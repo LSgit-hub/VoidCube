@@ -1,0 +1,1544 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime
+from pathlib import Path
+import sys
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+from fastapi import HTTPException
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from systems.body_registry import BodyRegistryManager
+from systems.execution.adapters import (
+    AgentLifecycleExecutionAdapter,
+    BodyUpgradeExecutionAdapter,
+    BodyLifecycleExecutionAdapter,
+    GovernorReviewExecutionAdapter,
+    SelfLearningExecutionAdapter,
+    WatchWindowExecutionAdapter,
+)
+from systems.execution.facade import VoidCubeExecutionFacade
+from systems.governor import GovernorRequest
+from systems.governor import GovernorDecisionEngine
+from systems.lifecycle import BodyLifecycleExecutor
+from systems.probe import ProbeExecutor, ProbeRunner
+from systems.self_learning import SelfLearningService, SelfLearningSkillDelegate
+from systems.supervisor.supervisor import AgentInstance
+
+
+class FakeSelfLearningToolRunner:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.calls: list[dict] = []
+
+    def run_tool(self, name: str, args: dict, *, task_id: str) -> str:
+        self.calls.append({"name": name, "args": args, "task_id": task_id})
+        if self.fail:
+            return '{"success": false, "error": "search backend unavailable"}'
+        if name == "search_files":
+            return '{"matches": [{"path": "docs/a.md", "line": 12, "content": "local evidence"}]}'
+        if name == "read_file":
+            return '{"content": "1|reference evidence", "path": "docs/a.md"}'
+        return (
+            '{"success": true, "data": {"web": ['
+            '{"title": "Evidence", "url": "https://example.test/evidence", '
+            '"description": "Relevant self-learning evidence."}'
+            "]}}"
+        )
+
+
+def _attach_route_hint(payload: dict, interface_id: str) -> dict:
+    result = dict(payload)
+    result["execution_route_hint"] = {"interface_id": interface_id}
+    return result
+
+
+def _make_watch_window_state(*, task=None, last_outcome=None) -> SimpleNamespace:
+    return SimpleNamespace(task=task, last_outcome=last_outcome)
+
+
+def _make_governor_request_executor(result=None) -> SimpleNamespace:
+    return SimpleNamespace(execute_governor_request=Mock(return_value=result or {"status": "executed"}))
+
+
+def _seed_body_repo(tmp_path: Path, *, probe_ready: bool) -> None:
+    (tmp_path / "systems").mkdir(exist_ok=True)
+    (tmp_path / "systems" / "agent").mkdir(exist_ok=True)
+    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
+        "print('slot launch')\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".soul-runtime").mkdir(exist_ok=True)
+
+    if not probe_ready:
+        return
+
+    (tmp_path / "run_agent.py").write_text("print('agent entrypoint')\n", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text("model: test\n", encoding="utf-8")
+    tools_dir = tmp_path / "tools"
+    tools_dir.mkdir(exist_ok=True)
+    (tools_dir / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "model_tools.py").write_text("# probe smoke\n", encoding="utf-8")
+
+
+def _make_body_upgrade_runtime(tmp_path: Path) -> SimpleNamespace:
+    manager = BodyRegistryManager(tmp_path)
+    manager.initialize_layout()
+    lifecycle = BodyLifecycleExecutor(manager)
+    body_lifecycle = BodyLifecycleExecutionAdapter(
+        config=SimpleNamespace(git_repo_path=str(tmp_path)),
+        body_registry=manager,
+        lifecycle=lifecycle,
+        probe_runner=ProbeRunner(),
+        probe_executor=ProbeExecutor(),
+        governor_storage_root=str(tmp_path / ".soul-runtime"),
+        attach_execution_route_hint=_attach_route_hint,
+    )
+    engine = GovernorDecisionEngine()
+
+    def review(governor_request, *, slot_meta=None):
+        return engine.evaluate(governor_request, slot_meta=slot_meta)
+
+    governor = SimpleNamespace(
+        review=review,
+        record_execution_outcome=Mock(),
+    )
+    governor_review = GovernorReviewExecutionAdapter(
+        body_registry=manager,
+        governor=governor,
+        lifecycle=lifecycle,
+        watch_window_runtime_sync=SimpleNamespace(
+            sync_runtime_after_governor_response=Mock(
+                return_value={"status": "no_watch_window_runtime_change"},
+            )
+        ),
+    )
+    recorded_requests: list[Any] = []
+    governor_request_executor = SimpleNamespace(
+        execute_governor_request=Mock(
+            side_effect=lambda governor_request: (
+                recorded_requests.append(governor_request),
+                governor_review.execute_governor_request(governor_request),
+            )[1]
+        )
+    )
+
+    start_agent = AsyncMock(return_value={"status": "started", "instance_id": "agent-1"})
+    wait_for_health = AsyncMock()
+    sync_gateway_body_activation = AsyncMock(return_value={"status": "synced"})
+    adapter = BodyUpgradeExecutionAdapter(
+        config=SimpleNamespace(probe_watch_window_seconds=300),
+        body_registry=manager,
+        run_body_probe=body_lifecycle.run_body_probe,
+        start_agent=start_agent,
+        wait_for_health=wait_for_health,
+        sync_gateway_body_activation=sync_gateway_body_activation,
+        attach_execution_route_hint=_attach_route_hint,
+        agents={},
+        governor_request_executor=governor_request_executor,
+    )
+    return SimpleNamespace(
+        adapter=adapter,
+        manager=manager,
+        body_lifecycle=body_lifecycle,
+        governor_review=governor_review,
+        governor_request_executor=governor_request_executor,
+        recorded_requests=recorded_requests,
+        start_agent=start_agent,
+        wait_for_health=wait_for_health,
+        sync_gateway_body_activation=sync_gateway_body_activation,
+    )
+
+
+def _make_body_lifecycle_runtime(tmp_path: Path) -> SimpleNamespace:
+    manager = BodyRegistryManager(tmp_path)
+    manager.initialize_layout()
+    lifecycle = BodyLifecycleExecutor(manager)
+    adapter = BodyLifecycleExecutionAdapter(
+        config=SimpleNamespace(git_repo_path=str(tmp_path)),
+        body_registry=manager,
+        lifecycle=lifecycle,
+        probe_runner=ProbeRunner(),
+        probe_executor=ProbeExecutor(),
+        governor_storage_root=str(tmp_path / ".soul-runtime"),
+        attach_execution_route_hint=_attach_route_hint,
+    )
+    return SimpleNamespace(
+        adapter=adapter,
+        manager=manager,
+        lifecycle=lifecycle,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_execution_facade_delegates_to_current_adapters():
+    agent_lifecycle = SimpleNamespace(
+        start_managed_agent=AsyncMock(return_value={"status": "started"}),
+        stop_agent=AsyncMock(return_value={"status": "stopped"}),
+        activate_body=AsyncMock(return_value={"status": "activated"}),
+    )
+    body_lifecycle = SimpleNamespace(
+        get_body_registry=Mock(return_value={"registry": {"active_slot": "slot-A"}}),
+        get_active_body_target=Mock(return_value={"slot_id": "slot-A"}),
+        list_body_slots=Mock(return_value={"slots": {"slot-A": {}}}),
+        get_body_slot=Mock(return_value={"slot_id": "slot-A"}),
+        prepare_body_slot=AsyncMock(return_value={"status": "slot_prepared"}),
+        mark_body_candidate=AsyncMock(return_value={"status": "candidate_marked"}),
+        record_body_probe_report=AsyncMock(return_value={"status": "probe_report_recorded"}),
+        run_body_probe=AsyncMock(return_value={"status": "probe_executed"}),
+    )
+    watch_window = SimpleNamespace(
+        reconcile_watch_window_outcome=AsyncMock(return_value={"action": "retired_slot_recycled"}),
+        get_watch_window_status=Mock(return_value={"status": "watch_status"}),
+        ensure_watch_window_task=Mock(return_value="task-handle"),
+        sync_runtime_after_governor_response=Mock(return_value={"status": "watch_window_runtime_ensured"}),
+        build_watch_window_evidence=Mock(return_value={"healthy": True}),
+        poll_watch_window=AsyncMock(return_value={"should_evaluate": False}),
+        run_watch_window_loop=AsyncMock(return_value=None),
+        evaluate_watch_window=AsyncMock(return_value={"status": "watch_window_evaluated"}),
+    )
+    body_upgrade = SimpleNamespace(
+        execute_body_upgrade=AsyncMock(return_value={"status": "upgrade_executed"}),
+    )
+    memory_maintenance = SimpleNamespace(
+        trigger_memory_compression=AsyncMock(return_value={"status": "compressed"}),
+    )
+    self_learning = SimpleNamespace(
+        execute_self_learning_followup=AsyncMock(return_value={"status": "self_learning_followup_executed"}),
+    )
+    facade = VoidCubeExecutionFacade(
+        agent_lifecycle=agent_lifecycle,
+        watch_window=watch_window,
+        body_lifecycle=body_lifecycle,
+        body_upgrade=body_upgrade,
+        memory_maintenance=memory_maintenance,
+        self_learning=self_learning,
+    )
+
+    assert await facade.start_managed_agent({}) == {"status": "started"}
+    assert await facade.stop_agent("agent-1") == {"status": "stopped"}
+    assert await facade.activate_body({"slot_id": "slot-B"}) == {"status": "activated"}
+    assert facade.get_watch_window_status() == {"status": "watch_status"}
+    assert await facade.evaluate_watch_window({"healthy_override": True}) == {"status": "watch_window_evaluated"}
+    assert facade.get_body_registry() == {"registry": {"active_slot": "slot-A"}}
+    assert facade.get_active_body_target() == {"slot_id": "slot-A"}
+    assert facade.list_body_slots() == {"slots": {"slot-A": {}}}
+    assert facade.get_body_slot("slot-A") == {"slot_id": "slot-A"}
+    assert await facade.prepare_body_slot("slot-B", {}) == {"status": "slot_prepared"}
+    assert await facade.mark_body_candidate("slot-B", {}) == {"status": "candidate_marked"}
+    assert await facade.execute_body_upgrade({}) == {"status": "upgrade_executed"}
+    formal_result = await facade.execute_self_evolution_request(
+        {
+            "task_id": "task-1",
+            "kind": "body_switch",
+            "source_actor": "mem_supervisor",
+            "target_slot_id": "slot-B",
+            "git_lineage": {
+                "candidate_commit": "bbb222",
+                "rollback_commit": "aaa111",
+                "changed_files": ["agent/stream_handler.py"],
+            },
+        }
+    )
+    assert await facade.record_body_probe_report({"slot_id": "slot-B"}) == {"status": "probe_report_recorded"}
+    assert await facade.run_body_probe({"slot_id": "slot-B"}) == {"status": "probe_executed"}
+    assert await facade.trigger_memory_compression({}) == {"status": "compressed"}
+    assert await facade.execute_self_learning_followup({"task": {}}) == {
+        "status": "self_learning_followup_executed"
+    }
+
+    agent_lifecycle.start_managed_agent.assert_awaited_once_with({})
+    watch_window.get_watch_window_status.assert_called_once_with()
+    watch_window.evaluate_watch_window.assert_awaited_once_with({"healthy_override": True})
+    body_lifecycle.get_body_slot.assert_called_once_with("slot-A")
+    body_lifecycle.mark_body_candidate.assert_awaited_once_with("slot-B", {})
+    assert body_upgrade.execute_body_upgrade.await_count == 2
+    body_upgrade.execute_body_upgrade.assert_any_await({})
+    body_upgrade.execute_body_upgrade.assert_any_await(
+        {
+            "slot_id": "slot-B",
+            "execution_request": formal_result["execution_request"],
+        }
+    )
+    assert formal_result["status"] == "formal_self_evolution_executed"
+    memory_maintenance.trigger_memory_compression.assert_awaited_once_with({})
+    self_learning.execute_self_learning_followup.assert_awaited_once_with({"task": {}})
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_self_learning_execution_adapter_records_learn_only_followup(tmp_path: Path):
+    learning = SelfLearningService(tmp_path / "self-learning")
+    runner = FakeSelfLearningToolRunner()
+    adapter = SelfLearningExecutionAdapter(
+        learning_service=learning,
+        attach_execution_route_hint=_attach_route_hint,
+        skill_delegate=SelfLearningSkillDelegate(tool_runner=runner),
+    )
+
+    result = await adapter.execute_self_learning_followup(
+        {
+            "task": {
+                "task_id": "task-learning-1",
+                "trace_id": "trace-learning-1",
+                "title": "Review correction signals",
+                "summary": "Study why recent uncertainty increased.",
+                "task_type": "self_learning_followup",
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+                "metadata": {"governance_task_type": "self_learning"},
+                "evidence": {
+                    "hypothesis": "Correction signals reveal a useful learning topic.",
+                    "observations": ["uncertainty rose during idle review"],
+                    "comparisons": ["uncertainty trend"],
+                },
+            }
+        }
+    )
+
+    assert result["status"] == "self_learning_followup_executed"
+    assert result["execution_metadata"]["task_id"] == "task-learning-1"
+    assert result["execution_metadata"]["governance_task_type"] == "self_learning"
+    assert result["execution_route_hint"]["interface_id"] == "self_learning.execute"
+    submission = result["supervisor_submission"]
+    assert submission["source"] == "self_learning"
+    assert submission["metadata"]["source_task_id"] == "task-learning-1"
+    assert submission["metadata"]["trace_id"] == "trace-learning-1"
+    assert submission["metadata"]["skill_delegate"] == "SelfLearningSkillDelegate"
+    assert submission["metadata"]["skill_backend"] == "bounded_tool_runner"
+    assert submission["metadata"]["skill_evidence_summary"]["source_mix"] == ["external_web"]
+    assert submission["metadata"]["skill_evidence_summary"]["total_calls"] == 2
+    assert submission["metadata"]["skill_evidence_summary"]["succeeded"] == 2
+    assert submission["metadata"]["skill_evidence_summary"]["failed"] == 0
+    assert submission["metadata"]["skill_evidence_summary"]["evidence_preview"][0]["url"] == "https://example.test/evidence"
+    assert result["skill_execution"]["status"] == "skill_delegate_executed"
+    assert result["skill_execution"]["capability_boundary"]["uses_agent_skill_contract"] is True
+    assert result["skill_execution"]["capability_boundary"]["performs_external_search"] is True
+    assert result["skill_execution"]["capability_boundary"]["performs_body_mutation"] is False
+    assert result["skill_execution"]["learning_plan"]["search_queries"]
+    assert result["skill_execution"]["tool_execution"]["summary"]["succeeded"] == 2
+    assert runner.calls[0]["task_id"] == "task-learning-1"
+    assert submission["proposals"] == []
+    assert (tmp_path / "self-learning" / "conclusions").exists()
+    experiment_path = tmp_path / "self-learning" / "experiments" / f"{result['learning_records']['experiment_id']}.json"
+    experiment_payload = experiment_path.read_text(encoding="utf-8")
+    assert "Self-learning evidence summary: 2 succeeded, 0 failed, 2 total calls." in experiment_payload
+    assert "Evidence preview: Evidence <https://example.test/evidence>." in experiment_payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_self_learning_execution_adapter_promotes_failed_evidence_summary(tmp_path: Path):
+    learning = SelfLearningService(tmp_path / "self-learning")
+    adapter = SelfLearningExecutionAdapter(
+        learning_service=learning,
+        attach_execution_route_hint=_attach_route_hint,
+        skill_delegate=SelfLearningSkillDelegate(
+            tool_runner=FakeSelfLearningToolRunner(fail=True),
+        ),
+    )
+
+    result = await adapter.execute_self_learning_followup(
+        {
+            "task": {
+                "task_id": "task-learning-failed-evidence",
+                "title": "Review failed evidence path",
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+                "metadata": {"governance_task_type": "self_learning"},
+            }
+        }
+    )
+
+    summary = result["supervisor_submission"]["metadata"]["skill_evidence_summary"]
+    assert summary["status"] == "failed"
+    assert summary["total_calls"] == 2
+    assert summary["succeeded"] == 0
+    assert summary["failed"] == 2
+    assert summary["failed_tools"][0] == {
+        "tool": "web_search",
+        "source_type": "external_web",
+        "error": "search backend unavailable",
+    }
+    experiment_path = tmp_path / "self-learning" / "experiments" / f"{result['learning_records']['experiment_id']}.json"
+    experiment_payload = experiment_path.read_text(encoding="utf-8")
+    assert "Self-learning evidence summary: 0 succeeded, 2 failed, 2 total calls." in experiment_payload
+    assert "Self-learning evidence tool failed: web_search (external_web): search backend unavailable" in experiment_payload
+
+
+@pytest.mark.unit
+def test_self_learning_skill_delegate_runs_bounded_tool_runner():
+    runner = FakeSelfLearningToolRunner()
+    delegate = SelfLearningSkillDelegate(tool_runner=runner)
+
+    result = delegate.execute(
+        {
+            "task": {
+                "task_id": "task-runner-1",
+                "title": "Evaluate agent knowledge radar",
+                "summary": "Use the bundled self-learning skill to prepare evidence.",
+                "constraints": {"planned_minutes": 15},
+            }
+        }
+    )
+
+    assert result["status"] == "skill_delegate_executed"
+    assert result["backend"] == "bounded_tool_runner"
+    assert result["skill"]["name"] == "self-learning"
+    assert result["learning_plan"]["planned_minutes"] == 15
+    assert "Evaluate agent knowledge radar latest trends 2026" in result["learning_plan"]["search_queries"]
+    assert [item["name"] for item in result["learning_plan"]["evaluation_dimensions"]] == [
+        "practicality",
+        "cutting_edge",
+        "maturity",
+        "learning_cost",
+        "long_term_value",
+    ]
+    assert result["evidence"]["guide_excerpt"]
+    assert result["evidence"]["summary_template_excerpt"]
+    assert result["tool_execution"]["status"] == "completed"
+    assert result["tool_execution"]["summary"] == {"total": 2, "succeeded": 2, "failed": 0}
+    assert [call["name"] for call in runner.calls] == ["web_search", "web_search"]
+    assert result["learning_plan"]["evidence_plan"]["source_mix"] == ["external_web"]
+    assert result["tool_execution"]["calls"][0]["result"]["web"][0]["url"] == "https://example.test/evidence"
+    assert result["capability_boundary"]["performs_external_search"] is True
+
+
+@pytest.mark.unit
+def test_self_learning_skill_delegate_records_failed_tool_evidence_without_success_claim():
+    delegate = SelfLearningSkillDelegate(tool_runner=FakeSelfLearningToolRunner(fail=True))
+
+    result = delegate.execute({"task": {"task_id": "task-failed-search", "title": "Study failed search"}})
+
+    assert result["status"] == "skill_delegate_executed"
+    assert result["tool_execution"]["status"] == "failed"
+    assert result["tool_execution"]["summary"] == {"total": 2, "succeeded": 0, "failed": 2}
+    assert result["tool_execution"]["calls"][0]["success"] is False
+    assert result["tool_execution"]["calls"][0]["error"] == "search backend unavailable"
+    assert result["capability_boundary"]["performs_external_search"] is False
+    assert result["capability_boundary"]["performs_body_mutation"] is False
+
+
+@pytest.mark.unit
+def test_self_learning_skill_delegate_builds_multisource_evidence_plan_from_task_constraints():
+    runner = FakeSelfLearningToolRunner()
+    delegate = SelfLearningSkillDelegate(tool_runner=runner)
+
+    result = delegate.execute(
+        {
+            "task": {
+                "task_id": "task-multisource",
+                "title": "Study trace runtime",
+                "constraints": {
+                    "evidence_tools": ["web_search", "search_files", "read_file"],
+                    "local_search_patterns": ["TraceRuntimeMixin"],
+                    "local_search_path": "systems",
+                    "reference_files": ["docs/supervisor-runtime-structure.md"],
+                },
+            }
+        }
+    )
+
+    plan = result["learning_plan"]["evidence_plan"]
+    assert plan["status"] == "planned"
+    assert plan["source_mix"] == ["external_web", "local_reference", "local_repository"]
+    assert plan["policy"]["rejected_tools"] == []
+    assert [call["name"] for call in runner.calls] == [
+        "web_search",
+        "web_search",
+        "search_files",
+        "read_file",
+    ]
+    assert runner.calls[2]["args"]["pattern"] == "TraceRuntimeMixin"
+    assert runner.calls[3]["args"]["path"] == "docs/supervisor-runtime-structure.md"
+    assert result["tool_execution"]["summary"] == {"total": 4, "succeeded": 4, "failed": 0}
+    assert result["tool_execution"]["calls"][2]["source_type"] == "local_repository"
+    assert result["tool_execution"]["calls"][3]["source_type"] == "local_reference"
+
+
+@pytest.mark.unit
+def test_self_learning_skill_delegate_rejects_disallowed_evidence_tools_without_calling_them():
+    runner = FakeSelfLearningToolRunner()
+    delegate = SelfLearningSkillDelegate(tool_runner=runner)
+
+    result = delegate.execute(
+        {
+            "task": {
+                "task_id": "task-reject-disallowed",
+                "title": "Reject memory mutation",
+                "constraints": {
+                    "evidence_tools": ["memory_persist", "web_search"],
+                },
+            }
+        }
+    )
+
+    plan = result["learning_plan"]["evidence_plan"]
+    assert plan["policy"]["rejected_tools"] == ["memory_persist"]
+    assert [call["name"] for call in runner.calls] == ["web_search", "web_search"]
+    assert result["capability_boundary"]["performs_memory_mutation"] is False
+
+
+@pytest.mark.unit
+def test_governor_review_execution_adapter_coordinates_review_and_runtime_followup():
+    slot_meta = SimpleNamespace(last_probe_result={"overall_passed": True, "summary": "probe ok"})
+    registry = SimpleNamespace(model_dump=lambda mode="json": {"active_slot": "slot-B", "retired_slot": "slot-A"})
+    governor_response = SimpleNamespace(
+        decision="approve_with_watch",
+        model_dump=lambda mode="json": {"decision": "approve_with_watch"},
+    )
+    execution_report = SimpleNamespace(model_dump=lambda mode="json": {"status": "applied"})
+    body_registry = SimpleNamespace(
+        load_slot_meta=Mock(return_value=slot_meta),
+        load_registry=Mock(return_value=registry),
+    )
+    governor = SimpleNamespace(
+        review=Mock(return_value=governor_response),
+        record_execution_outcome=Mock(),
+    )
+    lifecycle = SimpleNamespace(apply_governor_response=Mock(return_value=execution_report))
+    sync_runtime_after_governor_response = Mock(
+        return_value={"status": "watch_window_runtime_ensured"},
+    )
+    adapter = GovernorReviewExecutionAdapter(
+        body_registry=body_registry,
+        governor=governor,
+        lifecycle=lifecycle,
+        watch_window_runtime_sync=SimpleNamespace(
+            sync_runtime_after_governor_response=sync_runtime_after_governor_response
+        ),
+    )
+
+    result = adapter.execute_governor_request(
+        GovernorRequest.model_validate(
+            {
+                "request_id": "switch-1",
+                "event_type": "switch_request",
+                "body_id": "slot-B",
+                "source_actor": "gateway",
+                "summary": "Promote candidate after probe pass",
+                "evidence": {},
+                "constraints": {"watch_window_seconds": 120},
+            }
+        )
+    )
+
+    assert result["governor_response"]["decision"] == "approve_with_watch"
+    assert result["execution_report"]["status"] == "applied"
+    assert result["runtime_followup"] == {"status": "watch_window_runtime_ensured"}
+    governor.review.assert_called_once()
+    reviewed_request = governor.review.call_args.args[0]
+    assert reviewed_request.evidence["probe_report"]["overall_passed"] is True
+    assert reviewed_request.evidence["probe_passed"] is True
+    sync_runtime_after_governor_response.assert_called_once_with(governor_response)
+    governor.record_execution_outcome.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_agent_lifecycle_adapter_starts_agent_and_registers_gateway(monkeypatch):
+    agents = {}
+    spawn = AsyncMock()
+    register = AsyncMock(return_value="service-1")
+    unregister = AsyncMock()
+    monkeypatch.setattr("systems.execution.adapters.asyncio.sleep", AsyncMock())
+
+    adapter = AgentLifecycleExecutionAdapter(
+        config=SimpleNamespace(agent_base_port=9000),
+        agents=agents,
+        agent_model=AgentInstance,
+        spawn_agent_process=spawn,
+        terminate_agent_process=AsyncMock(),
+        register_agent_with_gateway=register,
+        unregister_agent_from_gateway=unregister,
+        attach_execution_route_hint=_attach_route_hint,
+    )
+
+    result, next_counter = await adapter.start_agent({}, agent_counter=0)
+
+    assert result["status"] == "started"
+    assert result["port"] == 9001
+    assert result["execution_route_hint"]["interface_id"] == "agents.start"
+    assert next_counter == 1
+    assert len(agents) == 1
+    agent = next(iter(agents.values()))
+    assert agent.name == "managed-agent-1"
+    spawn.assert_awaited_once_with(agent)
+    register.assert_awaited_once_with(agent)
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_agent_lifecycle_adapter_rejects_legacy_color_selection(monkeypatch):
+    monkeypatch.setattr("systems.execution.adapters.asyncio.sleep", AsyncMock())
+    adapter = AgentLifecycleExecutionAdapter(
+        config=SimpleNamespace(agent_base_port=9000),
+        agents={},
+        agent_model=AgentInstance,
+        spawn_agent_process=AsyncMock(),
+        terminate_agent_process=AsyncMock(),
+        register_agent_with_gateway=AsyncMock(),
+        unregister_agent_from_gateway=AsyncMock(),
+        attach_execution_route_hint=_attach_route_hint,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await adapter.start_agent({"color": "green"}, agent_counter=0)
+
+    assert exc_info.value.status_code == 400
+    assert "Legacy color-based agent selection" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_agent_lifecycle_adapter_stops_agent_and_unregisters_gateway():
+    agent = AgentInstance(
+        instance_id="agent-1",
+        name="agent-slot-A-1",
+        pid=1234,
+        port=9001,
+        status="running",
+        healthy=True,
+        gateway_service_id="svc-1",
+    )
+    terminate = AsyncMock()
+    unregister = AsyncMock()
+    adapter = AgentLifecycleExecutionAdapter(
+        config=SimpleNamespace(agent_base_port=9000),
+        agents={"agent-1": agent},
+        agent_model=AgentInstance,
+        spawn_agent_process=AsyncMock(),
+        terminate_agent_process=terminate,
+        register_agent_with_gateway=AsyncMock(),
+        unregister_agent_from_gateway=unregister,
+        attach_execution_route_hint=_attach_route_hint,
+    )
+
+    result = await adapter.stop_agent("agent-1")
+
+    assert result["status"] == "stopped"
+    assert result["execution_route_hint"]["interface_id"] == "agents.stop"
+    assert agent.status == "stopped"
+    assert agent.pid is None
+    assert agent.healthy is False
+    terminate.assert_awaited_once_with(agent)
+    unregister.assert_awaited_once_with("svc-1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_body_lifecycle_adapter_marks_candidate_through_registry(tmp_path: Path):
+    (tmp_path / "run_agent.py").write_text("print('agent')\n", encoding="utf-8")
+    runtime = _make_body_lifecycle_runtime(tmp_path)
+
+    result = await runtime.adapter.mark_body_candidate("slot-B", {"body_version": "v2"})
+
+    slot = runtime.manager.load_slot_meta("slot-B")
+    assert result["status"] == "candidate_marked"
+    assert result["slot"]["body_state"] == "candidate"
+    assert result["slot"]["body_version"] == "v2"
+    assert result["prepared_slot"]["slot_id"] == "slot-B"
+    assert result["execution_route_hint"]["interface_id"] == "body.candidate"
+    assert slot.body_state == "candidate"
+    assert slot.body_version == "v2"
+
+
+@pytest.mark.unit
+def test_body_lifecycle_adapter_exposes_body_registry_snapshot(tmp_path: Path):
+    runtime = _make_body_lifecycle_runtime(tmp_path)
+
+    result = runtime.adapter.get_body_registry()
+
+    assert result["registry"]["active_slot"] == "slot-A"
+    assert result["registry"]["shell_slot"] == "slot-B"
+    assert result["slots"]["slot-A"]["body_state"] == "active"
+    assert result["slots"]["slot-B"]["body_state"] == "shell"
+
+
+@pytest.mark.unit
+def test_body_lifecycle_adapter_exposes_active_target_and_slot_views(tmp_path: Path):
+    runtime = _make_body_lifecycle_runtime(tmp_path)
+
+    active_target = runtime.adapter.get_active_body_target()
+    slots = runtime.adapter.list_body_slots()
+    slot = runtime.adapter.get_body_slot("slot-A")
+
+    assert active_target["slot_id"] == "slot-A"
+    assert "slot-A" in slots["slots"]
+    assert "slot-B" in slots["slots"]
+    assert slot["slot_id"] == "slot-A"
+    assert slot["body_state"] == "active"
+
+
+@pytest.mark.unit
+def test_body_lifecycle_adapter_rejects_unknown_slot_lookup(tmp_path: Path):
+    runtime = _make_body_lifecycle_runtime(tmp_path)
+
+    with pytest.raises(HTTPException) as exc_info:
+        runtime.adapter.get_body_slot("slot-missing")
+
+    assert exc_info.value.status_code == 400
+    assert "Unknown slot_id 'slot-missing'" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_body_lifecycle_adapter_prepares_slot_workspace_and_bootstraps_runtime(tmp_path: Path):
+    _seed_body_repo(tmp_path, probe_ready=True)
+    runtime = _make_body_lifecycle_runtime(tmp_path)
+
+    result = await runtime.adapter.prepare_body_slot("slot-B")
+
+    slot = runtime.manager.load_slot_meta("slot-B")
+    worktree_root = Path(slot.worktree_path)
+    runtime_root = Path(slot.runtime_path)
+    assert result["status"] == "slot_prepared"
+    assert result["slot"]["slot_id"] == "slot-B"
+    assert result["execution_route_hint"]["interface_id"] == "body.prepare"
+    assert slot.materialized_from == "repo_root"
+    assert (worktree_root / "run_agent.py").exists()
+    assert (worktree_root / "config.yaml").exists()
+    assert (runtime_root / "slot-runtime.json").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_body_lifecycle_adapter_records_probe_report_and_persists_it(tmp_path: Path):
+    _seed_body_repo(tmp_path, probe_ready=True)
+    runtime = _make_body_lifecycle_runtime(tmp_path)
+
+    await runtime.adapter.mark_body_candidate(
+        "slot-B",
+        {
+            "body_version": "v2",
+            "source_commit": "aaa111",
+            "candidate_commit": "bbb222",
+            "rollback_commit": "aaa111",
+            "changed_files": ["systems/probe.py"],
+        },
+    )
+    runtime.manager.start_probe("slot-B")
+
+    result = await runtime.adapter.record_body_probe_report(
+        {
+            "slot_id": "slot-B",
+            "checks": [
+                {"name": "startup_ok", "passed": True},
+                {"name": "config_load_ok", "passed": True},
+                {"name": "memory_path_ok", "passed": True},
+                {"name": "tool_smoke_ok", "passed": True},
+                {"name": "task_replay_ok", "passed": True},
+            ],
+            "summary": "Probe report recorded through execution adapter.",
+        }
+    )
+
+    slot = runtime.manager.load_slot_meta("slot-B")
+    assert result["status"] == "probe_report_recorded"
+    assert result["result"]["status"] == "applied"
+    assert result["report"]["overall_passed"] is True
+    assert result["execution_route_hint"]["interface_id"] == "body.probe.report"
+    assert slot.last_probe_result is not None
+    assert slot.last_probe_result["overall_passed"] is True
+    assert slot.last_probe_result["candidate_commit"] == "bbb222"
+    assert slot.last_probe_result["changed_files"] == ["systems/probe.py"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_body_lifecycle_adapter_runs_probe_and_persists_report(tmp_path: Path):
+    _seed_body_repo(tmp_path, probe_ready=True)
+    runtime = _make_body_lifecycle_runtime(tmp_path)
+
+    await runtime.adapter.mark_body_candidate("slot-B", {"body_version": "v2"})
+    runtime.manager.start_probe("slot-B")
+
+    result = await runtime.adapter.run_body_probe({"slot_id": "slot-B"})
+
+    slot = runtime.manager.load_slot_meta("slot-B")
+    assert result["status"] == "probe_executed"
+    assert result["report"]["overall_passed"] is True
+    assert result["persistence"]["status"] == "applied"
+    assert result["execution_route_hint"]["interface_id"] == "body.probe.run"
+    assert slot.last_probe_result is not None
+    assert slot.last_probe_result["overall_passed"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_body_upgrade_execution_adapter_halts_when_probe_fails(tmp_path: Path):
+    _seed_body_repo(tmp_path, probe_ready=False)
+    runtime = _make_body_upgrade_runtime(tmp_path)
+
+    result = await runtime.adapter.execute_body_upgrade({"body_version": "v2"})
+
+    registry = runtime.manager.load_registry()
+    slot_b = runtime.manager.load_slot_meta("slot-B")
+    assert result["status"] == "upgrade_halted"
+    assert result["stage"] == "probe_execution"
+    assert result["probe_review"]["governor_response"]["decision"] == "approve"
+    assert result["probe_execution"]["report"]["overall_passed"] is False
+    assert result["execution_route_hint"]["interface_id"] == "body.upgrade.execute"
+    assert registry.active_slot == "slot-A"
+    assert slot_b.body_state == "probe"
+    assert len(runtime.recorded_requests) == 1
+    runtime.start_agent.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_body_upgrade_execution_adapter_persists_formal_git_lineage(tmp_path: Path):
+    _seed_body_repo(tmp_path, probe_ready=True)
+    runtime = _make_body_upgrade_runtime(tmp_path)
+
+    result = await runtime.adapter.execute_body_upgrade(
+        {
+            "body_version": "v2",
+            "execution_request": {
+                "git_lineage": {
+                    "source_branch": "main",
+                    "source_commit": "aaa111",
+                    "candidate_branch": "evolution/task-1",
+                    "candidate_commit": "bbb222",
+                    "active_ref": "stable/v2",
+                    "rollback_ref": "body/slot-A",
+                    "rollback_commit": "aaa111",
+                    "diff_summary": "Formal lineage handoff.",
+                    "changed_files": ["systems/execution/adapters.py"],
+                }
+            },
+        }
+    )
+
+    registry = runtime.manager.load_registry()
+    slot_b = runtime.manager.load_slot_meta("slot-B")
+    pointer = runtime.manager.load_active_body_pointer()
+
+    assert result["status"] == "upgrade_executed"
+    assert result["execution_route_hint"]["interface_id"] == "body.upgrade.execute"
+    assert slot_b.source_commit == "aaa111"
+    assert slot_b.source_branch == "main"
+    assert slot_b.candidate_commit == "bbb222"
+    assert slot_b.candidate_branch == "evolution/task-1"
+    assert slot_b.active_ref == "stable/v2"
+    assert slot_b.active_commit == "bbb222"
+    assert slot_b.rollback_commit == "aaa111"
+    assert slot_b.last_probe_result["candidate_commit"] == "bbb222"
+    assert slot_b.last_probe_result["changed_files"] == ["systems/execution/adapters.py"]
+    assert registry.last_switch_result["active_ref"] == "stable/v2"
+    assert registry.last_switch_result["active_commit"] == "bbb222"
+    assert pointer.slot_id == "slot-B"
+    assert pointer.active_ref == "stable/v2"
+    assert pointer.active_commit == "bbb222"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_body_upgrade_execution_adapter_propagates_trace_and_decision_ids_into_governor_requests(
+    tmp_path: Path,
+):
+    _seed_body_repo(tmp_path, probe_ready=True)
+    runtime = _make_body_upgrade_runtime(tmp_path)
+
+    result = await runtime.adapter.execute_body_upgrade(
+        {
+            "body_version": "v2",
+            "execution_request": {
+                "trace_id": "trace-formal-1",
+                "task_type": "self_evolution",
+                "decision_id": "decision-formal-1",
+                "git_lineage": {
+                    "candidate_commit": "bbb222",
+                    "rollback_commit": "aaa111",
+                    "changed_files": ["systems/execution/adapters.py"],
+                },
+            },
+        }
+    )
+
+    assert result["status"] == "upgrade_executed"
+    assert len(runtime.recorded_requests) == 2
+    first_request = runtime.recorded_requests[0]
+    second_request = runtime.recorded_requests[1]
+    assert first_request.trace_id == "trace-formal-1"
+    assert first_request.task_type == "self_evolution"
+    assert first_request.evidence["runtime_task_profile"] == {
+        "task_type": "self_evolution",
+        "governance_task_type": "self_evolution",
+        "task_family": "general_self_evolution",
+        "execution_kind": "general_self_evolution",
+    }
+    assert first_request.decision_id == "decision-formal-1"
+    assert second_request.trace_id == "trace-formal-1"
+    assert second_request.task_type == "self_evolution"
+    assert second_request.evidence["runtime_task_profile"] == {
+        "task_type": "self_evolution",
+        "governance_task_type": "self_evolution",
+        "task_family": "general_self_evolution",
+        "execution_kind": "general_self_evolution",
+    }
+    assert second_request.decision_id == "decision-formal-1"
+    assert result["switch_review"]["execution_report"]["runtime_task_profile"] == {
+        "task_type": "self_evolution",
+        "governance_task_type": "self_evolution",
+        "task_family": "general_self_evolution",
+        "execution_kind": "general_self_evolution",
+    }
+    assert runtime.manager.load_registry().last_switch_result["task_family"] == "general_self_evolution"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_body_upgrade_then_watch_window_pass_recycles_retired_slot_end_to_end(tmp_path: Path):
+    _seed_body_repo(tmp_path, probe_ready=True)
+    runtime = _make_body_upgrade_runtime(tmp_path)
+    old_agent = AgentInstance(
+        instance_id="old-active",
+        name="agent-slot-A-old",
+        pid=1701,
+        port=9701,
+        status="running",
+        healthy=True,
+        slot_id="slot-A",
+    )
+    new_agent = AgentInstance(
+        instance_id="new-active",
+        name="agent-slot-B-new",
+        pid=1702,
+        port=9702,
+        status="running",
+        healthy=True,
+        slot_id="slot-B",
+    )
+    agents = {"old-active": old_agent, "new-active": new_agent}
+    stopped_instances: list[str] = []
+
+    async def stop_agent(instance_id: str) -> dict:
+        stopped_instances.append(instance_id)
+        agent = agents[instance_id]
+        agent.status = "stopped"
+        agent.pid = None
+        agent.healthy = False
+        return {"status": "stopped", "instance_id": instance_id}
+
+    upgrade = await runtime.adapter.execute_body_upgrade(
+        {
+            "body_version": "v2",
+            "execution_request": {
+                "trace_id": "trace-phase1-pass",
+                "decision_id": "decision-phase1-pass",
+                "git_lineage": {
+                    "candidate_commit": "bbb222",
+                    "rollback_commit": "aaa111",
+                    "changed_files": ["systems/execution/adapters.py"],
+                },
+            },
+        }
+    )
+    watch = WatchWindowExecutionAdapter(
+        body_registry=runtime.manager,
+        agents=agents,
+        stop_agent=stop_agent,
+        run_health_checks=AsyncMock(return_value={"results": []}),
+        runtime_state=_make_watch_window_state(),
+        governor_request_executor=runtime.governor_request_executor,
+    )
+
+    result = await watch.evaluate_watch_window({"healthy_override": True})
+
+    registry = runtime.manager.load_registry()
+    slot_a = runtime.manager.load_slot_meta("slot-A")
+    slot_b = runtime.manager.load_slot_meta("slot-B")
+    pointer = runtime.manager.load_active_body_pointer()
+    assert upgrade["status"] == "upgrade_executed"
+    assert upgrade["previous_active_slot"] == "slot-A"
+    assert upgrade["retired_slot"] == "slot-A"
+    assert result["status"] == "watch_window_evaluated"
+    assert result["governor_response"]["decision"] == "approve"
+    assert result["execution_report"]["action_results"][0]["action_type"] == "recycle_retired_slot"
+    assert result["execution_report"]["action_results"][0]["status"] == "applied"
+    assert result["execution_followup"] == {
+        "action": "retired_slot_recycled",
+        "slot_id": "slot-A",
+        "stopped_instance_ids": ["old-active"],
+    }
+    assert registry.active_slot == "slot-B"
+    assert registry.shell_slot == "slot-A"
+    assert registry.retired_slot is None
+    assert registry.watch_window.status == "completed"
+    assert slot_a.body_state == "shell"
+    assert slot_b.body_state == "active"
+    assert pointer.slot_id == "slot-B"
+    assert stopped_instances == ["old-active"]
+    assert old_agent.status == "stopped"
+    assert new_agent.status == "running"
+    assert len(runtime.recorded_requests) == 3
+    assert [request.event_type for request in runtime.recorded_requests] == [
+        "health_review_request",
+        "switch_request",
+        "post_switch_review",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_body_upgrade_then_watch_window_failure_rolls_back_to_retired_slot_end_to_end(tmp_path: Path):
+    _seed_body_repo(tmp_path, probe_ready=True)
+    runtime = _make_body_upgrade_runtime(tmp_path)
+    restored_agent = AgentInstance(
+        instance_id="restored-old",
+        name="agent-slot-A-old",
+        pid=1801,
+        port=9801,
+        status="running",
+        healthy=True,
+        slot_id="slot-A",
+    )
+    failed_agent = AgentInstance(
+        instance_id="failed-new",
+        name="agent-slot-B-new",
+        pid=1802,
+        port=9802,
+        status="running",
+        healthy=False,
+        slot_id="slot-B",
+    )
+    agents = {"restored-old": restored_agent, "failed-new": failed_agent}
+    stopped_instances: list[str] = []
+
+    async def stop_agent(instance_id: str) -> dict:
+        stopped_instances.append(instance_id)
+        agent = agents[instance_id]
+        agent.status = "stopped"
+        agent.pid = None
+        agent.healthy = False
+        return {"status": "stopped", "instance_id": instance_id}
+
+    upgrade = await runtime.adapter.execute_body_upgrade(
+        {
+            "body_version": "v2",
+            "execution_request": {
+                "trace_id": "trace-phase1-rollback",
+                "decision_id": "decision-phase1-rollback",
+                "git_lineage": {
+                    "candidate_commit": "bbb222",
+                    "rollback_commit": "aaa111",
+                    "changed_files": ["systems/execution/adapters.py"],
+                },
+            },
+        }
+    )
+    watch = WatchWindowExecutionAdapter(
+        body_registry=runtime.manager,
+        agents=agents,
+        stop_agent=stop_agent,
+        run_health_checks=AsyncMock(return_value={"results": []}),
+        runtime_state=_make_watch_window_state(),
+        governor_request_executor=runtime.governor_request_executor,
+    )
+
+    result = await watch.evaluate_watch_window({"healthy_override": False})
+
+    registry = runtime.manager.load_registry()
+    slot_a = runtime.manager.load_slot_meta("slot-A")
+    slot_b = runtime.manager.load_slot_meta("slot-B")
+    pointer = runtime.manager.load_active_body_pointer()
+    assert upgrade["status"] == "upgrade_executed"
+    assert result["status"] == "watch_window_evaluated"
+    assert result["governor_response"]["decision"] == "rollback_required"
+    assert result["execution_report"]["action_results"][0]["action_type"] == "restore_retired_slot"
+    assert result["execution_report"]["action_results"][0]["status"] == "applied"
+    assert result["execution_followup"] == {
+        "action": "failed_slot_drained",
+        "slot_id": "slot-B",
+        "restored_slot_id": "slot-A",
+        "restored_instance_id": "restored-old",
+        "gateway_activation": None,
+        "stopped_instance_ids": ["failed-new"],
+    }
+    assert registry.active_slot == "slot-A"
+    assert registry.retired_slot == "slot-B"
+    assert registry.watch_window.status == "active"
+    assert slot_a.body_state == "active"
+    assert slot_b.body_state == "retired"
+    assert pointer.slot_id == "slot-A"
+    assert stopped_instances == ["failed-new"]
+    assert failed_agent.status == "stopped"
+    assert restored_agent.status == "running"
+    assert len(runtime.recorded_requests) == 3
+    assert [request.event_type for request in runtime.recorded_requests] == [
+        "health_review_request",
+        "switch_request",
+        "rollback_request",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_watch_window_execution_adapter_stops_retired_slot_agents():
+    old_agent = AgentInstance(
+        instance_id="old-active",
+        name="agent-slot-A-old",
+        pid=1001,
+        port=9001,
+        status="running",
+        healthy=True,
+        slot_id="slot-A",
+    )
+    new_agent = AgentInstance(
+        instance_id="new-active",
+        name="agent-slot-B-new",
+        pid=1002,
+        port=9002,
+        status="running",
+        healthy=True,
+        slot_id="slot-B",
+    )
+    stop_agent = AsyncMock(side_effect=lambda instance_id: {"status": "stopped", "instance_id": instance_id})
+    body_registry = SimpleNamespace(load_registry=Mock(return_value=SimpleNamespace()))
+    adapter = WatchWindowExecutionAdapter(
+        body_registry=body_registry,
+        agents={"old-active": old_agent, "new-active": new_agent},
+        stop_agent=stop_agent,
+        run_health_checks=AsyncMock(),
+        runtime_state=_make_watch_window_state(),
+        governor_request_executor=_make_governor_request_executor(),
+    )
+
+    result = await adapter.reconcile_watch_window_outcome(
+        result={"governor_response": {"decision": "approve"}},
+        previous_retired_slot="slot-A",
+    )
+
+    assert result == {
+        "action": "retired_slot_recycled",
+        "slot_id": "slot-A",
+        "stopped_instance_ids": ["old-active"],
+    }
+    stop_agent.assert_awaited_once_with("old-active")
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_watch_window_execution_adapter_stops_failed_slot_agents_after_rollback():
+    restored_agent = AgentInstance(
+        instance_id="restored-old",
+        name="agent-slot-A-old",
+        pid=1101,
+        port=9101,
+        status="running",
+        healthy=True,
+        slot_id="slot-A",
+    )
+    failed_agent = AgentInstance(
+        instance_id="failed-new",
+        name="agent-slot-B-new",
+        pid=1102,
+        port=9102,
+        status="running",
+        healthy=False,
+        slot_id="slot-B",
+    )
+    stop_agent = AsyncMock(side_effect=lambda instance_id: {"status": "stopped", "instance_id": instance_id})
+    body_registry = SimpleNamespace(
+        load_registry=Mock(return_value=SimpleNamespace(active_slot="slot-A"))
+    )
+    sync_gateway_body_activation = AsyncMock(
+        return_value={"status": "activated", "active_body": {"slot_id": "slot-A"}}
+    )
+    adapter = WatchWindowExecutionAdapter(
+        body_registry=body_registry,
+        agents={"restored-old": restored_agent, "failed-new": failed_agent},
+        stop_agent=stop_agent,
+        run_health_checks=AsyncMock(),
+        runtime_state=_make_watch_window_state(),
+        sync_gateway_body_activation=sync_gateway_body_activation,
+        governor_request_executor=_make_governor_request_executor(),
+    )
+
+    result = await adapter.reconcile_watch_window_outcome(
+        result={
+            "governor_response": {"decision": "rollback_required"},
+            "request": {"body_id": "slot-B"},
+        },
+        previous_retired_slot="slot-A",
+    )
+
+    assert result == {
+        "action": "failed_slot_drained",
+        "slot_id": "slot-B",
+        "restored_slot_id": "slot-A",
+        "restored_instance_id": "restored-old",
+        "gateway_activation": {"status": "activated", "active_body": {"slot_id": "slot-A"}},
+        "stopped_instance_ids": ["failed-new"],
+    }
+    sync_gateway_body_activation.assert_awaited_once_with("restored-old")
+    stop_agent.assert_awaited_once_with("failed-new")
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_watch_window_execution_adapter_polls_for_expired_window(tmp_path: Path):
+    watch_window = SimpleNamespace(
+        status="active",
+        expires_at=datetime.utcnow(),
+        model_dump=lambda mode="json": {"status": "active"},
+    )
+    registry = SimpleNamespace(
+        active_slot="slot-B",
+        retired_slot="slot-A",
+        watch_window=watch_window,
+    )
+    body_registry = SimpleNamespace(load_registry=Mock(return_value=registry))
+    agent = AgentInstance(
+        instance_id="new-active",
+        name="agent-slot-B-new",
+        pid=1202,
+        port=9202,
+        status="running",
+        healthy=True,
+        slot_id="slot-B",
+    )
+    run_health_checks = AsyncMock(return_value={"results": []})
+    adapter = WatchWindowExecutionAdapter(
+        body_registry=body_registry,
+        agents={"new-active": agent},
+        stop_agent=AsyncMock(),
+        run_health_checks=run_health_checks,
+        runtime_state=_make_watch_window_state(),
+        governor_request_executor=_make_governor_request_executor(),
+    )
+
+    result = await adapter.poll_watch_window()
+
+    assert result == {
+        "should_evaluate": True,
+        "request": {
+            "healthy_override": True,
+            "metrics": {"reason": "automatic_watch_window_expired_cleanly"},
+        },
+    }
+    run_health_checks.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_watch_window_execution_adapter_builds_runtime_status_snapshot():
+    watch_window = SimpleNamespace(
+        status="active",
+        expires_at=None,
+        model_dump=lambda mode="json": {"status": "active"},
+    )
+    registry = SimpleNamespace(
+        active_slot="slot-B",
+        retired_slot="slot-A",
+        watch_window=watch_window,
+    )
+    body_registry = SimpleNamespace(load_registry=Mock(return_value=registry))
+    agent = AgentInstance(
+        instance_id="new-active",
+        name="agent-slot-B-new",
+        pid=1302,
+        port=9302,
+        status="running",
+        healthy=True,
+        slot_id="slot-B",
+    )
+    runtime_state = _make_watch_window_state(last_outcome={"status": "watch_window_evaluated"})
+    adapter = WatchWindowExecutionAdapter(
+        body_registry=body_registry,
+        agents={"new-active": agent},
+        stop_agent=AsyncMock(),
+        run_health_checks=AsyncMock(),
+        runtime_state=runtime_state,
+        governor_request_executor=_make_governor_request_executor(),
+    )
+
+    status = adapter.get_watch_window_status()
+    evidence = adapter.build_watch_window_evidence(metrics={"reason": "manual-check"})
+
+    assert status["watch_window"]["status"] == "active"
+    assert status["task_running"] is False
+    assert evidence["healthy"] is True
+    assert evidence["observation"]["active_slot"] == "slot-B"
+    assert evidence["observation"]["metrics"]["reason"] == "manual-check"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_watch_window_execution_adapter_evaluates_and_records_outcome():
+    watch_window = SimpleNamespace(
+        status="active",
+        expires_at=None,
+        model_dump=lambda mode="json": {"status": "active"},
+    )
+    registry = SimpleNamespace(
+        active_slot="slot-B",
+        retired_slot="slot-A",
+        watch_window=watch_window,
+    )
+    body_registry = SimpleNamespace(load_registry=Mock(return_value=registry))
+    agent = AgentInstance(
+        instance_id="new-active",
+        name="agent-slot-B-new",
+        pid=1402,
+        port=9402,
+        status="running",
+        healthy=True,
+        slot_id="slot-B",
+    )
+    governor_request_executor = _make_governor_request_executor(
+        {
+            "request": {"body_id": "slot-A"},
+            "governor_response": {"decision": "approve"},
+            "registry": {"active_slot": "slot-B", "retired_slot": None},
+        }
+    )
+    runtime_state = _make_watch_window_state()
+    adapter = WatchWindowExecutionAdapter(
+        body_registry=body_registry,
+        agents={"new-active": agent},
+        stop_agent=AsyncMock(return_value={"status": "stopped"}),
+        run_health_checks=AsyncMock(),
+        runtime_state=runtime_state,
+        governor_request_executor=governor_request_executor,
+    )
+
+    result = await adapter.evaluate_watch_window({"healthy_override": True})
+
+    assert result["status"] == "watch_window_evaluated"
+    assert result["governor_response"]["decision"] == "approve"
+    assert result["execution_followup"]["action"] == "retired_slot_recycled"
+    governor_request_executor.execute_governor_request.assert_called_once()
+    assert runtime_state.last_outcome is result
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_watch_window_execution_adapter_evaluate_success_reuses_reconcile_cleanup():
+    watch_window = SimpleNamespace(
+        status="active",
+        expires_at=None,
+        model_dump=lambda mode="json": {"status": "active"},
+    )
+    registry = SimpleNamespace(
+        active_slot="slot-B",
+        retired_slot="slot-A",
+        watch_window=watch_window,
+    )
+    body_registry = SimpleNamespace(load_registry=Mock(return_value=registry))
+    old_agent = AgentInstance(
+        instance_id="old-active",
+        name="agent-slot-A-old",
+        pid=1501,
+        port=9501,
+        status="running",
+        healthy=True,
+        slot_id="slot-A",
+    )
+    new_agent = AgentInstance(
+        instance_id="new-active",
+        name="agent-slot-B-new",
+        pid=1502,
+        port=9502,
+        status="running",
+        healthy=True,
+        slot_id="slot-B",
+    )
+    stopped_instances: list[str] = []
+
+    async def stop_agent(instance_id: str) -> dict:
+        stopped_instances.append(instance_id)
+        agent = {"old-active": old_agent, "new-active": new_agent}[instance_id]
+        agent.status = "stopped"
+        agent.pid = None
+        agent.healthy = False
+        return {"status": "stopped", "instance_id": instance_id}
+
+    adapter = WatchWindowExecutionAdapter(
+        body_registry=body_registry,
+        agents={"old-active": old_agent, "new-active": new_agent},
+        stop_agent=stop_agent,
+        run_health_checks=AsyncMock(),
+        runtime_state=_make_watch_window_state(),
+        governor_request_executor=_make_governor_request_executor(
+            {
+                "request": {"body_id": "slot-A"},
+                "governor_response": {"decision": "approve"},
+                "registry": {"active_slot": "slot-B", "retired_slot": None},
+            }
+        ),
+    )
+
+    result = await adapter.evaluate_watch_window({"healthy_override": True})
+
+    assert result["execution_followup"] == {
+        "action": "retired_slot_recycled",
+        "slot_id": "slot-A",
+        "stopped_instance_ids": ["old-active"],
+    }
+    assert stopped_instances == ["old-active"]
+    assert old_agent.status == "stopped"
+    assert new_agent.status == "running"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_watch_window_execution_adapter_evaluate_rollback_reuses_reconcile_cleanup():
+    watch_window = SimpleNamespace(
+        status="active",
+        expires_at=None,
+        model_dump=lambda mode="json": {"status": "active"},
+    )
+    registry = SimpleNamespace(
+        active_slot="slot-B",
+        retired_slot="slot-A",
+        watch_window=watch_window,
+    )
+    body_registry = SimpleNamespace(load_registry=Mock(return_value=registry))
+    restored_agent = AgentInstance(
+        instance_id="restored-old",
+        name="agent-slot-A-old",
+        pid=1601,
+        port=9601,
+        status="running",
+        healthy=True,
+        slot_id="slot-A",
+    )
+    failed_agent = AgentInstance(
+        instance_id="failed-new",
+        name="agent-slot-B-new",
+        pid=1602,
+        port=9602,
+        status="running",
+        healthy=False,
+        slot_id="slot-B",
+    )
+    stopped_instances: list[str] = []
+
+    async def stop_agent(instance_id: str) -> dict:
+        stopped_instances.append(instance_id)
+        agent = {"restored-old": restored_agent, "failed-new": failed_agent}[instance_id]
+        agent.status = "stopped"
+        agent.pid = None
+        agent.healthy = False
+        return {"status": "stopped", "instance_id": instance_id}
+
+    adapter = WatchWindowExecutionAdapter(
+        body_registry=body_registry,
+        agents={"restored-old": restored_agent, "failed-new": failed_agent},
+        stop_agent=stop_agent,
+        run_health_checks=AsyncMock(),
+        runtime_state=_make_watch_window_state(),
+        governor_request_executor=_make_governor_request_executor(
+            {
+                "request": {"body_id": "slot-B"},
+                "governor_response": {"decision": "rollback_required"},
+                "registry": {"active_slot": "slot-A", "retired_slot": "slot-B"},
+            }
+        ),
+    )
+
+    result = await adapter.evaluate_watch_window({"healthy_override": False})
+
+    assert result["execution_followup"] == {
+        "action": "failed_slot_drained",
+        "slot_id": "slot-B",
+        "restored_slot_id": "slot-A",
+        "restored_instance_id": "restored-old",
+        "gateway_activation": None,
+        "stopped_instance_ids": ["failed-new"],
+    }
+    assert stopped_instances == ["failed-new"]
+    assert failed_agent.status == "stopped"
+    assert restored_agent.status == "running"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_watch_window_execution_adapter_owns_task_lifecycle():
+    watch_window = SimpleNamespace(
+        status="active",
+        expires_at=None,
+        model_dump=lambda mode="json": {"status": "active"},
+    )
+    registry = SimpleNamespace(
+        active_slot="slot-B",
+        retired_slot="slot-A",
+        watch_window=watch_window,
+    )
+    body_registry = SimpleNamespace(load_registry=Mock(return_value=registry))
+    runtime_state = _make_watch_window_state()
+
+    adapter = WatchWindowExecutionAdapter(
+        body_registry=body_registry,
+        agents={},
+        stop_agent=AsyncMock(),
+        run_health_checks=AsyncMock(),
+        runtime_state=runtime_state,
+        governor_request_executor=_make_governor_request_executor(),
+        poll_interval_seconds=0.01,
+    )
+
+    task = adapter.ensure_watch_window_task()
+    assert task is not None
+    assert runtime_state.task is task
+    assert adapter.ensure_watch_window_task() is task
+
+    await asyncio.sleep(0.03)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert runtime_state.task is None
+
+
+@pytest.mark.unit
+def test_watch_window_execution_adapter_syncs_runtime_after_watch_approval():
+    existing_task = Mock()
+    existing_task.done.return_value = False
+    runtime_state = _make_watch_window_state(task=existing_task)
+
+    adapter = WatchWindowExecutionAdapter(
+        body_registry=SimpleNamespace(load_registry=Mock()),
+        agents={},
+        stop_agent=AsyncMock(),
+        run_health_checks=AsyncMock(),
+        runtime_state=runtime_state,
+        governor_request_executor=_make_governor_request_executor(),
+    )
+
+    result = adapter.sync_runtime_after_governor_response(SimpleNamespace(decision="approve_with_watch"))
+
+    assert result == {
+        "status": "watch_window_runtime_ensured",
+        "decision": "approve_with_watch",
+        "task_running": True,
+        "task_created": False,
+    }
+    assert runtime_state.task is existing_task
+
+
+@pytest.mark.unit
+def test_watch_window_execution_adapter_ignores_non_watch_governor_decisions():
+    adapter = WatchWindowExecutionAdapter(
+        body_registry=SimpleNamespace(load_registry=Mock()),
+        agents={},
+        stop_agent=AsyncMock(),
+        run_health_checks=AsyncMock(),
+        runtime_state=_make_watch_window_state(),
+        governor_request_executor=_make_governor_request_executor(),
+    )
+
+    result = adapter.sync_runtime_after_governor_response(SimpleNamespace(decision="approve"))
+
+    assert result == {
+        "status": "no_watch_window_runtime_change",
+        "decision": "approve",
+    }

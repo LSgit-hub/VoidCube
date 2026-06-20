@@ -1,0 +1,14 @@
+{
+  "name": "audit_trace_request",
+  "request": "Where did this conclusion come from?",
+  "reference_time": "2026-03-31T00:00:00Z",
+  "mode": "audit",
+  "target_id": "scene:0",
+  "expected_intent": "explain_memory",
+  "required_step_types": ["evidence_trace"],
+  "expected_strategy": "audit_first",
+  "requires_evidence_step": true,
+  "expected_uncertainty_flags": [],
+  "expected_answer_sections": ["observed", "structure", "evidence"],
+  "passing_threshold": 0.8
+}

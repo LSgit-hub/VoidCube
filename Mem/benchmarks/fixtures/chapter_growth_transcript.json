@@ -1,0 +1,22 @@
+{
+  "turns": [
+    {
+      "turn_id": "turn_101",
+      "speaker": "user",
+      "text": "2026-01-03 we decided to build the memory system around time and chronology.",
+      "timestamp": "2026-01-03T09:00:00Z"
+    },
+    {
+      "turn_id": "turn_102",
+      "speaker": "assistant",
+      "text": "2026-02-10 we implemented the schema and retrieval pipeline.",
+      "timestamp": "2026-02-10T10:00:00Z"
+    },
+    {
+      "turn_id": "turn_103",
+      "speaker": "user",
+      "text": "2026-03-12 we changed direction and refined the revision rules for the project.",
+      "timestamp": "2026-03-12T12:00:00Z"
+    }
+  ]
+}

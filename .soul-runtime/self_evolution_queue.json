@@ -1,0 +1,115 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "task_id": "feaf469c-02c5-46b8-a6f7-5cc0bb3f83c3",
+      "trace_id": "ddbb0082-e89e-43f5-b217-5f45629f6195",
+      "title": "Adopt gateway-backed idle judgement",
+      "summary": "Queue an evolution task instead of changing runtime directly.",
+      "task_type": "self_evolution",
+      "source": "self_learning",
+      "priority": "normal",
+      "status": "planned",
+      "created_at": "2026-06-03T11:07:50.729200",
+      "updated_at": "2026-06-03T11:07:50.729202",
+      "metadata": {
+        "session_id": "e9a71308-c9ac-422d-a25e-1ca4749ef187",
+        "topic_reason": "Need a formal self-evolution proposal backed by learning evidence.",
+        "topic_tags": [
+          "gateway",
+          "idle"
+        ],
+        "topic_id": "c5124dd6-2d3e-4b38-b790-cd364c10c9eb",
+        "conclusion_id": "ddbb0082-e89e-43f5-b217-5f45629f6195",
+        "verified": true,
+        "recommendation_type": "propose_evolution_task"
+      },
+      "evidence": {
+        "comparisons": [
+          "gateway-facts > clock-only"
+        ],
+        "experiments": [
+          {
+            "experiment_id": "3dad3307-6ee2-4968-84cb-545e655b70b3",
+            "topic_id": "c5124dd6-2d3e-4b38-b790-cd364c10c9eb",
+            "session_id": "e9a71308-c9ac-422d-a25e-1ca4749ef187",
+            "hypothesis": "Gateway activity facts should gate idle judgement.",
+            "method": "Compare clock-only judgement with gateway activity markers.",
+            "observations": [
+              "Gateway markers better match real user interruption patterns."
+            ],
+            "outcome": "passed",
+            "compared_against": [
+              "clock-only"
+            ],
+            "created_at": "2026-06-03T11:07:50.725751"
+          }
+        ],
+        "summary": "Promote gateway-backed idle judgement into the supervisor planning queue.",
+        "experiment_ids": [
+          "3dad3307-6ee2-4968-84cb-545e655b70b3"
+        ],
+        "priority_reason": "reduces false idle windows"
+      },
+      "constraints": {},
+      "decision_reason": "",
+      "decision_history": [],
+      "execution_request": null
+    },
+    {
+      "task_id": "867f6491-bdfd-4b52-bc60-4a8cf70af6d5",
+      "trace_id": "011ea3bd-a19f-4844-aea3-93aa1f783dbb",
+      "title": "Adopt gateway-backed idle judgement",
+      "summary": "Queue an evolution task instead of changing runtime directly.",
+      "task_type": "self_evolution",
+      "source": "self_learning",
+      "priority": "normal",
+      "status": "planned",
+      "created_at": "2026-06-03T11:09:01.133202",
+      "updated_at": "2026-06-03T11:09:01.133204",
+      "metadata": {
+        "session_id": "8944eb93-b638-4482-945c-e62e5f661739",
+        "topic_reason": "Need a formal self-evolution proposal backed by learning evidence.",
+        "topic_tags": [
+          "gateway",
+          "idle"
+        ],
+        "topic_id": "5aeef05c-4cae-49e3-b70c-1f0b9d8056e1",
+        "conclusion_id": "011ea3bd-a19f-4844-aea3-93aa1f783dbb",
+        "verified": true,
+        "recommendation_type": "propose_evolution_task"
+      },
+      "evidence": {
+        "comparisons": [
+          "gateway-facts > clock-only"
+        ],
+        "experiments": [
+          {
+            "experiment_id": "f4100ef5-64c9-4006-90e3-b397e52420b1",
+            "topic_id": "5aeef05c-4cae-49e3-b70c-1f0b9d8056e1",
+            "session_id": "8944eb93-b638-4482-945c-e62e5f661739",
+            "hypothesis": "Gateway activity facts should gate idle judgement.",
+            "method": "Compare clock-only judgement with gateway activity markers.",
+            "observations": [
+              "Gateway markers better match real user interruption patterns."
+            ],
+            "outcome": "passed",
+            "compared_against": [
+              "clock-only"
+            ],
+            "created_at": "2026-06-03T11:09:01.129028"
+          }
+        ],
+        "summary": "Promote gateway-backed idle judgement into the supervisor planning queue.",
+        "experiment_ids": [
+          "f4100ef5-64c9-4006-90e3-b397e52420b1"
+        ],
+        "priority_reason": "reduces false idle windows"
+      },
+      "constraints": {},
+      "decision_reason": "",
+      "decision_history": [],
+      "execution_request": null
+    }
+  ]
+}

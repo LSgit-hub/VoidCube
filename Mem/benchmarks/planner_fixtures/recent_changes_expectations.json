@@ -1,0 +1,12 @@
+{
+  "name": "recent_changes_request",
+  "request": "What changed in the project this month?",
+  "reference_time": "2026-03-31T00:00:00Z",
+  "expected_intent": "summarize_recent_changes",
+  "required_step_types": ["range_query", "evidence_trace"],
+  "expected_strategy": "timeline_first",
+  "requires_evidence_step": true,
+  "expected_uncertainty_flags": [],
+  "expected_answer_sections": ["observed", "structure", "evidence"],
+  "passing_threshold": 0.8
+}

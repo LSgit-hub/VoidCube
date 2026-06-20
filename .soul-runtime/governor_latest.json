@@ -1,0 +1,116 @@
+{
+  "record_id": "25364fe2-4f08-4ae0-b90e-652fba3a91f9",
+  "kind": "execution_outcome",
+  "created_at": "2026-06-03T11:09:00.606470",
+  "request": {
+    "request_id": "health-88a3c566-486f-45ef-b839-6d64446f3e47",
+    "trace_id": null,
+    "task_type": "self_evolution",
+    "decision_id": null,
+    "mode": "governor",
+    "event_type": "health_review_request",
+    "body_id": "slot-B",
+    "source_actor": "body_upgrade_pipeline",
+    "summary": "Candidate build complete and ready for probe review.",
+    "evidence": {
+      "build_complete": true,
+      "git_lineage": {}
+    },
+    "constraints": {
+      "target_transition": "candidate_to_probe"
+    },
+    "timestamp": "2026-06-03T11:09:00.106004"
+  },
+  "slot_meta": null,
+  "response": {
+    "decision": "approve",
+    "confidence": 0.82,
+    "risk_level": "low",
+    "reasoning_summary": "Candidate body appears build-complete and may receive a probe lease for controlled health verification.",
+    "required_actions": [
+      {
+        "action_type": "issue_probe_lease",
+        "slot_id": "slot-B",
+        "payload": {
+          "lease": "probe"
+        },
+        "notes": null
+      }
+    ],
+    "watch_window_hint": null,
+    "writeback_events": [
+      {
+        "event_type": "governor_decision",
+        "payload": {
+          "decision": "approve",
+          "target_transition": "candidate_to_probe",
+          "body_id": "slot-B"
+        }
+      }
+    ]
+  },
+  "execution_report": {
+    "decision": "approve",
+    "action_results": [
+      {
+        "action_type": "issue_probe_lease",
+        "status": "applied",
+        "slot_id": "slot-B",
+        "details": {
+          "body_state": "probe",
+          "lease": "probe"
+        }
+      }
+    ],
+    "writeback_events": [
+      {
+        "event_type": "governor_decision",
+        "payload": {
+          "decision": "approve",
+          "target_transition": "candidate_to_probe",
+          "body_id": "slot-B"
+        }
+      }
+    ]
+  },
+  "registry": {
+    "slot_ids": [
+      "slot-A",
+      "slot-B"
+    ],
+    "active_slot": "slot-A",
+    "shell_slot": null,
+    "retired_slot": null,
+    "current_generation": 0,
+    "watch_window": {
+      "status": "inactive",
+      "slot_id": null,
+      "started_at": null,
+      "expires_at": null,
+      "stable_window_days": 3,
+      "stable_health_checks": 3
+    },
+    "last_switch_result": null
+  },
+  "evolution_lineage": {
+    "body_id": "slot-B",
+    "trace_id": null,
+    "task_type": "self_evolution",
+    "decision_id": null,
+    "event_type": "health_review_request",
+    "source_actor": "body_upgrade_pipeline",
+    "source_branch": null,
+    "source_commit": null,
+    "candidate_branch": null,
+    "candidate_commit": null,
+    "active_ref": null,
+    "rollback_ref": null,
+    "rollback_commit": null,
+    "diff_summary": "",
+    "changed_files": [],
+    "probe_report_ref": null,
+    "active_slot": "slot-A",
+    "retired_slot": null,
+    "evolution_boundary": null
+  }
+}

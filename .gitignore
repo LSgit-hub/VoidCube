@@ -1,0 +1,190 @@
+# ==========================================
+# 🔐 密钥和凭证文件 (Security & Credentials)
+# ==========================================
+.env
+.env.local
+.env.*.local
+*.env
+*.env.development
+*.env.test
+*.env.production
+.envrc
+
+*.pem
+*.key
+*.crt
+*.p12
+*.p7b
+*.p7c
+*.pfx
+*.secret
+*.secrets.json
+*.secrets.yml
+*.secrets.yaml
+*.api_key
+*.apikey
+*api*.txt
+*secret*.txt
+*password*.txt
+*token*.txt
+*credentials*.txt
+
+.vault
+credentials/
+secrets/
+auth/
+config/secrets/
+config/secret/
+
+# ==========================================
+# 🐍 Python 和虚拟环境
+# ==========================================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.o
+*.obj
+.Python
+
+venv/
+env/
+ENV/
+.venv/
+.venv-python313-broken/
+.python-*/
+*.venv
+env.bak/
+venv.bak/
+
+# ==========================================
+# 📦 构建和分发
+# ==========================================
+dist/
+build/
+*.egg
+*.egg-info/
+*.whl
+
+# ==========================================
+# 📝 日志文件
+# ==========================================
+*.log
+*.log.1
+*.log.2
+*.log.3
+*.log.4
+*.log.5
+*.log.6
+*.log.7
+*.log.8
+*.log.9
+*.log.gz
+*.log.Z
+logs/
+
+# ==========================================
+# 💾 数据库文件
+# ==========================================
+*.sqlite
+*.sqlite3
+*.db
+*.db.*
+
+# ==========================================
+# 🚀 VoidCube 特定
+# ==========================================
+.VoidCube/
+.voidcube/
+.body-slots/
+.body-registry.json
+.body-active.json
+soul-runtime/
+.mem/
+
+# ==========================================
+# 🔧 编译输出和二进制
+# ==========================================
+*.exe
+*.dll
+*.dylib
+*.so.*
+*.out
+*.a
+*.lib
+*.pdb
+*.ko
+*.mod
+*.mod.c
+*.lst
+*.elf
+*.bin
+*.img
+*.iso
+*.hex
+*.s
+*.S
+*.d
+*.di
+*.class
+*.pyw
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+
+# C/C++ compilation database
+compile_commands.json
+
+# ==========================================
+# 🛠️ 编辑器和 IDE
+# ==========================================
+.idea/
+.vscode/
+.vscode/settings.json
+.vscode/tasks.json
+.vscode/launch.json
+.vscode/extensions.json
+.vs/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+
+# ==========================================
+# 🗂️ 其他临时文件和缓存
+# ==========================================
+.arts/
+.mypy_cache/
+.pytest_tmp/
+.tmp-pytest*/
+.pytest_cache/
+.trae/
+*.tmp
+*.temp
+*.backup
+*.bak
+*-backup
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ==========================================
+# 🏷️ 本地运行和敏感临时文件（建议）
+# ==========================================
+# 本地测试/运行环境文件，避免凭证/环境泄露
+test_env.env
+# 运行时产生的本地-only 状态或缓存
+.local_state/
+.cache/
+
+# ==========================================
+# 📦 可选：忽略大型数据/模型目录（如果使用 Git LFS，移除此项并改用 `git lfs track`）
+# ==========================================
+# model_data/
+# models/

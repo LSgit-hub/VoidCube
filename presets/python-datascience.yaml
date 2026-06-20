@@ -1,0 +1,8 @@
+name: Python 数据科学
+description: Python + Jupyter + 常用数据科学库
+steps:
+  - action: pkg_install
+    packages: "jupyter pandas numpy matplotlib scipy scikit-learn"
+    manager: pip
+  - action: firewall_allow
+    ports: [8888]

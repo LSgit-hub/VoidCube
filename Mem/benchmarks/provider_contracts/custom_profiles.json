@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "vendor-file-profile": {
+      "extends": "legacy-compatible",
+      "chat_completions_path": "/vendor/file/chat",
+      "system_prompt_style": "developer",
+      "response_format_style": "json_object_string",
+      "response_content_style": "choices_text"
+    }
+  }
+}

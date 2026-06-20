@@ -1,0 +1,22 @@
+{
+  "turns": [
+    {
+      "turn_id": "turn_301",
+      "speaker": "user",
+      "text": "Today we decided to pause the schema rollout because retrieval is unstable.",
+      "timestamp": "2026-04-05T09:00:00Z"
+    },
+    {
+      "turn_id": "turn_302",
+      "speaker": "assistant",
+      "text": "Tomorrow we will revise the retrieval plan and continue the project carefully.",
+      "timestamp": "2026-04-05T11:00:00Z"
+    },
+    {
+      "turn_id": "turn_303",
+      "speaker": "user",
+      "text": "This week we implemented a smaller timeline index instead of making broad conclusions.",
+      "timestamp": "2026-04-05T15:00:00Z"
+    }
+  ]
+}

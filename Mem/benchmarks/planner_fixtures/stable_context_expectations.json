@@ -1,0 +1,12 @@
+{
+  "name": "stable_context_request",
+  "request": "What stable constraints should I remember before answering?",
+  "reference_time": "2026-03-31T00:00:00Z",
+  "expected_intent": "retrieve_stable_context",
+  "required_step_types": ["profile_lookup"],
+  "expected_strategy": "stable_context_first",
+  "requires_evidence_step": false,
+  "expected_uncertainty_flags": [],
+  "expected_answer_sections": ["observed", "stable_context"],
+  "passing_threshold": 0.8
+}

@@ -1,0 +1,20 @@
+{
+  "name": "chapter_growth_memory_design",
+  "expected_min_events": 3,
+  "expected_min_scenes": 2,
+  "expected_min_arcs": 1,
+  "expected_min_epochs": 1,
+  "expected_topics": [
+    "memory-system",
+    "timeline-indexing",
+    "schema",
+    "retrieval",
+    "revision",
+    "project-definition"
+  ],
+  "required_theme_queries": [
+    "memory-system",
+    "revision"
+  ],
+  "passing_threshold": 0.5
+}

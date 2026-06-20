@@ -1,0 +1,610 @@
+{
+  "locale": "en_US",
+  "name": "English",
+  "translations": {
+    "commands": {
+      "plugin_command": "Plugin command",
+      "skill_command": "Skill command",
+      "new": {
+        "description": "Start a new session (fresh session ID + history)"
+      },
+      "clear": {
+        "description": "Clear screen and start a new session"
+      },
+      "history": {
+        "description": "Show conversation history"
+      },
+      "save": {
+        "description": "Save the current conversation"
+      },
+      "retry": {
+        "description": "Retry the last message (resend to agent)"
+      },
+      "undo": {
+        "description": "Remove the last user/assistant exchange"
+      },
+      "title": {
+        "description": "Set a title for the current session"
+      },
+      "branch": {
+        "description": "Branch the current session (explore a different path)"
+      },
+      "compress": {
+        "description": "Manually compress conversation context"
+      },
+      "rollback": {
+        "description": "List or restore filesystem checkpoints"
+      },
+      "stop": {
+        "description": "Kill all running background processes"
+      },
+      "approve": {
+        "description": "Approve a pending dangerous command"
+      },
+      "deny": {
+        "description": "Deny a pending dangerous command"
+      },
+      "background": {
+        "description": "Run a prompt in the background"
+      },
+      "btw": {
+        "description": "Ephemeral side question using session context (no tools, not persisted)"
+      },
+      "queue": {
+        "description": "Queue a prompt for the next turn (doesn't interrupt)"
+      },
+      "status": {
+        "description": "Show session info"
+      },
+      "profile": {
+        "description": "Show active profile name and home directory"
+      },
+      "sethome": {
+        "description": "Set this chat as the home channel"
+      },
+      "resume": {
+        "description": "Resume a previously-named session"
+      },
+      "config": {
+        "description": "Show current configuration"
+      },
+      "model": {
+        "description": "Switch model for this session"
+      },
+      "provider": {
+        "description": "Show available providers and current provider"
+      },
+      "personality": {
+        "description": "Set a predefined personality"
+      },
+      "statusbar": {
+        "description": "Toggle the context/model status bar"
+      },
+      "verbose": {
+        "description": "Cycle tool progress display: off -> new -> all -> verbose"
+      },
+      "yolo": {
+        "description": "Toggle YOLO mode (skip all dangerous command approvals)"
+      },
+      "reasoning": {
+        "description": "Manage reasoning effort and display"
+      },
+      "fast": {
+        "description": "Toggle fast mode — OpenAI Priority Processing (Normal/Fast)"
+      },
+      "skin": {
+        "description": "Show or change the display skin/theme"
+      },
+      "language": {
+        "description": "Show or change the display language"
+      },
+      "voice": {
+        "description": "Toggle voice mode"
+      },
+      "tools": {
+        "description": "Manage tools: /tools [list|disable|enable] [name...]"
+      },
+      "toolsets": {
+        "description": "List available toolsets"
+      },
+      "skills": {
+        "description": "Search, install, inspect, or manage skills"
+      },
+      "cron": {
+        "description": "Manage scheduled tasks"
+      },
+      "reload-mcp": {
+        "description": "Reload MCP servers from config"
+      },
+      "browser": {
+        "description": "Connect browser tools to your live Chrome via CDP"
+      },
+      "plugins": {
+        "description": "List installed plugins and their status"
+      },
+      "commands": {
+        "description": "Browse all commands and skills (paginated)"
+      },
+      "help": {
+        "description": "Show available commands"
+      },
+      "restart": {
+        "description": "Gracefully restart the gateway after draining active runs"
+      },
+      "usage": {
+        "description": "Show token usage and rate limits for the current session"
+      },
+      "insights": {
+        "description": "Show usage insights and analytics"
+      },
+      "platforms": {
+        "description": "Show gateway/messaging platform status"
+      },
+      "paste": {
+        "description": "Check clipboard for an image and attach it"
+      },
+      "image": {
+        "description": "Attach a local image file for your next prompt"
+      },
+      "update": {
+        "description": "Update Voidcube Agent to the latest version"
+      },
+      "debug": {
+        "description": "Upload debug report (system info + logs) and get shareable links"
+      },
+      "quit": {
+        "description": "Exit the CLI"
+      },
+      "connect": {
+        "description": "Manage server SSH connections"
+      },
+      "preset": {
+        "description": "Apply deployment presets (LNMP, Docker, etc.)"
+      },
+      "doctor": {
+        "description": "Diagnose configuration issues"
+      },
+      "api": {
+        "description": "Configure API settings"
+      }
+    },
+    "categories": {
+      "Session": "Session",
+      "Configuration": "Configuration",
+      "Tools & Skills": "Tools & Skills",
+      "Info": "Info",
+      "Exit": "Exit",
+      "会话管理": "Session",
+      "配置管理": "Configuration",
+      "服务器管理": "Server Management",
+      "帮助信息": "Info",
+      "诊断": "Diagnostics",
+      "API配置": "API Config",
+      "退出": "Exit"
+    },
+    "banner": {
+      "available_tools": "Available Tools",
+      "available_skills": "Available Skills",
+      "mcp_servers": "MCP Servers",
+      "session": "Session",
+      "profile": "Profile",
+      "no_skills": "No skills installed",
+      "more_toolsets": "and {count} more toolsets...",
+      "tools_count": "{count} tools",
+      "skills_count": "{count} skills",
+      "mcp_count": "{count} MCP servers",
+      "help_hint": "/help for commands",
+      "update_available": "⚠ {count} commits behind",
+      "update_command": "run {command} to update",
+      "mcp_tools_count": "{count} tool(s)",
+      "mcp_failed": "failed"
+    },
+    "errors": {
+      "no_tty": "Voidcube CLI requires an interactive terminal (TTY). Do not pipe or redirect input.",
+      "no_session": "Failed to load session: {session_id}",
+      "config_error": "Configuration error: {error}",
+      "model_not_found": "Model not found: {model}",
+      "provider_error": "Provider error: {error}",
+      "file_not_found": "File not found: {path}",
+      "permission_denied": "Permission denied: {path}",
+      "network_error": "Network error: {error}",
+      "api_error": "API error: {error}",
+      "timeout": "Operation timed out",
+      "invalid_command": "Invalid command: {command}",
+      "missing_argument": "Missing argument: {arg}"
+    },
+    "prompts": {
+      "select_session": "Select session",
+      "search_sessions": "Search sessions...",
+      "no_sessions": "No sessions found",
+      "no_tools_available": "No tools available",
+      "total_tools": "{count} tools total",
+      "confirm_exit": "Confirm exit?",
+      "cancel_operation": "Operation cancelled",
+      "first_run": "First run? Run '/api' to get started",
+      "setup_wizard": "Setup wizard",
+      "enter_api_key": "Enter API key",
+      "select_model": "Select model",
+      "select_provider": "Select provider",
+      "resumed_session": "Resumed session",
+      "user_messages": "user message",
+      "total_messages": "total messages"
+    },
+    "process": {
+      "watch_match": "Background process {sid} matched watch pattern",
+      "command": "Command",
+      "matched_output": "Matched output",
+      "suppressed_count": "({count} earlier matches were suppressed by rate limit)",
+      "completed": "Background process {sid} completed",
+      "exit_code": "exit code",
+      "output": "Output"
+    },
+    "language_command": {
+      "current": "Current language: {locale} - {name}",
+      "available": "Available languages:",
+      "usage": "Usage: /language [-CN|-EN]",
+      "examples": "Examples:",
+      "example_show": "/language      - Show current language",
+      "example_cn": "/language -CN  - Switch to Chinese",
+      "example_en": "/language -EN  - Switch to English",
+      "tip_env": "Tip: Set VOIDCUBE_LANG environment variable to make it permanent.",
+      "invalid_param": "Invalid parameter: {param}",
+      "set_to": "Language set to: {locale}",
+      "set_to_saved": "Language set to: {locale} (saved)",
+      "switched_cn": "Note: Interface updated to Chinese.",
+      "switched_en": "Note: Interface updated to English.",
+      "i18n_not_available": "i18n module not available.",
+      "lang_zh_CN": "简体中文",
+      "lang_en_US": "English"
+    },
+    "usage": {
+      "config_set": "Usage: VoidCube config set <key> <value>",
+      "cron": "Usage: VoidCube cron [list|create|edit|pause|resume|run|remove|status|tick]",
+      "debug_share": "Usage: VoidCube debug share [--lines N] [--expire N] [--local]",
+      "pairing": "Usage: VoidCube pairing {list|approve|revoke|clear-pending}",
+      "webhook": "Usage: VoidCube webhook {subscribe|list|remove|test}",
+      "skills": "Usage: VoidCube skills [browse|search|install|inspect|list|check|update|audit|uninstall|publish|snapshot|tap]",
+      "skills_search": "Usage: /skills search <query> [--source skills-sh|well-known|github|official] [--limit N]",
+      "skills_install": "Usage: /skills install <identifier> [--category <cat>] [--force] [--now]",
+      "skills_inspect": "Usage: /skills inspect <identifier>",
+      "skills_uninstall": "Usage: /skills uninstall <name> [--now]",
+      "skills_publish": "Usage: /skills publish <skill-path> [--to github] [--repo owner/repo]",
+      "skills_snapshot": "Usage: /skills snapshot export <file> | /skills snapshot import <file>",
+      "skills_tap": "Usage: VoidCube skills tap [list|add|remove]",
+      "language": "Usage: /language [-CN|-EN]"
+    },
+    "tips": {
+      "set_env_permanent": "Tip: Set {env_var} environment variable to make it permanent.",
+      "run_doctor_fix": "Tip: run '{command}' to auto-fix what's possible.",
+      "agent_prefix": "Tip: Agent responses are prefixed with '{prefix}'",
+      "select_provider_model": "Tip: You can now select a provider and model:",
+      "skills_search_deeper": "Tip: 'VoidCube skills search <query>' searches deeper across all registries",
+      "fresh_start": "✨ (◕‿◕)✨ Fresh start! Screen cleared and conversation reset.",
+      "browser_local_mode": "Tip: set browser.cloud_provider to 'local' to use free local mode instead",
+      "tip_prefix": "✦ Tip:",
+      "chat_hint": "Just type your message to chat with Voidcube!",
+      "resume_hint": "Tip: Use /history or `VoidCube sessions list` to find sessions.",
+      "sudo_password_hint": "Tip: To enable sudo over messaging, add SUDO_PASSWORD to {path}/.env on the agent machine."
+    },
+    "auth": {
+      "login_successful": "Login successful!",
+      "login_cancelled": "Login cancelled.",
+      "signing_in": "Signing in to {provider}...",
+      "waiting_signin": "Waiting for sign-in... (press Ctrl+C to cancel)",
+      "please_enter_number": "Please enter a number",
+      "invalid_choice": "Invalid choice.",
+      "credential_pool_status": "Credential Pool Status",
+      "what_to_do": "What would you like to do?",
+      "choose_method": "Choose authentication method:",
+      "method_api_key": "1. API key (paste a key from the provider dashboard)",
+      "method_oauth": "2. OAuth login (authenticate via browser)",
+      "no_provider_logged_in": "No provider is currently logged in.",
+      "open_browser": "(Opened browser for verification)",
+      "cannot_open_browser": "Could not open browser automatically — use the URL above.",
+      "no_free_models": "No free models currently available.",
+      "no_curated_models": "No curated models available for Nous Portal.",
+      "subscription_required": "Your Nous Portal account does not have an active subscription.",
+      "subscribe_then_model": "After subscribing, run `VoidCube model` to finish setup.",
+      "to_continue": "To continue:",
+      "step_open_url": "1. Open this URL in your browser:",
+      "step_enter_code": "2. Enter this code:",
+      "tls_disabled": "TLS verification: disabled (--insecure)",
+      "using_openrouter": "Voidcube will use OpenRouter for inference.",
+      "run_model_or_config": "Run `VoidCube model` or configure an API key to use Voidcube.",
+      "migrating_codex": "Migrating Codex credentials to Voidcube's own auth store.",
+      "migrating_avoid_conflict": "This avoids conflicts with Codex CLI and VS Code.",
+      "migrating_run_auth": "Run `VoidCube auth` to create a fully independent session.",
+      "login_removed": "The 'VoidCube login' command has been removed.",
+      "use_auth_instead": "Use 'VoidCube auth' to manage credentials,",
+      "use_model_or_setup": "'VoidCube model' to select a provider, or '/api' for full setup.",
+      "codex_found_in_store": "Existing Codex credentials found in Voidcube auth store.",
+      "codex_expired": "Existing Codex credentials are expired. Starting fresh login...",
+      "codex_cli_found": "Found existing Codex CLI credentials at ~/.codex/auth.json",
+      "codex_will_create": "Voidcube will create its own session to avoid conflicts with Codex CLI / VS Code.",
+      "credentials_imported": "Credentials imported. Note: if Codex CLI refreshes its token,",
+      "VoidCube_will_continue": "Voidcube will keep working independently with its own session.",
+      "creating_own_session": "(Voidcube creates its own session — won't affect Codex CLI or VS Code)",
+      "cleared_anthropic": "",
+      "suppressed_claude_code": "",
+      "claude_code_note": "",
+      "run_auth_add": "",
+      "whatsapp_paired": "WhatsApp paired successfully!",
+      "next_steps": "Next steps:"
+    },
+    "backup": {
+      "no_files": "No files to back up.",
+      "config_exists": "Warning: Target directory already has Voidcube configuration.",
+      "will_overwrite": "Importing will overwrite existing files with backup contents.",
+      "aborted": "Aborted."
+    },
+    "common": {
+      "error": "Error",
+      "warning": "Warning",
+      "success": "Success",
+      "cancelled": "Cancelled",
+      "completed": "Completed",
+      "failed": "Failed",
+      "yes": "Yes",
+      "no": "No",
+      "ok": "OK",
+      "cancel": "Cancel",
+      "continue": "Continue",
+      "back": "Back",
+      "quit": "Quit",
+      "help": "Help",
+      "confirm": "Confirm",
+      "select": "Select",
+      "search": "Search",
+      "filter": "Filter",
+      "sort": "Sort",
+      "refresh": "Refresh",
+      "reload": "Reload",
+      "save": "Save",
+      "load": "Load",
+      "export": "Export",
+      "import": "Import",
+      "copy": "Copy",
+      "paste": "Paste",
+      "cut": "Cut",
+      "undo": "Undo",
+      "redo": "Redo",
+      "clear": "Clear",
+      "reset": "Reset",
+      "default": "Default",
+      "custom": "Custom",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "active": "Active",
+      "inactive": "Inactive",
+      "online": "Online",
+      "offline": "Offline",
+      "connected": "Connected",
+      "disconnected": "Disconnected",
+      "loading": "Loading...",
+      "processing": "Processing...",
+      "saving": "Saving...",
+      "please_wait": "Please wait...",
+      "no_results": "No results",
+      "not_found": "Not found",
+      "invalid_input": "Invalid input",
+      "missing_required": "Missing required parameter",
+      "repo_required": "Repo required."
+    },
+    "cli": {
+      "welcome": "VoidCube ready. /help for commands.",
+      "security_scanner_unavailable": "⚠ tirith security scanner enabled but not available — command scanning will use pattern matching only"
+    },
+    "help": {
+      "available_commands": "(^_^)? Available Commands",
+      "skill_commands": "⚡ Skill Commands",
+      "tip_chat": "Tip: Just type your message to chat with Voidcube!",
+      "tip_multiline": "Multi-line: Alt+Enter for a new line",
+      "tip_paste": "Paste image: Alt+V (or /paste)"
+    },
+    "time": {
+      "just_now": "just now",
+      "minutes_ago": "{count} minutes ago",
+      "hours_ago": "{count} hours ago",
+      "days_ago": "{count} days ago",
+      "weeks_ago": "{count} weeks ago",
+      "months_ago": "{count} months ago",
+      "yesterday": "yesterday"
+    },
+    "ops": {
+      "system_info": "Get system information (CPU, memory, OS, uptime)",
+      "cpu_stats": "Get CPU usage statistics",
+      "cpu_stats.interval": "Sample interval in seconds",
+      "memory_stats": "Get memory and swap usage",
+      "disk_usage": "Get disk usage for a path",
+      "disk_usage.path": "Disk path",
+      "disk_partitions": "List all disk partitions",
+      "top_processes": "List top processes by CPU or memory",
+      "top_processes.sort_by": "Sort by cpu or memory",
+      "top_processes.limit": "Number of processes",
+      "service_status": "Check service status",
+      "service_start": "Start a service",
+      "service_stop": "Stop a service",
+      "service_restart": "Restart a service",
+      "service_enable": "Enable a service on boot",
+      "service_disable": "Disable a service on boot",
+      "service_logs": "Get service logs",
+      "list_services": "List all services",
+      "service_name": "Service name",
+      "service_state": "Filter by state",
+      "log_lines": "Number of lines",
+      "ping": "Ping a host",
+      "host": "Host to ping",
+      "ping_count": "Number of pings",
+      "check_port": "Check if a port is open",
+      "scan_ports": "Scan ports on a host",
+      "net_connections": "List network connections",
+      "net_interfaces": "List network interfaces",
+      "dns_lookup": "DNS lookup",
+      "curl_check": "HTTP request to a URL",
+      "traceroute": "Traceroute to a host",
+      "host_generic": "Host",
+      "port_number": "Port number",
+      "port_ranges": "Port ranges e.g. 22,80,443,8000-9000",
+      "domain_name": "Domain name",
+      "record_type": "Record type A, AAAA, MX etc",
+      "url": "URL",
+      "http_method": "HTTP method",
+      "timeout_seconds": "Timeout seconds",
+      "max_hops": "Max hops",
+      "pkg_install": "Install packages (apt/yum/dnf/pacman/pip/npm)",
+      "pkg_update": "Update package cache",
+      "pkg_upgrade": "Upgrade all packages",
+      "pkg_remove": "Remove packages",
+      "pkg_search": "Search for packages",
+      "pkg_list_installed": "List installed packages",
+      "pkg_names": "Space-separated package names",
+      "pkg_manager": "Package manager",
+      "update_cache_first": "Update cache first",
+      "search_query": "Search query",
+      "docker_ps": "List Docker containers",
+      "docker_images": "List Docker images",
+      "docker_run": "Run a Docker container",
+      "docker_stop": "Stop a Docker container",
+      "docker_start": "Start a Docker container",
+      "docker_restart": "Restart a Docker container",
+      "docker_rm": "Remove a Docker container",
+      "docker_logs": "Get Docker container logs",
+      "docker_exec": "Execute command in a Docker container",
+      "docker_compose_up": "Run docker compose up",
+      "docker_compose_down": "Run docker compose down",
+      "docker_image": "Docker image",
+      "container_name": "Container name",
+      "container_id": "Container name or ID",
+      "port_mappings": "Port mappings",
+      "volume_mappings": "Volume mappings",
+      "env_vars": "Environment variables",
+      "run_background": "Run in background",
+      "command": "Command",
+      "force_remove": "Force remove",
+      "include_stopped": "Include stopped",
+      "compose_path": "Compose file or directory",
+      "read_log": "Read and filter log files",
+      "journalctl": "Read systemd journal logs",
+      "log_errors": "Read error lines from a log file",
+      "analyze_log": "Analyze log file for errors and statistics",
+      "log_path": "Log file path",
+      "filter_pattern": "Filter pattern",
+      "filter_level": "Filter by level",
+      "systemd_unit": "Systemd unit",
+      "time_range": "Time range",
+      "firewall_status": "Check firewall status",
+      "firewall_allow": "Allow port through firewall",
+      "firewall_deny": "Block port through firewall",
+      "list_users": "List system users",
+      "user_add": "Add a system user",
+      "user_del": "Delete a system user",
+      "file_permissions": "Check file permissions",
+      "set_permissions": "Set file permissions and ownership",
+      "ssh_keygen": "Generate SSH key pair",
+      "port_number": "Port number",
+      "protocol_tcp_udp": "Protocol tcp/udp",
+      "source_ip_cidr": "Source IP/CIDR",
+      "username": "Username",
+      "login_shell": "Login shell",
+      "comma_groups": "Comma-separated groups",
+      "file_path": "File path",
+      "perm_mode": "Permission mode e.g. 644",
+      "owner_user": "Owner user",
+      "owner_group": "Owner group",
+      "key_comment": "Key comment",
+      "key_type": "Key type ed25519/rsa",
+      "setup_wizard": {
+        "welcome": "Welcome to VoidCube! First-time setup required.",
+        "step_env_check": "[1/7] Environment Check",
+        "step_api_config": "[2/7] API Configuration",
+        "step_lang": "[3/7] Language",
+        "step_ssh": "[4/7] SSH Setup (Optional)",
+        "step_tools": "[5/7] Common Tools",
+        "step_security": "[6/7] Security Baseline (Optional)",
+        "step_verify": "[7/7] Save & Verify",
+        "api_key_prompt": "Enter API Key (e.g. sk-...)",
+        "api_key_hint": "(Press Enter to skip, configure later via /config)",
+        "model_prompt": "Select model number [1-6]",
+        "base_url_prompt": "Enter Base URL (Enter for default)",
+        "lang_prompt": "Select language [1/2]",
+        "ssh_setup": "Configure SSH key?",
+        "ssh_key_type": "Key type (ed25519/rsa)",
+        "ssh_key_comment": "Key comment",
+        "tool_select": "Select tools to pre-install (space to select, enter to confirm)",
+        "firewall_setup": "Configure firewall?",
+        "firewall_open_ports": "Ports to open (comma-separated, e.g. 80,443)",
+        "verifying": "Verifying configuration...",
+        "api_ok": "API connection successful",
+        "api_fail": "API connection failed, check configuration",
+        "done": "Setup complete! Saved to {path}",
+        "skipped": "(skipped)",
+        "env_os": "OS",
+        "env_pkg_mgr": "Package Manager",
+        "env_docker": "Docker",
+        "env_python": "Python",
+        "env_node": "Node.js",
+        "env_detected": "Detection Results",
+        "env_available": "Available",
+        "env_not_available": "Not Available"
+      },
+      "ops_errors": {
+        "invalid_service_name": "Invalid service name: {name}",
+        "invalid_service_state": "Invalid service state: {state}",
+        "invalid_lines_range": "Invalid lines value: {lines}, must be 1-10000",
+        "invalid_package_name": "Invalid package name: {name}",
+        "invalid_host": "Invalid hostname: {host}",
+        "invalid_port": "Invalid port number: {port}",
+        "invalid_url": "Invalid URL: {url}",
+        "invalid_path": "Invalid path: {path}",
+        "invalid_username": "Invalid username: {name}",
+        "invalid_sort_by": "Invalid sort field: {field}, use 'cpu' or 'memory'",
+        "invalid_limit": "Invalid limit: {limit}",
+        "invalid_interval": "Invalid interval: {interval}",
+        "invalid_container_name": "Invalid container name: {name}",
+        "invalid_image_name": "Invalid image name: {name}",
+        "dangerous_command": "Dangerous command pattern detected: {pattern}",
+        "command_not_found": "Command not found: {cmd}",
+        "permission_denied": "Permission denied",
+        "timeout": "Operation timed out",
+        "operation_failed": "Operation failed: {error}",
+        "no_log_found": "No log found for {name}"
+      }
+    },
+    "memory": {
+      "installing_deps": "Installing dependencies: {deps}",
+      "uv_not_found": "uv not found",
+      "install_uv": "Run: uv pip install uv",
+      "re_run": "Then re-run this command",
+      "installed": "Installed: {deps}",
+      "failed_install": "Failed to install: {deps}",
+      "install_failed": "Installation failed: {error}",
+      "run_manually": "Or run manually: {cmd}",
+      "dep_not_found": "External dependency not found: {dep}",
+      "provider_not_found": "Provider not found: {provider}",
+      "run_setup": "Run /memory setup to configure",
+      "provider": "Provider: {name}",
+      "activation_saved": "Activation saved",
+      "no_providers": "No memory providers found",
+      "install_plugin": "Run /memory setup to install a plugin",
+      "builtin_only": "Built-in only (MEMORY.md / USER.md)",
+      "saved_to_config": "Saved to config",
+      "configuring": "Configuring: {name}",
+      "failed_write_config": "Failed to write config: {error}",
+      "config_saved": "Config saved",
+      "api_keys_saved": "API keys saved",
+      "start_new_session": "Start a new session to use",
+      "status": "Memory Status",
+      "builtin_always_active": "Built-in memory: always active",
+      "none_builtin_only": "none (built-in only)",
+      "plugin_installed": "Plugin installed",
+      "status_available": "Status: available",
+      "status_not_available": "Status: not available",
+      "missing": "Missing:",
+      "plugin_not_installed": "Plugin not installed",
+      "install_plugin_to": "Install plugin for: {provider}",
+      "installed_plugins": "Installed plugins",
+      "active": " (active)",
+      "setup": "Memory Setup"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+name: 监控栈 (Prometheus + Grafana)
+description: 部署 Prometheus + Grafana + Node Exporter 监控体系
+tags: [monitoring, prometheus, grafana, observability]
+steps:
+  - action: pkg_install
+    packages: "prometheus grafana prometheus-node-exporter"
+    condition: "os == 'linux'"
+  - action: service_enable
+    services: ["prometheus", "grafana-server", "prometheus-node-exporter"]
+  - action: firewall_allow
+    ports: [9090, 3000, 9100]
+  - action: service_start
+    services: ["prometheus", "grafana-server", "prometheus-node-exporter"]

@@ -1,0 +1,19 @@
+{
+  "name": "mixed_language_project_bootstrap",
+  "expected_min_events": 3,
+  "expected_min_scenes": 1,
+  "expected_min_arcs": 1,
+  "expected_min_epochs": 1,
+  "expected_topics": [
+    "memory-system",
+    "schema",
+    "retrieval",
+    "revision"
+  ],
+  "required_theme_queries": [
+    "memory-system",
+    "revision"
+  ],
+  "passing_threshold": 0.5,
+  "notes": "Starter fixture for smoke-testing extraction and scene construction on a mixed Chinese-English transcript."
+}

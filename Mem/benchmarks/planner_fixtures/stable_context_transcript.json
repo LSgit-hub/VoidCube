@@ -1,0 +1,16 @@
+{
+  "turns": [
+    {
+      "turn_id": "turn_001",
+      "speaker": "user",
+      "text": "Please use Chinese responses.",
+      "timestamp": "2026-03-22T09:00:00Z"
+    },
+    {
+      "turn_id": "turn_002",
+      "speaker": "assistant",
+      "text": "The project must preserve evidence traces.",
+      "timestamp": "2026-03-22T10:00:00Z"
+    }
+  ]
+}

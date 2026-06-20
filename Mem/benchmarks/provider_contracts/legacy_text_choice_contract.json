@@ -1,0 +1,34 @@
+{
+  "name": "legacy_text_choice_transport_contract",
+  "provider_profile": "legacy-compatible",
+  "response_content_style": "choices_text",
+  "chat_completions_path": "/custom/chat",
+  "invocation": {
+    "method": "extract_events",
+    "turns": [
+      {
+        "turn_id": "turn_010",
+        "speaker": "assistant",
+        "text": "2026-03-23 we adapted the parser for legacy text choice responses.",
+        "timestamp": "2026-03-23T10:00:00Z"
+      }
+    ]
+  },
+  "response": {
+    "choices": [
+      {
+        "text": "{\"events\": [{\"title\": \"Legacy parser adapted\", \"summary\": \"The parser now accepts legacy text choice responses.\", \"event_kind\": \"implementation\", \"impact_scope\": \"scene\", \"topics\": [\"provider-contract\"], \"entities\": [\"client\"], \"source_turns\": [\"turn_010\"], \"time_hint\": \"2026-03-23\", \"importance\": 0.7, \"confidence\": 0.85, \"main_or_side\": \"side\", \"novelty\": 0.6}]}"
+      }
+    ]
+  },
+  "expectations": {
+    "url_suffix": "/custom/chat",
+    "message_roles": ["system", "user"],
+    "response_format": "absent",
+    "request_contains": [
+      "\"task\": \"extractor.events\""
+    ],
+    "expected_min_events": 1,
+    "expected_summary_contains": "legacy text choice"
+  }
+}

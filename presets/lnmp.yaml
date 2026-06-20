@@ -1,0 +1,9 @@
+name: LNMP 环境
+description: Linux + Nginx + MySQL + PHP-FPM
+steps:
+  - action: pkg_install
+    packages: "nginx mysql-server php-fpm"
+  - action: service_enable
+    services: ["nginx", "mysql", "php8.2-fpm"]
+  - action: firewall_allow
+    ports: [80, 443]

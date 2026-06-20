@@ -1,0 +1,283 @@
+# VoidCube CLI Configuration
+# 配置文件路径: ~/.VoidCube/config.yaml
+
+_config_version: 17
+
+# 主要模型配置
+model: ""
+providers: {}
+fallback_providers: []
+credential_pool_strategies: {}
+
+# 工具集
+toolsets:
+  - VoidCube-cli
+
+# Agent 设置
+agent:
+  max_turns: 90
+  gateway_timeout: 1800
+  restart_drain_timeout: 60
+  service_tier: ""
+  tool_use_enforcement: "auto"
+  gateway_timeout_warning: 900
+  gateway_notify_interval: 600
+
+# 终端配置
+terminal:
+  backend: podman
+  modal_mode: auto
+  cwd: "."
+  timeout: 180
+  env_passthrough: []
+  docker_image: nikolaik/python-nodejs:python3.11-nodejs20
+  podman_image: localhost/voidcube-podman-local:latest
+  docker_forward_env: []
+  docker_env: {}
+  singularity_image: docker://nikolaik/python-nodejs:python3.11-nodejs20
+  modal_image: nikolaik/python-nodejs:python3.11-nodejs20
+  daytona_image: nikolaik/python-nodejs:python3.11-nodejs20
+  container_cpu: 1
+  container_memory: 5120
+  container_disk: 51200
+  container_persistent: true
+  docker_volumes: []
+  docker_mount_cwd_to_workspace: true
+  persistent_shell: true
+
+# 浏览器配置
+browser:
+  inactivity_timeout: 120
+  command_timeout: 30
+  record_sessions: false
+  allow_private_urls: false
+  camofox:
+    managed_persistence: false
+
+# 检查点配置
+checkpoints:
+  enabled: true
+  max_snapshots: 50
+
+# 文件读取最大字符数
+file_read_max_chars: 100000
+
+# 压缩配置
+compression:
+  enabled: true
+  threshold: 0.50
+  target_ratio: 0.20
+  protect_last_n: 20
+  summary_model: ""
+  summary_provider: auto
+  summary_base_url: null
+
+# 智能模型路由
+smart_model_routing:
+  enabled: false
+  max_simple_chars: 160
+  max_simple_words: 28
+  cheap_model: {}
+
+# 辅助模型配置 - 用于压缩、摘要、记忆等功能
+# 如果使用本地模型 (如 Ollama)，配置如下:
+auxiliary:
+  vision:
+    provider: auto
+    model: ""
+    base_url: ""
+    api_key: ""
+    timeout: 120
+    download_timeout: 30
+  web_extract:
+    provider: auto
+    model: ""
+    base_url: ""
+    api_key: ""
+    timeout: 360
+  compression:
+    provider: auto          # 自动检测 (OpenRouter / Nous / Codex / API-key)
+    model: ""               # 留空 = 使用默认辅助模型
+    base_url: ""            # 留空 = 跟随主提供者
+    api_key: ""             # 留空 = 复用主 API key
+    timeout: 120
+  session_search:
+    provider: auto
+    model: ""
+    base_url: ""
+    api_key: ""
+    timeout: 30
+  skills_hub:
+    provider: auto
+    model: ""
+    base_url: ""
+    api_key: ""
+    timeout: 30
+  approval:
+    provider: auto
+    model: ""
+    base_url: ""
+    api_key: ""
+    timeout: 30
+  mcp:
+    provider: auto
+    model: ""
+    base_url: ""
+    api_key: ""
+    timeout: 30
+  flush_memories:
+    provider: auto
+    model: ""
+    base_url: ""
+    api_key: ""
+    timeout: 30
+
+# 显示设置
+display:
+  compact: false
+  personality: kawaii
+  resume_display: full
+  busy_input_mode: interrupt
+  bell_on_complete: false
+  show_reasoning: false
+  streaming: false
+  inline_diffs: true
+  show_cost: false
+  skin: default
+  interim_assistant_messages: true
+  tool_progress_command: false
+  tool_progress_overrides: {}
+  tool_preview_length: 0
+  platforms: {}
+
+# 隐私设置
+privacy:
+  redact_pii: false
+
+# 文本转语音配置
+tts:
+  provider: edge
+  edge:
+    voice: en-US-AriaNeural
+  elevenlabs:
+    voice_id: pNInz6obpgDQGcFmaJgB
+    model_id: eleven_multilingual_v2
+  openai:
+    model: gpt-4o-mini-tts
+    voice: alloy
+  mistral:
+    model: voxtral-mini-tts-2603
+    voice_id: c69964a6-ab8b-4f8a-9465-ec0925096ec8
+  neutts:
+    ref_audio: ""
+    ref_text: ""
+    model: neuphonic/neutts-air-q4-gguf
+    device: cpu
+
+# 语音转文字配置
+stt:
+  enabled: true
+  provider: local
+  local:
+    model: base
+    language: ""
+  openai:
+    model: whisper-1
+  mistral:
+    model: voxtral-mini-latest
+
+# 语音配置
+voice:
+  record_key: ctrl+b
+  max_recording_seconds: 120
+  auto_tts: false
+  silence_threshold: 200
+  silence_duration: 3.0
+
+# 人类延迟模拟
+human_delay:
+  mode: off
+  min_ms: 800
+  max_ms: 2500
+
+# 上下文引擎
+context:
+  engine: compressor
+
+# 记忆配置
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+  memory_char_limit: 2200
+  user_char_limit: 1375
+  provider: mem
+  mem:
+    db_path: null
+    incremental_lookback_days: 14
+    auto_sync: true
+
+# 委托配置
+delegation:
+  model: ""
+  provider: ""
+  base_url: ""
+  api_key: ""
+  max_iterations: 50
+  reasoning_effort: ""
+
+# 预填充消息文件
+prefill_messages_file: ""
+
+# 技能配置
+skills:
+  external_dirs: []
+
+# 时区
+timezone: ""
+
+# Discord 配置
+discord:
+  require_mention: true
+  free_response_channels: ""
+  allowed_channels: ""
+  auto_thread: true
+  reactions: true
+
+# WhatsApp 配置
+whatsapp: null
+
+# 审批模式
+approvals:
+  mode: manual
+  timeout: 60
+
+# 命令白名单
+command_allowlist: []
+quick_commands: {}
+personalities: {}
+
+# 安全设置
+security:
+  redact_secrets: true
+  tirith_enabled: true
+  tirith_path: tirith
+  tirith_timeout: 5
+  tirith_fail_open: true
+  website_blocklist:
+    enabled: false
+    domains: []
+    shared_files: []
+
+# Cron 配置
+cron:
+  wrap_response: true
+
+# 日志配置
+logging:
+  level: INFO
+  max_size_mb: 5
+  backup_count: 3
+
+# 网络设置
+network:
+  force_ipv4: false

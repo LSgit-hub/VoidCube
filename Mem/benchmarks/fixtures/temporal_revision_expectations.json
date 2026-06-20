@@ -1,0 +1,65 @@
+{
+  "name": "temporal_relative_revision_probe",
+  "expected_min_events": 4,
+  "expected_min_scenes": 2,
+  "expected_min_arcs": 1,
+  "expected_min_epochs": 1,
+  "expected_topics": [
+    "memory-system",
+    "schema",
+    "retrieval",
+    "revision",
+    "timeline-indexing",
+    "project-definition"
+  ],
+  "required_theme_queries": [
+    "retrieval",
+    "revision"
+  ],
+  "range_query_checks": [
+    {
+      "start": "2026-03-01",
+      "end": "2026-03-31",
+      "topic": "retrieval",
+      "min_observed": 1,
+      "min_main_arcs": 0,
+      "min_side_arcs": 1,
+      "min_confidence": 0.4
+    }
+  ],
+  "chapter_query_checks": [
+    {
+      "start": "2026-03-01",
+      "end": "2026-03-31",
+      "min_epochs": 1,
+      "min_themes": 1,
+      "min_confidence": 0.4
+    }
+  ],
+  "revision_probe": {
+    "target_selector": "event:0",
+    "revision_type": "factual_revision",
+    "reason": "The initial direction needs to be reframed as a retrieval blocker",
+    "changes": {
+      "summary": "Retrieval is blocked and needs a revision pass.",
+      "topics": [
+        "retrieval"
+      ],
+      "event_kind": "blocker"
+    },
+    "expected_revision_records_min": 4,
+    "expected_arc_topics": [
+      "retrieval"
+    ],
+    "expected_epoch_topics": [
+      "retrieval"
+    ],
+    "expected_open_question_contains": "retrieval"
+  },
+  "forbidden_summary_terms": [
+    "personality trait",
+    "identity verdict"
+  ],
+  "passing_threshold": 0.5,
+  "notes": "Covers relative-time normalization, retrieval-oriented querying, and revision propagation."
+}

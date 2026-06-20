@@ -1,0 +1,12 @@
+name: Docker Web 开发
+description: Docker + Docker Compose + 常用开发工具
+steps:
+  - action: pkg_install
+    packages: "curl git vim htop tmux unzip"
+  - action: pkg_install
+    packages: "docker-compose"
+    manager: pip
+  - action: service_enable
+    services: ["docker"]
+  - action: firewall_allow
+    ports: [80, 443, 8080]

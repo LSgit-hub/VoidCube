@@ -1,0 +1,12 @@
+{
+  "name": "mixed_intent_recent_and_state_request",
+  "request": "What changed recently and what blockers are still active?",
+  "reference_time": "2026-03-31T00:00:00Z",
+  "expected_intent": "inspect_current_state",
+  "required_step_types": ["active_arcs", "range_query"],
+  "expected_strategy": "state_first",
+  "requires_evidence_step": false,
+  "expected_uncertainty_flags": ["request_has_multiple_possible_intents", "time_window_is_implicit"],
+  "expected_answer_sections": ["observed", "unknown"],
+  "passing_threshold": 0.8
+}

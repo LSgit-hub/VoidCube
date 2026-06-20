@@ -1,0 +1,15 @@
+name: SSH 安全加固
+description: 禁用密码认证、限制 Root 登录、强化 SSH 服务器安全
+tags: [security, ssh, hardening]
+steps:
+  - action: pkg_install
+    packages: "openssh-server fail2ban"
+  - action: ssh_keygen
+    key_type: ed25519
+    comment: "VoidCube-hardened"
+  - action: service_enable
+    services: ["ssh", "fail2ban"]
+  - action: firewall_allow
+    ports: [22]
+  - action: service_restart
+    services: ["ssh", "fail2ban"]

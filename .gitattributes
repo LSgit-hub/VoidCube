@@ -1,0 +1,28 @@
+# Normalize text files and enforce consistent EOL
+* text=auto
+
+# Force LF for source files to avoid CRLF churn on CI
+*.py text eol=lf
+*.sh text eol=lf
+*.md text eol=lf
+docs/* text eol=lf
+
+# Windows scripts keep CRLF
+*.bat text eol=crlf
+
+# Treat common binary formats as binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.gz binary
+*.tar binary
+*.tgz binary
+*.7z binary
+*.exe binary
+*.dll binary
+
+# Export-ignore for files not needed in archives
+docs/architecture-integration.md export-ignore

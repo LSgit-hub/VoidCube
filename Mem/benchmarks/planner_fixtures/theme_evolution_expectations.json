@@ -1,0 +1,12 @@
+{
+  "name": "theme_evolution_request",
+  "request": "How has retrieval evolved so far?",
+  "reference_time": "2026-03-31T00:00:00Z",
+  "expected_intent": "trace_theme",
+  "required_step_types": ["theme_evolution"],
+  "expected_strategy": "theme_first",
+  "requires_evidence_step": false,
+  "expected_uncertainty_flags": [],
+  "expected_answer_sections": ["observed", "structure"],
+  "passing_threshold": 0.8
+}

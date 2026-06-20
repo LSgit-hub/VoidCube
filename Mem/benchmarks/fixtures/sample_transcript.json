@@ -1,0 +1,22 @@
+{
+  "turns": [
+    {
+      "turn_id": "turn_001",
+      "speaker": "user",
+      "text": "今天我们决定把这个项目做成时间优先的记忆系统。",
+      "timestamp": "2026-03-22T09:00:00Z"
+    },
+    {
+      "turn_id": "turn_002",
+      "speaker": "assistant",
+      "text": "This week we implemented the schema and built the first event extractor.",
+      "timestamp": "2026-03-22T11:30:00Z"
+    },
+    {
+      "turn_id": "turn_003",
+      "speaker": "user",
+      "text": "但是今天检索排序还有问题，需要继续修订。",
+      "timestamp": "2026-03-22T14:45:00Z"
+    }
+  ]
+}

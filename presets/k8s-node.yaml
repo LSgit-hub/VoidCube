@@ -1,0 +1,16 @@
+name: Kubernetes 节点基础环境
+description: 安装 kubectl、containerd/k3s 及 K8s 节点基础依赖
+tags: [kubernetes, k8s, container]
+steps:
+  - action: pkg_install
+    packages: "curl wget apt-transport-https ca-certificates gnupg lsb-release"
+  - action: pkg_install
+    packages: "containerd"
+    condition: "os == 'linux' and pkg_manager in ('apt', 'apt-get')"
+  - action: pkg_install
+    packages: "kubectl kubeadm kubelet"
+    condition: "os == 'linux'"
+  - action: service_enable
+    services: ["containerd", "kubelet"]
+  - action: firewall_allow
+    ports: [6443, 2379, 2380, 10250, 10251, 10252, 30000, 30001]

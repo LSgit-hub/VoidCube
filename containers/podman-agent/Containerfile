@@ -1,0 +1,24 @@
+FROM docker.io/library/alpine:latest
+
+# Minimal runtime for VoidCube terminal/file tools on Podman in constrained
+# networks. Keep the base small and rely on Alpine packages that are reachable
+# from this machine.
+RUN apk add --no-cache \
+    bash \
+    ca-certificates \
+    coreutils \
+    curl \
+    findutils \
+    git \
+    grep \
+    nodejs \
+    npm \
+    py3-pip \
+    python3 \
+    ripgrep \
+    sed
+
+WORKDIR /root
+
+# Keep behavior consistent with the existing terminal backend assumptions.
+CMD ["sleep", "infinity"]

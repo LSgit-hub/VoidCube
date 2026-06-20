@@ -1,0 +1,40 @@
+{
+  "name": "user_only_output_text_transport_contract",
+  "provider_profile": "user-only",
+  "response_content_style": "output_text",
+  "response_format_style": "json_object_string",
+  "invocation": {
+    "method": "extract_events",
+    "turns": [
+      {
+        "turn_id": "turn_020",
+        "speaker": "user",
+        "text": "2026-03-24 we verified a provider that only accepts user messages and returns output text blocks.",
+        "timestamp": "2026-03-24T11:00:00Z"
+      }
+    ]
+  },
+  "response": {
+    "output": [
+      {
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"events\": [{\"title\": \"User-only provider verified\", \"summary\": \"A user-only provider with output text blocks was verified.\", \"event_kind\": \"verification\", \"impact_scope\": \"scene\", \"topics\": [\"provider-contract\"], \"entities\": [\"adapter\"], \"source_turns\": [\"turn_020\"], \"time_hint\": \"2026-03-24\", \"importance\": 0.75, \"confidence\": 0.88, \"main_or_side\": \"main\", \"novelty\": 0.65}]}"
+          }
+        ]
+      }
+    ]
+  },
+  "expectations": {
+    "url_suffix": "/chat/completions",
+    "message_roles": ["user"],
+    "response_format": "json_object_string",
+    "request_contains": [
+      "Follow these system instructions while answering.",
+      "\"task\": \"extractor.events\""
+    ],
+    "expected_min_events": 1,
+    "expected_summary_contains": "output text blocks"
+  }
+}

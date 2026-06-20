@@ -1,0 +1,90 @@
+# VoidCube 项目通用编辑器配置
+# https://editorconfig.org/
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 4
+trim_trailing_whitespace = true
+
+[*.py]
+indent_size = 4
+
+[*.{yaml,yml}]
+indent_size = 2
+
+[*.{json,jsonc}]
+indent_size = 2
+
+[*.{md,markdown}]
+trim_trailing_whitespace = false
+
+[*.{js,jsx,ts,tsx}]
+indent_size = 2
+
+[Makefile]
+indent_style = tab
+
+[*.sh]
+indent_size = 4
+
+# 以下文件不会被 Git 跟踪（通过 .gitignore）
+# 但编辑器仍然应该知道它们不应被提交
+# 对于 VS Code，建议在项目根目录的 .vscode/settings.json 中配置：
+# 
+# {
+#   "files.exclude": {
+#     "**/.git": true,
+#     "**/.env": true,
+#     "**/.env.*": true,
+#     "**/__pycache__": true,
+#     "**/*.pyc": true,
+#     "**/.pytest_cache": true,
+#     "**/.pytest_tmp": true,
+#     "**/.mypy_cache": true,
+#     "**/.trae": true,
+#     "**/.arts": true,
+#     "**/.VoidCube": true,
+#     "**/.venv": true,
+#     "**/venv": true,
+#     "**/.body-slots": true,
+#     "**/.body-registry.json": true,
+#     "**/.body-active.json": true,
+#     "**/soul-runtime": true,
+#     "**/.mem": true,
+#     "**/dist": true,
+#     "**/build": true,
+#     "**/*.egg-info": true
+#   },
+#   "search.exclude": {
+#     "**/.git": true,
+#     "**/.env": true,
+#     "**/.env.*": true,
+#     "**/__pycache__": true,
+#     "**/*.pyc": true,
+#     "**/.pytest_cache": true,
+#     "**/.pytest_tmp": true,
+#     "**/.mypy_cache": true,
+#     "**/.trae": true,
+#     "**/.arts": true,
+#     "**/.VoidCube": true,
+#     "**/.venv": true,
+#     "**/venv": true,
+#     "**/.body-slots": true,
+#     "**/dist": true,
+#     "**/build": true,
+#     "**/*.egg-info": true
+#   },
+#   "files.watcherExclude": {
+#     "**/.git/objects/**": true,
+#     "**/.git/subtree-cache/**": true,
+#     "**/node_modules/**": true,
+#     "**/.pytest_tmp/**": true,
+#     "**/.pytest_cache/**": true,
+#     "**/.mypy_cache/**": true
+#   }
+# }

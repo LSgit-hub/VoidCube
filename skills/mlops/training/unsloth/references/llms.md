@@ -1,0 +1,82 @@
+# Unsloth 文档
+
+## Unsloth 文档
+
+- [Unsloth 文档](/get-started/unsloth-docs.md)：使用 Unsloth 训练你自己的模型，Unsloth 是一个用于 LLM 微调和强化学习的开源框架。
+- [初学者？从这里开始！](/get-started/beginner-start-here.md)
+- [Unsloth 要求](/get-started/beginner-start-here/unsloth-requirements.md)：这里是 Unsloth 的要求，包括系统和 GPU VRAM 要求。
+- [FAQ + 微调适合我吗？](/get-started/beginner-start-here/faq-+-is-fine-tuning-right-for-me.md)：如果你不确定微调是否适合你，请看这里！了解微调误区、它与 RAG 的比较等：
+- [Unsloth Notebooks](/get-started/unsloth-notebooks.md)：探索我们的 Unsloth notebooks 目录：
+- [我们所有的模型](/get-started/all-our-models.md)
+- [安装和更新](/get-started/install-and-update.md)：学习在本地或在线安装 Unsloth。
+- [更新](/get-started/install-and-update/updating.md)：要更新或使用旧版本 Unsloth，请按以下步骤操作：
+- [Pip 安装](/get-started/install-and-update/pip-install.md)：要通过 Pip 在本地安装 Unsloth，请按以下步骤操作：
+- [Docker](/get-started/install-and-update/docker.md)：使用我们的官方 Docker 容器安装 Unsloth
+- [Windows 安装](/get-started/install-and-update/windows-installation.md)：了解如何在 Windows 上安装 Unsloth，支持 WSL 和非 WSL 方式。
+- [AMD](/get-started/install-and-update/amd.md)：在 AMD GPU 上使用 Unsloth 微调。
+- [Conda 安装](/get-started/install-and-update/conda-install.md)：要在 Conda 上本地安装 Unsloth，请按以下步骤操作：
+- [Google Colab](/get-started/install-and-update/google-colab.md)：要在 Google Colab 上安装和运行 Unsloth，请按以下步骤操作：
+- [LLM 微调指南](/get-started/fine-tuning-llms-guide.md)：学习微调的所有基础和最佳实践。适合初学者。
+- [我应该使用什么模型？](/get-started/fine-tuning-llms-guide/what-model-should-i-use.md)
+- [数据集指南](/get-started/fine-tuning-llms-guide/datasets-guide.md)：学习如何创建和准备微调数据集。
+- [LoRA 超参数指南](/get-started/fine-tuning-llms-guide/lora-hyperparameters-guide.md)：最优 LoRA 秩、alpha、轮数、批量大小和梯度累积、QLoRA vs LoRA、目标模块等！
+- [教程：如何微调 Llama-3 并在 Ollama 中使用](/get-started/fine-tuning-llms-guide/tutorial-how-to-finetune-llama-3-and-use-in-ollama.md)：创建自定义个人助手（如 ChatGPT）在 Ollama 上本地运行的初学者指南
+- [强化学习 (RL) 指南](/get-started/reinforcement-learning-rl-guide.md)：全面了解强化学习 (RL) 以及如何使用 Unsloth 和 GRPO 训练你自己的 DeepSeek-R1 推理模型。从初学者到高级的完整指南。
+- [教程：用 GRPO 训练你自己的推理模型](/get-started/reinforcement-learning-rl-guide/tutorial-train-your-own-reasoning-model-with-grpo.md)：使用 Unsloth 和 GRPO 将 Llama 3.1 (8B) 等模型转换为推理模型的初学者指南。
+- [高级 RL 文档](/get-started/reinforcement-learning-rl-guide/advanced-rl-documentation.md)：使用 Unsloth 和 GRPO 时的高级文档设置。
+- [内存高效 RL](/get-started/reinforcement-learning-rl-guide/memory-efficient-rl.md)
+- [RL 奖励黑客](/get-started/reinforcement-learning-rl-guide/rl-reward-hacking.md)：了解强化学习中的奖励黑客以及如何应对。
+- [GSPO 强化学习](/get-started/reinforcement-learning-rl-guide/gspo-reinforcement-learning.md)：在 Unsloth 中使用 GSPO（组序列策略优化）RL 训练。
+- [强化学习 - DPO, ORPO & KTO](/get-started/reinforcement-learning-rl-guide/reinforcement-learning-dpo-orpo-and-kto.md)：要在 Unsloth 中使用 DPO、GRPO、ORPO 或 KTO 的奖励建模函数，请按以下步骤操作：
+- [DeepSeek-OCR：如何运行和微调](/new/deepseek-ocr-how-to-run-and-fine-tune.md)：关于如何在本地运行和微调 DeepSeek-OCR 的指南。
+- [如何用 Unsloth 和 Docker 微调 LLM](/new/how-to-fine-tune-llms-with-unsloth-and-docker.md)：学习如何使用 Unsloth 的 Docker 镜像微调 LLM 或进行强化学习 (RL)。
+- [视觉强化学习 (VLM RL)](/new/vision-reinforcement-learning-vlm-rl.md)：用 Unsloth 通过 GRPO 和 RL 训练视觉/多模态模型！
+- [gpt-oss 强化学习](/new/gpt-oss-reinforcement-learning.md)
+- [教程：如何用 RL 训练 gpt-oss](/new/gpt-oss-reinforcement-learning/tutorial-how-to-train-gpt-oss-with-rl.md)：学习用 GRPO 训练 OpenAI gpt-oss 以自主击败 2048，本地或在 Colab 上。
+- [Unsloth 动态 GGUF 在 Aider Polyglot 上的表现](/new/unsloth-dynamic-ggufs-on-aider-polyglot.md)：Unsloth 动态 GGUF 在 Aider Polyglot 基准测试上的性能
+- [Qwen3-VL：如何运行和微调](/models/qwen3-vl-how-to-run-and-fine-tune.md)：学习用 Unsloth 在本地微调和运行 Qwen3-VL。
+- [gpt-oss：如何运行和微调](/models/gpt-oss-how-to-run-and-fine-tune.md)：运行和微调 OpenAI 的新开源模型！
+- [教程：如何微调 gpt-oss](/models/gpt-oss-how-to-run-and-fine-tune/tutorial-how-to-fine-tune-gpt-oss.md)：逐步学习如何用 Unsloth 在本地训练 OpenAI gpt-oss。
+- [长上下文 gpt-oss 训练](/models/gpt-oss-how-to-run-and-fine-tune/long-context-gpt-oss-training.md)
+- [GLM-4.6：如何本地运行](/models/glm-4.6-how-to-run-locally.md)：关于如何在你的本地设备上运行 Z.ai 的新 GLM-4.6 模型的指南！
+- [IBM Granite 4.0](/models/ibm-granite-4.0.md)：如何在 llama.cpp、Ollama 上用 Unsloth GGUF 运行 IBM Granite-4.0 以及如何微调！
+- [DeepSeek-V3.1：如何本地运行](/models/deepseek-v3.1-how-to-run-locally.md)：关于如何在你的本地设备上运行 DeepSeek-V3.1 和 Terminus 的指南！
+- [Qwen3-Coder：如何本地运行](/models/qwen3-coder-how-to-run-locally.md)：用 Unsloth 动态量化本地运行 Qwen3-Coder-30B-A3B-Instruct 和 480B-A35B。
+- [Gemma 3：如何运行和微调](/models/gemma-3-how-to-run-and-fine-tune.md)：如何在 llama.cpp、Ollama、Open WebUI 上用我们的 GGUF 有效运行 Gemma 3 以及如何用 Unsloth 微调！
+- [Gemma 3n：如何运行和微调](/models/gemma-3-how-to-run-and-fine-tune/gemma-3n-how-to-run-and-fine-tune.md)：在 llama.cpp、Ollama、Open WebUI 上用动态 GGUF 本地运行 Google 新的 Gemma 3n 并用 Unsloth 微调！
+- [Qwen3：如何运行和微调](/models/qwen3-how-to-run-and-fine-tune.md)：学习用 Unsloth + 我们的动态 2.0 量化本地运行和微调 Qwen3
+- [Qwen3-2507](/models/qwen3-how-to-run-and-fine-tune/qwen3-2507.md)：在你的设备上本地运行 Qwen3-30B-A3B-2507 和 235B-A22B Thinking 和 Instruct 版本！
+- [教程：如何微调和运行 LLM](/models/tutorials-how-to-fine-tune-and-run-llms.md)：学习如何用 Unsloth 100% 本地最优运行和微调模型。
+- [DeepSeek-R1-0528：如何本地运行](/models/tutorials-how-to-fine-tune-and-run-llms/deepseek-r1-0528-how-to-run-locally.md)：关于如何在你的本地设备上运行 DeepSeek-R1-0528（包括 Qwen3）的指南！
+- [Magistral：如何运行和微调](/models/tutorials-how-to-fine-tune-and-run-llms/magistral-how-to-run-and-fine-tune.md)：认识 Magistral - Mistral 的新推理模型。
+- [Llama 4：如何运行和微调](/models/tutorials-how-to-fine-tune-and-run-llms/llama-4-how-to-run-and-fine-tune.md)：如何使用我们的动态 GGUF 本地运行 Llama 4，相比标准量化恢复准确率。
+- [Kimi K2：如何本地运行](/models/tutorials-how-to-fine-tune-and-run-llms/kimi-k2-how-to-run-locally.md)：在你的本地设备上运行 Kimi K2 和 Kimi-K2-Instruct-0905 的指南！
+- [Grok 2](/models/tutorials-how-to-fine-tune-and-run-llms/grok-2.md)：本地运行 xAI 的 Grok 2 模型！
+- [Devstral：如何运行和微调](/models/tutorials-how-to-fine-tune-and-run-llms/devstral-how-to-run-and-fine-tune.md)：运行和微调 Mistral Devstral 1.1，包括 Small-2507 和 2505。
+- [DeepSeek-V3-0324：如何本地运行](/models/tutorials-how-to-fine-tune-and-run-llms/deepseek-v3-0324-how-to-run-locally.md)：如何使用我们的动态量化本地运行 DeepSeek-V3-0324，恢复准确率
+- [DeepSeek-R1：如何本地运行](/models/tutorials-how-to-fine-tune-and-run-llms/deepseek-r1-how-to-run-locally.md)：关于如何用 llama.cpp 运行我们的 1.58 位动态量化 DeepSeek-R1 的指南。
+- [DeepSeek-R1 动态 1.58 位](/models/tutorials-how-to-fine-tune-and-run-llms/deepseek-r1-how-to-run-locally/deepseek-r1-dynamic-1.58-bit.md)：查看 Unsloth 动态 GGUF 量化与标准 IMatrix 量化的性能比较表。
+- [QwQ-32B：如何有效运行](/models/tutorials-how-to-fine-tune-and-run-llms/qwq-32b-how-to-run-effectively.md)：如何用我们的错误修复和无无限生成 + GGUF 有效运行 QwQ-32B。
+- [Phi-4 Reasoning：如何运行和微调](/models/tutorials-how-to-fine-tune-and-run-llms/phi-4-reasoning-how-to-run-and-fine-tune.md)：学习用 Unsloth + 我们的动态 2.0 量化本地运行和微调 Phi-4 推理模型
+- [运行和保存模型](/basics/running-and-saving-models.md)：学习如何保存微调后的模型，以便在你喜欢的推理引擎中运行。
+- [保存为 GGUF](/basics/running-and-saving-models/saving-to-gguf.md)：将模型保存为 16 位 GGUF，以便用于 Ollama、Jan AI、Open WebUI 等！
+- [保存为 Ollama](/basics/running-and-saving-models/saving-to-ollama.md)
+- [保存为 vLLM 用于部署](/basics/running-and-saving-models/saving-to-vllm-for-deployment.md)：将模型保存为 16 位用于 vLLM 部署和服务
+- [保存为 SGLang 用于部署](/basics/running-and-saving-models/saving-to-sglang-for-deployment.md)：将模型保存为 16 位用于 SGLang 部署和服务
+- [Unsloth 推理](/basics/running-and-saving-models/unsloth-inference.md)：学习如何用 Unsloth 的更快推理运行微调后的模型。
+- [推理故障排除](/basics/running-and-saving-models/troubleshooting-inference.md)：如果你在运行或保存模型时遇到问题。
+- [vLLM 引擎参数](/basics/running-and-saving-models/vllm-engine-arguments.md)
+- [LoRA 热交换指南](/basics/running-and-saving-models/lora-hot-swapping-guide.md)
+- [文本转语音 (TTS) 微调](/basics/text-to-speech-tts-fine-tuning.md)：学习如何用 Unsloth 微调 TTS 和 STT 语音模型。
+- [Unsloth 动态 2.0 GGUF](/basics/unsloth-dynamic-2.0-ggufs.md)：我们动态量化的重大新升级！
+- [视觉微调](/basics/vision-fine-tuning.md)：学习如何用 Unsloth 微调视觉/多模态 LLM
+- [用 NVIDIA DGX Spark 和 Unsloth 微调 LLM](/basics/fine-tuning-llms-with-nvidia-dgx-spark-and-unsloth.md)：关于如何在 NVIDIA DGX Spark 上用 Unsloth 微调和进行强化学习 (RL) OpenAI gpt-oss 的教程。
+- [用 Blackwell、RTX 50 系列和 Unsloth 微调 LLM](/basics/fine-tuning-llms-with-blackwell-rtx-50-series-and-unsloth.md)：通过我们的分步指南学习如何在 NVIDIA 的 Blackwell RTX 50 系列和 B200 GPU 上微调 LLM。
+- [用 Unsloth 多 GPU 训练](/basics/multi-gpu-training-with-unsloth.md)：学习如何用 Unsloth 在多 GPU 和并行上微调 LLM。
+- [从最后检查点微调](/basics/finetuning-from-last-checkpoint.md)：检查点允许你保存微调进度，以便暂停后继续。
+- [故障排除和 FAQ](/basics/troubleshooting-and-faqs.md)：解决问题的技巧和常见问题。
+- [聊天模板](/basics/chat-templates.md)：学习聊天模板的基础和自定义选项，包括对话式、ChatML、ShareGPT、Alpaca 格式等！
+- [量化感知训练 (QAT)](/basics/quantization-aware-training-qat.md)：用 Unsloth 和 PyTorch 将模型量化为 4 位以恢复准确率。
+- [Unsloth 环境标志](/basics/unsloth-environment-flags.md)：如果你遇到微调中断或想关闭某些功能，可能有用的高级标志。
+- [继续预训练](/basics/continued-pretraining.md)：也称为继续微调。Unsloth 允许你继续预训练，使模型可以学习新语言。
+- [Unsloth 基准测试](/basics/unsloth-benchmarks.md)：Unsloth 在 NVIDIA GPU 上记录的基准测试。

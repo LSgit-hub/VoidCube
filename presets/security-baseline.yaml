@@ -1,0 +1,11 @@
+name: 安全基线
+description: SSH 加固 + 防火墙基础 + fail2ban
+steps:
+  - action: pkg_install
+    packages: "fail2ban ufw"
+  - action: service_enable
+    services: ["fail2ban", "ufw"]
+  - action: firewall_allow
+    ports: [22, 80, 443]
+  - action: firewall_deny
+    ports: [23, 3389]

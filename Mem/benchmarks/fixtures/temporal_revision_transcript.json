@@ -1,0 +1,28 @@
+{
+  "turns": [
+    {
+      "turn_id": "turn_201",
+      "speaker": "user",
+      "text": "Yesterday we decided to formalize the memory system project.",
+      "timestamp": "2026-03-28T09:00:00Z"
+    },
+    {
+      "turn_id": "turn_202",
+      "speaker": "assistant",
+      "text": "Last week we implemented the schema and retrieval pipeline.",
+      "timestamp": "2026-03-28T10:00:00Z"
+    },
+    {
+      "turn_id": "turn_203",
+      "speaker": "user",
+      "text": "Today the retrieval ranking is blocked and needs revision.",
+      "timestamp": "2026-03-28T13:00:00Z"
+    },
+    {
+      "turn_id": "turn_204",
+      "speaker": "assistant",
+      "text": "Earlier this month we changed direction toward time-first chronology.",
+      "timestamp": "2026-03-28T16:00:00Z"
+    }
+  ]
+}

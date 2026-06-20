@@ -1,0 +1,33 @@
+{
+  "name": "custom_profile_file_transport_contract",
+  "provider_profile": "vendor-file-profile",
+  "provider_profile_file": "custom_profiles.json",
+  "invocation": {
+    "method": "extract_events",
+    "turns": [
+      {
+        "turn_id": "turn_030",
+        "speaker": "assistant",
+        "text": "2026-03-25 we validated a provider profile loaded from a JSON file.",
+        "timestamp": "2026-03-25T12:00:00Z"
+      }
+    ]
+  },
+  "response": {
+    "choices": [
+      {
+        "text": "{\"events\": [{\"title\": \"Profile file validated\", \"summary\": \"The provider profile file path was validated by the contract runner.\", \"event_kind\": \"verification\", \"impact_scope\": \"scene\", \"topics\": [\"provider-contract\"], \"entities\": [\"benchmark\"], \"source_turns\": [\"turn_030\"], \"time_hint\": \"2026-03-25\", \"importance\": 0.74, \"confidence\": 0.9, \"main_or_side\": \"main\", \"novelty\": 0.62}]}"
+      }
+    ]
+  },
+  "expectations": {
+    "url_suffix": "/vendor/file/chat",
+    "message_roles": ["developer", "user"],
+    "response_format": "json_object_string",
+    "request_contains": [
+      "\"task\": \"extractor.events\""
+    ],
+    "expected_min_events": 1,
+    "expected_summary_contains": "contract runner"
+  }
+}

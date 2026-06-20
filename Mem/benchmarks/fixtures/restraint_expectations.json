@@ -1,0 +1,50 @@
+{
+  "name": "interpretation_restraint_project_stress",
+  "expected_min_events": 3,
+  "expected_min_scenes": 2,
+  "expected_min_arcs": 1,
+  "expected_min_epochs": 1,
+  "expected_topics": [
+    "schema",
+    "retrieval",
+    "revision",
+    "timeline-indexing",
+    "project-definition"
+  ],
+  "required_theme_queries": [
+    "retrieval"
+  ],
+  "range_query_checks": [
+    {
+      "start": "2026-04-01",
+      "end": "2026-04-30",
+      "topic": "retrieval",
+      "min_observed": 1,
+      "min_main_arcs": 0,
+      "min_side_arcs": 1,
+      "min_confidence": 0.4
+    }
+  ],
+  "chapter_query_checks": [
+    {
+      "start": "2026-04-01",
+      "end": "2026-04-30",
+      "min_epochs": 1,
+      "min_themes": 1,
+      "min_confidence": 0.4
+    }
+  ],
+  "forbidden_topics": [
+    "personality-analysis",
+    "identity-judgment"
+  ],
+  "forbidden_summary_terms": [
+    "personality",
+    "identity",
+    "trait",
+    "lazy",
+    "broken person"
+  ],
+  "passing_threshold": 0.5,
+  "notes": "Checks that project stress and caution do not turn into personality-style summaries."
+}
