@@ -52,7 +52,7 @@ class BodySlotMeta(BaseModel):
     """
 
     slot_id: str
-    body_state: BodyState
+    body_state: BodyState = "shell"
     body_version: str = "bootstrap"
     generation: int = 0
     worktree_path: str
