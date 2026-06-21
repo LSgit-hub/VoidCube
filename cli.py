@@ -57,7 +57,10 @@ if sys.platform == 'win32':
 from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from run_agent import AIAgent  # noqa: F401 — only for static type-checkers
 
 logger = logging.getLogger(__name__)
 
@@ -95,12 +98,47 @@ except (ImportError, AttributeError):
 import threading
 import queue
 
-from agent.usage_pricing import (
-    CanonicalUsage,
-    estimate_usage_cost,
-    format_duration_compact,
-    format_token_count_compact,
-)
+# Lazy import for agent.usage_pricing — defers ~180ms (openai + usage_pricing import chain)
+_usage_pricing_imported = False
+_CanonicalUsage = None
+_estimate_usage_cost = None
+_format_duration_compact = None
+_format_token_count_compact = None
+
+def _lazy_import_usage_pricing():
+    global _usage_pricing_imported, _CanonicalUsage, _estimate_usage_cost, _format_duration_compact, _format_token_count_compact
+    if not _usage_pricing_imported:
+        from agent.usage_pricing import (
+            CanonicalUsage as _CU,
+            estimate_usage_cost as _EC,
+            format_duration_compact as _FDC,
+            format_token_count_compact as _FTC,
+        )
+        _CanonicalUsage = _CU
+        _estimate_usage_cost = _EC
+        _format_duration_compact = _FDC
+        _format_token_count_compact = _FTC
+        _usage_pricing_imported = True
+
+
+def _format_duration_compact_lazy(elapsed_seconds):
+    _lazy_import_usage_pricing()
+    return _format_duration_compact(elapsed_seconds)
+
+
+def _format_token_count_compact_lazy(count):
+    _lazy_import_usage_pricing()
+    return _format_token_count_compact(count)
+
+
+def _estimate_usage_cost_lazy(usage, **kwargs):
+    _lazy_import_usage_pricing()
+    return _estimate_usage_cost(usage, **kwargs)
+
+
+def _CanonicalUsage_lazy(*args, **kwargs):
+    _lazy_import_usage_pricing()
+    return _CanonicalUsage(*args, **kwargs)
 from VoidCube_cli.banner import _format_context_length, format_banner_version_label
 from VoidCube_cli.cli_ui import (
     _SkinAwareAnsi,
@@ -645,49 +683,81 @@ def load_cli_config() -> Dict[str, Any]:
 
     return defaults
 
-# Load configuration at module startup
-CLI_CONFIG = load_cli_config()
+# Lazy-loaded configuration — defers ~62ms (VoidCube_cli.config import chain)
+# until first access.
+_CLI_CONFIG_CACHE = None
 
-# Initialize centralized logging early — agent.log + errors.log in ~/.VoidCube/logs/.
-# This ensures CLI sessions produce a log trail even before AIAgent is instantiated.
-try:
-    from VoidCube_core.logging import setup_logging
-    setup_logging(mode="cli")
-except Exception:
-    pass  # Logging setup is best-effort — don't crash the CLI
 
-# Validate config structure early — print warnings before user hits cryptic errors
-try:
-    from VoidCube_cli.config import print_config_warnings
-    print_config_warnings()
-except Exception:
-    pass
+def _get_cli_config():
+    """Lazy-load and cache the CLI configuration (called automatically on first access)."""
+    global _CLI_CONFIG_CACHE
+    if _CLI_CONFIG_CACHE is None:
+        _CLI_CONFIG_CACHE = load_cli_config()
+    return _CLI_CONFIG_CACHE
 
-# Initialize the skin engine from config
-try:
-    from VoidCube_cli.skin_engine import init_skin_from_config
-    init_skin_from_config(CLI_CONFIG)
-except Exception:
-    pass  # Skin engine is optional — default skin used if unavailable
 
-# Initialize tool preview length from config
-try:
-    from agent.display import set_tool_preview_max_len
-    _tpl = CLI_CONFIG.get("display", {}).get("tool_preview_length", 0)
-    set_tool_preview_max_len(int(_tpl) if _tpl else 0)
-except Exception:
-    pass
+# Module __getattr__ for transparent lazy config access.
+# After first access, stashes the result as CLI_CONFIG in the module namespace
+# so subsequent lookups avoid __getattr__ overhead entirely.
+def __getattr__(name: str):
+    if name == "CLI_CONFIG":
+        cfg = _get_cli_config()
+        # Cache directly in module namespace for zero-overhead subsequent access
+        globals()["CLI_CONFIG"] = cfg
+        return cfg
+    raise AttributeError(f"module 'cli' has no attribute {name!r}")
+
+def _init_cli_runtime():
+    """Apply config-dependent CLI setup (deferred to avoid import-time config load)."""
+    # Initialize centralized logging
+    try:
+        from VoidCube_core.logging import setup_logging
+        setup_logging(mode="cli")
+    except Exception:
+        pass
+    cfg = _get_cli_config()
+    # Validate config structure — print warnings before user hits cryptic errors
+    try:
+        from VoidCube_cli.config import print_config_warnings
+        print_config_warnings()
+    except Exception:
+        pass
+    # Initialize the skin engine from config
+    try:
+        from VoidCube_cli.skin_engine import init_skin_from_config
+        init_skin_from_config(cfg)
+    except Exception:
+        pass
+    # Initialize tool preview length from config
+    try:
+        from agent.display import set_tool_preview_max_len
+        _tpl = cfg.get("display", {}).get("tool_preview_length", 0)
+        set_tool_preview_max_len(int(_tpl) if _tpl else 0)
+    except Exception:
+        pass
 
 # Neuter AsyncHttpxClientWrapper.__del__ before any AsyncOpenAI clients are
 # created.  The SDK's __del__ schedules aclose() on asyncio.get_running_loop()
 # which, during CLI idle time, finds prompt_toolkit's event loop and tries to
 # close TCP transports bound to dead worker loops — producing
 # "Event loop is closed" / "Press ENTER to continue..." errors.
-try:
-    from agent.auxiliary_client import neuter_async_httpx_del
-    neuter_async_httpx_del()
-except Exception:
-    pass
+# NOTE: Deferred to first AIAgent creation to avoid importing openai (~125ms) at
+# module load time. The monkey-patch must be applied before any OpenAI client is
+# instantiated, which happens during AIAgent.__init__ — calling it lazily there
+# is early enough.
+_neutered_async_httpx = False
+
+def _ensure_async_httpx_neutered():
+    """Apply OpenAI SDK monkey-patch exactly once, before first client creation."""
+    global _neutered_async_httpx
+    if _neutered_async_httpx:
+        return
+    _neutered_async_httpx = True
+    try:
+        from agent.auxiliary_client import neuter_async_httpx_del
+        neuter_async_httpx_del()
+    except Exception:
+        pass
 
 from rich import box as rich_box
 from rich.console import Console
@@ -697,23 +767,127 @@ from rich.text import Text as _RichText
 
 import fire
 
-# Import the agent and tool systems
-from run_agent import AIAgent
-from tools.model_tools import get_tool_definitions, get_toolset_for_tool
-
-# Extracted CLI modules (Phase 3)
 from VoidCube_cli.banner import build_welcome_banner
 from VoidCube_cli.commands import SlashCommandCompleter, SlashCommandAutoSuggest
-from tools.toolsets import get_all_toolsets, get_toolset_info, validate_toolset
 
-# Stub function for backward compatibility (cron feature removed)
+# =============================================================================
+# Lazy import helpers — defer heavy imports (run_agent, tools.*, agent.*) until
+# first use. This shaves ~500ms off CLI startup time (the import cascade
+# run_agent → tools.model_tools → all tool modules is the dominant cost).
+# =============================================================================
 
-# Resource cleanup imports for safe shutdown (terminal VMs, browser sessions)
-from tools.terminal_tool import cleanup_all_environments as _cleanup_all_terminals
-from tools.terminal_tool import set_sudo_password_callback, set_approval_callback
-from tools.skills_tool import set_secret_capture_callback
-from VoidCube_cli.callbacks import prompt_for_secret
-from tools.browser_tool import _emergency_cleanup_all_sessions as _cleanup_all_browsers
+_AIAgent_class = None
+_tool_defs_fn = None
+_toolset_for_tool_fn = None
+_all_toolsets_fn = None
+_toolset_info_fn = None
+_validate_toolset_fn = None
+_cleanup_all_terminals_fn = None
+_cleanup_all_browsers_fn = None
+_set_sudo_password_callback_fn = None
+_set_approval_callback_fn = None
+_set_secret_capture_callback_fn = None
+_prompt_for_secret_fn = None
+
+
+def _get_AIAgent():
+    """Lazy-import AIAgent class (defers ~251ms of import chain)."""
+    global _AIAgent_class
+    if _AIAgent_class is None:
+        _ensure_async_httpx_neutered()
+        from run_agent import AIAgent as _AIAgent
+        _AIAgent_class = _AIAgent
+    return _AIAgent_class
+
+
+def _get_tool_definitions(*args, **kwargs):
+    """Lazy-import get_tool_definitions (defers ~243ms of import chain)."""
+    global _tool_defs_fn
+    if _tool_defs_fn is None:
+        from tools.model_tools import get_tool_definitions as _fn
+        _tool_defs_fn = _fn
+    return _tool_defs_fn(*args, **kwargs)
+
+
+def _get_toolset_for_tool(name: str) -> str:
+    global _toolset_for_tool_fn
+    if _toolset_for_tool_fn is None:
+        from tools.model_tools import get_toolset_for_tool as _fn
+        _toolset_for_tool_fn = _fn
+    return _toolset_for_tool_fn(name)
+
+
+def _get_all_toolsets():
+    global _all_toolsets_fn
+    if _all_toolsets_fn is None:
+        from tools.toolsets import get_all_toolsets as _fn
+        _all_toolsets_fn = _fn
+    return _all_toolsets_fn()
+
+
+def _get_toolset_info(name: str):
+    global _toolset_info_fn
+    if _toolset_info_fn is None:
+        from tools.toolsets import get_toolset_info as _fn
+        _toolset_info_fn = _fn
+    return _toolset_info_fn(name)
+
+
+def _get_validate_toolset(name: str) -> bool:
+    global _validate_toolset_fn
+    if _validate_toolset_fn is None:
+        from tools.toolsets import validate_toolset as _fn
+        _validate_toolset_fn = _fn
+    return _validate_toolset_fn(name)
+
+
+def _get_cleanup_all_terminals():
+    global _cleanup_all_terminals_fn
+    if _cleanup_all_terminals_fn is None:
+        from tools.terminal_tool import cleanup_all_environments as _fn
+        _cleanup_all_terminals_fn = _fn
+    return _cleanup_all_terminals_fn()
+
+
+def _get_cleanup_all_browsers():
+    global _cleanup_all_browsers_fn
+    if _cleanup_all_browsers_fn is None:
+        from tools.browser_tool import _emergency_cleanup_all_sessions as _fn
+        _cleanup_all_browsers_fn = _fn
+    return _cleanup_all_browsers_fn()
+
+
+def _get_set_sudo_password_callback(cb):
+    global _set_sudo_password_callback_fn
+    if _set_sudo_password_callback_fn is None:
+        from tools.terminal_tool import set_sudo_password_callback as _fn
+        _set_sudo_password_callback_fn = _fn
+    return _set_sudo_password_callback_fn(cb)
+
+
+def _get_set_approval_callback(cb):
+    global _set_approval_callback_fn
+    if _set_approval_callback_fn is None:
+        from tools.terminal_tool import set_approval_callback as _fn
+        _set_approval_callback_fn = _fn
+    return _set_approval_callback_fn(cb)
+
+
+def _get_set_secret_capture_callback():
+    global _set_secret_capture_callback_fn
+    if _set_secret_capture_callback_fn is None:
+        from tools.skills_tool import set_secret_capture_callback as _fn
+        _set_secret_capture_callback_fn = _fn
+    return _set_secret_capture_callback_fn
+
+
+def _get_prompt_for_secret():
+    global _prompt_for_secret_fn
+    if _prompt_for_secret_fn is None:
+        from VoidCube_cli.callbacks import prompt_for_secret as _fn
+        _prompt_for_secret_fn = _fn
+    return _prompt_for_secret_fn
+
 
 # Guard to prevent cleanup from running multiple times on exit
 _cleanup_done = False
@@ -727,11 +901,11 @@ def _run_cleanup():
         return
     _cleanup_done = True
     try:
-        _cleanup_all_terminals()
+        _get_cleanup_all_terminals()
     except Exception:
         pass
     try:
-        _cleanup_all_browsers()
+        _get_cleanup_all_browsers()
     except Exception:
         pass
     try:
@@ -1319,14 +1493,40 @@ def _looks_like_slash_command(text: str) -> bool:
 # Skill Slash Commands — dynamic commands generated from installed skills
 # ============================================================================
 
-from agent.skill_commands import (
-    scan_skill_commands,
-    build_skill_invocation_message,
-    build_plan_path,
-    build_preloaded_skills_prompt,
-)
+# Lazy import for skill commands — defers tools.skills_tool → VoidCube_cli.config
+# (~62ms import chain) until first skill command is processed.
+_skill_commands_cache = None
+_skill_cmd_imports = None
 
-_skill_commands = scan_skill_commands()
+
+def _get_skill_commands():
+    """Lazy-load and cache the skill commands dictionary."""
+    global _skill_commands_cache, _skill_cmd_imports
+    if _skill_commands_cache is None:
+        from agent.skill_commands import (
+            scan_skill_commands as _sc,
+            build_skill_invocation_message as _bi,
+            build_plan_path as _bp,
+            build_preloaded_skills_prompt as _bl,
+        )
+        _skill_cmd_imports = (_bi, _bp, _bl)
+        _skill_commands_cache = _sc()
+    return _skill_commands_cache
+
+
+def _get_skill_invocation_message(*args, **kwargs):
+    _get_skill_commands()  # ensure imports are done
+    return _skill_cmd_imports[0](*args, **kwargs)
+
+
+def _get_plan_path(*args, **kwargs):
+    _get_skill_commands()
+    return _skill_cmd_imports[1](*args, **kwargs)
+
+
+def _get_preloaded_skills_prompt(*args, **kwargs):
+    _get_skill_commands()
+    return _skill_cmd_imports[2](*args, **kwargs)
 
 
 def _get_plugin_cmd_handler_names() -> set:
@@ -1543,7 +1743,7 @@ class VoidcubeCLI:
             # _get_platform_tools() but aren't registered in TOOLSETS yet
             # (that happens later in _sync_mcp_toolsets), so exclude them.
             mcp_names = set((CLI_CONFIG.get("mcp_servers") or {}).keys())
-            invalid = [t for t in toolsets if not validate_toolset(t) and t not in mcp_names]
+            invalid = [t for t in toolsets if not _get_validate_toolset(t) and t not in mcp_names]
             if invalid:
                 self.console.print(f"[bold red]Warning: Unknown toolsets: {', '.join(invalid)}[/]")
         
@@ -1657,6 +1857,14 @@ class VoidcubeCLI:
         self._last_invalidate: float = 0.0  # throttle UI repaints
         self._app = None
 
+        # ── Per-instance render caches (avoid disk I/O & subprocess on hot path) ──
+        self._config_cache: Dict[str, Any] | None = None
+        self._config_cache_ts: float = 0.0
+        self._git_status_cache: list | None = None
+        self._git_status_cache_ts: float = 0.0
+        self._git_status_refreshing: bool = False  # guard against concurrent git subprocess refresh
+        self._ascii_fallback: bool | None = None  # cached once, never changes mid-session
+
         # State shared by interactive run() and single-query chat mode.
         # These must exist before any direct chat() call because single-query
         # mode does not go through run().
@@ -1679,6 +1887,7 @@ class VoidcubeCLI:
         self._secret_deadline = 0
         self._spinner_text: str = ""  # thinking spinner text for TUI
         self._tool_start_time: float = 0.0  # monotonic timestamp when current tool started (for live elapsed)
+        self._current_tool_name: str = ""  # function_name of currently running tool ("" when idle)
         self._pending_tool_info: dict = {}  # function_name -> list of (preview, args) for stacked scrollback
         self._last_scrollback_tool: str = ""  # last tool name printed to scrollback (for "new" dedup)
         self._command_running = False
@@ -1746,7 +1955,7 @@ class VoidcubeCLI:
         snapshot = {
             "model_name": model_name,
             "model_short": model_short,
-            "duration": format_duration_compact(elapsed_seconds),
+            "duration": _format_duration_compact_lazy(elapsed_seconds),
             "context_tokens": 0,
             "context_length": None,
             "context_percent": None,
@@ -1903,50 +2112,314 @@ class VoidcubeCLI:
         except Exception:
             return f"{self.model if getattr(self, 'model', None) else 'Voidcube'}"
 
-    def _get_git_status_simple(self) -> list[tuple[str, str]]:
-        """简洁的Git状态显示，返回片段列表，支持高亮数字"""
+    # ── Supervisor status polling ──────────────────────────────────────
+    _supervisor_state_cache: Dict[str, Any] = {}
+    _supervisor_state_ts: float = 0.0
+    _supervisor_state_refreshing: bool = False  # guard against concurrent HTTP fetches
+    _supervisor_url: str = ""
+
+    def _get_supervisor_url(self) -> str:
+        """Resolve supervisor UI state endpoint from config or defaults."""
+        if self._supervisor_url:
+            return self._supervisor_url
         try:
-            from VoidCube_cli.git_display import GitDisplay
-            git_display = GitDisplay()
-            status = git_display.runner.get_status()
-            
-            if not status.is_repo:
-                return []
-            
-            frags = []
-            
-            # Git <branch>
-            frags.append(("bg:#1a1a2e #58A6FF", "Git "))
-            frags.append(("bg:#1a1a2e #9CA3AF", "<"))
-            frags.append(("bg:#1a1a2e #58A6FF bold", status.branch))
-            frags.append(("bg:#1a1a2e #9CA3AF", ">"))
-            
-            # 暂存
-            if status.staged:
-                frags.append(("bg:#1a1a2e #9CA3AF", "  暂存 "))
-                frags.append(("bg:#1a1a2e #FFFFFF bold", str(len(status.staged))))
-            
-            # 更改
-            changes = len(status.modified) + len(status.deleted) + len(status.untracked)
-            if changes > 0:
-                frags.append(("bg:#1a1a2e #9CA3AF", "  更改 "))
-                frags.append(("bg:#1a1a2e #FFFFFF bold", str(changes)))
-            
-            # 检查远程
-            try:
-                from subprocess import check_output, CalledProcessError
-                remotes = check_output(["git", "remote"], text=True).strip().splitlines()
-                if remotes:
-                    remote_str = ",".join(remotes)
-                    frags.append(("bg:#1a1a2e #9CA3AF", "  <"))
-                    frags.append(("bg:#1a1a2e #8B949E", remote_str))
-                    frags.append(("bg:#1a1a2e #9CA3AF", ">"))
-            except:
-                pass
-            
-            return frags
+            from VoidCube_cli.config import load_config
+            cfg = load_config()
+            sc = cfg.get("supervisor", {}) if isinstance(cfg, dict) else {}
+            host = sc.get("host", "127.0.0.1")
+            port = sc.get("port", 6002)
+            self._supervisor_url = f"http://{host}:{port}/ui/state"
         except Exception:
-            return []
+            self._supervisor_url = "http://127.0.0.1:6002/ui/state"
+        return self._supervisor_url
+
+    def _fetch_supervisor_status(self) -> Dict[str, Any]:
+        """Return cached supervisor state.  Never blocks — HTTP fetch runs in background.
+
+        The actual HTTP request is triggered from the process_loop (every 5 s)
+        via _refresh_supervisor_status(), so the UI render path always reads
+        from an in-memory cache instantly.
+        """
+        return getattr(self, "_supervisor_state_cache", None) or {}
+
+    def _refresh_supervisor_status(self) -> None:
+        """Fetch supervisor state in a background thread.  Called from process_loop.
+
+        Guards against concurrent refreshes.  Runs the HTTP request with a
+        2 s timeout; failures silently leave the previous cache in place.
+        """
+        import time
+        import threading
+
+        now = time.time()
+        # Skip if cached recently (5 s TTL) or a refresh is already in flight
+        if (now - getattr(self, "_supervisor_state_ts", 0.0)) < 5.0:
+            return
+        if getattr(self, "_supervisor_state_refreshing", False):
+            return
+        self._supervisor_state_refreshing = True
+
+        def _do_fetch():
+            try:
+                import urllib.request
+                url = self._get_supervisor_url()
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=2) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    self._supervisor_state_cache = data
+            except Exception:
+                # Keep previous cache on failure — don't overwrite with {}
+                pass
+            finally:
+                self._supervisor_state_ts = time.time()
+                self._supervisor_state_refreshing = False
+
+        threading.Thread(target=_do_fetch, daemon=True, name="supervisor-status").start()
+
+    @staticmethod
+    def _use_ascii_fallback() -> bool:
+        """Detect terminals that may not render emoji correctly (e.g. legacy conhost)."""
+        import sys, os
+        if sys.platform != "win32":
+            return False
+        if os.environ.get("WT_SESSION") or os.environ.get("TERM_PROGRAM"):
+            return False
+        if os.environ.get("ConEmuANSI") or os.environ.get("ConEmuTask"):
+            return False
+        return True
+
+    def _use_ascii_fallback_cached(self) -> bool:
+        """Cached version — terminal type never changes mid-session."""
+        if self._ascii_fallback is None:
+            self._ascii_fallback = self._use_ascii_fallback()
+        return self._ascii_fallback
+
+    def _cached_load_config(self, ttl: float = 30.0) -> Dict[str, Any]:
+        """Return cached config, refreshing from disk every *ttl* seconds.
+
+        Also invalidates early when the config-watcher thread (in ``run()``)
+        detects a file change via ``_config_mtime``.
+        """
+        import time
+        now = time.time()
+        config_mtime = getattr(self, '_config_mtime', 0.0)
+        if (
+            self._config_cache is not None
+            and (now - self._config_cache_ts) < ttl
+            and config_mtime <= self._config_cache_ts
+        ):
+            return self._config_cache
+        from VoidCube_cli.config import load_config
+        self._config_cache = load_config()
+        self._config_cache_ts = now
+        return self._config_cache
+
+    def _get_middle_status_fragments(self, is_active: bool = False) -> list[tuple[str, str]]:
+        """Build middle status bar section: supervisor's model + supervisor scene.
+
+        The "memory model" is the supervisor's working LLM (configured via
+        memory.llm.* in config.yaml).  Its marquee and context% reflect the
+        **supervisor's** activity, not the agent's memory-tool calls.
+
+        - Marquee ON  → supervisor scene is NOT "idle" (planning / learning /
+          memory / execution)
+        - Context %   → supervisor's own MemAI token accumulator, reported via
+          /ui/state.mem_usage
+        """
+        frags: list[tuple[str, str]] = []
+        ascii_mode = self._use_ascii_fallback_cached()
+
+        # ── Fetch supervisor state once (cached 5s) ──
+        sup: Dict[str, Any] = {}
+        try:
+            sup = self._fetch_supervisor_status()
+        except Exception:
+            pass
+        scene = sup.get("scene", "idle")
+        sup_active = scene != "idle"
+        mem_usage = sup.get("mem_usage", {}) if isinstance(sup, dict) else {}
+
+        # ── Supervisor's model (memory.llm) ──
+        try:
+            config = self._cached_load_config()
+            memory_config = config.get("memory", {})
+            mem_llm = memory_config.get("llm", {})
+            mem_model = mem_llm.get("model", None) or memory_config.get("model", None)
+            if mem_model:
+                mem_short = mem_model.split("/")[-1] if "/" in mem_model else mem_model
+                if mem_short.endswith(".gguf"):
+                    mem_short = mem_short[:-5]
+                if len(mem_short) > 20:
+                    mem_short = mem_short[:17] + "..."
+            else:
+                mem_provider = mem_llm.get("provider", "") or memory_config.get("provider", "") or "mem"
+                mem_short = mem_provider if len(mem_provider) <= 12 else mem_provider[:9] + "..."
+
+            icon = "[M]" if ascii_mode else "🧠"
+            frags.append(("bg:#1a1a2e #6B7280", icon))
+
+            # Marquee: supervisor's model lights up when supervisor is working
+            mem_color = "#7CC9A0"  # mint green
+            if sup_active and len(mem_short) > 0:
+                import time
+                marquee_speed = 9
+                marquee_pos = int(time.time() * marquee_speed) % (len(mem_short) + 4)
+                for i, char in enumerate(mem_short):
+                    if i == marquee_pos - 1:
+                        frags.append(("bg:#1a1a2e #FFFFFF bold", char))
+                    elif i == marquee_pos:
+                        frags.append(("bg:#1a1a2e #C0FFC0 bold", char))
+                    elif i == marquee_pos + 1:
+                        frags.append(("bg:#1a1a2e #80C080 bold", char))
+                    else:
+                        frags.append((f"bg:#1a1a2e {mem_color} bold", char))
+            else:
+                frags.append((f"bg:#1a1a2e {mem_color} bold", mem_short))
+
+            # Context %: from supervisor's own token accumulator
+            mem_pct = mem_usage.get("context_percent") if mem_usage else None
+            if sup_active and mem_pct == 0:
+                # Supervisor is working but hasn't made LLM calls yet
+                frags.append(("bg:#1a1a2e #C0FFC0", " ···"))
+            elif mem_pct is not None and mem_pct > 0:
+                if mem_pct >= 80:
+                    mem_pct_color = "#FF6B6B"
+                elif mem_pct >= 60:
+                    mem_pct_color = "#FFD700"
+                else:
+                    mem_pct_color = "#8FBC8F"
+                frags.append((f"bg:#1a1a2e {mem_pct_color} bold", f" {mem_pct}%"))
+            else:
+                frags.append(("bg:#1a1a2e #6B7280", " --"))
+        except Exception:
+            pass
+
+        # ── Supervisor scene (reuse `sup` from memory-model section above) ──
+        try:
+            if scene:
+                if ascii_mode:
+                    scene_icons = {
+                        "idle": "(-)", "planning": "(?)", "memory": "(M)",
+                        "learning": "(L)", "execution": "(E)",
+                    }
+                else:
+                    scene_icons = {
+                        "idle": "💤", "planning": "🤔", "memory": "📚",
+                        "learning": "📖", "execution": "▶",
+                    }
+                scene_colors = {
+                    "idle": "#8B8682", "planning": "#E07362", "memory": "#E2B04A",
+                    "learning": "#7CC9A0", "execution": "#E07362",
+                }
+                icon = scene_icons.get(scene, "●")
+                color = scene_colors.get(scene, "#9CA3AF")
+                if frags:
+                    frags.append(("bg:#1a1a2e #4B5563", " · "))
+                frags.append((f"bg:#1a1a2e {color}", icon))
+
+                # compact scene label
+                scene_labels = {
+                    "idle": "休眠", "planning": "规划", "memory": "记忆",
+                    "learning": "学习", "execution": "执行",
+                }
+                label = scene_labels.get(scene, scene)
+                frags.append((f"bg:#1a1a2e {color}", label))
+
+                # error indicator
+                error_count = sup.get("error_count", 0)
+                if error_count > 0:
+                    frags.append(("bg:#1a1a2e #FF6B6B bold", f" !{error_count}"))
+            else:
+                # Supervisor not reachable — show offline indicator
+                if frags:
+                    frags.append(("bg:#1a1a2e #4B5563", " · "))
+                icon = "[x]" if ascii_mode else "⚙️"
+                frags.append(("bg:#1a1a2e #6B7280", icon))
+                frags.append(("bg:#1a1a2e #6B7280", "离线"))
+        except Exception:
+            pass
+
+        return frags
+
+    def _get_git_status_simple(self) -> list[tuple[str, str]]:
+        """简洁的Git状态显示，返回片段列表，支持高亮数字。
+
+        Git status is cached for 60 s and runs in a background thread so
+        it NEVER blocks the UI thread — spawning ``git status`` as a
+        subprocess is the #2 hot-path bottleneck after ``load_config()``,
+        and on Windows each subprocess spawn is especially expensive.
+        """
+        import time
+        import threading
+
+        now = time.time()
+        # Serve from cache while it's fresh
+        if self._git_status_cache is not None and (now - self._git_status_cache_ts) < 60.0:
+            return self._git_status_cache  # type: ignore[return-value]
+
+        # Prevent concurrent background refreshes
+        if getattr(self, "_git_status_refreshing", False):
+            return self._git_status_cache or []
+        self._git_status_refreshing = True
+
+        def _refresh():
+            try:
+                from VoidCube_cli.git_display import GitDisplay
+                git_display = GitDisplay()
+                status = git_display.runner.get_status()
+
+                if not status.is_repo:
+                    self._git_status_cache = []
+                    self._git_status_cache_ts = time.time()
+                    return
+
+                frags = []
+
+                # Git <branch>
+                frags.append(("bg:#1a1a2e #58A6FF", "Git "))
+                frags.append(("bg:#1a1a2e #9CA3AF", "<"))
+                frags.append(("bg:#1a1a2e #58A6FF bold", status.branch))
+                frags.append(("bg:#1a1a2e #9CA3AF", ">"))
+
+                # 暂存
+                if status.staged:
+                    frags.append(("bg:#1a1a2e #9CA3AF", "  暂存 "))
+                    frags.append(("bg:#1a1a2e #FFFFFF bold", str(len(status.staged))))
+
+                # 更改
+                changes = len(status.modified) + len(status.deleted) + len(status.untracked)
+                if changes > 0:
+                    frags.append(("bg:#1a1a2e #9CA3AF", "  更改 "))
+                    frags.append(("bg:#1a1a2e #FFFFFF bold", str(changes)))
+
+                # 检查远程 — use GitRunner for PowerShell/Win compat
+                try:
+                    code, out, _ = git_display.runner._run(["remote"])
+                    if code == 0 and out.strip():
+                        remotes = out.strip().splitlines()
+                        remote_str = ",".join(remotes)
+                        frags.append(("bg:#1a1a2e #9CA3AF", "  <"))
+                        frags.append(("bg:#1a1a2e #8B949E", remote_str))
+                        frags.append(("bg:#1a1a2e #9CA3AF", ">"))
+                except:
+                    pass
+
+                self._git_status_cache = frags
+                self._git_status_cache_ts = time.time()
+            except Exception:
+                self._git_status_cache = []
+                self._git_status_cache_ts = time.time()
+            finally:
+                self._git_status_refreshing = False
+                # Trigger a repaint so the new status is visible immediately
+                try:
+                    self._invalidate(min_interval=0.0)
+                except Exception:
+                    pass
+
+        threading.Thread(target=_refresh, daemon=True, name="git-status-refresh").start()
+        # Return stale cache while refresh runs; empty list on first call
+        return self._git_status_cache or []
     
     def _get_status_bar_fragments(self):
         if not self._status_bar_visible or getattr(self, '_model_picker_state', None):
@@ -2018,26 +2491,45 @@ class VoidcubeCLI:
                     (f'bg:#1a1a2e {percent_color} bold', percent_label),
                 ]
             
+            # 获取中间片段：记忆模型 + 监督者状态
+            middle_frags = self._get_middle_status_fragments(is_active=is_active)
+
             # 获取 Git 状态片段
             git_frags = self._get_git_status_simple()
-            
+
             if git_frags:
-                # 计算左侧宽度和Git内容宽度，计算需要填充的空格
+                # 计算各段宽度
                 left_width = sum(self._status_bar_display_width(text) for _, text in left_frags)
+                mid_width = sum(self._status_bar_display_width(text) for _, text in middle_frags) if middle_frags else 0
                 git_width = sum(self._status_bar_display_width(text) for _, text in git_frags)
-                padding_width = width - left_width - git_width - 4
-                
-                if padding_width > 0:
-                    # 构建完整的片段：左侧 + 填充空格 + Git内容
+
+                # 布局：left | spacer | middle | spacer | git
+                available = width - left_width - git_width - 6  # 6 = margins
+                if mid_width > 0 and available > 20:
+                    mid_pad_left = max(1, (available - mid_width) // 2)
+                    mid_pad_right = max(1, available - mid_width - mid_pad_left)
                     frags = left_frags.copy()
-                    frags.append(("class:status-bar", " " * padding_width))
+                    frags.append(("class:status-bar", " " * mid_pad_left))
+                    frags.extend(middle_frags)
+                    frags.append(("class:status-bar", " " * mid_pad_right))
+                    frags.extend(git_frags)
+                elif mid_width > 0 and available > 0:
+                    frags = left_frags.copy()
+                    frags.append(("class:status-bar", "  "))
+                    frags.extend(middle_frags)
+                    frags.append(("class:status-bar", "  "))
                     frags.extend(git_frags)
                 else:
-                    # 空间不够，直接拼接
-                    frags = left_frags.copy()
-                    frags.append(("class:status-bar", "  --  "))
-                    frags.extend(git_frags)
-                
+                    padding_width = width - left_width - git_width - 4
+                    if padding_width > 0:
+                        frags = left_frags.copy()
+                        frags.append(("class:status-bar", " " * padding_width))
+                        frags.extend(git_frags)
+                    else:
+                        frags = left_frags.copy()
+                        frags.append(("class:status-bar", "  --  "))
+                        frags.extend(git_frags)
+
                 total_width = sum(self._status_bar_display_width(text) for _, text in frags)
                 if total_width > width:
                     plain_text = "".join(text for _, text in frags)
@@ -2045,13 +2537,25 @@ class VoidcubeCLI:
                     return [("class:status-bar", trimmed)]
                 return frags
             else:
-                # 没有Git内容，只返回左侧
-                total_width = sum(self._status_bar_display_width(text) for _, text in left_frags)
+                # 没有Git内容：left | spacer | middle
+                all_frags = left_frags.copy()
+                if middle_frags:
+                    mid_width = sum(self._status_bar_display_width(text) for _, text in middle_frags)
+                    left_w = sum(self._status_bar_display_width(text) for _, text in left_frags)
+                    pad = width - left_w - mid_width - 4
+                    if pad > 4:
+                        all_frags.append(("class:status-bar", " " * (pad // 2)))
+                        all_frags.extend(middle_frags)
+                        all_frags.append(("class:status-bar", " " * (pad - pad // 2)))
+                    elif pad > 0:
+                        all_frags.append(("class:status-bar", "  "))
+                        all_frags.extend(middle_frags)
+                total_width = sum(self._status_bar_display_width(text) for _, text in all_frags)
                 if total_width > width:
-                    plain_text = "".join(text for _, text in left_frags)
+                    plain_text = "".join(text for _, text in all_frags)
                     trimmed = self._trim_status_bar_text(plain_text, width)
                     return [("class:status-bar", trimmed)]
-                return left_frags
+                return all_frags
         except Exception:
             return [("class:status-bar", f" {self._build_status_bar_text()} ")]
 
@@ -2191,7 +2695,7 @@ class VoidcubeCLI:
             term_width = shutil.get_terminal_size().columns
         except Exception:
             term_width = 80
-        prefix = "  [thinking] "
+        prefix = "  [思考中] "
         wrap_width = max(30, term_width - len(prefix) - 2)
 
         paragraphs = []
@@ -2205,7 +2709,7 @@ class VoidcubeCLI:
             return
 
         if self.verbose:
-            _cprint(f"  {_DIM}[thinking] {preview_text}{_RST}")
+            _cprint(f"  {_DIM}[思考中] {preview_text}{_RST}")
             return
 
         lines = preview_text.splitlines()
@@ -2214,7 +2718,7 @@ class VoidcubeCLI:
             preview += f"\n  ... ({len(lines) - 5} more lines)"
         else:
             preview = preview_text
-        _cprint(f"  {_DIM}[thinking] {preview}{_RST}")
+        _cprint(f"  {_DIM}[思考中] {preview}{_RST}")
 
     def _flush_reasoning_preview(self, *, force: bool = False) -> None:
         """Flush buffered reasoning text at natural boundaries.
@@ -2231,7 +2735,7 @@ class VoidcubeCLI:
             term_width = shutil.get_terminal_size().columns
         except Exception:
             term_width = 80
-        target_width = max(40, term_width - len("  [thinking] ") - 4)
+        target_width = max(40, term_width - len("  [思考中] ") - 4)
 
         flush_text = ""
 
@@ -2787,7 +3291,7 @@ class VoidcubeCLI:
                 "credential_pool": getattr(self, "_credential_pool", None),
             }
             effective_model = model_override or self.model
-            self.agent = AIAgent(
+            self.agent = _get_AIAgent()(
                 model=effective_model,
                 api_key=runtime.get("api_key"),
                 base_url=runtime.get("base_url"),
@@ -2876,7 +3380,7 @@ class VoidcubeCLI:
             self._show_status()
         else:
             # Get tools for display
-            tools = get_tool_definitions(enabled_toolsets=self.enabled_toolsets, quiet_mode=True)
+            tools = _get_tool_definitions(enabled_toolsets=self.enabled_toolsets, quiet_mode=True)
             
             # Get terminal working directory (where commands will execute)
             cwd = os.getenv("TERMINAL_CWD", os.getcwd())
@@ -3632,9 +4136,10 @@ class VoidcubeCLI:
                     continue
                 ChatConsole().print(f"    [bold {_accent_hex()}]{cmd:<15}[/] [dim]-[/] {_escape(desc)}")
 
-        if _skill_commands:
-            _cprint(f"\n  {skill_cmd_header} {_RST}({len(_skill_commands)} installed):")
-            for cmd, info in sorted(_skill_commands.items()):
+        _skcmds = _get_skill_commands()
+        if _skcmds:
+            _cprint(f"\n  {skill_cmd_header} {_RST}({len(_skcmds)} installed):")
+            for cmd, info in sorted(_skcmds.items()):
                 ChatConsole().print(
                     f"    [bold {_accent_hex()}]{cmd:<22}[/] [dim]-[/] {_escape(info['description'])}"
                 )
@@ -3668,7 +4173,7 @@ class VoidcubeCLI:
         toolsets = {}
         for tool in sorted(tools, key=lambda t: t["function"]["name"]):
             name = tool["function"]["name"]
-            toolset = get_toolset_for_tool(name) or "unknown"
+            toolset = _get_toolset_for_tool(name) or "unknown"
             if toolset not in toolsets:
                 toolsets[toolset] = []
             desc = tool["function"].get("description", "")
@@ -3744,7 +4249,7 @@ class VoidcubeCLI:
         """Display available toolsets with kawaii ASCII art."""
         from VoidCube_cli.i18n import get_i18n
         
-        all_toolsets = get_all_toolsets()
+        all_toolsets = _get_all_toolsets()
         i18n = get_i18n()
         locale_data = i18n._translations.get(i18n.get_current_locale(), {})
         ts_translations = locale_data.get("translations", {}).get("toolsets", {})
@@ -3760,7 +4265,7 @@ class VoidcubeCLI:
         print()
         
         for name in sorted(all_toolsets):
-            info = get_toolset_info(name)
+            info = _get_toolset_info(name)
             if info:
                 tool_count = len(info.get("tools", []))
                 # Get translated description, fall back to original
@@ -4003,6 +4508,10 @@ class VoidcubeCLI:
             except Exception:
                 pass
 
+        # Per-interaction trace_id for end-to-end observability (C-03).
+        # A new trace_id is generated for each user message so the full
+        # chain (CLI → Gateway → Agent → Tool → Response) can be correlated.
+        self._current_trace_id: str = ""
         self.session_start = datetime.now()
         timestamp_str = self.session_start.strftime("%Y%m%d_%H%M%S")
         short_uuid = uuid.uuid4().hex[:6]
@@ -5531,7 +6040,7 @@ class VoidcubeCLI:
                 if self.compact or term_w < 80:
                     cc.print(_build_compact_banner())
                 else:
-                    tools = get_tool_definitions(enabled_toolsets=self.enabled_toolsets, quiet_mode=True)
+                    tools = _get_tool_definitions(enabled_toolsets=self.enabled_toolsets, quiet_mode=True)
                     cwd = os.getenv("TERMINAL_CWD", os.getcwd())
                     ctx_len = None
                     if hasattr(self, 'agent') and self.agent and hasattr(self.agent, 'context_compressor'):
@@ -5650,6 +6159,8 @@ class VoidcubeCLI:
         elif canonical == "personality":
             # Use original case (handler lowercases the personality name itself)
             self._handle_personality_command(cmd_original)
+        elif canonical == "auto":
+            self._handle_auto_command(cmd_original)
         elif canonical == "plan":
             self._handle_plan_command(cmd_original)
         elif canonical == "retry":
@@ -5805,13 +6316,14 @@ class VoidcubeCLI:
                     except Exception as e:
                         _cprint(f"\033[1;31mPlugin command error: {e}{_RST}")
             # Check for skill slash commands (/gif-search, /axolotl, etc.)
-            elif base_cmd in _skill_commands:
+            elif base_cmd in _get_skill_commands():
+                _skcmds = _get_skill_commands()
                 user_instruction = cmd_original[len(base_cmd):].strip()
-                msg = build_skill_invocation_message(
+                msg = _get_skill_invocation_message(
                     base_cmd, user_instruction, task_id=self.session_id
                 )
                 if msg:
-                    skill_name = _skill_commands[base_cmd]["name"]
+                    skill_name = _skcmds[base_cmd]["name"]
                     print(f"\n🔧 Loading skill: {skill_name}")
                     if hasattr(self, '_pending_input'):
                         self._pending_input.put(msg)
@@ -5823,7 +6335,7 @@ class VoidcubeCLI:
                 # that execution-time resolution agrees with tab-completion.
                 from VoidCube_cli.commands import COMMANDS
                 typed_base = cmd_lower.split()[0]
-                all_known = set(COMMANDS) | set(_skill_commands)
+                all_known = set(COMMANDS) | set(_skcmds)
                 matches = [c for c in all_known if c.startswith(typed_base)]
                 if len(matches) > 1:
                     # Prefer an exact match (typed the full command name)
@@ -5859,14 +6371,98 @@ class VoidcubeCLI:
                     _cprint(f"{_DIM}{_ACCENT}Type /help for available commands{_RST}")
         
         return True
-    
+
+    def _handle_auto_command(self, cmd: str):
+        """Handle /auto [focus] — trigger the supervisor autonomous pipeline.
+
+        Calls the Supervisor REST API to run one full autonomous cycle:
+          1. Endogenous drive  → generate & queue task candidates
+          2. Self-evolution review → approve eligible tasks & dispatch execution
+
+        Agents execute only supervisor-approved tasks — they do NOT decide
+        what to do on their own.  An optional focus area can be provided:
+        /auto security, /auto performance, etc.
+
+        Requires the VoidCube daemon stack (gateway + supervisor) to be running.
+        The CLI auto-starts them in interactive mode; use ``voidcube serve start``
+        if they were stopped.
+        """
+        parts = cmd.strip().split(maxsplit=1)
+        focus = parts[1].strip() if len(parts) > 1 else ""
+
+        _cprint(f"  🧠 Triggering supervisor autonomous cycle...")
+        if focus:
+            _cprint(f"     Focus: {focus}")
+
+        # Run the HTTP call in a background thread so the UI stays responsive.
+        # The supervisor endpoint is synchronous (it runs the full pipeline
+        # before returning), so we must not block the TUI event loop.
+        import threading, json as _json
+
+        def _call_auto_cycle():
+            # Resolve supervisor URL from config (same logic as _get_supervisor_url)
+            try:
+                from VoidCube_cli.config import load_config
+                cfg = load_config()
+                sv_cfg = cfg.get("supervisor", {})
+                host = sv_cfg.get("host", "127.0.0.1")
+                port = sv_cfg.get("port", 6002)
+                supervisor_url = f"http://{host}:{port}"
+            except Exception:
+                supervisor_url = "http://127.0.0.1:6002"
+
+            try:
+                import urllib.request as _req
+                payload = _json.dumps({"focus": focus}).encode()
+                r = _req.Request(
+                    f"{supervisor_url}/self-evolution/auto-cycle",
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                resp = _json.loads(_req.urlopen(r, timeout=120).read())
+            except Exception as exc:
+                _cprint(f"  ⚠️  Supervisor unreachable: {exc}")
+                _cprint(f"     Ensure daemons are running (auto-started in interactive mode).")
+                _cprint(f"     Or run: voidcube serve start")
+                return
+
+            try:
+                summary = resp.get("summary", {})
+                phases = resp.get("phases", {})
+                planned = summary.get("planned", 0)
+                dispatched = summary.get("dispatched", 0)
+                drive_status = phases.get("drive", {}).get("status", "?")
+                review_info = phases.get("review", {})
+
+                _cprint(f"     Drive phase: {drive_status} ({planned} candidate(s) queued)")
+                _cprint(f"     Review phase: {review_info.get('reviewed', 0)} task(s) reviewed")
+                dispatched_list = review_info.get("dispatched", [])
+                if dispatched_list:
+                    tasks_str = ", ".join(
+                        d.get("task_id", "?")[:8] for d in dispatched_list[:5]
+                    )
+                    _cprint(f"     Dispatched: {len(dispatched_list)} execution request(s) → [{tasks_str}...]")
+                    _cprint(f"  ✅ Agents are now executing supervisor-approved tasks.")
+                    _cprint(f"     Monitor: {supervisor_url}/ui")
+                elif planned > 0:
+                    _cprint(f"     No tasks eligible for execution yet (idle-window conditions not met).")
+                    _cprint(f"     Tasks remain queued for the next auto cycle.")
+                else:
+                    _cprint(f"     No new candidates generated — system may be fully idle.")
+                    _cprint(f"     Queued tasks (if any) will be reviewed on the next periodic cycle.")
+            except Exception:
+                pass  # best-effort reporting; the API call succeeded
+
+        threading.Thread(target=_call_auto_cycle, daemon=True, name="auto-cycle").start()
+
     def _handle_plan_command(self, cmd: str):
         """Handle /plan [request] — load the bundled plan skill."""
         parts = cmd.strip().split(maxsplit=1)
         user_instruction = parts[1].strip() if len(parts) > 1 else ""
 
-        plan_path = build_plan_path(user_instruction)
-        msg = build_skill_invocation_message(
+        plan_path = _get_plan_path(user_instruction)
+        msg = _get_skill_invocation_message(
             "/plan",
             user_instruction,
             task_id=self.session_id,
@@ -5918,7 +6514,7 @@ class VoidcubeCLI:
 
         def run_background():
             try:
-                bg_agent = AIAgent(
+                bg_agent = _get_AIAgent()(
                     model=turn_route["model"],
                     api_key=turn_route["runtime"].get("api_key"),
                     base_url=turn_route["runtime"].get("base_url"),
@@ -6056,7 +6652,7 @@ class VoidcubeCLI:
 
         def run_btw():
             try:
-                btw_agent = AIAgent(
+                btw_agent = _get_AIAgent()(
                     model=turn_route["model"],
                     api_key=turn_route["runtime"].get("api_key"),
                     base_url=turn_route["runtime"].get("base_url"),
@@ -6660,9 +7256,9 @@ class VoidcubeCLI:
         compressions = compressor.compression_count
 
         msg_count = len(self.conversation_history)
-        cost_result = estimate_usage_cost(
+        cost_result = _estimate_usage_cost_lazy(
             agent.model,
-            CanonicalUsage(
+            _CanonicalUsage_lazy(
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cache_read_tokens=cache_read_tokens,
@@ -6671,7 +7267,7 @@ class VoidcubeCLI:
             provider=getattr(agent, "provider", None),
             base_url=getattr(agent, "base_url", None),
         )
-        elapsed = format_duration_compact((datetime.now() - self.session_start).total_seconds())
+        elapsed = _format_duration_compact_lazy((datetime.now() - self.session_start).total_seconds())
 
         print("  📊 Session Token Usage")
         print(f"  {'─' * 40}")
@@ -6810,8 +7406,7 @@ class VoidcubeCLI:
 
             # Refresh the agent's tool list so the model can call new tools
             if self.agent is not None:
-                from tools.model_tools import get_tool_definitions
-                self.agent.tools = get_tool_definitions(
+                self.agent.tools = _get_tool_definitions(
                     enabled_toolsets=self.agent.enabled_toolsets
                     if hasattr(self.agent, "enabled_toolsets") else None,
                     quiet_mode=True,
@@ -6895,6 +7490,7 @@ class VoidcubeCLI:
         if event_type == "tool.completed":
             import time as _time
             self._tool_start_time = 0.0
+            self._current_tool_name = ""
             # Print stacked scrollback line for "all" / "new" modes
             if function_name and self.tool_progress_mode in ("all", "new"):
                 duration = kwargs.get("duration", 0.0)
@@ -6932,6 +7528,7 @@ class VoidcubeCLI:
                 label = label[:_pl - 3] + "..."
             self._spinner_text = f"{emoji} {label}"
             self._tool_start_time = _time.monotonic()
+            self._current_tool_name = function_name
             # Store args for stacked scrollback line on completion
             self._pending_tool_info.setdefault(function_name, []).append(
                 function_args if function_args is not None else {}
@@ -7162,23 +7759,28 @@ class VoidcubeCLI:
                     self._voice_continuous = False
                     self._no_speech_count = 0
                     _cprint(f"{_DIM}No speech detected 3 times, continuous mode stopped.{_RST}")
-                    return
+                    self._voice_stop_continuous = True
             else:
                 self._no_speech_count = 0
 
-            # If no transcript was submitted but continuous mode is active,
-            # restart recording so the user can keep talking.
-            # (When transcript IS submitted, process_loop handles restart
-            # after chat() completes.)
-            if self._voice_continuous and not submitted and not self._voice_recording:
-                def _restart_recording():
-                    try:
-                        self._voice_start_recording()
-                        if hasattr(self, '_app') and self._app:
-                            self._app.invalidate()
-                    except Exception as e:
-                        _cprint(f"{_DIM}Voice auto-restart failed: {e}{_RST}")
-                threading.Thread(target=_restart_recording, daemon=True).start()
+        # Python 3.14+: return outside finally block to avoid SyntaxWarning
+        if getattr(self, '_voice_stop_continuous', False):
+            self._voice_stop_continuous = False
+            return
+
+        # If no transcript was submitted but continuous mode is active,
+        # restart recording so the user can keep talking.
+        # (When transcript IS submitted, process_loop handles restart
+        # after chat() completes.)
+        if not submitted and self._voice_continuous and not self._voice_recording:
+            def _restart_recording():
+                try:
+                    self._voice_start_recording()
+                    if hasattr(self, '_app') and self._app:
+                        self._app.invalidate()
+                except Exception as e:
+                    _cprint(f"{_DIM}Voice auto-restart failed: {e}{_RST}")
+            threading.Thread(target=_restart_recording, daemon=True).start()
 
     def _voice_speak_response(self, text: str):
         """Speak the agent's response aloud using TTS (runs in background thread)."""
@@ -7772,7 +8374,7 @@ class VoidcubeCLI:
         return lines
 
     def _secret_capture_callback(self, var_name: str, prompt: str, metadata=None) -> dict:
-        return prompt_for_secret(self, var_name, prompt, metadata)
+        return _get_prompt_for_secret()(self, var_name, prompt, metadata)
 
     def _capture_modal_input_snapshot(self) -> None:
         """Temporarily clear the input buffer and save the user's in-progress draft."""
@@ -7840,7 +8442,7 @@ class VoidcubeCLI:
         """
         # Single-query and direct chat callers do not go through run(), so
         # register secure secret capture here as well.
-        set_secret_capture_callback(self._secret_capture_callback)
+        _get_set_secret_capture_callback()(self._secret_capture_callback)
 
         # Refresh provider credentials if needed (handles key rotation transparently)
         if not self._ensure_runtime_credentials():
@@ -7977,11 +8579,14 @@ class VoidcubeCLI:
                     agent_message = _msn + "\n\n" + agent_message
                     self._pending_model_switch_note = None
                 try:
+                    # Generate per-interaction trace_id for observability (C-03)
+                    self._current_trace_id = str(uuid.uuid4())
                     result = self.agent.run_conversation(
                         user_message=agent_message,
-                        conversation_history=self.conversation_history[:-1],  # Exclude the message we just added
+                        conversation_history=self.conversation_history[:-1],
                         stream_callback=stream_callback,
                         task_id=self.session_id,
+                        trace_id=self._current_trace_id,
                         persist_user_message=message if _voice_prefix else None,
                     )
                 except Exception as exc:
@@ -8490,7 +9095,8 @@ class VoidcubeCLI:
             from VoidCube_cli.config import load_config
             config = load_config()
             memory_config = config.get("memory", {})
-            memory_model = memory_config.get("model", None)
+            mem_llm = memory_config.get("llm", {})
+            memory_model = mem_llm.get("model", None) or memory_config.get("model", None)
             if memory_model:
                 memory_model_display = memory_model.split("/")[-1] if "/" in memory_model else memory_model
                 if memory_model_display.endswith(".gguf"):
@@ -8553,7 +9159,7 @@ class VoidcubeCLI:
         
         # Get tool count by calling get_tool_definitions
         try:
-            tools = get_tool_definitions(enabled_toolsets=self.enabled_toolsets, quiet_mode=True)
+            tools = _get_tool_definitions(enabled_toolsets=self.enabled_toolsets, quiet_mode=True)
             tools_count = len(tools) if tools else 0
         except Exception:
             tools_count = 0
@@ -8635,9 +9241,9 @@ class VoidcubeCLI:
         self._voice_tts_done.set()  # Initially "done" (no TTS pending)
 
         # Register callbacks so terminal_tool prompts route through our UI
-        set_sudo_password_callback(self._sudo_password_callback)
-        set_approval_callback(self._approval_callback)
-        set_secret_capture_callback(self._secret_capture_callback)
+        _get_set_sudo_password_callback(self._sudo_password_callback)
+        _get_set_approval_callback(self._approval_callback)
+        _get_set_secret_capture_callback()(self._secret_capture_callback)
 
         # Ensure tirith security scanner is available (downloads if needed).
         # Warn the user if tirith is enabled in config but not available,
@@ -8764,10 +9370,24 @@ class VoidcubeCLI:
                     event.app.current_buffer.reset(append_to_history=True)
                     return
                 
-                # Handle /quit directly on the UI thread for immediate exit
+                # Handle /quit directly on the UI thread for immediate exit.
+                # Force-stop auto-started daemons so the full VoidCube stack
+                # shuts down cleanly instead of leaving orphaned processes.
+                # Use /quit --keep-daemons to exit while leaving daemons running.
                 if text.startswith("/quit"):
                     if not self.process_command(text):
                         self._should_exit = True
+                        # ── Force-stop daemons (unless --keep-daemons) ──
+                        keep_daemons = "--keep-daemons" in text
+                        global _daemons_auto_started
+                        if _daemons_auto_started and not keep_daemons:
+                            try:
+                                from VoidCube_cli.ops.serve import stop_all
+                                stop_all(force=True)
+                                _daemons_auto_started = False
+                            except Exception:
+                                pass  # leave flag True so atexit handler retries
+                        # ───────────────────────────────────────────────
                         if event.app.is_running:
                             event.app.exit()
                     event.app.current_buffer.reset(append_to_history=True)
@@ -9918,9 +10538,10 @@ class VoidcubeCLI:
                     try:
                         user_input = self._pending_input.get(timeout=0.1)
                     except queue.Empty:
-                        # Periodic config watcher — auto-reload MCP on mcp_servers change
+                        # Periodic background tasks — never block the UI thread
                         if not self._agent_running:
                             self._check_config_mcp_changes()
+                            self._refresh_supervisor_status()
                             # Check for background process notifications (completions
                             # and watch pattern matches) while agent is idle.
                             try:
@@ -10031,7 +10652,8 @@ class VoidcubeCLI:
                     self._agent_running = True
                     app.invalidate()  # Refresh status line
 
-                    logger.info("User input received: %s (images: %d)", user_input[:100] + "..." if len(user_input) > 100 else user_input, len(submit_images) if submit_images else 0)
+                    _sanitized = str(user_input).encode('ascii', errors='replace').decode('ascii')
+                    logger.info("User input received: %s (images: %d)", _sanitized[:100] + "..." if len(_sanitized) > 100 else _sanitized, len(submit_images) if submit_images else 0)
 
                     try:
                         self.chat(user_input, images=submit_images or None)
@@ -10039,6 +10661,7 @@ class VoidcubeCLI:
                         self._agent_running = False
                         self._spinner_text = ""
                         self._tool_start_time = 0.0
+                        self._current_tool_name = ""
                         self._pending_tool_info.clear()
                         self._last_scrollback_tool = ""
 
@@ -10191,9 +10814,9 @@ class VoidcubeCLI:
             except Exception:
                 pass
             # Unregister callbacks to avoid dangling references
-            set_sudo_password_callback(None)
-            set_approval_callback(None)
-            set_secret_capture_callback(None)
+            _get_set_sudo_password_callback(None)
+            _get_set_approval_callback(None)
+            _get_set_secret_capture_callback()(None)
             # Close session in SQLite
             if hasattr(self, '_session_db') and self._session_db and self.agent:
                 try:
@@ -10225,6 +10848,86 @@ class VoidcubeCLI:
 # Main Entry Point
 # ============================================================================
 
+# Track whether daemons were auto-started (so we can offer to stop on exit)
+_daemons_auto_started = False
+
+
+def _handle_serve_command(action: str) -> None:
+    """Handle ``voidcube stop`` / ``voidcube status`` subcommands.
+
+    ``start`` and ``foreground`` are also available but are normally
+    handled automatically by the interactive entry path.
+    """
+    valid = {"start", "stop", "status", "foreground"}
+    action_lower = action.strip().lower() if action else "status"
+
+    if action_lower not in valid:
+        print(f"Invalid serve action: {action!r}")
+        print(f"Usage: voidcube <stop|status|start|foreground>")
+        return
+
+    try:
+        from VoidCube_cli.ops.serve import start_all, stop_all, print_status
+    except ImportError as exc:
+        print(f"Failed to import serve module: {exc}")
+        print("Ensure VoidCube is installed correctly (pip install -e .)")
+        return
+
+    if action_lower == "start":
+        start_all(foreground=False)
+    elif action_lower == "foreground":
+        start_all(foreground=True)
+    elif action_lower == "stop":
+        stop_all()
+    elif action_lower == "status":
+        print_status()
+
+
+def _auto_start_daemons() -> None:
+    """Start Gateway → Memory → Supervisor if not already running.
+
+    Called transparently when entering interactive mode (skipped for -q).
+    Sets the module-level ``_daemons_auto_started`` flag so the exit
+    handler can offer to stop them.
+    """
+    global _daemons_auto_started
+
+    try:
+        from VoidCube_cli.ops.serve import ensure_running, print_status
+    except ImportError:
+        return  # serve module not available — silently skip
+
+    print("\n  ⚡ Auto-starting VoidCube daemons (Mem → Gateway → Supervisor)...\n")
+    result = ensure_running(silent=False)
+    print()
+
+    any_started = any(info.get("started") for info in result.values())
+    if any_started:
+        print_status()
+        _daemons_auto_started = True
+
+
+def _maybe_stop_daemons_on_exit(force: bool = False) -> None:
+    """Called at process exit: stop daemons that were auto-started.
+
+    When ``force=True`` (from /quit): stop immediately, no output.
+    When ``force=False`` (from Ctrl+C / EOF / normal exit): stop silently
+    without prompting — ``input()`` is unreliable inside atexit handlers
+    because stdin may already be closed after TUI teardown.
+    """
+    global _daemons_auto_started
+    if not _daemons_auto_started:
+        return
+
+    try:
+        from VoidCube_cli.ops.serve import stop_all
+    except ImportError:
+        return
+
+    stop_all(force=True)
+    _daemons_auto_started = False
+
+
 def main(
     query: Optional[str] = None,
     q: Optional[str] = None,
@@ -10247,6 +10950,7 @@ def main(
     checkpoints: bool = False,
     pass_session_id: bool = False,
     version: bool = False,
+    serve: Optional[str] = None,
 ):
     """
     Voidcube Agent CLI - Interactive AI Assistant
@@ -10291,6 +10995,19 @@ def main(
         print("项目地址: https://gitee.com/LSgit-hub/voidcub-CLI")
         return
 
+    # ── serve command ─────────────────────────────────────────────────
+    if serve is not None:
+        _handle_serve_command(serve)
+        return
+
+    # Deferred runtime initialization — logging, config, skin, tool preview.
+    # Moved out of module-level to avoid ~300ms of import-chain cost at startup.
+    _init_cli_runtime()
+
+    # Ensure CLI_CONFIG is cached in module globals so bare-name references
+    # in main(), VoidcubeCLI.__init__, and class methods resolve correctly.
+    globals()["CLI_CONFIG"] = _get_cli_config()
+
     # Signal to terminal_tool that we're in interactive mode
     # This enables interactive sudo password prompts with timeout
     os.environ["VOIDCUBE_INTERACTIVE"] = "1"
@@ -10321,7 +11038,27 @@ def main(
     
     # Handle query shorthand
     query = query or q
-    
+
+    # ── Auto-start daemons (interactive mode only) ─────────────────────
+    # Single-query (-q), list commands, and other short-lived operations
+    # skip the daemon lifecycle to keep startup fast.
+    #
+    # When VOIDCUBE_DAEMONS_STARTED=1 (set by voidcube.py), daemons were
+    # already started by the wrapper — skip the start but still register
+    # cleanup so /quit and atexit can stop them.  Without this, daemons
+    # started via ``voidcube`` would be orphaned on exit.
+    is_interactive = query is None and not list_tools and not list_toolsets
+    daemons_already_started = os.environ.get("VOIDCUBE_DAEMONS_STARTED") == "1"
+    if is_interactive:
+        if daemons_already_started:
+            # Daemons were started by voidcube.py — we still own cleanup
+            global _daemons_auto_started
+            _daemons_auto_started = True
+            atexit.register(_maybe_stop_daemons_on_exit)
+        else:
+            _auto_start_daemons()
+            atexit.register(_maybe_stop_daemons_on_exit)
+
     # Parse toolsets - handle both string and tuple/list inputs
     # Default to VoidCube-cli toolset which includes cronjob management tools
     toolsets_list = None
@@ -10359,7 +11096,7 @@ def main(
     )
 
     if parsed_skills:
-        skills_prompt, loaded_skills, missing_skills = build_preloaded_skills_prompt(
+        skills_prompt, loaded_skills, missing_skills = _get_preloaded_skills_prompt(
             parsed_skills,
             task_id=cli.session_id,
         )

@@ -849,7 +849,8 @@ def cmd_whatsapp(args):
                 _default_msg = "Tip: Agent responses are prefixed with '> Voidcube Agent'"
                 print(f"  {t('tips.agent_prefix', prefix='> Voidcube Agent', default=_default_msg)}")
             except Exception:
-                print(f"  {t('tips.agent_prefix', prefix='> Voidcube Agent', default='Tip: Agent responses are prefixed with \'> Voidcube Agent\'')}")
+                _default_msg2 = "Tip: Agent responses are prefixed with '> Voidcube Agent'"
+                print(f"  {t('tips.agent_prefix', prefix='> Voidcube Agent', default=_default_msg2)}")
         else:
             print(f"  {t('auth.next_steps', default='Next steps:')}")
             print("    1. Start the gateway:  VoidCube gateway")
@@ -861,7 +862,8 @@ def cmd_whatsapp(args):
                 _default_msg = "Tip: Agent responses are prefixed with '> Voidcube Agent'"
                 print(f"  {t('tips.agent_prefix', prefix='> Voidcube Agent', default=_default_msg)}")
             except Exception:
-                print(f"  {t('tips.agent_prefix', prefix='> Voidcube Agent', default='Tip: Agent responses are prefixed with \'> Voidcube Agent\'')}")
+                _default_msg2 = "Tip: Agent responses are prefixed with '> Voidcube Agent'"
+                print(f"  {t('tips.agent_prefix', prefix='> Voidcube Agent', default=_default_msg2)}")
             print("  so you can tell them apart from your own messages.")
         print()
         print("  Or install as a service: VoidCube gateway install")
@@ -1135,6 +1137,20 @@ def cmd_body(args):
     print("Unknown body command. Use: VoidCube body --help")
 
 
+def cmd_serve(args):
+    """Integrated system launcher — start/stop/status of gateway + supervisor."""
+    from VoidCube_cli.ops.serve import start_all, stop_all, print_status
+
+    action = getattr(args, "serve_action", None) or "status"
+    if action == "start":
+        foreground = getattr(args, "foreground", False)
+        start_all(foreground=foreground)
+    elif action == "stop":
+        stop_all()
+    else:
+        print_status()
+
+
 def cmd_agent(args):
     """Agent process operations routed through gateway executor."""
     import requests
@@ -1204,11 +1220,12 @@ def _coalesce_session_name_args(argv: list) -> list:
     or a known top-level subcommand.
     """
     _SUBCOMMANDS = {
-        "chat", "model", "gateway", "setup", "whatsapp", "login", "logout", "auth",
-        "body", "agent",
-        "status", "cron", "doctor", "config", "pairing", "skills", "tools",
-        "mcp", "sessions", "insights", "version", "update", "uninstall",
-        "profile",
+        "chat", "model", "gateway", "whatsapp", "login", "logout",
+        "body", "agent", "serve",
+        "status", "doctor", "config", "tools",
+        "mcp", "sessions", "insights", "version",
+        "api", "acp", "logs", "memory", "profile", "update", "uninstall",
+        "cron", "setup", "pairing", "skills", "honcho",
     }
     _SESSION_FLAGS = {"-c", "--continue", "-r", "--resume"}
 
@@ -1677,7 +1694,22 @@ For more help on a command:
         help="Start an agent from the active body pointer via the preferred gateway executor path",
     )
     agent_parser.set_defaults(func=cmd_agent)
-    
+
+    # =========================================================================
+    # serve command — integrated system launcher (Phase 1 multi-process)
+    # =========================================================================
+    serve_parser = subparsers.add_parser(
+        "serve",
+        help="Start or manage VoidCube background services (gateway + supervisor)",
+        description="Launch the full VoidCube multi-process system: gateway, supervisor.",
+    )
+    serve_subparsers = serve_parser.add_subparsers(dest="serve_action")
+    serve_start = serve_subparsers.add_parser("start", help="Start all services in background")
+    serve_start.add_argument("--foreground", action="store_true", help="Run in foreground (single-process)")
+    serve_stop = serve_subparsers.add_parser("stop", help="Stop all running services")
+    serve_status = serve_subparsers.add_parser("status", help="Show service status")
+    serve_parser.set_defaults(func=cmd_serve)
+
     # =========================================================================
     # debug command
     # =========================================================================
@@ -2208,6 +2240,329 @@ Examples:
     logs_parser.set_defaults(func=cmd_logs)
 
     # =========================================================================
+    # api command
+    # =========================================================================
+    api_parser = subparsers.add_parser(
+        "api",
+        help="Configure API settings for inference providers",
+        description="Interactive wizard for adding and configuring inference providers",
+    )
+
+    def cmd_api(args):
+        """Interactive API configuration wizard."""
+        _require_tty("api")
+        try:
+            from VoidCube_cli.api_config import run_api_config_wizard
+            run_api_config_wizard()
+        except ImportError:
+            print("API configuration module not available.")
+            print("Run 'VoidCube config edit' to configure providers manually.")
+            sys.exit(1)
+
+    api_parser.set_defaults(func=cmd_api)
+
+    # =========================================================================
+    # gateway command
+    # =========================================================================
+    gateway_parser = subparsers.add_parser(
+        "gateway",
+        help="Manage the VoidCube gateway service",
+        description="Start, stop, or check the internal gateway and supervisor services",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+Examples:
+    VoidCube gateway              Show gateway + supervisor status
+    VoidCube gateway start        Start background services
+    VoidCube gateway stop         Stop all running services
+""",
+    )
+    gateway_sub = gateway_parser.add_subparsers(dest="gateway_action")
+    gateway_sub.add_parser("start", help="Start gateway and supervisor in background")
+    gateway_sub.add_parser("stop", help="Stop all running services")
+    gateway_sub.add_parser("status", help="Show service status")
+
+    def cmd_gateway(args):
+        """Gateway lifecycle — delegates to serve module."""
+        action = getattr(args, "gateway_action", None) or "status"
+        from VoidCube_cli.ops.serve import start_all, stop_all, print_status
+        if action == "start":
+            start_all()
+        elif action == "stop":
+            stop_all()
+        else:
+            print_status()
+
+    gateway_parser.set_defaults(func=cmd_gateway)
+
+    # =========================================================================
+    # profile command
+    # =========================================================================
+    profile_parser = subparsers.add_parser(
+        "profile",
+        help="Manage VoidCube configuration profiles",
+        description="Create, list, switch, and delete isolated VoidCube profiles",
+    )
+    profile_sub = profile_parser.add_subparsers(dest="profile_action")
+    profile_sub.add_parser("list", help="List all profiles")
+    profile_create = profile_sub.add_parser("create", help="Create a new profile")
+    profile_create.add_argument("name", help="Profile name")
+    profile_use = profile_sub.add_parser("use", help="Switch to a profile")
+    profile_use.add_argument("name", help="Profile name")
+    profile_delete = profile_sub.add_parser("delete", help="Delete a profile")
+    profile_delete.add_argument("name", help="Profile name")
+    profile_delete.add_argument("--yes", "-y", action="store_true", help="Skip confirmation")
+
+    def cmd_profile(args):
+        """Profile management commands."""
+        from VoidCube_cli.profiles import (
+            list_profiles, create_profile, delete_profile, set_active_profile, resolve_profile_env,
+        )
+
+        action = getattr(args, "profile_action", None) or "list"
+
+        if action == "list":
+            profiles = list_profiles()
+            print()
+            print("  Available profiles:")
+            print()
+            for name, path in sorted(profiles.items()):
+                active = " ← active" if os.environ.get("VOIDCUBE_HOME") == path else ""
+                print(f"    {name:<20} {path}{active}")
+            print()
+
+        elif action == "create":
+            try:
+                path = create_profile(args.name)
+                print(f"\n  ✓ Profile '{args.name}' created at {path}")
+                print(f"  Switch to it: VoidCube profile use {args.name}")
+            except (ValueError, FileExistsError) as e:
+                print(f"  ✗ {e}")
+
+        elif action == "use":
+            try:
+                path = resolve_profile_env(args.name)
+                set_active_profile(args.name)
+                print(f"\n  ✓ Active profile: {args.name}")
+                print(f"  VOIDCUBE_HOME: {path}")
+                print(f"  Restart VoidCube to apply.")
+            except (ValueError, FileNotFoundError) as e:
+                print(f"  ✗ {e}")
+
+        elif action == "delete":
+            if args.name.lower() == "default":
+                print("  ✗ Cannot delete the default profile.")
+                return
+            if not args.yes:
+                try:
+                    confirm = input(f"  Delete profile '{args.name}'? This removes all its data. [y/N] ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    print("  Cancelled.")
+                    return
+                if confirm not in ("y", "yes"):
+                    print("  Cancelled.")
+                    return
+            if delete_profile(args.name):
+                print(f"  ✓ Profile '{args.name}' deleted.")
+            else:
+                print(f"  ✗ Profile '{args.name}' not found.")
+        else:
+            profile_parser.print_help()
+
+    profile_parser.set_defaults(func=cmd_profile)
+
+    # =========================================================================
+    # update command
+    # =========================================================================
+    update_parser = subparsers.add_parser(
+        "update",
+        help="Update VoidCube to the latest version",
+        description="Upgrade VoidCube Agent via pip",
+    )
+
+    def cmd_update(args):
+        """Upgrade VoidCube via pip."""
+        import subprocess as _sp
+
+        print()
+        print("  Updating VoidCube Agent...")
+        print()
+        result = _sp.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade", "voidcube-agent"],
+            capture_output=False,
+        )
+        if result.returncode == 0:
+            print()
+            print("  ✓ Update complete. Restart VoidCube to use the new version.")
+        else:
+            print()
+            print("  ✗ Update failed. Try manually:")
+            print("    pip install --upgrade voidcube-agent")
+
+    update_parser.set_defaults(func=cmd_update)
+
+    # =========================================================================
+    # uninstall command
+    # =========================================================================
+    uninstall_parser = subparsers.add_parser(
+        "uninstall",
+        help="Uninstall VoidCube Agent",
+        description="Remove VoidCube Agent from your system",
+    )
+
+    def cmd_uninstall(args):
+        """Guide for uninstalling VoidCube."""
+        print()
+        print("  To uninstall VoidCube Agent:")
+        print()
+        print("  1. Stop running services:")
+        print("     VoidCube serve stop")
+        print()
+        print("  2. Uninstall via pip:")
+        print("     pip uninstall voidcube-agent")
+        print()
+        print("  3. Remove configuration (optional):")
+        home = get_VoidCube_home()
+        print(f"     rm -rf {home}")
+        print()
+        print("  4. Remove the active_profile file (optional):")
+        try:
+            from VoidCube_core.constants import get_default_VoidCube_root
+            root = get_default_VoidCube_root()
+            print(f"     rm {root / 'active_profile'}")
+        except Exception:
+            pass
+        print()
+
+    uninstall_parser.set_defaults(func=cmd_uninstall)
+
+    # =========================================================================
+    # cron command (stub — delegates to Claude Code CronCreate)
+    # =========================================================================
+    cron_parser = subparsers.add_parser(
+        "cron",
+        help="Manage scheduled tasks",
+        description="Cron job management for VoidCube scheduled tasks",
+    )
+    cron_sub = cron_parser.add_subparsers(dest="cron_action")
+    cron_sub.add_parser("list", help="List scheduled cron jobs")
+    cron_sub.add_parser("status", help="Check if the cron scheduler is running")
+
+    def cmd_cron(args):
+        """Cron management stub."""
+        print()
+        print("  Cron job management is handled by Claude Code's CronCreate / CronList tools.")
+        print("  Use '/cron' in the Claude Code chat to manage scheduled tasks.")
+        print()
+        print("  Or manually edit:  ~/.VoidCube/scheduled_tasks.json")
+        print()
+
+    cron_parser.set_defaults(func=cmd_cron)
+
+    # =========================================================================
+    # setup command (stub)
+    # =========================================================================
+    setup_parser = subparsers.add_parser(
+        "setup",
+        help="Run the initial setup wizard",
+        description="Configure VoidCube Agent for first use",
+    )
+
+    def cmd_setup(args):
+        """Initial setup guide."""
+        print()
+        print("  VoidCube Setup")
+        print("  " + "─" * 40)
+        print()
+        print("  1. Configure an API provider:")
+        print("     VoidCube api")
+        print()
+        print("  2. Select a model:")
+        print("     VoidCube model")
+        print()
+        print("  3. Check your configuration:")
+        print("     VoidCube doctor")
+        print()
+        print("  4. Start a chat:")
+        print("     VoidCube")
+        print()
+
+    setup_parser.set_defaults(func=cmd_setup)
+
+    # =========================================================================
+    # pairing command (stub — integrated into whatsapp)
+    # =========================================================================
+    pairing_parser = subparsers.add_parser(
+        "pairing",
+        help="Manage device pairing for messaging bridges",
+        description="QR-code pairing for WhatsApp and other messaging bridges",
+    )
+
+    def cmd_pairing(args):
+        """Pairing stub — points to whatsapp."""
+        print()
+        print("  Device pairing is integrated into the messaging bridge setup.")
+        print()
+        print("  WhatsApp:  VoidCube whatsapp")
+        print()
+
+    pairing_parser.set_defaults(func=cmd_pairing)
+
+    # =========================================================================
+    # skills command (stub)
+    # =========================================================================
+    skills_parser = subparsers.add_parser(
+        "skills",
+        help="Manage VoidCube skills",
+        description="List, enable, and disable agent skills",
+    )
+    skills_sub = skills_parser.add_subparsers(dest="skills_action")
+    skills_list = skills_sub.add_parser("list", help="List available skills")
+    skills_list.add_argument("--platform", default="cli", help="Platform to show skills for")
+
+    def cmd_skills(args):
+        """Skills management stub."""
+        print()
+        print("  Skills are configured via the skills system.")
+        print()
+        print("  Use /skills in the chat to see available skills.")
+        print("  Preload skills at launch:  VoidCube -s skill-name")
+        print("  Configure per-platform:    VoidCube skills list --platform telegram")
+        print()
+
+    skills_parser.set_defaults(func=cmd_skills)
+
+    # =========================================================================
+    # honcho command (stub)
+    # =========================================================================
+    honcho_parser = subparsers.add_parser(
+        "honcho",
+        help="Configure Honcho AI memory integration",
+        description="Manage Honcho long-term memory provider settings",
+    )
+    honcho_sub = honcho_parser.add_subparsers(dest="honcho_action")
+    honcho_sub.add_parser("status", help="Show Honcho config and connection status")
+    honcho_sub.add_parser("sessions", help="List directory to session name mappings")
+    honcho_map = honcho_sub.add_parser("map", help="Map current directory to a session name")
+    honcho_map.add_argument("name", help="Session name")
+    honcho_sub.add_parser("peer", help="Show peer names and dialectic settings")
+    honcho_sub.add_parser("mode", help="Show current memory mode")
+    honcho_sub.add_parser("tokens", help="Show token budget settings")
+    honcho_sub.add_parser("identity", help="Show AI peer identity")
+    honcho_sub.add_parser("migrate", help="Migration guide")
+
+    def cmd_honcho(args):
+        """Honcho memory provider stub."""
+        print()
+        print("  Honcho memory provider is configured via the memory system.")
+        print()
+        print("  View status:       VoidCube memory status")
+        print("  Configure:         VoidCube memory setup")
+        print("  Disable external:  VoidCube memory off")
+        print()
+
+    honcho_parser.set_defaults(func=cmd_honcho)
+
+    # =========================================================================
     # Parse and execute
     # =========================================================================
     # Pre-process argv so unquoted multi-word session names after -c / -r
@@ -2221,13 +2576,38 @@ Examples:
     from VoidCube_cli.config import get_container_exec_info
     container_info = get_container_exec_info()
     if container_info:
-        _exec_in_container(container_info, sys.argv[1:])
-        # Unreachable: os.execvp never returns on success (process is replaced)
-        # and raises OSError on failure (which propagates as a traceback).
+        try:
+            _exec_in_container(container_info, sys.argv[1:])
+        except OSError as exc:
+            print(f"Error: cannot exec into container: {exc}", file=sys.stderr)
+            sys.exit(1)
+        # Unreachable: os.execvp replaces the process on success.
         sys.exit(1)
 
     _processed_argv = _coalesce_session_name_args(sys.argv[1:])
     args = parser.parse_args(_processed_argv)
+
+    # Fix -c / --continue greedy consumption of subcommand names.
+    # When ``VoidCube -c chat`` is typed, nargs="?" on -c consumes "chat"
+    # as the session name rather than recognising it as a subcommand.
+    # Detect this and swap: treat the value as the subcommand instead.
+    _KNOWN_COMMANDS = {
+        "chat", "model", "gateway", "whatsapp", "login", "logout",
+        "body", "agent", "serve", "status", "doctor", "config", "tools",
+        "mcp", "sessions", "insights", "version", "api", "acp", "logs",
+        "memory", "profile", "update", "uninstall", "cron", "setup",
+        "pairing", "skills", "honcho",
+    }
+    continue_val = getattr(args, "continue_last", None)
+    if (
+        continue_val is not None
+        and continue_val is not True  # ``-c`` with no argument → const=True
+        and isinstance(continue_val, str)
+        and continue_val.lower() in _KNOWN_COMMANDS
+        and args.command is None
+    ):
+        args.command = continue_val.lower()
+        args.continue_last = None
 
     # Handle --version flag
     if args.version:

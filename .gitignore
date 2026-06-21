@@ -100,8 +100,10 @@ logs/
 .body-slots/
 .body-registry.json
 .body-active.json
+.soul-runtime/
 soul-runtime/
 .mem/
+state/
 
 # ==========================================
 # 🔧 编译输出和二进制

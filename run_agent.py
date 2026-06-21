@@ -6652,7 +6652,7 @@ class AIAgent:
         spinner = None
         if self._should_emit_quiet_tool_messages() and self._should_start_quiet_spinner():
             face = random.choice(KawaiiSpinner.KAWAII_WAITING)
-            spinner = KawaiiSpinner(f"{face} 🔧 running {num_tools} tools concurrently", spinner_type='dots', print_fn=self._print_fn)
+            spinner = KawaiiSpinner(f"{face} 🔧 正在并发执行 {num_tools} 个工具", spinner_type='dots', print_fn=self._print_fn)
             spinner.start()
 
         try:
@@ -6670,7 +6670,7 @@ class AIAgent:
                 # Build a summary message for the spinner stop
                 completed = sum(1 for r in results if r is not None)
                 total_dur = sum(r[3] for r in results if r is not None)
-                spinner.stop(f"🔧 {completed}/{num_tools} tools completed in {total_dur:.1f}s total")
+                spinner.stop(f"🔧 {completed}/{num_tools} 个工具已完成，总耗时 {total_dur:.1f}s")
 
         # ── Post-execution: display per-tool results ─────────────────────
         for i, (tc, name, args) in enumerate(parsed_calls):
@@ -6892,10 +6892,10 @@ class AIAgent:
                 from tools.delegate_tool import delegate_task as _delegate_task
                 tasks_arg = function_args.get("tasks")
                 if tasks_arg and isinstance(tasks_arg, list):
-                    spinner_label = f"🔀 delegating {len(tasks_arg)} tasks"
+                    spinner_label = f"🔀 正在委派 {len(tasks_arg)} 个任务"
                 else:
                     goal_preview = (function_args.get("goal") or "")[:30]
-                    spinner_label = f"🔀 {goal_preview}" if goal_preview else "🔀 delegating"
+                    spinner_label = f"🔀 {goal_preview}" if goal_preview else "🔀 委派中"
                 spinner = None
                 if self._should_emit_quiet_tool_messages() and self._should_start_quiet_spinner():
                     face = random.choice(KawaiiSpinner.KAWAII_WAITING)
@@ -7290,6 +7290,7 @@ class AIAgent:
         task_id: str = None,
         stream_callback: Optional[callable] = None,
         persist_user_message: Optional[str] = None,
+        trace_id: str = None,
     ) -> Dict[str, Any]:
         """
         Run a complete conversation with tool calling until completion.
@@ -7306,6 +7307,9 @@ class AIAgent:
                 transcripts/history when user_message contains API-only
                 synthetic prefixes.
                     or queuing follow-up prefetch work.
+            trace_id (str): Per-interaction trace identifier for end-to-end
+                observability (C-03).  Stored in activity logs and passed
+                through to the gateway/supervisor chain.
 
         Returns:
             Dict: Complete conversation result with final response and message history
@@ -7790,9 +7794,9 @@ class AIAgent:
             thinking_spinner = None
             
             if not self.quiet_mode:
-                self._vprint(f"\n{self.log_prefix}🔄 Making API call #{api_call_count}/{self.max_iterations}...")
-                self._vprint(f"{self.log_prefix}   📊 Request size: {len(api_messages)} messages, ~{approx_tokens:,} tokens (~{total_chars:,} chars)")
-                self._vprint(f"{self.log_prefix}   🔧 Available tools: {len(self.tools) if self.tools else 0}")
+                self._vprint(f"\n{self.log_prefix}🔄 正在发起 API 调用 #{api_call_count}/{self.max_iterations}...")
+                self._vprint(f"{self.log_prefix}   📊 请求规模: {len(api_messages)} 条消息, ~{approx_tokens:,} tokens (~{total_chars:,} 字符)")
+                self._vprint(f"{self.log_prefix}   🔧 可用工具: {len(self.tools) if self.tools else 0}")
             else:
                 # Animated thinking spinner in quiet mode
                 face = random.choice(KawaiiSpinner.KAWAII_THINKING)

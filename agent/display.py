@@ -149,7 +149,7 @@ def get_tool_emoji(tool_name: str, default: str = "🔧") -> str:
     """
     # 1. Skin override
     skin = _get_skin()
-    if skin and skin.tool_emojis:
+    if skin and getattr(skin, 'tool_emojis', None):
         override = skin.tool_emojis.get(tool_name)
         if override:
             return override
@@ -591,20 +591,20 @@ class KawaiiSpinner:
     }
 
     KAWAII_WAITING = [
-        "(｡◕‿◕｡)", "(◕‿◕✿)", "٩(◕‿◕｡)۶", "(✿◠‿◠)", "( ˘▽˘)っ",
-        "♪(´ε` )", "(◕ᴗ◕✿)", "ヾ(＾∇＾)", "(≧◡≦)", "(★ω★)",
+        "⏳", "🔄", "⚙️", "🔧", "📡",
+        "💭", "🤔", "✨", "🌟", "💫",
     ]
 
     KAWAII_THINKING = [
-        "(｡•́︿•̀｡)", "(◔_◔)", "(¬‿¬)", "( •_•)>⌐■-■", "(⌐■_■)",
-        "(´･_･`)", "◉_◉", "(°ロ°)", "( ˘⌣˘)♡", "ヽ(>∀<☆)☆",
-        "٩(๑❛ᴗ❛๑)۶", "(⊙_⊙)", "(¬_¬)", "( ͡° ͜ʖ ͡°)", "ಠ_ಠ",
+        "🤔", "💭", "🧠", "💡", "🔍",
+        "📝", "🎯", "⚡", "🔥", "💪",
+        "🚀", "🎨", "🔮", "🎪", "🌈",
     ]
 
     THINKING_VERBS = [
-        "pondering", "contemplating", "musing", "cogitating", "ruminating",
-        "deliberating", "mulling", "reflecting", "processing", "reasoning",
-        "analyzing", "computing", "synthesizing", "formulating", "brainstorming",
+        "思考中", "分析中", "计算中", "推演中", "规划中",
+        "检索中", "整合中", "处理中", "生成中", "学习中",
+        "理解中", "评估中", "优化中", "编译中", "调度中",
     ]
 
     def __init__(self, message: str = "", spinner_type: str = 'dots', print_fn=None):
@@ -835,175 +835,175 @@ def get_cute_tool_message(
         return f"{line}{failure_suffix}"
 
     if tool_name == "web_search":
-        return _wrap(f"┊ 🔍 search    {_trunc(args.get('query', ''), 42)}  {dur}")
+        return _wrap(f"┊ 🔍 搜索      {_trunc(args.get('query', ''), 42)}  {dur}")
     if tool_name == "web_extract":
         urls = args.get("urls", [])
         if urls:
             url = urls[0] if isinstance(urls, list) else str(urls)
             domain = url.replace("https://", "").replace("http://", "").split("/")[0]
             extra = f" +{len(urls)-1}" if len(urls) > 1 else ""
-            return _wrap(f"┊ 📄 fetch     {_trunc(domain, 35)}{extra}  {dur}")
-        return _wrap(f"┊ 📄 fetch     pages  {dur}")
+            return _wrap(f"┊ 📄 抓取      {_trunc(domain, 35)}{extra}  {dur}")
+        return _wrap(f"┊ 📄 抓取      pages  {dur}")
     if tool_name == "web_crawl":
         url = args.get("url", "")
         domain = url.replace("https://", "").replace("http://", "").split("/")[0]
-        return _wrap(f"┊ 🕸️  crawl     {_trunc(domain, 35)}  {dur}")
+        return _wrap(f"┊ 🕸️  爬取      {_trunc(domain, 35)}  {dur}")
     if tool_name == "terminal":
-        return _wrap(f"┊ 💻 $         {_trunc(args.get('command', ''), 42)}  {dur}")
+        return _wrap(f"┊ 💻 终端       {_trunc(args.get('command', ''), 42)}  {dur}")
     if tool_name == "process":
         action = args.get("action", "?")
         sid = args.get("session_id", "")[:12]
-        labels = {"list": "ls processes", "poll": f"poll {sid}", "log": f"log {sid}",
-                  "wait": f"wait {sid}", "kill": f"kill {sid}", "write": f"write {sid}", "submit": f"submit {sid}"}
-        return _wrap(f"┊ >️  proc      {labels.get(action, f'{action} {sid}')}  {dur}")
+        labels = {"list": "进程列表", "poll": f"轮询 {sid}", "log": f"日志 {sid}",
+                  "wait": f"等待 {sid}", "kill": f"终止 {sid}", "write": f"写入 {sid}", "submit": f"提交 {sid}"}
+        return _wrap(f"┊ >️  进程      {labels.get(action, f'{action} {sid}')}  {dur}")
     if tool_name == "read_file":
-        return _wrap(f"┊ 📖 read      {_path(args.get('path', ''))}  {dur}")
+        return _wrap(f"┊ 📖 读取      {_path(args.get('path', ''))}  {dur}")
     if tool_name == "write_file":
-        return _wrap(f"┊ ✍️  write     {_path(args.get('path', ''))}  {dur}")
+        return _wrap(f"┊ ✍️  写入      {_path(args.get('path', ''))}  {dur}")
     if tool_name == "patch":
-        return _wrap(f"┊ 🔧 patch     {_path(args.get('path', ''))}  {dur}")
+        return _wrap(f"┊ 🔧 补丁      {_path(args.get('path', ''))}  {dur}")
     if tool_name == "search_files":
         pattern = _trunc(args.get("pattern", ""), 35)
         target = args.get("target", "content")
-        verb = "find" if target == "files" else "grep"
-        return _wrap(f"┊ 🔎 {verb:9} {pattern}  {dur}")
+        verb = "查找文件" if target == "files" else "搜索内容"
+        return _wrap(f"┊ 🔎 {verb:8} {pattern}  {dur}")
     if tool_name == "browser_navigate":
         url = args.get("url", "")
         domain = url.replace("https://", "").replace("http://", "").split("/")[0]
-        return _wrap(f"┊ 🌐 navigate  {_trunc(domain, 35)}  {dur}")
+        return _wrap(f"┊ 🌐 导航      {_trunc(domain, 35)}  {dur}")
     if tool_name == "browser_snapshot":
         mode = "full" if args.get("full") else "compact"
-        return _wrap(f"┊ 📸 snapshot  {mode}  {dur}")
+        return _wrap(f"┊ 📸 快照      {mode}  {dur}")
     if tool_name == "browser_click":
-        return _wrap(f"┊ 👆 click     {args.get('ref', '?')}  {dur}")
+        return _wrap(f"┊ 👆 点击      {args.get('ref', '?')}  {dur}")
     if tool_name == "browser_type":
-        return _wrap(f"┊ ⌨️  type      \"{_trunc(args.get('text', ''), 30)}\"  {dur}")
+        return _wrap(f"┊ ⌨️  输入      \"{_trunc(args.get('text', ''), 30)}\"  {dur}")
     if tool_name == "browser_scroll":
         d = args.get("direction", "down")
         arrow = {"down": "↓", "up": "↑", "right": "→", "left": "←"}.get(d, "↓")
-        return _wrap(f"┊ {arrow}  scroll    {d}  {dur}")
+        return _wrap(f"┊ {arrow} 滚动      {d}  {dur}")
     if tool_name == "browser_back":
-        return _wrap(f"┊ ◀️  back      {dur}")
+        return _wrap(f"┊ ◀️  返回      {dur}")
     if tool_name == "browser_press":
-        return _wrap(f"┊ ⌨️  press     {args.get('key', '?')}  {dur}")
+        return _wrap(f"┊ ⌨️  按键      {args.get('key', '?')}  {dur}")
     if tool_name == "browser_get_images":
-        return _wrap(f"┊ 🖼️  images    extracting  {dur}")
+        return _wrap(f"┊ 🖼️  图像      提取中  {dur}")
     if tool_name == "browser_vision":
-        return _wrap(f"┊ 👁️  vision    analyzing page  {dur}")
+        return _wrap(f"┊ 👁️  视觉      分析中  {dur}")
     if tool_name == "todo":
         todos_arg = args.get("todos")
         merge = args.get("merge", False)
         if todos_arg is None:
-            return _wrap(f"┊ 📋 plan      reading tasks  {dur}")
+            return _wrap(f"┊ 📋 计划      读取任务  {dur}")
         elif merge:
-            return _wrap(f"┊ 📋 plan      update {len(todos_arg)} task(s)  {dur}")
+            return _wrap(f"┊ 📋 计划      更新 {len(todos_arg)} 项  {dur}")
         else:
-            return _wrap(f"┊ 📋 plan      {len(todos_arg)} task(s)  {dur}")
+            return _wrap(f"┊ 📋 计划      {len(todos_arg)} 项  {dur}")
     if tool_name == "session_search":
-        return _wrap(f"┊ 🔍 recall    \"{_trunc(args.get('query', ''), 35)}\"  {dur}")
+        return _wrap(f"┊ 🔍 记忆搜索   \"{_trunc(args.get('query', ''), 35)}\"  {dur}")
     if tool_name == "memory":
         action = args.get("action", "?")
         target = args.get("target", "")
         if action == "add":
-            return _wrap(f"┊ 🧠 memory    +{target}: \"{_trunc(args.get('content', ''), 30)}\"  {dur}")
+            return _wrap(f"┊ 🧠 记忆      +{target}: \"{_trunc(args.get('content', ''), 30)}\"  {dur}")
         elif action == "replace":
-            return _wrap(f"┊ 🧠 memory    ~{target}: \"{_trunc(args.get('old_text', ''), 20)}\"  {dur}")
+            return _wrap(f"┊ 🧠 记忆      ~{target}: \"{_trunc(args.get('old_text', ''), 20)}\"  {dur}")
         elif action == "remove":
-            return _wrap(f"┊ 🧠 memory    -{target}: \"{_trunc(args.get('old_text', ''), 20)}\"  {dur}")
-        return _wrap(f"┊ 🧠 memory    {action}  {dur}")
+            return _wrap(f"┊ 🧠 记忆      -{target}: \"{_trunc(args.get('old_text', ''), 20)}\"  {dur}")
+        return _wrap(f"┊ 🧠 记忆      {action}  {dur}")
     if tool_name == "skills_list":
-        return _wrap(f"┊ 📚 skills    list {args.get('category', 'all')}  {dur}")
+        return _wrap(f"┊ 📚 技能列表   list {args.get('category', 'all')}  {dur}")
     if tool_name == "skill_view":
-        return _wrap(f"┊ 📚 skill     {_trunc(args.get('name', ''), 30)}  {dur}")
+        return _wrap(f"┊ 📚 技能查看   {_trunc(args.get('name', ''), 30)}  {dur}")
     if tool_name == "image_generate":
-        return _wrap(f"┊ 🎨 create    {_trunc(args.get('prompt', ''), 35)}  {dur}")
+        return _wrap(f"┊ 🎨 创作      {_trunc(args.get('prompt', ''), 35)}  {dur}")
     if tool_name == "text_to_speech":
-        return _wrap(f"┊ 🔊 speak     {_trunc(args.get('text', ''), 30)}  {dur}")
+        return _wrap(f"┊ 🔊 朗读      {_trunc(args.get('text', ''), 30)}  {dur}")
     if tool_name == "vision_analyze":
-        return _wrap(f"┊ 👁️  vision    {_trunc(args.get('question', ''), 30)}  {dur}")
+        return _wrap(f"┊ 👁️  视觉分析   {_trunc(args.get('question', ''), 30)}  {dur}")
     if tool_name == "mixture_of_agents":
-        return _wrap(f"┊ 🧠 reason    {_trunc(args.get('user_prompt', ''), 30)}  {dur}")
+        return _wrap(f"┊ 🧠 深度推理   {_trunc(args.get('user_prompt', ''), 30)}  {dur}")
     if tool_name == "send_message":
-        return _wrap(f"┊ 📨 send      {args.get('target', '?')}: \"{_trunc(args.get('message', ''), 25)}\"  {dur}")
+        return _wrap(f"┊ 📨 发送      {args.get('target', '?')}: \"{_trunc(args.get('message', ''), 25)}\"  {dur}")
     if tool_name == "cronjob":
         action = args.get("action", "?")
         if action == "create":
             skills = args.get("skills") or ([] if not args.get("skill") else [args.get("skill")])
             label = args.get("name") or (skills[0] if skills else None) or args.get("prompt", "task")
-            return _wrap(f"┊ ⏰ cron      create {_trunc(label, 24)}  {dur}")
+            return _wrap(f"┊ ⏰ 定时任务   创建 {_trunc(label, 24)}  {dur}")
         if action == "list":
-            return _wrap(f"┊ ⏰ cron      listing  {dur}")
-        return _wrap(f"┊ ⏰ cron      {action} {args.get('job_id', '')}  {dur}")
+            return _wrap(f"┊ ⏰ 定时任务   列表中  {dur}")
+        return _wrap(f"┊ ⏰ 定时任务   {action} {args.get('job_id', '')}  {dur}")
     if tool_name.startswith("rl_"):
         rl = {
-            "rl_list_environments": "list envs", "rl_select_environment": f"select {args.get('name', '')}",
-            "rl_get_current_config": "get config", "rl_edit_config": f"set {args.get('field', '?')}",
-            "rl_start_training": "start training", "rl_check_status": f"status {args.get('run_id', '?')[:12]}",
-            "rl_stop_training": f"stop {args.get('run_id', '?')[:12]}", "rl_get_results": f"results {args.get('run_id', '?')[:12]}",
-            "rl_list_runs": "list runs", "rl_test_inference": "test inference",
+            "rl_list_environments": "环境列表", "rl_select_environment": f"选择 {args.get('name', '')}",
+            "rl_get_current_config": "当前配置", "rl_edit_config": f"设置 {args.get('field', '?')}",
+            "rl_start_training": "开始训练", "rl_check_status": f"状态 {args.get('run_id', '?')[:12]}",
+            "rl_stop_training": f"停止 {args.get('run_id', '?')[:12]}", "rl_get_results": f"结果 {args.get('run_id', '?')[:12]}",
+            "rl_list_runs": "运行列表", "rl_test_inference": "测试推理",
         }
-        return _wrap(f"┊ 🧪 rl        {rl.get(tool_name, tool_name.replace('rl_', ''))}  {dur}")
+        return _wrap(f"┊ 🧪 强化学习   {rl.get(tool_name, tool_name.replace('rl_', ''))}  {dur}")
     if tool_name == "execute_code":
         code = args.get("code", "")
         first_line = code.strip().split("\n")[0] if code.strip() else ""
-        return _wrap(f"┊ 🐍 exec      {_trunc(first_line, 35)}  {dur}")
+        return _wrap(f"┊ 🐍 代码执行   {_trunc(first_line, 35)}  {dur}")
     if tool_name == "delegate_task":
         tasks = args.get("tasks")
         if tasks and isinstance(tasks, list):
-            return _wrap(f"┊ 🔀 delegate  {len(tasks)} parallel tasks  {dur}")
-        return _wrap(f"┊ 🔀 delegate  {_trunc(args.get('goal', ''), 35)}  {dur}")
+            return _wrap(f"┊ 🔀 委派      {len(tasks)} 个并行任务  {dur}")
+        return _wrap(f"┊ 🔀 委派      {_trunc(args.get('goal', ''), 35)}  {dur}")
 
     _OPS_MESSAGES = {
-        "system_info": lambda a: "┊ 📊 sysinfo   overview",
-        "cpu_stats": lambda a: "┊ 📊 cpu       stats",
-        "memory_stats": lambda a: "┊ 💾 memory    stats",
-        "disk_usage": lambda a: f"┊ 💿 disk      {_path(a.get('path', '/'))}",
-        "disk_partitions": lambda a: "┊ 💿 disk      partitions",
-        "top_processes": lambda a: f"┊ 📋 procs     top {a.get('limit', 10)} by {a.get('sort_by', 'cpu')}",
-        "service_status": lambda a: f"┊ 🔧 svc       {_trunc(a.get('name', ''), 25)} status",
-        "service_start": lambda a: f"┊ ▶️  svc       {_trunc(a.get('name', ''), 25)} start",
-        "service_stop": lambda a: f"┊ ⏹️  svc       {_trunc(a.get('name', ''), 25)} stop",
-        "service_restart": lambda a: f"┊ 🔄 svc       {_trunc(a.get('name', ''), 25)} restart",
-        "service_enable": lambda a: f"┊ ✅ svc       {_trunc(a.get('name', ''), 25)} enable",
-        "service_disable": lambda a: f"┊ ❌ svc       {_trunc(a.get('name', ''), 25)} disable",
-        "service_logs": lambda a: f"┊ 📜 svc       {_trunc(a.get('name', ''), 25)} logs",
-        "list_services": lambda a: f"┊ 📋 svc       list {a.get('state', 'all')}",
-        "ping": lambda a: f"┊ 📡 ping       {_trunc(a.get('host', ''), 30)}",
-        "check_port": lambda a: f"┊ 🔌 port      {a.get('host', '?')}:{a.get('port', '?')}",
-        "scan_ports": lambda a: f"┊ 🔍 scan      {_trunc(a.get('host', ''), 25)} {a.get('ports', '')}",
-        "net_connections": lambda a: "┊ 🔗 net       connections",
-        "net_interfaces": lambda a: "┊ 🌐 net       interfaces",
-        "dns_lookup": lambda a: f"┊ 🔍 dns        {_trunc(a.get('domain', ''), 30)}",
-        "curl_check": lambda a: f"┊ 🌐 curl       {_trunc(a.get('url', ''), 30)}",
-        "traceroute": lambda a: f"┊ 🗺️  trace     {_trunc(a.get('host', ''), 30)}",
-        "pkg_install": lambda a: f"┊ 📦 install   {_trunc(a.get('packages', ''), 25)}",
-        "pkg_update": lambda a: "┊ 📦 update    cache",
-        "pkg_upgrade": lambda a: "┊ 📦 upgrade   all",
-        "pkg_remove": lambda a: f"┊ 🗑️  remove    {_trunc(a.get('packages', ''), 25)}",
-        "pkg_search": lambda a: f"┊ 🔍 search    {_trunc(a.get('query', ''), 25)}",
-        "pkg_list_installed": lambda a: "┊ 📋 packages  list",
-        "docker_ps": lambda a: "┊ 🐳 docker    ps",
-        "docker_images": lambda a: "┊ 🐳 docker    images",
-        "docker_run": lambda a: f"┊ 🐳 docker    run {_trunc(a.get('image', ''), 25)}",
-        "docker_stop": lambda a: f"┊ 🐳 docker    stop {_trunc(a.get('container', ''), 20)}",
-        "docker_start": lambda a: f"┊ 🐳 docker    start {_trunc(a.get('container', ''), 20)}",
-        "docker_restart": lambda a: f"┊ 🐳 docker    restart {_trunc(a.get('container', ''), 18)}",
-        "docker_rm": lambda a: f"┊ 🐳 docker    rm {_trunc(a.get('container', ''), 20)}",
-        "docker_logs": lambda a: f"┊ 📜 docker    logs {_trunc(a.get('container', ''), 20)}",
-        "docker_exec": lambda a: f"┊ 🐳 docker    exec {_trunc(a.get('container', ''), 15)}",
-        "docker_compose_up": lambda a: "┊ 🐳 compose   up",
-        "docker_compose_down": lambda a: "┊ 🐳 compose   down",
-        "read_log": lambda a: f"┊ 📜 log       {_path(a.get('path', ''))}",
-        "journalctl": lambda a: f"┊ 📜 journal   {_trunc(a.get('unit', 'all'), 25)}",
-        "log_errors": lambda a: f"┊ ❌ errors    {_path(a.get('path', ''))}",
-        "analyze_log": lambda a: f"┊ 📊 analyze   {_path(a.get('path', ''))}",
-        "firewall_status": lambda a: "┊ 🛡️  fw        status",
-        "firewall_allow": lambda a: f"┊ 🛡️  fw        allow {a.get('port', '?')}/{a.get('protocol', 'tcp')}",
-        "firewall_deny": lambda a: f"┊ 🛡️  fw        deny {a.get('port', '?')}/{a.get('protocol', 'tcp')}",
-        "list_users": lambda a: "┊ 👤 users     list",
-        "user_add": lambda a: f"┊ 👤 user      +{_trunc(a.get('username', ''), 25)}",
-        "user_del": lambda a: f"┊ 👤 user      -{_trunc(a.get('username', ''), 25)}",
-        "file_permissions": lambda a: f"┊ 🔐 perm      {_path(a.get('path', ''))}",
+        "system_info": lambda a: "┊ 📊 系统信息   概览",
+        "cpu_stats": lambda a: "┊ 📊 CPU       状态",
+        "memory_stats": lambda a: "┊ 💾 内存       状态",
+        "disk_usage": lambda a: f"┊ 💿 磁盘       {_path(a.get('path', '/'))}",
+        "disk_partitions": lambda a: "┊ 💿 磁盘       分区",
+        "top_processes": lambda a: f"┊ 📋 进程       Top {a.get('limit', 10)} by {a.get('sort_by', 'cpu')}",
+        "service_status": lambda a: f"┊ 🔧 服务       {_trunc(a.get('name', ''), 25)} 状态",
+        "service_start": lambda a: f"┊ ▶️  服务       {_trunc(a.get('name', ''), 25)} 启动",
+        "service_stop": lambda a: f"┊ ⏹️  服务       {_trunc(a.get('name', ''), 25)} 停止",
+        "service_restart": lambda a: f"┊ 🔄 服务       {_trunc(a.get('name', ''), 25)} 重启",
+        "service_enable": lambda a: f"┊ ✅ 服务       {_trunc(a.get('name', ''), 25)} 启用",
+        "service_disable": lambda a: f"┊ ❌ 服务       {_trunc(a.get('name', ''), 25)} 禁用",
+        "service_logs": lambda a: f"┊ 📜 服务       {_trunc(a.get('name', ''), 25)} 日志",
+        "list_services": lambda a: f"┊ 📋 服务       列表 {a.get('state', 'all')}",
+        "ping": lambda a: f"┊ 📡 网络检测    {_trunc(a.get('host', ''), 30)}",
+        "check_port": lambda a: f"┊ 🔌 端口检查    {a.get('host', '?')}:{a.get('port', '?')}",
+        "scan_ports": lambda a: f"┊ 🔍 端口扫描    {_trunc(a.get('host', ''), 25)} {a.get('ports', '')}",
+        "net_connections": lambda a: "┊ 🔗 网络连接    列表",
+        "net_interfaces": lambda a: "┊ 🌐 网络接口    列表",
+        "dns_lookup": lambda a: f"┊ 🔍 DNS        {_trunc(a.get('domain', ''), 30)}",
+        "curl_check": lambda a: f"┊ 🌐 网页请求    {_trunc(a.get('url', ''), 30)}",
+        "traceroute": lambda a: f"┊ 🗺️  路由追踪   {_trunc(a.get('host', ''), 30)}",
+        "pkg_install": lambda a: f"┊ 📦 安装       {_trunc(a.get('packages', ''), 25)}",
+        "pkg_update": lambda a: "┊ 📦 更新       缓存",
+        "pkg_upgrade": lambda a: "┊ 📦 升级       全部",
+        "pkg_remove": lambda a: f"┊ 🗑️  卸载       {_trunc(a.get('packages', ''), 25)}",
+        "pkg_search": lambda a: f"┊ 🔍 搜索       {_trunc(a.get('query', ''), 25)}",
+        "pkg_list_installed": lambda a: "┊ 📋 软件包     列表",
+        "docker_ps": lambda a: "┊ 🐳 Docker    容器列表",
+        "docker_images": lambda a: "┊ 🐳 Docker    镜像列表",
+        "docker_run": lambda a: f"┊ 🐳 Docker    运行 {_trunc(a.get('image', ''), 25)}",
+        "docker_stop": lambda a: f"┊ 🐳 Docker    停止 {_trunc(a.get('container', ''), 20)}",
+        "docker_start": lambda a: f"┊ 🐳 Docker    启动 {_trunc(a.get('container', ''), 20)}",
+        "docker_restart": lambda a: f"┊ 🐳 Docker    重启 {_trunc(a.get('container', ''), 18)}",
+        "docker_rm": lambda a: f"┊ 🐳 Docker    删除 {_trunc(a.get('container', ''), 20)}",
+        "docker_logs": lambda a: f"┊ 📜 Docker    日志 {_trunc(a.get('container', ''), 20)}",
+        "docker_exec": lambda a: f"┊ 🐳 Docker    执行 {_trunc(a.get('container', ''), 15)}",
+        "docker_compose_up": lambda a: "┊ 🐳 Compose   启动",
+        "docker_compose_down": lambda a: "┊ 🐳 Compose   停止",
+        "read_log": lambda a: f"┊ 📜 日志       读取 {_path(a.get('path', ''))}",
+        "journalctl": lambda a: f"┊ 📜 系统日志    {_trunc(a.get('unit', 'all'), 25)}",
+        "log_errors": lambda a: f"┊ ❌ 错误日志    {_path(a.get('path', ''))}",
+        "analyze_log": lambda a: f"┊ 📊 日志分析    {_path(a.get('path', ''))}",
+        "firewall_status": lambda a: "┊ 🛡️  防火墙     状态",
+        "firewall_allow": lambda a: f"┊ 🛡️  防火墙     允许 {a.get('port', '?')}/{a.get('protocol', 'tcp')}",
+        "firewall_deny": lambda a: f"┊ 🛡️  防火墙     拒绝 {a.get('port', '?')}/{a.get('protocol', 'tcp')}",
+        "list_users": lambda a: "┊ 👤 用户       列表",
+        "user_add": lambda a: f"┊ 👤 用户       添加 {_trunc(a.get('username', ''), 25)}",
+        "user_del": lambda a: f"┊ 👤 用户       删除 {_trunc(a.get('username', ''), 25)}",
+        "file_permissions": lambda a: f"┊ 🔐 文件权限    {_path(a.get('path', ''))}",
         "set_permissions": lambda a: f"┊ 🔐 perm      {_path(a.get('path', ''))} {a.get('mode', '')}",
         "ssh_keygen": lambda a: f"┊ 🔑 ssh       keygen {a.get('key_type', 'ed25519')}",
     }
