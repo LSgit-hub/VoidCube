@@ -1922,7 +1922,6 @@ class VoidcubeCLI:
         # mode does not go through run().
         self._agent_running = False
         self._auto_mode_active: bool = False
-        self._auto_mode_executing: bool = False
         self._pending_input: queue.Queue = queue.Queue()
         self._interrupt_queue: queue.Queue = queue.Queue()
         self._should_exit = False
@@ -2410,9 +2409,6 @@ class VoidcubeCLI:
         try:
             sup = self._fetch_supervisor_status()
             # Update auto-mode execution indicator
-            if self._auto_mode_active:
-                active_execs = sup.get("active_executions", [])
-                self._auto_mode_executing = bool(active_execs)
         except Exception:
             pass
         scene = sup.get("scene", "idle")
@@ -10558,12 +10554,8 @@ class VoidcubeCLI:
         )
 
         def _get_auto_mode_text():
-            if cli_ref._auto_mode_executing or getattr(cli_ref, "_auto_executing", False):
-                return [
-                    ("class:auto-mode", " 🤖 AUTO ⚡ 执行中 — Agent 正在执行学习任务 | /auto-q 退出"),
-                ]
             return [
-                ("class:auto-mode", " 🤖 AUTO 💤 空闲 — 等待 Agent 空闲后派发任务 | /auto-q 退出"),
+                ("class:auto-mode", " 🤖 AUTO 模式 | /auto-q 退出"),
             ]
 
         auto_mode_bar = ConditionalContainer(
