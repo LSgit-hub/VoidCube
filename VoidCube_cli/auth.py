@@ -77,7 +77,7 @@ DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 
 # 认证存储锁
-_auth_store_lock = threading.Lock()
+_auth_store_lock = threading.RLock()  # reentrant — callers may nest _save_auth_store inside their own lock
 
 class AuthError(Exception):
     """认证错误"""
