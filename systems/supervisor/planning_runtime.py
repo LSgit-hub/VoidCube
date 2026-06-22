@@ -1328,22 +1328,54 @@ class PlanningRuntimeMixin:
         )
         # Record sub-agent tool workflow for CLI display
         skill_exec = result.get("skill_execution", {}) if isinstance(result, dict) else {}
+        tool_exec = skill_exec.get("tool_execution", {})
+        tool_summary = tool_exec.get("summary", {})
+        api_calls = tool_summary.get("api_calls", 0)
+        subagent_model = tool_summary.get("model", "")
+
+        # Emit execution-start event with model info
+        if api_calls > 0 or subagent_model:
+            self._record_supervisor_ui_activity(
+                "execution_start", scene="learning",
+                summary=f"Sub-agent executing{' with ' + subagent_model if subagent_model else ''}{' (' + str(api_calls) + ' API calls)' if api_calls else ''}",
+                metadata={"api_calls": api_calls, "model": subagent_model},
+            )
+
         for te in skill_exec.get("tool_events", []) or []:
             tool_name = te.get("tool", "")
             preview = te.get("args_preview", "")
+            result_preview = te.get("result_preview", "")
             kind = te.get("kind", "tool")
             if kind == "thinking":
                 self._record_supervisor_ui_activity(
                     "subagent_thinking", scene="learning",
                     summary=f"💭 {preview}" if preview else "🤔 Thinking...",
-                    metadata={"tool": tool_name},
+                    metadata={
+                        "tool": tool_name,
+                        "tool_name": tool_name,
+                        "tool_args": preview,
+                        "kind": "thinking",
+                    },
                 )
             else:
                 self._record_supervisor_ui_activity(
                     "subagent_tool", scene="learning",
                     summary=f"🔧 {tool_name}" + (f": {preview}" if preview else ""),
-                    metadata={"tool": tool_name, "preview": preview},
+                    metadata={
+                        "tool": tool_name,
+                        "tool_name": tool_name,
+                        "tool_args": preview,
+                        "result_preview": result_preview,
+                        "kind": "tool",
+                    },
                 )
+
+        # Emit execution-end event
+        self._record_supervisor_ui_activity(
+            "execution_end", scene="learning",
+            summary=f"Sub-agent completed: {len(skill_exec.get('tool_events', []))} tool events, {api_calls} API calls",
+            metadata={"api_calls": api_calls, "model": subagent_model},
+        )
         self._record_supervisor_ui_activity(
             "self_learning_completed",
             scene="learning",

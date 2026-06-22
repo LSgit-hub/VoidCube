@@ -172,6 +172,31 @@ class AgentInstance:
                 task_id=f"governance-{request.get('task_id', '')}",
             )
             final_response = result.get("final_response", "")
+
+            # Capture sub-agent tool events for CLI visibility
+            tool_events = []
+            messages = result.get("messages", [])
+            for msg in messages:
+                role = msg.get("role", "")
+                if role == "tool":
+                    tool_name = msg.get("name", "") or msg.get("tool_name", "")
+                    tool_args_preview = str(msg.get("tool_args", "") or "")[:120]
+                    result_preview = str(msg.get("content", "") or "")[:200]
+                    tool_events.append({
+                        "tool": tool_name,
+                        "kind": "tool",
+                        "args_preview": tool_args_preview,
+                        "result_preview": result_preview,
+                    })
+                elif role == "assistant" and msg.get("content"):
+                    thinking = str(msg.get("content", ""))[:150]
+                    if thinking.strip():
+                        tool_events.append({
+                            "tool": "thinking",
+                            "kind": "thinking",
+                            "args_preview": thinking,
+                        })
+
             # Parse structured output from sub-agent
             import re, json
             parsed = None
@@ -187,6 +212,9 @@ class AgentInstance:
                 "status": "completed",
                 "final_response": final_response,
                 "parsed_output": parsed,
+                "tool_events": tool_events,
+                "api_calls": result.get("api_calls", 0),
+                "model": getattr(child, "model", ""),
             }
         except Exception as e:
             logger.error(f"Governance task failed: {e}")

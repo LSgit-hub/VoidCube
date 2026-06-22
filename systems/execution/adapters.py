@@ -645,6 +645,7 @@ class BodyUpgradeExecutionAdapter:
         attach_execution_route_hint: Callable[[Dict[str, Any], str], Dict[str, Any]],
         agents: MutableMapping[str, Any],
         governor_request_executor: Optional[GovernorRequestExecutorProtocol] = None,
+        governor_storage_root: Optional[str] = None,
     ) -> None:
         self.config = config
         self.body_registry = body_registry
@@ -655,6 +656,7 @@ class BodyUpgradeExecutionAdapter:
         self.attach_execution_route_hint = attach_execution_route_hint
         self.agents = agents
         self.governor_request_executor = governor_request_executor
+        self._governor_storage_root = governor_storage_root
 
     def bind_governor_request_executor(
         self,
@@ -1376,7 +1378,9 @@ class SelfLearningExecutionAdapter:
         # ── Route learning task through Gateway → Agent → delegate_task ──
         # Agent (API-A) executes learning via sub-agent; supervisor only dispatches
         skill_execution = await self._dispatch_to_agent(task, title, summary, constraints)
-        skill_execution["tool_events"] = []
+        # Preserve tool_events from agent execution for CLI visibility
+        if "tool_events" not in skill_execution:
+            skill_execution["tool_events"] = []
         skill_evidence = dict(skill_execution.get("evidence") or {})
         skill_plan = dict(skill_execution.get("learning_plan") or {})
         skill_evidence_summary = self._build_skill_evidence_summary(skill_execution)
@@ -1545,6 +1549,9 @@ class SelfLearningExecutionAdapter:
         status = agent_result.get("status", "error")
         if status == "completed":
             parsed = agent_result.get("parsed_output") or {}
+            tool_events = agent_result.get("tool_events", [])
+            api_calls = agent_result.get("api_calls", 0)
+            model = agent_result.get("model", "")
             return {
                 "status": "skill_delegate_executed",
                 "delegate": "AgentSubagent",
@@ -1556,8 +1563,14 @@ class SelfLearningExecutionAdapter:
                                   "evidence_plan": {"status": "agent_managed"}},
                 "evidence": {"observations": parsed.get("observations", []),
                              "comparisons": parsed.get("comparisons", [])},
-                "tool_execution": {"status": "completed", "calls": [],
-                                   "summary": {"total": 0, "succeeded": 0, "failed": 0}},
+                "tool_events": tool_events,
+                "tool_execution": {"status": "completed",
+                                   "calls": [{"tool": te.get("tool", ""),
+                                              "args_preview": te.get("args_preview", "")}
+                                             for te in tool_events if te.get("kind") == "tool"],
+                                   "summary": {"total": len(tool_events),
+                                               "api_calls": api_calls,
+                                               "model": model}},
                 "capability_boundary": {"uses_agent_skill_contract": True,
                                         "performs_body_mutation": False,
                                         "performs_memory_mutation": False,

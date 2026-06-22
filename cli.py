@@ -2181,21 +2181,27 @@ class VoidcubeCLI:
     _auto_mode_last_event_ts: str = ""
 
     def _poll_auto_mode_workflow(self) -> None:
-        """Poll supervisor timeline for sub-agent tool events and display them.
+        """Poll supervisor timeline for sub-agent events and display them in the CLI.
 
-        Shows sub-agent tool calls in the same visual style as the main agent's
-        workflow display (tool names, search queries, elapsed time).
+        Fetches new events from the supervisor's runtime timeline and renders
+        sub-agent thinking, tool calls, decisions, and execution results in
+        the same visual style as the main agent's workflow display.
         """
         import time, threading, json as _json
+
+        if getattr(self, "_auto_poll_busy", False):
+            return  # Skip if previous poll hasn't completed yet
+        self._auto_poll_busy = True
 
         def _fetch_and_display():
             try:
                 import urllib.request as _req
-                url = f"{self._get_supervisor_url()}/runtime/timeline?limit=8"
+                url = f"{self._get_supervisor_url().rstrip('/ui/state')}/runtime/timeline?limit=20"
                 r = _req.Request(url, headers={"Accept": "application/json"})
                 resp = _json.loads(_req.urlopen(r, timeout=3).read())
                 timeline = resp.get("timeline", [])
             except Exception:
+                self._auto_poll_busy = False
                 return
 
             last_ts = self._auto_mode_last_event_ts
@@ -2211,8 +2217,64 @@ class VoidcubeCLI:
             for ev in reversed(new_events):
                 etype = ev.get("event_type", "")
                 summary = ev.get("summary", "")
-                if etype in ("subagent_tool", "subagent_thinking"):
-                    _cprint(f"  {summary}")
+                detail = ev.get("detail", "")
+                meta = ev.get("metadata", {})
+
+                if etype in ("subagent_thinking", "agent_thinking"):
+                    # Show the model's reasoning/thinking
+                    thinking_text = detail or summary
+                    if thinking_text:
+                        _cprint(f"  [dim]🧠 {thinking_text}[/]")
+
+                elif etype in ("subagent_tool", "agent_tool"):
+                    # Show tool calls with detail
+                    tool_name = meta.get("tool_name", "")
+                    tool_args = meta.get("tool_args", {})
+                    duration = meta.get("duration", 0)
+                    result_preview = meta.get("result_preview", "")
+
+                    if tool_name:
+                        dur_str = f"  {duration:.1f}s" if duration else ""
+                        args_preview = _json.dumps(tool_args, ensure_ascii=False)[:80] if tool_args else ""
+                        line = f"  [bold]🔧 {tool_name}[/] {args_preview} [dim]{dur_str}[/]"
+                        _cprint(line)
+                        if result_preview:
+                            _cprint(f"    [dim]→ {result_preview[:120]}[/]")
+                    elif summary:
+                        _cprint(f"  {summary}")
+
+                elif etype in ("governor_decision", "evolution_decision"):
+                    # Show governor decisions
+                    decision = meta.get("decision", "") or summary
+                    reason = meta.get("reasoning_summary", "") or detail
+                    _cprint(f"  [bold yellow]📋 决策: {decision}[/]")
+                    if reason:
+                        _cprint(f"    [dim]{reason[:150]}[/]")
+
+                elif etype in ("task_planned", "task_created"):
+                    task_title = meta.get("title", "") or summary
+                    task_priority = meta.get("priority", "")
+                    priority_str = f" [{task_priority}]" if task_priority else ""
+                    _cprint(f"  [bold green]📝 任务{priority_str}: {task_title}[/]")
+
+                elif etype in ("task_completed", "task_failed"):
+                    task_title = meta.get("title", "") or summary
+                    outcome = meta.get("outcome", "") or detail
+                    icon = "✅" if etype == "task_completed" else "❌"
+                    _cprint(f"  {icon} 完成: {task_title}")
+                    if outcome:
+                        _cprint(f"    [dim]{outcome[:150]}[/]")
+
+                elif etype in ("execution_start", "execution_end"):
+                    detail_text = detail or summary
+                    if detail_text:
+                        _cprint(f"  [dim]⚡ {detail_text}[/]")
+
+                elif summary:
+                    # Generic event — show summary if available
+                    _cprint(f"  [dim]{summary[:200]}[/]")
+
+            self._auto_poll_busy = False
 
         threading.Thread(target=_fetch_and_display, daemon=True, name="auto-workflow").start()
 
