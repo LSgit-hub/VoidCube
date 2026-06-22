@@ -2261,12 +2261,14 @@ class VoidcubeCLI:
                 self._auto_poll_busy = False
                 return
 
-            # Find an approved self_learning task not yet dispatched
+            # Find an approved self_learning task not yet executed by CLI agent.
+            # (Supervisor marks execution_dispatched=True BEFORE agent runs,
+            #  so we check for actual execution result instead.)
             pending = [
                 t for t in tasks
                 if t.get("status") == "approved"
                 and t.get("governance_task_type") == "self_learning"
-                and not t.get("metadata", {}).get("execution_dispatched")
+                and not t.get("metadata", {}).get("executed_by_cli")
             ]
             if not pending:
                 self._auto_poll_busy = False
@@ -2324,13 +2326,13 @@ class VoidcubeCLI:
                 if final:
                     _cprint(f"  [dim]{final[:300]}[/]")
 
-                # Mark task as dispatched via supervisor decision endpoint
+                # Mark task as executed via supervisor decision endpoint
                 try:
                     data = _json.dumps({
                         "decision": "approve",
                         "metadata": {
-                            "execution_dispatched": True,
-                            "executed_by": "cli_agent",
+                            "executed_by_cli": True,
+                            "execution_result": final[:500] if final else "",
                         },
                     }).encode()
                     dec_url = f"{sup_url}/self-evolution/tasks/{task_id}/decision"

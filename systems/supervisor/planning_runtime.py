@@ -1441,11 +1441,9 @@ class PlanningRuntimeMixin:
                 continue  # already dispatched or permanently failed
 
             if self._task_governance_type(task) == "self_learning":
-                result = await self._dispatch_self_learning_followup(task)
-                if result is not None:
-                    dispatched.append(
-                        {"task_id": task.task_id, "status": result.get("status")}
-                    )
+                # Self-learning tasks are executed by the CLI's active agent
+                # (see cli.py:_poll_auto_mode_workflow).  The supervisor only
+                # plans and approves — it does NOT dispatch self_learning.
                 continue
 
             if task.execution_request is None:
