@@ -86,6 +86,11 @@ SERVICES: Dict[str, ServiceInfo] = {
         pid_file=str(PID_DIR / "agent.pid"),
         log_file=str(PID_DIR / "agent.log"),
     ),
+    # ── Embedded services (run inside supervisor, not as separate processes) ──
+    # Per architecture baseline §5, self-learning and executor are conceptual
+    # services.  They run embedded in the Supervisor via mixin composition
+    # (ServiceRuntimeMixin, ProcessGatewayRuntimeMixin) rather than as
+    # standalone daemon processes.
 }
 
 
@@ -404,12 +409,12 @@ def print_status(full: bool = False) -> None:
 
 
 def start_all(foreground: bool = False) -> None:
-    """Start all services in order: memory → gateway → supervisor → agent.
+    """Start all services per architecture baseline §5:
 
-    Per architecture baseline §7.2: Mem must be ready first (long-term
-    memory is the soul layer), then gateway (the nerve centre), then
-    supervisor (which registers with gateway), then the agent instance
-    (which registers with gateway as the active body).
+    1. Mem (soul layer, API-B) — must be ready first
+    2. Gateway (nerve centre) — routes all traffic, accepts registrations
+    3. Supervisor (Mem's governance identity, API-B) — registers with Gateway
+    4. Agent Instance (active body, API-A) — registers with Gateway
     """
     PID_DIR.mkdir(parents=True, exist_ok=True)
     print("\n  Starting VoidCube services...\n")
@@ -419,12 +424,12 @@ def start_all(foreground: bool = False) -> None:
     if not foreground:
         _wait_for_health("memory", SERVICES["memory"].port)
 
-    # 2. Gateway (nerve centre)
+    # 2. Gateway (nerve centre — routes all internal traffic)
     start_service("gateway", foreground=foreground)
     if not foreground:
         _wait_for_health("gateway", GATEWAY_PORT)
 
-    # 3. Supervisor (registers with gateway)
+    # 3. Supervisor (Mem's governance identity)
     start_service("supervisor", foreground=foreground)
     if not foreground:
         _wait_for_health("supervisor", SUPERVISOR_PORT)
@@ -494,9 +499,10 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
     PID_DIR.mkdir(parents=True, exist_ok=True)
     result: Dict[str, Any] = {}
 
-    # Per architecture baseline §7.2: Mem → Gateway → Supervisor.
-    # Memory must be ready before gateway routes memory-bound requests;
-    # gateway must be ready before the supervisor registers with it.
+    # Per architecture baseline §5: Mem → Gateway → Supervisor → Agent.
+    # Mem is the soul layer (API-B); Gateway is the nerve centre;
+    # Supervisor is Mem's governance identity (registers with Gateway);
+    # Agent is the active body (API-A).
     startup_order = ["memory", "gateway", "supervisor", "agent"]
     for name in startup_order:
         svc = SERVICES.get(name)
