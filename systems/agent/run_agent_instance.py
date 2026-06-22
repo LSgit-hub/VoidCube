@@ -189,11 +189,13 @@ class AgentInstance:
             cfg = load_config()
             creds = _resolve_delegation_credentials(cfg, None) or {}
             child = _build_child_agent(
-                parent_agent=None,
+                task_index=0,
                 goal=prompt,
-                enabled_toolsets=["learn"],
+                context=None,
+                toolsets=["learn"],
+                model=None,
                 max_iterations=30,
-                delegation_config=cfg.get("delegation", {}),
+                parent_agent=None,
             )
             result = child.run_conversation(
                 user_message=prompt,

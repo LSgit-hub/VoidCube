@@ -318,9 +318,9 @@ def _build_child_agent(
         child_thinking_cb = _child_thinking
 
     # Resolve effective credentials: config override > parent inherit
-    effective_model = model or parent_agent.model
+    effective_model = model or (parent_agent.model if parent_agent else None)
     effective_provider = override_provider or getattr(parent_agent, "provider", None)
-    effective_base_url = override_base_url or parent_agent.base_url
+    effective_base_url = override_base_url or (parent_agent.base_url if parent_agent else None)
     effective_api_key = override_api_key or parent_api_key
     effective_api_mode = override_api_mode or getattr(parent_agent, "api_mode", None)
     effective_acp_command = override_acp_command or getattr(parent_agent, "acp_command", None)
@@ -361,17 +361,17 @@ def _build_child_agent(
         quiet_mode=True,
         ephemeral_system_prompt=child_prompt,
         log_prefix=f"[subagent-{task_index}]",
-        platform=parent_agent.platform,
+        platform=getattr(parent_agent, 'platform', 'cli') if parent_agent else 'cli',
         skip_context_files=True,
         skip_memory=True,
         clarify_callback=None,
         thinking_callback=child_thinking_cb,
-        session_db=getattr(parent_agent, '_session_db', None),
-        parent_session_id=getattr(parent_agent, 'session_id', None),
-        providers_allowed=parent_agent.providers_allowed,
-        providers_ignored=parent_agent.providers_ignored,
-        providers_order=parent_agent.providers_order,
-        provider_sort=parent_agent.provider_sort,
+        session_db=getattr(parent_agent, '_session_db', None) if parent_agent else None,
+        parent_session_id=getattr(parent_agent, 'session_id', None) if parent_agent else None,
+        providers_allowed=getattr(parent_agent, 'providers_allowed', None) if parent_agent else None,
+        providers_ignored=getattr(parent_agent, 'providers_ignored', None) if parent_agent else None,
+        providers_order=getattr(parent_agent, 'providers_order', None) if parent_agent else None,
+        provider_sort=getattr(parent_agent, 'provider_sort', None) if parent_agent else None,
         tool_progress_callback=child_progress_cb,
         iteration_budget=None,  # fresh budget per subagent
     )
