@@ -116,8 +116,14 @@ class MemoryService:
 
     @asynccontextmanager
     async def _app_lifespan(self, app: FastAPI):
-        """Start background compression loop on startup, cancel on shutdown."""
+        """Register with Gateway on startup, run compression loop, cleanup on shutdown."""
         del app
+        # Register with Gateway so the supervisor can route memory requests
+        svc_id = await self.register_with_gateway()
+        if svc_id:
+            logger.info("Memory service registered with gateway: %s", svc_id)
+        else:
+            logger.warning("Memory service failed to register with gateway")
         self._compression_task = asyncio.create_task(self._compression_loop())
         try:
             yield

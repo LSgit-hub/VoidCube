@@ -38,6 +38,9 @@ _MODEL_CONTEXT_LENGTHS: dict[str, int] = {
     "deepseek-v4": 65536,
     "deepseek-v4-flash": 65536,
     "deepseek-reasoner": 65536,
+    # Agnes AI family
+    "agnes-2.0-flash": 131072,
+    "agnes-2.0-pro": 131072,
     # OpenAI family
     "gpt-4o": 128000,
     "gpt-4o-mini": 128000,
