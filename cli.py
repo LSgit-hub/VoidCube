@@ -791,13 +791,66 @@ _prompt_for_secret_fn = None
 
 
 def _get_AIAgent():
-    """Lazy-import AIAgent class (defers ~251ms of import chain)."""
+    """Lazy-import AIAgent class (defers ~251ms of import chain).
+
+    Architecture note (baseline §3.1/§4.2):
+    When the Gateway daemon is running, agent API traffic SHOULD route
+    through the Gateway for activity tracking and observability.  The
+    AgentProxy in ``systems.gateway.agent_adapter`` is the canonical
+    Gateway-routed agent, but its interface is limited to chat-completion
+    and agent-query — not the full AIAgent surface used by the CLI.
+
+    Until AgentProxy gains full AIAgent parity, the CLI runs a local
+    agent and registers with the Gateway at session start via
+    ``_register_with_gateway()`` for activity tracking.
+    """
     global _AIAgent_class
     if _AIAgent_class is None:
         _ensure_async_httpx_neutered()
         from run_agent import AIAgent as _AIAgent
         _AIAgent_class = _AIAgent
     return _AIAgent_class
+
+
+def _is_gateway_running(timeout: float = 0.3) -> bool:
+    """Quick TCP check — returns True if Gateway is listening on 6000."""
+    import socket as _sock
+    try:
+        s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect(("127.0.0.1", 6000))
+        s.close()
+        return True
+    except OSError:
+        return False
+
+
+def _register_with_gateway(session_id: str, model: str, provider: str) -> None:
+    """Register the current CLI session with the Gateway for activity tracking.
+
+    Called once per session so the Gateway can correlate gateway-level
+    activity with the CLI's conversation.  Best-effort — failure is silent.
+    """
+    import threading, json as _json
+    def _register():
+        try:
+            import urllib.request as _req
+            payload = _json.dumps({
+                "session_id": session_id,
+                "model": model,
+                "provider": provider,
+                "source": "cli",
+            }).encode()
+            req = _req.Request(
+                "http://127.0.0.1:6000/v1/sessions/register",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            _req.urlopen(req, timeout=3)
+        except Exception:
+            pass  # Best-effort — Gateway may not be started or doesn't support this endpoint
+    threading.Thread(target=_register, daemon=True, name="gw-register").start()
 
 
 def _get_tool_definitions(*args, **kwargs):
@@ -3460,6 +3513,15 @@ class VoidcubeCLI:
                 except (ValueError, Exception) as e:
                     _cprint(f"  Could not apply pending title: {e}")
                     self._pending_title = None
+
+            # Register with Gateway for activity tracking when daemon stack is running
+            if _is_gateway_running():
+                _register_with_gateway(
+                    self.session_id,
+                    effective_model,
+                    runtime.get("provider", ""),
+                )
+
             return True
         except Exception as e:
             ChatConsole().print(f"[bold red]Failed to initialize agent: {e}[/]")
