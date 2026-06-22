@@ -2247,11 +2247,13 @@ class VoidcubeCLI:
             return  # Already executing a task
         self._auto_poll_busy = True
 
+        # Resolve supervisor URL once (used in both fetch and decision POST)
+        sup_url = self._get_supervisor_url().rstrip('/ui/state')
+
         def _fetch_and_execute():
+            import urllib.request as _req
             try:
-                import urllib.request as _req
                 # Fetch approved self_learning tasks from supervisor queue
-                sup_url = self._get_supervisor_url().rstrip('/ui/state')
                 url = f"{sup_url}/self-evolution/tasks"
                 r = _req.Request(url, headers={"Accept": "application/json"})
                 resp = _json.loads(_req.urlopen(r, timeout=3).read())
@@ -2275,7 +2277,11 @@ class VoidcubeCLI:
             task_id = task.get("task_id", "")
             title = task.get("title", "Learning task")
             summary = task.get("summary", "")
-            prompt = f"## Learning Task: {title}\n\n{summary}\n\nExecute this self-learning task using available tools. Research, verify, and produce a structured conclusion."
+            prompt = (
+                f"## Learning Task: {title}\n\n{summary}\n\n"
+                "Execute this self-learning task using available tools. "
+                "Research, verify, and produce a structured conclusion."
+            )
 
             _cprint(f"\n  [bold green]📝 学习任务: {title}[/]")
             if summary:
@@ -2290,16 +2296,18 @@ class VoidcubeCLI:
                     _cprint("  ⚠️  Agent not initialized")
                     return
 
-                # Temporarily restore direct LLM access (not through Gateway
-                # which blocks during Governor Mode)
+                # Temporarily restore direct LLM access (Gateway blocks
+                # agent_query during Governor Mode per baseline §13.4).
                 _saved_base_url = getattr(agent, "base_url", None)
                 try:
                     from VoidCube_cli.config import load_config
                     cfg = load_config()
-                    provider = cfg.get("runtime", {}).get("active_provider", "")
+                    active_prov = cfg.get("runtime", {}).get("active_provider", "")
                     providers = cfg.get("providers", {})
-                    pc = providers.get(provider, {})
-                    agent.base_url = pc.get("base_url", "") or _saved_base_url
+                    pc = providers.get(active_prov, {})
+                    direct_url = pc.get("base_url", "")
+                    if direct_url:
+                        agent.base_url = direct_url
                 except Exception:
                     pass
 
@@ -2317,11 +2325,21 @@ class VoidcubeCLI:
                 if final:
                     _cprint(f"  [dim]{final[:300]}[/]")
 
-                # Mark task as dispatched via supervisor
+                # Mark task as dispatched via supervisor decision endpoint
                 try:
-                    data = _json.dumps({"decision": "approve", "metadata": {"execution_dispatched": True, "executed_by": "cli_agent"}}).encode()
+                    data = _json.dumps({
+                        "decision": "approve",
+                        "metadata": {
+                            "execution_dispatched": True,
+                            "executed_by": "cli_agent",
+                        },
+                    }).encode()
                     dec_url = f"{sup_url}/self-evolution/tasks/{task_id}/decision"
-                    dr = _req.Request(dec_url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+                    dr = _req.Request(
+                        dec_url, data=data,
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
                     _req.urlopen(dr, timeout=5)
                 except Exception:
                     pass
@@ -2330,6 +2348,7 @@ class VoidcubeCLI:
                 _cprint(f"  ❌ 学习任务失败: {exc}")
             finally:
                 self._auto_executing = False
+                self._auto_poll_busy = False
 
         threading.Thread(target=_fetch_and_execute, daemon=True, name="auto-exec").start()
 
@@ -10539,7 +10558,7 @@ class VoidcubeCLI:
         )
 
         def _get_auto_mode_text():
-            if cli_ref._auto_mode_executing:
+            if cli_ref._auto_mode_executing or getattr(cli_ref, "_auto_executing", False):
                 return [
                     ("class:auto-mode", " 🤖 AUTO ⚡ 执行中 — Agent 正在执行学习任务 | /auto-q 退出"),
                 ]
