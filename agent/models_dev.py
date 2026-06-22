@@ -2,6 +2,10 @@
 
 This is a stripped-down version for the server management CLI,
 providing basic model metadata and catalog functionality.
+
+DEPRECATED: Model lists here duplicate ``VoidCube_cli/models.py`` and are
+not kept in sync.  Once all callers migrate to ``models.py``, this file
+should be deleted.
 """
 
 from dataclasses import dataclass

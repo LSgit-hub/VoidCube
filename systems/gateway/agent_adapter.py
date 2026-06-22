@@ -98,61 +98,47 @@ class GatewayAgentAdapter:
 
 
 class AgentProxy:
+    """Gateway-mediated agent proxy — all agent communication through Gateway.
+
+    The local AIAgent mode has been removed per architecture baseline §3.1/§4.2:
+    CLI must not create agent instances directly; all routing goes through Gateway.
+
+    READY: This is the canonical Gateway-routed agent.  It is currently unused
+    in production because CLI still creates local AIAgent instances (see
+    ``cli.py:_get_AIAgent``).  Once AgentProxy gains full AIAgent interface
+    parity, switch CLI's _get_AIAgent to use AgentProxy.
+    """
+
     def __init__(
         self,
-        mode: str = "local",
         gateway_url: str = "http://localhost:6000",
-        **agent_kwargs
+        **agent_kwargs,
     ):
-        self.mode = mode.lower()
         self.gateway_url = gateway_url
-        self._local_agent: Optional[AIAgent] = None
         self._gateway_adapter: Optional[GatewayAgentAdapter] = None
         self._agent_kwargs = agent_kwargs
-        self._initialized = False
-
-    def _ensure_local_agent(self):
-        if self._local_agent is None:
-            self._local_agent = AIAgent(**self._agent_kwargs)
 
     def _ensure_gateway_adapter(self):
         if self._gateway_adapter is None:
             self._gateway_adapter = GatewayAgentAdapter(self.gateway_url)
 
     async def run_conversation(self, query: str, **kwargs) -> str:
-        if self.mode == "local":
-            self._ensure_local_agent()
-            return self._local_agent.run_conversation(query, **kwargs)
-        else:
-            self._ensure_gateway_adapter()
-            messages = [{"role": "user", "content": query}]
-            response = await self._gateway_adapter.agent_query(messages, **kwargs)
-            return response.get("response", {}).get("content", "")
+        self._ensure_gateway_adapter()
+        messages = [{"role": "user", "content": query}]
+        response = await self._gateway_adapter.agent_query(messages, **kwargs)
+        return response.get("response", {}).get("content", "")
 
     async def chat_completion(self, messages: List[Dict[str, Any]], **kwargs) -> Dict[str, Any]:
-        if self.mode == "local":
-            self._ensure_local_agent()
-            return await self._local_agent.chat_completion(messages, **kwargs)
-        else:
-            self._ensure_gateway_adapter()
-            return await self._gateway_adapter.chat_completion(messages, **kwargs)
+        self._ensure_gateway_adapter()
+        return await self._gateway_adapter.chat_completion(messages, **kwargs)
 
     async def get_session_info(self) -> Dict[str, Any]:
-        if self.mode == "local":
-            return {
-                "session_id": self._local_agent.session_id if self._local_agent else "N/A",
-                "mode": "local",
-            }
-        else:
-            self._ensure_gateway_adapter()
-            return await self._gateway_adapter.get_session_info()
+        self._ensure_gateway_adapter()
+        return await self._gateway_adapter.get_session_info()
 
     async def health_check(self) -> Dict[str, Any]:
-        if self.mode == "local":
-            return {"status": "healthy", "mode": "local"}
-        else:
-            self._ensure_gateway_adapter()
-            return await self._gateway_adapter.health_check()
+        self._ensure_gateway_adapter()
+        return await self._gateway_adapter.health_check()
 
     async def close(self):
         if self._gateway_adapter:
@@ -160,11 +146,10 @@ class AgentProxy:
 
 
 def create_agent(
-    mode: str = "local",
     gateway_url: str = "http://localhost:6000",
-    **agent_kwargs
+    **agent_kwargs,
 ) -> AgentProxy:
-    return AgentProxy(mode=mode, gateway_url=gateway_url, **agent_kwargs)
+    return AgentProxy(gateway_url=gateway_url, **agent_kwargs)
 
 
 def is_gateway_available(gateway_url: str, timeout: int = 5) -> bool:

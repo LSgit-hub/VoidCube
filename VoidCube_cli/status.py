@@ -155,8 +155,12 @@ def show_status(args):
         display = redact_key(value) if not show_all else value
         print(f"  {name:<12}  {check_mark(has_key)} {display}")
 
-    from VoidCube_cli.auth import get_anthropic_key
-    anthropic_value = get_anthropic_key()
+    try:
+        from agent.credential_pool import get_credential_pool
+        pool = get_credential_pool()
+        anthropic_value = pool.get_anthropic_api_key() if hasattr(pool, 'get_anthropic_api_key') else ""
+    except Exception:
+        anthropic_value = ""
     anthropic_display = redact_key(anthropic_value) if not show_all else anthropic_value
     print(f"  {'Anthropic':<12}  {check_mark(bool(anthropic_value))} {anthropic_display}")
 

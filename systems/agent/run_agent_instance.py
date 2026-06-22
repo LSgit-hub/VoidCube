@@ -343,68 +343,39 @@ class AgentInstance:
         return ""
 
     async def _generate_response(self, message: str, context: Dict[str, Any]) -> str:
-        try:
-            import aiohttp
-            
-            llm_response = await self._call_llm(message)
-            
-            tool_calls = self._parse_tool_calls(llm_response)
-            
-            if tool_calls:
-                tool_results = await self._execute_tools(tool_calls)
-                final_response = await self._summarize_results(llm_response, tool_results)
-                return final_response
-            
-            return llm_response
-        
-        except Exception as e:
-            logger.warning(f"Error generating response: {e}")
-            return f"Processed your request: {message[:50]}..."
+        """Simple LLM call for basic agent queries (used by /chat and /v1/agent/query).
 
-    async def _call_llm(self, message: str) -> str:
+        For full chat-completions with tools/streaming, use handle_chat_completions.
+        """
         try:
             import aiohttp
 
-            # Agent uses API-A (baseline §4.3) — configurable provider/model
             api_key = os.getenv("AGENT_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
             if not api_key:
                 return f"Processed request: {message}"
-            
+
             base_url = os.getenv("AGENT_BASE_URL", "https://api.deepseek.com/v1")
             model = os.getenv("AGENT_MODEL", "deepseek-chat")
-            
+
             async with aiohttp.ClientSession() as session:
                 url = f"{base_url.rstrip('/')}/chat/completions"
                 headers = {
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {api_key}",
                 }
-                
                 payload = {
                     "model": model,
                     "messages": [{"role": "user", "content": message}],
-                    "max_tokens": 500
+                    "max_tokens": 500,
                 }
-                
                 async with session.post(url, headers=headers, json=payload) as response:
                     if response.status == 200:
                         result = await response.json()
                         return result["choices"][0]["message"]["content"].strip()
-            
             return f"Response to: {message}"
-        
         except Exception as e:
             logger.warning(f"LLM call failed: {e}")
             return f"Processed request: {message}"
-
-    def _parse_tool_calls(self, response: str) -> List[Dict[str, Any]]:
-        return []
-
-    async def _execute_tools(self, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
-        return {}
-
-    async def _summarize_results(self, original_response: str, tool_results: Dict[str, Any]) -> str:
-        return original_response
 
     async def handle_memory_operation(self, request: dict):
         try:

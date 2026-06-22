@@ -276,36 +276,15 @@ def start_service(name: str, foreground: bool = False) -> Optional[subprocess.Po
 
     script = f"""
 import sys, os
-# Redirect Python-level stdio to log file so the child is fully detached
-# from the parent console.  uvicorn uses Python logging → sys.stderr, so
-# this is sufficient on all platforms.
 log_file = open({log_path}, 'a', buffering=1)
 sys.stdout = log_file
 sys.stderr = log_file
-
 sys.path.insert(0, {json.dumps(str(Path(__file__).resolve().parents[2]))})
 os.chdir({json.dumps(str(Path.cwd()))})
 import uvicorn
-from systems.gateway.internal_gateway import InternalGateway, GatewayConfig
-from systems.supervisor.supervisor import Supervisor, SupervisorConfig
-from systems.memory.memory_service import MemoryService, MemoryServiceConfig
-from systems.agent.run_agent_instance import AgentInstance, AgentConfig
-
-if {json.dumps(name)} == 'gateway':
-    gw = InternalGateway(GatewayConfig(port={svc.port}))
-    uvicorn.run(gw.app, host='127.0.0.1', port={svc.port}, log_level='info')
-elif {json.dumps(name)} == 'supervisor':
-    sv_cfg = SupervisorConfig(port={svc.port})
-    sup = Supervisor(config=sv_cfg)
-    uvicorn.run(sup.app, host='127.0.0.1', port={svc.port}, log_level='info')
-elif {json.dumps(name)} == 'memory':
-    mem_cfg = MemoryServiceConfig(port={svc.port})
-    mem = MemoryService(config=mem_cfg)
-    uvicorn.run(mem.app, host='127.0.0.1', port={svc.port}, log_level='info')
-elif {json.dumps(name)} == 'agent':
-    agt_cfg = AgentConfig(port={svc.port}, active_slot="slot-A")
-    agt = AgentInstance(config=agt_cfg)
-    uvicorn.run(agt.app, host='127.0.0.1', port={svc.port}, log_level='info')
+from VoidCube_cli.ops.serve import _build_service_app
+app = _build_service_app({json.dumps(name)}, {svc.port})
+uvicorn.run(app, host='127.0.0.1', port={svc.port}, log_level='info')
 """
 
     proc = subprocess.Popen(

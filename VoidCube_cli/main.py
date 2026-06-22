@@ -1013,9 +1013,9 @@ def _prompt_provider_choice(choices, *, default=0):
     if the user cancels.
     """
     try:
-        from VoidCube_cli.setup import _curses_prompt_choice
-        idx = _curses_prompt_choice("Select provider:", choices, default)
-        if idx >= 0:
+        from VoidCube_cli.curses_ui import curses_single_select
+        idx = curses_single_select("Select provider:", choices, default)
+        if idx is not None:
             print()
             return idx
     except Exception:
@@ -1225,7 +1225,6 @@ def _coalesce_session_name_args(argv: list) -> list:
         "status", "doctor", "config", "tools",
         "mcp", "sessions", "insights", "version",
         "api", "acp", "logs", "memory", "profile", "update", "uninstall",
-        "cron", "setup", "pairing", "skills", "honcho",
     }
     _SESSION_FLAGS = {"-c", "--continue", "-r", "--resume"}
 
@@ -2436,132 +2435,6 @@ Examples:
     uninstall_parser.set_defaults(func=cmd_uninstall)
 
     # =========================================================================
-    # cron command (stub — delegates to Claude Code CronCreate)
-    # =========================================================================
-    cron_parser = subparsers.add_parser(
-        "cron",
-        help="Manage scheduled tasks",
-        description="Cron job management for VoidCube scheduled tasks",
-    )
-    cron_sub = cron_parser.add_subparsers(dest="cron_action")
-    cron_sub.add_parser("list", help="List scheduled cron jobs")
-    cron_sub.add_parser("status", help="Check if the cron scheduler is running")
-
-    def cmd_cron(args):
-        """Cron management stub."""
-        print()
-        print("  Cron job management is handled by Claude Code's CronCreate / CronList tools.")
-        print("  Use '/cron' in the Claude Code chat to manage scheduled tasks.")
-        print()
-        print("  Or manually edit:  ~/.VoidCube/scheduled_tasks.json")
-        print()
-
-    cron_parser.set_defaults(func=cmd_cron)
-
-    # =========================================================================
-    # setup command (stub)
-    # =========================================================================
-    setup_parser = subparsers.add_parser(
-        "setup",
-        help="Run the initial setup wizard",
-        description="Configure VoidCube Agent for first use",
-    )
-
-    def cmd_setup(args):
-        """Initial setup guide."""
-        print()
-        print("  VoidCube Setup")
-        print("  " + "─" * 40)
-        print()
-        print("  1. Configure an API provider:")
-        print("     VoidCube api")
-        print()
-        print("  2. Select a model:")
-        print("     VoidCube model")
-        print()
-        print("  3. Check your configuration:")
-        print("     VoidCube doctor")
-        print()
-        print("  4. Start a chat:")
-        print("     VoidCube")
-        print()
-
-    setup_parser.set_defaults(func=cmd_setup)
-
-    # =========================================================================
-    # pairing command (stub — integrated into whatsapp)
-    # =========================================================================
-    pairing_parser = subparsers.add_parser(
-        "pairing",
-        help="Manage device pairing for messaging bridges",
-        description="QR-code pairing for WhatsApp and other messaging bridges",
-    )
-
-    def cmd_pairing(args):
-        """Pairing stub — points to whatsapp."""
-        print()
-        print("  Device pairing is integrated into the messaging bridge setup.")
-        print()
-        print("  WhatsApp:  VoidCube whatsapp")
-        print()
-
-    pairing_parser.set_defaults(func=cmd_pairing)
-
-    # =========================================================================
-    # skills command (stub)
-    # =========================================================================
-    skills_parser = subparsers.add_parser(
-        "skills",
-        help="Manage VoidCube skills",
-        description="List, enable, and disable agent skills",
-    )
-    skills_sub = skills_parser.add_subparsers(dest="skills_action")
-    skills_list = skills_sub.add_parser("list", help="List available skills")
-    skills_list.add_argument("--platform", default="cli", help="Platform to show skills for")
-
-    def cmd_skills(args):
-        """Skills management stub."""
-        print()
-        print("  Skills are configured via the skills system.")
-        print()
-        print("  Use /skills in the chat to see available skills.")
-        print("  Preload skills at launch:  VoidCube -s skill-name")
-        print("  Configure per-platform:    VoidCube skills list --platform telegram")
-        print()
-
-    skills_parser.set_defaults(func=cmd_skills)
-
-    # =========================================================================
-    # honcho command (stub)
-    # =========================================================================
-    honcho_parser = subparsers.add_parser(
-        "honcho",
-        help="Configure Honcho AI memory integration",
-        description="Manage Honcho long-term memory provider settings",
-    )
-    honcho_sub = honcho_parser.add_subparsers(dest="honcho_action")
-    honcho_sub.add_parser("status", help="Show Honcho config and connection status")
-    honcho_sub.add_parser("sessions", help="List directory to session name mappings")
-    honcho_map = honcho_sub.add_parser("map", help="Map current directory to a session name")
-    honcho_map.add_argument("name", help="Session name")
-    honcho_sub.add_parser("peer", help="Show peer names and dialectic settings")
-    honcho_sub.add_parser("mode", help="Show current memory mode")
-    honcho_sub.add_parser("tokens", help="Show token budget settings")
-    honcho_sub.add_parser("identity", help="Show AI peer identity")
-    honcho_sub.add_parser("migrate", help="Migration guide")
-
-    def cmd_honcho(args):
-        """Honcho memory provider stub."""
-        print()
-        print("  Honcho memory provider is configured via the memory system.")
-        print()
-        print("  View status:       VoidCube memory status")
-        print("  Configure:         VoidCube memory setup")
-        print("  Disable external:  VoidCube memory off")
-        print()
-
-    honcho_parser.set_defaults(func=cmd_honcho)
-
     # =========================================================================
     # Parse and execute
     # =========================================================================
@@ -2597,8 +2470,7 @@ Examples:
         "chat", "model", "gateway", "whatsapp", "login", "logout",
         "body", "agent", "serve", "status", "doctor", "config", "tools",
         "mcp", "sessions", "insights", "version", "api", "acp", "logs",
-        "memory", "profile", "update", "uninstall", "cron", "setup",
-        "pairing", "skills", "honcho",
+        "memory", "profile", "update", "uninstall",
     }
     continue_val = getattr(args, "continue_last", None)
     if (

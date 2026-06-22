@@ -142,6 +142,7 @@ def _normalize_for_deepseek(model_name: str) -> str:
         if keyword in bare:
             return "deepseek-v4-pro"
 
+    # TODO: Replace hardcoded default with active provider's selected_model
     return "deepseek-v4-flash"
 
 

@@ -222,26 +222,6 @@ def get_provider_auth_state(provider: str) -> Dict[str, Any]:
     """获取提供者认证状态"""
     return {"authenticated": False, "provider": provider}
 
-def is_provider_explicitly_configured(provider: str) -> bool:
-    """检查提供者是否显式配置"""
-    return provider in ["ollama", "lm-studio", "local"]
-
-def is_source_suppressed(source: str) -> bool:
-    """检查源是否被抑制"""
-    return False
-
-def deactivate_provider(provider: str) -> None:
-    """停用提供者"""
-    pass
-
-def _prompt_model_selection() -> Optional[str]:
-    """提示选择模型"""
-    return None
-
-def _save_model_choice(model: str) -> None:
-    """保存模型选择"""
-    pass
-
 def _get_auth_store_path() -> Path:
     """Return the path to the auth store JSON file."""
     from pathlib import Path as _Path
@@ -365,11 +345,11 @@ def format_auth_error(error: Exception) -> str:
 
 def resolve_qwen_runtime_credentials() -> Optional[Dict[str, Any]]:
     """解析 Qwen 运行时凭证"""
-    return None
+    return {}
 
 def resolve_external_process_provider_credentials(provider: str) -> Optional[Dict[str, Any]]:
     """解析外部进程提供者凭证"""
-    return None
+    return {}
 
 
 # ── CLI command handlers ────────────────────────────────────────────────

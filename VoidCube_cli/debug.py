@@ -127,34 +127,10 @@ def _upload_report(report: str, expire_days: int = 7) -> Optional[str]:
 
     Returns None if upload fails.
     """
+    import urllib.request
+    import urllib.parse
+
     try:
-        import urllib.request
-        import json
-
-        data = json.dumps({
-            "content": report,
-            "expire_days": expire_days,
-            "syntax": "text",
-        }).encode("utf-8")
-
-        req = urllib.request.Request(
-            "https://paste.voidcube.dev/api/v1/paste",
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            result = json.loads(resp.read().decode())
-            return result.get("url")
-    except Exception:
-        pass
-
-    # Fallback: try dpaste.org
-    try:
-        import urllib.request
-        import urllib.parse
-
         data = urllib.parse.urlencode({
             "content": report,
             "expiry_days": expire_days,
