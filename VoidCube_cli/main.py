@@ -2591,6 +2591,8 @@ Examples:
     # When ``VoidCube -c chat`` is typed, nargs="?" on -c consumes "chat"
     # as the session name rather than recognising it as a subcommand.
     # Detect this and swap: treat the value as the subcommand instead.
+    # Only swap when NO session with that name exists — a real session
+    # name that happens to match a subcommand takes priority.
     _KNOWN_COMMANDS = {
         "chat", "model", "gateway", "whatsapp", "login", "logout",
         "body", "agent", "serve", "status", "doctor", "config", "tools",
@@ -2606,8 +2608,15 @@ Examples:
         and continue_val.lower() in _KNOWN_COMMANDS
         and args.command is None
     ):
-        args.command = continue_val.lower()
-        args.continue_last = None
+        # Only swap if NO session with that name actually exists
+        resolved = _resolve_session_by_name_or_id(continue_val)
+        if resolved is None:
+            args.command = continue_val.lower()
+            args.continue_last = None
+        else:
+            # Session exists — keep as session name, route to chat
+            args.command = "chat"
+            args.continue_last = continue_val
 
     # Handle --version flag
     if args.version:

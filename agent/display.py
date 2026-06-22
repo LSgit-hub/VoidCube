@@ -814,6 +814,31 @@ def get_cute_tool_message(
     is_failure, failure_suffix = _detect_tool_failure(tool_name, result)
     skin_prefix = get_skin_tool_prefix()
 
+    def _display_width(s: str) -> int:
+        """Return the terminal display width of a string (CJK chars = 2 columns)."""
+        w = 0
+        for ch in s:
+            cp = ord(ch)
+            # CJK Unified Ideographs, Compatibility Ideographs, etc.
+            if (0x1100 <= cp <= 0x115F or 0x2329 <= cp <= 0x232A or
+                0x2E80 <= cp <= 0xA4CF or 0xA960 <= cp <= 0xA97C or
+                0xAC00 <= cp <= 0xD7A3 or 0xF900 <= cp <= 0xFAFF or
+                0xFE10 <= cp <= 0xFE19 or 0xFE30 <= cp <= 0xFE6F or
+                0xFF01 <= cp <= 0xFF60 or 0xFFE0 <= cp <= 0xFFE6 or
+                0x1F300 <= cp <= 0x1F64F or 0x1F900 <= cp <= 0x1F9FF or
+                0x20000 <= cp <= 0x2FFFD or 0x30000 <= cp <= 0x3FFFD):
+                w += 2
+            else:
+                w += 1
+        return w
+
+    def _pad(text: str, target_width: int) -> str:
+        """Pad *text* with spaces so its display width equals *target_width*."""
+        current = _display_width(text)
+        if current >= target_width:
+            return text
+        return text + " " * (target_width - current)
+
     def _trunc(s, n=40):
         s = str(s)
         if _tool_preview_max_len == 0:
@@ -835,42 +860,42 @@ def get_cute_tool_message(
         return f"{line}{failure_suffix}"
 
     if tool_name == "web_search":
-        return _wrap(f"┊ 🔍 搜索      {_trunc(args.get('query', ''), 42)}  {dur}")
+        return _wrap(f"┊ 🔍 {_pad('搜索', 8)} {_trunc(args.get('query', ''), 42)}  {dur}")
     if tool_name == "web_extract":
         urls = args.get("urls", [])
         if urls:
             url = urls[0] if isinstance(urls, list) else str(urls)
             domain = url.replace("https://", "").replace("http://", "").split("/")[0]
             extra = f" +{len(urls)-1}" if len(urls) > 1 else ""
-            return _wrap(f"┊ 📄 抓取      {_trunc(domain, 35)}{extra}  {dur}")
-        return _wrap(f"┊ 📄 抓取      pages  {dur}")
+            return _wrap(f"┊ 📄 {_pad('抓取', 8)} {_trunc(domain, 35)}{extra}  {dur}")
+        return _wrap(f"┊ 📄 {_pad('抓取', 8)} pages  {dur}")
     if tool_name == "web_crawl":
         url = args.get("url", "")
         domain = url.replace("https://", "").replace("http://", "").split("/")[0]
-        return _wrap(f"┊ 🕸️  爬取      {_trunc(domain, 35)}  {dur}")
+        return _wrap(f"┊ 🕸️  {_pad('爬取', 8)} {_trunc(domain, 35)}  {dur}")
     if tool_name == "terminal":
-        return _wrap(f"┊ 💻 终端       {_trunc(args.get('command', ''), 42)}  {dur}")
+        return _wrap(f"┊ 💻 {_pad('终端', 8)} {_trunc(args.get('command', ''), 42)}  {dur}")
     if tool_name == "process":
         action = args.get("action", "?")
         sid = args.get("session_id", "")[:12]
         labels = {"list": "进程列表", "poll": f"轮询 {sid}", "log": f"日志 {sid}",
                   "wait": f"等待 {sid}", "kill": f"终止 {sid}", "write": f"写入 {sid}", "submit": f"提交 {sid}"}
-        return _wrap(f"┊ >️  进程      {labels.get(action, f'{action} {sid}')}  {dur}")
+        return _wrap(f"┊ >️  {_pad('进程', 8)} {labels.get(action, f'{action} {sid}')}  {dur}")
     if tool_name == "read_file":
-        return _wrap(f"┊ 📖 读取      {_path(args.get('path', ''))}  {dur}")
+        return _wrap(f"┊ 📖 {_pad('读取', 8)} {_path(args.get('path', ''))}  {dur}")
     if tool_name == "write_file":
-        return _wrap(f"┊ ✍️  写入      {_path(args.get('path', ''))}  {dur}")
+        return _wrap(f"┊ ✍️  {_pad('写入', 8)} {_path(args.get('path', ''))}  {dur}")
     if tool_name == "patch":
-        return _wrap(f"┊ 🔧 补丁      {_path(args.get('path', ''))}  {dur}")
+        return _wrap(f"┊ 🔧 {_pad('补丁', 8)} {_path(args.get('path', ''))}  {dur}")
     if tool_name == "search_files":
         pattern = _trunc(args.get("pattern", ""), 35)
         target = args.get("target", "content")
         verb = "查找文件" if target == "files" else "搜索内容"
-        return _wrap(f"┊ 🔎 {verb:8} {pattern}  {dur}")
+        return _wrap(f"┊ 🔎 {_pad(verb, 8)} {pattern}  {dur}")
     if tool_name == "browser_navigate":
         url = args.get("url", "")
         domain = url.replace("https://", "").replace("http://", "").split("/")[0]
-        return _wrap(f"┊ 🌐 导航      {_trunc(domain, 35)}  {dur}")
+        return _wrap(f"┊ 🌐 {_pad('导航', 8)} {_trunc(domain, 35)}  {dur}")
     if tool_name == "browser_snapshot":
         mode = "full" if args.get("full") else "compact"
         return _wrap(f"┊ 📸 快照      {mode}  {dur}")

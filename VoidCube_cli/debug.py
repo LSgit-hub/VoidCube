@@ -23,6 +23,23 @@ from typing import Optional
 from VoidCube_core.constants import get_VoidCube_home
 
 
+def _tail_file(path: Path, n: int) -> list[str]:
+    """Return the last *n* lines of a file without loading it entirely into memory.
+
+    Uses a streaming approach with a bounded deque — memory usage is O(n)
+    regardless of file size.
+    """
+    from collections import deque
+    ring: deque[str] = deque(maxlen=n)
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                ring.append(line.rstrip("\n\r"))
+    except OSError:
+        pass
+    return list(ring)
+
+
 def _collect_debug_report(lines: int = 200) -> str:
     """Collect system info and recent logs into a debug report string."""
     parts: list[str] = []
@@ -80,7 +97,7 @@ def _collect_debug_report(lines: int = 200) -> str:
         parts.append(f"  (config unavailable: {exc})")
     parts.append("")
 
-    # Logs
+    # Logs — stream-read the tail to avoid loading multi-GB files into memory
     parts.append("--- Recent Logs ---")
     log_dir = get_VoidCube_home() / "logs"
     for log_name in ("agent.log", "errors.log", "gateway.log"):
@@ -89,9 +106,8 @@ def _collect_debug_report(lines: int = 200) -> str:
             parts.append(f"\n  [{log_name}]  (last {lines} lines)")
             parts.append("  " + "-" * 50)
             try:
-                log_content = log_path.read_text(errors="replace")
-                log_lines = log_content.strip().split("\n")
-                for line in log_lines[-lines:]:
+                tail_lines = _tail_file(log_path, lines)
+                for line in tail_lines:
                     parts.append(f"    {line}")
             except Exception as exc:
                 parts.append(f"    (read error: {exc})")

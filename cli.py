@@ -2455,11 +2455,10 @@ class VoidcubeCLI:
                 self._git_status_cache_ts = time.time()
             finally:
                 self._git_status_refreshing = False
-                # Trigger a repaint so the new status is visible immediately
-                try:
-                    self._invalidate(min_interval=0.0)
-                except Exception:
-                    pass
+                # Cache updated in-place; the next status-bar render will
+                # pick up the new fragments without any explicit invalidate.
+                # (Do NOT call self._invalidate() from a daemon thread —
+                #  prompt_toolkit's Application is not thread-safe.)
 
         threading.Thread(target=_refresh, daemon=True, name="git-status-refresh").start()
         # Return stale cache while refresh runs; empty list on first call

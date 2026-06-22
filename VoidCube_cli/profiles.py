@@ -112,6 +112,14 @@ def create_profile(name: str) -> str:
     root = get_default_VoidCube_root()
     profile_dir = root / "profiles" / name
 
+    # Ensure the root VoidCube home is set up with secure permissions and
+    # canonical subdirectories before creating the profile.
+    try:
+        from VoidCube_cli.config import ensure_VoidCube_home
+        ensure_VoidCube_home()
+    except ImportError:
+        root.mkdir(parents=True, exist_ok=True)
+
     if profile_dir.exists():
         raise FileExistsError(f"Profile '{name}' already exists at {profile_dir}")
 
@@ -143,6 +151,25 @@ def delete_profile(name: str) -> bool:
     import shutil
     shutil.rmtree(profile_dir)
     return True
+
+
+def get_active_profile_name() -> str | None:
+    """Read the sticky active profile name from ``~/.VoidCube/active_profile``.
+
+    Returns:
+        The profile name, or ``None`` if no sticky profile is set
+        (i.e. the default profile is active).
+    """
+    root = get_default_VoidCube_root()
+    active_path = root / "active_profile"
+    try:
+        if active_path.exists():
+            name = active_path.read_text().strip()
+            if name and name.lower() != "default":
+                return name
+    except (OSError, UnicodeDecodeError):
+        pass
+    return None
 
 
 def set_active_profile(name: str | None) -> None:

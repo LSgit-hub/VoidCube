@@ -242,9 +242,44 @@ def _save_model_choice(model: str) -> None:
     """保存模型选择"""
     pass
 
+def _get_auth_store_path() -> Path:
+    """Return the path to the auth store JSON file."""
+    from pathlib import Path as _Path
+    try:
+        from VoidCube_cli.config import get_VoidCube_home
+        home = get_VoidCube_home()
+    except Exception:
+        home = _Path.home() / ".VoidCube"
+    home.mkdir(parents=True, exist_ok=True)
+    return home / "auth_store.json"
+
+
 def _load_auth_store() -> Dict[str, Any]:
-    """加载认证存储"""
+    """Load the persistent auth store from disk."""
+    import json as _json
+    store_path = _get_auth_store_path()
+    try:
+        if store_path.exists():
+            with open(store_path, "r", encoding="utf-8") as f:
+                data = _json.load(f)
+                if isinstance(data, dict):
+                    return data
+    except Exception:
+        pass
     return {}
+
+
+def _save_auth_store(store: Dict[str, Any]) -> None:
+    """Persist the auth store to disk atomically."""
+    import json as _json
+    store_path = _get_auth_store_path()
+    try:
+        tmp_path = store_path.with_suffix(".tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            _json.dump(store, f, ensure_ascii=False, indent=2)
+        tmp_path.replace(store_path)
+    except Exception:
+        pass
 
 def fetch_nous_models() -> List[Dict[str, Any]]:
     """获取 Nous 模型列表"""
@@ -300,10 +335,6 @@ def _resolve_kimi_base_url() -> str:
 def _resolve_zai_base_url() -> str:
     """解析 Zai 基础 URL"""
     return os.getenv("ZAI_BASE_URL", "https://api.zai.com/v1")
-
-def _save_auth_store(store: Dict[str, Any]) -> None:
-    """保存认证存储"""
-    pass
 
 def _save_provider_state(provider: str, state: Dict[str, Any]) -> None:
     """保存提供者状态"""
