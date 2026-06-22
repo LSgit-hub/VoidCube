@@ -15,11 +15,22 @@ class SupervisorExecutionConfig(BaseModel):
 
 class SupervisorServiceRuntimeConfig(BaseModel):
     health_check_interval: int = 30
-    memory_compression_interval: int = 3600
     self_evolution_review_interval: int = 300
+    # Deprecated: compression is now owned by MemoryService (baseline §3.4).
+    # Kept for config-file compatibility; no longer read by the supervisor.
+    memory_compression_interval: int = 3600
     endogenous_drive_enabled: bool = True
     endogenous_drive_interval: int = 300
     endogenous_drive_max_candidates: int = 3
+    # Execution window: self_evolution / body_upgrade tasks only auto-execute
+    # during [execution_window_start_hour, execution_window_end_hour).
+    # Default 0–24 = always open (development).  Set to 0–6 for production.
+    execution_window_start_hour: int = 0
+    execution_window_end_hour: int = 24
+    # Interval in seconds for the structured 4-layer memory maintenance loop
+    # (Event→Scene→Arc→Epoch compression via MemoryMaintenanceEngine).
+    # Runs in Memory Mode independently of the task queue.  0 = disabled.
+    structured_memory_maintenance_interval: int = 3600
 
 
 class SupervisorBodyRuntimeConfig(BaseModel):

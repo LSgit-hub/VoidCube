@@ -39,10 +39,11 @@ class RouteEntry(BaseModel):
 
 class GatewayConfig(BaseModel):
     host: str = "127.0.0.1"
-    port: int = 8000
+    port: int = 6000
     auth_token: Optional[str] = None
     log_level: str = "INFO"
     activity_log_limit: int = 200
+    activity_log_path: str = ""  # disk path; "" = auto-derive from VoidCube home
 
 
 class AgentRequest(BaseModel):
@@ -76,7 +77,12 @@ class InternalGateway:
         self._routes: Dict[str, RouteEntry] = {}
         self._active_body_service_id: str = None
         self._request_counter = 0
+        # NOTE(SB-03): Session cache is body-runtime state, not gateway operations
+        # state.  Long-term session ownership should belong to the agent body
+        # instances.  The gateway should only hold routing metadata.  TTL eviction
+        # (SB-04) mitigates unbounded growth for now.
         self._agent_session_cache: Dict[str, Dict[str, Any]] = {}
+        self._session_ttl_seconds: int = 3600  # evict sessions idle >1 hour
         self._activity_log: Deque[Dict[str, Any]] = deque(
             maxlen=max(int(self.config.activity_log_limit), 1)
         )
@@ -95,6 +101,8 @@ class InternalGateway:
             "self_evolution_activity_count": 0,
             "self_evolution_plan_count": 0,
             "self_evolution_execute_count": 0,
+            "error_count": 0,
+            "uncertainty_high_count": 0,
             "recent_metadata": {
                 "user_request": None,
                 "agent_work": None,
@@ -105,7 +113,16 @@ class InternalGateway:
                 "self_evolution_execute": None,
             },
         }
+        # Auto-derive persistence path when not explicitly configured.
+        # Skip under pytest to avoid test-isolation issues from shared
+        # persisted state across gateway test cases.
+        if not self.config.activity_log_path and not os.environ.get("PYTEST_CURRENT_TEST"):
+            from VoidCube_core.constants import get_VoidCube_home
+            run_dir = get_VoidCube_home() / "run"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            self.config.activity_log_path = str(run_dir / "gateway-activity.json")
         self._setup_routes()
+        self._load_activity_state()
 
     def _setup_routes(self):
         self.app.add_api_route("/", self.health_check, methods=["GET"])
@@ -133,6 +150,7 @@ class InternalGateway:
         self.app.add_api_route("/v1/agent/query", self.agent_query_proxy, methods=["POST"])
         self.app.add_api_route("/v1/sessions/{session_id}", self.get_session_info, methods=["GET"])
         self.app.add_api_route("/v1/sessions/{session_id}", self.delete_session, methods=["DELETE"])
+        self.app.add_api_route("/admin/traces/{trace_id}", self.get_trace, methods=["GET"])
 
     async def health_check(self):
         active_body = self._build_active_body_snapshot()
@@ -300,6 +318,8 @@ class InternalGateway:
                 "self_evolution_activity_count": self._activity_state["self_evolution_activity_count"],
                 "self_evolution_plan_count": self._activity_state["self_evolution_plan_count"],
                 "self_evolution_execute_count": self._activity_state["self_evolution_execute_count"],
+                "error_count": self._activity_state["error_count"],
+                "uncertainty_high_count": self._activity_state["uncertainty_high_count"],
             },
             "recent_metadata": dict(self._activity_state["recent_metadata"]),
             "active_sessions": len(self._agent_session_cache),
@@ -367,6 +387,12 @@ class InternalGateway:
             self._activity_state["self_evolution_execute_count"] += 1
             self._activity_state["recent_metadata"]["self_evolution"] = activity_metadata
             self._activity_state["recent_metadata"]["self_evolution_execute"] = activity_metadata
+        elif normalized == "agent_error":
+            self._activity_state["error_count"] += 1
+            self._activity_state["recent_metadata"]["agent_error"] = activity_metadata
+        elif normalized == "uncertainty_high":
+            self._activity_state["uncertainty_high_count"] += 1
+            self._activity_state["recent_metadata"]["uncertainty_high"] = activity_metadata
         else:
             supported = False
             logger.debug(
@@ -383,6 +409,72 @@ class InternalGateway:
                 session_id=session_id,
                 metadata=activity_metadata,
             )
+            self._persist_activity_state()
+
+    def _load_activity_state(self) -> None:
+        """Restore activity state + log from disk (best-effort)."""
+        path = self.config.activity_log_path
+        if not path:
+            return
+        try:
+            raw = json.loads(open(path, encoding="utf-8").read())
+        except Exception:
+            return
+        if not isinstance(raw, dict):
+            return
+        saved_state = raw.get("state")
+        if isinstance(saved_state, dict):
+            # Timestamp fields are stored as ISO strings; restore to datetime
+            _ts_fields = {k for k in self._activity_state if k.startswith("last_")}
+            for key in self._activity_state:
+                if key in saved_state:
+                    value = saved_state[key]
+                    if key in _ts_fields and isinstance(value, str):
+                        try:
+                            value = datetime.fromisoformat(value)
+                        except ValueError:
+                            value = None
+                    self._activity_state[key] = value
+        saved_events = raw.get("events")
+        if isinstance(saved_events, list):
+            # Truncate to configured limit (G-05: rotation)
+            limit = max(int(self.config.activity_log_limit), 1)
+            for event in reversed(saved_events[-limit:]):
+                if isinstance(event, dict):
+                    self._activity_log.appendleft(event)
+        # Counters are runtime-only — reset on restart to avoid stale
+        # accumulation.  Timestamps and log events survive for idle-window
+        # continuity after a quick restart.
+        for key in self._activity_state:
+            if key.endswith("_count"):
+                self._activity_state[key] = 0
+
+    def _persist_activity_state(self) -> None:
+        """Write activity state + log to disk (debounced, fire-and-forget)."""
+        path = self.config.activity_log_path
+        if not path:
+            return
+        # Debounce: skip writes within 2s of the last persist to avoid
+        # high-frequency disk I/O on every activity touch (G-02).
+        import time as _time
+        now = _time.monotonic()
+        last = getattr(self, '_last_persist_ts', 0.0)
+        if now - last < 2.0:
+            return
+        self._last_persist_ts = now
+        try:
+            payload = {
+                "state": self._activity_state,
+                "events": list(self._activity_log),
+                "written_at": datetime.utcnow().isoformat(),
+            }
+            # Atomic write: temp file + rename
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, default=str)
+            os.replace(tmp, path)
+        except Exception:
+            pass  # best-effort; never block the request for persistence
 
     def _record_activity_log_event(
         self,
@@ -473,6 +565,11 @@ class InternalGateway:
                 if value is not None and key not in metadata
             }
         )
+        # Ensure every activity has a trace_id for end-to-end observability.
+        # When the caller provided one, keep it as-is (trace_id is an opaque
+        # correlation identifier, not required to be a UUID).
+        if "trace_id" not in metadata:
+            metadata["trace_id"] = str(uuid.uuid4())
         return metadata
 
     async def get_activity_status(self):
@@ -497,6 +594,25 @@ class InternalGateway:
             "limit": bounded_limit,
             "activity_log_limit": self._activity_log.maxlen,
             "events": events,
+        }
+
+    async def get_trace(self, trace_id: str) -> Dict[str, Any]:
+        """Aggregate trace events by trace_id from the gateway activity log (O-03).
+
+        Provides a single gateway-centric trace view that complements the
+        supervisor's multi-source trace aggregation.
+        """
+        events = [
+            event for event in self._activity_log
+            if isinstance(event.get("metadata"), dict)
+            and event["metadata"].get("trace_id") == trace_id
+        ]
+        return {
+            "trace_id": trace_id,
+            "source": "gateway_activity_log",
+            "count": len(events),
+            "events": events,
+            "activity_snapshot": self._build_activity_snapshot(),
         }
 
     async def touch_activity(self, request: Request):
@@ -580,6 +696,11 @@ class InternalGateway:
             body_routing = self._activate_body_service(target_service)
             active_body = self._serialize_body_service(target_service)
 
+            self._touch_activity("self_evolution", metadata={
+                "action": "body_activation",
+                "slot_id": target_service.metadata.get("slot_id"),
+                "service_id": target_service.service_id,
+            })
             logger.info(
                 "Body activation synced: slot=%s service=%s",
                 target_service.metadata.get("slot_id"),
@@ -764,13 +885,13 @@ class InternalGateway:
                     activity_metadata = {}
 
             if target_service.service_type == "memory":
-                self._touch_activity("memory_task", metadata=activity_metadata)
+                self._touch_activity("memory_task", source_service="gateway", metadata=activity_metadata)
             elif target_service.service_type == "agent":
-                self._touch_activity("agent_work", metadata=activity_metadata)
+                self._touch_activity("agent_work", source_service="gateway", metadata=activity_metadata)
             elif target_service.service_type == "self_learning":
-                self._touch_activity("self_learning", metadata=activity_metadata)
+                self._touch_activity("self_learning", source_service="gateway", metadata=activity_metadata)
             elif target_service.service_type == "supervisor":
-                self._touch_activity("self_evolution_plan", metadata=activity_metadata)
+                self._touch_activity("self_evolution_plan", source_service="gateway", metadata=activity_metadata)
             elif target_service.service_type == "executor":
                 self._touch_activity("self_evolution_execute", metadata=activity_metadata)
             
@@ -793,14 +914,32 @@ class InternalGateway:
         
         except asyncio.TimeoutError:
             logger.error(f"Request {request_id} timed out")
+            self._touch_activity("agent_error", metadata={
+                "request_id": request_id, "error_type": "timeout", "path": path,
+            })
             raise HTTPException(status_code=504, detail="Gateway timeout")
         except HTTPException:
             raise
         except Exception as e:
             logger.error(f"Error routing request {request_id}: {e}")
+            self._touch_activity("agent_error", metadata={
+                "request_id": request_id, "error_type": type(e).__name__, "path": path,
+            })
             raise HTTPException(status_code=500, detail=str(e))
 
+    def _evict_stale_sessions(self) -> None:
+        """Remove sessions idle longer than TTL (SB-04)."""
+        import time
+        cutoff = time.time() - self._session_ttl_seconds
+        stale = [
+            sid for sid, s in self._agent_session_cache.items()
+            if s.get('last_access', 0) < cutoff
+        ]
+        for sid in stale:
+            del self._agent_session_cache[sid]
+
     async def chat_completions_proxy(self, request: Request):
+        self._evict_stale_sessions()
         self._request_counter += 1
         request_id = str(uuid.uuid4())
         
@@ -846,14 +985,21 @@ class InternalGateway:
         
         except asyncio.TimeoutError:
             logger.error(f"Chat completion {request_id} timed out")
+            self._touch_activity("agent_error", metadata={
+                "request_id": request_id, "error_type": "timeout", "path": "chat/completions",
+            })
             raise HTTPException(status_code=504, detail="Gateway timeout")
         except HTTPException:
             raise
         except Exception as e:
             logger.error(f"Error proxying chat completion {request_id}: {e}")
+            self._touch_activity("agent_error", metadata={
+                "request_id": request_id, "error_type": type(e).__name__, "path": "chat/completions",
+            })
             raise HTTPException(status_code=500, detail=str(e))
 
     async def agent_query_proxy(self, request: Request):
+        self._evict_stale_sessions()
         self._request_counter += 1
         request_id = str(uuid.uuid4())
         
@@ -906,11 +1052,17 @@ class InternalGateway:
         
         except asyncio.TimeoutError:
             logger.error(f"Agent query {request_id} timed out")
+            self._touch_activity("agent_error", metadata={
+                "request_id": request_id, "error_type": "timeout", "path": "agent/query",
+            })
             raise HTTPException(status_code=504, detail="Gateway timeout")
         except HTTPException:
             raise
         except Exception as e:
             logger.error(f"Error proxying agent query {request_id}: {e}")
+            self._touch_activity("agent_error", metadata={
+                "request_id": request_id, "error_type": type(e).__name__, "path": "agent/query",
+            })
             raise HTTPException(status_code=500, detail=str(e))
 
     async def get_session_info(self, session_id: str):

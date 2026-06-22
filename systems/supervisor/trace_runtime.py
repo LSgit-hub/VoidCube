@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from systems.runtime_task_profile import derive_runtime_task_profile
+
 
 class TraceRuntimeMixin:
     """Read-only trace aggregation across supervisor-local runtime stores."""
@@ -287,11 +289,14 @@ class TraceRuntimeMixin:
         }
 
     def _trace_runtime_profile_from_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return {
-            "governance_task_type": payload.get("governance_task_type"),
-            "task_family": payload.get("task_family"),
-            "execution_kind": payload.get("execution_kind"),
-        }
+        return derive_runtime_task_profile(
+            task_type=payload.get("task_type"),
+            governance_task_type=payload.get("governance_task_type"),
+            task_family=payload.get("task_family"),
+            execution_kind=payload.get("execution_kind"),
+            kind=payload.get("kind"),
+            default_task_family="general_self_evolution",
+        )
 
     def _build_trace_timeline(self, records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         timeline = list(records)

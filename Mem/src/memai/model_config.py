@@ -21,7 +21,7 @@ PROVIDER_DEFAULTS = {
     },
     "deepseek": {
         "api_key_env": "DEEPSEEK_API_KEY",
-        "base_url": "https://api.deepseek.com",
+        "base_url": "https://api.deepseek.com/v1",
         "provider_profile": "openai",
     },
     "ollama": {

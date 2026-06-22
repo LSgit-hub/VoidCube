@@ -73,6 +73,9 @@ class VoidCubeExecutionFacade:
         }
 
         if execution_request.kind in {"body_upgrade", "body_switch"}:
+            # body_switch is a distinct operation (baseline §7.4) — the
+            # execution_request already carries the kind, so the adapter
+            # can differentiate without extra payload keys.
             result = await self.body_upgrade.execute_body_upgrade(payload)
             return {
                 "status": "formal_self_evolution_executed",

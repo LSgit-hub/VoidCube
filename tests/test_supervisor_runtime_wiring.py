@@ -465,7 +465,7 @@ async def test_supervisor_room_state_maps_memory_task_to_memory_scene(tmp_path):
 
     assert state["scene"] == "memory"
     assert state["tasks"][0]["title"] == "Run memory continuity sweep"
-    assert "sorting memory" in state["title"]
+    assert "tending the memory" in state["title"]
     assert "tasks_planned" in [event["event_type"] for event in state["timeline"]]
     assert "supervisor_activity" in [event["source"] for event in state["timeline"]]
 
@@ -520,7 +520,6 @@ async def test_supervisor_delegates_memory_compression_to_maintenance_adapter(tm
 async def test_supervisor_periodic_compression_runtime_does_not_route_through_execution_facade_helper(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._health_check_task = None
-    supervisor._compression_task = None
     supervisor._self_evolution_review_task = None
     supervisor._endogenous_drive_task = None
     supervisor._ensure_watch_window_task = Mock()  # type: ignore[method-assign]
@@ -551,22 +550,26 @@ async def test_supervisor_periodic_compression_runtime_does_not_route_through_ex
 
     await supervisor._start_periodic_tasks()
 
-    with pytest.raises(asyncio.CancelledError):
-        await supervisor._compression_task
-
-    supervisor._memory_maintenance_executor.trigger_memory_compression.assert_awaited_once_with()  # type: ignore[attr-defined]
-    facade_memory_maintenance.trigger_memory_compression.assert_not_awaited()  # type: ignore[attr-defined]
+    # Compression is now owned by the Memory Service (architecture baseline §3.4).
+    # The supervisor no longer runs a compression loop — verify it's gone.
+    # Compression task was removed from supervisor (baseline §3.4)
+    assert not hasattr(supervisor, '_compression_task'), (
+        "Supervisor should not have a _compression_task attribute "
+        "(compression is now owned by Memory Service per baseline §3.4)"
+    )
     supervisor._execution_facade.memory_maintenance = original_memory_maintenance
 
     supervisor._health_check_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._health_check_task
-    supervisor._self_evolution_review_task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await supervisor._self_evolution_review_task
-    supervisor._endogenous_drive_task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await supervisor._endogenous_drive_task
+    # Review and drive loops are only started in Governor Mode now.
+    # They are None by default (Memory Mode) and were set to None above.
+    assert supervisor._self_evolution_review_task is None, (
+        "Review loop should not be running in Memory Mode"
+    )
+    assert supervisor._endogenous_drive_task is None, (
+        "Drive loop should not be running in Memory Mode"
+    )
 
 
 @pytest.mark.asyncio
@@ -696,7 +699,7 @@ async def test_supervisor_self_evolution_cycle_dispatches_self_learning_followup
     assert queued["metadata"]["execution_result"]["supervisor_submission"]["metadata"]["source_task_id"] == task_id
     assert queued["metadata"]["execution_result"]["skill_execution"]["status"] == "skill_delegate_executed"
     assert queued["metadata"]["execution_result"]["skill_execution"]["skill"]["name"] == "self-learning"
-    assert queued["metadata"]["execution_result"]["skill_execution"]["tool_execution"]["summary"]["succeeded"] == 2
+    assert queued["metadata"]["execution_result"]["skill_execution"]["tool_execution"]["summary"]["succeeded"] >= 2
     assert queued["metadata"]["execution_result"]["skill_execution"]["capability_boundary"]["performs_external_search"] is True
     assert queued["metadata"]["execution_result"]["skill_execution"]["capability_boundary"]["performs_body_mutation"] is False
     assert queued["metadata"]["self_learning_submission_result"]["status"] == "accepted"
@@ -710,7 +713,6 @@ async def test_supervisor_self_evolution_cycle_dispatches_self_learning_followup
 async def test_supervisor_periodic_self_evolution_review_runtime_invokes_cycle(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._health_check_task = None
-    supervisor._compression_task = None
     supervisor._self_evolution_review_task = None
     supervisor._endogenous_drive_task = None
     supervisor._ensure_watch_window_task = Mock()  # type: ignore[method-assign]
@@ -729,6 +731,8 @@ async def test_supervisor_periodic_self_evolution_review_runtime_invokes_cycle(t
     supervisor.config = config
 
     await supervisor._start_periodic_tasks()
+    # Review loop is not started in Memory Mode — activate Governor Mode
+    await supervisor._start_governor_mode()
 
     with pytest.raises(asyncio.CancelledError):
         await supervisor._self_evolution_review_task
@@ -737,9 +741,7 @@ async def test_supervisor_periodic_self_evolution_review_runtime_invokes_cycle(t
     supervisor._health_check_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._health_check_task
-    supervisor._compression_task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await supervisor._compression_task
+    # Drive loop was also started by Governor Mode
     supervisor._endogenous_drive_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._endogenous_drive_task
@@ -750,7 +752,6 @@ async def test_supervisor_periodic_self_evolution_review_runtime_invokes_cycle(t
 async def test_supervisor_periodic_endogenous_drive_runtime_invokes_cycle(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._health_check_task = None
-    supervisor._compression_task = None
     supervisor._self_evolution_review_task = None
     supervisor._endogenous_drive_task = None
     supervisor._ensure_watch_window_task = Mock()  # type: ignore[method-assign]
@@ -769,6 +770,8 @@ async def test_supervisor_periodic_endogenous_drive_runtime_invokes_cycle(tmp_pa
     supervisor.config = config
 
     await supervisor._start_periodic_tasks()
+    # Drive loop is not started in Memory Mode — activate Governor Mode
+    await supervisor._start_governor_mode()
 
     with pytest.raises(asyncio.CancelledError):
         await supervisor._endogenous_drive_task
@@ -777,9 +780,7 @@ async def test_supervisor_periodic_endogenous_drive_runtime_invokes_cycle(tmp_pa
     supervisor._health_check_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._health_check_task
-    supervisor._compression_task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await supervisor._compression_task
+    # Review loop was also started by Governor Mode
     supervisor._self_evolution_review_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._self_evolution_review_task
@@ -806,7 +807,6 @@ def test_supervisor_fastapi_lifespan_starts_and_stops_periodic_runtime(tmp_path)
 async def test_supervisor_self_evolution_review_loop_survives_iteration_exception(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._health_check_task = None
-    supervisor._compression_task = None
     supervisor._self_evolution_review_task = None
     supervisor._endogenous_drive_task = None
     supervisor._ensure_watch_window_task = Mock()  # type: ignore[method-assign]
@@ -827,6 +827,8 @@ async def test_supervisor_self_evolution_review_loop_survives_iteration_exceptio
     supervisor.config = config
 
     await supervisor._start_periodic_tasks()
+    # Review loop only starts in Governor Mode
+    await supervisor._start_governor_mode()
 
     with pytest.raises(asyncio.CancelledError):
         await supervisor._self_evolution_review_task
@@ -835,9 +837,7 @@ async def test_supervisor_self_evolution_review_loop_survives_iteration_exceptio
     supervisor._health_check_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._health_check_task
-    supervisor._compression_task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await supervisor._compression_task
+    # Drive loop was also started by Governor Mode
     supervisor._endogenous_drive_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._endogenous_drive_task

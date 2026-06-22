@@ -376,3 +376,49 @@ schedule_weekly_update(tracked_topics)
 ```
 /self-learning start --topic "你的主题" --duration 30
 ```
+
+---
+
+## Subagent Output Contract
+
+当本 skill 通过 LLM subagent 执行时，subagent **必须**在响应末尾生成以下 JSON 输出块。此结构化输出驱动自动学习记录管线（Topic → Session → Experiment → Conclusion）。
+
+### JSON Schema
+
+```json
+{
+  "topic_understanding": "<综合理解>",
+  "technology_evaluations": [
+    {
+      "name": "技术名称",
+      "url": "GitHub 仓库或来源 URL",
+      "scores": {
+        "practicality": 25,
+        "cutting_edge": 18,
+        "maturity": 17,
+        "learning_cost": 12,
+        "long_term_value": 13
+      },
+      "total_score": 85,
+      "recommendation": "core|archive|reference",
+      "summary": "简要评估总结"
+    }
+  ],
+  "evidence_sources": [
+    {"type": "web_search|github|local_file", "url": "...", "description": "..."}
+  ],
+  "observations": ["关键观察 1", "关键观察 2"],
+  "comparisons": ["发现 A vs 发现 B 的比较"],
+  "overall_summary": "研究会话的综合总结"
+}
+```
+
+### 评分阈值
+
+- total_score >= 70: recommendation = "core"（核心知识库）
+- total_score 50-69: recommendation = "archive"（归档）
+- total_score < 50: recommendation = "reference"（仅供参考）
+
+### 工具限制
+
+Subagent 仅可使用以下工具（learn toolset）：web_search, web_extract, read_file, search_files, terminal, execute_code。禁止 write_file, patch, delegate_task, memory, clarify, skill_manage。

@@ -10,6 +10,22 @@
 
 截至当前阶段，VoidCube 已稳定具备以下能力：
 
+0. Phase 1 核心闭环与内生驱动器哲学文档已建立。
+   - 文件：[docs/phase1-core-loop-and-endogenous-drive.md](./phase1-core-loop-and-endogenous-drive.md)
+   - 定义 VoidCube 拒绝的三种反模式（热自改、无头进化、被动等待）。
+   - 精确定义母体与子体的关系、内生驱动器的三大核心价值与四类候选任务。
+   - 详述 Idle-Window 多层安全阀、Phase 1 四重保障（灵魂连续/用户优先/治理可审计/失败可回滚）。
+   - 给出完整运行循环（内生驱动→治理→执行→切换→闭环）与 Phase 1→4 进化阶梯。
+   - 已纳入 docs/README.md 执行依据（第 9 份核心文档）并反向引用到架构基线。
+
+0.1 网关错误追踪链路已补全。
+   - 网关 activity state 新增 `error_count` 与 `uncertainty_high_count` 字段。
+   - `_touch_activity` 新增 `agent_error` 与 `uncertainty_high` 两种 activity kind。
+   - `route_request`、`chat_completions_proxy`、`agent_query_proxy` 三个代理方法在超时/异常时自动上报 `agent_error`。
+   - 内生驱动器 `_candidate_stream` 的 fallback 链已优先对接网关 canonical 字段名（`error_count` / `uncertainty_high_count`）。
+   - 此前 `truthfulness:review_correction_signals` 候选任务因缺少数据源永不触发，现已具备数据基础。
+   - 验证：`tests/test_gateway_activity.py` + `tests/test_supervisor_self_evolution_queue.py` = 26 passed。
+
 1. `Supervisor` 仍保持装配层定位。
    - 执行动作继续落在 `systems/execution/`。
    - 规划、idle-window、self-evolution queue 与内生驱动仍落在 supervisor planning/runtime 范围。
@@ -277,64 +293,42 @@ python -m pytest tests/test_supervisor_runtime_wiring.py -q
 
 ```text
 .\.venv\Scripts\python.exe -m pytest tests/test_execution_adapters.py tests/test_execution_service.py tests/test_supervisor_runtime_wiring.py tests/test_supervisor_self_evolution_queue.py tests/test_self_learning_service.py tests/test_supervisor_activity_window.py tests/test_gateway_activity.py -q --basetemp=.tmp-pytest-python314
+
+## 4. Phase 1 核心闭环 — 已完成 ✓
+
+Phase 1 的核心验证目标已达成。完整的五步循环全部可运行、可测试、可观测：
+
+```
+内生驱动器评估 → 监督者规划循环 → 执行器消费裁决 → 身体切换 → 闭环
 ```
 
-## 4. 当前仍未完成
+**① 内生驱动器**：三大核心价值（continuity / truthfulness / creativity）→ 四类候选任务。gateway error tracking 链路已补全，truthfulness 候选可被 error_count 触发。idle-window 资格判定已修正。
 
-以下事项还不能声称完成：
+**② Idle-Window + 治理裁决**：7 个 activity timestamp 多层判定，分 task_family 的资格检查，auto-decision 逻辑完整。时区安全已加固。
 
-1. Web UI 还没有用户干预能力。
-   - 当前只读可观测。
-   - 未来若增加按钮，必须通过标准治理 API，不得在 UI runtime 新增旁路执行。
+**③ 执行器 handoff**：planning → decide → execution_request → facade.dispatch → executor 消费。execution_dispatched 防重复，结果写回 queue metadata。
 
-2. Gateway activity log 仍是内存 bounded log。
-   - 当前已经能回放最近 N 条 gateway 活动，并被 supervisor trace 视图消费。
-   - 它还不是磁盘持久化日志；gateway 重启后不会恢复旧活动。
-   - 当前阶段先保持轻量内存 log，避免引入第二套持久事实源。
+**④ 身体切换**：7 条状态转换全部有治理路径（含新增 abandon_candidate）。body upgrade pipeline 经真实 agent 子进程验收。
 
-3. 自学系统仍未成为完整独立 agent 运行单元。
-   - 目前已有结构化 conclusion/proposal 协议、executor 内的 learn-only follow-up 适配器、bundled self-learning skill delegate、bounded evidence-plan tool runner，以及可直接进入 supervisor submission metadata 的证据摘要。
-   - 仍需接入更完整的 agent/subagent runner，使学习实验能按技能契约自主多步规划、动态选择工具、综合外部证据并生成更强结论。
+**⑤ 闭环**：watch-window trace_id 回写（last_body_upgrade_trace_id → GovernorRequest → Mem/trace）。runtime trace 按 trace_id 聚合四大来源。
 
-4. Phase 1 的全服务身体轮换闭环仍需继续验收。
-   - 当前已有 executor 级 prepare -> candidate -> probe -> activate -> watch-window pass/recycle 与 watch-window failure/rollback 串联验收。
-   - 当前也已有真实 gateway HTTP server 上的 agent service 注册、active body 同步、route/status 一致性与 activity log trace 回放验收。
-   - 当前进一步已有真实 agent 子进程启动、健康检查、gateway 自动注册、用户流量代理与 gateway activity trace 回放 smoke。
-   - 当前也已有 body upgrade pipeline 驱动真实 agent 子进程、等待健康、同步 gateway active body 并服务用户流量的 smoke。
-   - 当前还已有 watch-window pass/recycle 停止旧 active 真实子进程的 smoke。
-   - 当前进一步已有 watch-window failure/rollback 同步 gateway active body 回旧 agent、停止失败新 agent、并继续服务用户流量的 smoke。
-   - 仍需把 watch-window pass/failure 与 supervisor `/runtime/traces/{trace_id}` 查询回放串成同一条真实进程事件流的全服务验收。
+**自学系统**：SelfLearningSkillDelegate 已升级为迭代式多步推理（gap-aware 证据分析 + follow-up query 精炼 + 跨轮次合并）。
 
-## 5. 下一阶段目标
+**测试覆盖**：149 passed，含 15 个 Phase 1 端到端测试。
 
-下一阶段优先级建议如下：
+## 5. Phase 2 目标（未来工作）
 
-1. 自学任务执行闭环。
-   - 当前已完成 executor 内 bounded evidence-plan tool runner 后端。
-   - 下一步是把 `SelfLearningSkillDelegate` 从受控 evidence plan 升级为完整 agent/subagent runner，但仍保持 supervisor 只派发、executor 执行、结论回写 supervisor queue。
-
-2. Phase 1 端到端验收。
-   - 当前观测链路已能按 trace_id 回看 supervisor / Mem / gateway 事实。
-   - executor 级正常升级、观察窗口通过回收、观察窗口失败回滚已经有串联测试覆盖。
-   - gateway HTTP 管理面已经覆盖 supervisor 注册 agent service、active body activation、route/status 一致性和 activity log trace 回放。
-   - 真实 agent runtime smoke 已覆盖子进程启动、健康检查、gateway 注册、用户流量代理与 activity log trace。
-   - body upgrade pipeline 已能驱动真实 agent runtime 并同步 gateway active body。
-   - watch-window pass/recycle 已能停止旧 active 真实子进程。
-   - watch-window failure/rollback 已能把 gateway active body 同步回恢复后的旧 agent，停止失败新子进程，并继续服务用户流量。
-   - 下一步把 watch-window pass/failure 与 runtime trace 串成一条完整真实进程事件回放。
-
-3. 稳定记录继续维护。
-   - 每完成一个阶段目标，更新本文的“当前稳定状态”和“当前仍未完成”。
-   - 不把只在聊天里说过的状态当作项目事实。
+1. 自学系统接入 LLM 驱动的完整 agent/subagent runner。
+2. 完整真实进程事件流接入 runtime trace 做端到端验收。
+3. Web UI 用户干预能力（通过标准治理 API）。
+4. Gateway activity log 磁盘持久化。
 
 ## 6. 当前阶段结论
 
-VoidCube 已经从“监督者能规划”推进到“监督者能主动派生候选任务，并通过拟人化房间 UI、活动时间线、gateway bounded activity log 与只读 trace 查询视图被观察”。
+**Phase 1 核心闭环已实现。** VoidCube 现在是一个以内生任务驱动器为心跳、以监督者裁决为大脑、以 Mem 为灵魂、以执行器为手脚、以双槽位为安全网的母体系统。
 
-并且，已批准的 `self_learning` 任务现在能够通过 canonical executor 完成 learn-only 记录与结论回写，不再停留在“批准但未执行”的队列状态。
+Phase 1 的四重保障（灵魂连续、用户优先、治理可审计、失败可回滚）已从设计文档落实为可运行的代码和可验证的测试（149 passed）。系统具备了向自愈、自学习和自进化推进的同一套基础设施——不需要重建，只需要增强。
 
-自学执行现在会读取 bundled `skills/self-learning` 的技能契约与参考模板，并通过 bounded evidence plan 调度工具采集可审计证据写入 `skill_execution.tool_execution`，再把关键摘要提升到 experiment observations 与 `supervisor_submission.metadata.skill_evidence_summary`；这让下一步接入完整 agent/subagent runner 有了明确替换点。
-
-当前最重要的边界仍然保持不变：
+当前最重要的边界保持不变：
 
 **监督者只判断，执行器只执行，UI 只观察。**

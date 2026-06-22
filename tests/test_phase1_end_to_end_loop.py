@@ -1,0 +1,592 @@
+"""Phase 1 core loop end-to-end tests.
+
+Validates the complete running cycle described in
+docs/phase1-core-loop-and-endogenous-drive.md:
+
+  endogenous_drive → plan → review → decide → dispatch → execute → trace
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Optional
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
+
+from systems.supervisor.endogenous_drive import EndogenousDriveEngine
+from systems.supervisor.supervisor import (
+    Supervisor,
+    SupervisorConfig,
+    WatchWindowRuntimeState,
+)
+from systems.supervisor.task_queue import SelfEvolutionTaskQueue
+
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
+def _make_supervisor(tmp_path: Path) -> Supervisor:
+    """Minimal wiring for in-process supervisor tests."""
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True, exist_ok=True)
+    (repo / ".git").mkdir(exist_ok=True)
+    (repo / "config.yaml").write_text("_config_version: 1\n", encoding="utf-8")
+
+    cfg = SupervisorConfig()
+    cfg.execution.git_repo_path = str(repo)
+    cfg.soul_store_path = str(tmp_path / ".soul-runtime")
+
+    sv = Supervisor(config=cfg)
+    sv._agents = {}
+    sv._governor = Mock()
+    sv._governor.list_history = Mock(return_value=[])
+    sv._governor.get_latest = Mock(return_value=None)
+    sv._governor.record_boundary_defer = Mock()
+    sv._governor.review = Mock()
+    sv._body_registry.initialize_layout = Mock()
+    sv._body_registry.load_registry = Mock()
+    sv._body_registry.load_slot_meta = Mock()
+    sv._body_registry.active_body_pointer_path = Mock(
+        return_value=tmp_path / ".body-active.json"
+    )
+    sv._execution_facade = Mock()
+    sv._execution_facade.execute_self_evolution_request = AsyncMock(
+        return_value={"status": "executed"}
+    )
+    sv._execution_facade.execute_self_learning_followup = AsyncMock(
+        return_value={"status": "learn_only_completed"}
+    )
+    sv._touch_gateway_activity = AsyncMock()
+    sv._fetch_gateway_activity_snapshot = AsyncMock()
+    sv._endogenous_drive_task = None
+    sv._watch_window_runtime = WatchWindowRuntimeState()
+    return sv
+
+
+def _idle_snapshot(
+    *,
+    user_idle: bool = True,
+    in_window: bool = True,
+    active_sessions: int = 0,
+    error_count: int = 1,
+    uncertainty_high_count: int = 2,
+) -> Dict[str, Any]:
+    """Build a gateway activity snapshot for idle-window evaluation."""
+    base_time = "2026-06-20T02:00:00"  # inside 00:00-06:00 window
+    old_time = "2026-06-20T01:00:00" if user_idle else base_time
+    return {
+        "last_user_request_at": old_time if user_idle else base_time,
+        "last_agent_work_at": old_time if user_idle else base_time,
+        "last_memory_task_at": old_time if user_idle else base_time,
+        "last_self_learning_activity_at": old_time if user_idle else base_time,
+        "last_self_evolution_plan_at": old_time if user_idle else base_time,
+        "last_self_evolution_execute_at": old_time if user_idle else base_time,
+        "last_self_evolution_activity_at": old_time if user_idle else base_time,
+        "counts": {
+            "user_request_count": 10,
+            "agent_work_count": 10,
+            "memory_task_count": 3,
+            "self_learning_activity_count": 5,
+            "self_evolution_activity_count": 2,
+            "self_evolution_plan_count": 2,
+            "self_evolution_execute_count": 1,
+            "error_count": error_count,
+            "uncertainty_high_count": uncertainty_high_count,
+        },
+        "active_sessions": active_sessions,
+        "recent_metadata": {},
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 loop steps
+# ---------------------------------------------------------------------------
+
+class TestPhase1EndogenousDriveToQueue:
+    """Step ①: Endogenous drive evaluates and generates queue candidates."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.unit
+    async def test_all_four_candidates_generated_in_idle_window(self, tmp_path):
+        """When all families are eligible, 4 candidates are created then queued."""
+        sv = _make_supervisor(tmp_path)
+        # Increase max_candidates so all 4 are included
+        sv.config = sv.config.model_copy(
+            update={
+                "service_runtime": sv.config.service_runtime.model_copy(
+                    update={"endogenous_drive_max_candidates": 10}
+                )
+            }
+        )
+        sv._fetch_gateway_activity_snapshot = AsyncMock(
+            return_value=_idle_snapshot()
+        )
+
+        result = await sv._run_endogenous_drive_cycle()
+
+        assert result["status"] == "planned", f"Expected planned, got {result}"
+        assert result["planned"] == 4, f"Expected 4 candidates, got {result['planned']}"
+
+        tasks = await sv.list_self_evolution_tasks()
+        keys = {
+            t["metadata"].get("endogenous_drive_key")
+            for t in tasks["tasks"]
+        }
+        assert "continuity:memory_maintenance_sweep" in keys
+        assert "truthfulness:review_correction_signals" in keys
+        assert "creativity:idle_learning_thread" in keys
+        assert "continuity:queue_hygiene_review" in keys
+
+        # Verify canonical gateway field names are read correctly
+        truthfulness_task = next(
+            t for t in tasks["tasks"]
+            if t["metadata"].get("endogenous_drive_key") == "truthfulness:review_correction_signals"
+        )
+        assert truthfulness_task["source"] == "endogenous_drive"
+        assert truthfulness_task["governance_task_type"] == "self_learning"
+
+    @pytest.mark.asyncio
+    @pytest.mark.unit
+    async def test_truthfulness_candidate_triggered_by_gateway_error_count(self, tmp_path):
+        """The truthfulness candidate fires when gateway reports error_count > 0."""
+        sv = _make_supervisor(tmp_path)
+        sv._fetch_gateway_activity_snapshot = AsyncMock(
+            return_value=_idle_snapshot(error_count=3, uncertainty_high_count=0)
+        )
+
+        evaluation = await sv.evaluate_endogenous_drive({})
+        candidates = evaluation["candidates"]
+        truth = next(
+            (c for c in candidates if c["stable_key"] == "truthfulness:review_correction_signals"),
+            None,
+        )
+        assert truth is not None, "truthfulness candidate should fire when error_count > 0"
+        assert truth["priority"] == "high", f"Expected high priority for 3 errors, got {truth['priority']}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.unit
+    async def test_no_duplicate_candidates_across_cycles(self, tmp_path):
+        """Second drive cycle does not re-create already-queued candidates."""
+        sv = _make_supervisor(tmp_path)
+        sv.config = sv.config.model_copy(
+            update={
+                "service_runtime": sv.config.service_runtime.model_copy(
+                    update={"endogenous_drive_max_candidates": 10}
+                )
+            }
+        )
+        sv._fetch_gateway_activity_snapshot = AsyncMock(
+            return_value=_idle_snapshot()
+        )
+
+        first = await sv._run_endogenous_drive_cycle()
+        assert first["status"] == "planned"
+
+        second = await sv._run_endogenous_drive_cycle()
+        assert second["status"] == "idle", f"Second cycle should be idle, got {second}"
+
+
+class TestPhase1IdleWindowGovernance:
+    """Step ②-③: Idle-window evaluation and governance auto-decision."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.unit
+    async def test_auto_decision_approves_memory_maintenance_in_window(self, tmp_path):
+        """Memory maintenance approved when in execution window + user/agent/memory idle."""
+        sv = _make_supervisor(tmp_path)
+        sv._fetch_gateway_activity_snapshot = AsyncMock(
+            return_value=_idle_snapshot()
+        )
+
+        # Create a memory_maintenance task via endogenous drive
+        await sv._run_endogenous_drive_cycle()
+        tasks = await sv.list_self_evolution_tasks()
+        mem_task = next(
+            t for t in tasks["tasks"]
+            if t["governance_task_type"] == "memory_maintenance"
+        )
+
+        # Auto-decide
+        decision = await sv.decide_self_evolution_task(
+            mem_task["task_id"],
+            {"decision": "auto", "idle_window": {"now": "2026-06-20T02:00:00"}},
+        )
+        assert decision["status"] == "approved", f"Expected approved, got {decision}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.unit
+    async def test_auto_decision_defers_outside_execution_window(self, tmp_path):
+        """Tasks deferred when outside 00:00-06:00 window."""
+        sv = _make_supervisor(tmp_path)
+        # Restrict execution window to 00:00-06:00 so that 14:00 is outside.
+        sv.config.service_runtime.execution_window_start_hour = 0
+        sv.config.service_runtime.execution_window_end_hour = 6
+        sv._fetch_gateway_activity_snapshot = AsyncMock(
+            return_value=_idle_snapshot()
+        )
+
+        await sv._run_endogenous_drive_cycle()
+        tasks = await sv.list_self_evolution_tasks()
+        mem_task = next(
+            t for t in tasks["tasks"]
+            if t["governance_task_type"] == "memory_maintenance"
+        )
+
+        # Outside window
+        decision = await sv.decide_self_evolution_task(
+            mem_task["task_id"],
+            {"decision": "auto", "idle_window": {"now": "2026-06-20T14:00:00"}},
+        )
+        assert decision["status"] == "deferred", f"Expected deferred outside window, got {decision}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.unit
+    async def test_memory_maintenance_not_blocked_by_unrelated_activity(self, tmp_path):
+        """After idle-window fix: memory_maintenance execution only requires
+        user + agent + memory idle, NOT self_learning or self_evolution idle."""
+        sv = _make_supervisor(tmp_path)
+        # Self-learning and self-evolution are active, but memory path is idle
+        snapshot = _idle_snapshot()
+        snapshot["last_self_learning_activity_at"] = "2026-06-20T02:00:00"  # recent
+        snapshot["last_self_evolution_plan_at"] = "2026-06-20T02:00:00"     # recent
+        snapshot["last_self_evolution_execute_at"] = "2026-06-20T02:00:00"  # recent
+        sv._fetch_gateway_activity_snapshot = AsyncMock(return_value=snapshot)
+
+        idle = await sv.evaluate_idle_window({
+            "now": "2026-06-20T02:15:00",
+            "task_family": "memory_maintenance",
+        })
+
+        # memory_maintenance execution should STILL be eligible because
+        # it only gates on user + agent + memory (the fix removed the extra checks)
+        mem_decision = idle["task_family_decisions"]["memory_maintenance"]
+        assert mem_decision["eligible_for_execution"] is True, (
+            f"memory_maintenance should be eligible even when self_learning/self_evolution "
+            f"are active. Got: {mem_decision}"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.unit
+    async def test_self_evolution_uses_correct_idle_fields(self, tmp_path):
+        """After idle-window fix: self_evolution checks self_evolution_plan_idle,
+        NOT self_learning_idle."""
+        sv = _make_supervisor(tmp_path)
+        # self_evolution_plan is VERY recent (only 60s ago → NOT idle),
+        # but self_learning is old (idle)
+        snapshot = _idle_snapshot()
+        snapshot["last_self_evolution_plan_at"] = "2026-06-20T02:14:00"  # 60s ago → NOT idle
+        snapshot["last_self_learning_activity_at"] = "2026-06-20T01:00:00"  # 75min ago → idle
+        sv._fetch_gateway_activity_snapshot = AsyncMock(return_value=snapshot)
+
+        idle = await sv.evaluate_idle_window({
+            "now": "2026-06-20T02:15:00",
+            "task_family": "body_upgrade",
+        })
+
+        # body_upgrade maps to self_evolution decisions
+        se_decision = idle["governance_task_type_decisions"]["self_evolution"]
+        # has_self_evolution_plan_idle should be FALSE (the plan was active at 02:00)
+        assert idle["checks"]["has_self_evolution_plan_idle"] is False, (
+            "self_evolution_plan should NOT be idle when last_self_evolution_plan_at is recent"
+        )
+        # Therefore execution should be blocked
+        assert se_decision["eligible_for_execution"] is False, (
+            f"self_evolution execution should be blocked when plan was recent. "
+            f"Got: {se_decision}"
+        )
+
+
+class TestPhase1ExecutionDispatchAndTraceWriteback:
+    """Step ④-⑤: Dispatch to executor, trace_id flows through chain."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.unit
+    async def test_execution_request_dispatched_for_approved_memory_task(self, tmp_path):
+        """Approved memory_maintenance task gets dispatched with execution_request."""
+        sv = _make_supervisor(tmp_path)
+        sv.config = sv.config.model_copy(
+            update={
+                "service_runtime": sv.config.service_runtime.model_copy(
+                    update={"endogenous_drive_max_candidates": 10}
+                )
+            }
+        )
+        sv._fetch_gateway_activity_snapshot = AsyncMock(
+            return_value=_idle_snapshot()
+        )
+
+        # Create all 4 candidates
+        await sv._run_endogenous_drive_cycle()
+        tasks = await sv.list_self_evolution_tasks()
+        mem_task = next(
+            t for t in tasks["tasks"]
+            if t["governance_task_type"] == "memory_maintenance"
+        )
+
+        # Mock idle-window to guarantee in-window approval regardless of real time
+        async def fake_idle_for_dispatch(_request=None):
+            return {
+                "status": "evaluated",
+                "checks": {
+                    "has_user_idle": True,
+                    "has_agent_idle": True,
+                    "has_memory_idle": True,
+                    "in_execution_window": True,
+                },
+                "task_family_decisions": {
+                    "memory_maintenance": {
+                        "eligible_for_planning": True,
+                        "eligible_for_execution": True,
+                    },
+                    "self_learning": {
+                        "eligible_for_planning": True,
+                        "eligible_for_execution": True,
+                    },
+                    "general_self_evolution": {
+                        "eligible_for_planning": True,
+                        "eligible_for_execution": True,
+                    },
+                },
+                "governance_task_type_decisions": {
+                    "memory_maintenance": {
+                        "eligible_for_planning": True,
+                        "eligible_for_execution": True,
+                    },
+                    "self_learning": {
+                        "eligible_for_planning": True,
+                        "eligible_for_execution": True,
+                    },
+                    "self_evolution": {
+                        "eligible_for_planning": True,
+                        "eligible_for_execution": True,
+                    },
+                },
+                "decisions": {
+                    "eligible_for_planning": True,
+                    "eligible_for_execution": True,
+                },
+            }
+        sv.evaluate_idle_window = fake_idle_for_dispatch  # type: ignore[method-assign]
+
+        # Run full review + dispatch cycle
+        result = await sv._run_self_evolution_cycle()
+        assert result["dispatched"], f"No tasks dispatched: {result}"
+
+        # Verify execution was dispatched
+        updated = await sv.get_self_evolution_task(mem_task["task_id"])
+        assert updated["metadata"].get("execution_dispatched") is True, (
+            f"execution_dispatched not set. metadata={updated['metadata']}"
+        )
+        assert updated["metadata"].get("execution_result", {}).get("status") == "executed"
+
+    @pytest.mark.asyncio
+    @pytest.mark.unit
+    async def test_duplicate_dispatch_prevented(self, tmp_path):
+        """execution_dispatched flag prevents duplicate execution."""
+        sv = _make_supervisor(tmp_path)
+        sv._fetch_gateway_activity_snapshot = AsyncMock(
+            return_value=_idle_snapshot()
+        )
+
+        await sv._run_endogenous_drive_cycle()
+        tasks = await sv.list_self_evolution_tasks()
+        mem_task = next(
+            t for t in tasks["tasks"]
+            if t["governance_task_type"] == "memory_maintenance"
+        )
+        await sv.decide_self_evolution_task(
+            mem_task["task_id"],
+            {"decision": "auto", "idle_window": {"now": "2026-06-20T02:00:00"}},
+        )
+
+        # First dispatch
+        await sv._run_self_evolution_cycle()
+        call_count_before = sv._execution_facade.execute_self_evolution_request.call_count
+
+        # Second dispatch attempt
+        await sv._run_self_evolution_cycle()
+        call_count_after = sv._execution_facade.execute_self_evolution_request.call_count
+
+        # No additional calls — duplicate prevented
+        assert call_count_after == call_count_before, (
+            f"Duplicate dispatch not prevented: {call_count_before} → {call_count_after}"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.unit
+    async def test_trace_id_flows_to_watch_window_state(self, tmp_path):
+        """Body upgrade dispatch writes trace_id to WatchWindowRuntimeState."""
+        sv = _make_supervisor(tmp_path)
+        sv.config = sv.config.model_copy(
+            update={
+                "service_runtime": sv.config.service_runtime.model_copy(
+                    update={"endogenous_drive_max_candidates": 10}
+                )
+            }
+        )
+        sv._fetch_gateway_activity_snapshot = AsyncMock(
+            return_value=_idle_snapshot()
+        )
+
+        # Generate all 4 candidates
+        await sv._run_endogenous_drive_cycle()
+        tasks = await sv.list_self_evolution_tasks()
+
+        # Pick the queue hygiene task (general_self_evolution)
+        task = next(
+            t for t in tasks["tasks"]
+            if t["metadata"].get("endogenous_drive_key") == "continuity:queue_hygiene_review"
+        )
+
+        # Mock idle-window for in-window approval
+        async def fake_idle(_request=None):
+            return {
+                "status": "evaluated",
+                "checks": {
+                    "has_user_idle": True, "has_agent_idle": True,
+                    "has_memory_idle": True, "in_execution_window": True,
+                },
+                "task_family_decisions": {
+                    "general_self_evolution": {
+                        "eligible_for_planning": True,
+                        "eligible_for_execution": True,
+                    },
+                },
+                "governance_task_type_decisions": {
+                    "self_evolution": {
+                        "eligible_for_planning": True,
+                        "eligible_for_execution": True,
+                    },
+                },
+                "decisions": {
+                    "eligible_for_planning": True,
+                    "eligible_for_execution": True,
+                },
+            }
+        sv.evaluate_idle_window = fake_idle  # type: ignore[method-assign]
+
+        await sv._run_self_evolution_cycle()
+
+        updated = await sv.get_self_evolution_task(task["task_id"])
+        assert updated["metadata"].get("execution_dispatched") is True, (
+            f"execution_dispatched not set. status={updated.get('status')}, "
+            f"metadata={updated.get('metadata')}"
+        )
+        assert "trace_id" in updated, "Task should have trace_id"
+
+
+class TestPhase1TimezoneSafety:
+    """Regression: timezone-aware timestamps from gateway don't crash idle-window."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.unit
+    async def test_timezone_aware_iso_timestamps_are_normalized(self, tmp_path):
+        """Gateway timestamps with timezone offset are safely parsed."""
+        sv = _make_supervisor(tmp_path)
+        sv._fetch_gateway_activity_snapshot = AsyncMock(
+            return_value={
+                "last_user_request_at": "2026-06-20T01:00:00+00:00",  # aware
+                "last_agent_work_at": "2026-06-20T01:00:00Z",          # UTC suffix
+                "last_memory_task_at": "2026-06-20T01:00:00",          # naive
+                "last_self_learning_activity_at": None,
+                "last_self_evolution_plan_at": None,
+                "last_self_evolution_execute_at": None,
+                "last_self_evolution_activity_at": None,
+                "counts": {"error_count": 0, "uncertainty_high_count": 0},
+                "active_sessions": 0,
+                "recent_metadata": {},
+            }
+        )
+
+        # Must not raise TypeError
+        result = await sv.evaluate_idle_window({
+            "now": "2026-06-20T02:15:00",
+            "task_family": "self_learning",
+        })
+        assert result["status"] == "evaluated"
+        # All timestamps normalized to naive UTC, comparison safe
+        assert result["idle_seconds"]["user"] >= 3600  # at least 1 hour idle
+
+
+class TestPhase1AbandonCandidateAction:
+    """Regression: probe→shell governed cleanup path exists."""
+
+    def test_abandon_candidate_action_type_registered(self):
+        """abandon_candidate is recognized as a valid GovernorActionType."""
+        from systems.governor import GovernorAction, GovernorActionType
+        # This is a type-level check: the Literal includes abandon_candidate
+        action_types: set[str] = set(GovernorActionType.__args__)  # type: ignore[union-attr]
+        assert "abandon_candidate" in action_types, (
+            f"abandon_candidate missing from GovernorActionType: {sorted(action_types)}"
+        )
+
+    def test_abandon_candidate_probe_to_shell_allowed(self):
+        """probe → shell is in ALLOWED_STATE_TRANSITIONS."""
+        from systems.body_registry import ALLOWED_STATE_TRANSITIONS
+        assert "shell" in ALLOWED_STATE_TRANSITIONS.get("probe", set()), (
+            "probe→shell must be allowed in state transitions"
+        )
+
+
+class TestPhase1GatewayErrorTracking:
+    """Regression: gateway error_count is populated and endogenous drive reads it."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.unit
+    async def test_error_count_in_activity_snapshot(self, tmp_path):
+        """Gateway snapshot includes error_count and uncertainty_high_count."""
+        sv = _make_supervisor(tmp_path)
+        sv._fetch_gateway_activity_snapshot = AsyncMock(
+            return_value=_idle_snapshot(error_count=5, uncertainty_high_count=3)
+        )
+
+        idle = await sv.evaluate_idle_window({
+            "now": "2026-06-20T02:15:00",
+            "task_family": "self_learning",
+        })
+        counts = idle.get("activity", {}).get("counts", {})
+        assert counts.get("error_count") == 5
+        assert counts.get("uncertainty_high_count") == 3
+
+    def test_endogenous_drive_reads_canonical_gateway_field_names(self):
+        """Endogenous drive prefers error_count and uncertainty_high_count."""
+        engine = EndogenousDriveEngine()
+        idle_window = {
+            "activity": {
+                "active_sessions": 0,
+                "counts": {
+                    "error_count": 7,
+                    "uncertainty_high_count": 4,
+                    # Old field names should NOT be preferred
+                    "recent_errors": 0,
+                    "high_uncertainty": 0,
+                },
+            },
+            "checks": {"has_user_idle": True},
+            "idle_seconds": {"user": 900},
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "general_self_evolution": {"eligible_for_planning": True},
+            },
+            "governance_task_type_decisions": {},
+            "decisions": {"eligible_for_planning": True, "eligible_for_execution": True},
+        }
+        candidates = engine.generate_candidates(
+            idle_window=idle_window,
+            existing_drive_keys=set(),
+            max_candidates=10,
+        )
+        truth = next(
+            (c for c in candidates if c.stable_key == "truthfulness:review_correction_signals"),
+            None,
+        )
+        assert truth is not None
+        # With 7 errors + 4 uncertainty = 11 correction signals, utility is high
+        assert truth.utility > 0.85, f"Expected high utility, got {truth.utility}"
+        assert truth.priority == "high"

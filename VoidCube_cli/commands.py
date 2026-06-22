@@ -120,6 +120,14 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("api", "配置 API 设置", "API配置",
                cli_only=True),
 
+    # Auto - 自主规划
+    CommandDef("auto", "进入管理者模式，启动治理循环（drive+review）", "会话管理",
+               aliases=("autonomous",),
+               args_hint="[focus]"),
+    CommandDef("auto-q", "退出管理者模式，返回记忆模式", "会话管理",
+               aliases=("auto-quit", "auto-stop"),
+               cli_only=True),
+
     # Exit - 退出
     CommandDef("quit", "退出CLI", "退出",
                cli_only=True),

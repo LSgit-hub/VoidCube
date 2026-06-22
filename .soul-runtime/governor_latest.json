@@ -1,116 +1,36 @@
 {
-  "record_id": "25364fe2-4f08-4ae0-b90e-652fba3a91f9",
-  "kind": "execution_outcome",
-  "created_at": "2026-06-03T11:09:00.606470",
+  "record_id": "57e8e73b-dc1d-473f-a49a-c4c8621a9350",
+  "kind": "supervisor_activity",
+  "created_at": "2026-06-22T01:51:37.366228",
   "request": {
-    "request_id": "health-88a3c566-486f-45ef-b839-6d64446f3e47",
+    "event_id": "729ba97c-2086-454b-a1bd-ef31be3285c1",
+    "event_type": "endogenous_drive_planned",
+    "scene": "planning",
+    "summary": "Endogenous drive queued 1 candidate task(s).",
     "trace_id": null,
-    "task_type": "self_evolution",
+    "task_id": null,
+    "task_type": null,
+    "governance_task_type": null,
+    "task_family": null,
+    "execution_kind": null,
     "decision_id": null,
-    "mode": "governor",
-    "event_type": "health_review_request",
-    "body_id": "slot-B",
-    "source_actor": "body_upgrade_pipeline",
-    "summary": "Candidate build complete and ready for probe review.",
-    "evidence": {
-      "build_complete": true,
-      "git_lineage": {}
-    },
-    "constraints": {
-      "target_transition": "candidate_to_probe"
-    },
-    "timestamp": "2026-06-03T11:09:00.106004"
+    "source_actor": "supervisor"
   },
   "slot_meta": null,
   "response": {
-    "decision": "approve",
-    "confidence": 0.82,
-    "risk_level": "low",
-    "reasoning_summary": "Candidate body appears build-complete and may receive a probe lease for controlled health verification.",
-    "required_actions": [
-      {
-        "action_type": "issue_probe_lease",
-        "slot_id": "slot-B",
-        "payload": {
-          "lease": "probe"
-        },
-        "notes": null
-      }
-    ],
-    "watch_window_hint": null,
-    "writeback_events": [
-      {
-        "event_type": "governor_decision",
-        "payload": {
-          "decision": "approve",
-          "target_transition": "candidate_to_probe",
-          "body_id": "slot-B"
-        }
-      }
-    ]
+    "recorded": true,
+    "source": "supervisor_ui_activity"
   },
-  "execution_report": {
-    "decision": "approve",
-    "action_results": [
-      {
-        "action_type": "issue_probe_lease",
-        "status": "applied",
-        "slot_id": "slot-B",
-        "details": {
-          "body_state": "probe",
-          "lease": "probe"
-        }
-      }
-    ],
-    "writeback_events": [
-      {
-        "event_type": "governor_decision",
-        "payload": {
-          "decision": "approve",
-          "target_transition": "candidate_to_probe",
-          "body_id": "slot-B"
-        }
-      }
-    ]
-  },
-  "registry": {
-    "slot_ids": [
-      "slot-A",
-      "slot-B"
-    ],
-    "active_slot": "slot-A",
-    "shell_slot": null,
-    "retired_slot": null,
-    "current_generation": 0,
-    "watch_window": {
-      "status": "inactive",
-      "slot_id": null,
-      "started_at": null,
-      "expires_at": null,
-      "stable_window_days": 3,
-      "stable_health_checks": 3
-    },
-    "last_switch_result": null
-  },
+  "execution_report": null,
+  "registry": null,
   "evolution_lineage": {
-    "body_id": "slot-B",
     "trace_id": null,
-    "task_type": "self_evolution",
+    "task_type": null,
+    "governance_task_type": null,
+    "task_family": null,
+    "execution_kind": null,
     "decision_id": null,
-    "event_type": "health_review_request",
-    "source_actor": "body_upgrade_pipeline",
-    "source_branch": null,
-    "source_commit": null,
-    "candidate_branch": null,
-    "candidate_commit": null,
-    "active_ref": null,
-    "rollback_ref": null,
-    "rollback_commit": null,
-    "diff_summary": "",
-    "changed_files": [],
-    "probe_report_ref": null,
-    "active_slot": "slot-A",
-    "retired_slot": null,
-    "evolution_boundary": null
+    "event_type": "endogenous_drive_planned",
+    "source_actor": "supervisor"
   }
 }

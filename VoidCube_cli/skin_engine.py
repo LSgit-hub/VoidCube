@@ -9,6 +9,7 @@ class Skin:
     def __init__(self, name: str = "default"):
         self.name = name
         self.tool_prefix = "┊"
+        self.tool_emojis: dict = {}
     
     def get_color(self, key: str, default: str) -> str:
         return default

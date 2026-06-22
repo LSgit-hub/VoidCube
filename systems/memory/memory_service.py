@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import logging
 import os
@@ -44,18 +45,24 @@ class CompressionRequest(BaseModel):
 
 class MemoryServiceConfig(BaseModel):
     host: str = "127.0.0.1"
-    port: int = 8001
+    port: int = 6001
     db_path: str = "./memory.db"
-    gateway_address: str = "http://127.0.0.1:8000"
+    gateway_address: str = "http://127.0.0.1:6000"
     llm_api_key: Optional[str] = None
     llm_base_url: str = "https://api.deepseek.com"
     decay_interval_hours: int = 24
+    compression_interval: int = 3600  # seconds between auto-compression runs
 
 
 class MemoryService:
     def __init__(self, config: MemoryServiceConfig = None):
         self.config = config or MemoryServiceConfig()
-        self.app = FastAPI(title="VoidCube Memory Service", version="1.0")
+        self._compression_task: asyncio.Task | None = None
+        self.app = FastAPI(
+            title="VoidCube Memory Service",
+            version="1.0",
+            lifespan=self._app_lifespan,
+        )
         self._db_path = Path(self.config.db_path)
         self._namespace_cache: Dict[str, List[MemoryEntry]] = {}
         self._setup_database()
@@ -96,6 +103,7 @@ class MemoryService:
 
     def _setup_routes(self):
         self.app.add_api_route("/", self.health_check, methods=["GET"])
+        self.app.add_api_route("/mem/usage", self.get_mem_usage, methods=["GET"])
         self.app.add_api_route("/memories", self.write_memory, methods=["POST"])
         self.app.add_api_route("/memories/{memory_id}", self.read_memory, methods=["GET"])
         self.app.add_api_route("/memories/{memory_id}", self.update_memory, methods=["PUT"])
@@ -106,8 +114,78 @@ class MemoryService:
         self.app.add_api_route("/memories/decay", self.apply_decay, methods=["POST"])
         self.app.add_api_route("/memories/summarize/{memory_id}", self.summarize_memory, methods=["POST"])
 
+    @asynccontextmanager
+    async def _app_lifespan(self, app: FastAPI):
+        """Start background compression loop on startup, cancel on shutdown."""
+        del app
+        self._compression_task = asyncio.create_task(self._compression_loop())
+        try:
+            yield
+        finally:
+            if self._compression_task and not self._compression_task.done():
+                self._compression_task.cancel()
+            try:
+                await self._compression_task
+            except asyncio.CancelledError:
+                pass
+
+    async def _compression_loop(self) -> None:
+        """Periodically trigger memory compression (runs in the memory service).
+
+        Per architecture baseline §3.4, Mem is responsible for its own
+        maintenance — the supervisor should not be running maintenance
+        loops on Mem's behalf.
+        """
+        while True:
+            await asyncio.sleep(self.config.compression_interval)
+            try:
+                for namespace in list(self._namespace_cache.keys()):
+                    await self._compress_namespace(namespace)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.debug("Background compression skipped", exc_info=True)
+
     async def health_check(self):
         return {"status": "healthy", "service": "memory-service"}
+
+    async def get_mem_usage(self) -> Dict[str, Any]:
+        """Return cumulative LLM token usage for the memory model.
+
+        NOTE: This endpoint reports the in-process ``memai.llm_client``
+        accumulator, which only counts calls routed through
+        ``OpenAICompatibleLLMClient`` (the default transport).  The memory
+        service itself uses ``aiohttp`` directly for summarisation and does
+        NOT populate this counter — so the endpoint will return all zeros
+        under normal operation.
+
+        The canonical source for the supervisor's memory-model context
+        usage is ``/ui/state.mem_usage`` on the supervisor (port 6002),
+        which runs in the same process as the MemAI pipeline.
+
+        This endpoint remains available for external monitoring tools that
+        may inject LLM calls through the ``OpenAICompatibleLLMClient`` path.
+        """
+        try:
+            from memai.llm_client import get_memory_token_usage
+            usage = get_memory_token_usage()
+        except Exception:
+            usage = {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "request_count": 0,
+                "context_length": 65536,
+            }
+        context_length = usage.get("context_length", 65536)
+        total_tokens = usage.get("total_tokens", 0)
+        percent = round((total_tokens / context_length) * 100) if context_length > 0 else None
+        return {
+            "status": "ok",
+            "usage": usage,
+            "context_percent": percent,
+            "context_length": context_length,
+        }
 
     async def write_memory(self, request: dict):
         try:
@@ -406,40 +484,44 @@ class MemoryService:
             raise HTTPException(status_code=500, detail=str(e))
 
     async def _call_llm_for_summary(self, content: str) -> str:
+        """Summarise via MemAI LLM pipeline (API-B, baseline SS4.3, M-04)."""
         try:
-            import aiohttp
-            
-            prompt = f"""请对以下内容进行总结，提取关键信息和核心要点：
+            from memai.llm_client import OpenAICompatibleLLMClient
+            from memai.model_config import load_voidcube_mem_model_config
+            import asyncio as _asyncio
 
-{content}
+            prompt = (
+                "Summarise the following content. Extract key information "
+                "and core points. Keep the summary concise, under 500 words."
+                + "\n\n" + content + "\n\n----\n\nSummary:"
+            )
 
----
+            def _run_sync() -> str:
+                mem_cfg = load_voidcube_mem_model_config()
+                api_key = os.environ.get(mem_cfg.api_key_env or "", "")
+                if not api_key:
+                    raise ValueError(f"Missing API key: {mem_cfg.api_key_env}")
+                client = OpenAICompatibleLLMClient(
+                    model=mem_cfg.model or "deepseek-chat",
+                    api_key=api_key,
+                    base_url=mem_cfg.base_url or "https://api.deepseek.com/v1",
+                )
+                result = client.complete_json(
+                    system_prompt="You are a precise content summariser.",
+                    user_payload={"text": prompt},
+                    task="summarisation",
+                )
+                if isinstance(result, dict):
+                    return str(result.get("content", result.get("summary", "")))
+                return str(result) if result else ""
 
-请用简洁的语言总结上述内容，保持在500字以内。
-"""
-            
-            async with aiohttp.ClientSession() as session:
-                url = f"{self.config.llm_base_url}/v1/chat/completions"
-                headers = {
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.config.llm_api_key}"
-                } if self.config.llm_api_key else {"Content-Type": "application/json"}
-                
-                payload = {
-                    "model": "deepseek-chat",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 1000
-                }
-                
-                async with session.post(url, headers=headers, json=payload) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        return result["choices"][0]["message"]["content"].strip()
-            
+            summary = await _asyncio.to_thread(_run_sync)
+            if summary and len(summary) > 10:
+                return summary
             return content[:500] + "..."
-        
+
         except Exception as e:
-            logger.warning(f"LLM call failed, using fallback: {e}")
+            logger.warning(f"LLM summarisation failed, using fallback: {e}")
             return content[:500] + "..."
 
     async def apply_decay(self, request: dict):
@@ -505,28 +587,51 @@ class MemoryService:
             raise HTTPException(status_code=500, detail=str(e))
 
     async def register_with_gateway(self):
-        try:
-            import aiohttp
-            
-            async with aiohttp.ClientSession() as session:
-                url = f"{self.config.gateway_address}/register"
-                payload = {
-                    "service_name": "memory-service",
-                    "service_type": "memory",
-                    "address": f"http://{self.config.host}:{self.config.port}",
-                    "health_endpoint": "/",
-                    "metadata": {"version": "1.0"}
-                }
-                
-                async with session.post(url, json=payload) as response:
-                    if response.status == 201:
-                        result = await response.json()
-                        logger.info(f"Registered with gateway: {result}")
-                        return result["service_id"]
-        
-        except Exception as e:
-            logger.warning(f"Failed to register with gateway: {e}")
-            return None
+        import asyncio as _asyncio
+
+        url = f"{self.config.gateway_address}/register"
+        payload = {
+            "service_name": "memory-service",
+            "service_type": "memory",
+            "address": f"http://{self.config.host}:{self.config.port}",
+            "health_endpoint": "/",
+            "metadata": {"version": "1.0"},
+        }
+
+        max_retries = 5
+        base_delay = 1.0
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                import aiohttp
+
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(url, json=payload, timeout=10) as response:
+                        if response.status == 201:
+                            result = await response.json()
+                            logger.info("Registered with gateway (attempt %d): %s", attempt, result)
+                            return result["service_id"]
+                        else:
+                            logger.debug(
+                                "Gateway registration attempt %d returned status %d",
+                                attempt,
+                                response.status,
+                            )
+            except Exception as e:
+                logger.debug("Gateway registration attempt %d failed: %s", attempt, e)
+
+            if attempt < max_retries:
+                delay = base_delay * (2 ** (attempt - 1))
+                logger.info(
+                    "Waiting %.1fs before retrying gateway registration (attempt %d/%d)...",
+                    delay,
+                    attempt + 1,
+                    max_retries,
+                )
+                await _asyncio.sleep(delay)
+
+        logger.warning("Failed to register with gateway after %d attempts", max_retries)
+        return None
 
     async def start(self):
         import uvicorn

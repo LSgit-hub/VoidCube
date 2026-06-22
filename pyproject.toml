@@ -65,8 +65,8 @@ all = [
 ]
 
 [project.scripts]
-voidcube = "cli:main"
-vc = "cli:main"
+voidcube = "voidcube:main"
+vc = "voidcube:main"
 
 [project.urls]
 Homepage = "https://gitee.com/LSgit-hub/voidcub-CLI"
@@ -74,8 +74,8 @@ Documentation = "https://gitee.com/LSgit-hub/voidcub-CLI#readme"
 Repository = "https://gitee.com/LSgit-hub/voidcub-CLI"
 
 [tool.setuptools]
-py-modules = ["cli", "run_agent", "model_tools", "toolsets", "VoidCube_constants", "utils"]
+py-modules = ["voidcube", "cli", "run_agent"]
 
 [tool.setuptools.packages.find]
 where = [".", "Mem/src"]
-include = ["agent", "tools", "VoidCube_cli", "memai"]
+include = ["agent", "tools", "VoidCube_cli", "VoidCube_core", "systems", "plugins.*", "memai"]

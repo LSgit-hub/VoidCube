@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
@@ -119,7 +120,47 @@ class SelfLearningService:
             recommendations=list(recommendations or []),
         )
         self._write_model(self.conclusions_root / f"{conclusion.conclusion_id}.json", conclusion)
+        # Best-effort writeback to MemAI governance repository (SL-01).
+        # Failure here must not block the conclusion save or the supervisor
+        # submission — Mem is the long-term soul layer, but the local file
+        # is the authoritative store for now.
+        try:
+            from memai.governance import GovernanceEvent, GovernanceEventType, GovernanceDecision
+            from memai.governance_repository import GovernanceEventRepository
+            repo_path = self.storage_root / "mem_governance.jsonl"
+            repo = GovernanceEventRepository(str(repo_path))
+            repo.append(GovernanceEvent.create(
+                event_type=GovernanceEventType.CANDIDATE_REVIEW,
+                source_actor="self_learning",
+                decision=GovernanceDecision.RECORD_ONLY,
+                reason=f"Self-learning conclusion: {summary[:120]}",
+                task_id=conclusion.conclusion_id,
+            ))
+        except Exception:
+            pass
         return conclusion
+
+    def record_feedback(self, conclusion_id: str, *, useful: bool) -> Dict[str, Any]:
+        """Record post-hoc usefulness feedback for a conclusion (SL-03).
+
+        Stores a simple counter so future iterations can weight conclusion
+        quality when generating new learning plans.
+        """
+        feedback_path = self.storage_root / "feedback.json"
+        data: Dict[str, Any] = {}
+        if feedback_path.exists():
+            try:
+                data = json.loads(feedback_path.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
+        entry = data.setdefault(conclusion_id, {"useful": 0, "not_useful": 0, "total": 0})
+        if useful:
+            entry["useful"] += 1
+        else:
+            entry["not_useful"] += 1
+        entry["total"] = entry["useful"] + entry["not_useful"]
+        feedback_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        return entry
 
     def build_supervisor_submission(
         self,

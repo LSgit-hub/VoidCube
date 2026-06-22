@@ -6161,6 +6161,8 @@ class VoidcubeCLI:
             self._handle_personality_command(cmd_original)
         elif canonical == "auto":
             self._handle_auto_command(cmd_original)
+        elif canonical == "auto-q":
+            self._handle_auto_q_command()
         elif canonical == "plan":
             self._handle_plan_command(cmd_original)
         elif canonical == "retry":
@@ -6373,34 +6375,27 @@ class VoidcubeCLI:
         return True
 
     def _handle_auto_command(self, cmd: str):
-        """Handle /auto [focus] — trigger the supervisor autonomous pipeline.
+        """Handle /auto [focus] — enter persistent Governor Mode.
 
-        Calls the Supervisor REST API to run one full autonomous cycle:
-          1. Endogenous drive  → generate & queue task candidates
-          2. Self-evolution review → approve eligible tasks & dispatch execution
+        Activates the endogenous drive and self-evolution review loops
+        that run continuously at their configured intervals.  Use /auto-q
+        to exit Governor Mode and return to Memory Mode.
 
-        Agents execute only supervisor-approved tasks — they do NOT decide
-        what to do on their own.  An optional focus area can be provided:
+        An optional focus area can be provided:
         /auto security, /auto performance, etc.
 
         Requires the VoidCube daemon stack (gateway + supervisor) to be running.
-        The CLI auto-starts them in interactive mode; use ``voidcube serve start``
-        if they were stopped.
         """
         parts = cmd.strip().split(maxsplit=1)
         focus = parts[1].strip() if len(parts) > 1 else ""
 
-        _cprint(f"  🧠 Triggering supervisor autonomous cycle...")
+        _cprint(f"  🧠 Activating Governor Mode...")
         if focus:
             _cprint(f"     Focus: {focus}")
 
-        # Run the HTTP call in a background thread so the UI stays responsive.
-        # The supervisor endpoint is synchronous (it runs the full pipeline
-        # before returning), so we must not block the TUI event loop.
         import threading, json as _json
 
-        def _call_auto_cycle():
-            # Resolve supervisor URL from config (same logic as _get_supervisor_url)
+        def _call_activate_governor():
             try:
                 from VoidCube_cli.config import load_config
                 cfg = load_config()
@@ -6415,12 +6410,12 @@ class VoidcubeCLI:
                 import urllib.request as _req
                 payload = _json.dumps({"focus": focus}).encode()
                 r = _req.Request(
-                    f"{supervisor_url}/self-evolution/auto-cycle",
+                    f"{supervisor_url}/governor-mode/activate",
                     data=payload,
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
-                resp = _json.loads(_req.urlopen(r, timeout=120).read())
+                resp = _json.loads(_req.urlopen(r, timeout=30).read())
             except Exception as exc:
                 _cprint(f"  ⚠️  Supervisor unreachable: {exc}")
                 _cprint(f"     Ensure daemons are running (auto-started in interactive mode).")
@@ -6428,33 +6423,63 @@ class VoidcubeCLI:
                 return
 
             try:
-                summary = resp.get("summary", {})
-                phases = resp.get("phases", {})
-                planned = summary.get("planned", 0)
-                dispatched = summary.get("dispatched", 0)
-                drive_status = phases.get("drive", {}).get("status", "?")
-                review_info = phases.get("review", {})
-
-                _cprint(f"     Drive phase: {drive_status} ({planned} candidate(s) queued)")
-                _cprint(f"     Review phase: {review_info.get('reviewed', 0)} task(s) reviewed")
-                dispatched_list = review_info.get("dispatched", [])
-                if dispatched_list:
-                    tasks_str = ", ".join(
-                        d.get("task_id", "?")[:8] for d in dispatched_list[:5]
-                    )
-                    _cprint(f"     Dispatched: {len(dispatched_list)} execution request(s) → [{tasks_str}...]")
-                    _cprint(f"  ✅ Agents are now executing supervisor-approved tasks.")
+                active = resp.get("governor_mode_active", False)
+                if active:
+                    _cprint(f"  ✅ Governor Mode [bold green]ACTIVE[/]")
+                    _cprint(f"     Drive loop:  {'running' if resp.get('drive_loop_running') else 'stopped'}")
+                    _cprint(f"     Review loop: {'running' if resp.get('review_loop_running') else 'stopped'}")
+                    if not resp.get("endogenous_drive_enabled", True):
+                        _cprint(f"     ⚠️  endogenous_drive_enabled=False in config — drive loop disabled")
+                    _cprint(f"     Use /auto-q to return to Memory Mode.")
                     _cprint(f"     Monitor: {supervisor_url}/ui")
-                elif planned > 0:
-                    _cprint(f"     No tasks eligible for execution yet (idle-window conditions not met).")
-                    _cprint(f"     Tasks remain queued for the next auto cycle.")
                 else:
-                    _cprint(f"     No new candidates generated — system may be fully idle.")
-                    _cprint(f"     Queued tasks (if any) will be reviewed on the next periodic cycle.")
+                    _cprint(f"  ⚠️  Governor Mode activation failed.")
+                    if not resp.get("endogenous_drive_enabled", True):
+                        _cprint(f"     endogenous_drive_enabled is False in config.")
             except Exception:
                 pass  # best-effort reporting; the API call succeeded
 
-        threading.Thread(target=_call_auto_cycle, daemon=True, name="auto-cycle").start()
+        threading.Thread(target=_call_activate_governor, daemon=True, name="governor-activate").start()
+
+    def _handle_auto_q_command(self):
+        """Handle /auto-q — exit Governor Mode, return to Memory Mode."""
+        _cprint(f"  🔄 Exiting Governor Mode...")
+
+        import threading, json as _json
+
+        def _call_deactivate_governor():
+            try:
+                from VoidCube_cli.config import load_config
+                cfg = load_config()
+                sv_cfg = cfg.get("supervisor", {})
+                host = sv_cfg.get("host", "127.0.0.1")
+                port = sv_cfg.get("port", 6002)
+                supervisor_url = f"http://{host}:{port}"
+            except Exception:
+                supervisor_url = "http://127.0.0.1:6002"
+
+            try:
+                import urllib.request as _req
+                r = _req.Request(
+                    f"{supervisor_url}/governor-mode/deactivate",
+                    data=b"{}",
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                resp = _json.loads(_req.urlopen(r, timeout=30).read())
+            except Exception as exc:
+                _cprint(f"  ⚠️  Supervisor unreachable: {exc}")
+                return
+
+            active = resp.get("governor_mode_active", True)
+            if not active:
+                _cprint(f"  💤 Governor Mode [bold]DEACTIVATED[/] — returned to Memory Mode.")
+                _cprint(f"     Only health-check loop is running.")
+                _cprint(f"     Use /auto to re-enter Governor Mode.")
+            else:
+                _cprint(f"  ⚠️  Governor Mode could not be deactivated (still active).")
+
+        threading.Thread(target=_call_deactivate_governor, daemon=True, name="governor-deactivate").start()
 
     def _handle_plan_command(self, cmd: str):
         """Handle /plan [request] — load the bundled plan skill."""

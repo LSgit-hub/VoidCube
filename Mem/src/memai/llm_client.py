@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any, Callable, Sequence
 from urllib import request
@@ -18,6 +19,77 @@ RESPONSE_FORMAT_STYLES = frozenset({"json_object", "json_object_string", "none"}
 RESPONSE_CONTENT_STYLES = frozenset(
     {"auto", "openai_message", "choices_text", "output_text"}
 )
+
+# ── Token usage tracking (module-level, shared across LLMClient instances) ──
+# Exposed so the Supervisor can report live context usage via /ui/state.
+_memory_token_usage: dict[str, int] = {
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "total_tokens": 0,
+    "request_count": 0,
+    "context_length": 65536,  # updated by _set_memory_context_length when LLMClient inits
+}
+_memory_token_lock = threading.Lock()
+
+# ── Context-length lookup (best-effort; model names change over time) ──
+_MODEL_CONTEXT_LENGTHS: dict[str, int] = {
+    # DeepSeek family
+    "deepseek-chat": 65536,
+    "deepseek-v4": 65536,
+    "deepseek-v4-flash": 65536,
+    "deepseek-reasoner": 65536,
+    # OpenAI family
+    "gpt-4o": 128000,
+    "gpt-4o-mini": 128000,
+    "gpt-4-turbo": 128000,
+    "gpt-4": 8192,
+    "gpt-3.5-turbo": 16385,
+    # Anthropic family (via OpenAI-compatible proxy)
+    "claude-3-opus": 200000,
+    "claude-3-sonnet": 200000,
+    "claude-3-haiku": 200000,
+    "claude-3.5-sonnet": 200000,
+    # Open-source / local
+    "llama-3": 8192,
+    "llama-3.1": 131072,
+    "mixtral": 32768,
+    "qwen": 32768,
+}
+_DEFAULT_CONTEXT_LENGTH = 65536
+
+
+def _set_memory_context_length(model_name: str) -> None:
+    """Update the global context-length estimate based on the model name.
+
+    Called by ``OpenAICompatibleLLMClient.__init__`` so the accumulator
+    reflects the actual model's context window.  Falls back to 65536 for
+    unknown models.
+    """
+    with _memory_token_lock:
+        _memory_token_usage["context_length"] = _MODEL_CONTEXT_LENGTHS.get(
+            model_name, _DEFAULT_CONTEXT_LENGTH
+        )
+
+
+def get_memory_token_usage() -> dict[str, int]:
+    """Return a snapshot of cumulative memory LLM token usage (thread-safe)."""
+    with _memory_token_lock:
+        return dict(_memory_token_usage)
+
+
+def _accumulate_memory_usage(usage: dict[str, Any]) -> None:
+    """Merge an API ``usage`` object into the module-level accumulator.
+
+    Thread-safe: the accumulator is protected by a module-level lock.
+    """
+    if not isinstance(usage, dict):
+        return
+    with _memory_token_lock:
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = usage.get(key)
+            if isinstance(value, (int, float)):
+                _memory_token_usage[key] += int(value)
+        _memory_token_usage["request_count"] += 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,7 +325,12 @@ def _default_transport(
     body = json.dumps(payload).encode("utf-8")
     http_request = request.Request(url, data=body, headers=headers, method="POST")
     with request.urlopen(http_request, timeout=60) as response:
-        return json.loads(response.read().decode("utf-8"))
+        result = json.loads(response.read().decode("utf-8"))
+    # Accumulate token usage so the Memory Service can report it to the CLI
+    usage = result.get("usage") if isinstance(result, dict) else None
+    if usage is not None:
+        _accumulate_memory_usage(usage)
+    return result
 
 
 def _extract_json_object(content: str) -> dict[str, Any]:
@@ -376,6 +453,9 @@ class OpenAICompatibleLLMClient:
         self.prompt_registry = prompt_registry or PromptRegistry.default()
         self.temperature = temperature
         self.transport = transport or _default_transport
+        # Update the global context-length estimate so the accumulator
+        # (and therefore the UI percentage) reflects this model's window.
+        _set_memory_context_length(model)
 
     @classmethod
     def from_env(

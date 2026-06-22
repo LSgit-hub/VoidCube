@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import logging
+from pathlib import Path
+from pathlib import Path
 import uuid
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, MutableMapping, Optional, Protocol
@@ -23,6 +26,7 @@ logger = logging.getLogger(__name__)
 class WatchWindowRuntimeStateProtocol(Protocol):
     task: Optional[asyncio.Task[Any]]
     last_outcome: Optional[Dict[str, Any]]
+    last_body_upgrade_trace_id: Optional[str]
 
 
 class GovernorRequestExecutorProtocol(Protocol):
@@ -244,8 +248,20 @@ class GovernorReviewExecutionAdapter:
         )
 
 
+@dataclass
+class WatchWindowState:
+    """Watch-window runtime state owned by the executor (S-02/S-03)."""
+    task: Optional[Any] = None
+    last_outcome: Optional[Dict[str, Any]] = None
+    last_body_upgrade_trace_id: Optional[str] = None
+
+
 class WatchWindowExecutionAdapter:
-    """Execution boundary for watch-window runtime mechanics and cleanup."""
+    """Execution boundary for watch-window runtime mechanics and cleanup.
+
+    Owns its runtime state directly (S-02/S-03) — the supervisor no longer
+    injects a ``runtime_state`` protocol.
+    """
 
     def __init__(
         self,
@@ -254,7 +270,7 @@ class WatchWindowExecutionAdapter:
         agents: MutableMapping[str, Any],
         stop_agent: Callable[[str], Awaitable[Dict[str, Any]]],
         run_health_checks: Callable[[], Awaitable[Dict[str, Any]]],
-        runtime_state: WatchWindowRuntimeStateProtocol,
+        runtime_state: Any = None,  # deprecated; state is now self-owned (S-02/03)
         sync_gateway_body_activation: Optional[
             Callable[[str], Awaitable[Dict[str, Any] | None]]
         ] = None,
@@ -265,7 +281,7 @@ class WatchWindowExecutionAdapter:
         self.agents = agents
         self.stop_agent = stop_agent
         self.run_health_checks = run_health_checks
-        self.runtime_state = runtime_state
+        self._state = WatchWindowState()
         self.sync_gateway_body_activation = sync_gateway_body_activation
         self.governor_request_executor = governor_request_executor
         self.poll_interval_seconds = poll_interval_seconds
@@ -277,20 +293,20 @@ class WatchWindowExecutionAdapter:
         self.governor_request_executor = governor_request_executor
 
     def _get_task(self) -> Optional[asyncio.Task[Any]]:
-        return self.runtime_state.task
+        return self._state.task
 
     def _set_task(self, task: Optional[asyncio.Task[Any]]) -> None:
-        self.runtime_state.task = task
+        self._state.task = task
 
     def _is_task_running(self) -> bool:
         task = self._get_task()
         return bool(task and not task.done())
 
     def _get_last_outcome(self) -> Optional[Dict[str, Any]]:
-        return self.runtime_state.last_outcome
+        return self._state.last_outcome
 
     def _set_last_outcome(self, result: Dict[str, Any]) -> None:
-        self.runtime_state.last_outcome = result
+        self._state.last_outcome = result
 
     def _execute_governor_request(self, governor_request: GovernorRequest) -> Dict[str, Any]:
         if self.governor_request_executor is None:
@@ -414,9 +430,12 @@ class WatchWindowExecutionAdapter:
         if not body_id:
             raise HTTPException(status_code=400, detail="No active slot is registered for watch-window evaluation.")
 
+        trace_id = request.get("trace_id") or self._state.last_body_upgrade_trace_id
         if evaluation["healthy"]:
             governor_request = GovernorRequest(
                 request_id=request.get("request_id", f"watch-pass-{uuid.uuid4()}"),
+                trace_id=trace_id,
+                task_type="self_evolution",
                 event_type="post_switch_review",
                 body_id=retired_slot,
                 source_actor="supervisor_watch_window",
@@ -430,6 +449,8 @@ class WatchWindowExecutionAdapter:
         else:
             governor_request = GovernorRequest(
                 request_id=request.get("request_id", f"watch-fail-{uuid.uuid4()}"),
+                trace_id=trace_id,
+                task_type="self_evolution",
                 event_type="rollback_request",
                 body_id=body_id,
                 source_actor="supervisor_watch_window",
@@ -602,6 +623,12 @@ class WatchWindowExecutionAdapter:
             return None
         return running_agents[-1]
 
+
+
+    # NOTE(E-04): Execution results should be systematically written back to
+    # Mem via the governance bridge.  Currently only governor_review does this;
+    # body_upgrade and self_learning adapters should also record outcomes.
+    # See baseline §7.4, state-boundary.md §7.
 
 class BodyUpgradeExecutionAdapter:
     """Execution boundary for the child-agent upgrade pipeline."""
@@ -844,32 +871,58 @@ class BodyUpgradeExecutionAdapter:
                     )
                 gateway_activation = await self.sync_gateway_body_activation(started_agent["instance_id"])
 
-            return self.attach_execution_route_hint(
-                {
-                    "status": "upgrade_executed",
-                    "slot_id": slot_id,
-                    "previous_active_slot": pre_switch_registry.active_slot,
-                    "retired_slot": switch_review["registry"]["retired_slot"],
-                    "prepared_slot": (
-                        prepared_slot.model_dump(mode="json")
-                        if prepared_slot is not None
-                        else None
-                    ),
-                    "candidate_slot": candidate_slot.model_dump(mode="json"),
-                    "probe_review": probe_approval,
-                    "probe_execution": probe_execution,
-                    "switch_review": switch_review,
-                    "started_agent": started_agent,
-                    "gateway_activation": gateway_activation,
-                    "running_agents": self._serialize_running_agents(),
-                    "active_target": self.body_registry.load_active_body_pointer().model_dump(mode="json"),
-                },
-                "body.upgrade.execute",
-            )
+            outcome = {
+                "status": "upgrade_executed",
+                "slot_id": slot_id,
+                "task_id": str(request.get("execution_request", {}).get("task_id", "")),
+                "previous_active_slot": pre_switch_registry.active_slot,
+                "retired_slot": switch_review["registry"]["retired_slot"],
+                "prepared_slot": (
+                    prepared_slot.model_dump(mode="json")
+                    if prepared_slot is not None
+                    else None
+                ),
+                "candidate_slot": candidate_slot.model_dump(mode="json"),
+                "probe_review": probe_approval,
+                "probe_execution": probe_execution,
+                "switch_review": switch_review,
+                "started_agent": started_agent,
+                "gateway_activation": gateway_activation,
+                "running_agents": self._serialize_running_agents(),
+                "active_target": self.body_registry.load_active_body_pointer().model_dump(mode="json"),
+            }
+            result = self.attach_execution_route_hint(outcome, "body.upgrade.execute")
+            # E-04: writeback execution outcome to Mem governance
+            await self._writeback_execution_outcome(outcome)
+            return result
         except HTTPException:
             raise
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+
+    async def _writeback_execution_outcome(
+        self, outcome: Dict[str, Any]
+    ) -> None:
+        """Best-effort writeback of execution outcome to Mem governance (E-04)."""
+        try:
+            from memai.governance import GovernanceEvent, GovernanceEventType, GovernanceDecision
+            from memai.governance_repository import GovernanceEventRepository
+            repo = GovernanceEventRepository(
+                str(Path(self._governor_storage_root or ".") / "mem_governance.jsonl")
+            )
+            repo.append(GovernanceEvent.create(
+                event_type=GovernanceEventType.EXECUTION_OUTCOME,
+                source_actor="executor",
+                decision=(
+                    GovernanceDecision.COMPLETED
+                    if outcome.get("status") == "upgrade_executed"
+                    else GovernanceDecision.FAILED
+                ),
+                reason=f"Body upgrade: {outcome.get('status', 'unknown')}",
+                task_id=outcome.get("task_id", ""),
+            ))
+        except Exception:
+            pass  # best-effort; never block the upgrade path
 
     def _serialize_running_agents(self) -> list[Dict[str, Any]]:
         return [
@@ -1088,18 +1141,169 @@ class BodyLifecycleExecutionAdapter:
             raise HTTPException(status_code=400, detail=str(exc))
 
 
+
+    async def trigger_memory_decay(self, request: dict | None = None) -> Dict[str, Any]:
+        """Apply memory decay to a namespace (E-03)."""
+        request = request or {}
+        namespace = request.get("namespace", "default")
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                url = f"{self.config.gateway_address}/mem/memories/decay"
+                async with session.post(url, json={
+                    "namespace": namespace,
+                    "decay_factor": request.get("decay_factor", 0.1),
+                }) as resp:
+                    if resp.status == 200:
+                        return await resp.json()
+            return {"status": "decay_failed", "namespace": namespace}
+        except Exception as exc:
+            logger.warning("Memory decay failed for %s: %s", namespace, exc)
+            return {"status": "decay_error", "error": str(exc)}
+
+    async def trigger_memory_cleanup(self, request: dict | None = None) -> Dict[str, Any]:
+        """Remove stale/low-relevance entries from a namespace (E-03)."""
+        request = request or {}
+        namespace = request.get("namespace", "default")
+        min_score = float(request.get("min_score", 0.01))
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                url = f"{self.config.gateway_address}/mem/memories/namespace/{namespace}"
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        return {"status": "cleanup_failed"}
+                    data = await resp.json()
+                entries = data.get("memories", [])
+                removed = 0
+                for entry in entries:
+                    score = float(entry.get("relevance_score", 0))
+                    memory_id = entry.get("memory_id")
+                    if score < min_score and memory_id:
+                        async with session.delete(
+                            f"{self.config.gateway_address}/mem/memories/{memory_id}"
+                        ) as del_resp:
+                            if del_resp.status == 200:
+                                removed += 1
+                return {"status": "cleanup_complete", "removed": removed, "namespace": namespace}
+        except Exception as exc:
+            logger.warning("Memory cleanup failed for %s: %s", namespace, exc)
+            return {"status": "cleanup_error", "error": str(exc)}
+
 class MemoryMaintenanceExecutionAdapter:
     def __init__(
         self,
         *,
         config: Any,
         attach_execution_route_hint: Callable[[Dict[str, Any], str], Dict[str, Any]],
+        mem_state_path: str | None = None,
     ) -> None:
         self.config = config
         self.attach_execution_route_hint = attach_execution_route_hint
+        if mem_state_path:
+            self._mem_state_path = Path(mem_state_path)
+        else:
+            from VoidCube_core.constants import get_VoidCube_home
+            self._mem_state_path = get_VoidCube_home() / "mem_state.json"
 
     async def trigger_memory_compression(self, request: dict | None = None) -> Dict[str, Any]:
         request = request or {}
+        result: Dict[str, Any] = {}
+
+        # ── Structured 4-layer maintenance (primary) ──
+        try:
+            structured = await self._run_structured_maintenance(request)
+            result["structured_maintenance"] = structured
+        except Exception as exc:
+            logger.warning("Structured memory maintenance failed: %s", exc)
+            result["structured_maintenance"] = {"status": "error", "error": str(exc)}
+
+        # ── Flat SQLite compression (secondary, backward-compatible) ──
+        try:
+            flat = await self._run_flat_compression(request)
+            result["flat_compression"] = flat
+        except Exception as exc:
+            logger.warning("Flat memory compression failed: %s", exc)
+            result["flat_compression"] = {"status": "error", "error": str(exc)}
+
+        return self.attach_execution_route_hint(result, "memory.compress")
+
+    # ── Structured maintenance helpers ──────────────────────────────
+
+    def _build_scholar_backend(self):
+        """Build LLMScholarBackend with HeuristicScholarBackend fallback."""
+        try:
+            import os
+            api_key = (
+                os.environ.get("DEEPSEEK_API_KEY")
+                or os.environ.get("OPENAI_API_KEY")
+                or ""
+            )
+            if not api_key:
+                logger.info("No LLM API key configured; using heuristic scholar backend")
+                from memai.scholar import HeuristicScholarBackend
+                return HeuristicScholarBackend()
+
+            model = os.environ.get("MEMAI_LLM_MODEL", os.environ.get("OPENAI_MODEL", "deepseek-chat"))
+            base_url = os.environ.get(
+                "MEMAI_LLM_BASE_URL", os.environ.get("OPENAI_BASE_URL", "https://api.deepseek.com")
+            )
+            from memai.llm_client import OpenAICompatibleLLMClient
+            client = OpenAICompatibleLLMClient(model=model, api_key=api_key, base_url=base_url)
+            from memai.scholar import LLMScholarBackend
+            return LLMScholarBackend(client)
+        except Exception as exc:
+            logger.warning("Failed to initialize LLM scholar backend: %s; falling back to heuristic", exc)
+            from memai.scholar import HeuristicScholarBackend
+            return HeuristicScholarBackend()
+
+    async def _run_structured_maintenance(self, request: dict) -> Dict[str, Any]:
+        """Load mem_state.json, run structured 4-layer maintenance, save."""
+        import sys
+        from pathlib import Path as _Path
+
+        mem_src = _Path(__file__).resolve().parents[2] / "Mem" / "src"
+        if str(mem_src) not in sys.path:
+            sys.path.insert(0, str(mem_src))
+
+        from memai.repository import MemoryStateRepository
+        from memai.pipeline import ChroniclePipeline
+
+        scholar = self._build_scholar_backend()
+        pipeline = ChroniclePipeline(scholar_backend=scholar)
+        repository = MemoryStateRepository(pipeline=pipeline)
+
+        state_path = self._mem_state_path
+        if not state_path.exists():
+            return {"status": "no_state", "message": f"No memory state file at {state_path}"}
+
+        state = repository.load(str(state_path))
+        execution = state.result.apply_maintenance()
+
+        # Update PipelineResult with compressed data
+        state.result.events = list(execution.events)
+        state.result.scenes = list(execution.scenes)
+        state.result.arcs = list(execution.arcs)
+        state.result.epochs = list(execution.epochs)
+
+        from VoidCube_core.utils import atomic_json_write
+        atomic_json_write(str(state_path), state.to_dict())
+
+        return {
+            "status": "structured_maintenance_complete",
+            "revision_count": len(execution.revision_records),
+            "compression_actions": [
+                action.to_dict() for action in execution.plan.compression_actions
+            ],
+            "dormant_arc_ids": execution.plan.dormant_arc_ids,
+            "policy_notes": execution.plan.policy_notes,
+            "revision_records": [
+                record.to_dict() for record in execution.revision_records
+            ],
+        }
+
+    async def _run_flat_compression(self, request: dict) -> Dict[str, Any]:
+        """Existing flat SQLite compression via HTTP (backward-compatible)."""
         try:
             import aiohttp
 
@@ -1109,17 +1313,12 @@ class MemoryMaintenanceExecutionAdapter:
                     "namespace": request.get("namespace", "default"),
                     "max_entries": int(request.get("max_entries", 100)),
                 }
-
                 async with session.post(url, json=payload) as response:
                     if response.status == 200:
-                        result = await response.json()
-                        return self.attach_execution_route_hint(result, "memory.compress")
-
-            raise HTTPException(status_code=500, detail="Compression failed")
-        except HTTPException:
-            raise
+                        return await response.json()
+            return {"status": "flat_compression_error", "error": "Non-200 response"}
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+            return {"status": "flat_compression_error", "error": str(exc)}
 
 
 class SelfLearningExecutionAdapter:
@@ -1131,10 +1330,15 @@ class SelfLearningExecutionAdapter:
         learning_service: SelfLearningService,
         attach_execution_route_hint: Callable[[Dict[str, Any], str], Dict[str, Any]],
         skill_delegate: Optional[SelfLearningSkillDelegate] = None,
+        subagent_enabled: bool = True,
     ) -> None:
         self.learning_service = learning_service
         self.attach_execution_route_hint = attach_execution_route_hint
-        self.skill_delegate = skill_delegate or SelfLearningSkillDelegate()
+        self.subagent_enabled = subagent_enabled
+        if skill_delegate is not None:
+            self.skill_delegate = skill_delegate
+        else:
+            self.skill_delegate = SelfLearningSkillDelegate(use_subagent=subagent_enabled)
 
     async def execute_self_learning_followup(self, request: dict | None = None) -> Dict[str, Any]:
         request = request or {}
@@ -1202,6 +1406,18 @@ class SelfLearningExecutionAdapter:
         observations = list(evidence.get("observations") or [])
         observations.extend(skill_observations)
         observations.extend(self._skill_evidence_observations(skill_evidence_summary))
+        # Extract subagent technology evaluations as enriched observations
+        subagent_meta = skill_execution.get("subagent_metadata", {})
+        for te in subagent_meta.get("technology_evaluations", []):
+            name = te.get("name", "")
+            total = te.get("total_score", 0)
+            rec = te.get("recommendation", "")
+            tech_summary = str(te.get("summary", ""))[:120]
+            if name and total:
+                observations.append(
+                    f"Subagent technology evaluation: {name} scored {total}/100 "
+                    f"(recommendation: {rec}) — {tech_summary}"
+                )
         for query in skill_plan.get("search_queries") or []:
             observations.append(f"Prepared search query: {query}")
         if summary:
@@ -1231,6 +1447,14 @@ class SelfLearningExecutionAdapter:
             for item in constraints.get("recommendations", [])
             if isinstance(item, dict)
         ]
+        # Include subagent-generated recommendations from technology evaluations
+        subagent_recs = skill_execution.get("learning_plan", {}).get("subagent_recommendations", [])
+        for rec in subagent_recs:
+            if isinstance(rec, dict):
+                try:
+                    recommendations.append(LearningRecommendation.model_validate(rec))
+                except Exception:
+                    pass
         conclusion = self.learning_service.submit_conclusion(
             topic=topic,
             session=session,

@@ -17,8 +17,8 @@ logger = logging.getLogger("agent_instance")
 
 class AgentConfig(BaseModel):
     host: str = "127.0.0.1"
-    port: int = 8080
-    gateway_address: str = "http://127.0.0.1:8000"
+    port: int = 6080
+    gateway_address: str = "http://127.0.0.1:6000"
     active_slot: str = "slot-A"
     body_worktree: str = ""
     body_runtime: str = ""
@@ -192,19 +192,23 @@ class AgentInstance:
         try:
             import aiohttp
 
-            api_key = os.getenv("DEEPSEEK_API_KEY")
+            # Agent uses API-A (baseline §4.3) — configurable provider/model
+            api_key = os.getenv("AGENT_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
             if not api_key:
                 return f"Processed request: {message}"
             
+            base_url = os.getenv("AGENT_BASE_URL", "https://api.deepseek.com/v1")
+            model = os.getenv("AGENT_MODEL", "deepseek-chat")
+            
             async with aiohttp.ClientSession() as session:
-                url = "https://api.deepseek.com/v1/chat/completions"
+                url = f"{base_url.rstrip('/')}/chat/completions"
                 headers = {
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {api_key}",
                 }
                 
                 payload = {
-                    "model": "deepseek-chat",
+                    "model": model,
                     "messages": [{"role": "user", "content": message}],
                     "max_tokens": 500
                 }
@@ -250,6 +254,12 @@ class AgentInstance:
             logger.error(f"Error handling memory operation: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
+
+    # NOTE(A-02): Memory operations (_read/_write/_search/_delete) currently
+    # call gateway directly without governance-layer access control.
+    # Per constitution §5.4, gateway should enforce memory access policies.
+    # This is acceptable for Phase 1 single-user mode.
+
     async def _read_memory(self, request: dict):
         try:
             import aiohttp
@@ -277,7 +287,12 @@ class AgentInstance:
     async def _write_memory(self, request: dict):
         try:
             import aiohttp
-            
+
+            # A-02: Require governance trace_id for all memory writes
+            trace_id = request.get("trace_id") or request.get("metadata", {}).get("trace_id")
+            if not trace_id:
+                raise HTTPException(status_code=400, detail="trace_id required for memory write governance")
+
             content = request.get("value")
             namespace = request.get("namespace", "default")
             memory_id = request.get("key")
@@ -355,31 +370,54 @@ class AgentInstance:
             raise HTTPException(status_code=500, detail=str(e))
 
     async def register_with_gateway(self):
-        try:
-            import aiohttp
-            
-            async with aiohttp.ClientSession() as session:
-                url = f"{self.config.gateway_address}/register"
-                payload = {
-                    "service_name": self._service_name(),
-                    "service_type": "agent",
-                    "address": f"http://{self.config.host}:{self.config.port}",
-                    "health_endpoint": "/health",
-                    "metadata": {
-                        "slot_id": self.config.active_slot,
-                        "body_version": self.config.body_version,
-                    }
-                }
-                
-                async with session.post(url, json=payload) as response:
-                    if response.status == 201:
-                        result = await response.json()
-                        logger.info(f"Registered with gateway: {result}")
-                        return result.get("service_id")
-        
-        except Exception as e:
-            logger.warning(f"Failed to register with gateway: {e}")
-            return None
+        import asyncio as _asyncio
+
+        url = f"{self.config.gateway_address}/register"
+        payload = {
+            "service_name": self._service_name(),
+            "service_type": "agent",
+            "address": f"http://{self.config.host}:{self.config.port}",
+            "health_endpoint": "/health",
+            "metadata": {
+                "slot_id": self.config.active_slot,
+                "body_version": self.config.body_version,
+            },
+        }
+
+        max_retries = 5
+        base_delay = 1.0
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                import aiohttp
+
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(url, json=payload, timeout=10) as response:
+                        if response.status == 201:
+                            result = await response.json()
+                            logger.info("Registered with gateway (attempt %d): %s", attempt, result)
+                            return result.get("service_id")
+                        else:
+                            logger.debug(
+                                "Gateway registration attempt %d returned status %d",
+                                attempt,
+                                response.status,
+                            )
+            except Exception as e:
+                logger.debug("Gateway registration attempt %d failed: %s", attempt, e)
+
+            if attempt < max_retries:
+                delay = base_delay * (2 ** (attempt - 1))
+                logger.info(
+                    "Waiting %.1fs before retrying gateway registration (attempt %d/%d)...",
+                    delay,
+                    attempt + 1,
+                    max_retries,
+                )
+                await _asyncio.sleep(delay)
+
+        logger.warning("Failed to register with gateway after %d attempts", max_retries)
+        return None
 
     async def start(self):
         import uvicorn
@@ -402,15 +440,53 @@ class AgentInstance:
             )
         ).serve()
 
+    def _ensure_body_slot_layout(self) -> Dict[str, str]:
+        """Resolve canonical ``.body-slots/slot-{id}/`` layout.
+
+        Per architecture baseline §3.3, each agent must have independent
+        worktree / runtime / logs / meta.  When env vars are not set,
+        derive paths from the canonical layout instead of falling back
+        to CWD (which would cause slot collisions).
+        """
+        slots_dir = Path(
+            os.environ.get("VOIDCUBE_BODY_SLOTS_DIR", ".body-slots")
+        ).resolve()
+        slot_root = slots_dir / self.config.active_slot
+        worktree = Path(self.config.body_worktree) if self.config.body_worktree else (slot_root / "worktree")
+        runtime = Path(self.config.body_runtime) if self.config.body_runtime else (slot_root / "runtime")
+        logs = Path(self.config.body_logs) if self.config.body_logs else (slot_root / "logs")
+        return {
+            "slot_root": str(slot_root),
+            "worktree": str(worktree),
+            "runtime": str(runtime),
+            "logs": str(logs),
+        }
+
     def _initialize_runtime_paths(self) -> Dict[str, str]:
-        runtime_root = Path(self.config.body_runtime or ".").resolve()
-        logs_root = Path(self.config.body_logs or runtime_root / "logs").resolve()
+        layout = self._ensure_body_slot_layout()
+        runtime_root = Path(layout["runtime"]).resolve()
+        logs_root = Path(layout["logs"]).resolve()
         sessions_root = runtime_root / "sessions"
         cache_root = runtime_root / "cache"
         state_root = runtime_root / "state"
 
         for path in (runtime_root, logs_root, sessions_root, cache_root, state_root):
             path.mkdir(parents=True, exist_ok=True)
+
+        # Write canonical slot meta.json per baseline §3.3
+        slot_root = Path(layout["slot_root"])
+        slot_root.mkdir(parents=True, exist_ok=True)
+        meta = {
+            "slot_id": self.config.active_slot,
+            "body_version": self.config.body_version,
+            "worktree_path": layout["worktree"],
+            "runtime_path": layout["runtime"],
+            "logs_path": layout["logs"],
+            "initialized_at": datetime.now().isoformat(),
+        }
+        (slot_root / "meta.json").write_text(
+            json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
 
         manifest = {
             "slot_id": self.config.active_slot,
@@ -439,9 +515,32 @@ class AgentInstance:
             "manifest_path": str(manifest_path),
         }
 
+
+    # NOTE(A-03/A-04): Session snapshots and runtime cache should have a
+    # retention policy.  Stale sessions and old meta files should be cleaned
+    # up periodically to prevent unbounded disk usage.
+
+
+    def _cleanup_stale_sessions(self, max_sessions: int = 50) -> None:
+        """Remove oldest session files beyond max_sessions (A-03/A-04)."""
+        try:
+            sessions_root = Path(self._runtime_paths.get("sessions_root", ""))
+            if not sessions_root.exists():
+                return
+            files = sorted(
+                sessions_root.glob("*.json"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            for stale in files[max_sessions:]:
+                stale.unlink(missing_ok=True)
+        except Exception:
+            pass
+
     def _persist_session_snapshot(self, session_id: str) -> None:
         if not session_id:
             return
+        self._cleanup_stale_sessions()
         session = self._session_data.get(session_id)
         if session is None:
             return

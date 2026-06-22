@@ -83,19 +83,51 @@ class GitLogEntry:
 # ── Git command runner ─────────────────────────────────────────────────
 
 class GitRunner:
-    """Thin wrapper around git CLI with timeout and error handling."""
+    """Thin wrapper around git CLI with timeout and error handling.
+
+    On Windows (especially PowerShell), ``git`` may not be on PATH for
+    subprocesses.  We try ``git`` first, then ``git.exe``, then fall back
+    to ``shell=True`` which uses the system shell's PATH resolution.
+    """
 
     def __init__(self, cwd: Optional[Path] = None):
         self.cwd = cwd or Path.cwd()
+        self._git_cmd: Optional[List[str]] = None  # cached resolution
+
+    def _resolve_git_cmd(self) -> List[str]:
+        """Resolve the git command once per process lifetime."""
+        if self._git_cmd is not None:
+            return self._git_cmd
+        import shutil
+        # Try bare 'git' first (works on Linux/macOS and most Windows setups)
+        if shutil.which("git"):
+            self._git_cmd = ["git"]
+            return self._git_cmd
+        # Try 'git.exe' explicitly (Windows)
+        if shutil.which("git.exe"):
+            self._git_cmd = ["git.exe"]
+            return self._git_cmd
+        # Last resort: shell=True for PowerShell compatibility
+        self._git_cmd = []  # signals "use shell"
+        return self._git_cmd
 
     def _run(self, args: List[str], timeout: int = 10) -> Tuple[int, str, str]:
         """Run a git command. Returns (returncode, stdout, stderr)."""
+        git_cmd = self._resolve_git_cmd()
         try:
-            r = subprocess.run(
-                ["git"] + args,
-                capture_output=True, text=True,
-                cwd=str(self.cwd), timeout=timeout,
-            )
+            if git_cmd:
+                r = subprocess.run(
+                    git_cmd + args,
+                    capture_output=True, text=True,
+                    cwd=str(self.cwd), timeout=timeout,
+                )
+            else:
+                # Shell fallback for environments where git PATH is shell-specific
+                r = subprocess.run(
+                    "git " + " ".join(args),
+                    capture_output=True, text=True, shell=True,
+                    cwd=str(self.cwd), timeout=timeout,
+                )
             return r.returncode, r.stdout.strip(), r.stderr.strip()
         except subprocess.TimeoutExpired:
             return -1, "", "timeout"

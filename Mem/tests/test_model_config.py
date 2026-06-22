@@ -124,7 +124,7 @@ def test_mem_model_config_set_resolves_role_overrides() -> None:
     assert config_set.for_role("governance_reasoner").provider == "deepseek"
     assert config_set.for_role("governance_reasoner").model == "deepseek-reasoner"
     assert config_set.for_role("governance_reasoner").api_key_env == "DEEPSEEK_API_KEY"
-    assert config_set.for_role("governance_reasoner").base_url == "https://api.deepseek.com"
+    assert config_set.for_role("governance_reasoner").base_url == "https://api.deepseek.com/v1"
     assert config_set.for_role("embedding") == config_set.default
     assert "unknown_role" not in config_set.roles
 

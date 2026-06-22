@@ -97,6 +97,7 @@
 | --- | --- |
 | 核心基线 | [voidcube架构基线.md](./voidcube架构基线.md) 已重写为最高优先级总基线。 |
 | 组件接线 | [architecture-integration.md](./architecture-integration.md) 已收敛为接线说明。 |
+| 核心闭环与内生驱动 | [phase1-core-loop-and-endogenous-drive.md](./phase1-core-loop-and-endogenous-drive.md) 已建立，定义三种反模式、母体心跳机理、四重保障与完整运行循环。 |
 | body 状态机 | [body-lifecycle.md](./body-lifecycle.md) 已收敛为状态机规范。 |
 | 切换协议 | [switch-protocol.md](./switch-protocol.md) 已收敛为切换协议。 |
 | 状态边界 | [state-boundary.md](./state-boundary.md) 已收敛为状态归属规范。 |

@@ -27,79 +27,70 @@ class ProcessGatewayRuntimeMixin:
         raise HTTPException(status_code=404, detail="Agent not found")
 
     async def _spawn_agent_process(self, agent) -> None:
+        """Delegate to AgentProcessManager (S-01)."""
         try:
-            execution_config = self.config.execution
-            env = os.environ.copy()
-            env["AGENT_PORT"] = str(agent.port)
-            env["GATEWAY_ADDRESS"] = execution_config.gateway_address
             target = self._body_registry.load_active_body_pointer()
-            env["VOIDCUBE_ACTIVE_SLOT"] = target.slot_id
-            env["VOIDCUBE_BODY_WORKTREE"] = target.worktree_path
-            env["VOIDCUBE_BODY_RUNTIME"] = target.runtime_path
-            env["VOIDCUBE_BODY_LOGS"] = target.logs_path
-            env["VOIDCUBE_BODY_VERSION"] = target.body_version
-
-            script_path = Path(target.launch_script_path)
-            cwd = target.launch_cwd
-
-            if sys.platform == "win32":
-                process = self._subprocess_module.Popen(
-                    [sys.executable, str(script_path), "--port", str(agent.port)],
-                    env=env,
-                    cwd=cwd,
-                    creationflags=self._subprocess_module.CREATE_NEW_PROCESS_GROUP,
+            pm = getattr(self, '_process_manager', None)
+            if pm is not None:
+                pm.spawn(
+                    agent=agent,
+                    body_target=target,
+                    gateway_address=self.config.execution.gateway_address,
                 )
             else:
-                process = self._subprocess_module.Popen(
-                    [sys.executable, str(script_path), "--port", str(agent.port)],
-                    env=env,
-                    cwd=cwd,
-                    start_new_session=True,
-                )
-
-            agent.pid = process.pid
-            agent.status = "running"
-            agent.started_at = datetime.now()
-            agent.healthy = False
-            agent.version = target.body_version
-            agent.slot_id = target.slot_id
-            agent.name = f"agent-{target.slot_id}"
-            agent.body_worktree = target.worktree_path
-            agent.body_runtime = target.runtime_path
-            agent.body_logs = target.logs_path
-
-            asyncio.create_task(self._monitor_agent(process, agent))
-
+                # Fallback for tests that don't wire the full assembler
+                await self.__spawn_agent_process_impl(agent, target)
         except Exception as exc:
-            logger.error(f"Failed to spawn agent process: {exc}")
+            logger.error("Failed to spawn agent process: %s", exc)
             raise
 
-    async def _terminate_agent_process(self, agent) -> None:
-        if not agent.pid:
-            return
-
-        try:
-            import psutil
-
-            process = psutil.Process(agent.pid)
-            children = process.children(recursive=True)
-            for child in children:
-                child.terminate()
-            process.terminate()
-            _, alive = psutil.wait_procs([process, *children], timeout=3)
-            for remaining in alive:
-                remaining.kill()
-            return
-        except Exception:
-            pass
-
+    async def __spawn_agent_process_impl(self, agent, target) -> None:
+        """Legacy inline implementation — used only when ProcessManager is absent."""
+        env = os.environ.copy()
+        env["AGENT_PORT"] = str(agent.port)
+        env["GATEWAY_ADDRESS"] = self.config.execution.gateway_address
+        env["VOIDCUBE_ACTIVE_SLOT"] = target.slot_id
+        env["VOIDCUBE_BODY_WORKTREE"] = target.worktree_path
+        env["VOIDCUBE_BODY_RUNTIME"] = target.runtime_path
+        env["VOIDCUBE_BODY_LOGS"] = target.logs_path
+        env["VOIDCUBE_BODY_VERSION"] = target.body_version
+        script_path = Path(target.launch_script_path)
         if sys.platform == "win32":
-            self._subprocess_module.run(["taskkill", "/F", "/T", "/PID", str(agent.pid)], check=False)
-            return
+            process = self._subprocess_module.Popen(
+                [sys.executable, str(script_path), "--port", str(agent.port)],
+                env=env, cwd=target.launch_cwd,
+                creationflags=self._subprocess_module.CREATE_NEW_PROCESS_GROUP,
+            )
+        else:
+            process = self._subprocess_module.Popen(
+                [sys.executable, str(script_path), "--port", str(agent.port)],
+                env=env, cwd=target.launch_cwd, start_new_session=True,
+            )
+        agent.pid = process.pid
+        agent.status = "running"
+        agent.started_at = datetime.now()
+        agent.healthy = False
+        agent.version = target.body_version
+        agent.slot_id = target.slot_id
+        agent.name = f"agent-{target.slot_id}"
+        agent.body_worktree = target.worktree_path
+        agent.body_runtime = target.runtime_path
+        agent.body_logs = target.logs_path
+        asyncio.create_task(self._monitor_agent(process, agent))
 
-        self._subprocess_module.run(["kill", "-TERM", str(agent.pid)], check=True)
-        time.sleep(1)
-        self._subprocess_module.run(["kill", "-KILL", str(agent.pid)], check=False)
+    async def _terminate_agent_process(self, agent) -> None:
+        """Delegate to AgentProcessManager (S-01)."""
+        pm = getattr(self, '_process_manager', None)
+        if pm is not None:
+            pm.terminate(agent)
+        elif agent.pid:
+            # Legacy fallback
+            if sys.platform == "win32":
+                self._subprocess_module.run(["taskkill", "/F", "/T", "/PID", str(agent.pid)], check=False)
+            else:
+                self._subprocess_module.run(["kill", "-TERM", str(agent.pid)], check=True)
+                time.sleep(1)
+                self._subprocess_module.run(["kill", "-KILL", str(agent.pid)], check=False)
 
     async def _monitor_agent(self, process, agent) -> None:
         while True:

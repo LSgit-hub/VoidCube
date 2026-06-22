@@ -128,10 +128,10 @@ class EndogenousDriveEngine:
                 )
             )
 
-        recent_errors = int(counts.get("recent_errors") or counts.get("error_count") or 0)
+        recent_errors = int(counts.get("error_count") or counts.get("recent_errors") or 0)
         uncertainty_count = int(
-            counts.get("high_uncertainty")
-            or counts.get("uncertainty_high_count")
+            counts.get("uncertainty_high_count")
+            or counts.get("high_uncertainty")
             or 0
         )
         correction_signals = recent_errors + uncertainty_count

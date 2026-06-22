@@ -57,8 +57,8 @@ def _attach_route_hint(payload: dict, interface_id: str) -> dict:
     return result
 
 
-def _make_watch_window_state(*, task=None, last_outcome=None) -> SimpleNamespace:
-    return SimpleNamespace(task=task, last_outcome=last_outcome)
+def _make_watch_window_state(*, task=None, last_outcome=None, last_body_upgrade_trace_id=None) -> SimpleNamespace:
+    return SimpleNamespace(task=task, last_outcome=last_outcome, last_body_upgrade_trace_id=last_body_upgrade_trace_id)
 
 
 def _make_governor_request_executor(result=None) -> SimpleNamespace:
@@ -278,7 +278,7 @@ async def test_self_learning_execution_adapter_records_learn_only_followup(tmp_p
     adapter = SelfLearningExecutionAdapter(
         learning_service=learning,
         attach_execution_route_hint=_attach_route_hint,
-        skill_delegate=SelfLearningSkillDelegate(tool_runner=runner),
+        skill_delegate=SelfLearningSkillDelegate(tool_runner=runner, max_iterations=1),
     )
 
     result = await adapter.execute_self_learning_followup(
@@ -310,7 +310,7 @@ async def test_self_learning_execution_adapter_records_learn_only_followup(tmp_p
     assert submission["metadata"]["source_task_id"] == "task-learning-1"
     assert submission["metadata"]["trace_id"] == "trace-learning-1"
     assert submission["metadata"]["skill_delegate"] == "SelfLearningSkillDelegate"
-    assert submission["metadata"]["skill_backend"] == "bounded_tool_runner"
+    assert submission["metadata"]["skill_backend"] == "iterative_bounded_tool_runner"
     assert submission["metadata"]["skill_evidence_summary"]["source_mix"] == ["external_web"]
     assert submission["metadata"]["skill_evidence_summary"]["total_calls"] == 2
     assert submission["metadata"]["skill_evidence_summary"]["succeeded"] == 2
@@ -340,6 +340,7 @@ async def test_self_learning_execution_adapter_promotes_failed_evidence_summary(
         attach_execution_route_hint=_attach_route_hint,
         skill_delegate=SelfLearningSkillDelegate(
             tool_runner=FakeSelfLearningToolRunner(fail=True),
+            max_iterations=1,
         ),
     )
 
@@ -374,7 +375,7 @@ async def test_self_learning_execution_adapter_promotes_failed_evidence_summary(
 @pytest.mark.unit
 def test_self_learning_skill_delegate_runs_bounded_tool_runner():
     runner = FakeSelfLearningToolRunner()
-    delegate = SelfLearningSkillDelegate(tool_runner=runner)
+    delegate = SelfLearningSkillDelegate(tool_runner=runner, max_iterations=1)
 
     result = delegate.execute(
         {
@@ -388,7 +389,7 @@ def test_self_learning_skill_delegate_runs_bounded_tool_runner():
     )
 
     assert result["status"] == "skill_delegate_executed"
-    assert result["backend"] == "bounded_tool_runner"
+    assert result["backend"] == "iterative_bounded_tool_runner"
     assert result["skill"]["name"] == "self-learning"
     assert result["learning_plan"]["planned_minutes"] == 15
     assert "Evaluate agent knowledge radar latest trends 2026" in result["learning_plan"]["search_queries"]
@@ -411,7 +412,7 @@ def test_self_learning_skill_delegate_runs_bounded_tool_runner():
 
 @pytest.mark.unit
 def test_self_learning_skill_delegate_records_failed_tool_evidence_without_success_claim():
-    delegate = SelfLearningSkillDelegate(tool_runner=FakeSelfLearningToolRunner(fail=True))
+    delegate = SelfLearningSkillDelegate(tool_runner=FakeSelfLearningToolRunner(fail=True), max_iterations=1)
 
     result = delegate.execute({"task": {"task_id": "task-failed-search", "title": "Study failed search"}})
 
@@ -427,7 +428,7 @@ def test_self_learning_skill_delegate_records_failed_tool_evidence_without_succe
 @pytest.mark.unit
 def test_self_learning_skill_delegate_builds_multisource_evidence_plan_from_task_constraints():
     runner = FakeSelfLearningToolRunner()
-    delegate = SelfLearningSkillDelegate(tool_runner=runner)
+    delegate = SelfLearningSkillDelegate(tool_runner=runner, max_iterations=1)
 
     result = delegate.execute(
         {
@@ -464,7 +465,7 @@ def test_self_learning_skill_delegate_builds_multisource_evidence_plan_from_task
 @pytest.mark.unit
 def test_self_learning_skill_delegate_rejects_disallowed_evidence_tools_without_calling_them():
     runner = FakeSelfLearningToolRunner()
-    delegate = SelfLearningSkillDelegate(tool_runner=runner)
+    delegate = SelfLearningSkillDelegate(tool_runner=runner, max_iterations=1)
 
     result = delegate.execute(
         {
@@ -1315,7 +1316,7 @@ async def test_watch_window_execution_adapter_evaluates_and_records_outcome():
     assert result["governor_response"]["decision"] == "approve"
     assert result["execution_followup"]["action"] == "retired_slot_recycled"
     governor_request_executor.execute_governor_request.assert_called_once()
-    assert runtime_state.last_outcome is result
+    assert adapter._state.last_outcome is result  # S-02/03: state self-owned
 
 
 @pytest.mark.asyncio
@@ -1487,7 +1488,8 @@ async def test_watch_window_execution_adapter_owns_task_lifecycle():
 
     task = adapter.ensure_watch_window_task()
     assert task is not None
-    assert runtime_state.task is task
+    # State now owned by adapter (S-02/03)
+    assert adapter._state.task is not None
     assert adapter.ensure_watch_window_task() is task
 
     await asyncio.sleep(0.03)
@@ -1510,19 +1512,18 @@ def test_watch_window_execution_adapter_syncs_runtime_after_watch_approval():
         agents={},
         stop_agent=AsyncMock(),
         run_health_checks=AsyncMock(),
-        runtime_state=runtime_state,
         governor_request_executor=_make_governor_request_executor(),
     )
+    # S-02/03: populate adapter's self-owned state
+    adapter._state.task = existing_task
 
     result = adapter.sync_runtime_after_governor_response(SimpleNamespace(decision="approve_with_watch"))
 
-    assert result == {
-        "status": "watch_window_runtime_ensured",
-        "decision": "approve_with_watch",
-        "task_running": True,
-        "task_created": False,
-    }
-    assert runtime_state.task is existing_task
+    assert result["status"] == "watch_window_runtime_ensured"
+    assert result["decision"] == "approve_with_watch"
+    assert result["task_running"] is True
+    assert result["task_created"] is False
+    assert adapter._state.task is existing_task
 
 
 @pytest.mark.unit

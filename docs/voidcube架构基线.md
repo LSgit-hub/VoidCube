@@ -155,6 +155,11 @@ Mem 负责：
 
 Mem 不替代 Agent 的临时上下文管理；Agent 临时记忆服务短期工作，Mem 承担长期真相。
 
+Mem 的记忆压缩分两个层级运作：
+
+- **扁平压缩**（memory_service）：对 SQLite 中的对话条目做 API-B LLM 摘要合并与衰减，已接入运行时周期 loop。
+- **结构化四级压缩**（MemoryMaintenanceEngine）：对 Event→Scene→Arc→Epoch 四层对象做分层压缩与替代（supersede），超期 Scene（>30天）压缩入父 Arc，超期 Arc（>180天）压缩入父 Epoch，超期 Epoch（>365天）进一步压缩。默认使用 LLMScholarBackend（API-B）生成自然压缩摘要，无 API 凭据时自动降级到 HeuristicScholarBackend。**已接入运行时**：Governor Mode 下通过内生驱动→任务队列触发，Memory Mode 下每 3600s 自动执行。
+
 在当前基线中，记忆管理者与监督者共用同一条 API-B 能力链。二者不是两套互相割裂的灵魂系统，而是同一长期记忆与治理能力在不同时间窗口、不同权限上下文下的两种身份：
 
 - 记忆管理者：负责长期记忆管理、压缩、整理、总结
@@ -188,6 +193,8 @@ API-B 必须独立配置的原因是：
 
 自学系统只生产证据、结论和建议，不消费最终执行权。
 
+自学任务的执行已从执行器侧有界工具运行器升级为 **subagent 模式**：监督者批准的自学任务被分派给独立的 AIAgent 子代理执行。子代理使用专用的 `learn` toolset（web_search、read_file、search_files、terminal、execute_code、browser），拥有完整 LLM 推理与工具调用循环，但受 `learn_only` 约束——禁止修改 active body、禁止修改 memory、禁止递归 delegate。无 API 凭据时自动降级到过程化工具运行器。研究结果通过 Topic→Session→Experiment→Conclusion→SupervisorSubmission 管线写回监督者队列。
+
 ### 3.6 监督者
 
 监督者是 Mem 在治理窗口内的提权身份，使用 API-B。
@@ -218,7 +225,12 @@ API-B 必须独立配置的原因是：
 - 真实：把错误、不确定性、证据缺口转成复核或学习任务
 - 创造：在空闲容量中提出受边界约束的学习和改进方向
 
-内生驱动器不能直接执行任务，也不能绕过 idle-window、任务队列、治理裁决、执行器和回滚协议。它解决的是“该主动想到什么”，不是“可以不经审查做什么”。
+内生驱动器不能直接执行任务，也不能绕过 idle-window、任务队列、治理裁决、执行器和回滚协议。它解决的是”该主动想到什么”，不是”可以不经审查做什么”。
+
+监督者有两种运行模式，由 CLI 用户显式控制：
+
+- **Memory Mode（默认）**：仅运行 health_check 和结构化记忆维护循环。内生驱动器与自进化审查 loop 不启动。系统只做记忆管理，不派生/裁决/分派任务。
+- **Governor Mode（`/auto` 激活）**：启动内生驱动器 + 自进化审查 loop，按配置周期（默认 300s）运行完整的 drive→plan→review→dispatch 循环。在 Governor Mode 下，self_learning 和 memory_maintenance 的 planning 不再受 idle_window 限制（用户显式授权治理），但 body_upgrade/body_switch 的**执行**仍要求执行窗口和全部空闲条件。CLI `/auto-q` 退出回到 Memory Mode，立即停止 drive 和 review loop。
 
 正式身体切换是自进化的一部分，而不是用户日常手动操作。人工可以提交测试请求、应急请求或候选证据，但不能绕过 Mem / 监督者裁决直接让候选体成为 active。
 
@@ -521,9 +533,14 @@ Mem / 监督者 -> 裁决
 
 - 把 `supervisor` 中残留的直接执行职责继续迁移到执行器
 - 细化网关活动分类与空闲判定
-- 让自学系统成为更完整的独立运行单元
-- 让执行器完整消费“放行 / 推迟 / 取消 / 暂停”裁决
 - 让 CLI / Gateway 成为更完整的标准操作入口，减少内部端口直连依赖
+
+已完成收口的方向：
+
+- **监督者模式切换**：Memory Mode / Governor Mode 现已通过 `/auto` 和 `/auto-q` CLI 命令显式控制。默认 Memory Mode 仅运行 health_check + 结构化记忆维护，Governor Mode 启动完整的 drive→plan→review→dispatch 循环。
+- **自学系统 subagent 化**：自学任务已从执行器侧有界工具运行器升级为独立 AIAgent 子代理执行（`learn` toolset），产出通过 Topic→Session→Experiment→Conclusion→SupervisorSubmission 管线写回。
+- **结构化四级记忆压缩**（Phase M5）：Event→Scene→Arc→Epoch 四级压缩管线（MemoryMaintenanceEngine）已接入运行时，支持双触发路径（Governor Mode 通过任务队列 + Memory Mode 周期自动），使用 LLMScholarBackend + Heuristic fallback。
+- **执行器完整消费裁决**：执行器现已消费全部四种裁决状态（放行/推迟/取消/暂停），通过 SelfEvolutionExecutionRequest 正式契约分派到各 canonical executor。
 
 ## 10. 非目标
 
@@ -552,6 +569,7 @@ Mem / 监督者 -> 裁决
 - [body-runtime-runbook.md](./body-runtime-runbook.md)：当前实现的操作与排障手册
 - [architecture-conflicts-audit.md](./architecture-conflicts-audit.md)：当前实现与基线的偏差审计
 - [voidcube架构可行性论证论文.md](./voidcube架构可行性论证论文.md)：架构可行性论证
+- [phase1-core-loop-and-endogenous-drive.md](./phase1-core-loop-and-endogenous-drive.md)：Phase 1 核心闭环与内生驱动器运行机理，定义母体心跳、四重保障与完整运行循环
 
 ## 12. 一句话结论
 

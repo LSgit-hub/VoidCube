@@ -45,7 +45,20 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         or (runtime_root / "self_evolution_queue.json")
     )
     supervisor._self_learning_service = SelfLearningService(runtime_root / "self-learning")
-    supervisor._self_learning_skill_delegate = SelfLearningSkillDelegate()
+    # Resolve self-learning subagent config from global VoidCube config
+    _sl_cfg: Dict[str, Any] = {}
+    try:
+        from VoidCube_cli.config import load_config as _load_global_cfg
+        _global_cfg = _load_global_cfg()
+        _sl_cfg = _global_cfg.get("self_learning", {}) if isinstance(_global_cfg, dict) else {}
+    except Exception:
+        pass
+    supervisor._self_learning_skill_delegate = SelfLearningSkillDelegate(
+        use_subagent=bool(_sl_cfg.get("subagent_enabled", True)),
+        subagent_model=_sl_cfg.get("subagent_model") or None,
+        subagent_max_iterations=int(_sl_cfg.get("subagent_max_iterations", 30)),
+        subagent_timeout_seconds=float(_sl_cfg.get("subagent_timeout_seconds", 300)),
+    )
     supervisor._endogenous_drive_engine = EndogenousDriveEngine()
     supervisor._body_lifecycle_state_executor = BodyLifecycleExecutor(supervisor._body_registry)
     supervisor._probe_runner = ProbeRunner()
@@ -54,6 +67,15 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
 
 def assemble_supervisor_execution_runtime(supervisor: Any) -> None:
     execution_config = supervisor.config.execution
+
+    # S-01: Agent process lifecycle is now owned by the executor layer.
+    # The supervisor injects the ProcessManager rather than owning the
+    # spawn/terminate/monitor implementations directly.
+    from systems.execution.process_manager import AgentProcessManager
+    supervisor._process_manager = AgentProcessManager(
+        agent_model=supervisor._agent_model,
+    )
+
     supervisor._agent_lifecycle_executor = AgentLifecycleExecutionAdapter(
         config=execution_config,
         agents=supervisor._agents,
@@ -98,6 +120,7 @@ def assemble_supervisor_execution_runtime(supervisor: Any) -> None:
     supervisor._memory_maintenance_executor = MemoryMaintenanceExecutionAdapter(
         config=execution_config,
         attach_execution_route_hint=attach_execution_route_hint,
+        mem_state_path=None,  # auto-resolve ~/.VoidCube/mem_state.json
     )
     supervisor._self_learning_executor = SelfLearningExecutionAdapter(
         learning_service=supervisor._self_learning_service,

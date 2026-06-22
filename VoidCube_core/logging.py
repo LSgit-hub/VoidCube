@@ -312,8 +312,13 @@ class _ManagedRotatingFileHandler(RotatingFileHandler):
     """
 
     def __init__(self, *args, **kwargs):
-        from VoidCube_cli.config import is_managed
-        self._managed = is_managed()
+        # Defer config import to avoid ~62ms import chain during early startup.
+        # is_managed() defaults to False when unreadable.
+        try:
+            from VoidCube_cli.config import is_managed
+            self._managed = is_managed()
+        except Exception:
+            self._managed = False
         super().__init__(*args, **kwargs)
 
     def _chmod_if_managed(self):
@@ -324,7 +329,8 @@ class _ManagedRotatingFileHandler(RotatingFileHandler):
                 pass
 
     def _open(self):
-        stream = super()._open()
+        stream = open(self.baseFilename, self.mode, encoding='utf-8',
+                      errors='replace')
         self._chmod_if_managed()
         return stream
 

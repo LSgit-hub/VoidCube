@@ -110,6 +110,23 @@ TOOLSETS = {
         "tools": [],
         "includes": ["voidcube", "session_search"]
     },
+    "learn": {
+        "description": (
+            "Research-only tools for self-learning subagents: web search, "
+            "file reading, terminal, code execution, and browser automation. "
+            "No file writes, no skill mutations, no memory writes, no delegation."
+        ),
+        "tools": [
+            "web_search", "web_extract",
+            "read_file", "search_files",
+            "terminal",
+            "execute_code",
+            "browser_navigate", "browser_snapshot", "browser_click",
+            "browser_type", "browser_scroll", "browser_extract",
+            "browser_wait", "browser_close", "browser_screenshot",
+        ],
+        "includes": [],
+    },
 }
 
 

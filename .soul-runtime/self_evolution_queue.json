@@ -2,109 +2,4129 @@
   "version": 1,
   "tasks": [
     {
-      "task_id": "feaf469c-02c5-46b8-a6f7-5cc0bb3f83c3",
-      "trace_id": "ddbb0082-e89e-43f5-b217-5f45629f6195",
-      "title": "Adopt gateway-backed idle judgement",
-      "summary": "Queue an evolution task instead of changing runtime directly.",
-      "task_type": "self_evolution",
-      "source": "self_learning",
-      "priority": "normal",
-      "status": "planned",
-      "created_at": "2026-06-03T11:07:50.729200",
-      "updated_at": "2026-06-03T11:07:50.729202",
+      "task_id": "d2f2e389-80f5-4040-acd6-161c2531d9c3",
+      "trace_id": "57c61512-0136-4cbf-9893-b2e0c12812a2",
+      "title": "Maintain long-term memory continuity",
+      "summary": "Inspect memory-maintenance needs during an idle window so long-term identity, summaries, and governance traces stay usable.",
+      "task_type": "memory_maintenance",
+      "governance_task_type": "memory_maintenance",
+      "task_family": "memory_maintenance",
+      "execution_kind": "memory_maintenance",
+      "source": "endogenous_drive",
+      "priority": "high",
+      "status": "approved",
+      "created_at": "2026-06-21T04:10:38.900214",
+      "updated_at": "2026-06-22T01:11:35.045098",
       "metadata": {
-        "session_id": "e9a71308-c9ac-422d-a25e-1ca4749ef187",
-        "topic_reason": "Need a formal self-evolution proposal backed by learning evidence.",
-        "topic_tags": [
-          "gateway",
-          "idle"
+        "source": "endogenous_drive",
+        "endogenous_drive_key": "continuity:memory_maintenance_sweep",
+        "core_values": [
+          "continuity"
         ],
-        "topic_id": "c5124dd6-2d3e-4b38-b790-cd364c10c9eb",
-        "conclusion_id": "ddbb0082-e89e-43f5-b217-5f45629f6195",
-        "verified": true,
-        "recommendation_type": "propose_evolution_task"
+        "utility": 0.92,
+        "governance_task_type": "memory_maintenance",
+        "task_family": "memory_maintenance",
+        "execution_kind": "memory_maintenance",
+        "execution_dispatched": true,
+        "executed_at": "2026-06-22T01:11:35.044745+00:00"
       },
       "evidence": {
-        "comparisons": [
-          "gateway-facts > clock-only"
-        ],
-        "experiments": [
-          {
-            "experiment_id": "3dad3307-6ee2-4968-84cb-545e655b70b3",
-            "topic_id": "c5124dd6-2d3e-4b38-b790-cd364c10c9eb",
-            "session_id": "e9a71308-c9ac-422d-a25e-1ca4749ef187",
-            "hypothesis": "Gateway activity facts should gate idle judgement.",
-            "method": "Compare clock-only judgement with gateway activity markers.",
-            "observations": [
-              "Gateway markers better match real user interruption patterns."
-            ],
-            "outcome": "passed",
-            "compared_against": [
-              "clock-only"
-            ],
-            "created_at": "2026-06-03T11:07:50.725751"
-          }
-        ],
-        "summary": "Promote gateway-backed idle judgement into the supervisor planning queue.",
-        "experiment_ids": [
-          "3dad3307-6ee2-4968-84cb-545e655b70b3"
-        ],
-        "priority_reason": "reduces false idle windows"
+        "endogenous_drive": {
+          "stable_key": "continuity:memory_maintenance_sweep",
+          "core_values": [
+            "continuity"
+          ],
+          "core_value_definitions": {
+            "continuity": "Preserve VoidCube's long-term memory, lineage, and service continuity."
+          },
+          "utility": 0.92
+        },
+        "idle_window_checks": {
+          "has_user_idle": true,
+          "has_memory_idle": true,
+          "has_agent_idle": true,
+          "has_self_learning_idle": true,
+          "has_self_evolution_plan_idle": true,
+          "has_self_evolution_execute_idle": true,
+          "has_self_evolution_idle": true,
+          "in_execution_window": true
+        },
+        "idle_seconds": {
+          "user": null,
+          "agent": null,
+          "memory": null,
+          "self_learning": null,
+          "self_evolution_plan": null,
+          "self_evolution_execute": null,
+          "self_evolution": null
+        }
       },
       "constraints": {},
-      "decision_reason": "",
-      "decision_history": [],
+      "decision_reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+      "decision_history": [
+        {
+          "decision_id": "5158b60e-ae06-4d15-9505-2848829fa1fa",
+          "status": "approved",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "57c61512-0136-4cbf-9893-b2e0c12812a2",
+          "decided_at": "2026-06-21T04:15:38.856079",
+          "actor": "supervisor",
+          "reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+          "context": {
+            "idle_window": {
+              "status": "evaluated",
+              "evaluated_at": "2026-06-21T12:15:38.855527",
+              "gateway_address": "http://127.0.0.1:6000",
+              "governance_task_type": "memory_maintenance",
+              "task_family": "memory_maintenance",
+              "execution_kind": "memory_maintenance",
+              "task_profile": {
+                "governance_task_type": "memory_maintenance",
+                "task_family": "memory_maintenance",
+                "execution_kind": "memory_maintenance"
+              },
+              "activity": {
+                "last_user_request_at": null,
+                "last_agent_work_at": null,
+                "last_memory_task_at": null,
+                "last_self_learning_activity_at": null,
+                "last_self_evolution_activity_at": "2026-06-21T04:15:05.772344",
+                "last_self_evolution_plan_at": "2026-06-21T04:15:05.772344",
+                "last_self_evolution_execute_at": null,
+                "counts": {
+                  "user_request_count": 0,
+                  "agent_work_count": 0,
+                  "memory_task_count": 0,
+                  "self_learning_activity_count": 0,
+                  "self_evolution_activity_count": 6,
+                  "self_evolution_plan_count": 6,
+                  "self_evolution_execute_count": 0,
+                  "error_count": 0,
+                  "uncertainty_high_count": 0
+                },
+                "recent_metadata": {
+                  "user_request": null,
+                  "agent_work": null,
+                  "memory_task": null,
+                  "self_learning": null,
+                  "self_evolution": {
+                    "action": "decision",
+                    "count": 1,
+                    "status": "approved",
+                    "governance_task_types": [
+                      "self_evolution"
+                    ],
+                    "task_families": [
+                      "general_self_evolution"
+                    ],
+                    "execution_kinds": [
+                      "general_self_evolution"
+                    ],
+                    "task_id": "b710079e-71a0-42b4-a435-a21f5e5e0d4c",
+                    "trace_id": "4989da56-92af-45d2-b4ac-deb4cb03ba4a",
+                    "task_type": "self_evolution",
+                    "governance_task_type": "self_evolution",
+                    "task_family": "general_self_evolution",
+                    "execution_kind": "general_self_evolution",
+                    "source_service": "supervisor"
+                  },
+                  "self_evolution_plan": {
+                    "action": "decision",
+                    "count": 1,
+                    "status": "approved",
+                    "governance_task_types": [
+                      "self_evolution"
+                    ],
+                    "task_families": [
+                      "general_self_evolution"
+                    ],
+                    "execution_kinds": [
+                      "general_self_evolution"
+                    ],
+                    "task_id": "b710079e-71a0-42b4-a435-a21f5e5e0d4c",
+                    "trace_id": "4989da56-92af-45d2-b4ac-deb4cb03ba4a",
+                    "task_type": "self_evolution",
+                    "governance_task_type": "self_evolution",
+                    "task_family": "general_self_evolution",
+                    "execution_kind": "general_self_evolution",
+                    "source_service": "supervisor"
+                  },
+                  "self_evolution_execute": null
+                },
+                "active_sessions": 0
+              },
+              "idle_seconds": {
+                "user": null,
+                "agent": null,
+                "memory": null,
+                "self_learning": null,
+                "self_evolution_plan": 28833.083183,
+                "self_evolution_execute": null,
+                "self_evolution": 28833.083183
+              },
+              "thresholds": {
+                "user_idle_seconds": 600,
+                "memory_idle_seconds": 600,
+                "workflow_idle_seconds": 600,
+                "execution_window_start_hour": 0,
+                "execution_window_end_hour": 24
+              },
+              "checks": {
+                "has_user_idle": true,
+                "has_memory_idle": true,
+                "has_agent_idle": true,
+                "has_self_learning_idle": true,
+                "has_self_evolution_plan_idle": true,
+                "has_self_evolution_execute_idle": true,
+                "has_self_evolution_idle": true,
+                "in_execution_window": true
+              },
+              "governance_task_type_decisions": {
+                "user": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_learning": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "memory_maintenance": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_evolution": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                }
+              },
+              "task_family_decisions": {
+                "user": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_learning": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "memory_maintenance": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "general_self_evolution": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "body_upgrade": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "body_switch": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                }
+              },
+              "decisions": {
+                "eligible_for_planning": true,
+                "eligible_for_execution": true
+              }
+            }
+          }
+        }
+      ],
+      "execution_request": {
+        "request_id": "bdb191a4-276d-4195-b9b6-7c39b9a81d55",
+        "task_id": "d2f2e389-80f5-4040-acd6-161c2531d9c3",
+        "trace_id": "57c61512-0136-4cbf-9893-b2e0c12812a2",
+        "task_type": "memory_maintenance",
+        "governance_task_type": "memory_maintenance",
+        "task_family": "memory_maintenance",
+        "execution_kind": "memory_maintenance",
+        "decision_id": "5158b60e-ae06-4d15-9505-2848829fa1fa",
+        "kind": "memory_maintenance",
+        "status": "approved_for_execution",
+        "source_actor": "supervisor",
+        "target_slot_id": null,
+        "git_lineage": {
+          "source_branch": null,
+          "source_commit": null,
+          "candidate_branch": null,
+          "candidate_commit": null,
+          "active_ref": null,
+          "rollback_ref": null,
+          "rollback_commit": null,
+          "diff_summary": "",
+          "changed_files": []
+        },
+        "probe_report_ref": null,
+        "idle_window_evidence": {
+          "status": "evaluated",
+          "evaluated_at": "2026-06-21T12:15:38.855527",
+          "gateway_address": "http://127.0.0.1:6000",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "task_profile": {
+            "governance_task_type": "memory_maintenance",
+            "task_family": "memory_maintenance",
+            "execution_kind": "memory_maintenance"
+          },
+          "activity": {
+            "last_user_request_at": null,
+            "last_agent_work_at": null,
+            "last_memory_task_at": null,
+            "last_self_learning_activity_at": null,
+            "last_self_evolution_activity_at": "2026-06-21T04:15:05.772344",
+            "last_self_evolution_plan_at": "2026-06-21T04:15:05.772344",
+            "last_self_evolution_execute_at": null,
+            "counts": {
+              "user_request_count": 0,
+              "agent_work_count": 0,
+              "memory_task_count": 0,
+              "self_learning_activity_count": 0,
+              "self_evolution_activity_count": 6,
+              "self_evolution_plan_count": 6,
+              "self_evolution_execute_count": 0,
+              "error_count": 0,
+              "uncertainty_high_count": 0
+            },
+            "recent_metadata": {
+              "user_request": null,
+              "agent_work": null,
+              "memory_task": null,
+              "self_learning": null,
+              "self_evolution": {
+                "action": "decision",
+                "count": 1,
+                "status": "approved",
+                "governance_task_types": [
+                  "self_evolution"
+                ],
+                "task_families": [
+                  "general_self_evolution"
+                ],
+                "execution_kinds": [
+                  "general_self_evolution"
+                ],
+                "task_id": "b710079e-71a0-42b4-a435-a21f5e5e0d4c",
+                "trace_id": "4989da56-92af-45d2-b4ac-deb4cb03ba4a",
+                "task_type": "self_evolution",
+                "governance_task_type": "self_evolution",
+                "task_family": "general_self_evolution",
+                "execution_kind": "general_self_evolution",
+                "source_service": "supervisor"
+              },
+              "self_evolution_plan": {
+                "action": "decision",
+                "count": 1,
+                "status": "approved",
+                "governance_task_types": [
+                  "self_evolution"
+                ],
+                "task_families": [
+                  "general_self_evolution"
+                ],
+                "execution_kinds": [
+                  "general_self_evolution"
+                ],
+                "task_id": "b710079e-71a0-42b4-a435-a21f5e5e0d4c",
+                "trace_id": "4989da56-92af-45d2-b4ac-deb4cb03ba4a",
+                "task_type": "self_evolution",
+                "governance_task_type": "self_evolution",
+                "task_family": "general_self_evolution",
+                "execution_kind": "general_self_evolution",
+                "source_service": "supervisor"
+              },
+              "self_evolution_execute": null
+            },
+            "active_sessions": 0
+          },
+          "idle_seconds": {
+            "user": null,
+            "agent": null,
+            "memory": null,
+            "self_learning": null,
+            "self_evolution_plan": 28833.083183,
+            "self_evolution_execute": null,
+            "self_evolution": 28833.083183
+          },
+          "thresholds": {
+            "user_idle_seconds": 600,
+            "memory_idle_seconds": 600,
+            "workflow_idle_seconds": 600,
+            "execution_window_start_hour": 0,
+            "execution_window_end_hour": 24
+          },
+          "checks": {
+            "has_user_idle": true,
+            "has_memory_idle": true,
+            "has_agent_idle": true,
+            "has_self_learning_idle": true,
+            "has_self_evolution_plan_idle": true,
+            "has_self_evolution_execute_idle": true,
+            "has_self_evolution_idle": true,
+            "in_execution_window": true
+          },
+          "governance_task_type_decisions": {
+            "user": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_learning": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "memory_maintenance": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_evolution": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            }
+          },
+          "task_family_decisions": {
+            "user": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_learning": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "memory_maintenance": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "general_self_evolution": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "body_upgrade": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "body_switch": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            }
+          },
+          "decisions": {
+            "eligible_for_planning": true,
+            "eligible_for_execution": true
+          }
+        },
+        "governor_decision": {
+          "decision": "approved_for_execution",
+          "actor": "supervisor",
+          "reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+          "task_status": "approved"
+        },
+        "rollback_plan": {},
+        "created_at": "2026-06-21T04:15:38.855681"
+      }
+    },
+    {
+      "task_id": "3b1777bb-8999-49f2-a061-9323cc98ac2e",
+      "trace_id": "53a2506c-0e4d-4b35-bc2f-c337c212a20a",
+      "title": "Explore one unresolved learning thread",
+      "summary": "Use idle capacity to ask the agent for one evidence-producing learning pass over unresolved recent topics.",
+      "task_type": "self_learning",
+      "governance_task_type": "self_learning",
+      "task_family": "self_learning",
+      "execution_kind": null,
+      "source": "endogenous_drive",
+      "priority": "normal",
+      "status": "approved",
+      "created_at": "2026-06-21T04:10:38.925541",
+      "updated_at": "2026-06-21T04:15:38.904393",
+      "metadata": {
+        "source": "endogenous_drive",
+        "endogenous_drive_key": "creativity:idle_learning_thread",
+        "core_values": [
+          "creativity"
+        ],
+        "utility": 0.58,
+        "governance_task_type": "self_learning",
+        "task_family": "self_learning"
+      },
+      "evidence": {
+        "endogenous_drive": {
+          "stable_key": "creativity:idle_learning_thread",
+          "core_values": [
+            "creativity"
+          ],
+          "core_value_definitions": {
+            "creativity": "Turn idle capacity into bounded learning and improvement proposals."
+          },
+          "utility": 0.58
+        },
+        "active_sessions": 0,
+        "trigger": "idle_capacity"
+      },
+      "constraints": {
+        "execution_policy": "learn_only",
+        "must_not_modify_active_body": true
+      },
+      "decision_reason": "Task approved for learn-only follow-up because the user path is idle and no conflicting workflow activity is active. Execution-window gating is not required for self-learning evidence work.",
+      "decision_history": [
+        {
+          "decision_id": "fd192238-8dfc-4afe-9c42-466538023b4a",
+          "status": "approved",
+          "task_type": "self_learning",
+          "governance_task_type": "self_learning",
+          "task_family": "self_learning",
+          "execution_kind": null,
+          "trace_id": "53a2506c-0e4d-4b35-bc2f-c337c212a20a",
+          "decided_at": "2026-06-21T04:15:38.904410",
+          "actor": "supervisor",
+          "reason": "Task approved for learn-only follow-up because the user path is idle and no conflicting workflow activity is active. Execution-window gating is not required for self-learning evidence work.",
+          "context": {
+            "idle_window": {
+              "status": "evaluated",
+              "evaluated_at": "2026-06-21T12:15:38.903848",
+              "gateway_address": "http://127.0.0.1:6000",
+              "governance_task_type": "self_learning",
+              "task_family": "self_learning",
+              "execution_kind": null,
+              "task_profile": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+                "execution_kind": null
+              },
+              "activity": {
+                "last_user_request_at": null,
+                "last_agent_work_at": null,
+                "last_memory_task_at": null,
+                "last_self_learning_activity_at": null,
+                "last_self_evolution_activity_at": "2026-06-21T04:15:05.772344",
+                "last_self_evolution_plan_at": "2026-06-21T04:15:05.772344",
+                "last_self_evolution_execute_at": null,
+                "counts": {
+                  "user_request_count": 0,
+                  "agent_work_count": 0,
+                  "memory_task_count": 0,
+                  "self_learning_activity_count": 0,
+                  "self_evolution_activity_count": 6,
+                  "self_evolution_plan_count": 6,
+                  "self_evolution_execute_count": 0,
+                  "error_count": 0,
+                  "uncertainty_high_count": 0
+                },
+                "recent_metadata": {
+                  "user_request": null,
+                  "agent_work": null,
+                  "memory_task": null,
+                  "self_learning": null,
+                  "self_evolution": {
+                    "action": "decision",
+                    "count": 1,
+                    "status": "approved",
+                    "governance_task_types": [
+                      "self_evolution"
+                    ],
+                    "task_families": [
+                      "general_self_evolution"
+                    ],
+                    "execution_kinds": [
+                      "general_self_evolution"
+                    ],
+                    "task_id": "b710079e-71a0-42b4-a435-a21f5e5e0d4c",
+                    "trace_id": "4989da56-92af-45d2-b4ac-deb4cb03ba4a",
+                    "task_type": "self_evolution",
+                    "governance_task_type": "self_evolution",
+                    "task_family": "general_self_evolution",
+                    "execution_kind": "general_self_evolution",
+                    "source_service": "supervisor"
+                  },
+                  "self_evolution_plan": {
+                    "action": "decision",
+                    "count": 1,
+                    "status": "approved",
+                    "governance_task_types": [
+                      "self_evolution"
+                    ],
+                    "task_families": [
+                      "general_self_evolution"
+                    ],
+                    "execution_kinds": [
+                      "general_self_evolution"
+                    ],
+                    "task_id": "b710079e-71a0-42b4-a435-a21f5e5e0d4c",
+                    "trace_id": "4989da56-92af-45d2-b4ac-deb4cb03ba4a",
+                    "task_type": "self_evolution",
+                    "governance_task_type": "self_evolution",
+                    "task_family": "general_self_evolution",
+                    "execution_kind": "general_self_evolution",
+                    "source_service": "supervisor"
+                  },
+                  "self_evolution_execute": null
+                },
+                "active_sessions": 0
+              },
+              "idle_seconds": {
+                "user": null,
+                "agent": null,
+                "memory": null,
+                "self_learning": null,
+                "self_evolution_plan": 28833.131504,
+                "self_evolution_execute": null,
+                "self_evolution": 28833.131504
+              },
+              "thresholds": {
+                "user_idle_seconds": 600,
+                "memory_idle_seconds": 600,
+                "workflow_idle_seconds": 600,
+                "execution_window_start_hour": 0,
+                "execution_window_end_hour": 24
+              },
+              "checks": {
+                "has_user_idle": true,
+                "has_memory_idle": true,
+                "has_agent_idle": true,
+                "has_self_learning_idle": true,
+                "has_self_evolution_plan_idle": true,
+                "has_self_evolution_execute_idle": true,
+                "has_self_evolution_idle": true,
+                "in_execution_window": true
+              },
+              "governance_task_type_decisions": {
+                "user": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_learning": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "memory_maintenance": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_evolution": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                }
+              },
+              "task_family_decisions": {
+                "user": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_learning": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "memory_maintenance": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "general_self_evolution": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "body_upgrade": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "body_switch": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                }
+              },
+              "decisions": {
+                "eligible_for_planning": true,
+                "eligible_for_execution": true
+              }
+            }
+          }
+        }
+      ],
       "execution_request": null
     },
     {
-      "task_id": "867f6491-bdfd-4b52-bc60-4a8cf70af6d5",
-      "trace_id": "011ea3bd-a19f-4844-aea3-93aa1f783dbb",
-      "title": "Adopt gateway-backed idle judgement",
-      "summary": "Queue an evolution task instead of changing runtime directly.",
+      "task_id": "2efc35c1-c909-45fb-bf47-70cdc6ee70db",
+      "trace_id": "a2f3a0ca-7809-4022-8a4b-f190c28140ef",
+      "title": "Review self-evolution queue hygiene",
+      "summary": "Check whether planned, deferred, or paused self-evolution work still has enough evidence and clear rollback constraints.",
       "task_type": "self_evolution",
-      "source": "self_learning",
+      "governance_task_type": "self_evolution",
+      "task_family": "general_self_evolution",
+      "execution_kind": "general_self_evolution",
+      "source": "endogenous_drive",
       "priority": "normal",
-      "status": "planned",
-      "created_at": "2026-06-03T11:09:01.133202",
-      "updated_at": "2026-06-03T11:09:01.133204",
+      "status": "approved",
+      "created_at": "2026-06-21T04:10:38.967213",
+      "updated_at": "2026-06-21T04:15:38.943430",
       "metadata": {
-        "session_id": "8944eb93-b638-4482-945c-e62e5f661739",
-        "topic_reason": "Need a formal self-evolution proposal backed by learning evidence.",
-        "topic_tags": [
-          "gateway",
-          "idle"
+        "source": "endogenous_drive",
+        "endogenous_drive_key": "continuity:queue_hygiene_review",
+        "core_values": [
+          "continuity",
+          "truthfulness"
         ],
-        "topic_id": "5aeef05c-4cae-49e3-b70c-1f0b9d8056e1",
-        "conclusion_id": "011ea3bd-a19f-4844-aea3-93aa1f783dbb",
-        "verified": true,
-        "recommendation_type": "propose_evolution_task"
+        "utility": 0.52,
+        "governance_task_type": "self_evolution",
+        "task_family": "general_self_evolution",
+        "execution_kind": "general_self_evolution"
       },
       "evidence": {
-        "comparisons": [
-          "gateway-facts > clock-only"
-        ],
-        "experiments": [
-          {
-            "experiment_id": "f4100ef5-64c9-4006-90e3-b397e52420b1",
-            "topic_id": "5aeef05c-4cae-49e3-b70c-1f0b9d8056e1",
-            "session_id": "8944eb93-b638-4482-945c-e62e5f661739",
-            "hypothesis": "Gateway activity facts should gate idle judgement.",
-            "method": "Compare clock-only judgement with gateway activity markers.",
-            "observations": [
-              "Gateway markers better match real user interruption patterns."
-            ],
-            "outcome": "passed",
-            "compared_against": [
-              "clock-only"
-            ],
-            "created_at": "2026-06-03T11:09:01.129028"
+        "endogenous_drive": {
+          "stable_key": "continuity:queue_hygiene_review",
+          "core_values": [
+            "continuity",
+            "truthfulness"
+          ],
+          "core_value_definitions": {
+            "continuity": "Preserve VoidCube's long-term memory, lineage, and service continuity.",
+            "truthfulness": "Surface uncertainty, correction signals, and evidence gaps before they harden."
+          },
+          "utility": 0.52
+        },
+        "trigger": "supervisor_queue_governance"
+      },
+      "constraints": {
+        "must_not_execute_without_review": true
+      },
+      "decision_reason": "Task approved for the next execution handoff because the system is inside the execution window and idle requirements are satisfied.",
+      "decision_history": [
+        {
+          "decision_id": "4ed185bd-34c8-468a-9fca-7f018f095702",
+          "status": "approved",
+          "task_type": "self_evolution",
+          "governance_task_type": "self_evolution",
+          "task_family": "general_self_evolution",
+          "execution_kind": "general_self_evolution",
+          "trace_id": "a2f3a0ca-7809-4022-8a4b-f190c28140ef",
+          "decided_at": "2026-06-21T04:15:38.943440",
+          "actor": "supervisor",
+          "reason": "Task approved for the next execution handoff because the system is inside the execution window and idle requirements are satisfied.",
+          "context": {
+            "idle_window": {
+              "status": "evaluated",
+              "evaluated_at": "2026-06-21T12:15:38.853744",
+              "gateway_address": "http://127.0.0.1:6000",
+              "governance_task_type": "self_evolution",
+              "task_family": "general_self_evolution",
+              "execution_kind": "general_self_evolution",
+              "task_profile": {
+                "governance_task_type": "self_evolution",
+                "task_family": "general_self_evolution",
+                "execution_kind": "general_self_evolution"
+              },
+              "activity": {
+                "last_user_request_at": null,
+                "last_agent_work_at": null,
+                "last_memory_task_at": null,
+                "last_self_learning_activity_at": null,
+                "last_self_evolution_activity_at": "2026-06-21T04:15:05.772344",
+                "last_self_evolution_plan_at": "2026-06-21T04:15:05.772344",
+                "last_self_evolution_execute_at": null,
+                "counts": {
+                  "user_request_count": 0,
+                  "agent_work_count": 0,
+                  "memory_task_count": 0,
+                  "self_learning_activity_count": 0,
+                  "self_evolution_activity_count": 6,
+                  "self_evolution_plan_count": 6,
+                  "self_evolution_execute_count": 0,
+                  "error_count": 0,
+                  "uncertainty_high_count": 0
+                },
+                "recent_metadata": {
+                  "user_request": null,
+                  "agent_work": null,
+                  "memory_task": null,
+                  "self_learning": null,
+                  "self_evolution": {
+                    "action": "decision",
+                    "count": 1,
+                    "status": "approved",
+                    "governance_task_types": [
+                      "self_evolution"
+                    ],
+                    "task_families": [
+                      "general_self_evolution"
+                    ],
+                    "execution_kinds": [
+                      "general_self_evolution"
+                    ],
+                    "task_id": "b710079e-71a0-42b4-a435-a21f5e5e0d4c",
+                    "trace_id": "4989da56-92af-45d2-b4ac-deb4cb03ba4a",
+                    "task_type": "self_evolution",
+                    "governance_task_type": "self_evolution",
+                    "task_family": "general_self_evolution",
+                    "execution_kind": "general_self_evolution",
+                    "source_service": "supervisor"
+                  },
+                  "self_evolution_plan": {
+                    "action": "decision",
+                    "count": 1,
+                    "status": "approved",
+                    "governance_task_types": [
+                      "self_evolution"
+                    ],
+                    "task_families": [
+                      "general_self_evolution"
+                    ],
+                    "execution_kinds": [
+                      "general_self_evolution"
+                    ],
+                    "task_id": "b710079e-71a0-42b4-a435-a21f5e5e0d4c",
+                    "trace_id": "4989da56-92af-45d2-b4ac-deb4cb03ba4a",
+                    "task_type": "self_evolution",
+                    "governance_task_type": "self_evolution",
+                    "task_family": "general_self_evolution",
+                    "execution_kind": "general_self_evolution",
+                    "source_service": "supervisor"
+                  },
+                  "self_evolution_execute": null
+                },
+                "active_sessions": 0
+              },
+              "idle_seconds": {
+                "user": null,
+                "agent": null,
+                "memory": null,
+                "self_learning": null,
+                "self_evolution_plan": 28833.0814,
+                "self_evolution_execute": null,
+                "self_evolution": 28833.0814
+              },
+              "thresholds": {
+                "user_idle_seconds": 600,
+                "memory_idle_seconds": 600,
+                "workflow_idle_seconds": 600,
+                "execution_window_start_hour": 0,
+                "execution_window_end_hour": 24
+              },
+              "checks": {
+                "has_user_idle": true,
+                "has_memory_idle": true,
+                "has_agent_idle": true,
+                "has_self_learning_idle": true,
+                "has_self_evolution_plan_idle": true,
+                "has_self_evolution_execute_idle": true,
+                "has_self_evolution_idle": true,
+                "in_execution_window": true
+              },
+              "governance_task_type_decisions": {
+                "user": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_learning": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "memory_maintenance": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_evolution": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                }
+              },
+              "task_family_decisions": {
+                "user": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_learning": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "memory_maintenance": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "general_self_evolution": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "body_upgrade": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "body_switch": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                }
+              },
+              "decisions": {
+                "eligible_for_planning": true,
+                "eligible_for_execution": true
+              }
+            }
           }
+        }
+      ],
+      "execution_request": {
+        "request_id": "a0fc04b4-9a3e-47d8-96f9-ac41f432f496",
+        "task_id": "2efc35c1-c909-45fb-bf47-70cdc6ee70db",
+        "trace_id": "a2f3a0ca-7809-4022-8a4b-f190c28140ef",
+        "task_type": "self_evolution",
+        "governance_task_type": "self_evolution",
+        "task_family": "general_self_evolution",
+        "execution_kind": "general_self_evolution",
+        "decision_id": "4ed185bd-34c8-468a-9fca-7f018f095702",
+        "kind": "general_self_evolution",
+        "status": "approved_for_execution",
+        "source_actor": "supervisor",
+        "target_slot_id": null,
+        "git_lineage": {
+          "source_branch": null,
+          "source_commit": null,
+          "candidate_branch": null,
+          "candidate_commit": null,
+          "active_ref": null,
+          "rollback_ref": null,
+          "rollback_commit": null,
+          "diff_summary": "",
+          "changed_files": []
+        },
+        "probe_report_ref": null,
+        "idle_window_evidence": {
+          "status": "evaluated",
+          "evaluated_at": "2026-06-21T12:15:38.853744",
+          "gateway_address": "http://127.0.0.1:6000",
+          "governance_task_type": "self_evolution",
+          "task_family": "general_self_evolution",
+          "execution_kind": "general_self_evolution",
+          "task_profile": {
+            "governance_task_type": "self_evolution",
+            "task_family": "general_self_evolution",
+            "execution_kind": "general_self_evolution"
+          },
+          "activity": {
+            "last_user_request_at": null,
+            "last_agent_work_at": null,
+            "last_memory_task_at": null,
+            "last_self_learning_activity_at": null,
+            "last_self_evolution_activity_at": "2026-06-21T04:15:05.772344",
+            "last_self_evolution_plan_at": "2026-06-21T04:15:05.772344",
+            "last_self_evolution_execute_at": null,
+            "counts": {
+              "user_request_count": 0,
+              "agent_work_count": 0,
+              "memory_task_count": 0,
+              "self_learning_activity_count": 0,
+              "self_evolution_activity_count": 6,
+              "self_evolution_plan_count": 6,
+              "self_evolution_execute_count": 0,
+              "error_count": 0,
+              "uncertainty_high_count": 0
+            },
+            "recent_metadata": {
+              "user_request": null,
+              "agent_work": null,
+              "memory_task": null,
+              "self_learning": null,
+              "self_evolution": {
+                "action": "decision",
+                "count": 1,
+                "status": "approved",
+                "governance_task_types": [
+                  "self_evolution"
+                ],
+                "task_families": [
+                  "general_self_evolution"
+                ],
+                "execution_kinds": [
+                  "general_self_evolution"
+                ],
+                "task_id": "b710079e-71a0-42b4-a435-a21f5e5e0d4c",
+                "trace_id": "4989da56-92af-45d2-b4ac-deb4cb03ba4a",
+                "task_type": "self_evolution",
+                "governance_task_type": "self_evolution",
+                "task_family": "general_self_evolution",
+                "execution_kind": "general_self_evolution",
+                "source_service": "supervisor"
+              },
+              "self_evolution_plan": {
+                "action": "decision",
+                "count": 1,
+                "status": "approved",
+                "governance_task_types": [
+                  "self_evolution"
+                ],
+                "task_families": [
+                  "general_self_evolution"
+                ],
+                "execution_kinds": [
+                  "general_self_evolution"
+                ],
+                "task_id": "b710079e-71a0-42b4-a435-a21f5e5e0d4c",
+                "trace_id": "4989da56-92af-45d2-b4ac-deb4cb03ba4a",
+                "task_type": "self_evolution",
+                "governance_task_type": "self_evolution",
+                "task_family": "general_self_evolution",
+                "execution_kind": "general_self_evolution",
+                "source_service": "supervisor"
+              },
+              "self_evolution_execute": null
+            },
+            "active_sessions": 0
+          },
+          "idle_seconds": {
+            "user": null,
+            "agent": null,
+            "memory": null,
+            "self_learning": null,
+            "self_evolution_plan": 28833.0814,
+            "self_evolution_execute": null,
+            "self_evolution": 28833.0814
+          },
+          "thresholds": {
+            "user_idle_seconds": 600,
+            "memory_idle_seconds": 600,
+            "workflow_idle_seconds": 600,
+            "execution_window_start_hour": 0,
+            "execution_window_end_hour": 24
+          },
+          "checks": {
+            "has_user_idle": true,
+            "has_memory_idle": true,
+            "has_agent_idle": true,
+            "has_self_learning_idle": true,
+            "has_self_evolution_plan_idle": true,
+            "has_self_evolution_execute_idle": true,
+            "has_self_evolution_idle": true,
+            "in_execution_window": true
+          },
+          "governance_task_type_decisions": {
+            "user": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_learning": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "memory_maintenance": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_evolution": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            }
+          },
+          "task_family_decisions": {
+            "user": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_learning": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "memory_maintenance": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "general_self_evolution": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "body_upgrade": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "body_switch": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            }
+          },
+          "decisions": {
+            "eligible_for_planning": true,
+            "eligible_for_execution": true
+          }
+        },
+        "governor_decision": {
+          "decision": "approved_for_execution",
+          "actor": "supervisor",
+          "reason": "Task approved for the next execution handoff because the system is inside the execution window and idle requirements are satisfied.",
+          "task_status": "approved"
+        },
+        "rollback_plan": {},
+        "created_at": "2026-06-21T04:15:38.942997"
+      }
+    },
+    {
+      "task_id": "5a3519a7-62e9-47af-9437-788267dc3630",
+      "trace_id": "cc9863f5-525b-40a4-a0b6-586f3ef5400f",
+      "title": "Maintain long-term memory continuity",
+      "summary": "Inspect memory-maintenance needs during an idle window so long-term identity, summaries, and governance traces stay usable.",
+      "task_type": "memory_maintenance",
+      "governance_task_type": "memory_maintenance",
+      "task_family": "memory_maintenance",
+      "execution_kind": "memory_maintenance",
+      "source": "endogenous_drive",
+      "priority": "high",
+      "status": "approved",
+      "created_at": "2026-06-22T01:11:35.153229",
+      "updated_at": "2026-06-22T01:16:35.297360",
+      "metadata": {
+        "source": "endogenous_drive",
+        "endogenous_drive_key": "continuity:memory_maintenance_sweep",
+        "core_values": [
+          "continuity"
         ],
-        "summary": "Promote gateway-backed idle judgement into the supervisor planning queue.",
-        "experiment_ids": [
-          "f4100ef5-64c9-4006-90e3-b397e52420b1"
+        "utility": 0.92,
+        "governance_task_type": "memory_maintenance",
+        "task_family": "memory_maintenance",
+        "execution_kind": "memory_maintenance",
+        "execution_dispatched": true,
+        "executed_at": "2026-06-22T01:16:35.296835+00:00"
+      },
+      "evidence": {
+        "endogenous_drive": {
+          "stable_key": "continuity:memory_maintenance_sweep",
+          "core_values": [
+            "continuity"
+          ],
+          "core_value_definitions": {
+            "continuity": "Preserve VoidCube's long-term memory, lineage, and service continuity."
+          },
+          "utility": 0.92
+        },
+        "idle_window_checks": {
+          "has_user_idle": true,
+          "has_memory_idle": true,
+          "has_agent_idle": true,
+          "has_self_learning_idle": true,
+          "has_self_evolution_plan_idle": true,
+          "has_self_evolution_execute_idle": true,
+          "has_self_evolution_idle": true,
+          "in_execution_window": true
+        },
+        "idle_seconds": {
+          "user": null,
+          "agent": null,
+          "memory": null,
+          "self_learning": null,
+          "self_evolution_plan": null,
+          "self_evolution_execute": null,
+          "self_evolution": null
+        }
+      },
+      "constraints": {},
+      "decision_reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+      "decision_history": [
+        {
+          "decision_id": "ab0e4f1b-30d8-4ace-8ec3-f7c27c596e14",
+          "status": "approved",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "cc9863f5-525b-40a4-a0b6-586f3ef5400f",
+          "decided_at": "2026-06-22T01:16:35.206352",
+          "actor": "supervisor",
+          "reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+          "context": {
+            "idle_window": {
+              "status": "evaluated",
+              "evaluated_at": "2026-06-22T09:16:35.205731",
+              "gateway_address": "http://127.0.0.1:6000",
+              "governance_task_type": "memory_maintenance",
+              "task_family": "memory_maintenance",
+              "execution_kind": "memory_maintenance",
+              "task_profile": {
+                "governance_task_type": "memory_maintenance",
+                "task_family": "memory_maintenance",
+                "execution_kind": "memory_maintenance"
+              },
+              "activity": {
+                "last_user_request_at": null,
+                "last_agent_work_at": null,
+                "last_memory_task_at": null,
+                "last_self_learning_activity_at": null,
+                "last_self_evolution_activity_at": "2026-06-22T01:11:35.441700",
+                "last_self_evolution_plan_at": "2026-06-22T01:11:35.441700",
+                "last_self_evolution_execute_at": null,
+                "counts": {
+                  "user_request_count": 0,
+                  "agent_work_count": 0,
+                  "memory_task_count": 0,
+                  "self_learning_activity_count": 0,
+                  "self_evolution_activity_count": 2,
+                  "self_evolution_plan_count": 2,
+                  "self_evolution_execute_count": 0,
+                  "error_count": 0,
+                  "uncertainty_high_count": 0
+                },
+                "recent_metadata": {
+                  "user_request": null,
+                  "agent_work": null,
+                  "memory_task": null,
+                  "self_learning": null,
+                  "self_evolution": {
+                    "action": "endogenous_drive",
+                    "count": 1,
+                    "endogenous_drive_keys": [
+                      "continuity:memory_maintenance_sweep"
+                    ],
+                    "trace_id": "5def071c-ba51-4529-a0e9-85c8dbf90d21",
+                    "source_service": "supervisor"
+                  },
+                  "self_evolution_plan": {
+                    "action": "endogenous_drive",
+                    "count": 1,
+                    "endogenous_drive_keys": [
+                      "continuity:memory_maintenance_sweep"
+                    ],
+                    "trace_id": "5def071c-ba51-4529-a0e9-85c8dbf90d21",
+                    "source_service": "supervisor"
+                  },
+                  "self_evolution_execute": null
+                },
+                "active_sessions": 0
+              },
+              "idle_seconds": {
+                "user": null,
+                "agent": null,
+                "memory": null,
+                "self_learning": null,
+                "self_evolution_plan": 29099.764031,
+                "self_evolution_execute": null,
+                "self_evolution": 29099.764031
+              },
+              "thresholds": {
+                "user_idle_seconds": 600,
+                "memory_idle_seconds": 600,
+                "workflow_idle_seconds": 600,
+                "execution_window_start_hour": 0,
+                "execution_window_end_hour": 24
+              },
+              "checks": {
+                "has_user_idle": true,
+                "has_memory_idle": true,
+                "has_agent_idle": true,
+                "has_self_learning_idle": true,
+                "has_self_evolution_plan_idle": true,
+                "has_self_evolution_execute_idle": true,
+                "has_self_evolution_idle": true,
+                "in_execution_window": true
+              },
+              "governance_task_type_decisions": {
+                "user": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_learning": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "memory_maintenance": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_evolution": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                }
+              },
+              "task_family_decisions": {
+                "user": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_learning": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "memory_maintenance": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "general_self_evolution": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "body_upgrade": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "body_switch": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                }
+              },
+              "decisions": {
+                "eligible_for_planning": true,
+                "eligible_for_execution": true
+              }
+            }
+          }
+        }
+      ],
+      "execution_request": {
+        "request_id": "a0f47ecc-260a-4fb9-847f-cb63cc8aa84c",
+        "task_id": "5a3519a7-62e9-47af-9437-788267dc3630",
+        "trace_id": "cc9863f5-525b-40a4-a0b6-586f3ef5400f",
+        "task_type": "memory_maintenance",
+        "governance_task_type": "memory_maintenance",
+        "task_family": "memory_maintenance",
+        "execution_kind": "memory_maintenance",
+        "decision_id": "ab0e4f1b-30d8-4ace-8ec3-f7c27c596e14",
+        "kind": "memory_maintenance",
+        "status": "approved_for_execution",
+        "source_actor": "supervisor",
+        "target_slot_id": null,
+        "git_lineage": {
+          "source_branch": null,
+          "source_commit": null,
+          "candidate_branch": null,
+          "candidate_commit": null,
+          "active_ref": null,
+          "rollback_ref": null,
+          "rollback_commit": null,
+          "diff_summary": "",
+          "changed_files": []
+        },
+        "probe_report_ref": null,
+        "idle_window_evidence": {
+          "status": "evaluated",
+          "evaluated_at": "2026-06-22T09:16:35.205731",
+          "gateway_address": "http://127.0.0.1:6000",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "task_profile": {
+            "governance_task_type": "memory_maintenance",
+            "task_family": "memory_maintenance",
+            "execution_kind": "memory_maintenance"
+          },
+          "activity": {
+            "last_user_request_at": null,
+            "last_agent_work_at": null,
+            "last_memory_task_at": null,
+            "last_self_learning_activity_at": null,
+            "last_self_evolution_activity_at": "2026-06-22T01:11:35.441700",
+            "last_self_evolution_plan_at": "2026-06-22T01:11:35.441700",
+            "last_self_evolution_execute_at": null,
+            "counts": {
+              "user_request_count": 0,
+              "agent_work_count": 0,
+              "memory_task_count": 0,
+              "self_learning_activity_count": 0,
+              "self_evolution_activity_count": 2,
+              "self_evolution_plan_count": 2,
+              "self_evolution_execute_count": 0,
+              "error_count": 0,
+              "uncertainty_high_count": 0
+            },
+            "recent_metadata": {
+              "user_request": null,
+              "agent_work": null,
+              "memory_task": null,
+              "self_learning": null,
+              "self_evolution": {
+                "action": "endogenous_drive",
+                "count": 1,
+                "endogenous_drive_keys": [
+                  "continuity:memory_maintenance_sweep"
+                ],
+                "trace_id": "5def071c-ba51-4529-a0e9-85c8dbf90d21",
+                "source_service": "supervisor"
+              },
+              "self_evolution_plan": {
+                "action": "endogenous_drive",
+                "count": 1,
+                "endogenous_drive_keys": [
+                  "continuity:memory_maintenance_sweep"
+                ],
+                "trace_id": "5def071c-ba51-4529-a0e9-85c8dbf90d21",
+                "source_service": "supervisor"
+              },
+              "self_evolution_execute": null
+            },
+            "active_sessions": 0
+          },
+          "idle_seconds": {
+            "user": null,
+            "agent": null,
+            "memory": null,
+            "self_learning": null,
+            "self_evolution_plan": 29099.764031,
+            "self_evolution_execute": null,
+            "self_evolution": 29099.764031
+          },
+          "thresholds": {
+            "user_idle_seconds": 600,
+            "memory_idle_seconds": 600,
+            "workflow_idle_seconds": 600,
+            "execution_window_start_hour": 0,
+            "execution_window_end_hour": 24
+          },
+          "checks": {
+            "has_user_idle": true,
+            "has_memory_idle": true,
+            "has_agent_idle": true,
+            "has_self_learning_idle": true,
+            "has_self_evolution_plan_idle": true,
+            "has_self_evolution_execute_idle": true,
+            "has_self_evolution_idle": true,
+            "in_execution_window": true
+          },
+          "governance_task_type_decisions": {
+            "user": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_learning": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "memory_maintenance": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_evolution": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            }
+          },
+          "task_family_decisions": {
+            "user": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_learning": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "memory_maintenance": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "general_self_evolution": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "body_upgrade": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "body_switch": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            }
+          },
+          "decisions": {
+            "eligible_for_planning": true,
+            "eligible_for_execution": true
+          }
+        },
+        "governor_decision": {
+          "decision": "approved_for_execution",
+          "actor": "supervisor",
+          "reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+          "task_status": "approved"
+        },
+        "rollback_plan": {},
+        "created_at": "2026-06-22T01:16:35.205855"
+      }
+    },
+    {
+      "task_id": "7af21d6a-18bd-4fd5-bf54-1f5b2af858dc",
+      "trace_id": "56b888b7-9331-408d-800e-4d1bb2a23e8c",
+      "title": "Maintain long-term memory continuity",
+      "summary": "Inspect memory-maintenance needs during an idle window so long-term identity, summaries, and governance traces stay usable.",
+      "task_type": "memory_maintenance",
+      "governance_task_type": "memory_maintenance",
+      "task_family": "memory_maintenance",
+      "execution_kind": "memory_maintenance",
+      "source": "endogenous_drive",
+      "priority": "high",
+      "status": "approved",
+      "created_at": "2026-06-22T01:16:35.503912",
+      "updated_at": "2026-06-22T01:21:35.426712",
+      "metadata": {
+        "source": "endogenous_drive",
+        "endogenous_drive_key": "continuity:memory_maintenance_sweep",
+        "core_values": [
+          "continuity"
         ],
-        "priority_reason": "reduces false idle windows"
+        "utility": 0.92,
+        "governance_task_type": "memory_maintenance",
+        "task_family": "memory_maintenance",
+        "execution_kind": "memory_maintenance",
+        "execution_dispatched": true,
+        "executed_at": "2026-06-22T01:21:35.425897+00:00"
+      },
+      "evidence": {
+        "endogenous_drive": {
+          "stable_key": "continuity:memory_maintenance_sweep",
+          "core_values": [
+            "continuity"
+          ],
+          "core_value_definitions": {
+            "continuity": "Preserve VoidCube's long-term memory, lineage, and service continuity."
+          },
+          "utility": 0.92
+        },
+        "idle_window_checks": {
+          "has_user_idle": true,
+          "has_memory_idle": true,
+          "has_agent_idle": true,
+          "has_self_learning_idle": true,
+          "has_self_evolution_plan_idle": true,
+          "has_self_evolution_execute_idle": true,
+          "has_self_evolution_idle": true,
+          "in_execution_window": true
+        },
+        "idle_seconds": {
+          "user": null,
+          "agent": null,
+          "memory": null,
+          "self_learning": null,
+          "self_evolution_plan": 28800.163428,
+          "self_evolution_execute": null,
+          "self_evolution": 28800.163428
+        }
+      },
+      "constraints": {},
+      "decision_reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+      "decision_history": [
+        {
+          "decision_id": "6a6ea405-1dad-4377-9225-b073f72be3e1",
+          "status": "approved",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "56b888b7-9331-408d-800e-4d1bb2a23e8c",
+          "decided_at": "2026-06-22T01:21:35.339608",
+          "actor": "supervisor",
+          "reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+          "context": {
+            "idle_window": {
+              "status": "evaluated",
+              "evaluated_at": "2026-06-22T09:21:35.338952",
+              "gateway_address": "http://127.0.0.1:6000",
+              "governance_task_type": "memory_maintenance",
+              "task_family": "memory_maintenance",
+              "execution_kind": "memory_maintenance",
+              "task_profile": {
+                "governance_task_type": "memory_maintenance",
+                "task_family": "memory_maintenance",
+                "execution_kind": "memory_maintenance"
+              },
+              "activity": {
+                "last_user_request_at": null,
+                "last_agent_work_at": null,
+                "last_memory_task_at": null,
+                "last_self_learning_activity_at": null,
+                "last_self_evolution_activity_at": "2026-06-22T01:16:35.660942",
+                "last_self_evolution_plan_at": "2026-06-22T01:16:35.660942",
+                "last_self_evolution_execute_at": null,
+                "counts": {
+                  "user_request_count": 0,
+                  "agent_work_count": 0,
+                  "memory_task_count": 0,
+                  "self_learning_activity_count": 0,
+                  "self_evolution_activity_count": 5,
+                  "self_evolution_plan_count": 5,
+                  "self_evolution_execute_count": 0,
+                  "error_count": 0,
+                  "uncertainty_high_count": 0
+                },
+                "recent_metadata": {
+                  "user_request": null,
+                  "agent_work": null,
+                  "memory_task": null,
+                  "self_learning": null,
+                  "self_evolution": {
+                    "action": "endogenous_drive",
+                    "count": 1,
+                    "endogenous_drive_keys": [
+                      "continuity:memory_maintenance_sweep"
+                    ],
+                    "trace_id": "e9ca1104-bff4-4177-b850-f3369fb94ffb",
+                    "source_service": "supervisor"
+                  },
+                  "self_evolution_plan": {
+                    "action": "endogenous_drive",
+                    "count": 1,
+                    "endogenous_drive_keys": [
+                      "continuity:memory_maintenance_sweep"
+                    ],
+                    "trace_id": "e9ca1104-bff4-4177-b850-f3369fb94ffb",
+                    "source_service": "supervisor"
+                  },
+                  "self_evolution_execute": null
+                },
+                "active_sessions": 0
+              },
+              "idle_seconds": {
+                "user": null,
+                "agent": null,
+                "memory": null,
+                "self_learning": null,
+                "self_evolution_plan": 29099.67801,
+                "self_evolution_execute": null,
+                "self_evolution": 29099.67801
+              },
+              "thresholds": {
+                "user_idle_seconds": 600,
+                "memory_idle_seconds": 600,
+                "workflow_idle_seconds": 600,
+                "execution_window_start_hour": 0,
+                "execution_window_end_hour": 24
+              },
+              "checks": {
+                "has_user_idle": true,
+                "has_memory_idle": true,
+                "has_agent_idle": true,
+                "has_self_learning_idle": true,
+                "has_self_evolution_plan_idle": true,
+                "has_self_evolution_execute_idle": true,
+                "has_self_evolution_idle": true,
+                "in_execution_window": true
+              },
+              "governance_task_type_decisions": {
+                "user": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_learning": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "memory_maintenance": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_evolution": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                }
+              },
+              "task_family_decisions": {
+                "user": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_learning": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "memory_maintenance": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "general_self_evolution": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "body_upgrade": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "body_switch": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                }
+              },
+              "decisions": {
+                "eligible_for_planning": true,
+                "eligible_for_execution": true
+              }
+            }
+          }
+        }
+      ],
+      "execution_request": {
+        "request_id": "97d21331-24b8-49cf-901d-93a89bc4bada",
+        "task_id": "7af21d6a-18bd-4fd5-bf54-1f5b2af858dc",
+        "trace_id": "56b888b7-9331-408d-800e-4d1bb2a23e8c",
+        "task_type": "memory_maintenance",
+        "governance_task_type": "memory_maintenance",
+        "task_family": "memory_maintenance",
+        "execution_kind": "memory_maintenance",
+        "decision_id": "6a6ea405-1dad-4377-9225-b073f72be3e1",
+        "kind": "memory_maintenance",
+        "status": "approved_for_execution",
+        "source_actor": "supervisor",
+        "target_slot_id": null,
+        "git_lineage": {
+          "source_branch": null,
+          "source_commit": null,
+          "candidate_branch": null,
+          "candidate_commit": null,
+          "active_ref": null,
+          "rollback_ref": null,
+          "rollback_commit": null,
+          "diff_summary": "",
+          "changed_files": []
+        },
+        "probe_report_ref": null,
+        "idle_window_evidence": {
+          "status": "evaluated",
+          "evaluated_at": "2026-06-22T09:21:35.338952",
+          "gateway_address": "http://127.0.0.1:6000",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "task_profile": {
+            "governance_task_type": "memory_maintenance",
+            "task_family": "memory_maintenance",
+            "execution_kind": "memory_maintenance"
+          },
+          "activity": {
+            "last_user_request_at": null,
+            "last_agent_work_at": null,
+            "last_memory_task_at": null,
+            "last_self_learning_activity_at": null,
+            "last_self_evolution_activity_at": "2026-06-22T01:16:35.660942",
+            "last_self_evolution_plan_at": "2026-06-22T01:16:35.660942",
+            "last_self_evolution_execute_at": null,
+            "counts": {
+              "user_request_count": 0,
+              "agent_work_count": 0,
+              "memory_task_count": 0,
+              "self_learning_activity_count": 0,
+              "self_evolution_activity_count": 5,
+              "self_evolution_plan_count": 5,
+              "self_evolution_execute_count": 0,
+              "error_count": 0,
+              "uncertainty_high_count": 0
+            },
+            "recent_metadata": {
+              "user_request": null,
+              "agent_work": null,
+              "memory_task": null,
+              "self_learning": null,
+              "self_evolution": {
+                "action": "endogenous_drive",
+                "count": 1,
+                "endogenous_drive_keys": [
+                  "continuity:memory_maintenance_sweep"
+                ],
+                "trace_id": "e9ca1104-bff4-4177-b850-f3369fb94ffb",
+                "source_service": "supervisor"
+              },
+              "self_evolution_plan": {
+                "action": "endogenous_drive",
+                "count": 1,
+                "endogenous_drive_keys": [
+                  "continuity:memory_maintenance_sweep"
+                ],
+                "trace_id": "e9ca1104-bff4-4177-b850-f3369fb94ffb",
+                "source_service": "supervisor"
+              },
+              "self_evolution_execute": null
+            },
+            "active_sessions": 0
+          },
+          "idle_seconds": {
+            "user": null,
+            "agent": null,
+            "memory": null,
+            "self_learning": null,
+            "self_evolution_plan": 29099.67801,
+            "self_evolution_execute": null,
+            "self_evolution": 29099.67801
+          },
+          "thresholds": {
+            "user_idle_seconds": 600,
+            "memory_idle_seconds": 600,
+            "workflow_idle_seconds": 600,
+            "execution_window_start_hour": 0,
+            "execution_window_end_hour": 24
+          },
+          "checks": {
+            "has_user_idle": true,
+            "has_memory_idle": true,
+            "has_agent_idle": true,
+            "has_self_learning_idle": true,
+            "has_self_evolution_plan_idle": true,
+            "has_self_evolution_execute_idle": true,
+            "has_self_evolution_idle": true,
+            "in_execution_window": true
+          },
+          "governance_task_type_decisions": {
+            "user": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_learning": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "memory_maintenance": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_evolution": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            }
+          },
+          "task_family_decisions": {
+            "user": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_learning": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "memory_maintenance": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "general_self_evolution": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "body_upgrade": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "body_switch": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            }
+          },
+          "decisions": {
+            "eligible_for_planning": true,
+            "eligible_for_execution": true
+          }
+        },
+        "governor_decision": {
+          "decision": "approved_for_execution",
+          "actor": "supervisor",
+          "reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+          "task_status": "approved"
+        },
+        "rollback_plan": {},
+        "created_at": "2026-06-22T01:21:35.339085"
+      }
+    },
+    {
+      "task_id": "9dd68999-16d9-40f5-9edb-ccf40eb84e54",
+      "trace_id": "b4e2f56a-ffac-49cf-b7b7-43529c417867",
+      "title": "Maintain long-term memory continuity",
+      "summary": "Inspect memory-maintenance needs during an idle window so long-term identity, summaries, and governance traces stay usable.",
+      "task_type": "memory_maintenance",
+      "governance_task_type": "memory_maintenance",
+      "task_family": "memory_maintenance",
+      "execution_kind": "memory_maintenance",
+      "source": "endogenous_drive",
+      "priority": "high",
+      "status": "approved",
+      "created_at": "2026-06-22T01:21:35.728758",
+      "updated_at": "2026-06-22T01:26:35.566771",
+      "metadata": {
+        "source": "endogenous_drive",
+        "endogenous_drive_key": "continuity:memory_maintenance_sweep",
+        "core_values": [
+          "continuity"
+        ],
+        "utility": 0.92,
+        "governance_task_type": "memory_maintenance",
+        "task_family": "memory_maintenance",
+        "execution_kind": "memory_maintenance",
+        "execution_dispatched": true,
+        "executed_at": "2026-06-22T01:26:35.566223+00:00"
+      },
+      "evidence": {
+        "endogenous_drive": {
+          "stable_key": "continuity:memory_maintenance_sweep",
+          "core_values": [
+            "continuity"
+          ],
+          "core_value_definitions": {
+            "continuity": "Preserve VoidCube's long-term memory, lineage, and service continuity."
+          },
+          "utility": 0.92
+        },
+        "idle_window_checks": {
+          "has_user_idle": true,
+          "has_memory_idle": true,
+          "has_agent_idle": true,
+          "has_self_learning_idle": true,
+          "has_self_evolution_plan_idle": true,
+          "has_self_evolution_execute_idle": true,
+          "has_self_evolution_idle": true,
+          "in_execution_window": true
+        },
+        "idle_seconds": {
+          "user": null,
+          "agent": null,
+          "memory": null,
+          "self_learning": null,
+          "self_evolution_plan": 28800.255722,
+          "self_evolution_execute": null,
+          "self_evolution": 28800.255722
+        }
+      },
+      "constraints": {},
+      "decision_reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+      "decision_history": [
+        {
+          "decision_id": "cd7f8a2c-2107-46f0-a12e-ca396f4d227b",
+          "status": "approved",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "b4e2f56a-ffac-49cf-b7b7-43529c417867",
+          "decided_at": "2026-06-22T01:26:35.481464",
+          "actor": "supervisor",
+          "reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+          "context": {
+            "idle_window": {
+              "status": "evaluated",
+              "evaluated_at": "2026-06-22T09:26:35.480769",
+              "gateway_address": "http://127.0.0.1:6000",
+              "governance_task_type": "memory_maintenance",
+              "task_family": "memory_maintenance",
+              "execution_kind": "memory_maintenance",
+              "task_profile": {
+                "governance_task_type": "memory_maintenance",
+                "task_family": "memory_maintenance",
+                "execution_kind": "memory_maintenance"
+              },
+              "activity": {
+                "last_user_request_at": null,
+                "last_agent_work_at": null,
+                "last_memory_task_at": null,
+                "last_self_learning_activity_at": null,
+                "last_self_evolution_activity_at": "2026-06-22T01:21:35.862454",
+                "last_self_evolution_plan_at": "2026-06-22T01:21:35.862454",
+                "last_self_evolution_execute_at": null,
+                "counts": {
+                  "user_request_count": 0,
+                  "agent_work_count": 0,
+                  "memory_task_count": 0,
+                  "self_learning_activity_count": 0,
+                  "self_evolution_activity_count": 8,
+                  "self_evolution_plan_count": 8,
+                  "self_evolution_execute_count": 0,
+                  "error_count": 0,
+                  "uncertainty_high_count": 0
+                },
+                "recent_metadata": {
+                  "user_request": null,
+                  "agent_work": null,
+                  "memory_task": null,
+                  "self_learning": null,
+                  "self_evolution": {
+                    "action": "endogenous_drive",
+                    "count": 1,
+                    "endogenous_drive_keys": [
+                      "continuity:memory_maintenance_sweep"
+                    ],
+                    "trace_id": "41d9d028-a46a-4bb6-9f2f-00aa927daf25",
+                    "source_service": "supervisor"
+                  },
+                  "self_evolution_plan": {
+                    "action": "endogenous_drive",
+                    "count": 1,
+                    "endogenous_drive_keys": [
+                      "continuity:memory_maintenance_sweep"
+                    ],
+                    "trace_id": "41d9d028-a46a-4bb6-9f2f-00aa927daf25",
+                    "source_service": "supervisor"
+                  },
+                  "self_evolution_execute": null
+                },
+                "active_sessions": 0
+              },
+              "idle_seconds": {
+                "user": null,
+                "agent": null,
+                "memory": null,
+                "self_learning": null,
+                "self_evolution_plan": 29099.618315,
+                "self_evolution_execute": null,
+                "self_evolution": 29099.618315
+              },
+              "thresholds": {
+                "user_idle_seconds": 600,
+                "memory_idle_seconds": 600,
+                "workflow_idle_seconds": 600,
+                "execution_window_start_hour": 0,
+                "execution_window_end_hour": 24
+              },
+              "checks": {
+                "has_user_idle": true,
+                "has_memory_idle": true,
+                "has_agent_idle": true,
+                "has_self_learning_idle": true,
+                "has_self_evolution_plan_idle": true,
+                "has_self_evolution_execute_idle": true,
+                "has_self_evolution_idle": true,
+                "in_execution_window": true
+              },
+              "governance_task_type_decisions": {
+                "user": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_learning": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "memory_maintenance": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_evolution": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                }
+              },
+              "task_family_decisions": {
+                "user": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_learning": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "memory_maintenance": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "general_self_evolution": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "body_upgrade": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "body_switch": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                }
+              },
+              "decisions": {
+                "eligible_for_planning": true,
+                "eligible_for_execution": true
+              }
+            }
+          }
+        }
+      ],
+      "execution_request": {
+        "request_id": "3f3da054-602e-4cc9-aaea-c26a1b50db1d",
+        "task_id": "9dd68999-16d9-40f5-9edb-ccf40eb84e54",
+        "trace_id": "b4e2f56a-ffac-49cf-b7b7-43529c417867",
+        "task_type": "memory_maintenance",
+        "governance_task_type": "memory_maintenance",
+        "task_family": "memory_maintenance",
+        "execution_kind": "memory_maintenance",
+        "decision_id": "cd7f8a2c-2107-46f0-a12e-ca396f4d227b",
+        "kind": "memory_maintenance",
+        "status": "approved_for_execution",
+        "source_actor": "supervisor",
+        "target_slot_id": null,
+        "git_lineage": {
+          "source_branch": null,
+          "source_commit": null,
+          "candidate_branch": null,
+          "candidate_commit": null,
+          "active_ref": null,
+          "rollback_ref": null,
+          "rollback_commit": null,
+          "diff_summary": "",
+          "changed_files": []
+        },
+        "probe_report_ref": null,
+        "idle_window_evidence": {
+          "status": "evaluated",
+          "evaluated_at": "2026-06-22T09:26:35.480769",
+          "gateway_address": "http://127.0.0.1:6000",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "task_profile": {
+            "governance_task_type": "memory_maintenance",
+            "task_family": "memory_maintenance",
+            "execution_kind": "memory_maintenance"
+          },
+          "activity": {
+            "last_user_request_at": null,
+            "last_agent_work_at": null,
+            "last_memory_task_at": null,
+            "last_self_learning_activity_at": null,
+            "last_self_evolution_activity_at": "2026-06-22T01:21:35.862454",
+            "last_self_evolution_plan_at": "2026-06-22T01:21:35.862454",
+            "last_self_evolution_execute_at": null,
+            "counts": {
+              "user_request_count": 0,
+              "agent_work_count": 0,
+              "memory_task_count": 0,
+              "self_learning_activity_count": 0,
+              "self_evolution_activity_count": 8,
+              "self_evolution_plan_count": 8,
+              "self_evolution_execute_count": 0,
+              "error_count": 0,
+              "uncertainty_high_count": 0
+            },
+            "recent_metadata": {
+              "user_request": null,
+              "agent_work": null,
+              "memory_task": null,
+              "self_learning": null,
+              "self_evolution": {
+                "action": "endogenous_drive",
+                "count": 1,
+                "endogenous_drive_keys": [
+                  "continuity:memory_maintenance_sweep"
+                ],
+                "trace_id": "41d9d028-a46a-4bb6-9f2f-00aa927daf25",
+                "source_service": "supervisor"
+              },
+              "self_evolution_plan": {
+                "action": "endogenous_drive",
+                "count": 1,
+                "endogenous_drive_keys": [
+                  "continuity:memory_maintenance_sweep"
+                ],
+                "trace_id": "41d9d028-a46a-4bb6-9f2f-00aa927daf25",
+                "source_service": "supervisor"
+              },
+              "self_evolution_execute": null
+            },
+            "active_sessions": 0
+          },
+          "idle_seconds": {
+            "user": null,
+            "agent": null,
+            "memory": null,
+            "self_learning": null,
+            "self_evolution_plan": 29099.618315,
+            "self_evolution_execute": null,
+            "self_evolution": 29099.618315
+          },
+          "thresholds": {
+            "user_idle_seconds": 600,
+            "memory_idle_seconds": 600,
+            "workflow_idle_seconds": 600,
+            "execution_window_start_hour": 0,
+            "execution_window_end_hour": 24
+          },
+          "checks": {
+            "has_user_idle": true,
+            "has_memory_idle": true,
+            "has_agent_idle": true,
+            "has_self_learning_idle": true,
+            "has_self_evolution_plan_idle": true,
+            "has_self_evolution_execute_idle": true,
+            "has_self_evolution_idle": true,
+            "in_execution_window": true
+          },
+          "governance_task_type_decisions": {
+            "user": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_learning": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "memory_maintenance": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_evolution": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            }
+          },
+          "task_family_decisions": {
+            "user": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_learning": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "memory_maintenance": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "general_self_evolution": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "body_upgrade": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "body_switch": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            }
+          },
+          "decisions": {
+            "eligible_for_planning": true,
+            "eligible_for_execution": true
+          }
+        },
+        "governor_decision": {
+          "decision": "approved_for_execution",
+          "actor": "supervisor",
+          "reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+          "task_status": "approved"
+        },
+        "rollback_plan": {},
+        "created_at": "2026-06-22T01:26:35.480895"
+      }
+    },
+    {
+      "task_id": "46960c7a-267c-4e60-bf64-b4e7a5ec493e",
+      "trace_id": "ed014cb3-434c-4dfe-87a5-b67b0a986625",
+      "title": "Maintain long-term memory continuity",
+      "summary": "Inspect memory-maintenance needs during an idle window so long-term identity, summaries, and governance traces stay usable.",
+      "task_type": "memory_maintenance",
+      "governance_task_type": "memory_maintenance",
+      "task_family": "memory_maintenance",
+      "execution_kind": "memory_maintenance",
+      "source": "endogenous_drive",
+      "priority": "high",
+      "status": "approved",
+      "created_at": "2026-06-22T01:26:35.921362",
+      "updated_at": "2026-06-22T01:31:35.728017",
+      "metadata": {
+        "source": "endogenous_drive",
+        "endogenous_drive_key": "continuity:memory_maintenance_sweep",
+        "core_values": [
+          "continuity"
+        ],
+        "utility": 0.92,
+        "governance_task_type": "memory_maintenance",
+        "task_family": "memory_maintenance",
+        "execution_kind": "memory_maintenance",
+        "execution_dispatched": true,
+        "executed_at": "2026-06-22T01:31:35.727404+00:00"
+      },
+      "evidence": {
+        "endogenous_drive": {
+          "stable_key": "continuity:memory_maintenance_sweep",
+          "core_values": [
+            "continuity"
+          ],
+          "core_value_definitions": {
+            "continuity": "Preserve VoidCube's long-term memory, lineage, and service continuity."
+          },
+          "utility": 0.92
+        },
+        "idle_window_checks": {
+          "has_user_idle": true,
+          "has_memory_idle": true,
+          "has_agent_idle": true,
+          "has_self_learning_idle": true,
+          "has_self_evolution_plan_idle": true,
+          "has_self_evolution_execute_idle": true,
+          "has_self_evolution_idle": true,
+          "in_execution_window": true
+        },
+        "idle_seconds": {
+          "user": null,
+          "agent": null,
+          "memory": null,
+          "self_learning": null,
+          "self_evolution_plan": 28800.310095,
+          "self_evolution_execute": null,
+          "self_evolution": 28800.310095
+        }
+      },
+      "constraints": {},
+      "decision_reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+      "decision_history": [
+        {
+          "decision_id": "1ffd56ea-f37a-42cb-80eb-6eb2adba0634",
+          "status": "approved",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "ed014cb3-434c-4dfe-87a5-b67b0a986625",
+          "decided_at": "2026-06-22T01:31:35.619772",
+          "actor": "supervisor",
+          "reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+          "context": {
+            "idle_window": {
+              "status": "evaluated",
+              "evaluated_at": "2026-06-22T09:31:35.619017",
+              "gateway_address": "http://127.0.0.1:6000",
+              "governance_task_type": "memory_maintenance",
+              "task_family": "memory_maintenance",
+              "execution_kind": "memory_maintenance",
+              "task_profile": {
+                "governance_task_type": "memory_maintenance",
+                "task_family": "memory_maintenance",
+                "execution_kind": "memory_maintenance"
+              },
+              "activity": {
+                "last_user_request_at": null,
+                "last_agent_work_at": null,
+                "last_memory_task_at": null,
+                "last_self_learning_activity_at": null,
+                "last_self_evolution_activity_at": "2026-06-22T01:26:36.087975",
+                "last_self_evolution_plan_at": "2026-06-22T01:26:36.087975",
+                "last_self_evolution_execute_at": null,
+                "counts": {
+                  "user_request_count": 0,
+                  "agent_work_count": 0,
+                  "memory_task_count": 0,
+                  "self_learning_activity_count": 0,
+                  "self_evolution_activity_count": 11,
+                  "self_evolution_plan_count": 11,
+                  "self_evolution_execute_count": 0,
+                  "error_count": 0,
+                  "uncertainty_high_count": 0
+                },
+                "recent_metadata": {
+                  "user_request": null,
+                  "agent_work": null,
+                  "memory_task": null,
+                  "self_learning": null,
+                  "self_evolution": {
+                    "action": "endogenous_drive",
+                    "count": 1,
+                    "endogenous_drive_keys": [
+                      "continuity:memory_maintenance_sweep"
+                    ],
+                    "trace_id": "95cbd819-70ec-426a-b3c6-c92c6346148d",
+                    "source_service": "supervisor"
+                  },
+                  "self_evolution_plan": {
+                    "action": "endogenous_drive",
+                    "count": 1,
+                    "endogenous_drive_keys": [
+                      "continuity:memory_maintenance_sweep"
+                    ],
+                    "trace_id": "95cbd819-70ec-426a-b3c6-c92c6346148d",
+                    "source_service": "supervisor"
+                  },
+                  "self_evolution_execute": null
+                },
+                "active_sessions": 0
+              },
+              "idle_seconds": {
+                "user": null,
+                "agent": null,
+                "memory": null,
+                "self_learning": null,
+                "self_evolution_plan": 29099.531042,
+                "self_evolution_execute": null,
+                "self_evolution": 29099.531042
+              },
+              "thresholds": {
+                "user_idle_seconds": 600,
+                "memory_idle_seconds": 600,
+                "workflow_idle_seconds": 600,
+                "execution_window_start_hour": 0,
+                "execution_window_end_hour": 24
+              },
+              "checks": {
+                "has_user_idle": true,
+                "has_memory_idle": true,
+                "has_agent_idle": true,
+                "has_self_learning_idle": true,
+                "has_self_evolution_plan_idle": true,
+                "has_self_evolution_execute_idle": true,
+                "has_self_evolution_idle": true,
+                "in_execution_window": true
+              },
+              "governance_task_type_decisions": {
+                "user": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_learning": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "memory_maintenance": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_evolution": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                }
+              },
+              "task_family_decisions": {
+                "user": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_learning": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "memory_maintenance": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "general_self_evolution": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "body_upgrade": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "body_switch": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                }
+              },
+              "decisions": {
+                "eligible_for_planning": true,
+                "eligible_for_execution": true
+              }
+            }
+          }
+        }
+      ],
+      "execution_request": {
+        "request_id": "36667f67-bf8a-444c-8f1b-a43b022d0fd3",
+        "task_id": "46960c7a-267c-4e60-bf64-b4e7a5ec493e",
+        "trace_id": "ed014cb3-434c-4dfe-87a5-b67b0a986625",
+        "task_type": "memory_maintenance",
+        "governance_task_type": "memory_maintenance",
+        "task_family": "memory_maintenance",
+        "execution_kind": "memory_maintenance",
+        "decision_id": "1ffd56ea-f37a-42cb-80eb-6eb2adba0634",
+        "kind": "memory_maintenance",
+        "status": "approved_for_execution",
+        "source_actor": "supervisor",
+        "target_slot_id": null,
+        "git_lineage": {
+          "source_branch": null,
+          "source_commit": null,
+          "candidate_branch": null,
+          "candidate_commit": null,
+          "active_ref": null,
+          "rollback_ref": null,
+          "rollback_commit": null,
+          "diff_summary": "",
+          "changed_files": []
+        },
+        "probe_report_ref": null,
+        "idle_window_evidence": {
+          "status": "evaluated",
+          "evaluated_at": "2026-06-22T09:31:35.619017",
+          "gateway_address": "http://127.0.0.1:6000",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "task_profile": {
+            "governance_task_type": "memory_maintenance",
+            "task_family": "memory_maintenance",
+            "execution_kind": "memory_maintenance"
+          },
+          "activity": {
+            "last_user_request_at": null,
+            "last_agent_work_at": null,
+            "last_memory_task_at": null,
+            "last_self_learning_activity_at": null,
+            "last_self_evolution_activity_at": "2026-06-22T01:26:36.087975",
+            "last_self_evolution_plan_at": "2026-06-22T01:26:36.087975",
+            "last_self_evolution_execute_at": null,
+            "counts": {
+              "user_request_count": 0,
+              "agent_work_count": 0,
+              "memory_task_count": 0,
+              "self_learning_activity_count": 0,
+              "self_evolution_activity_count": 11,
+              "self_evolution_plan_count": 11,
+              "self_evolution_execute_count": 0,
+              "error_count": 0,
+              "uncertainty_high_count": 0
+            },
+            "recent_metadata": {
+              "user_request": null,
+              "agent_work": null,
+              "memory_task": null,
+              "self_learning": null,
+              "self_evolution": {
+                "action": "endogenous_drive",
+                "count": 1,
+                "endogenous_drive_keys": [
+                  "continuity:memory_maintenance_sweep"
+                ],
+                "trace_id": "95cbd819-70ec-426a-b3c6-c92c6346148d",
+                "source_service": "supervisor"
+              },
+              "self_evolution_plan": {
+                "action": "endogenous_drive",
+                "count": 1,
+                "endogenous_drive_keys": [
+                  "continuity:memory_maintenance_sweep"
+                ],
+                "trace_id": "95cbd819-70ec-426a-b3c6-c92c6346148d",
+                "source_service": "supervisor"
+              },
+              "self_evolution_execute": null
+            },
+            "active_sessions": 0
+          },
+          "idle_seconds": {
+            "user": null,
+            "agent": null,
+            "memory": null,
+            "self_learning": null,
+            "self_evolution_plan": 29099.531042,
+            "self_evolution_execute": null,
+            "self_evolution": 29099.531042
+          },
+          "thresholds": {
+            "user_idle_seconds": 600,
+            "memory_idle_seconds": 600,
+            "workflow_idle_seconds": 600,
+            "execution_window_start_hour": 0,
+            "execution_window_end_hour": 24
+          },
+          "checks": {
+            "has_user_idle": true,
+            "has_memory_idle": true,
+            "has_agent_idle": true,
+            "has_self_learning_idle": true,
+            "has_self_evolution_plan_idle": true,
+            "has_self_evolution_execute_idle": true,
+            "has_self_evolution_idle": true,
+            "in_execution_window": true
+          },
+          "governance_task_type_decisions": {
+            "user": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_learning": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "memory_maintenance": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_evolution": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            }
+          },
+          "task_family_decisions": {
+            "user": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_learning": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "memory_maintenance": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "general_self_evolution": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "body_upgrade": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "body_switch": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            }
+          },
+          "decisions": {
+            "eligible_for_planning": true,
+            "eligible_for_execution": true
+          }
+        },
+        "governor_decision": {
+          "decision": "approved_for_execution",
+          "actor": "supervisor",
+          "reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+          "task_status": "approved"
+        },
+        "rollback_plan": {},
+        "created_at": "2026-06-22T01:31:35.619135"
+      }
+    },
+    {
+      "task_id": "e1f812ef-89e5-4406-abcb-fb585b684d57",
+      "trace_id": "952632a6-b8e0-489e-9189-8a73b4d7ddca",
+      "title": "Maintain long-term memory continuity",
+      "summary": "Inspect memory-maintenance needs during an idle window so long-term identity, summaries, and governance traces stay usable.",
+      "task_type": "memory_maintenance",
+      "governance_task_type": "memory_maintenance",
+      "task_family": "memory_maintenance",
+      "execution_kind": "memory_maintenance",
+      "source": "endogenous_drive",
+      "priority": "high",
+      "status": "approved",
+      "created_at": "2026-06-22T01:31:36.156333",
+      "updated_at": "2026-06-22T01:36:35.910923",
+      "metadata": {
+        "source": "endogenous_drive",
+        "endogenous_drive_key": "continuity:memory_maintenance_sweep",
+        "core_values": [
+          "continuity"
+        ],
+        "utility": 0.92,
+        "governance_task_type": "memory_maintenance",
+        "task_family": "memory_maintenance",
+        "execution_kind": "memory_maintenance",
+        "execution_dispatched": true,
+        "executed_at": "2026-06-22T01:36:35.910286+00:00"
+      },
+      "evidence": {
+        "endogenous_drive": {
+          "stable_key": "continuity:memory_maintenance_sweep",
+          "core_values": [
+            "continuity"
+          ],
+          "core_value_definitions": {
+            "continuity": "Preserve VoidCube's long-term memory, lineage, and service continuity."
+          },
+          "utility": 0.92
+        },
+        "idle_window_checks": {
+          "has_user_idle": true,
+          "has_memory_idle": true,
+          "has_agent_idle": true,
+          "has_self_learning_idle": true,
+          "has_self_evolution_plan_idle": true,
+          "has_self_evolution_execute_idle": true,
+          "has_self_evolution_idle": true,
+          "in_execution_window": true
+        },
+        "idle_seconds": {
+          "user": null,
+          "agent": null,
+          "memory": null,
+          "self_learning": null,
+          "self_evolution_plan": 28800.379112,
+          "self_evolution_execute": null,
+          "self_evolution": 28800.379112
+        }
+      },
+      "constraints": {},
+      "decision_reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+      "decision_history": [
+        {
+          "decision_id": "28465133-8a02-488f-87fd-1f5d80a1e1bd",
+          "status": "approved",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "952632a6-b8e0-489e-9189-8a73b4d7ddca",
+          "decided_at": "2026-06-22T01:36:35.791878",
+          "actor": "supervisor",
+          "reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+          "context": {
+            "idle_window": {
+              "status": "evaluated",
+              "evaluated_at": "2026-06-22T09:36:35.791070",
+              "gateway_address": "http://127.0.0.1:6000",
+              "governance_task_type": "memory_maintenance",
+              "task_family": "memory_maintenance",
+              "execution_kind": "memory_maintenance",
+              "task_profile": {
+                "governance_task_type": "memory_maintenance",
+                "task_family": "memory_maintenance",
+                "execution_kind": "memory_maintenance"
+              },
+              "activity": {
+                "last_user_request_at": null,
+                "last_agent_work_at": null,
+                "last_memory_task_at": null,
+                "last_self_learning_activity_at": null,
+                "last_self_evolution_activity_at": "2026-06-22T01:31:36.464016",
+                "last_self_evolution_plan_at": "2026-06-22T01:31:36.464016",
+                "last_self_evolution_execute_at": null,
+                "counts": {
+                  "user_request_count": 0,
+                  "agent_work_count": 0,
+                  "memory_task_count": 0,
+                  "self_learning_activity_count": 0,
+                  "self_evolution_activity_count": 14,
+                  "self_evolution_plan_count": 14,
+                  "self_evolution_execute_count": 0,
+                  "error_count": 0,
+                  "uncertainty_high_count": 0
+                },
+                "recent_metadata": {
+                  "user_request": null,
+                  "agent_work": null,
+                  "memory_task": null,
+                  "self_learning": null,
+                  "self_evolution": {
+                    "action": "endogenous_drive",
+                    "count": 1,
+                    "endogenous_drive_keys": [
+                      "continuity:memory_maintenance_sweep"
+                    ],
+                    "trace_id": "bb3aa064-e99b-4e49-802b-ccdb25d877a3",
+                    "source_service": "supervisor"
+                  },
+                  "self_evolution_plan": {
+                    "action": "endogenous_drive",
+                    "count": 1,
+                    "endogenous_drive_keys": [
+                      "continuity:memory_maintenance_sweep"
+                    ],
+                    "trace_id": "bb3aa064-e99b-4e49-802b-ccdb25d877a3",
+                    "source_service": "supervisor"
+                  },
+                  "self_evolution_execute": null
+                },
+                "active_sessions": 0
+              },
+              "idle_seconds": {
+                "user": null,
+                "agent": null,
+                "memory": null,
+                "self_learning": null,
+                "self_evolution_plan": 29099.327054,
+                "self_evolution_execute": null,
+                "self_evolution": 29099.327054
+              },
+              "thresholds": {
+                "user_idle_seconds": 600,
+                "memory_idle_seconds": 600,
+                "workflow_idle_seconds": 600,
+                "execution_window_start_hour": 0,
+                "execution_window_end_hour": 24
+              },
+              "checks": {
+                "has_user_idle": true,
+                "has_memory_idle": true,
+                "has_agent_idle": true,
+                "has_self_learning_idle": true,
+                "has_self_evolution_plan_idle": true,
+                "has_self_evolution_execute_idle": true,
+                "has_self_evolution_idle": true,
+                "in_execution_window": true
+              },
+              "governance_task_type_decisions": {
+                "user": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_learning": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "memory_maintenance": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_evolution": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                }
+              },
+              "task_family_decisions": {
+                "user": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_learning": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "memory_maintenance": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "general_self_evolution": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "body_upgrade": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "body_switch": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                }
+              },
+              "decisions": {
+                "eligible_for_planning": true,
+                "eligible_for_execution": true
+              }
+            }
+          }
+        }
+      ],
+      "execution_request": {
+        "request_id": "5eb6250e-3fc7-45e0-ad2a-b8278a8e975d",
+        "task_id": "e1f812ef-89e5-4406-abcb-fb585b684d57",
+        "trace_id": "952632a6-b8e0-489e-9189-8a73b4d7ddca",
+        "task_type": "memory_maintenance",
+        "governance_task_type": "memory_maintenance",
+        "task_family": "memory_maintenance",
+        "execution_kind": "memory_maintenance",
+        "decision_id": "28465133-8a02-488f-87fd-1f5d80a1e1bd",
+        "kind": "memory_maintenance",
+        "status": "approved_for_execution",
+        "source_actor": "supervisor",
+        "target_slot_id": null,
+        "git_lineage": {
+          "source_branch": null,
+          "source_commit": null,
+          "candidate_branch": null,
+          "candidate_commit": null,
+          "active_ref": null,
+          "rollback_ref": null,
+          "rollback_commit": null,
+          "diff_summary": "",
+          "changed_files": []
+        },
+        "probe_report_ref": null,
+        "idle_window_evidence": {
+          "status": "evaluated",
+          "evaluated_at": "2026-06-22T09:36:35.791070",
+          "gateway_address": "http://127.0.0.1:6000",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "task_profile": {
+            "governance_task_type": "memory_maintenance",
+            "task_family": "memory_maintenance",
+            "execution_kind": "memory_maintenance"
+          },
+          "activity": {
+            "last_user_request_at": null,
+            "last_agent_work_at": null,
+            "last_memory_task_at": null,
+            "last_self_learning_activity_at": null,
+            "last_self_evolution_activity_at": "2026-06-22T01:31:36.464016",
+            "last_self_evolution_plan_at": "2026-06-22T01:31:36.464016",
+            "last_self_evolution_execute_at": null,
+            "counts": {
+              "user_request_count": 0,
+              "agent_work_count": 0,
+              "memory_task_count": 0,
+              "self_learning_activity_count": 0,
+              "self_evolution_activity_count": 14,
+              "self_evolution_plan_count": 14,
+              "self_evolution_execute_count": 0,
+              "error_count": 0,
+              "uncertainty_high_count": 0
+            },
+            "recent_metadata": {
+              "user_request": null,
+              "agent_work": null,
+              "memory_task": null,
+              "self_learning": null,
+              "self_evolution": {
+                "action": "endogenous_drive",
+                "count": 1,
+                "endogenous_drive_keys": [
+                  "continuity:memory_maintenance_sweep"
+                ],
+                "trace_id": "bb3aa064-e99b-4e49-802b-ccdb25d877a3",
+                "source_service": "supervisor"
+              },
+              "self_evolution_plan": {
+                "action": "endogenous_drive",
+                "count": 1,
+                "endogenous_drive_keys": [
+                  "continuity:memory_maintenance_sweep"
+                ],
+                "trace_id": "bb3aa064-e99b-4e49-802b-ccdb25d877a3",
+                "source_service": "supervisor"
+              },
+              "self_evolution_execute": null
+            },
+            "active_sessions": 0
+          },
+          "idle_seconds": {
+            "user": null,
+            "agent": null,
+            "memory": null,
+            "self_learning": null,
+            "self_evolution_plan": 29099.327054,
+            "self_evolution_execute": null,
+            "self_evolution": 29099.327054
+          },
+          "thresholds": {
+            "user_idle_seconds": 600,
+            "memory_idle_seconds": 600,
+            "workflow_idle_seconds": 600,
+            "execution_window_start_hour": 0,
+            "execution_window_end_hour": 24
+          },
+          "checks": {
+            "has_user_idle": true,
+            "has_memory_idle": true,
+            "has_agent_idle": true,
+            "has_self_learning_idle": true,
+            "has_self_evolution_plan_idle": true,
+            "has_self_evolution_execute_idle": true,
+            "has_self_evolution_idle": true,
+            "in_execution_window": true
+          },
+          "governance_task_type_decisions": {
+            "user": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_learning": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "memory_maintenance": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_evolution": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            }
+          },
+          "task_family_decisions": {
+            "user": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_learning": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "memory_maintenance": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "general_self_evolution": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "body_upgrade": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "body_switch": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            }
+          },
+          "decisions": {
+            "eligible_for_planning": true,
+            "eligible_for_execution": true
+          }
+        },
+        "governor_decision": {
+          "decision": "approved_for_execution",
+          "actor": "supervisor",
+          "reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+          "task_status": "approved"
+        },
+        "rollback_plan": {},
+        "created_at": "2026-06-22T01:36:35.791180"
+      }
+    },
+    {
+      "task_id": "f84fd137-30f9-422f-b35d-f8be04e75b46",
+      "trace_id": "2ced0e67-6dcc-4617-bbf0-6a39b38a153a",
+      "title": "Maintain long-term memory continuity",
+      "summary": "Inspect memory-maintenance needs during an idle window so long-term identity, summaries, and governance traces stay usable.",
+      "task_type": "memory_maintenance",
+      "governance_task_type": "memory_maintenance",
+      "task_family": "memory_maintenance",
+      "execution_kind": "memory_maintenance",
+      "source": "endogenous_drive",
+      "priority": "high",
+      "status": "approved",
+      "created_at": "2026-06-22T01:36:36.531610",
+      "updated_at": "2026-06-22T01:41:36.078574",
+      "metadata": {
+        "source": "endogenous_drive",
+        "endogenous_drive_key": "continuity:memory_maintenance_sweep",
+        "core_values": [
+          "continuity"
+        ],
+        "utility": 0.92,
+        "governance_task_type": "memory_maintenance",
+        "task_family": "memory_maintenance",
+        "execution_kind": "memory_maintenance",
+        "execution_dispatched": true,
+        "executed_at": "2026-06-22T01:41:36.077854+00:00"
+      },
+      "evidence": {
+        "endogenous_drive": {
+          "stable_key": "continuity:memory_maintenance_sweep",
+          "core_values": [
+            "continuity"
+          ],
+          "core_value_definitions": {
+            "continuity": "Preserve VoidCube's long-term memory, lineage, and service continuity."
+          },
+          "utility": 0.92
+        },
+        "idle_window_checks": {
+          "has_user_idle": true,
+          "has_memory_idle": true,
+          "has_agent_idle": true,
+          "has_self_learning_idle": true,
+          "has_self_evolution_plan_idle": true,
+          "has_self_evolution_execute_idle": true,
+          "has_self_evolution_idle": true,
+          "in_execution_window": true
+        },
+        "idle_seconds": {
+          "user": null,
+          "agent": null,
+          "memory": null,
+          "self_learning": null,
+          "self_evolution_plan": 28800.562966,
+          "self_evolution_execute": null,
+          "self_evolution": 28800.562966
+        }
+      },
+      "constraints": {},
+      "decision_reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+      "decision_history": [
+        {
+          "decision_id": "60204726-c4fb-452f-ab14-6f42f2e0c30e",
+          "status": "approved",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "2ced0e67-6dcc-4617-bbf0-6a39b38a153a",
+          "decided_at": "2026-06-22T01:41:35.959411",
+          "actor": "supervisor",
+          "reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+          "context": {
+            "idle_window": {
+              "status": "evaluated",
+              "evaluated_at": "2026-06-22T09:41:35.958274",
+              "gateway_address": "http://127.0.0.1:6000",
+              "governance_task_type": "memory_maintenance",
+              "task_family": "memory_maintenance",
+              "execution_kind": "memory_maintenance",
+              "task_profile": {
+                "governance_task_type": "memory_maintenance",
+                "task_family": "memory_maintenance",
+                "execution_kind": "memory_maintenance"
+              },
+              "activity": {
+                "last_user_request_at": null,
+                "last_agent_work_at": null,
+                "last_memory_task_at": null,
+                "last_self_learning_activity_at": null,
+                "last_self_evolution_activity_at": "2026-06-22T01:36:36.681754",
+                "last_self_evolution_plan_at": "2026-06-22T01:36:36.681754",
+                "last_self_evolution_execute_at": null,
+                "counts": {
+                  "user_request_count": 0,
+                  "agent_work_count": 0,
+                  "memory_task_count": 0,
+                  "self_learning_activity_count": 0,
+                  "self_evolution_activity_count": 17,
+                  "self_evolution_plan_count": 17,
+                  "self_evolution_execute_count": 0,
+                  "error_count": 0,
+                  "uncertainty_high_count": 0
+                },
+                "recent_metadata": {
+                  "user_request": null,
+                  "agent_work": null,
+                  "memory_task": null,
+                  "self_learning": null,
+                  "self_evolution": {
+                    "action": "endogenous_drive",
+                    "count": 1,
+                    "endogenous_drive_keys": [
+                      "continuity:memory_maintenance_sweep"
+                    ],
+                    "trace_id": "dcd4a068-467e-4fa6-a522-48ab62f8e4ca",
+                    "source_service": "supervisor"
+                  },
+                  "self_evolution_plan": {
+                    "action": "endogenous_drive",
+                    "count": 1,
+                    "endogenous_drive_keys": [
+                      "continuity:memory_maintenance_sweep"
+                    ],
+                    "trace_id": "dcd4a068-467e-4fa6-a522-48ab62f8e4ca",
+                    "source_service": "supervisor"
+                  },
+                  "self_evolution_execute": null
+                },
+                "active_sessions": 0
+              },
+              "idle_seconds": {
+                "user": null,
+                "agent": null,
+                "memory": null,
+                "self_learning": null,
+                "self_evolution_plan": 29099.27652,
+                "self_evolution_execute": null,
+                "self_evolution": 29099.27652
+              },
+              "thresholds": {
+                "user_idle_seconds": 600,
+                "memory_idle_seconds": 600,
+                "workflow_idle_seconds": 600,
+                "execution_window_start_hour": 0,
+                "execution_window_end_hour": 24
+              },
+              "checks": {
+                "has_user_idle": true,
+                "has_memory_idle": true,
+                "has_agent_idle": true,
+                "has_self_learning_idle": true,
+                "has_self_evolution_plan_idle": true,
+                "has_self_evolution_execute_idle": true,
+                "has_self_evolution_idle": true,
+                "in_execution_window": true
+              },
+              "governance_task_type_decisions": {
+                "user": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_learning": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "memory_maintenance": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_evolution": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                }
+              },
+              "task_family_decisions": {
+                "user": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_learning": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "memory_maintenance": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "general_self_evolution": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "body_upgrade": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "body_switch": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                }
+              },
+              "decisions": {
+                "eligible_for_planning": true,
+                "eligible_for_execution": true
+              }
+            }
+          }
+        }
+      ],
+      "execution_request": {
+        "request_id": "3edd4a03-46dd-4ef5-967d-1df64a933090",
+        "task_id": "f84fd137-30f9-422f-b35d-f8be04e75b46",
+        "trace_id": "2ced0e67-6dcc-4617-bbf0-6a39b38a153a",
+        "task_type": "memory_maintenance",
+        "governance_task_type": "memory_maintenance",
+        "task_family": "memory_maintenance",
+        "execution_kind": "memory_maintenance",
+        "decision_id": "60204726-c4fb-452f-ab14-6f42f2e0c30e",
+        "kind": "memory_maintenance",
+        "status": "approved_for_execution",
+        "source_actor": "supervisor",
+        "target_slot_id": null,
+        "git_lineage": {
+          "source_branch": null,
+          "source_commit": null,
+          "candidate_branch": null,
+          "candidate_commit": null,
+          "active_ref": null,
+          "rollback_ref": null,
+          "rollback_commit": null,
+          "diff_summary": "",
+          "changed_files": []
+        },
+        "probe_report_ref": null,
+        "idle_window_evidence": {
+          "status": "evaluated",
+          "evaluated_at": "2026-06-22T09:41:35.958274",
+          "gateway_address": "http://127.0.0.1:6000",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "task_profile": {
+            "governance_task_type": "memory_maintenance",
+            "task_family": "memory_maintenance",
+            "execution_kind": "memory_maintenance"
+          },
+          "activity": {
+            "last_user_request_at": null,
+            "last_agent_work_at": null,
+            "last_memory_task_at": null,
+            "last_self_learning_activity_at": null,
+            "last_self_evolution_activity_at": "2026-06-22T01:36:36.681754",
+            "last_self_evolution_plan_at": "2026-06-22T01:36:36.681754",
+            "last_self_evolution_execute_at": null,
+            "counts": {
+              "user_request_count": 0,
+              "agent_work_count": 0,
+              "memory_task_count": 0,
+              "self_learning_activity_count": 0,
+              "self_evolution_activity_count": 17,
+              "self_evolution_plan_count": 17,
+              "self_evolution_execute_count": 0,
+              "error_count": 0,
+              "uncertainty_high_count": 0
+            },
+            "recent_metadata": {
+              "user_request": null,
+              "agent_work": null,
+              "memory_task": null,
+              "self_learning": null,
+              "self_evolution": {
+                "action": "endogenous_drive",
+                "count": 1,
+                "endogenous_drive_keys": [
+                  "continuity:memory_maintenance_sweep"
+                ],
+                "trace_id": "dcd4a068-467e-4fa6-a522-48ab62f8e4ca",
+                "source_service": "supervisor"
+              },
+              "self_evolution_plan": {
+                "action": "endogenous_drive",
+                "count": 1,
+                "endogenous_drive_keys": [
+                  "continuity:memory_maintenance_sweep"
+                ],
+                "trace_id": "dcd4a068-467e-4fa6-a522-48ab62f8e4ca",
+                "source_service": "supervisor"
+              },
+              "self_evolution_execute": null
+            },
+            "active_sessions": 0
+          },
+          "idle_seconds": {
+            "user": null,
+            "agent": null,
+            "memory": null,
+            "self_learning": null,
+            "self_evolution_plan": 29099.27652,
+            "self_evolution_execute": null,
+            "self_evolution": 29099.27652
+          },
+          "thresholds": {
+            "user_idle_seconds": 600,
+            "memory_idle_seconds": 600,
+            "workflow_idle_seconds": 600,
+            "execution_window_start_hour": 0,
+            "execution_window_end_hour": 24
+          },
+          "checks": {
+            "has_user_idle": true,
+            "has_memory_idle": true,
+            "has_agent_idle": true,
+            "has_self_learning_idle": true,
+            "has_self_evolution_plan_idle": true,
+            "has_self_evolution_execute_idle": true,
+            "has_self_evolution_idle": true,
+            "in_execution_window": true
+          },
+          "governance_task_type_decisions": {
+            "user": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_learning": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "memory_maintenance": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_evolution": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            }
+          },
+          "task_family_decisions": {
+            "user": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_learning": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "memory_maintenance": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "general_self_evolution": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "body_upgrade": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "body_switch": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            }
+          },
+          "decisions": {
+            "eligible_for_planning": true,
+            "eligible_for_execution": true
+          }
+        },
+        "governor_decision": {
+          "decision": "approved_for_execution",
+          "actor": "supervisor",
+          "reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+          "task_status": "approved"
+        },
+        "rollback_plan": {},
+        "created_at": "2026-06-22T01:41:35.958402"
+      }
+    },
+    {
+      "task_id": "4f10da68-2f65-454f-bd74-91e76e2ee425",
+      "trace_id": "8554a9fd-70c7-4f76-94d9-427a24266a59",
+      "title": "Maintain long-term memory continuity",
+      "summary": "Inspect memory-maintenance needs during an idle window so long-term identity, summaries, and governance traces stay usable.",
+      "task_type": "memory_maintenance",
+      "governance_task_type": "memory_maintenance",
+      "task_family": "memory_maintenance",
+      "execution_kind": "memory_maintenance",
+      "source": "endogenous_drive",
+      "priority": "high",
+      "status": "approved",
+      "created_at": "2026-06-22T01:41:36.741274",
+      "updated_at": "2026-06-22T01:46:36.254929",
+      "metadata": {
+        "source": "endogenous_drive",
+        "endogenous_drive_key": "continuity:memory_maintenance_sweep",
+        "core_values": [
+          "continuity"
+        ],
+        "utility": 0.92,
+        "governance_task_type": "memory_maintenance",
+        "task_family": "memory_maintenance",
+        "execution_kind": "memory_maintenance",
+        "execution_dispatched": true,
+        "executed_at": "2026-06-22T01:46:36.254076+00:00"
+      },
+      "evidence": {
+        "endogenous_drive": {
+          "stable_key": "continuity:memory_maintenance_sweep",
+          "core_values": [
+            "continuity"
+          ],
+          "core_value_definitions": {
+            "continuity": "Preserve VoidCube's long-term memory, lineage, and service continuity."
+          },
+          "utility": 0.92
+        },
+        "idle_window_checks": {
+          "has_user_idle": true,
+          "has_memory_idle": true,
+          "has_agent_idle": true,
+          "has_self_learning_idle": true,
+          "has_self_evolution_plan_idle": true,
+          "has_self_evolution_execute_idle": true,
+          "has_self_evolution_idle": true,
+          "in_execution_window": true
+        },
+        "idle_seconds": {
+          "user": null,
+          "agent": null,
+          "memory": null,
+          "self_learning": null,
+          "self_evolution_plan": 28800.615588,
+          "self_evolution_execute": null,
+          "self_evolution": 28800.615588
+        }
+      },
+      "constraints": {},
+      "decision_reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+      "decision_history": [
+        {
+          "decision_id": "be3d6aba-6f30-4453-9c0f-41fb38c12614",
+          "status": "approved",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "8554a9fd-70c7-4f76-94d9-427a24266a59",
+          "decided_at": "2026-06-22T01:46:36.134865",
+          "actor": "supervisor",
+          "reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+          "context": {
+            "idle_window": {
+              "status": "evaluated",
+              "evaluated_at": "2026-06-22T09:46:36.133906",
+              "gateway_address": "http://127.0.0.1:6000",
+              "governance_task_type": "memory_maintenance",
+              "task_family": "memory_maintenance",
+              "execution_kind": "memory_maintenance",
+              "task_profile": {
+                "governance_task_type": "memory_maintenance",
+                "task_family": "memory_maintenance",
+                "execution_kind": "memory_maintenance"
+              },
+              "activity": {
+                "last_user_request_at": null,
+                "last_agent_work_at": null,
+                "last_memory_task_at": null,
+                "last_self_learning_activity_at": null,
+                "last_self_evolution_activity_at": "2026-06-22T01:41:36.901395",
+                "last_self_evolution_plan_at": "2026-06-22T01:41:36.901395",
+                "last_self_evolution_execute_at": null,
+                "counts": {
+                  "user_request_count": 0,
+                  "agent_work_count": 0,
+                  "memory_task_count": 0,
+                  "self_learning_activity_count": 0,
+                  "self_evolution_activity_count": 20,
+                  "self_evolution_plan_count": 20,
+                  "self_evolution_execute_count": 0,
+                  "error_count": 0,
+                  "uncertainty_high_count": 0
+                },
+                "recent_metadata": {
+                  "user_request": null,
+                  "agent_work": null,
+                  "memory_task": null,
+                  "self_learning": null,
+                  "self_evolution": {
+                    "action": "endogenous_drive",
+                    "count": 1,
+                    "endogenous_drive_keys": [
+                      "continuity:memory_maintenance_sweep"
+                    ],
+                    "trace_id": "338e30db-3912-4300-b24d-5117ac95261c",
+                    "source_service": "supervisor"
+                  },
+                  "self_evolution_plan": {
+                    "action": "endogenous_drive",
+                    "count": 1,
+                    "endogenous_drive_keys": [
+                      "continuity:memory_maintenance_sweep"
+                    ],
+                    "trace_id": "338e30db-3912-4300-b24d-5117ac95261c",
+                    "source_service": "supervisor"
+                  },
+                  "self_evolution_execute": null
+                },
+                "active_sessions": 0
+              },
+              "idle_seconds": {
+                "user": null,
+                "agent": null,
+                "memory": null,
+                "self_learning": null,
+                "self_evolution_plan": 29099.232511,
+                "self_evolution_execute": null,
+                "self_evolution": 29099.232511
+              },
+              "thresholds": {
+                "user_idle_seconds": 600,
+                "memory_idle_seconds": 600,
+                "workflow_idle_seconds": 600,
+                "execution_window_start_hour": 0,
+                "execution_window_end_hour": 24
+              },
+              "checks": {
+                "has_user_idle": true,
+                "has_memory_idle": true,
+                "has_agent_idle": true,
+                "has_self_learning_idle": true,
+                "has_self_evolution_plan_idle": true,
+                "has_self_evolution_execute_idle": true,
+                "has_self_evolution_idle": true,
+                "in_execution_window": true
+              },
+              "governance_task_type_decisions": {
+                "user": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_learning": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "memory_maintenance": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_evolution": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                }
+              },
+              "task_family_decisions": {
+                "user": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_learning": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "memory_maintenance": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "general_self_evolution": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "body_upgrade": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "body_switch": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                }
+              },
+              "decisions": {
+                "eligible_for_planning": true,
+                "eligible_for_execution": true
+              }
+            }
+          }
+        }
+      ],
+      "execution_request": {
+        "request_id": "adb1b85f-5d62-4cac-89ee-1e624c105a20",
+        "task_id": "4f10da68-2f65-454f-bd74-91e76e2ee425",
+        "trace_id": "8554a9fd-70c7-4f76-94d9-427a24266a59",
+        "task_type": "memory_maintenance",
+        "governance_task_type": "memory_maintenance",
+        "task_family": "memory_maintenance",
+        "execution_kind": "memory_maintenance",
+        "decision_id": "be3d6aba-6f30-4453-9c0f-41fb38c12614",
+        "kind": "memory_maintenance",
+        "status": "approved_for_execution",
+        "source_actor": "supervisor",
+        "target_slot_id": null,
+        "git_lineage": {
+          "source_branch": null,
+          "source_commit": null,
+          "candidate_branch": null,
+          "candidate_commit": null,
+          "active_ref": null,
+          "rollback_ref": null,
+          "rollback_commit": null,
+          "diff_summary": "",
+          "changed_files": []
+        },
+        "probe_report_ref": null,
+        "idle_window_evidence": {
+          "status": "evaluated",
+          "evaluated_at": "2026-06-22T09:46:36.133906",
+          "gateway_address": "http://127.0.0.1:6000",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "task_profile": {
+            "governance_task_type": "memory_maintenance",
+            "task_family": "memory_maintenance",
+            "execution_kind": "memory_maintenance"
+          },
+          "activity": {
+            "last_user_request_at": null,
+            "last_agent_work_at": null,
+            "last_memory_task_at": null,
+            "last_self_learning_activity_at": null,
+            "last_self_evolution_activity_at": "2026-06-22T01:41:36.901395",
+            "last_self_evolution_plan_at": "2026-06-22T01:41:36.901395",
+            "last_self_evolution_execute_at": null,
+            "counts": {
+              "user_request_count": 0,
+              "agent_work_count": 0,
+              "memory_task_count": 0,
+              "self_learning_activity_count": 0,
+              "self_evolution_activity_count": 20,
+              "self_evolution_plan_count": 20,
+              "self_evolution_execute_count": 0,
+              "error_count": 0,
+              "uncertainty_high_count": 0
+            },
+            "recent_metadata": {
+              "user_request": null,
+              "agent_work": null,
+              "memory_task": null,
+              "self_learning": null,
+              "self_evolution": {
+                "action": "endogenous_drive",
+                "count": 1,
+                "endogenous_drive_keys": [
+                  "continuity:memory_maintenance_sweep"
+                ],
+                "trace_id": "338e30db-3912-4300-b24d-5117ac95261c",
+                "source_service": "supervisor"
+              },
+              "self_evolution_plan": {
+                "action": "endogenous_drive",
+                "count": 1,
+                "endogenous_drive_keys": [
+                  "continuity:memory_maintenance_sweep"
+                ],
+                "trace_id": "338e30db-3912-4300-b24d-5117ac95261c",
+                "source_service": "supervisor"
+              },
+              "self_evolution_execute": null
+            },
+            "active_sessions": 0
+          },
+          "idle_seconds": {
+            "user": null,
+            "agent": null,
+            "memory": null,
+            "self_learning": null,
+            "self_evolution_plan": 29099.232511,
+            "self_evolution_execute": null,
+            "self_evolution": 29099.232511
+          },
+          "thresholds": {
+            "user_idle_seconds": 600,
+            "memory_idle_seconds": 600,
+            "workflow_idle_seconds": 600,
+            "execution_window_start_hour": 0,
+            "execution_window_end_hour": 24
+          },
+          "checks": {
+            "has_user_idle": true,
+            "has_memory_idle": true,
+            "has_agent_idle": true,
+            "has_self_learning_idle": true,
+            "has_self_evolution_plan_idle": true,
+            "has_self_evolution_execute_idle": true,
+            "has_self_evolution_idle": true,
+            "in_execution_window": true
+          },
+          "governance_task_type_decisions": {
+            "user": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_learning": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "memory_maintenance": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_evolution": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            }
+          },
+          "task_family_decisions": {
+            "user": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_learning": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "memory_maintenance": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "general_self_evolution": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "body_upgrade": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "body_switch": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            }
+          },
+          "decisions": {
+            "eligible_for_planning": true,
+            "eligible_for_execution": true
+          }
+        },
+        "governor_decision": {
+          "decision": "approved_for_execution",
+          "actor": "supervisor",
+          "reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+          "task_status": "approved"
+        },
+        "rollback_plan": {},
+        "created_at": "2026-06-22T01:46:36.134013"
+      }
+    },
+    {
+      "task_id": "8306239a-4fb6-49d8-af71-d38e24a2898d",
+      "trace_id": "a6d9e5da-091e-4ae5-8f40-241b1c8db21c",
+      "title": "Maintain long-term memory continuity",
+      "summary": "Inspect memory-maintenance needs during an idle window so long-term identity, summaries, and governance traces stay usable.",
+      "task_type": "memory_maintenance",
+      "governance_task_type": "memory_maintenance",
+      "task_family": "memory_maintenance",
+      "execution_kind": "memory_maintenance",
+      "source": "endogenous_drive",
+      "priority": "high",
+      "status": "approved",
+      "created_at": "2026-06-22T01:46:36.967377",
+      "updated_at": "2026-06-22T01:51:36.432606",
+      "metadata": {
+        "source": "endogenous_drive",
+        "endogenous_drive_key": "continuity:memory_maintenance_sweep",
+        "core_values": [
+          "continuity"
+        ],
+        "utility": 0.92,
+        "governance_task_type": "memory_maintenance",
+        "task_family": "memory_maintenance",
+        "execution_kind": "memory_maintenance",
+        "execution_dispatched": true,
+        "executed_at": "2026-06-22T01:51:36.431799+00:00"
+      },
+      "evidence": {
+        "endogenous_drive": {
+          "stable_key": "continuity:memory_maintenance_sweep",
+          "core_values": [
+            "continuity"
+          ],
+          "core_value_definitions": {
+            "continuity": "Preserve VoidCube's long-term memory, lineage, and service continuity."
+          },
+          "utility": 0.92
+        },
+        "idle_window_checks": {
+          "has_user_idle": true,
+          "has_memory_idle": true,
+          "has_agent_idle": true,
+          "has_self_learning_idle": true,
+          "has_self_evolution_plan_idle": true,
+          "has_self_evolution_execute_idle": true,
+          "has_self_evolution_idle": true,
+          "in_execution_window": true
+        },
+        "idle_seconds": {
+          "user": null,
+          "agent": null,
+          "memory": null,
+          "self_learning": null,
+          "self_evolution_plan": 28800.667718,
+          "self_evolution_execute": null,
+          "self_evolution": 28800.667718
+        }
+      },
+      "constraints": {},
+      "decision_reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+      "decision_history": [
+        {
+          "decision_id": "cfdc9a22-6231-428f-aeb1-4c4b44f44a1a",
+          "status": "approved",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "a6d9e5da-091e-4ae5-8f40-241b1c8db21c",
+          "decided_at": "2026-06-22T01:51:36.324101",
+          "actor": "supervisor",
+          "reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+          "context": {
+            "idle_window": {
+              "status": "evaluated",
+              "evaluated_at": "2026-06-22T09:51:36.323119",
+              "gateway_address": "http://127.0.0.1:6000",
+              "governance_task_type": "memory_maintenance",
+              "task_family": "memory_maintenance",
+              "execution_kind": "memory_maintenance",
+              "task_profile": {
+                "governance_task_type": "memory_maintenance",
+                "task_family": "memory_maintenance",
+                "execution_kind": "memory_maintenance"
+              },
+              "activity": {
+                "last_user_request_at": null,
+                "last_agent_work_at": null,
+                "last_memory_task_at": null,
+                "last_self_learning_activity_at": null,
+                "last_self_evolution_activity_at": "2026-06-22T01:46:37.150464",
+                "last_self_evolution_plan_at": "2026-06-22T01:46:37.150464",
+                "last_self_evolution_execute_at": null,
+                "counts": {
+                  "user_request_count": 0,
+                  "agent_work_count": 0,
+                  "memory_task_count": 0,
+                  "self_learning_activity_count": 0,
+                  "self_evolution_activity_count": 23,
+                  "self_evolution_plan_count": 23,
+                  "self_evolution_execute_count": 0,
+                  "error_count": 0,
+                  "uncertainty_high_count": 0
+                },
+                "recent_metadata": {
+                  "user_request": null,
+                  "agent_work": null,
+                  "memory_task": null,
+                  "self_learning": null,
+                  "self_evolution": {
+                    "action": "endogenous_drive",
+                    "count": 1,
+                    "endogenous_drive_keys": [
+                      "continuity:memory_maintenance_sweep"
+                    ],
+                    "trace_id": "eb53586c-2fb7-44d3-9f7b-15281674cb8e",
+                    "source_service": "supervisor"
+                  },
+                  "self_evolution_plan": {
+                    "action": "endogenous_drive",
+                    "count": 1,
+                    "endogenous_drive_keys": [
+                      "continuity:memory_maintenance_sweep"
+                    ],
+                    "trace_id": "eb53586c-2fb7-44d3-9f7b-15281674cb8e",
+                    "source_service": "supervisor"
+                  },
+                  "self_evolution_execute": null
+                },
+                "active_sessions": 0
+              },
+              "idle_seconds": {
+                "user": null,
+                "agent": null,
+                "memory": null,
+                "self_learning": null,
+                "self_evolution_plan": 29099.172655,
+                "self_evolution_execute": null,
+                "self_evolution": 29099.172655
+              },
+              "thresholds": {
+                "user_idle_seconds": 600,
+                "memory_idle_seconds": 600,
+                "workflow_idle_seconds": 600,
+                "execution_window_start_hour": 0,
+                "execution_window_end_hour": 24
+              },
+              "checks": {
+                "has_user_idle": true,
+                "has_memory_idle": true,
+                "has_agent_idle": true,
+                "has_self_learning_idle": true,
+                "has_self_evolution_plan_idle": true,
+                "has_self_evolution_execute_idle": true,
+                "has_self_evolution_idle": true,
+                "in_execution_window": true
+              },
+              "governance_task_type_decisions": {
+                "user": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_learning": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "memory_maintenance": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_evolution": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                }
+              },
+              "task_family_decisions": {
+                "user": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "self_learning": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "memory_maintenance": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "general_self_evolution": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "body_upgrade": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                },
+                "body_switch": {
+                  "eligible_for_planning": true,
+                  "eligible_for_execution": true
+                }
+              },
+              "decisions": {
+                "eligible_for_planning": true,
+                "eligible_for_execution": true
+              }
+            }
+          }
+        }
+      ],
+      "execution_request": {
+        "request_id": "11fc6597-e5c0-440c-b5c5-22f7dde7013e",
+        "task_id": "8306239a-4fb6-49d8-af71-d38e24a2898d",
+        "trace_id": "a6d9e5da-091e-4ae5-8f40-241b1c8db21c",
+        "task_type": "memory_maintenance",
+        "governance_task_type": "memory_maintenance",
+        "task_family": "memory_maintenance",
+        "execution_kind": "memory_maintenance",
+        "decision_id": "cfdc9a22-6231-428f-aeb1-4c4b44f44a1a",
+        "kind": "memory_maintenance",
+        "status": "approved_for_execution",
+        "source_actor": "supervisor",
+        "target_slot_id": null,
+        "git_lineage": {
+          "source_branch": null,
+          "source_commit": null,
+          "candidate_branch": null,
+          "candidate_commit": null,
+          "active_ref": null,
+          "rollback_ref": null,
+          "rollback_commit": null,
+          "diff_summary": "",
+          "changed_files": []
+        },
+        "probe_report_ref": null,
+        "idle_window_evidence": {
+          "status": "evaluated",
+          "evaluated_at": "2026-06-22T09:51:36.323119",
+          "gateway_address": "http://127.0.0.1:6000",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "task_profile": {
+            "governance_task_type": "memory_maintenance",
+            "task_family": "memory_maintenance",
+            "execution_kind": "memory_maintenance"
+          },
+          "activity": {
+            "last_user_request_at": null,
+            "last_agent_work_at": null,
+            "last_memory_task_at": null,
+            "last_self_learning_activity_at": null,
+            "last_self_evolution_activity_at": "2026-06-22T01:46:37.150464",
+            "last_self_evolution_plan_at": "2026-06-22T01:46:37.150464",
+            "last_self_evolution_execute_at": null,
+            "counts": {
+              "user_request_count": 0,
+              "agent_work_count": 0,
+              "memory_task_count": 0,
+              "self_learning_activity_count": 0,
+              "self_evolution_activity_count": 23,
+              "self_evolution_plan_count": 23,
+              "self_evolution_execute_count": 0,
+              "error_count": 0,
+              "uncertainty_high_count": 0
+            },
+            "recent_metadata": {
+              "user_request": null,
+              "agent_work": null,
+              "memory_task": null,
+              "self_learning": null,
+              "self_evolution": {
+                "action": "endogenous_drive",
+                "count": 1,
+                "endogenous_drive_keys": [
+                  "continuity:memory_maintenance_sweep"
+                ],
+                "trace_id": "eb53586c-2fb7-44d3-9f7b-15281674cb8e",
+                "source_service": "supervisor"
+              },
+              "self_evolution_plan": {
+                "action": "endogenous_drive",
+                "count": 1,
+                "endogenous_drive_keys": [
+                  "continuity:memory_maintenance_sweep"
+                ],
+                "trace_id": "eb53586c-2fb7-44d3-9f7b-15281674cb8e",
+                "source_service": "supervisor"
+              },
+              "self_evolution_execute": null
+            },
+            "active_sessions": 0
+          },
+          "idle_seconds": {
+            "user": null,
+            "agent": null,
+            "memory": null,
+            "self_learning": null,
+            "self_evolution_plan": 29099.172655,
+            "self_evolution_execute": null,
+            "self_evolution": 29099.172655
+          },
+          "thresholds": {
+            "user_idle_seconds": 600,
+            "memory_idle_seconds": 600,
+            "workflow_idle_seconds": 600,
+            "execution_window_start_hour": 0,
+            "execution_window_end_hour": 24
+          },
+          "checks": {
+            "has_user_idle": true,
+            "has_memory_idle": true,
+            "has_agent_idle": true,
+            "has_self_learning_idle": true,
+            "has_self_evolution_plan_idle": true,
+            "has_self_evolution_execute_idle": true,
+            "has_self_evolution_idle": true,
+            "in_execution_window": true
+          },
+          "governance_task_type_decisions": {
+            "user": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_learning": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "memory_maintenance": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_evolution": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            }
+          },
+          "task_family_decisions": {
+            "user": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "self_learning": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "memory_maintenance": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "general_self_evolution": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "body_upgrade": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            },
+            "body_switch": {
+              "eligible_for_planning": true,
+              "eligible_for_execution": true
+            }
+          },
+          "decisions": {
+            "eligible_for_planning": true,
+            "eligible_for_execution": true
+          }
+        },
+        "governor_decision": {
+          "decision": "approved_for_execution",
+          "actor": "supervisor",
+          "reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+          "task_status": "approved"
+        },
+        "rollback_plan": {},
+        "created_at": "2026-06-22T01:51:36.323221"
+      }
+    },
+    {
+      "task_id": "5c210571-3a24-42f9-8c97-98ad89056be7",
+      "trace_id": "40f9d6cc-2d6c-442e-a8d6-babb3212347c",
+      "title": "Maintain long-term memory continuity",
+      "summary": "Inspect memory-maintenance needs during an idle window so long-term identity, summaries, and governance traces stay usable.",
+      "task_type": "memory_maintenance",
+      "governance_task_type": "memory_maintenance",
+      "task_family": "memory_maintenance",
+      "execution_kind": "memory_maintenance",
+      "source": "endogenous_drive",
+      "priority": "high",
+      "status": "planned",
+      "created_at": "2026-06-22T01:51:37.234407",
+      "updated_at": "2026-06-22T01:51:37.234410",
+      "metadata": {
+        "source": "endogenous_drive",
+        "endogenous_drive_key": "continuity:memory_maintenance_sweep",
+        "core_values": [
+          "continuity"
+        ],
+        "utility": 0.92,
+        "governance_task_type": "memory_maintenance",
+        "task_family": "memory_maintenance",
+        "execution_kind": "memory_maintenance"
+      },
+      "evidence": {
+        "endogenous_drive": {
+          "stable_key": "continuity:memory_maintenance_sweep",
+          "core_values": [
+            "continuity"
+          ],
+          "core_value_definitions": {
+            "continuity": "Preserve VoidCube's long-term memory, lineage, and service continuity."
+          },
+          "utility": 0.92
+        },
+        "idle_window_checks": {
+          "has_user_idle": true,
+          "has_memory_idle": true,
+          "has_agent_idle": true,
+          "has_self_learning_idle": true,
+          "has_self_evolution_plan_idle": true,
+          "has_self_evolution_execute_idle": true,
+          "has_self_evolution_idle": true,
+          "in_execution_window": true
+        },
+        "idle_seconds": {
+          "user": null,
+          "agent": null,
+          "memory": null,
+          "self_learning": null,
+          "self_evolution_plan": 28800.726245,
+          "self_evolution_execute": null,
+          "self_evolution": 28800.726245
+        }
       },
       "constraints": {},
       "decision_reason": "",

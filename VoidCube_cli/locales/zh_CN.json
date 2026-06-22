@@ -258,6 +258,10 @@
         "description": "上传调试报告(系统信息 + 日志)并获取可分享链接",
         "usage": "用法: /debug"
       },
+      "auto": {
+        "description": "强制启动监督者自主规划任务并分析可行性",
+        "usage": "用法: /auto [focus]"
+      },
       "quit": {
         "description": "退出CLI",
         "usage": "用法: /quit"
@@ -3083,6 +3087,12 @@
       "skills_snapshot": "用法: /skills snapshot export <文件> | /skills snapshot import <文件>",
       "skills_tap": "用法: VoidCube skills tap [list|add|remove]",
       "language": "用法: /language [-CN|-EN]"
+    },
+    "auto": {
+      "activating": "正在激活监督者自主规划模式...",
+      "focus": "聚焦领域",
+      "phases": "阶段: 状态扫描 → 任务发现 → 可行性分析 → 优先级排序 → 自主执行",
+      "queued": "自主规划提示已排队。智能体将在下一轮开始分析。"
     },
     "tips": {
       "btw_question": "/btw <问题> 快速提问，不使用工具或历史记录 — 非常适合澄清问题。",

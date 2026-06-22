@@ -1,3 +1,9 @@
+# NOTE(O-04): This module is the canonical entry point for runtime task profile
+# normalization. All callers (planning_runtime, task_queue, gateway, governor,
+# facade, governor_bridge) must derive governance_task_type/task_family/
+# execution_kind from here — never replicate the logic locally.
+# See baseline §8.
+
 from __future__ import annotations
 
 from typing import Dict, Optional

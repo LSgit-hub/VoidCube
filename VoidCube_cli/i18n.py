@@ -246,14 +246,19 @@ def init_i18n(locale: Optional[str] = None) -> None:
         target_locale = os.environ.get("VOIDCUBE_LANG")
     
     if target_locale is None:
-        # Check configuration file
+        # Check configuration file — read directly to avoid importing VoidCube_cli.config
+        # (~62ms import chain) at module init time
         try:
-            from VoidCube_cli.config import read_raw_config
-            config = read_raw_config()
-            if config and "display" in config:
-                config_locale = config["display"].get("language")
-                if config_locale:
-                    target_locale = config_locale
+            from VoidCube_core.constants import get_config_path
+            _config_path = get_config_path()
+            if _config_path.exists():
+                import yaml as _yaml
+                with open(_config_path, encoding="utf-8") as _f:
+                    _config = _yaml.safe_load(_f) or {}
+                if _config and "display" in _config:
+                    config_locale = _config["display"].get("language")
+                    if config_locale:
+                        target_locale = config_locale
         except Exception:
             pass
     

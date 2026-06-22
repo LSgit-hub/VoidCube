@@ -368,135 +368,17 @@ class MemMemoryProvider(MemoryProvider):
         return path
 
     def _sync_to_sqlite(self, update_result):
-        """Sync updated memory state to SQLite."""
+        """Sync updated memory state to SQLite via shared insert helper."""
         if not self._db or not update_result:
             return
-        
+
         result = update_result.state.result
-        
+
         def write_ops(conn):
-            # Insert/update events
-            for event in result.events:
-                conn.execute("""
-                    INSERT OR REPLACE INTO mem_events
-                    (id, type, title, summary, timespan_start, timespan_end, time_precision,
-                     importance, confidence, status, main_or_side, topics, entities,
-                     evidence_refs, parent_ids, child_ids, supersedes, compression_level,
-                     event_kind, novelty, impact_scope, source_turns, created_at, updated_at, last_reviewed_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    event.id, event.type, event.title, event.summary,
-                    event.timespan_start.timestamp(), event.timespan_end.timestamp(),
-                    event.time_precision.value, event.importance, event.confidence,
-                    event.status.value, event.main_or_side.value,
-                    json.dumps(event.topics), json.dumps(event.entities),
-                    json.dumps(event.evidence_refs), json.dumps(event.parent_ids),
-                    json.dumps(event.child_ids), json.dumps(event.supersedes),
-                    event.compression_level, event.event_kind.value, event.novelty,
-                    event.impact_scope.value, json.dumps(event.source_turns),
-                    event.created_at.timestamp(), event.updated_at.timestamp(),
-                    event.last_reviewed_at.timestamp()
-                ))
-            
-            # Insert/update scenes
-            for scene in result.scenes:
-                conn.execute("""
-                    INSERT OR REPLACE INTO mem_scenes
-                    (id, type, title, summary, timespan_start, timespan_end, time_precision,
-                     importance, confidence, status, main_or_side, topics, entities,
-                     evidence_refs, parent_ids, child_ids, supersedes, compression_level,
-                     scene_goal, key_events, local_turning_points, open_questions,
-                     created_at, updated_at, last_reviewed_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    scene.id, scene.type, scene.title, scene.summary,
-                    scene.timespan_start.timestamp(), scene.timespan_end.timestamp(),
-                    scene.time_precision.value, scene.importance, scene.confidence,
-                    scene.status.value, scene.main_or_side.value,
-                    json.dumps(scene.topics), json.dumps(scene.entities),
-                    json.dumps(scene.evidence_refs), json.dumps(scene.parent_ids),
-                    json.dumps(scene.child_ids), json.dumps(scene.supersedes),
-                    scene.compression_level, scene.scene_goal,
-                    json.dumps(scene.key_events), json.dumps(scene.local_turning_points),
-                    json.dumps(scene.open_questions),
-                    scene.created_at.timestamp(), scene.updated_at.timestamp(),
-                    scene.last_reviewed_at.timestamp()
-                ))
-            
-            # Insert/update arcs
-            for arc in result.arcs:
-                conn.execute("""
-                    INSERT OR REPLACE INTO mem_arcs
-                    (id, type, title, summary, timespan_start, timespan_end, time_precision,
-                     importance, confidence, status, main_or_side, topics, entities,
-                     evidence_refs, parent_ids, child_ids, supersedes, compression_level,
-                     arc_goal, arc_state, drivers, obstacles, milestones, turning_points,
-                     created_at, updated_at, last_reviewed_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    arc.id, arc.type, arc.title, arc.summary,
-                    arc.timespan_start.timestamp(), arc.timespan_end.timestamp(),
-                    arc.time_precision.value, arc.importance, arc.confidence,
-                    arc.status.value, arc.main_or_side.value,
-                    json.dumps(arc.topics), json.dumps(arc.entities),
-                    json.dumps(arc.evidence_refs), json.dumps(arc.parent_ids),
-                    json.dumps(arc.child_ids), json.dumps(arc.supersedes),
-                    arc.compression_level, arc.arc_goal, arc.arc_state.value,
-                    json.dumps(arc.drivers), json.dumps(arc.obstacles),
-                    json.dumps(arc.milestones), json.dumps(arc.turning_points),
-                    arc.created_at.timestamp(), arc.updated_at.timestamp(),
-                    arc.last_reviewed_at.timestamp()
-                ))
-            
-            # Insert/update epochs
-            for epoch in result.epochs:
-                conn.execute("""
-                    INSERT OR REPLACE INTO mem_epochs
-                    (id, type, title, summary, timespan_start, timespan_end, time_precision,
-                     importance, confidence, status, main_or_side, topics, entities,
-                     evidence_refs, parent_ids, child_ids, supersedes, compression_level,
-                     epoch_theme, major_arcs, chapter_shift, long_term_effects,
-                     created_at, updated_at, last_reviewed_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    epoch.id, epoch.type, epoch.title, epoch.summary,
-                    epoch.timespan_start.timestamp(), epoch.timespan_end.timestamp(),
-                    epoch.time_precision.value, epoch.importance, epoch.confidence,
-                    epoch.status.value, epoch.main_or_side.value,
-                    json.dumps(epoch.topics), json.dumps(epoch.entities),
-                    json.dumps(epoch.evidence_refs), json.dumps(epoch.parent_ids),
-                    json.dumps(epoch.child_ids), json.dumps(epoch.supersedes),
-                    epoch.compression_level, epoch.epoch_theme,
-                    json.dumps(epoch.major_arcs), epoch.chapter_shift,
-                    json.dumps(epoch.long_term_effects),
-                    epoch.created_at.timestamp(), epoch.updated_at.timestamp(),
-                    epoch.last_reviewed_at.timestamp()
-                ))
-            
-            # Insert/update profile memories
-            for profile in result.profile_memories:
-                conn.execute("""
-                    INSERT OR REPLACE INTO mem_profile
-                    (id, type, memory_kind, subject, predicate, value, summary,
-                     confidence, certainty_state, status, valid_from, valid_to,
-                     evidence_refs, source_turns, parent_timeline_refs, supersedes,
-                     conflict_refs, created_at, updated_at, last_reviewed_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    profile.id, profile.type, profile.memory_kind.value,
-                    profile.subject, profile.predicate, profile.value, profile.summary,
-                    profile.confidence, profile.certainty_state.value,
-                    profile.status.value, profile.valid_from.timestamp(),
-                    profile.valid_to.timestamp() if profile.valid_to else None,
-                    json.dumps(profile.evidence_refs), json.dumps(profile.source_turns),
-                    json.dumps(profile.parent_timeline_refs), json.dumps(profile.supersedes),
-                    json.dumps(profile.conflict_refs),
-                    profile.created_at.timestamp(), profile.updated_at.timestamp(),
-                    profile.last_reviewed_at.timestamp()
-                ))
-        
-        # Execute all write operations with proper transaction handling and retries
+            self._insert_result_units(conn, result)
+
         self._db._execute_write(write_ops)
+
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         """Return tool schemas for Mem queries."""
@@ -858,6 +740,179 @@ class MemMemoryProvider(MemoryProvider):
                 self._db.close()
             except Exception:
                 pass
+
+    def apply_structured_maintenance(self) -> Dict[str, Any]:
+        """Run structured 4-layer compression and persist results.
+
+        Calls PipelineResult.apply_maintenance() which delegates to the
+        MemoryMaintenanceEngine, then updates the PipelineResult in-place
+        with the compressed data and persists to both mem_state.json and SQLite.
+        """
+        if not self._initialized:
+            raise RuntimeError("Mem provider not initialized")
+        if not self._memory_state:
+            raise RuntimeError("No memory state available")
+
+        result = self._memory_state.result
+        execution = result.apply_maintenance()
+
+        # Update PipelineResult in-place with compressed data
+        result.events = list(execution.events)
+        result.scenes = list(execution.scenes)
+        result.arcs = list(execution.arcs)
+        result.epochs = list(execution.epochs)
+
+        # Persist to mem_state.json atomically
+        from VoidCube_core.utils import atomic_json_write
+        atomic_json_write(
+            str(self._memory_state_path),
+            self._memory_state.to_dict(),
+        )
+
+        # Sync full state to SQLite
+        self._sync_full_state_to_sqlite()
+
+        return execution.to_dict()
+
+    def _sync_full_state_to_sqlite(self):
+        """Sync the full current memory state to SQLite (clear + re-insert).
+
+        Used after structured maintenance which produces new superseding
+        units with new IDs across all layers.
+        """
+        if not self._db or not self._memory_state:
+            return
+
+        result = self._memory_state.result
+
+        def write_ops(conn):
+            conn.execute("DELETE FROM mem_events")
+            conn.execute("DELETE FROM mem_scenes")
+            conn.execute("DELETE FROM mem_arcs")
+            conn.execute("DELETE FROM mem_epochs")
+            conn.execute("DELETE FROM mem_profile")
+            self._insert_result_units(conn, result)
+
+        self._db._execute_write(write_ops)
+
+    def _insert_result_units(self, conn, result):
+        """Insert all units from a PipelineResult into SQLite tables."""
+        import json as _json
+
+        for event in result.events:
+            conn.execute(
+                "INSERT INTO mem_events (id, type, title, summary, timespan_start, timespan_end, "
+                "time_precision, importance, confidence, status, main_or_side, topics, entities, "
+                "evidence_refs, parent_ids, child_ids, supersedes, compression_level, "
+                "event_kind, novelty, impact_scope, source_turns, created_at, updated_at, last_reviewed_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    event.id, event.type, event.title, event.summary,
+                    event.timespan_start.timestamp(), event.timespan_end.timestamp(),
+                    event.time_precision.value, event.importance, event.confidence,
+                    event.status.value, event.main_or_side.value,
+                    _json.dumps(event.topics), _json.dumps(event.entities),
+                    _json.dumps(event.evidence_refs), _json.dumps(event.parent_ids),
+                    _json.dumps(event.child_ids), _json.dumps(event.supersedes),
+                    event.compression_level, event.event_kind.value, event.novelty,
+                    event.impact_scope.value, _json.dumps(event.source_turns),
+                    event.created_at.timestamp(), event.updated_at.timestamp(),
+                    event.last_reviewed_at.timestamp(),
+                ),
+            )
+
+        for scene in result.scenes:
+            conn.execute(
+                "INSERT INTO mem_scenes (id, type, title, summary, timespan_start, timespan_end, "
+                "time_precision, importance, confidence, status, main_or_side, topics, entities, "
+                "evidence_refs, parent_ids, child_ids, supersedes, compression_level, "
+                "scene_goal, key_events, local_turning_points, open_questions, "
+                "created_at, updated_at, last_reviewed_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    scene.id, scene.type, scene.title, scene.summary,
+                    scene.timespan_start.timestamp(), scene.timespan_end.timestamp(),
+                    scene.time_precision.value, scene.importance, scene.confidence,
+                    scene.status.value, scene.main_or_side.value,
+                    _json.dumps(scene.topics), _json.dumps(scene.entities),
+                    _json.dumps(scene.evidence_refs), _json.dumps(scene.parent_ids),
+                    _json.dumps(scene.child_ids), _json.dumps(scene.supersedes),
+                    scene.compression_level, scene.scene_goal,
+                    _json.dumps(scene.key_events), _json.dumps(scene.local_turning_points),
+                    _json.dumps(scene.open_questions),
+                    scene.created_at.timestamp(), scene.updated_at.timestamp(),
+                    scene.last_reviewed_at.timestamp(),
+                ),
+            )
+
+        for arc in result.arcs:
+            conn.execute(
+                "INSERT INTO mem_arcs (id, type, title, summary, timespan_start, timespan_end, "
+                "time_precision, importance, confidence, status, main_or_side, topics, entities, "
+                "evidence_refs, parent_ids, child_ids, supersedes, compression_level, "
+                "arc_goal, arc_state, drivers, obstacles, milestones, turning_points, "
+                "created_at, updated_at, last_reviewed_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    arc.id, arc.type, arc.title, arc.summary,
+                    arc.timespan_start.timestamp(), arc.timespan_end.timestamp(),
+                    arc.time_precision.value, arc.importance, arc.confidence,
+                    arc.status.value, arc.main_or_side.value,
+                    _json.dumps(arc.topics), _json.dumps(arc.entities),
+                    _json.dumps(arc.evidence_refs), _json.dumps(arc.parent_ids),
+                    _json.dumps(arc.child_ids), _json.dumps(arc.supersedes),
+                    arc.compression_level, arc.arc_goal, arc.arc_state.value,
+                    _json.dumps(arc.drivers), _json.dumps(arc.obstacles),
+                    _json.dumps(arc.milestones), _json.dumps(arc.turning_points),
+                    arc.created_at.timestamp(), arc.updated_at.timestamp(),
+                    arc.last_reviewed_at.timestamp(),
+                ),
+            )
+
+        for epoch in result.epochs:
+            conn.execute(
+                "INSERT INTO mem_epochs (id, type, title, summary, timespan_start, timespan_end, "
+                "time_precision, importance, confidence, status, main_or_side, topics, entities, "
+                "evidence_refs, parent_ids, child_ids, supersedes, compression_level, "
+                "epoch_theme, major_arcs, chapter_shift, long_term_effects, "
+                "created_at, updated_at, last_reviewed_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    epoch.id, epoch.type, epoch.title, epoch.summary,
+                    epoch.timespan_start.timestamp(), epoch.timespan_end.timestamp(),
+                    epoch.time_precision.value, epoch.importance, epoch.confidence,
+                    epoch.status.value, epoch.main_or_side.value,
+                    _json.dumps(epoch.topics), _json.dumps(epoch.entities),
+                    _json.dumps(epoch.evidence_refs), _json.dumps(epoch.parent_ids),
+                    _json.dumps(epoch.child_ids), _json.dumps(epoch.supersedes),
+                    epoch.compression_level, epoch.epoch_theme,
+                    _json.dumps(epoch.major_arcs), epoch.chapter_shift,
+                    _json.dumps(epoch.long_term_effects),
+                    epoch.created_at.timestamp(), epoch.updated_at.timestamp(),
+                    epoch.last_reviewed_at.timestamp(),
+                ),
+            )
+
+        for profile in result.profile_memories:
+            conn.execute(
+                "INSERT INTO mem_profile (id, type, memory_kind, subject, predicate, value, summary, "
+                "confidence, certainty_state, status, valid_from, valid_to, "
+                "evidence_refs, source_turns, parent_timeline_refs, supersedes, "
+                "conflict_refs, created_at, updated_at, last_reviewed_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    profile.id, profile.type, profile.memory_kind.value,
+                    profile.subject, profile.predicate, profile.value, profile.summary,
+                    profile.confidence, profile.certainty_state.value,
+                    profile.status.value, profile.valid_from.timestamp(),
+                    profile.valid_to.timestamp() if profile.valid_to else None,
+                    _json.dumps(profile.evidence_refs), _json.dumps(profile.source_turns),
+                    _json.dumps(profile.parent_timeline_refs), _json.dumps(profile.supersedes),
+                    _json.dumps(profile.conflict_refs),
+                    profile.created_at.timestamp(), profile.updated_at.timestamp(),
+                    profile.last_reviewed_at.timestamp(),
+                ),
+            )
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         """Prefetch relevant memory context."""

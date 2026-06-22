@@ -155,6 +155,9 @@
       "quit": {
         "description": "Exit the CLI"
       },
+      "auto": {
+        "description": "Force-start supervisor autonomous planning and feasibility analysis"
+      },
       "connect": {
         "description": "Manage server SSH connections"
       },
@@ -272,6 +275,12 @@
       "skills_snapshot": "Usage: /skills snapshot export <file> | /skills snapshot import <file>",
       "skills_tap": "Usage: VoidCube skills tap [list|add|remove]",
       "language": "Usage: /language [-CN|-EN]"
+    },
+    "auto": {
+      "activating": "Activating supervisor autonomous planning mode...",
+      "focus": "Focus area",
+      "phases": "Phases: State Scan → Task Discovery → Feasibility → Prioritization → Execution",
+      "queued": "Autonomous planning prompt queued. The agent will begin analysis on the next turn."
     },
     "tips": {
       "set_env_permanent": "Tip: Set {env_var} environment variable to make it permanent.",

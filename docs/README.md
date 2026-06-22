@@ -6,16 +6,17 @@
 
 ## 1. 当前执行依据
 
-日常实现、重构和验收优先看这 8 份：
+日常实现、重构和验收优先看这 9 份：
 
 1. [VoidCube 服务化系统架构基线](./voidcube架构基线.md)
 2. [VoidCube 架构集成说明](./architecture-integration.md)
-3. [Body Lifecycle](./body-lifecycle.md)
-4. [Switch Protocol](./switch-protocol.md)
-5. [State Boundary](./state-boundary.md)
-6. [Git Evolution Lineage](./git-evolution-lineage.md)
-7. [Agent Evolution Boundary](./agent-evolution-boundary.md)
-8. [Mem Integration Contract](./mem-integration-contract.md)
+3. [Phase 1 核心闭环与内生任务驱动器](./phase1-core-loop-and-endogenous-drive.md)
+4. [Body Lifecycle](./body-lifecycle.md)
+5. [Switch Protocol](./switch-protocol.md)
+6. [State Boundary](./state-boundary.md)
+7. [Git Evolution Lineage](./git-evolution-lineage.md)
+8. [Agent Evolution Boundary](./agent-evolution-boundary.md)
+9. [Mem Integration Contract](./mem-integration-contract.md)
 
 它们的分工是：
 
@@ -23,6 +24,7 @@
 | --- | --- |
 | [voidcube架构基线.md](./voidcube架构基线.md) | 最高优先级总基线，定义 VoidCube 是什么、谁负责什么、主升级对象是谁。 |
 | [architecture-integration.md](./architecture-integration.md) | 组件接线说明，定义 CLI、网关、Mem、Agent、自学系统、执行器如何连接。 |
+| [phase1-core-loop-and-endogenous-drive.md](./phase1-core-loop-and-endogenous-drive.md) | Phase 1 核心闭环哲学与运行机理，定义内生任务驱动器如何成为母体心跳、四重保障如何落地、完整运行循环如何串联。 |
 | [body-lifecycle.md](./body-lifecycle.md) | body slot 状态机，定义状态集合、允许转移、禁止转移和记录要求。 |
 | [switch-protocol.md](./switch-protocol.md) | 切换协议，定义租约、切换前置条件、观察窗口、回滚和回收。 |
 | [state-boundary.md](./state-boundary.md) | 状态归属，定义哪些状态归 Mem、网关、body runtime，以及哪些必须回写。 |

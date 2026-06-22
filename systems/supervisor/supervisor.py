@@ -53,10 +53,14 @@ class HealthCheckResult(BaseModel):
     details: Dict[str, Any] = {}
 
 
+# TODO(S-02/S-03): Per conflicts audit C-02/C-03, watch-window loop
+# protocol and runtime state should migrate to executor.
+# The supervisor should only trigger evaluation events.
 @dataclass(slots=True)
 class WatchWindowRuntimeState:
     task: Optional[Any] = None
     last_outcome: Optional[Dict[str, Any]] = None
+    last_body_upgrade_trace_id: Optional[str] = None
 
 
 class Supervisor(
@@ -81,6 +85,10 @@ class Supervisor(
         assemble_supervisor_runtime_state(self)
         self._initialize_supervisor_ui_runtime()
         assemble_supervisor_execution_runtime(self)
+        # S-02/03: watch-window state is now owned by the executor adapter.
+        # Proxy supervisor._watch_window_runtime → adapter._state for compat.
+        if hasattr(self, '_watch_window_executor'):
+            self._watch_window_runtime = self._watch_window_executor._state
         self._setup_routes()
 
     @property
@@ -145,6 +153,24 @@ class Supervisor(
         self.app.add_api_route("/body/slots/{slot_id}", self.get_body_slot, methods=["GET"])
         self.app.add_api_route("/body/review", execute_governor_review_request, methods=["POST"])
         self.app.add_api_route("/body/governor/history", self.get_governor_history, methods=["GET"])
+        self.app.add_api_route("/self-evolution/auto-cycle", self.run_auto_cycle, methods=["POST"])
+        self.app.add_api_route("/governor-mode/activate", self.activate_governor_mode, methods=["POST"])
+        self.app.add_api_route("/governor-mode/deactivate", self.deactivate_governor_mode, methods=["POST"])
+        self.app.add_api_route("/governor-mode/status", self.get_governor_mode_status, methods=["GET"])
+
+    async def activate_governor_mode(self, request: dict | None = None) -> Dict[str, Any]:
+        """Enter persistent Governor Mode: start drive + review loops."""
+        await self._start_governor_mode()
+        return self._governor_mode_status()
+
+    async def deactivate_governor_mode(self, request: dict | None = None) -> Dict[str, Any]:
+        """Exit Governor Mode: stop drive + review loops, keep health-check."""
+        await self._stop_governor_mode()
+        return self._governor_mode_status()
+
+    async def get_governor_mode_status(self) -> Dict[str, Any]:
+        """Return current Governor Mode state."""
+        return self._governor_mode_status()
 
     async def get_body_registry(self) -> Dict[str, Any]:
         return self._execution_facade.get_body_registry()
@@ -171,7 +197,14 @@ class Supervisor(
     @asynccontextmanager
     async def _app_lifespan(self, app: FastAPI):
         del app
-        await self.register_with_gateway()
+        service_id = await self.register_with_gateway()
+        if not service_id:
+            logger.warning(
+                "Supervisor started without gateway registration — "
+                "gateway-mediated routes and activity tracking will be unavailable."
+            )
+        else:
+            self._gateway_service_id = service_id
         await self._start_periodic_tasks()
         self._maybe_open_supervisor_ui()
         try:

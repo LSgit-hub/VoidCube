@@ -29,6 +29,7 @@ GovernorActionType = Literal[
     "activate_slot",
     "restore_retired_slot",
     "recycle_retired_slot",
+    "abandon_candidate",
     "record_evolution_event",
 ]
 

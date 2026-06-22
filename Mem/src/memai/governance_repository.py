@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import logging
 from pathlib import Path
 
 from .governance import (
@@ -10,6 +11,8 @@ from .governance import (
     GovernanceEventType,
     GovernanceFailureType,
 )
+
+logger = logging.getLogger("memai.governance")
 
 
 @dataclass(slots=True)
@@ -60,12 +63,33 @@ class GovernanceEventRepository:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
 
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+        self.retry_path = self.path.with_suffix(".retry.jsonl")
+
     def append(self, event: GovernanceEvent) -> GovernanceEvent:
+        """Append with idempotency, write protection, and retry-log fallback.
+
+        On write failure the event is appended to ``<path>.retry.jsonl`` so
+        no governance event is silently lost (M-06).
+        """
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if event.id in {item.id for item in self.list_events()}:
             return event
-        with self.path.open("a", encoding="utf-8", newline="\n") as handle:
-            handle.write(json.dumps(event.to_dict(), ensure_ascii=False) + "\n")
+        try:
+            with self.path.open("a", encoding="utf-8", newline="\n") as handle:
+                handle.write(json.dumps(event.to_dict(), ensure_ascii=False) + "\n")
+        except Exception:
+            logger.warning(
+                "Failed to write governance event %s — writing to retry log", event.id
+            )
+            try:
+                with self.retry_path.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(event.to_dict(), ensure_ascii=False) + "\n")
+            except Exception:
+                logger.error(
+                    "Failed to write governance event %s to retry log — event lost", event.id
+                )
         return event
 
     def list_events(self, limit: int = 0) -> list[GovernanceEvent]:

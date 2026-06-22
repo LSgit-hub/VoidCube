@@ -245,13 +245,8 @@ def _get_named_custom_provider(requested_provider: str) -> Optional[Dict[str, An
     # ``custom:local`` always target the saved custom provider.
     if requested_norm == "auto":
         return None
-    if not requested_norm.startswith("custom:"):
-        try:
-            auth_mod.resolve_provider(requested_norm)
-        except AuthError:
-            pass
-        else:
-            return None
+    if not requested_norm.startswith("custom:") and requested_norm in PROVIDER_REGISTRY:
+        return None
 
     config = load_config()
     providers = config.get("providers")

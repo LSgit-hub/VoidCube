@@ -167,6 +167,12 @@ class SelfEvolutionTask(BaseModel):
         return self
 
 
+
+# NOTE(SB-02): The self-evolution queue JSON file is runtime coordination state,
+# not an authoritative store.  It can be rebuilt from Mem governance history
+# if lost.  The Mem repository (governance_event table) is the true source of
+# record for governance decisions.  See state-boundary.md §4.
+
 class SelfEvolutionTaskQueueSnapshot(BaseModel):
     version: int = 1
     tasks: List[SelfEvolutionTask] = Field(default_factory=list)

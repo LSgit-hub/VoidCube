@@ -31,11 +31,13 @@ class MemGovernorRecord(BaseModel):
 
 
 class MemGovernorBridge:
-    """Minimal Mem-side governor bridge.
+    """Mem-side governor bridge — wraps the decision engine and persists
+    governance history to BOTH the legacy JSONL store AND (optionally) the
+    MemAI ``GovernanceEventRepository``.
 
-    This bridge wraps the deterministic governor engine but persists the
-    governance history in a soul-side store so the supervisor no longer talks
-    directly to the decision engine without leaving memory traces.
+    When ``governance_repo`` is provided, every recorded event is mirrored
+    into the repository so that MemAI's query, failure-sample, and evidence-
+    summary APIs can see VoidCube governance data (M-08).
     """
 
     def __init__(
@@ -43,6 +45,7 @@ class MemGovernorBridge:
         *,
         storage_root: str | Path | None = None,
         engine: GovernorDecisionEngine | None = None,
+        governance_repo: Any | None = None,
     ) -> None:
         root = Path(storage_root) if storage_root else get_VoidCube_home() / "soul"
         self.storage_root = root.resolve()
@@ -51,6 +54,18 @@ class MemGovernorBridge:
         self.latest_path = self.storage_root / "governor_latest.json"
         self._engine = engine or GovernorDecisionEngine()
         self._lock = threading.Lock()
+        # Auto-create a default GovernanceEventRepository when none provided.
+        # Per M-03: the repository should not be an optional dependency that
+        # defaults to None — it should always be available for governance writes.
+        if governance_repo is not None:
+            self._governance_repo = governance_repo
+        else:
+            try:
+                from memai.governance_repository import GovernanceEventRepository
+                repo_path = self.storage_root / "mem_governance.jsonl"
+                self._governance_repo = GovernanceEventRepository(str(repo_path))
+            except Exception:
+                self._governance_repo = None
 
     def review(
         self,
@@ -322,3 +337,110 @@ class MemGovernorBridge:
             with self.history_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(payload, ensure_ascii=False) + "\n")
             atomic_json_write(self.latest_path, payload)
+        # Mirror into MemAI GovernanceEventRepository when available
+        if self._governance_repo is not None:
+            try:
+                gov_event = self._to_governance_event(record)
+                self._governance_repo.append(gov_event)
+            except Exception:
+                pass  # best-effort mirror; legacy JSONL is the authoritative store
+
+    @staticmethod
+    def _to_governance_event(record: MemGovernorRecord) -> Any:
+        """Map a legacy ``MemGovernorRecord`` into a MemAI ``GovernanceEvent``.
+
+        Field mapping follows the governance event schema (M-01) so that
+        the repository's query / failure-sample / evidence-summary APIs
+        can consume VoidCube governance data without schema translation.
+        """
+        from memai.governance import (
+            GovernanceEvent,
+            GovernanceEventType,
+            GovernanceDecision,
+        )
+        req = record.request or {}
+        resp = record.response or {}
+        lineage = record.evolution_lineage or {}
+
+        # ── Event type mapping (all 13 GovernanceEventType values) ──
+        kind_map = {
+            "review": GovernanceEventType.CANDIDATE_REVIEW,
+            "execution_outcome": GovernanceEventType.EXECUTION_OUTCOME,
+            "boundary_defer": GovernanceEventType.BOUNDARY_DEFER,
+            "supervisor_activity": GovernanceEventType.CANDIDATE_REVIEW,
+            # Additional kinds used by lifecycle writeback
+            "probe_pass": GovernanceEventType.PROBE_APPROVAL,
+            "probe_failure": GovernanceEventType.PROBE_FAILURE,
+            "body_switch_approved": GovernanceEventType.SWITCH_APPROVAL,
+            "body_switch_rejected": GovernanceEventType.SWITCH_REJECTION,
+            "watch_window_pass": GovernanceEventType.WATCH_WINDOW_PASS,
+            "watch_window_rollback": GovernanceEventType.WATCH_WINDOW_ROLLBACK,
+            "self_evolution_approved": GovernanceEventType.SELF_EVOLUTION_APPROVAL,
+            "self_evolution_deferred": GovernanceEventType.SELF_EVOLUTION_DEFER,
+            "self_evolution_cancelled": GovernanceEventType.SELF_EVOLUTION_CANCEL,
+            "rollback_outcome": GovernanceEventType.ROLLBACK_OUTCOME,
+            "memory_maintenance": GovernanceEventType.MEMORY_MAINTENANCE,
+        }
+        event_type = kind_map.get(record.kind, GovernanceEventType.EXECUTION_OUTCOME)
+
+        # ── Decision mapping (all 9 GovernanceDecision values) ──
+        decision_raw = resp.get("decision", "")
+        decision_map = {
+            "approved": GovernanceDecision.APPROVE,
+            "approved_for_execution": GovernanceDecision.APPROVE,
+            "approved_with_watch": GovernanceDecision.APPROVE_WITH_WATCH,
+            "defer": GovernanceDecision.DEFER,
+            "deferred": GovernanceDecision.DEFER,
+            "reject": GovernanceDecision.REJECT,
+            "cancelled": GovernanceDecision.CANCEL,
+            "paused": GovernanceDecision.PAUSE,
+            "rollback": GovernanceDecision.ROLLBACK_REQUIRED,
+            "rollback_failed": GovernanceDecision.ROLLBACK_REQUIRED,
+            "completed": GovernanceDecision.COMPLETED,
+            "failed": GovernanceDecision.FAILED,
+            "record_only": GovernanceDecision.RECORD_ONLY,
+        }
+        decision = decision_map.get(
+            str(decision_raw).lower(), GovernanceDecision.RECORD_ONLY
+        )
+
+        from memai.governance import GovernanceGitLineage, GovernanceBoundaryReport
+
+        # Build structured git lineage
+        gl = GovernanceGitLineage(
+            source_branch=lineage.get("source_branch") or None,
+            source_commit=lineage.get("source_commit") or None,
+            candidate_branch=lineage.get("candidate_branch") or None,
+            candidate_commit=lineage.get("candidate_commit") or None,
+            active_ref=lineage.get("active_ref") or None,
+            rollback_ref=lineage.get("rollback_ref") or None,
+            rollback_commit=lineage.get("rollback_commit") or None,
+            changed_files=list(lineage.get("changed_files") or []),
+        )
+
+        # Build evolution boundary report if present
+        boundary_raw = lineage.get("evolution_boundary") or {}
+        boundary = GovernanceBoundaryReport(
+            ok=bool(boundary_raw.get("ok", True)),
+            violations=list(boundary_raw.get("violations") or []),
+        ) if boundary_raw else None
+
+        return GovernanceEvent.create(
+            event_type=event_type,
+            decision=decision,
+            task_id=str(req.get("task_id") or record.record_id),
+            body_id=str(
+                lineage.get("body_id")
+                or req.get("body_id")
+                or lineage.get("active_slot")
+                or ""
+            ),
+            source_actor=str(
+                lineage.get("source_actor") or req.get("source_actor") or "supervisor"
+            ),
+            reason=str(resp.get("reason") or record.kind),
+            git_lineage=gl,
+            evolution_boundary=boundary,
+            probe_report_ref=str(lineage.get("probe_report_ref") or ""),
+            execution_result=dict(record.execution_report or {}),
+        )

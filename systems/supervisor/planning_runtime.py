@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
@@ -214,7 +214,12 @@ class PlanningRuntimeMixin:
         if not value or not isinstance(value, str):
             return None
         try:
-            return datetime.fromisoformat(value)
+            parsed = datetime.fromisoformat(value)
+            # Normalize to naive UTC for safe comparison with datetime.now()
+            if parsed.tzinfo is not None:
+                from datetime import timezone
+                parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+            return parsed
         except ValueError:
             return None
 
@@ -244,11 +249,22 @@ class PlanningRuntimeMixin:
         else:
             now = datetime.now()
 
+        service_cfg = self.config.service_runtime
         user_idle_threshold = int(request.get("user_idle_seconds", 600))
         memory_idle_threshold = int(request.get("memory_idle_seconds", 600))
         workflow_idle_threshold = int(request.get("workflow_idle_seconds", 600))
-        execution_window_start_hour = int(request.get("execution_window_start_hour", 0))
-        execution_window_end_hour = int(request.get("execution_window_end_hour", 6))
+        execution_window_start_hour = int(
+            request.get(
+                "execution_window_start_hour",
+                getattr(service_cfg, "execution_window_start_hour", 0),
+            )
+        )
+        execution_window_end_hour = int(
+            request.get(
+                "execution_window_end_hour",
+                getattr(service_cfg, "execution_window_end_hour", 24),
+            )
+        )
         requested_task_profile = self._idle_window_request_profile(request)
         requested_governance_task_type = str(requested_task_profile["governance_task_type"])
         requested_task_family = str(requested_task_profile["task_family"])
@@ -317,7 +333,6 @@ class PlanningRuntimeMixin:
                     and has_memory_idle
                     and has_self_learning_idle
                     and has_self_evolution_plan_idle
-                    and has_self_evolution_execute_idle
                 ),
             },
             "memory_maintenance": {
@@ -327,9 +342,6 @@ class PlanningRuntimeMixin:
                     and has_user_idle
                     and has_agent_idle
                     and has_memory_idle
-                    and has_self_learning_idle
-                    and has_self_evolution_plan_idle
-                    and has_self_evolution_execute_idle
                 ),
             },
             "self_evolution": {
@@ -342,7 +354,7 @@ class PlanningRuntimeMixin:
                     and has_user_idle
                     and has_agent_idle
                     and has_memory_idle
-                    and has_self_learning_idle
+                    and has_self_evolution_plan_idle
                     and has_self_evolution_execute_idle
                 ),
             },
@@ -356,6 +368,19 @@ class PlanningRuntimeMixin:
             "body_switch": dict(governance_task_type_decisions["self_evolution"]),
         }
         selected_task_decisions = task_family_decisions[requested_task_family]
+
+        governor_mode_active = bool(
+            request.get("governor_mode_active")
+            or getattr(getattr(self, "_service_runtime", None), "governor_mode_active", False)
+        )
+        if governor_mode_active:
+            # In Governor Mode, self_learning and memory_maintenance planning
+            # is no longer gated by idle_window — the user has explicitly
+            # authorised governance.  Execution still follows its own gating.
+            governance_task_type_decisions["self_learning"]["eligible_for_planning"] = True
+            governance_task_type_decisions["memory_maintenance"]["eligible_for_planning"] = True
+            task_family_decisions["self_learning"]["eligible_for_planning"] = True
+            task_family_decisions["memory_maintenance"]["eligible_for_planning"] = True
 
         return {
             "status": "evaluated",
@@ -394,6 +419,7 @@ class PlanningRuntimeMixin:
             },
             "governance_task_type_decisions": governance_task_type_decisions,
             "task_family_decisions": task_family_decisions,
+            "governor_mode_active": governor_mode_active,
             "decisions": {
                 "eligible_for_planning": selected_task_decisions["eligible_for_planning"],
                 "eligible_for_execution": selected_task_decisions["eligible_for_execution"],
@@ -445,6 +471,10 @@ class PlanningRuntimeMixin:
     async def evaluate_endogenous_drive(self, request: dict | None = None):
         request = request or {}
         idle_window_request = dict(request.get("idle_window") or {})
+        idle_window_request.setdefault(
+            "governor_mode_active",
+            getattr(getattr(self, "_service_runtime", None), "governor_mode_active", False),
+        )
         record_activity = bool(request.get("record_activity", True))
         idle_window = await self.evaluate_idle_window(idle_window_request)
         max_candidates = int(
@@ -565,9 +595,27 @@ class PlanningRuntimeMixin:
         *,
         task: SelfEvolutionTask,
         idle_window: Dict[str, Any],
+        governor_mode_active: bool = False,
     ) -> tuple[str, str]:
         task_type = self._task_governance_type(task)
         task_family = self._task_runtime_family(task)
+
+        # In Governor Mode, self_learning and memory_maintenance are
+        # approved without idle-window gating — the user has explicitly
+        # authorised governance.  body_upgrade / body_switch keep their
+        # existing idle-window and execution-window requirements.
+        if governor_mode_active:
+            if task_type == "self_learning":
+                return (
+                    "approved",
+                    "Governor Mode active: self-learning task approved without idle-window requirement. Learn-only constraints still apply.",
+                )
+            if task_type == "memory_maintenance":
+                return (
+                    "approved",
+                    "Governor Mode active: memory-maintenance task approved without idle-window requirement.",
+                )
+
         decision = (
             idle_window.get("task_family_decisions", {}).get(task_family)
             or idle_window.get("governance_task_type_decisions", {}).get(task_type)
@@ -849,6 +897,9 @@ class PlanningRuntimeMixin:
             normalized, auto_reason = self._build_self_evolution_auto_decision(
                 task=task,
                 idle_window=idle_window,
+                governor_mode_active=getattr(
+                    getattr(self, "_service_runtime", None), "governor_mode_active", False
+                ),
             )
             decision_context["idle_window"] = idle_window
             reason = str(request.get("reason") or auto_reason)
@@ -955,6 +1006,9 @@ class PlanningRuntimeMixin:
             target_status, default_reason = self._build_self_evolution_auto_decision(
                 task=task,
                 idle_window=task_idle_window,
+                governor_mode_active=getattr(
+                    getattr(self, "_service_runtime", None), "governor_mode_active", False
+                ),
             )
             execution_request = None
             if target_status == "approved":
@@ -1135,6 +1189,8 @@ class PlanningRuntimeMixin:
     async def _dispatch_self_evolution_execution_request(
         self,
         task: SelfEvolutionTask,
+        *,
+        max_retries: int = 3,
     ) -> Optional[Dict[str, Any]]:
         execution_request = task.execution_request
         if execution_request is None:
@@ -1144,16 +1200,57 @@ class PlanningRuntimeMixin:
         if task_metadata.get("execution_dispatched"):
             return None
 
-        payload = execution_request.model_dump(mode="json")
-        result = await self._execution_facade.execute_self_evolution_request(payload)
+        # ── Mark dispatched BEFORE any await to prevent double-dispatch ──
         self._self_evolution_queue.update_metadata(
             task.task_id,
             metadata={
                 "execution_dispatched": True,
-                "execution_result": result,
-                "executed_at": datetime.utcnow().isoformat(),
+                "executed_at": datetime.now(timezone.utc).isoformat(),
             },
             execution_request=execution_request,
+        )
+
+        payload = execution_request.model_dump(mode="json")
+        if execution_request.execution_kind in {"body_upgrade", "body_switch"}:
+            self._watch_window_runtime.last_body_upgrade_trace_id = task.trace_id
+        result = await self._execution_facade.execute_self_evolution_request(payload)
+
+        # ── Failure recovery: clear dispatched flag so the task can be ──
+        # retried on the next cycle.  Only explicit error statuses trigger
+        # retry; everything else (including None / unknown) is treated as
+        # success to avoid false-positive retries on mock or partial results.
+        result_status = result.get("status") if isinstance(result, dict) else None
+        _ERROR_STATUSES = frozenset({"error", "failed", "timeout", "unreachable"})
+        is_failure = isinstance(result_status, str) and result_status in _ERROR_STATUSES
+        if is_failure:
+            failure_count = int(task_metadata.get("execution_failure_count") or 0) + 1
+            if failure_count < max_retries:
+                # Allow retry — clear dispatched flag
+                self._self_evolution_queue.update_metadata(
+                    task.task_id,
+                    metadata={
+                        "execution_dispatched": False,
+                        "execution_failed": True,
+                        "execution_failure_count": failure_count,
+                        "execution_result": result,
+                    },
+                )
+            else:
+                # Permanent failure — keep dispatched so it's not retried
+                self._self_evolution_queue.update_metadata(
+                    task.task_id,
+                    metadata={
+                        "execution_failed": True,
+                        "execution_failure_count": failure_count,
+                        "execution_result": result,
+                    },
+                )
+            return result
+
+        # Success path
+        self._self_evolution_queue.update_metadata(
+            task.task_id,
+            metadata={"execution_result": result},
         )
         await self._touch_gateway_activity(
             "self_evolution_execute",
@@ -1171,7 +1268,7 @@ class PlanningRuntimeMixin:
                 **self._task_activity_metadata(task),
                 "decision_id": execution_request.decision_id,
                 "source_actor": execution_request.source_actor,
-                "result_status": result.get("status") if isinstance(result, dict) else None,
+                "result_status": result_status,
             },
         )
         return result
@@ -1234,6 +1331,7 @@ class PlanningRuntimeMixin:
         review_result = await self.review_self_evolution_tasks({})
         dispatched = []
 
+        # Pass 1: dispatch tasks that were *just* approved in this review
         for task_payload in review_result.get("tasks", []):
             if task_payload.get("status") != "approved":
                 continue
@@ -1265,7 +1363,118 @@ class PlanningRuntimeMixin:
                     }
                 )
 
+        # Pass 2: dispatch any previously-approved tasks that were never
+        # dispatched, PLUS tasks whose previous dispatch failed and were
+        # cleared for retry (execution_dispatched=False, execution_failed=True,
+        # failure_count < max_retries).  Tasks that hit max_retries are left
+        # with execution_dispatched=True and skipped here.
+        dispatched_ids = {d["task_id"] for d in dispatched}
+        for task in self._self_evolution_queue.list_tasks(status="approved"):
+            if task.task_id in dispatched_ids:
+                continue
+            if task.metadata.get("execution_dispatched"):
+                continue  # already dispatched or permanently failed
+
+            if self._task_governance_type(task) == "self_learning":
+                result = await self._dispatch_self_learning_followup(task)
+                if result is not None:
+                    dispatched.append(
+                        {"task_id": task.task_id, "status": result.get("status")}
+                    )
+                continue
+
+            if task.execution_request is None:
+                continue
+
+            result = await self._dispatch_self_evolution_execution_request(task)
+            if result is not None:
+                dispatched.append(
+                    {"task_id": task.task_id, "status": result.get("status")}
+                )
+
         return {
             "reviewed": review_result.get("count", 0),
             "dispatched": dispatched,
+        }
+
+    async def run_auto_cycle(self, request: dict | None = None) -> Dict[str, Any]:
+        """Execute one full autonomous cycle: drive → plan → review → dispatch.
+
+        This is the single-endpoint entry point for ``/auto``.  It runs the
+        same pipeline as the periodic background loops, but triggered
+        synchronously on demand so the user sees immediate results.
+
+        Returns a summary of every phase so the CLI can report what happened.
+        """
+        request = request or {}
+        focus = str(request.get("focus") or "").strip()
+        phases: Dict[str, Any] = {}
+
+        # ── Phase 1: Endogenous drive → generate & queue candidates ──
+        try:
+            drive_result = await self._run_endogenous_drive_cycle()
+            phases["drive"] = {
+                "status": drive_result.get("status"),
+                "planned": drive_result.get("planned", 0),
+                "task_ids": [
+                    task.get("task_id")
+                    for task in drive_result.get("tasks", [])
+                    if isinstance(task, dict)
+                ],
+            }
+            now = datetime.now(timezone.utc)
+            self._service_runtime.last_drive_at = now
+            self._service_runtime.next_drive_at = now + timedelta(
+                seconds=self.config.service_runtime.endogenous_drive_interval
+            )
+        except Exception as exc:
+            phases["drive"] = {"status": "error", "error": str(exc)}
+
+        # ── Phase 2: Self-evolution review → approve & dispatch ──
+        try:
+            cycle_result = await self._run_self_evolution_cycle()
+            phases["review"] = {
+                "reviewed": cycle_result.get("reviewed", 0),
+                "dispatched": [
+                    dict(item) if isinstance(item, dict) else {"task_id": str(item)}
+                    for item in cycle_result.get("dispatched", [])
+                ],
+            }
+            now = datetime.now(timezone.utc)
+            self._service_runtime.last_review_at = now
+            self._service_runtime.next_review_at = now + timedelta(
+                seconds=self.config.service_runtime.self_evolution_review_interval
+            )
+        except Exception as exc:
+            phases["review"] = {"status": "error", "error": str(exc)}
+
+        # ── Phase 3: Record supervisor UI activity ──
+        total_dispatched = len(phases.get("review", {}).get("dispatched", []))
+        total_planned = phases.get("drive", {}).get("planned", 0)
+        self._record_supervisor_ui_activity(
+            "auto_cycle_completed",
+            scene="execution" if total_dispatched > 0 else "planning",
+            summary=(
+                f"Auto cycle complete: {total_planned} planned, "
+                f"{total_dispatched} dispatched for execution."
+            ),
+            metadata={
+                "phases": {
+                    k: {sk: sv for sk, sv in v.items() if sk != "task_ids"}
+                    for k, v in phases.items()
+                },
+                "total_planned": total_planned,
+                "total_dispatched": total_dispatched,
+                "focus": focus or None,
+            },
+        )
+
+        return {
+            "status": "completed",
+            "phases": phases,
+            "summary": {
+                "planned": total_planned,
+                "dispatched": total_dispatched,
+                "focus": focus or None,
+            },
         }

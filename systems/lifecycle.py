@@ -167,6 +167,26 @@ class BodyLifecycleExecutor:
                 ),
             )
 
+        if action.action_type == "abandon_candidate":
+            if not slot_id:
+                return self._failed(action, "Abandon candidate requires a slot_id.")
+            reason = str(payload.get("reason", "probe_failed"))
+            slot_meta = self.registry.transition_slot(slot_id, "shell", reason=reason)
+            registry = self.registry.load_registry()
+            return self._applied(
+                action,
+                slot_id=slot_id,
+                details=self._details_with_runtime_task_profile(
+                    {
+                    "previous_state": "probe",
+                    "body_state": slot_meta.body_state,
+                    "shell_slot": registry.shell_slot,
+                    "abandon_reason": reason,
+                    },
+                    payload,
+                ),
+            )
+
         if action.action_type == "record_evolution_event":
             return self._noop(
                 action,
