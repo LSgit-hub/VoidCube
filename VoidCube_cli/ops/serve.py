@@ -79,6 +79,13 @@ SERVICES: Dict[str, ServiceInfo] = {
         pid_file=str(PID_DIR / "memory.pid"),
         log_file=str(PID_DIR / "memory.log"),
     ),
+    "agent": ServiceInfo(
+        name="agent",
+        port=AGENT_BASE_PORT,
+        module="systems.agent.run_agent_instance:AgentInstance",
+        pid_file=str(PID_DIR / "agent.pid"),
+        log_file=str(PID_DIR / "agent.log"),
+    ),
 }
 
 
@@ -193,6 +200,9 @@ def _build_service_app(name: str, port: int):
         return Supervisor(config=SupervisorConfig(port=port)).app
     elif name == "memory":
         return MemoryService(config=MemoryServiceConfig(port=port)).app
+    elif name == "agent":
+        from systems.agent.run_agent_instance import AgentInstance, AgentConfig
+        return AgentInstance(config=AgentConfig(port=port, active_slot="slot-A")).app
     raise ValueError(f"Unknown service: {name}")
 
 
@@ -274,6 +284,7 @@ import uvicorn
 from systems.gateway.internal_gateway import InternalGateway, GatewayConfig
 from systems.supervisor.supervisor import Supervisor, SupervisorConfig
 from systems.memory.memory_service import MemoryService, MemoryServiceConfig
+from systems.agent.run_agent_instance import AgentInstance, AgentConfig
 
 if {json.dumps(name)} == 'gateway':
     gw = InternalGateway(GatewayConfig(port={svc.port}))
@@ -286,6 +297,10 @@ elif {json.dumps(name)} == 'memory':
     mem_cfg = MemoryServiceConfig(port={svc.port})
     mem = MemoryService(config=mem_cfg)
     uvicorn.run(mem.app, host='127.0.0.1', port={svc.port}, log_level='info')
+elif {json.dumps(name)} == 'agent':
+    agt_cfg = AgentConfig(port={svc.port}, active_slot="slot-A")
+    agt = AgentInstance(config=agt_cfg)
+    uvicorn.run(agt.app, host='127.0.0.1', port={svc.port}, log_level='info')
 """
 
     proc = subprocess.Popen(
@@ -389,11 +404,12 @@ def print_status(full: bool = False) -> None:
 
 
 def start_all(foreground: bool = False) -> None:
-    """Start all services in order: memory → gateway → supervisor.
+    """Start all services in order: memory → gateway → supervisor → agent.
 
     Per architecture baseline §7.2: Mem must be ready first (long-term
     memory is the soul layer), then gateway (the nerve centre), then
-    supervisor (which registers with gateway).
+    supervisor (which registers with gateway), then the agent instance
+    (which registers with gateway as the active body).
     """
     PID_DIR.mkdir(parents=True, exist_ok=True)
     print("\n  Starting VoidCube services...\n")
@@ -412,6 +428,11 @@ def start_all(foreground: bool = False) -> None:
     start_service("supervisor", foreground=foreground)
     if not foreground:
         _wait_for_health("supervisor", SUPERVISOR_PORT)
+
+    # 4. Agent Instance (registers with gateway as active body)
+    start_service("agent", foreground=foreground)
+    if not foreground:
+        _wait_for_health("agent", AGENT_BASE_PORT)
 
     if foreground:
         # Foreground: both services are running in daemon threads.
@@ -476,7 +497,7 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
     # Per architecture baseline §7.2: Mem → Gateway → Supervisor.
     # Memory must be ready before gateway routes memory-bound requests;
     # gateway must be ready before the supervisor registers with it.
-    startup_order = ["memory", "gateway", "supervisor"]
+    startup_order = ["memory", "gateway", "supervisor", "agent"]
     for name in startup_order:
         svc = SERVICES.get(name)
         if svc is None:

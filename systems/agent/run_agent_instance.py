@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import logging
 import os
@@ -43,7 +44,34 @@ class MemoryOperation(BaseModel):
 class AgentInstance:
     def __init__(self, config: AgentConfig = None):
         self.config = config or AgentConfig()
-        self.app = FastAPI(title="VoidCube Agent Instance", version="1.0")
+
+        @asynccontextmanager
+        async def _agent_lifespan(app: FastAPI):
+            del app
+            svc_id = await self.register_with_gateway()
+            if svc_id:
+                logger.info("Agent registered with gateway: %s", svc_id)
+            else:
+                logger.warning("Agent failed to register with gateway")
+            try:
+                yield
+            finally:
+                # Deregister on shutdown
+                try:
+                    import aiohttp
+                    async with aiohttp.ClientSession() as s:
+                        await s.post(
+                            f"{self.config.gateway_address}/deregister/{self._service_name()}",
+                            timeout=aiohttp.ClientTimeout(total=5),
+                        )
+                except Exception:
+                    pass
+
+        self.app = FastAPI(
+            title="VoidCube Agent Instance",
+            version="1.0",
+            lifespan=_agent_lifespan,
+        )
         self._session_data: Dict[str, Dict[str, Any]] = {}
         self._runtime_paths = self._initialize_runtime_paths()
         self._setup_routes()
@@ -221,30 +249,90 @@ class AgentInstance:
             return {"status": "error", "error": str(e)}
 
     async def handle_chat_completions(self, request: dict):
-        messages = request.get("messages") or []
-        latest_user_message = self._latest_user_message(messages)
-        if not latest_user_message:
-            raise HTTPException(status_code=400, detail="messages must include a user message")
+        """Transparently proxy chat completions to the configured LLM provider.
 
-        content = await self._generate_response(latest_user_message, {})
-        return {
-            "id": f"voidcube-{self.config.active_slot}-{int(datetime.now().timestamp())}",
-            "object": "chat.completion",
-            "created": int(datetime.now().timestamp()),
-            "model": "voidcube-agent-instance",
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": content,
-                    },
-                    "finish_reason": "stop",
-                }
-            ],
-            "slot_id": self.config.active_slot,
-            "body_version": self.config.body_version,
+        Accepts the full OpenAI-compatible payload (messages, model, tools,
+        stream, etc.) and forwards it to the LLM API.  Supports streaming
+        via Server-Sent Events when ``stream: true``.
+        """
+        from fastapi.responses import StreamingResponse
+
+        messages = request.get("messages") or []
+        if not messages:
+            raise HTTPException(status_code=400, detail="messages is required")
+
+        model = request.get("model", "")
+        is_stream = request.get("stream", False)
+        tools = request.get("tools")
+        tool_choice = request.get("tool_choice")
+        temperature = request.get("temperature")
+        max_tokens = request.get("max_tokens")
+
+        # Resolve provider credentials from config or env
+        import aiohttp
+        try:
+            from VoidCube_cli.config import load_config
+            cfg = load_config()
+            active_provider = cfg.get("runtime", {}).get("active_provider", "")
+            providers = cfg.get("providers", {})
+            provider_cfg = providers.get(active_provider, {})
+            api_key = provider_cfg.get("api_key", "") or os.getenv(
+                provider_cfg.get("api_key_env", ""), ""
+            )
+            base_url = (provider_cfg.get("base_url") or "").strip()
+            if not model:
+                model = provider_cfg.get("selected_model", "")
+            if not base_url:
+                base_url = os.getenv("AGENT_BASE_URL", "")
+        except Exception:
+            api_key = os.getenv("AGENT_API_KEY") or os.getenv("DEEPSEEK_API_KEY", "")
+            base_url = os.getenv("AGENT_BASE_URL", "")
+            if not model:
+                model = os.getenv("AGENT_MODEL", "")
+
+        if not api_key or not base_url:
+            raise HTTPException(status_code=503, detail="Agent LLM provider not configured")
+
+        api_url = f"{base_url.rstrip('/')}/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
         }
+        payload = {
+            "model": model,
+            "messages": messages,
+        }
+        if max_tokens:
+            payload["max_tokens"] = max_tokens
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if tools:
+            payload["tools"] = tools
+        if tool_choice:
+            payload["tool_choice"] = tool_choice
+        if is_stream:
+            payload["stream"] = True
+
+        if is_stream:
+            async def _stream_sse():
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(api_url, headers=headers, json=payload) as resp:
+                        if resp.status != 200:
+                            err = await resp.text()
+                            yield f"data: {{\"error\": \"upstream {resp.status}: {err[:200]}\"}}\n\n"
+                            yield "data: [DONE]\n\n"
+                            return
+                        async for line in resp.content:
+                            yield line.decode("utf-8", errors="replace")
+            return StreamingResponse(_stream_sse(), media_type="text/event-stream")
+
+        # Non-streaming
+        async with aiohttp.ClientSession() as session:
+            async with session.post(api_url, headers=headers, json=payload) as resp:
+                if resp.status != 200:
+                    err = await resp.text()
+                    raise HTTPException(status_code=502, detail=f"LLM upstream error: {resp.status}")
+                return await resp.json()
 
     def _latest_user_message(self, messages: List[Dict[str, Any]]) -> str:
         for message in reversed(messages):

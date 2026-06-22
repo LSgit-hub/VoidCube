@@ -3514,8 +3514,17 @@ class VoidcubeCLI:
                     _cprint(f"  Could not apply pending title: {e}")
                     self._pending_title = None
 
-            # Register with Gateway for activity tracking when daemon stack is running
+            # ── Gateway routing ──────────────────────────────────────────
+            # Per architecture baseline §3.1/§4.2: when the Gateway daemon is
+            # running, ALL agent API traffic MUST route through Gateway so
+            # activity is tracked and observable end-to-end.
+            #
+            # The Gateway proxies /v1/chat/completions to the registered
+            # Agent Instance (port 6080), which runs a local AIAgent that
+            # forwards to the actual LLM provider.
             if _is_gateway_running():
+                gateway_base = "http://127.0.0.1:6000/v1"
+                self.agent.base_url = gateway_base
                 _register_with_gateway(
                     self.session_id,
                     effective_model,
