@@ -462,7 +462,7 @@ class CredentialPool:
         if entry.source != "device_code":
             return
         try:
-            with _auth_store_lock():
+            with _auth_store_lock:
                 auth_store = _load_auth_store()
                 if self.provider == "nous":
                     state = _load_provider_state(auth_store, "nous")

@@ -8991,7 +8991,7 @@ class VoidcubeCLI:
         try:
             from VoidCube_cli.profiles import get_active_profile_name
             profile = get_active_profile_name()
-            if profile not in ("default", "custom"):
+            if profile and profile not in ("default", "custom"):
                 symbol = f"{profile} {symbol}"
         except Exception:
             pass

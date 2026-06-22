@@ -270,16 +270,23 @@ def _load_auth_store() -> Dict[str, Any]:
 
 
 def _save_auth_store(store: Dict[str, Any]) -> None:
-    """Persist the auth store to disk atomically."""
+    """Persist the auth store to disk atomically, with lock protection."""
     import json as _json
     store_path = _get_auth_store_path()
+    tmp_path = store_path.with_suffix(".tmp")
     try:
-        tmp_path = store_path.with_suffix(".tmp")
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            _json.dump(store, f, ensure_ascii=False, indent=2)
-        tmp_path.replace(store_path)
+        with _auth_store_lock:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                _json.dump(store, f, ensure_ascii=False, indent=2)
+            tmp_path.replace(store_path)
     except Exception:
         pass
+    finally:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
 
 def fetch_nous_models() -> List[Dict[str, Any]]:
     """获取 Nous 模型列表"""
@@ -599,11 +606,25 @@ def _login_api_key(provider: str, args) -> None:
 
 
 def _store_provider_credential(provider: str, credential: dict) -> None:
-    """Store a provider credential in the auth store."""
+    """Store a provider credential in the auth store (thread-safe)."""
     try:
-        store = _load_auth_store()
-        store[provider] = credential
-        _save_auth_store(store)
+        with _auth_store_lock:
+            store = _load_auth_store()
+            store[provider] = credential
+            # Inline the write inside the lock so load+save is atomic
+            import json as _json
+            store_path = _get_auth_store_path()
+            tmp_path = store_path.with_suffix(".tmp")
+            try:
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    _json.dump(store, f, ensure_ascii=False, indent=2)
+                tmp_path.replace(store_path)
+            finally:
+                try:
+                    if tmp_path.exists():
+                        tmp_path.unlink()
+                except OSError:
+                    pass
     except Exception:
         pass  # Best-effort
 

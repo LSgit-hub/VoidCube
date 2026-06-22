@@ -117,7 +117,9 @@ def create_profile(name: str) -> str:
     try:
         from VoidCube_cli.config import ensure_VoidCube_home
         ensure_VoidCube_home()
-    except ImportError:
+    except Exception:
+        # ensure_VoidCube_home may fail due to permissions, managed-mode
+        # restrictions, or a missing import.  Fall back to basic mkdir.
         root.mkdir(parents=True, exist_ok=True)
 
     if profile_dir.exists():
