@@ -590,3 +590,127 @@ class TestPhase1GatewayErrorTracking:
         # With 7 errors + 4 uncertainty = 11 correction signals, utility is high
         assert truth.utility > 0.85, f"Expected high utility, got {truth.utility}"
         assert truth.priority == "high"
+
+
+class TestPhase1GovernorMode:
+    """Governor Mode state transitions and auto-dispatch."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.unit
+    async def test_governor_mode_activation_sets_flags(self, tmp_path):
+        """Governor Mode activation sets state and starts loops."""
+        sv = _make_supervisor(tmp_path)
+        sv._ensure_watch_window_task = Mock()
+        sv.run_health_checks = AsyncMock(return_value={"results": []})
+        sv._run_self_evolution_cycle = AsyncMock(return_value={"reviewed": 0, "dispatched": []})
+        sv._run_endogenous_drive_cycle = AsyncMock(return_value={"planned": 0})
+        sv._fetch_gateway_activity_snapshot = AsyncMock(return_value={
+            "last_agent_work_at": None, "counts": {}, "active_sessions": 0,
+        })
+
+        await sv._start_periodic_tasks()
+        assert sv._service_runtime.governor_mode_active is False
+        assert sv._self_evolution_review_task is None
+        assert sv._endogenous_drive_task is None
+
+        await sv._start_governor_mode()
+        assert sv._service_runtime.governor_mode_active is True
+        assert sv._self_evolution_review_task is not None
+        assert sv._endogenous_drive_task is not None
+
+        await sv._stop_governor_mode()
+        assert sv._service_runtime.governor_mode_active is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.unit
+    async def test_auto_dispatch_submits_approved_task_when_idle(self, tmp_path):
+        """Auto-dispatch submits an approved undispatched task when agent idle > 3min."""
+        sv = _make_supervisor(tmp_path)
+        sv._fetch_gateway_activity_snapshot = AsyncMock(return_value={
+            "last_agent_work_at": "2026-06-20T00:00:00",  # hours ago
+            "counts": {"error_count": 1, "uncertainty_high_count": 2},
+            "active_sessions": 0,
+        })
+        sv._touch_gateway_activity = AsyncMock()
+        sv._dispatch_self_learning_followup = AsyncMock(
+            return_value={"status": "self_learning_followup_executed"}
+        )
+        sv._dispatch_self_evolution_execution_request = AsyncMock(
+            return_value={"status": "executed"}
+        )
+
+        # Create an approved self_learning task
+        sv._self_evolution_queue.create_task(
+            title="Test learning task",
+            summary="Test",
+            trace_id="trace-1",
+            task_type="self_learning",
+            source="endogenous_drive",
+            priority="normal",
+            metadata={
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        )
+        task = sv._self_evolution_queue.list_tasks()[0]
+        sv._self_evolution_queue.update_status(
+            task.task_id, status="approved", actor="test", reason="test"
+        )
+
+        await sv._try_auto_dispatch()
+        sv._dispatch_self_learning_followup.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.unit
+    async def test_governor_mode_idle_window_override(self, tmp_path):
+        """Governor Mode overrides planning eligibility for self_learning/memory."""
+        sv = _make_supervisor(tmp_path)
+        sv._service_runtime.governor_mode_active = True
+        sv._fetch_gateway_activity_snapshot = AsyncMock(return_value=_idle_snapshot(
+            user_idle=False  # user IS active
+        ))
+
+        idle = await sv.evaluate_idle_window({"task_family": "self_learning"})
+        assert idle["governor_mode_active"] is True
+        # self_learning planning should be eligible despite user being active
+        assert idle["task_family_decisions"]["self_learning"]["eligible_for_planning"] is True
+
+
+class TestPhase1LearningTopicExtraction:
+    """Intelligent learning topic extraction from gateway metadata."""
+
+    def test_extract_topic_from_user_request(self):
+        """Topic extracted from recent user_request metadata."""
+        from systems.supervisor.endogenous_drive import EndogenousDriveEngine
+        engine = EndogenousDriveEngine()
+        activity = {
+            "recent_metadata": {
+                "user_request": {
+                    "text": "How can I optimize the agent tool-calling pipeline for lower latency?"
+                }
+            }
+        }
+        topic = engine._extract_learning_topic(activity)
+        assert "optimize" in topic.lower()
+        assert "agent tool-calling" in topic.lower()
+
+    def test_extract_topic_fallback_to_agent_work(self):
+        """Fallback to agent_work summary when no user_request."""
+        from systems.supervisor.endogenous_drive import EndogenousDriveEngine
+        engine = EndogenousDriveEngine()
+        activity = {
+            "recent_metadata": {
+                "agent_work": {
+                    "summary": "Investigated WebSocket vs SSE tradeoffs for real-time updates"
+                }
+            }
+        }
+        topic = engine._extract_learning_topic(activity)
+        assert "websocket" in topic.lower() or "sse" in topic.lower()
+
+    def test_extract_topic_empty_when_no_data(self):
+        """Returns empty string when no usable metadata."""
+        from systems.supervisor.endogenous_drive import EndogenousDriveEngine
+        engine = EndogenousDriveEngine()
+        assert engine._extract_learning_topic({}) == ""
+        assert engine._extract_learning_topic({"recent_metadata": {}}) == ""

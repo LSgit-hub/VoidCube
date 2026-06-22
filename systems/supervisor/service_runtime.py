@@ -17,6 +17,7 @@ class ServiceRuntimeState:
     started: bool = False
     governor_mode_active: bool = False
     structured_maintenance_task: Optional[asyncio.Task[Any]] = None
+    auto_dispatch_task: Optional[asyncio.Task[Any]] = None
     # Scheduling visibility for the web UI countdown
     last_review_at: Optional[datetime] = None
     next_review_at: Optional[datetime] = None
@@ -69,6 +70,14 @@ class ServiceRuntimeMixin:
     @_structured_maintenance_task.setter
     def _structured_maintenance_task(self, task: Optional[asyncio.Task[Any]]) -> None:
         self._service_runtime.structured_maintenance_task = task
+
+    @property
+    def _auto_dispatch_task(self) -> Optional[asyncio.Task[Any]]:
+        return self._service_runtime.auto_dispatch_task
+
+    @_auto_dispatch_task.setter
+    def _auto_dispatch_task(self, task: Optional[asyncio.Task[Any]]) -> None:
+        self._service_runtime.auto_dispatch_task = task
 
     async def health_check(self) -> Dict[str, Any]:
         registry = self._body_registry.load_registry()
@@ -226,19 +235,33 @@ class ServiceRuntimeMixin:
 
             async def structured_maintenance_loop() -> None:
                 await asyncio.sleep(60)  # startup grace period
+                base_interval = maintenance_interval
+                current_interval = base_interval
+                min_interval = max(600, base_interval // 6)    # min 10 min
+                max_interval = min(86400, base_interval * 4)   # max 24 h
+                last_event_count = 0
                 while True:
                     try:
-                        logger.debug("Running structured memory maintenance loop iteration")
+                        logger.debug("Running structured memory maintenance (interval=%ds)", current_interval)
                         facade = getattr(self, "_execution_facade", None)
                         if facade is not None:
-                            await facade.trigger_memory_compression({})
+                            result = await facade.trigger_memory_compression({})
+                            # Adapt interval based on memory growth
+                            structured = result.get("structured_maintenance", {}) if isinstance(result, dict) else {}
+                            revision_count = int(structured.get("revision_count", 0) or 0)
+                            if revision_count > 2:
+                                current_interval = max(min_interval, current_interval // 2)
+                            elif revision_count == 0:
+                                current_interval = min(max_interval, current_interval * 2)
+                            else:
+                                current_interval = base_interval
                     except asyncio.CancelledError:
                         raise
                     except Exception as exc:
                         logger.warning(
                             "Structured memory maintenance loop iteration failed: %s", exc
                         )
-                    await asyncio.sleep(maintenance_interval)
+                    await asyncio.sleep(current_interval)
 
             self._structured_maintenance_task = asyncio.create_task(structured_maintenance_loop())
             logger.info("Structured memory maintenance loop started (interval=%ds)", maintenance_interval)
@@ -254,6 +277,7 @@ class ServiceRuntimeMixin:
         if self._service_runtime.governor_mode_active:
             return
         self._service_runtime.governor_mode_active = True
+        await self._notify_gateway_governor_mode(active=True)
         runtime_config = self.config.service_runtime
 
         if self._self_evolution_review_task:
@@ -302,6 +326,68 @@ class ServiceRuntimeMixin:
             self._endogenous_drive_task = None
             logger.info("Governor Mode: drive loop disabled (endogenous_drive_enabled=False)")
 
+        # ── Auto-dispatch loop: submit approved tasks to agent when idle ──
+        if self._auto_dispatch_task:
+            self._auto_dispatch_task.cancel()
+
+        async def auto_dispatch_loop() -> None:
+            await asyncio.sleep(30)  # initial grace period
+            while True:
+                try:
+                    await self._try_auto_dispatch()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.warning("Auto-dispatch iteration failed: %s", exc)
+                await asyncio.sleep(60)  # check every 60s
+
+        self._auto_dispatch_task = asyncio.create_task(auto_dispatch_loop())
+        logger.info("Governor Mode: auto-dispatch loop started (idle threshold=180s)")
+
+    async def _try_auto_dispatch(self) -> None:
+        """If agent is idle > 3min, submit one approved task for execution."""
+        try:
+            snapshot = await self._fetch_gateway_activity_snapshot()
+        except Exception:
+            return
+
+        last_work = snapshot.get("last_agent_work_at")
+        now = datetime.now(timezone.utc)
+        if last_work:
+            try:
+                last_dt = datetime.fromisoformat(str(last_work))
+                idle_seconds = (now - last_dt.replace(tzinfo=None)).total_seconds()
+            except (ValueError, TypeError):
+                idle_seconds = 9999
+        else:
+            idle_seconds = 9999  # never worked, treat as idle
+
+        if idle_seconds < 180:
+            return  # agent is still working or was recently active
+
+        # Find an approved, undispatched task
+        for task in self._self_evolution_queue.list_tasks(status="approved"):
+            if task.metadata.get("execution_dispatched"):
+                continue
+            governance_type = self._task_governance_type(task) if hasattr(self, '_task_governance_type') else task.governance_task_type
+            logger.info("Auto-dispatching approved task '%s' (idle=%.0fs)", task.title, idle_seconds)
+
+            if governance_type == "self_learning":
+                result = await self._dispatch_self_learning_followup(task)
+            elif task.execution_request is not None:
+                result = await self._dispatch_self_evolution_execution_request(task)
+            else:
+                continue
+
+            status = result.get("status") if isinstance(result, dict) else "dispatched"
+            self._record_supervisor_ui_activity(
+                "auto_dispatched",
+                scene="execution",
+                summary=f"Auto-dispatched: '{task.title}' (idle={idle_seconds:.0f}s)",
+                metadata={"task_id": task.task_id, "status": status},
+            )
+            return  # one at a time
+
     async def _stop_governor_mode(self) -> None:
         """Exit Governor Mode: stop review and drive loops immediately.
 
@@ -311,6 +397,7 @@ class ServiceRuntimeMixin:
         if not self._service_runtime.governor_mode_active:
             return
         self._service_runtime.governor_mode_active = False
+        await self._notify_gateway_governor_mode(active=False)
 
         async def cancel_task(task: Optional[asyncio.Task[Any]]) -> None:
             if task is None:
@@ -330,6 +417,9 @@ class ServiceRuntimeMixin:
         await cancel_task(self._endogenous_drive_task)
         self._endogenous_drive_task = None
 
+        await cancel_task(self._auto_dispatch_task)
+        self._auto_dispatch_task = None
+
         logger.info("Governor Mode deactivated — returned to Memory Mode")
 
     def _governor_mode_status(self) -> Dict[str, Any]:
@@ -346,6 +436,22 @@ class ServiceRuntimeMixin:
             ),
             "endogenous_drive_enabled": self.config.service_runtime.endogenous_drive_enabled,
         }
+
+    async def _notify_gateway_governor_mode(self, *, active: bool) -> None:
+        """Notify the gateway that Governor Mode is active/inactive."""
+        try:
+            import aiohttp
+            gateway_url = f"{self.config.execution.gateway_address}/admin/governor-mode"
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    gateway_url,
+                    json={"active": active},
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    if resp.status != 200:
+                        logger.debug("Gateway governor-mode notification returned %d", resp.status)
+        except Exception as exc:
+            logger.debug("Failed to notify gateway of governor mode change: %s", exc)
 
     async def _stop_periodic_tasks(self) -> None:
         async def cancel_task(task: Optional[asyncio.Task[Any]]) -> None:
@@ -376,5 +482,8 @@ class ServiceRuntimeMixin:
 
         await cancel_task(self._structured_maintenance_task)
         self._structured_maintenance_task = None
+
+        await cancel_task(self._auto_dispatch_task)
+        self._auto_dispatch_task = None
 
         self._service_runtime_started = False

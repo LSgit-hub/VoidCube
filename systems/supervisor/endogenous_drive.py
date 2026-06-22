@@ -159,23 +159,36 @@ class EndogenousDriveEngine:
 
         active_sessions = int(activity.get("active_sessions") or 0)
         if active_sessions == 0 and self_learning_plan.get("eligible_for_planning"):
+            # Extract a real topic from recent gateway activity metadata
+            learning_topic = self._extract_learning_topic(activity)
+            title = (
+                f"Research: {learning_topic}"
+                if learning_topic
+                else "Explore one unresolved learning thread"
+            )
+            summary = (
+                f"Use idle capacity to research '{learning_topic}' — the most recent "
+                f"user-discussed topic that may benefit from deeper investigation."
+                if learning_topic
+                else "Use idle capacity to ask the agent for one evidence-producing "
+                     "learning pass over unresolved recent topics."
+            )
+            utility = 0.68 if learning_topic else 0.58
             candidates.append(
                 EndogenousTaskCandidate(
                     stable_key="creativity:idle_learning_thread",
-                    title="Explore one unresolved learning thread",
-                    summary=(
-                        "Use idle capacity to ask the agent for one evidence-producing "
-                        "learning pass over unresolved recent topics."
-                    ),
+                    title=title,
+                    summary=summary,
                     priority="normal",
                     governance_task_type="self_learning",
                     task_family="self_learning",
                     execution_kind=None,
                     value_tags=["creativity"],
-                    utility=0.58,
+                    utility=utility,
                     evidence={
                         "active_sessions": active_sessions,
                         "trigger": "idle_capacity",
+                        "learning_topic": learning_topic or "",
                     },
                     constraints={
                         "execution_policy": "learn_only",
@@ -209,6 +222,40 @@ class EndogenousDriveEngine:
             )
 
         return candidates
+
+    def _extract_learning_topic(self, activity: Dict[str, Any]) -> str:
+        """Extract a concise learning topic from recent gateway activity metadata.
+
+        Looks at the most recent user_request and agent_work metadata to find
+        topics that were discussed but may benefit from deeper research.
+        Returns empty string if no meaningful topic can be extracted.
+        """
+        recent = dict(activity.get("recent_metadata") or {})
+        user_req = recent.get("user_request") or {}
+        agent_work = recent.get("agent_work") or {}
+
+        # Try to extract a topic from the user's last request
+        user_text = str(user_req.get("text") or user_req.get("query") or "")
+        if not user_text:
+            user_text = str(user_req.get("summary") or "")
+        if user_text and len(user_text) > 10:
+            # Take first sentence or first 80 chars as the topic
+            topic = user_text.split(".")[0].split("\n")[0].strip()
+            if len(topic) > 80:
+                topic = topic[:77] + "..."
+            if len(topic) >= 10:
+                return topic
+
+        # Fall back to agent's last response summary
+        agent_text = str(agent_work.get("summary") or agent_work.get("title") or "")
+        if agent_text and len(agent_text) > 10:
+            topic = agent_text.split(".")[0].strip()
+            if len(topic) > 80:
+                topic = topic[:77] + "..."
+            if len(topic) >= 10:
+                return topic
+
+        return ""
 
     def _decision_for(
         self,

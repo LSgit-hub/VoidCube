@@ -576,3 +576,113 @@ Mem / 监督者 -> 裁决
 VoidCube 的目标不是维护两套运行模式，而是建立一个单机多进程母体系统：用户通过 CLI 使用当前 active Agent，母体内部通过网关、Mem、监督者、执行器和自学系统持续培养、验证、切换与回滚子 Agent。
 
 在这个系统里，用户服务始终优先；长期记忆与治理属于 Mem；监督者只判断；执行器只执行；真正持续升级并最终交付给用户的主对象，是 Agent 本身。
+
+## 13. 双核模型总览
+
+### 13.1 双核定义
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      VoidCube 母体                              │
+│                                                                 │
+│   API-B 核（灵魂/治理）              API-A 核（身体/执行）        │
+│   ┌─────────────────────┐          ┌──────────────────────┐     │
+│   │ Mem 长期记忆        │          │ Active Agent         │     │
+│   │  · 四级压缩         │  裁决    │  · 用户任务执行       │     │
+│   │  · 身份连续性       │─────────▶│  · 工具调用           │     │
+│   │  · 演化谱系         │  派发    │  · 子 agent 学习      │     │
+│   │                     │          │                      │     │
+│   │ 监督者 (Governor)   │          │ Shell Agent (slot-B) │     │
+│   │  · 内生驱动         │  切换    │  · 候选体培养         │     │
+│   │  · 任务队列         │◀────────│  · probe 验证         │     │
+│   │  · 裁决引擎         │  回滚    │  · 待切换             │     │
+│   └─────────────────────┘          └──────────────────────┘     │
+│          ↑                                  ↑                   │
+│          │ 读写                             │ 执行              │
+│          ↓                                  ↓                   │
+│   ┌─────────────────────┐          ┌──────────────────────┐     │
+│   │ 执行器              │          │ Gateway              │     │
+│   │  · 身体切换         │          │  · 路由              │     │
+│   │  · 结构化压缩       │          │  · 服务注册          │     │
+│   │  · 任务消费         │          │  · 活动追踪          │     │
+│   └─────────────────────┘          └──────────────────────┘     │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+- **API-B 核**：Mem + 监督者，负责"记住自己是谁"和"判断该不该变"。独立配置模型，不与 Agent 共享短期工作心智。
+- **API-A 核**：Agent（活跃 + 候选双槽位），负责"做用户的事"和"学该学的东西"。可被替换，不持有长期真相。
+
+### 13.2 API-B 核：Mem 三层角色
+
+Mem 灵魂层的三个内部角色共享同一 API-B 能力链：
+
+| 角色 | 职责 | 约束 |
+|------|------|------|
+| **Memory Core**（记忆核心） | 长期记忆写入/检索、身份连续性维护、演化谱系保存 | 不能直接批准 probe/active/rollback |
+| **Governor Engine**（治理引擎） | shell→candidate→probe→active 裁决、回滚裁决、任务队列裁决 | 确定性协议，非 LLM 自由推理 |
+| **Governance Audit Store**（审计存储） | 每条裁决的 decision_id、观察窗口记录、回滚原因追溯 | 不可篡改 |
+
+### 13.3 记忆压缩双层体系
+
+| 层级 | 机制 | 数据模型 | 触发 |
+|------|------|---------|------|
+| **Level A** 扁平压缩 | memory_service → API-B LLM 摘要 → 删除旧条目 + 指数衰减 | SQLite 扁平表 | 运行时周期 loop |
+| **Level B** 结构化四级 | MemoryMaintenanceEngine: Event→Scene→Arc→Epoch 分层 supersede | mem_state.json 四层对象 | 双触发：Governor Mode 任务队列 + Memory Mode 自适应周期 |
+
+### 13.4 监督者运行模式
+
+| | Memory Mode（默认） | Governor Mode（/auto） |
+|---|---|---|
+| health_check loop | ✅ | ✅ |
+| 结构化记忆维护 | ✅ 自适应周期 | ✅ 任务队列触发 |
+| 内生驱动器 | ❌ | ✅ 每 300s |
+| 自进化审查 | ❌ | ✅ 每 300s |
+| auto-dispatch | ❌ | ✅ agent 空闲 > 3min |
+| Gateway 用户请求 | ✅ 正常服务 | ❌ 返回 503 |
+| CLI 输入 | ✅ 正常 | ❌ 仅 /auto-q |
+| self_learning / memory_maintenance planning | idle_window 门控 | 无门控（用户显式授权） |
+| body_upgrade / body_switch 执行 | N/A | 仍要求执行窗口 + 全部空闲条件 |
+
+### 13.5 内生驱动器四类候选
+
+```
+网关活动快照（7 个时间戳 + 错误/不确定性计数 + 活跃会话数）
+  │
+  ├── 候选 1: memory_maintenance_sweep (utility 0.92, priority high)
+  ├── 候选 2: truthfulness:review_correction_signals (utility 动态: 0.65+N×0.08)
+  ├── 候选 3: creativity:idle_learning_thread (utility 0.58~0.68, 智能主题提取)
+  └── 候选 4: queue_hygiene_review (utility 0.52)
+```
+
+### 13.6 API-A 核：Agent 双槽位 + 子 agent 学习
+
+**双槽位身体架构**：slot-A (active) 服务用户，slot-B (shell/candidate/probe) 隔离培养。切换后旧 active 保留为 retired，观察窗口通过后回收为 shell，失败则回滚。
+
+**学习任务正确链路**：
+
+```
+监督者 (API-B, 只 dispatch)
+  → POST /v1/agent/governance-task → Gateway (路由)
+    → Agent (API-A, delegate_task)
+      → 子 agent (["learn"] toolset)
+        → web_search + read_file + terminal + execute_code
+        → 产出 JSON → 写回学习记录 → 闭环
+```
+
+**关键边界**：子 agent 运行在 Agent 进程中，使用 Agent 的 API-A 配置。监督者只发送 HTTP 请求，不在自身进程中创建 AIAgent。Agent 不可用时自动 fallback 到过程化 tool runner。
+
+### 13.7 不可妥协的边界铁律
+
+| # | 规则 | 含义 |
+|---|------|------|
+| 1 | **监督者只判断，执行器只执行** | 监督者不拉代码、不启停进程、不跑升级流水线 |
+| 2 | **Agent 无长期状态** | 长期记忆、身份真相、演化谱系只属于 Mem（API-B） |
+| 3 | **学习与执行分离** | 自学系统只产证据和结论，不直接修改 active Agent |
+| 4 | **不能跳过 probe** | 候选体未经 probe 不得成为 active |
+| 5 | **不能无记录切换** | 每次切换必须有完整 governance trail |
+| 6 | **不能切换后立即销毁旧体** | 观察窗口是回滚保护层 |
+| 7 | **API-A ≠ API-B** | Agent 工作模型心智用于"做事"，Mem 模型心智用于"记住自己是谁" |
+| 8 | **子 agent 属于 API-A 核** | 学习任务由 Agent delegate_task 执行，不在 supervisor 进程中创建 AIAgent |
+| 9 | **用户服务绝对优先** | 自提升行为不能抢占用户链路。Governor Mode 显式激活后才允许 |
+| 10 | **内生驱动器只派生候选** | 不直接执行，不绕过治理 |

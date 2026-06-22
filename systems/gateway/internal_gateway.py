@@ -76,6 +76,7 @@ class InternalGateway:
         self._services: Dict[str, ServiceInfo] = {}
         self._routes: Dict[str, RouteEntry] = {}
         self._active_body_service_id: str = None
+        self._governor_mode_active: bool = False
         self._request_counter = 0
         # NOTE(SB-03): Session cache is body-runtime state, not gateway operations
         # state.  Long-term session ownership should belong to the agent body
@@ -142,12 +143,14 @@ class InternalGateway:
         self.app.add_api_route("/admin/activity", self.get_activity_status, methods=["GET"])
         self.app.add_api_route("/admin/activity/log", self.get_activity_log, methods=["GET"])
         self.app.add_api_route("/admin/activity/touch", self.touch_activity, methods=["POST"])
+        self.app.add_api_route("/admin/governor-mode", self.set_governor_mode, methods=["POST"])
         
         self.app.add_api_route("/register", self.register_service, methods=["POST"])
         self.app.add_api_route("/health/{service_id}", self.update_health, methods=["POST"])
         
         self.app.add_api_route("/v1/chat/completions", self.chat_completions_proxy, methods=["POST"])
         self.app.add_api_route("/v1/agent/query", self.agent_query_proxy, methods=["POST"])
+        self.app.add_api_route("/v1/agent/governance-task", self.governance_task_proxy, methods=["POST"])
         self.app.add_api_route("/v1/sessions/{session_id}", self.get_session_info, methods=["GET"])
         self.app.add_api_route("/v1/sessions/{session_id}", self.delete_session, methods=["DELETE"])
         self.app.add_api_route("/admin/traces/{trace_id}", self.get_trace, methods=["GET"])
@@ -632,6 +635,18 @@ class InternalGateway:
             logger.error(f"Error updating activity state: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
+    async def set_governor_mode(self, request: Request):
+        """Receive governor mode state from supervisor."""
+        try:
+            data = await request.json()
+            active = bool(data.get("active", False))
+            self._governor_mode_active = active
+            logger.info("Gateway governor mode set to: %s", active)
+            return {"governor_mode_active": active}
+        except Exception as e:
+            logger.error(f"Error setting governor mode: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
     async def register_service(self, request: Request):
         try:
             data = await request.json()
@@ -938,6 +953,35 @@ class InternalGateway:
         for sid in stale:
             del self._agent_session_cache[sid]
 
+    async def governance_task_proxy(self, request: Request):
+        """Proxy a supervisor governance task to the active agent for sub-agent execution."""
+        try:
+            data = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON")
+
+        if not self._active_body_service_id:
+            raise HTTPException(status_code=503, detail="No active agent available")
+
+        target = self._services.get(self._active_body_service_id)
+        if not target or not target.healthy:
+            raise HTTPException(status_code=503, detail="Active agent unavailable")
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                agent_url = f"{target.address}/v1/agent/governance-task"
+                async with session.post(agent_url, json=data, timeout=aiohttp.ClientTimeout(total=600)) as resp:
+                    result = await resp.json()
+            self._touch_activity("agent_work", source_service="gateway",
+                                 metadata={"task_type": data.get("task_type", ""),
+                                            "title": data.get("title", "")[:80]})
+            return result
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail="Agent governance task timed out")
+        except Exception as e:
+            logger.error(f"Governance task proxy failed: {e}")
+            raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
     async def chat_completions_proxy(self, request: Request):
         self._evict_stale_sessions()
         self._request_counter += 1
@@ -1005,10 +1049,16 @@ class InternalGateway:
         
         try:
             data = await request.json()
-            
+
+            if self._governor_mode_active:
+                raise HTTPException(
+                    status_code=503,
+                    detail="系统处于全自动模式，agent 正在自主规划并探索学习。请稍后再试。",
+                )
+
             if not self._active_body_service_id:
                 raise HTTPException(status_code=503, detail="No active body service available")
-            
+
             target_service = self._services.get(self._active_body_service_id)
             if not target_service:
                 raise HTTPException(status_code=503, detail="Active body service not found")

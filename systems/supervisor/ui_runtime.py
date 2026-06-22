@@ -684,6 +684,10 @@ body[data-exec-window="false"] .star { opacity:1; }
       <div class="schedule-countdown" id="countdown">—</div>
     </div>
     <div class="queue" id="queue"></div>
+    <div class="executions" id="executions" style="display:none;">
+      <div class="exec-label">⚡ 执行中</div>
+      <div id="execList"></div>
+    </div>
     <div class="timeline" id="timeline"></div>
   </aside>
 
@@ -702,6 +706,8 @@ const els = {
   summary: document.getElementById("sceneSummary"),
   glyph: document.getElementById("glyph"),
   queue: document.getElementById("queue"),
+  executions: document.getElementById("executions"),
+  execList: document.getElementById("execList"),
   timeline: document.getElementById("timeline"),
   metrics: document.getElementById("metrics"),
   particles: document.getElementById("particles"),
@@ -771,6 +777,29 @@ function renderTimeline(events) {
     text.textContent = ev.summary||ev.event_type||"Activity";
     row.append(icon,time,text);
     els.timeline.append(row);
+  });
+}
+
+/* ── Render active executions ── */
+function renderExecutions(tasks) {
+  els.execList.replaceChildren();
+  if (!tasks || !tasks.length) {
+    els.executions.style.display = "none";
+    return;
+  }
+  els.executions.style.display = "block";
+  tasks.slice(0,3).forEach(function(t) {
+    var row = document.createElement("div");
+    row.className = "exec-item";
+    var dot = document.createElement("span");
+    dot.className = "task-dot " + taskDotClass(t);
+    var title = document.createElement("span");
+    title.textContent = (t.title||"Untitled").substring(0,40);
+    var type = document.createElement("span");
+    type.className = "exec-type";
+    type.textContent = (t.governance_task_type||t.task_family||"").replace(/_/g," ");
+    row.append(dot,title,type);
+    els.execList.append(row);
   });
 }
 
@@ -868,6 +897,7 @@ function applyState(state) {
   els.body.dataset.execWindow = state.in_execution_window !== false ? "true" : "false";
 
   renderQueue(state.tasks||[]);
+  renderExecutions(state.active_executions||[]);
   renderTimeline(timeline);
   renderMetrics(state);
   if (state.schedule) renderSchedule(state.schedule);
@@ -1133,6 +1163,13 @@ class SupervisorUIMixin:
             "active_sessions": int(activity.get("active_sessions") or 0),
             "timeline": await self._recent_supervisor_observation_timeline(limit=10),
             "governor_mode": self._governor_mode_status(),
+            "active_executions": [
+                self._serialize_self_evolution_task(task)
+                for task in self._self_evolution_queue.list_tasks()
+                if task.status == "approved"
+                and task.metadata.get("execution_dispatched")
+                and not task.metadata.get("execution_failed")
+            ],
         }
 
     async def _recent_supervisor_observation_timeline(self, limit: int = 10) -> List[Dict[str, Any]]:

@@ -15,7 +15,7 @@ from systems.runtime_task_profile import (
     normalize_runtime_task_type,
 )
 
-SelfEvolutionTaskStatus = Literal["planned", "deferred", "approved", "paused", "cancelled"]
+SelfEvolutionTaskStatus = Literal["planned", "deferred", "approved", "paused", "cancelled", "completed", "failed"]
 SelfEvolutionExecutionRequestKind = Literal[
     "body_upgrade",
     "body_switch",

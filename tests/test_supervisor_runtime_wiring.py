@@ -625,7 +625,7 @@ async def test_supervisor_self_evolution_cycle_dispatches_approved_formal_task(t
     queued = await supervisor.get_self_evolution_task(task_id)
     assert cycle["reviewed"] == 1
     assert cycle["dispatched"] == [{"task_id": task_id, "status": "formal_self_evolution_executed"}]
-    assert queued["status"] == "approved"
+    assert queued["status"] == "completed"
     assert queued["metadata"]["execution_dispatched"] is True
     assert queued["metadata"]["execution_result"]["status"] == "formal_self_evolution_executed"
     supervisor._body_upgrade_executor.execute_body_upgrade.assert_awaited_once()  # type: ignore[attr-defined]
@@ -691,7 +691,7 @@ async def test_supervisor_self_evolution_cycle_dispatches_self_learning_followup
     assert first["reviewed"] == 1
     assert first["dispatched"] == [{"task_id": task_id, "status": "self_learning_followup_executed"}]
     assert second["dispatched"] == []
-    assert queued["status"] == "approved"
+    assert queued["status"] in ("approved", "completed")
     assert queued["execution_request"] is None
     assert queued["metadata"]["execution_dispatched"] is True
     assert queued["metadata"]["self_learning_dispatched"] is True

@@ -330,7 +330,7 @@ def stop_service(name: str, silent: bool = False) -> bool:
             time.sleep(0.5)
             if _pid_alive(pid):
                 os.kill(pid, signal.SIGKILL)
-    except Exception:
+    except (Exception, KeyboardInterrupt):
         pass
 
     _delete_pid(svc.pid_file)

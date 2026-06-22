@@ -1869,6 +1869,8 @@ class VoidcubeCLI:
         # These must exist before any direct chat() call because single-query
         # mode does not go through run().
         self._agent_running = False
+        self._auto_mode_active: bool = False
+        self._auto_mode_executing: bool = False
         self._pending_input: queue.Queue = queue.Queue()
         self._interrupt_queue: queue.Queue = queue.Queue()
         self._should_exit = False
@@ -2176,6 +2178,44 @@ class VoidcubeCLI:
 
         threading.Thread(target=_do_fetch, daemon=True, name="supervisor-status").start()
 
+    _auto_mode_last_event_ts: str = ""
+
+    def _poll_auto_mode_workflow(self) -> None:
+        """Poll supervisor timeline for sub-agent tool events and display them.
+
+        Shows sub-agent tool calls in the same visual style as the main agent's
+        workflow display (tool names, search queries, elapsed time).
+        """
+        import time, threading, json as _json
+
+        def _fetch_and_display():
+            try:
+                import urllib.request as _req
+                url = f"{self._get_supervisor_url()}/runtime/timeline?limit=8"
+                r = _req.Request(url, headers={"Accept": "application/json"})
+                resp = _json.loads(_req.urlopen(r, timeout=3).read())
+                timeline = resp.get("timeline", [])
+            except Exception:
+                return
+
+            last_ts = self._auto_mode_last_event_ts
+            new_events = []
+            for ev in reversed(timeline):
+                ts = ev.get("recorded_at", "")
+                if ts == last_ts:
+                    break
+                new_events.append(ev)
+            if new_events:
+                self._auto_mode_last_event_ts = new_events[0].get("recorded_at", "")
+
+            for ev in reversed(new_events):
+                etype = ev.get("event_type", "")
+                summary = ev.get("summary", "")
+                if etype in ("subagent_tool", "subagent_thinking"):
+                    _cprint(f"  {summary}")
+
+        threading.Thread(target=_fetch_and_display, daemon=True, name="auto-workflow").start()
+
     @staticmethod
     def _use_ascii_fallback() -> bool:
         """Detect terminals that may not render emoji correctly (e.g. legacy conhost)."""
@@ -2233,6 +2273,10 @@ class VoidcubeCLI:
         sup: Dict[str, Any] = {}
         try:
             sup = self._fetch_supervisor_status()
+            # Update auto-mode execution indicator
+            if self._auto_mode_active:
+                active_execs = sup.get("active_executions", [])
+                self._auto_mode_executing = bool(active_execs)
         except Exception:
             pass
         scene = sup.get("scene", "idle")
@@ -5992,6 +6036,16 @@ class VoidcubeCLI:
         cmd_lower = command.lower().strip()
         cmd_original = command.strip()
 
+        # ── Auto mode guard: only /auto-q is accepted ──
+        if self._auto_mode_active:
+            _base = cmd_lower.split()[0].lstrip("/")
+            if _base not in ("auto-q", "auto-quit", "auto-stop"):
+                _cprint(
+                    "  🔒 当前为全自动模式，agent 正在自主规划并探索学习。\n"
+                    "     如需 agent 辅助请退出 auto 模式，仅接受 /auto-q。"
+                )
+                return True
+
         # Resolve aliases via central registry so adding an alias is a one-line
         # change in VoidCube_cli/commands.py instead of touching every dispatch site.
         from VoidCube_cli.commands import resolve_command as _resolve_cmd
@@ -6417,6 +6471,7 @@ class VoidcubeCLI:
                 )
                 resp = _json.loads(_req.urlopen(r, timeout=30).read())
             except Exception as exc:
+                self._auto_mode_active = False
                 _cprint(f"  ⚠️  Supervisor unreachable: {exc}")
                 _cprint(f"     Ensure daemons are running (auto-started in interactive mode).")
                 _cprint(f"     Or run: voidcube serve start")
@@ -6433,12 +6488,14 @@ class VoidcubeCLI:
                     _cprint(f"     Use /auto-q to return to Memory Mode.")
                     _cprint(f"     Monitor: {supervisor_url}/ui")
                 else:
+                    self._auto_mode_active = False
                     _cprint(f"  ⚠️  Governor Mode activation failed.")
                     if not resp.get("endogenous_drive_enabled", True):
                         _cprint(f"     endogenous_drive_enabled is False in config.")
             except Exception:
                 pass  # best-effort reporting; the API call succeeded
 
+        self._auto_mode_active = True
         threading.Thread(target=_call_activate_governor, daemon=True, name="governor-activate").start()
 
     def _handle_auto_q_command(self):
@@ -6473,6 +6530,7 @@ class VoidcubeCLI:
 
             active = resp.get("governor_mode_active", True)
             if not active:
+                self._auto_mode_active = False
                 _cprint(f"  💤 Governor Mode [bold]DEACTIVATED[/] — returned to Memory Mode.")
                 _cprint(f"     Only health-check loop is running.")
                 _cprint(f"     Use /auto to re-enter Governor Mode.")
@@ -9065,6 +9123,7 @@ class VoidcubeCLI:
         input_area,
         input_rule_bot,
         voice_status_bar,
+        auto_mode_bar=None,
         completions_menu,
     ) -> list:
         """Assemble the ordered list of children for the root ``HSplit``.
@@ -9090,6 +9149,7 @@ class VoidcubeCLI:
                 input_area,
                 input_rule_bot,
                 voice_status_bar,
+                auto_mode_bar,
                 completions_menu,
             ] if item is not None
         ]
@@ -9390,8 +9450,11 @@ class VoidcubeCLI:
                 if self._should_handle_model_command_inline(text, has_images=has_images):
                     if not self.process_command(text):
                         self._should_exit = True
-                        if event.app.is_running:
-                            event.app.exit()
+                        try:
+                            if event.app.is_running:
+                                event.app.exit()
+                        except Exception:
+                            pass
                     event.app.current_buffer.reset(append_to_history=True)
                     return
                 
@@ -9413,8 +9476,11 @@ class VoidcubeCLI:
                             except Exception:
                                 pass  # leave flag True so atexit handler retries
                         # ───────────────────────────────────────────────
-                        if event.app.is_running:
-                            event.app.exit()
+                        try:
+                            if event.app.is_running:
+                                event.app.exit()
+                        except Exception:
+                            pass  # already exiting — graceful no-op
                     event.app.current_buffer.reset(append_to_history=True)
                     return
 
@@ -9424,6 +9490,22 @@ class VoidcubeCLI:
                 event.app.invalidate()
                 # Bundle text + images as a tuple when images are present
                 payload = (text, images) if images else text
+
+                # ── Auto mode guard: reject all non-/auto-q input ──
+                if self._auto_mode_active:
+                    if text and _looks_like_slash_command(text):
+                        _base = text.strip().lstrip("/").split()[0].lower()
+                        if _base in ("auto-q", "auto-quit", "auto-stop"):
+                            self._pending_input.put(payload)
+                            event.app.current_buffer.reset(append_to_history=True)
+                            return
+                    _cprint(
+                        "  🔒 当前为全自动模式，agent 正在自主规划并探索学习。\n"
+                        "     如需 agent 辅助请退出 auto 模式，仅接受 /auto-q。"
+                    )
+                    event.app.current_buffer.reset(append_to_history=True)
+                    return
+
                 if self._agent_running and not (text and _looks_like_slash_command(text)):
                     if self.busy_input_mode == "queue":
                         # Queue for the next turn instead of interrupting
@@ -9560,20 +9642,14 @@ class VoidcubeCLI:
 
         @kb.add('c-c')
         def handle_ctrl_c(event):
-            """Handle Ctrl+C - cancel interactive prompts, interrupt agent, or exit.
-            
-            Priority:
-            0. Cancel active voice recording
-            1. Cancel active sudo/approval/clarify prompt
-            2. Interrupt the running agent (first press)
-            3. Force exit (second press within 2s, or when idle)
+            """Handle Ctrl+C - cancel interactive prompts, interrupt agent.
+
+            Does NOT force-exit — use /quit to exit.
             """
             import time as _time
             now = _time.time()
 
             # Cancel active voice recording.
-            # Run cancel() in a background thread to prevent blocking the
-            # event loop if AudioRecorder._lock or CoreAudio takes time.
             _should_cancel_voice = False
             _recorder_ref = None
             with cli_ref._voice_lock:
@@ -9629,32 +9705,25 @@ class VoidcubeCLI:
                 event.app.invalidate()
                 return
 
+            # Interrupt running agent
             if self._agent_running and self.agent:
-                if now - self._last_ctrl_c_time < 2.0:
-                    print("\n🔧 Force exiting...")
-                    self._should_exit = True
-                    event.app.exit()
-                    return
-                
                 self._last_ctrl_c_time = now
-                print("\n🔧 Interrupting agent... (press Ctrl+C again to force exit)")
                 self.agent.interrupt()
-            else:
-                # If there's text or images, clear them (like bash).
-                # If everything is already empty, exit.
-                if event.app.current_buffer.text or self._attached_images:
-                    event.app.current_buffer.reset()
-                    self._attached_images.clear()
-                    event.app.invalidate()
-                else:
-                    self._should_exit = True
-                    event.app.exit()
-        
+                return
+
+            # Idle: clear input if there's text, otherwise no-op
+            if event.app.current_buffer.text or self._attached_images:
+                event.app.current_buffer.reset()
+                self._attached_images.clear()
+                event.app.invalidate()
+
         @kb.add('c-d')
         def handle_ctrl_d(event):
-            """Handle Ctrl+D - exit."""
-            self._should_exit = True
-            event.app.exit()
+            """Handle Ctrl+D — clear input (no exit, use /quit instead)."""
+            if event.app.current_buffer.text or self._attached_images:
+                event.app.current_buffer.reset()
+                self._attached_images.clear()
+                event.app.invalidate()
 
         @kb.add('c-z')
         def handle_ctrl_z(event):
@@ -10382,6 +10451,23 @@ class VoidcubeCLI:
             filter=Condition(lambda: cli_ref._voice_mode),
         )
 
+        def _get_auto_mode_text():
+            if cli_ref._auto_mode_executing:
+                return [
+                    ("class:auto-mode", " 🤖 AUTO ⚡ 执行中 — Agent 正在执行学习任务 | /auto-q 退出"),
+                ]
+            return [
+                ("class:auto-mode", " 🤖 AUTO 💤 空闲 — 等待 Agent 空闲后派发任务 | /auto-q 退出"),
+            ]
+
+        auto_mode_bar = ConditionalContainer(
+            Window(
+                FormattedTextControl(_get_auto_mode_text),
+                height=1,
+            ),
+            filter=Condition(lambda: cli_ref._auto_mode_active),
+        )
+
         status_bar = ConditionalContainer(
             Window(
                 content=FormattedTextControl(lambda: cli_ref._get_status_bar_fragments()),
@@ -10423,6 +10509,7 @@ class VoidcubeCLI:
                     input_area=input_area,
                     input_rule_bot=input_rule_bot,
                     voice_status_bar=voice_status_bar,
+                    auto_mode_bar=auto_mode_bar,
                     completions_menu=completions_menu,
                 )
             )
@@ -10567,6 +10654,8 @@ class VoidcubeCLI:
                         if not self._agent_running:
                             self._check_config_mcp_changes()
                             self._refresh_supervisor_status()
+                            if self._auto_mode_active:
+                                self._poll_auto_mode_workflow()
                             # Check for background process notifications (completions
                             # and watch pattern matches) while agent is idle.
                             try:
@@ -10949,7 +11038,10 @@ def _maybe_stop_daemons_on_exit(force: bool = False) -> None:
     except ImportError:
         return
 
-    stop_all(force=True)
+    try:
+        stop_all(force=True)
+    except KeyboardInterrupt:
+        pass
     _daemons_auto_started = False
 
 

@@ -45,19 +45,8 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         or (runtime_root / "self_evolution_queue.json")
     )
     supervisor._self_learning_service = SelfLearningService(runtime_root / "self-learning")
-    # Resolve self-learning subagent config from global VoidCube config
-    _sl_cfg: Dict[str, Any] = {}
-    try:
-        from VoidCube_cli.config import load_config as _load_global_cfg
-        _global_cfg = _load_global_cfg()
-        _sl_cfg = _global_cfg.get("self_learning", {}) if isinstance(_global_cfg, dict) else {}
-    except Exception:
-        pass
     supervisor._self_learning_skill_delegate = SelfLearningSkillDelegate(
-        use_subagent=bool(_sl_cfg.get("subagent_enabled", True)),
-        subagent_model=_sl_cfg.get("subagent_model") or None,
-        subagent_max_iterations=int(_sl_cfg.get("subagent_max_iterations", 30)),
-        subagent_timeout_seconds=float(_sl_cfg.get("subagent_timeout_seconds", 300)),
+        learning_service=supervisor._self_learning_service,
     )
     supervisor._endogenous_drive_engine = EndogenousDriveEngine()
     supervisor._body_lifecycle_state_executor = BodyLifecycleExecutor(supervisor._body_registry)
@@ -123,6 +112,7 @@ def assemble_supervisor_execution_runtime(supervisor: Any) -> None:
         mem_state_path=None,  # auto-resolve ~/.VoidCube/mem_state.json
     )
     supervisor._self_learning_executor = SelfLearningExecutionAdapter(
+        config=execution_config,
         learning_service=supervisor._self_learning_service,
         attach_execution_route_hint=attach_execution_route_hint,
         skill_delegate=supervisor._self_learning_skill_delegate,

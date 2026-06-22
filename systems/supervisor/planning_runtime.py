@@ -1247,7 +1247,13 @@ class PlanningRuntimeMixin:
                 )
             return result
 
-        # Success path
+        # Success path — mark completed
+        self._self_evolution_queue.update_status(
+            task.task_id,
+            status="completed",
+            actor="supervisor",
+            reason=f"Execution request completed: {str(result_status)[:100]}",
+        )
         self._self_evolution_queue.update_metadata(
             task.task_id,
             metadata={"execution_result": result},
@@ -1293,6 +1299,15 @@ class PlanningRuntimeMixin:
         if isinstance(supervisor_submission, dict):
             submission_result = await self.submit_self_learning_conclusion(supervisor_submission)
 
+        # Mark as completed (self_learning reaches terminal state after dispatch)
+        result_status = result.get("status") if isinstance(result, dict) else "completed"
+        is_error = isinstance(result_status, str) and result_status in {"error", "failed", "timeout"}
+        self._self_evolution_queue.update_status(
+            task.task_id,
+            status="failed" if is_error else "completed",
+            actor="supervisor",
+            reason=f"Self-learning follow-up {'failed' if is_error else 'completed'}: {str(result.get('status', ''))[:100]}",
+        )
         self._self_evolution_queue.update_metadata(
             task.task_id,
             metadata={
@@ -1311,6 +1326,24 @@ class PlanningRuntimeMixin:
                 "result_status": result.get("status") if isinstance(result, dict) else None,
             },
         )
+        # Record sub-agent tool workflow for CLI display
+        skill_exec = result.get("skill_execution", {}) if isinstance(result, dict) else {}
+        for te in skill_exec.get("tool_events", []) or []:
+            tool_name = te.get("tool", "")
+            preview = te.get("args_preview", "")
+            kind = te.get("kind", "tool")
+            if kind == "thinking":
+                self._record_supervisor_ui_activity(
+                    "subagent_thinking", scene="learning",
+                    summary=f"💭 {preview}" if preview else "🤔 Thinking...",
+                    metadata={"tool": tool_name},
+                )
+            else:
+                self._record_supervisor_ui_activity(
+                    "subagent_tool", scene="learning",
+                    summary=f"🔧 {tool_name}" + (f": {preview}" if preview else ""),
+                    metadata={"tool": tool_name, "preview": preview},
+                )
         self._record_supervisor_ui_activity(
             "self_learning_completed",
             scene="learning",

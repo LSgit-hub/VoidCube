@@ -1322,23 +1322,24 @@ class MemoryMaintenanceExecutionAdapter:
 
 
 class SelfLearningExecutionAdapter:
-    """Learn-only executor boundary for supervisor-approved learning tasks."""
+    """Learn-only executor boundary for supervisor-approved learning tasks.
+
+    Routes learning tasks through Gateway → Agent → delegate_task (primary)
+    with procedural skill delegate as fallback when Agent is unreachable.
+    """
 
     def __init__(
         self,
         *,
+        config: Any = None,
         learning_service: SelfLearningService,
         attach_execution_route_hint: Callable[[Dict[str, Any], str], Dict[str, Any]],
         skill_delegate: Optional[SelfLearningSkillDelegate] = None,
-        subagent_enabled: bool = True,
     ) -> None:
+        self.config = config
         self.learning_service = learning_service
         self.attach_execution_route_hint = attach_execution_route_hint
-        self.subagent_enabled = subagent_enabled
-        if skill_delegate is not None:
-            self.skill_delegate = skill_delegate
-        else:
-            self.skill_delegate = SelfLearningSkillDelegate(use_subagent=subagent_enabled)
+        self.skill_delegate = skill_delegate or SelfLearningSkillDelegate()
 
     async def execute_self_learning_followup(self, request: dict | None = None) -> Dict[str, Any]:
         request = request or {}
@@ -1372,7 +1373,10 @@ class SelfLearningExecutionAdapter:
                 detail="Self-learning executor only accepts governance_task_type=self_learning.",
             )
 
-        skill_execution = self.skill_delegate.execute({"task": task})
+        # ── Route learning task through Gateway → Agent → delegate_task ──
+        # Agent (API-A) executes learning via sub-agent; supervisor only dispatches
+        skill_execution = await self._dispatch_to_agent(task, title, summary, constraints)
+        skill_execution["tool_events"] = []
         skill_evidence = dict(skill_execution.get("evidence") or {})
         skill_plan = dict(skill_execution.get("learning_plan") or {})
         skill_evidence_summary = self._build_skill_evidence_summary(skill_execution)
@@ -1502,6 +1506,112 @@ class SelfLearningExecutionAdapter:
             },
             "self_learning.execute",
         )
+
+    async def _dispatch_to_agent(
+        self, task: dict, title: str, summary: str, constraints: dict
+    ) -> Dict[str, Any]:
+        """Send learning task to Agent via Gateway for sub-agent execution."""
+        import aiohttp
+
+        cfg = self.config or {}
+        gateway = (
+            getattr(cfg, "gateway_address", None)
+            or (cfg.get("gateway_address") if isinstance(cfg, dict) else None)
+            or "http://127.0.0.1:6000"
+        )
+        url = f"{gateway}/v1/agent/governance-task"
+        prompt = self._build_learning_prompt(title, summary, constraints, task)
+
+        payload = {
+            "task_type": "self_learning",
+            "governance_task_type": "self_learning",
+            "title": title,
+            "prompt": prompt,
+            "task_id": task.get("task_id", ""),
+            "trace_id": task.get("trace_id", ""),
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=600)) as resp:
+                    agent_result = await resp.json()
+        except Exception as exc:
+            # Agent unreachable — fall back to procedural skill delegate
+            logger.warning("Agent governance task failed, falling back to procedural: %s", exc)
+            result = self.skill_delegate.execute({"task": task})
+            result["backend"] = "procedural_fallback"
+            return result
+
+        status = agent_result.get("status", "error")
+        if status == "completed":
+            parsed = agent_result.get("parsed_output") or {}
+            return {
+                "status": "skill_delegate_executed",
+                "delegate": "AgentSubagent",
+                "backend": "agent_delegate_task",
+                "iterations_completed": 1,
+                "skill": {"name": "self-learning", "version": "1.0.0",
+                           "description": "Agent-executed learning via delegate_task"},
+                "learning_plan": {"topic": title, "summary": summary,
+                                  "evidence_plan": {"status": "agent_managed"}},
+                "evidence": {"observations": parsed.get("observations", []),
+                             "comparisons": parsed.get("comparisons", [])},
+                "tool_execution": {"status": "completed", "calls": [],
+                                   "summary": {"total": 0, "succeeded": 0, "failed": 0}},
+                "capability_boundary": {"uses_agent_skill_contract": True,
+                                        "performs_body_mutation": False,
+                                        "performs_memory_mutation": False,
+                                        "backend": "agent_delegate_task"},
+                "subagent_metadata": {
+                    "technology_evaluations": parsed.get("technology_evaluations", []),
+                    "evidence_sources": parsed.get("evidence_sources", []),
+                    "overall_summary": parsed.get("overall_summary", ""),
+                },
+            }
+        # Agent failed or rejected — fall back to procedural
+        logger.warning("Agent governance task returned %s, falling back to procedural", status)
+        result = self.skill_delegate.execute({"task": task})
+        result["backend"] = "procedural_fallback"
+        return result
+
+    def _build_learning_prompt(
+        self, title: str, summary: str, constraints: dict, task: dict
+    ) -> str:
+        """Build the learning research prompt for the Agent's sub-agent."""
+        evidence = dict(task.get("evidence") or {})
+        learning_topic = evidence.get("learning_topic", "") or title
+        search_queries = [
+            f"{learning_topic} latest trends 2026",
+            f"{learning_topic} best practices 2025 2026",
+            f"{learning_topic} production ready GitHub",
+            f"{learning_topic} state of the art",
+        ]
+        queries_text = "\n".join(f"- `{q}`" for q in search_queries)
+
+        return "\n".join([
+            "You are a focused research subagent for the VoidCube self-learning system.",
+            "",
+            "## MISSION",
+            f"Research: **{learning_topic}**",
+            f"Context: {summary}" if summary else "",
+            "",
+            "## SEARCH QUERIES",
+            queries_text,
+            "",
+            "## OUTPUT (JSON at end of response)",
+            "```json",
+            '{"technology_evaluations":[{"name":"","url":"","scores":{',
+            '"practicality":0,"cutting_edge":0,"maturity":0,',
+            '"learning_cost":0,"long_term_value":0},',
+            '"total_score":0,"recommendation":"core|archive|reference",',
+            '"summary":""}],',
+            '"evidence_sources":[{"type":"","url":"","description":""}],',
+            '"observations":[],"comparisons":[],"overall_summary":""}',
+            "```",
+            "",
+            "Use web_search, read_file, terminal, execute_code. "
+            "Do NOT modify files. READ-ONLY research.",
+        ])
 
     def _build_skill_evidence_summary(self, skill_execution: Dict[str, Any]) -> Dict[str, Any]:
         tool_execution = dict(skill_execution.get("tool_execution") or {})
