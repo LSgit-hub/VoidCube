@@ -10,7 +10,6 @@ from .models import (
     SupervisorTaskProposal,
 )
 from .service import SelfLearningService
-from .skill_delegate import SelfLearningSkillDelegate, SelfLearningToolRunner
 
 __all__ = [
     "ExperimentRecord",
@@ -19,8 +18,6 @@ __all__ = [
     "LearningSession",
     "LearningTopic",
     "SelfLearningService",
-    "SelfLearningSkillDelegate",
-    "SelfLearningToolRunner",
     "SupervisorConclusionSubmission",
     "SupervisorTaskProposal",
 ]

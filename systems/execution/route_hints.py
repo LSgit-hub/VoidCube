@@ -45,16 +45,6 @@ EXECUTION_ROUTE_HINTS: tuple[dict[str, Any], ...] = (
         },
     },
     {
-        "interface_id": "self_learning.execute",
-        "method": "POST",
-        "path": "/self-learning/execute",
-        "implemented_by": "SelfLearningExecutionAdapter",
-        "preferred_entrypoint": {
-            "gateway_path": "/api/executor/self-learning/execute",
-            "executor_path": "/executor/self-learning/execute",
-        },
-    },
-    {
         "interface_id": "body.prepare",
         "method": "POST",
         "path": "/body/slots/{slot_id}/prepare",

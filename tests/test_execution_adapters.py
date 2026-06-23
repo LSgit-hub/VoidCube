@@ -18,7 +18,6 @@ from systems.execution.adapters import (
     BodyUpgradeExecutionAdapter,
     BodyLifecycleExecutionAdapter,
     GovernorReviewExecutionAdapter,
-    SelfLearningExecutionAdapter,
     WatchWindowExecutionAdapter,
 )
 from systems.execution.facade import VoidCubeExecutionFacade
@@ -26,29 +25,7 @@ from systems.governor import GovernorRequest
 from systems.governor import GovernorDecisionEngine
 from systems.lifecycle import BodyLifecycleExecutor
 from systems.probe import ProbeExecutor, ProbeRunner
-from systems.self_learning import SelfLearningService, SelfLearningSkillDelegate
 from systems.supervisor.supervisor import AgentInstance
-
-
-class FakeSelfLearningToolRunner:
-    def __init__(self, *, fail: bool = False) -> None:
-        self.fail = fail
-        self.calls: list[dict] = []
-
-    def run_tool(self, name: str, args: dict, *, task_id: str) -> str:
-        self.calls.append({"name": name, "args": args, "task_id": task_id})
-        if self.fail:
-            return '{"success": false, "error": "search backend unavailable"}'
-        if name == "search_files":
-            return '{"matches": [{"path": "docs/a.md", "line": 12, "content": "local evidence"}]}'
-        if name == "read_file":
-            return '{"content": "1|reference evidence", "path": "docs/a.md"}'
-        return (
-            '{"success": true, "data": {"web": ['
-            '{"title": "Evidence", "url": "https://example.test/evidence", '
-            '"description": "Relevant self-learning evidence."}'
-            "]}}"
-        )
 
 
 def _attach_route_hint(payload: dict, interface_id: str) -> dict:
@@ -262,119 +239,6 @@ async def test_execution_facade_delegates_to_current_adapters():
     memory_maintenance.trigger_memory_compression.assert_awaited_once_with({})
 
 
-
-
-@pytest.mark.unit
-def test_self_learning_skill_delegate_runs_bounded_tool_runner():
-    runner = FakeSelfLearningToolRunner()
-    delegate = SelfLearningSkillDelegate(tool_runner=runner, max_iterations=1)
-
-    result = delegate.execute(
-        {
-            "task": {
-                "task_id": "task-runner-1",
-                "title": "Evaluate agent knowledge radar",
-                "summary": "Use the bundled self-learning skill to prepare evidence.",
-                "constraints": {"planned_minutes": 15},
-            }
-        }
-    )
-
-    assert result["status"] == "skill_delegate_executed"
-    assert result["backend"] == "iterative_bounded_tool_runner"
-    assert result["skill"]["name"] == "self-learning"
-    assert result["learning_plan"]["planned_minutes"] == 15
-    assert "Evaluate agent knowledge radar latest trends 2026" in result["learning_plan"]["search_queries"]
-    assert [item["name"] for item in result["learning_plan"]["evaluation_dimensions"]] == [
-        "practicality",
-        "cutting_edge",
-        "maturity",
-        "learning_cost",
-        "long_term_value",
-    ]
-    assert result["evidence"]["guide_excerpt"]
-    assert result["evidence"]["summary_template_excerpt"]
-    assert result["tool_execution"]["status"] == "completed"
-    assert result["tool_execution"]["summary"] == {"total": 2, "succeeded": 2, "failed": 0}
-    assert [call["name"] for call in runner.calls] == ["web_search", "web_search"]
-    assert result["learning_plan"]["evidence_plan"]["source_mix"] == ["external_web"]
-    assert result["tool_execution"]["calls"][0]["result"]["web"][0]["url"] == "https://example.test/evidence"
-    assert result["capability_boundary"]["performs_external_search"] is True
-
-
-@pytest.mark.unit
-def test_self_learning_skill_delegate_records_failed_tool_evidence_without_success_claim():
-    delegate = SelfLearningSkillDelegate(tool_runner=FakeSelfLearningToolRunner(fail=True), max_iterations=1)
-
-    result = delegate.execute({"task": {"task_id": "task-failed-search", "title": "Study failed search"}})
-
-    assert result["status"] == "skill_delegate_executed"
-    assert result["tool_execution"]["status"] == "failed"
-    assert result["tool_execution"]["summary"] == {"total": 2, "succeeded": 0, "failed": 2}
-    assert result["tool_execution"]["calls"][0]["success"] is False
-    assert result["tool_execution"]["calls"][0]["error"] == "search backend unavailable"
-    assert result["capability_boundary"]["performs_external_search"] is False
-    assert result["capability_boundary"]["performs_body_mutation"] is False
-
-
-@pytest.mark.unit
-def test_self_learning_skill_delegate_builds_multisource_evidence_plan_from_task_constraints():
-    runner = FakeSelfLearningToolRunner()
-    delegate = SelfLearningSkillDelegate(tool_runner=runner, max_iterations=1)
-
-    result = delegate.execute(
-        {
-            "task": {
-                "task_id": "task-multisource",
-                "title": "Study trace runtime",
-                "constraints": {
-                    "evidence_tools": ["web_search", "search_files", "read_file"],
-                    "local_search_patterns": ["TraceRuntimeMixin"],
-                    "local_search_path": "systems",
-                    "reference_files": ["docs/supervisor-runtime-structure.md"],
-                },
-            }
-        }
-    )
-
-    plan = result["learning_plan"]["evidence_plan"]
-    assert plan["status"] == "planned"
-    assert plan["source_mix"] == ["external_web", "local_reference", "local_repository"]
-    assert plan["policy"]["rejected_tools"] == []
-    assert [call["name"] for call in runner.calls] == [
-        "web_search",
-        "web_search",
-        "search_files",
-        "read_file",
-    ]
-    assert runner.calls[2]["args"]["pattern"] == "TraceRuntimeMixin"
-    assert runner.calls[3]["args"]["path"] == "docs/supervisor-runtime-structure.md"
-    assert result["tool_execution"]["summary"] == {"total": 4, "succeeded": 4, "failed": 0}
-    assert result["tool_execution"]["calls"][2]["source_type"] == "local_repository"
-    assert result["tool_execution"]["calls"][3]["source_type"] == "local_reference"
-
-
-@pytest.mark.unit
-def test_self_learning_skill_delegate_rejects_disallowed_evidence_tools_without_calling_them():
-    runner = FakeSelfLearningToolRunner()
-    delegate = SelfLearningSkillDelegate(tool_runner=runner, max_iterations=1)
-
-    result = delegate.execute(
-        {
-            "task": {
-                "task_id": "task-reject-disallowed",
-                "title": "Reject memory mutation",
-                "constraints": {
-                    "evidence_tools": ["memory_persist", "web_search"],
-                },
-            }
-        }
-    )
-
-    plan = result["learning_plan"]["evidence_plan"]
-    assert plan["policy"]["rejected_tools"] == ["memory_persist"]
-    assert [call["name"] for call in runner.calls] == ["web_search", "web_search"]
-    assert result["capability_boundary"]["performs_memory_mutation"] is False
 
 
 @pytest.mark.unit

@@ -19,17 +19,7 @@ from systems.supervisor.supervisor import (
     SupervisorExecutionConfig,
     SupervisorServiceRuntimeConfig,
 )
-from systems.self_learning import LearningRecommendation, SelfLearningService, SelfLearningSkillDelegate
-
-
-class FakeSelfLearningToolRunner:
-    def run_tool(self, name: str, args: dict, *, task_id: str) -> str:
-        return (
-            '{"success": true, "data": {"web": ['
-            '{"title": "Evidence", "url": "https://example.test/evidence", '
-            '"description": "Relevant self-learning evidence."}'
-            "]}}"
-        )
+from systems.self_learning import LearningRecommendation, SelfLearningService
 
 
 def _make_supervisor_config(tmp_path: Path) -> SupervisorConfig:
@@ -77,7 +67,6 @@ def test_supervisor_wires_execution_facade_to_canonical_executors(tmp_path):
     assert supervisor._execution_facade.body_lifecycle is supervisor._body_lifecycle_executor
     assert supervisor._execution_facade.body_upgrade is supervisor._body_upgrade_executor
     assert supervisor._execution_facade.memory_maintenance is supervisor._memory_maintenance_executor
-    assert supervisor._execution_facade.self_learning is supervisor._self_learning_executor
 
 
 @pytest.mark.unit
@@ -628,73 +617,6 @@ async def test_supervisor_self_evolution_cycle_dispatches_approved_formal_task(t
     assert queued["status"] == "completed"
     assert queued["metadata"]["execution_result"]["status"] == "formal_self_evolution_executed"
     supervisor._body_upgrade_executor.execute_body_upgrade.assert_awaited_once()  # type: ignore[attr-defined]
-
-
-@pytest.mark.asyncio
-@pytest.mark.unit
-async def test_supervisor_self_evolution_cycle_dispatches_self_learning_followup_once(tmp_path):
-    supervisor = _make_supervisor(tmp_path)
-    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    supervisor._self_learning_executor.skill_delegate = SelfLearningSkillDelegate(  # type: ignore[attr-defined]
-        tool_runner=FakeSelfLearningToolRunner()
-    )
-    supervisor._body_upgrade_executor.execute_body_upgrade = AsyncMock(  # type: ignore[method-assign]
-        side_effect=AssertionError("self-learning must not use body upgrade execution")
-    )
-
-    planned = await supervisor.plan_self_evolution_task(
-        {
-            "title": "Study idle uncertainty signals",
-            "summary": "Record a learn-only follow-up from the supervisor queue.",
-            "source": "self_learning",
-            "task_family": "self_learning",
-            "metadata": {
-                "governance_task_type": "self_learning",
-                "task_family": "self_learning",
-            },
-            "evidence": {
-                "observations": ["uncertainty increased while user path was idle"],
-            },
-        }
-    )
-    task_id = planned["tasks"][0]["task_id"]
-
-    supervisor.evaluate_idle_window = AsyncMock(  # type: ignore[method-assign]
-        return_value={
-            "decisions": {
-                "eligible_for_planning": True,
-                "eligible_for_execution": True,
-            },
-            "task_family_decisions": {
-                "self_learning": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                }
-            },
-            "governance_task_type_decisions": {
-                "self_learning": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                }
-            },
-            "checks": {"in_execution_window": False},
-        }
-    )
-
-    first = await supervisor._run_self_evolution_cycle()
-    second = await supervisor._run_self_evolution_cycle()
-
-    queued = await supervisor.get_self_evolution_task(task_id)
-
-    # Self-learning tasks are reviewed but NOT dispatched by the evolution cycle.
-    # They wait for Agent pull via Gateway /v1/tasks API.
-    assert first["reviewed"] == 1
-    assert first["dispatched"] == []  # self_learning tasks are not dispatched
-    assert second["dispatched"] == []
-    # Task remains approved (waiting for Agent pull), not completed
-    assert queued["status"] == "approved"
-    assert queued["execution_request"] is None
-    supervisor._body_upgrade_executor.execute_body_upgrade.assert_not_awaited()  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio

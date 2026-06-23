@@ -15,7 +15,6 @@ class VoidCubeExecutionFacade:
     body_lifecycle: Any
     body_upgrade: Any
     memory_maintenance: Any
-    self_learning: Any = None
 
     async def start_managed_agent(self, request: dict) -> Dict[str, Any]:
         return await self.agent_lifecycle.start_managed_agent(request)

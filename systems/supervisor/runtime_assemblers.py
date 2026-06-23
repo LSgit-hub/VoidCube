@@ -11,14 +11,12 @@ from systems.execution import (
     BodyUpgradeExecutionAdapter,
     GovernorReviewExecutionAdapter,
     MemoryMaintenanceExecutionAdapter,
-    SelfLearningExecutionAdapter,
     VoidCubeExecutionFacade,
     WatchWindowExecutionAdapter,
     attach_execution_route_hint,
 )
 from systems.lifecycle import BodyLifecycleExecutor
 from systems.probe import ProbeExecutor, ProbeRunner
-from systems.self_learning import SelfLearningService, SelfLearningSkillDelegate
 from systems.supervisor.endogenous_drive import EndogenousDriveEngine
 from systems.supervisor.task_queue import SelfEvolutionTaskQueue
 
@@ -43,10 +41,6 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
     supervisor._self_evolution_queue = SelfEvolutionTaskQueue(
         supervisor.config.self_evolution_queue_path
         or (runtime_root / "self_evolution_queue.json")
-    )
-    supervisor._self_learning_service = SelfLearningService(runtime_root / "self-learning")
-    supervisor._self_learning_skill_delegate = SelfLearningSkillDelegate(
-        learning_service=supervisor._self_learning_service,
     )
     supervisor._endogenous_drive_engine = EndogenousDriveEngine()
     supervisor._body_lifecycle_state_executor = BodyLifecycleExecutor(supervisor._body_registry)
@@ -115,12 +109,6 @@ def assemble_supervisor_execution_runtime(supervisor: Any) -> None:
         attach_execution_route_hint=attach_execution_route_hint,
         mem_state_path=None,  # auto-resolve ~/.VoidCube/mem_state.json
     )
-    supervisor._self_learning_executor = SelfLearningExecutionAdapter(
-        config=execution_config,
-        learning_service=supervisor._self_learning_service,
-        attach_execution_route_hint=attach_execution_route_hint,
-        skill_delegate=supervisor._self_learning_skill_delegate,
-    )
     supervisor._governor_review_executor = GovernorReviewExecutionAdapter(
         body_registry=supervisor._body_registry,
         governor=supervisor._governor,
@@ -135,5 +123,4 @@ def assemble_supervisor_execution_runtime(supervisor: Any) -> None:
         body_lifecycle=supervisor._body_lifecycle_executor,
         body_upgrade=supervisor._body_upgrade_executor,
         memory_maintenance=supervisor._memory_maintenance_executor,
-        self_learning=supervisor._self_learning_executor,
     )

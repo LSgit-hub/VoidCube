@@ -6,7 +6,6 @@ from .adapters import (
     BodyUpgradeExecutionAdapter,
     GovernorReviewExecutionAdapter,
     MemoryMaintenanceExecutionAdapter,
-    SelfLearningExecutionAdapter,
     WatchWindowExecutionAdapter,
 )
 from .facade import VoidCubeExecutionFacade
@@ -22,7 +21,6 @@ __all__ = [
     "BodyUpgradeExecutionAdapter",
     "GovernorReviewExecutionAdapter",
     "MemoryMaintenanceExecutionAdapter",
-    "SelfLearningExecutionAdapter",
     "WatchWindowExecutionAdapter",
     "VoidCubeExecutionFacade",
     "VoidCubeExecutionService",

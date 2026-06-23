@@ -205,7 +205,6 @@ class TestCLIExecutorCanonicalPath:
             body_lifecycle=Mock(),
             body_upgrade=body_upgrade,
             memory_maintenance=memory_maintenance,
-            self_learning=Mock(),
         )
 
         async def _run():
