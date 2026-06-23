@@ -155,8 +155,8 @@ def test_supervisor_mounts_built_in_room_ui_when_enabled(tmp_path):
         state = client.get("/ui/state")
 
     assert page.status_code == 200
-    assert "职场小星成长记" in page.text
-    assert "EventSource('/ui/events')" in page.text
+    assert "VoidCube Supervisor Room" in page.text
+    assert 'EventSource("/ui/events")' in page.text
     assert state.status_code == 200
     payload = state.json()
     assert payload["status"] == "ok"

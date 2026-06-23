@@ -12,9 +12,9 @@
       "execution_kind": "memory_maintenance",
       "source": "endogenous_drive",
       "priority": "high",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-21T04:10:38.900214",
-      "updated_at": "2026-06-22T01:11:35.045098",
+      "updated_at": "2026-06-23T10:56:28.289008",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:memory_maintenance_sweep",
@@ -60,7 +60,7 @@
         }
       },
       "constraints": {},
-      "decision_reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "5158b60e-ae06-4d15-9505-2848829fa1fa",
@@ -232,6 +232,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "02cf8e53-b010-426a-8c73-31b761ea28b8",
+          "status": "completed",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "57c61512-0136-4cbf-9893-b2e0c12812a2",
+          "decided_at": "2026-06-23T10:56:28.289033",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -1162,9 +1175,9 @@
       "execution_kind": "general_self_evolution",
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-21T04:10:38.967213",
-      "updated_at": "2026-06-22T04:01:43.257351",
+      "updated_at": "2026-06-23T10:56:28.876762",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:queue_hygiene_review",
@@ -1402,7 +1415,7 @@
       "constraints": {
         "must_not_execute_without_review": true
       },
-      "decision_reason": "Task approved for the next execution handoff because the system is inside the execution window and idle requirements are satisfied.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "4ed185bd-34c8-468a-9fca-7f018f095702",
@@ -1574,6 +1587,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "eac77b8b-da41-45b8-8131-3e739943cda8",
+          "status": "completed",
+          "task_type": "self_evolution",
+          "governance_task_type": "self_evolution",
+          "task_family": "general_self_evolution",
+          "execution_kind": "general_self_evolution",
+          "trace_id": "a2f3a0ca-7809-4022-8a4b-f190c28140ef",
+          "decided_at": "2026-06-23T10:56:28.876810",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -1782,9 +1808,9 @@
       "execution_kind": "memory_maintenance",
       "source": "endogenous_drive",
       "priority": "high",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T01:11:35.153229",
-      "updated_at": "2026-06-22T01:16:35.297360",
+      "updated_at": "2026-06-23T10:56:29.513266",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:memory_maintenance_sweep",
@@ -1830,7 +1856,7 @@
         }
       },
       "constraints": {},
-      "decision_reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "ab0e4f1b-30d8-4ace-8ec3-f7c27c596e14",
@@ -1978,6 +2004,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "c8bd2f63-a825-4372-afed-375b48c6a1a1",
+          "status": "completed",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "cc9863f5-525b-40a4-a0b6-586f3ef5400f",
+          "decided_at": "2026-06-23T10:56:29.513285",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -2162,9 +2201,9 @@
       "execution_kind": "memory_maintenance",
       "source": "endogenous_drive",
       "priority": "high",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T01:16:35.503912",
-      "updated_at": "2026-06-22T01:21:35.426712",
+      "updated_at": "2026-06-23T10:56:29.914004",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:memory_maintenance_sweep",
@@ -2210,7 +2249,7 @@
         }
       },
       "constraints": {},
-      "decision_reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "6a6ea405-1dad-4377-9225-b073f72be3e1",
@@ -2358,6 +2397,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "0968ab48-a2b6-4ba5-8cb9-cf86ca3e31cf",
+          "status": "completed",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "56b888b7-9331-408d-800e-4d1bb2a23e8c",
+          "decided_at": "2026-06-23T10:56:29.914053",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -2542,9 +2594,9 @@
       "execution_kind": "memory_maintenance",
       "source": "endogenous_drive",
       "priority": "high",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T01:21:35.728758",
-      "updated_at": "2026-06-22T01:26:35.566771",
+      "updated_at": "2026-06-23T10:56:30.326459",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:memory_maintenance_sweep",
@@ -2590,7 +2642,7 @@
         }
       },
       "constraints": {},
-      "decision_reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "cd7f8a2c-2107-46f0-a12e-ca396f4d227b",
@@ -2738,6 +2790,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "5d604a6b-ceba-430f-8b6a-a324c9392a03",
+          "status": "completed",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "b4e2f56a-ffac-49cf-b7b7-43529c417867",
+          "decided_at": "2026-06-23T10:56:30.326498",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -2922,9 +2987,9 @@
       "execution_kind": "memory_maintenance",
       "source": "endogenous_drive",
       "priority": "high",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T01:26:35.921362",
-      "updated_at": "2026-06-22T01:31:35.728017",
+      "updated_at": "2026-06-23T10:56:30.867828",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:memory_maintenance_sweep",
@@ -2970,7 +3035,7 @@
         }
       },
       "constraints": {},
-      "decision_reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "1ffd56ea-f37a-42cb-80eb-6eb2adba0634",
@@ -3118,6 +3183,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "c9258414-c728-45c3-b62d-a7de8d76c63a",
+          "status": "completed",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "ed014cb3-434c-4dfe-87a5-b67b0a986625",
+          "decided_at": "2026-06-23T10:56:30.867886",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -3302,9 +3380,9 @@
       "execution_kind": "memory_maintenance",
       "source": "endogenous_drive",
       "priority": "high",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T01:31:36.156333",
-      "updated_at": "2026-06-22T01:36:35.910923",
+      "updated_at": "2026-06-23T10:56:31.504150",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:memory_maintenance_sweep",
@@ -3350,7 +3428,7 @@
         }
       },
       "constraints": {},
-      "decision_reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "28465133-8a02-488f-87fd-1f5d80a1e1bd",
@@ -3498,6 +3576,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "afd431d4-1746-4120-98d9-975a443abc83",
+          "status": "completed",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "952632a6-b8e0-489e-9189-8a73b4d7ddca",
+          "decided_at": "2026-06-23T10:56:31.504168",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -3682,9 +3773,9 @@
       "execution_kind": "memory_maintenance",
       "source": "endogenous_drive",
       "priority": "high",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T01:36:36.531610",
-      "updated_at": "2026-06-22T01:41:36.078574",
+      "updated_at": "2026-06-23T10:56:31.956737",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:memory_maintenance_sweep",
@@ -3730,7 +3821,7 @@
         }
       },
       "constraints": {},
-      "decision_reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "60204726-c4fb-452f-ab14-6f42f2e0c30e",
@@ -3878,6 +3969,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "3e1b9af3-a27a-4251-81f9-405bbabfca02",
+          "status": "completed",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "2ced0e67-6dcc-4617-bbf0-6a39b38a153a",
+          "decided_at": "2026-06-23T10:56:31.956776",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -4062,9 +4166,9 @@
       "execution_kind": "memory_maintenance",
       "source": "endogenous_drive",
       "priority": "high",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T01:41:36.741274",
-      "updated_at": "2026-06-22T01:46:36.254929",
+      "updated_at": "2026-06-23T10:56:32.463131",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:memory_maintenance_sweep",
@@ -4110,7 +4214,7 @@
         }
       },
       "constraints": {},
-      "decision_reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "be3d6aba-6f30-4453-9c0f-41fb38c12614",
@@ -4258,6 +4362,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "1d152e91-b8dd-4aba-881a-105fc7ebbf7e",
+          "status": "completed",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "8554a9fd-70c7-4f76-94d9-427a24266a59",
+          "decided_at": "2026-06-23T10:56:32.463169",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -4442,9 +4559,9 @@
       "execution_kind": "memory_maintenance",
       "source": "endogenous_drive",
       "priority": "high",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T01:46:36.967377",
-      "updated_at": "2026-06-22T01:51:36.432606",
+      "updated_at": "2026-06-23T10:56:33.160532",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:memory_maintenance_sweep",
@@ -4490,7 +4607,7 @@
         }
       },
       "constraints": {},
-      "decision_reason": "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "cfdc9a22-6231-428f-aeb1-4c4b44f44a1a",
@@ -4638,6 +4755,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "a5c0d81c-16e9-428e-8b65-b2fb301bba9a",
+          "status": "completed",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "a6d9e5da-091e-4ae5-8f40-241b1c8db21c",
+          "decided_at": "2026-06-23T10:56:33.160567",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -4822,9 +4952,9 @@
       "execution_kind": "memory_maintenance",
       "source": "endogenous_drive",
       "priority": "high",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T01:51:37.234407",
-      "updated_at": "2026-06-22T03:58:53.128266",
+      "updated_at": "2026-06-23T10:56:33.536917",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:memory_maintenance_sweep",
@@ -5102,7 +5232,7 @@
         }
       },
       "constraints": {},
-      "decision_reason": "Governor Mode active: memory-maintenance task approved without idle-window requirement.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "b6f8a097-31b7-4762-b253-d10f525d99f4",
@@ -5275,6 +5405,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "373b26b3-c33d-4bdb-8943-8613cc73dde3",
+          "status": "completed",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "40f9d6cc-2d6c-442e-a8d6-babb3212347c",
+          "decided_at": "2026-06-23T10:56:33.536936",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -5484,9 +5627,9 @@
       "execution_kind": "memory_maintenance",
       "source": "endogenous_drive",
       "priority": "high",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:03:52.998368",
-      "updated_at": "2026-06-22T04:06:43.819508",
+      "updated_at": "2026-06-23T10:56:33.892491",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:memory_maintenance_sweep",
@@ -5763,7 +5906,7 @@
         }
       },
       "constraints": {},
-      "decision_reason": "Governor Mode active: memory-maintenance task approved without idle-window requirement.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "f3ba409a-a803-435e-9a72-7268888d3e4c",
@@ -5935,6 +6078,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "37b5372b-3d29-42b4-91aa-2de4683ced85",
+          "status": "completed",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "a4f67c36-f010-456a-9160-32f1957ae232",
+          "decided_at": "2026-06-23T10:56:33.892547",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -6143,9 +6299,9 @@
       "execution_kind": null,
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:03:53.056520",
-      "updated_at": "2026-06-22T04:09:33.639162",
+      "updated_at": "2026-06-23T10:56:40.998121",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "creativity:idle_learning_thread",
@@ -6665,7 +6821,7 @@
         "execution_policy": "learn_only",
         "must_not_modify_active_body": true
       },
-      "decision_reason": "Governor Mode active: self-learning task approved without idle-window requirement. Learn-only constraints still apply.",
+      "decision_reason": "expected string or bytes-like object, got 'NoneType'",
       "decision_history": [
         {
           "decision_id": "7648d277-e51a-49ed-95f5-c7fb8d93cc77",
@@ -6837,6 +6993,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "bb18d95e-d525-4cac-8ec5-e196e2818792",
+          "status": "completed",
+          "task_type": "self_learning",
+          "governance_task_type": "self_learning",
+          "task_family": "self_learning",
+          "execution_kind": null,
+          "trace_id": "5a5c0c32-106f-45da-9b9d-6f1a3ec78d7f",
+          "decided_at": "2026-06-23T10:56:40.998163",
+          "actor": "agent",
+          "reason": "expected string or bytes-like object, got 'NoneType'",
+          "context": {}
         }
       ],
       "execution_request": null
@@ -6852,9 +7021,9 @@
       "execution_kind": "general_self_evolution",
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:03:53.105301",
-      "updated_at": "2026-06-22T04:09:33.863919",
+      "updated_at": "2026-06-23T10:56:41.467727",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:queue_hygiene_review",
@@ -7092,7 +7261,7 @@
       "constraints": {
         "must_not_execute_without_review": true
       },
-      "decision_reason": "Task approved for the next execution handoff because the system is inside the execution window and idle requirements are satisfied.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "d4e553d9-9361-4f98-ac73-a5347d67dabd",
@@ -7264,6 +7433,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "ba68916c-21c9-4cd2-96c2-3102e5fd8739",
+          "status": "completed",
+          "task_type": "self_evolution",
+          "governance_task_type": "self_evolution",
+          "task_family": "general_self_evolution",
+          "execution_kind": "general_self_evolution",
+          "trace_id": "f1143a9b-afd2-4288-899e-b18edd1711de",
+          "decided_at": "2026-06-23T10:56:41.467768",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -7472,9 +7654,9 @@
       "execution_kind": "memory_maintenance",
       "source": "endogenous_drive",
       "priority": "high",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:09:34.021827",
-      "updated_at": "2026-06-22T04:14:34.845500",
+      "updated_at": "2026-06-23T10:56:42.094510",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:memory_maintenance_sweep",
@@ -7751,7 +7933,7 @@
         }
       },
       "constraints": {},
-      "decision_reason": "Governor Mode active: memory-maintenance task approved without idle-window requirement.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "c5cc72a3-7eea-4a38-9940-dfc7ef84bd2e",
@@ -7923,6 +8105,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "84f08fff-23a6-48d3-b6ee-085989389672",
+          "status": "completed",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "7e66efc9-b794-4de8-8a22-825588447afd",
+          "decided_at": "2026-06-23T10:56:42.094577",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -8131,9 +8326,9 @@
       "execution_kind": null,
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:09:34.154638",
-      "updated_at": "2026-06-22T04:17:24.867790",
+      "updated_at": "2026-06-23T10:56:45.986858",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "creativity:idle_learning_thread",
@@ -8653,7 +8848,7 @@
         "execution_policy": "learn_only",
         "must_not_modify_active_body": true
       },
-      "decision_reason": "Governor Mode active: self-learning task approved without idle-window requirement. Learn-only constraints still apply.",
+      "decision_reason": "expected string or bytes-like object, got 'NoneType'",
       "decision_history": [
         {
           "decision_id": "cc04424f-5e7c-4569-b963-2aed365082d5",
@@ -8825,6 +9020,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "d55929e2-b72b-4a30-85f2-430722685e9a",
+          "status": "completed",
+          "task_type": "self_learning",
+          "governance_task_type": "self_learning",
+          "task_family": "self_learning",
+          "execution_kind": null,
+          "trace_id": "04488c20-b686-48cc-848a-1cdcda28122d",
+          "decided_at": "2026-06-23T10:56:45.986904",
+          "actor": "agent",
+          "reason": "expected string or bytes-like object, got 'NoneType'",
+          "context": {}
         }
       ],
       "execution_request": null
@@ -8840,9 +9048,9 @@
       "execution_kind": "general_self_evolution",
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:09:34.212360",
-      "updated_at": "2026-06-22T04:17:25.293017",
+      "updated_at": "2026-06-23T10:56:46.545372",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:queue_hygiene_review",
@@ -9080,7 +9288,7 @@
       "constraints": {
         "must_not_execute_without_review": true
       },
-      "decision_reason": "Task approved for the next execution handoff because the system is inside the execution window and idle requirements are satisfied.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "fb499db5-5310-4cdb-9dcf-3b2fa3c2c2c3",
@@ -9252,6 +9460,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "d66d8bec-5466-4033-be90-5b3ec7618d5e",
+          "status": "completed",
+          "task_type": "self_evolution",
+          "governance_task_type": "self_evolution",
+          "task_family": "general_self_evolution",
+          "execution_kind": "general_self_evolution",
+          "trace_id": "e795527f-c123-4ad5-98b7-cd6cf13ca9b9",
+          "decided_at": "2026-06-23T10:56:46.545394",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -9460,9 +9681,9 @@
       "execution_kind": "memory_maintenance",
       "source": "endogenous_drive",
       "priority": "high",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:14:34.997239",
-      "updated_at": "2026-06-22T04:22:26.441475",
+      "updated_at": "2026-06-23T10:56:46.983832",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:memory_maintenance_sweep",
@@ -9737,7 +9958,7 @@
         }
       },
       "constraints": {},
-      "decision_reason": "Governor Mode active: memory-maintenance task approved without idle-window requirement.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "048db37c-f6fc-4b7d-99cf-ca02d0f24b0f",
@@ -9907,6 +10128,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "5bf334f9-059f-4870-80db-e3e4b7ceb049",
+          "status": "completed",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "67e4ad25-9a85-413a-9932-31fc6045a3cd",
+          "decided_at": "2026-06-23T10:56:46.983858",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -10113,9 +10347,9 @@
       "execution_kind": null,
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:22:25.460143",
-      "updated_at": "2026-06-22T04:25:16.372643",
+      "updated_at": "2026-06-23T10:56:50.065956",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "creativity:idle_learning_thread",
@@ -10635,7 +10869,7 @@
         "execution_policy": "learn_only",
         "must_not_modify_active_body": true
       },
-      "decision_reason": "Governor Mode active: self-learning task approved without idle-window requirement. Learn-only constraints still apply.",
+      "decision_reason": "expected string or bytes-like object, got 'NoneType'",
       "decision_history": [
         {
           "decision_id": "88b3a5ba-9d8a-4873-9997-e0b385f025c7",
@@ -10805,6 +11039,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "046bcf4e-d057-4a4c-9da5-c9f8b918ce1b",
+          "status": "completed",
+          "task_type": "self_learning",
+          "governance_task_type": "self_learning",
+          "task_family": "self_learning",
+          "execution_kind": null,
+          "trace_id": "35a6f023-a899-4197-ad1d-33dae856d195",
+          "decided_at": "2026-06-23T10:56:50.065998",
+          "actor": "agent",
+          "reason": "expected string or bytes-like object, got 'NoneType'",
+          "context": {}
         }
       ],
       "execution_request": null
@@ -10820,9 +11067,9 @@
       "execution_kind": "general_self_evolution",
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:22:25.544046",
-      "updated_at": "2026-06-22T04:25:16.734217",
+      "updated_at": "2026-06-23T10:56:50.472916",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:queue_hygiene_review",
@@ -11072,7 +11319,7 @@
       "constraints": {
         "must_not_execute_without_review": true
       },
-      "decision_reason": "Task approved for the next execution handoff because the system is inside the execution window and idle requirements are satisfied.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "88ae32da-39a7-453f-9619-2401d899bbcb",
@@ -11256,6 +11503,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "f6134c8d-4452-4aab-9490-132e55b72423",
+          "status": "completed",
+          "task_type": "self_evolution",
+          "governance_task_type": "self_evolution",
+          "task_family": "general_self_evolution",
+          "execution_kind": "general_self_evolution",
+          "trace_id": "bf15a1dd-ab9b-4d85-81f6-fc122da7906f",
+          "decided_at": "2026-06-23T10:56:50.472938",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -11476,9 +11736,9 @@
       "execution_kind": "memory_maintenance",
       "source": "endogenous_drive",
       "priority": "high",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:27:25.881533",
-      "updated_at": "2026-06-22T04:30:17.750611",
+      "updated_at": "2026-06-23T10:56:51.008439",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:memory_maintenance_sweep",
@@ -11755,7 +12015,7 @@
         }
       },
       "constraints": {},
-      "decision_reason": "Governor Mode active: memory-maintenance task approved without idle-window requirement.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "7c7ee04f-97f2-462f-b7f3-20a8892aea89",
@@ -11927,6 +12187,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "16ce9c86-1789-4028-b896-a20c4e0ee4d1",
+          "status": "completed",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "4c328319-6c96-4e21-a8a0-6df6116ada1c",
+          "decided_at": "2026-06-23T10:56:51.008477",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -12135,9 +12408,9 @@
       "execution_kind": null,
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:27:25.953603",
-      "updated_at": "2026-06-22T04:33:07.744523",
+      "updated_at": "2026-06-23T10:56:54.598698",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "creativity:idle_learning_thread",
@@ -12657,7 +12930,7 @@
         "execution_policy": "learn_only",
         "must_not_modify_active_body": true
       },
-      "decision_reason": "Governor Mode active: self-learning task approved without idle-window requirement. Learn-only constraints still apply.",
+      "decision_reason": "expected string or bytes-like object, got 'NoneType'",
       "decision_history": [
         {
           "decision_id": "f176a142-3fff-4ce1-8386-17f1fea00dc4",
@@ -12829,6 +13102,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "d12cd1ae-08e1-4594-b99f-9f0894f238ed",
+          "status": "completed",
+          "task_type": "self_learning",
+          "governance_task_type": "self_learning",
+          "task_family": "self_learning",
+          "execution_kind": null,
+          "trace_id": "9a84e2ae-286c-4f20-99e1-c1ccd6d1efcb",
+          "decided_at": "2026-06-23T10:56:54.598735",
+          "actor": "agent",
+          "reason": "expected string or bytes-like object, got 'NoneType'",
+          "context": {}
         }
       ],
       "execution_request": null
@@ -12844,9 +13130,9 @@
       "execution_kind": "general_self_evolution",
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:27:26.053802",
-      "updated_at": "2026-06-22T04:33:08.079209",
+      "updated_at": "2026-06-23T10:56:55.171564",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:queue_hygiene_review",
@@ -13084,7 +13370,7 @@
       "constraints": {
         "must_not_execute_without_review": true
       },
-      "decision_reason": "Task approved for the next execution handoff because the system is inside the execution window and idle requirements are satisfied.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "b3409f17-3a4a-4335-9074-326163ae26a3",
@@ -13256,6 +13542,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "fe26b1eb-5c5e-4633-b5c3-0a0eee957871",
+          "status": "completed",
+          "task_type": "self_evolution",
+          "governance_task_type": "self_evolution",
+          "task_family": "general_self_evolution",
+          "execution_kind": "general_self_evolution",
+          "trace_id": "0b4a1a21-bdfa-43f9-83b5-e807b33ce930",
+          "decided_at": "2026-06-23T10:56:55.171604",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -13464,9 +13763,9 @@
       "execution_kind": "memory_maintenance",
       "source": "endogenous_drive",
       "priority": "high",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:33:08.264930",
-      "updated_at": "2026-06-22T04:38:09.398639",
+      "updated_at": "2026-06-23T10:56:55.620591",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:memory_maintenance_sweep",
@@ -13743,7 +14042,7 @@
         }
       },
       "constraints": {},
-      "decision_reason": "Governor Mode active: memory-maintenance task approved without idle-window requirement.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "293d3cf6-8f90-4be2-8646-48a9a66b4281",
@@ -13915,6 +14214,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "9038150b-206c-41af-aea8-870118184b46",
+          "status": "completed",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "b2a2f50f-8eee-421a-9304-8a4855b8e526",
+          "decided_at": "2026-06-23T10:56:55.620610",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -14123,9 +14435,9 @@
       "execution_kind": null,
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:33:08.372421",
-      "updated_at": "2026-06-22T04:40:59.335954",
+      "updated_at": "2026-06-23T10:57:00.625897",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "creativity:idle_learning_thread",
@@ -14645,7 +14957,7 @@
         "execution_policy": "learn_only",
         "must_not_modify_active_body": true
       },
-      "decision_reason": "Governor Mode active: self-learning task approved without idle-window requirement. Learn-only constraints still apply.",
+      "decision_reason": "expected string or bytes-like object, got 'NoneType'",
       "decision_history": [
         {
           "decision_id": "601ac720-ba42-403e-9eee-789ffcccc52c",
@@ -14817,6 +15129,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "7abaf693-96bc-4611-b2c8-c327582d6da8",
+          "status": "completed",
+          "task_type": "self_learning",
+          "governance_task_type": "self_learning",
+          "task_family": "self_learning",
+          "execution_kind": null,
+          "trace_id": "01c3b1c9-f8d8-416f-b37b-f6a8f01f29f7",
+          "decided_at": "2026-06-23T10:57:00.625935",
+          "actor": "agent",
+          "reason": "expected string or bytes-like object, got 'NoneType'",
+          "context": {}
         }
       ],
       "execution_request": null
@@ -14832,9 +15157,9 @@
       "execution_kind": "general_self_evolution",
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:33:08.461642",
-      "updated_at": "2026-06-22T04:40:59.745323",
+      "updated_at": "2026-06-23T10:57:01.162314",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:queue_hygiene_review",
@@ -15072,7 +15397,7 @@
       "constraints": {
         "must_not_execute_without_review": true
       },
-      "decision_reason": "Task approved for the next execution handoff because the system is inside the execution window and idle requirements are satisfied.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "ef546347-1de9-451a-bdaf-5bcf696ad3b7",
@@ -15244,6 +15569,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "2edc04b7-7e7f-40f4-97fd-5eb7c90cf282",
+          "status": "completed",
+          "task_type": "self_evolution",
+          "governance_task_type": "self_evolution",
+          "task_family": "general_self_evolution",
+          "execution_kind": "general_self_evolution",
+          "trace_id": "98862bfa-7481-4fc8-b2f2-ed751406d6e0",
+          "decided_at": "2026-06-23T10:57:01.162360",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -15452,9 +15790,9 @@
       "execution_kind": "memory_maintenance",
       "source": "endogenous_drive",
       "priority": "high",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:45:59.503651",
-      "updated_at": "2026-06-22T04:46:00.958376",
+      "updated_at": "2026-06-23T10:57:01.694312",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:memory_maintenance_sweep",
@@ -15731,7 +16069,7 @@
         }
       },
       "constraints": {},
-      "decision_reason": "Governor Mode active: memory-maintenance task approved without idle-window requirement.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "c2d5fb94-e47c-4d54-a4dd-76baacf4fc7d",
@@ -15903,6 +16241,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "6bc76d4a-d1f4-4f54-bfba-425c34a1ab88",
+          "status": "completed",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "7eee2476-401e-4084-826d-332eec4db293",
+          "decided_at": "2026-06-23T10:57:01.694333",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -16111,9 +16462,9 @@
       "execution_kind": null,
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:45:59.584845",
-      "updated_at": "2026-06-22T04:48:51.004931",
+      "updated_at": "2026-06-23T10:57:07.189980",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "creativity:idle_learning_thread",
@@ -16633,7 +16984,7 @@
         "execution_policy": "learn_only",
         "must_not_modify_active_body": true
       },
-      "decision_reason": "Governor Mode active: self-learning task approved without idle-window requirement. Learn-only constraints still apply.",
+      "decision_reason": "expected string or bytes-like object, got 'NoneType'",
       "decision_history": [
         {
           "decision_id": "06005f74-18ee-4337-a00f-784a3e4cbea4",
@@ -16805,6 +17156,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "3dfb39fa-9a9c-478d-ae36-5f06fec01217",
+          "status": "completed",
+          "task_type": "self_learning",
+          "governance_task_type": "self_learning",
+          "task_family": "self_learning",
+          "execution_kind": null,
+          "trace_id": "29c0c96e-3f3b-47e6-ba68-6156dd165974",
+          "decided_at": "2026-06-23T10:57:07.190020",
+          "actor": "agent",
+          "reason": "expected string or bytes-like object, got 'NoneType'",
+          "context": {}
         }
       ],
       "execution_request": null
@@ -16820,9 +17184,9 @@
       "execution_kind": "general_self_evolution",
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:45:59.677093",
-      "updated_at": "2026-06-22T04:48:51.350734",
+      "updated_at": "2026-06-23T10:57:07.589601",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:queue_hygiene_review",
@@ -17060,7 +17424,7 @@
       "constraints": {
         "must_not_execute_without_review": true
       },
-      "decision_reason": "Task approved for the next execution handoff because the system is inside the execution window and idle requirements are satisfied.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "a78ef8ec-923b-46d9-91d4-10779e3c718c",
@@ -17232,6 +17596,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "f0e4d1d8-4796-49e3-af23-ab41781bc643",
+          "status": "completed",
+          "task_type": "self_evolution",
+          "governance_task_type": "self_evolution",
+          "task_family": "general_self_evolution",
+          "execution_kind": "general_self_evolution",
+          "trace_id": "95ac2a67-9398-40d9-8ee0-c3a63f52f3c4",
+          "decided_at": "2026-06-23T10:57:07.589619",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -17440,9 +17817,9 @@
       "execution_kind": "memory_maintenance",
       "source": "endogenous_drive",
       "priority": "high",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:51:00.027961",
-      "updated_at": "2026-06-22T04:53:52.633358",
+      "updated_at": "2026-06-23T10:57:08.070019",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:memory_maintenance_sweep",
@@ -17719,7 +18096,7 @@
         }
       },
       "constraints": {},
-      "decision_reason": "Governor Mode active: memory-maintenance task approved without idle-window requirement.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "fae4b872-f4e6-4725-b100-5f409ca20259",
@@ -17891,6 +18268,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "89b52265-3674-439d-9739-5c3ccf8a9203",
+          "status": "completed",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "d31dd953-a9cf-44e8-902c-45045c3c1ac5",
+          "decided_at": "2026-06-23T10:57:08.070077",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -18099,9 +18489,9 @@
       "execution_kind": null,
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:51:00.121766",
-      "updated_at": "2026-06-22T04:56:42.700713",
+      "updated_at": "2026-06-23T10:57:12.447715",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "creativity:idle_learning_thread",
@@ -18621,7 +19011,7 @@
         "execution_policy": "learn_only",
         "must_not_modify_active_body": true
       },
-      "decision_reason": "Governor Mode active: self-learning task approved without idle-window requirement. Learn-only constraints still apply.",
+      "decision_reason": "expected string or bytes-like object, got 'NoneType'",
       "decision_history": [
         {
           "decision_id": "4e0dd19d-f418-4044-bc13-19ef7a14738e",
@@ -18793,6 +19183,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "a38bed6e-94da-4edd-89e5-01252ae43054",
+          "status": "completed",
+          "task_type": "self_learning",
+          "governance_task_type": "self_learning",
+          "task_family": "self_learning",
+          "execution_kind": null,
+          "trace_id": "2f21ca12-2361-44e6-9238-312e510a8ffd",
+          "decided_at": "2026-06-23T10:57:12.447759",
+          "actor": "agent",
+          "reason": "expected string or bytes-like object, got 'NoneType'",
+          "context": {}
         }
       ],
       "execution_request": null
@@ -18808,9 +19211,9 @@
       "execution_kind": "general_self_evolution",
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:51:00.219949",
-      "updated_at": "2026-06-22T04:56:43.187863",
+      "updated_at": "2026-06-23T10:57:13.017281",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:queue_hygiene_review",
@@ -19048,7 +19451,7 @@
       "constraints": {
         "must_not_execute_without_review": true
       },
-      "decision_reason": "Task approved for the next execution handoff because the system is inside the execution window and idle requirements are satisfied.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "c2ac7105-9190-4f4e-840c-0adfd8564881",
@@ -19220,6 +19623,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "3ffc53eb-0142-41f7-8998-db77b59c69fd",
+          "status": "completed",
+          "task_type": "self_evolution",
+          "governance_task_type": "self_evolution",
+          "task_family": "general_self_evolution",
+          "execution_kind": "general_self_evolution",
+          "trace_id": "a346dd2f-4d90-4ff1-ade7-979fb142a346",
+          "decided_at": "2026-06-23T10:57:13.017313",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -19428,9 +19844,9 @@
       "execution_kind": "memory_maintenance",
       "source": "endogenous_drive",
       "priority": "high",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:56:43.403591",
-      "updated_at": "2026-06-22T05:01:44.803224",
+      "updated_at": "2026-06-23T10:57:13.400293",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:memory_maintenance_sweep",
@@ -19707,7 +20123,7 @@
         }
       },
       "constraints": {},
-      "decision_reason": "Governor Mode active: memory-maintenance task approved without idle-window requirement.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "d38c0144-3ac9-423d-a8cd-9ed99ca6e1c2",
@@ -19879,6 +20295,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "fdd75f4b-d7fc-44a9-9282-37589180f2a0",
+          "status": "completed",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "f207875d-a427-4962-90a1-7404f840f0d7",
+          "decided_at": "2026-06-23T10:57:13.400329",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -20087,9 +20516,9 @@
       "execution_kind": null,
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:56:43.517773",
-      "updated_at": "2026-06-22T05:04:34.863944",
+      "updated_at": "2026-06-23T10:57:16.656275",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "creativity:idle_learning_thread",
@@ -20609,7 +21038,7 @@
         "execution_policy": "learn_only",
         "must_not_modify_active_body": true
       },
-      "decision_reason": "Governor Mode active: self-learning task approved without idle-window requirement. Learn-only constraints still apply.",
+      "decision_reason": "expected string or bytes-like object, got 'NoneType'",
       "decision_history": [
         {
           "decision_id": "11e1fbc6-2914-436a-80dd-7dd143ebdf50",
@@ -20781,6 +21210,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "c6bc0d10-fd93-4062-b60d-17b0775cf770",
+          "status": "completed",
+          "task_type": "self_learning",
+          "governance_task_type": "self_learning",
+          "task_family": "self_learning",
+          "execution_kind": null,
+          "trace_id": "d4c93fbb-7955-4637-a2db-904113b06a23",
+          "decided_at": "2026-06-23T10:57:16.656296",
+          "actor": "agent",
+          "reason": "expected string or bytes-like object, got 'NoneType'",
+          "context": {}
         }
       ],
       "execution_request": null
@@ -20796,9 +21238,9 @@
       "execution_kind": "general_self_evolution",
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T04:56:43.628887",
-      "updated_at": "2026-06-22T05:04:35.661160",
+      "updated_at": "2026-06-23T10:57:17.313524",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:queue_hygiene_review",
@@ -21036,7 +21478,7 @@
       "constraints": {
         "must_not_execute_without_review": true
       },
-      "decision_reason": "Task approved for the next execution handoff because the system is inside the execution window and idle requirements are satisfied.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "b8e99831-7704-4fae-b104-4e342fd968f9",
@@ -21208,6 +21650,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "9a1bb533-2c88-4592-ae73-c88b0b639e84",
+          "status": "completed",
+          "task_type": "self_evolution",
+          "governance_task_type": "self_evolution",
+          "task_family": "general_self_evolution",
+          "execution_kind": "general_self_evolution",
+          "trace_id": "05734ca0-5f7d-43b3-921e-e4db6d9513f8",
+          "decided_at": "2026-06-23T10:57:17.313563",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -21416,9 +21871,9 @@
       "execution_kind": "memory_maintenance",
       "source": "endogenous_drive",
       "priority": "high",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T05:04:35.049006",
-      "updated_at": "2026-06-22T05:09:37.461834",
+      "updated_at": "2026-06-23T10:57:17.691919",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:memory_maintenance_sweep",
@@ -21693,7 +22148,7 @@
         }
       },
       "constraints": {},
-      "decision_reason": "Governor Mode active: memory-maintenance task approved without idle-window requirement.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "41642abc-e87b-499e-91e8-1096525073c7",
@@ -21863,6 +22318,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "0810c880-1c1e-48a3-844b-887dba739b50",
+          "status": "completed",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "09e93e69-0aa2-4270-a5f9-33e5f316f6da",
+          "decided_at": "2026-06-23T10:57:17.691939",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -22069,9 +22537,9 @@
       "execution_kind": null,
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T05:04:35.198584",
-      "updated_at": "2026-06-22T05:12:27.464539",
+      "updated_at": "2026-06-23T10:57:23.752306",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "creativity:idle_learning_thread",
@@ -22591,7 +23059,7 @@
         "execution_policy": "learn_only",
         "must_not_modify_active_body": true
       },
-      "decision_reason": "Governor Mode active: self-learning task approved without idle-window requirement. Learn-only constraints still apply.",
+      "decision_reason": "expected string or bytes-like object, got 'NoneType'",
       "decision_history": [
         {
           "decision_id": "3ae8d5f7-ebdf-4690-86f0-f071999ecb5a",
@@ -22781,6 +23249,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "3fd598dc-e150-4d3e-b400-601230862b25",
+          "status": "completed",
+          "task_type": "self_learning",
+          "governance_task_type": "self_learning",
+          "task_family": "self_learning",
+          "execution_kind": null,
+          "trace_id": "923f7479-1d23-4046-a3b2-a36841c63016",
+          "decided_at": "2026-06-23T10:57:23.752325",
+          "actor": "agent",
+          "reason": "expected string or bytes-like object, got 'NoneType'",
+          "context": {}
         }
       ],
       "execution_request": null
@@ -22796,9 +23277,9 @@
       "execution_kind": "general_self_evolution",
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T05:09:36.507821",
-      "updated_at": "2026-06-22T05:17:28.463414",
+      "updated_at": "2026-06-23T10:57:24.148757",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:queue_hygiene_review",
@@ -23034,7 +23515,7 @@
       "constraints": {
         "must_not_execute_without_review": true
       },
-      "decision_reason": "Task approved for the next execution handoff because the system is inside the execution window and idle requirements are satisfied.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "39331714-7582-492a-94a9-973cb5bd6fe0",
@@ -23204,6 +23685,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "b900bcd2-f783-4099-9f8d-0da324ebe068",
+          "status": "completed",
+          "task_type": "self_evolution",
+          "governance_task_type": "self_evolution",
+          "task_family": "general_self_evolution",
+          "execution_kind": "general_self_evolution",
+          "trace_id": "8d8fcf6f-b949-4e20-bb83-bd325a8d26bc",
+          "decided_at": "2026-06-23T10:57:24.148799",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -23410,9 +23904,9 @@
       "execution_kind": "memory_maintenance",
       "source": "endogenous_drive",
       "priority": "high",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T05:14:37.401717",
-      "updated_at": "2026-06-22T05:17:28.875211",
+      "updated_at": "2026-06-23T10:57:24.540955",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:memory_maintenance_sweep",
@@ -23687,7 +24181,7 @@
         }
       },
       "constraints": {},
-      "decision_reason": "Governor Mode active: memory-maintenance task approved without idle-window requirement.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "5239dd42-3f32-46de-acc4-7f1a103e46bc",
@@ -23857,6 +24351,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "11caf4d1-4803-4c0e-8c24-7bf2b5d7c4a6",
+          "status": "completed",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "a97ef218-e0c7-4014-8223-f6dde73ff83e",
+          "decided_at": "2026-06-23T10:57:24.540991",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -24063,9 +24570,9 @@
       "execution_kind": null,
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T05:14:37.548169",
-      "updated_at": "2026-06-22T05:20:19.135766",
+      "updated_at": "2026-06-23T10:57:28.130610",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "creativity:idle_learning_thread",
@@ -24585,7 +25092,7 @@
         "execution_policy": "learn_only",
         "must_not_modify_active_body": true
       },
-      "decision_reason": "Governor Mode active: self-learning task approved without idle-window requirement. Learn-only constraints still apply.",
+      "decision_reason": "expected string or bytes-like object, got 'NoneType'",
       "decision_history": [
         {
           "decision_id": "4f36b8d8-10f2-4306-8d2f-249aa8c4688f",
@@ -24755,6 +25262,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "0d3160c3-8648-4b26-ae8f-40b10fd4f287",
+          "status": "completed",
+          "task_type": "self_learning",
+          "governance_task_type": "self_learning",
+          "task_family": "self_learning",
+          "execution_kind": null,
+          "trace_id": "8bd3d511-c290-4015-8e93-5a4141de6fee",
+          "decided_at": "2026-06-23T10:57:28.130631",
+          "actor": "agent",
+          "reason": "expected string or bytes-like object, got 'NoneType'",
+          "context": {}
         }
       ],
       "execution_request": null
@@ -24770,9 +25290,9 @@
       "execution_kind": "memory_maintenance",
       "source": "endogenous_drive",
       "priority": "high",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T05:20:19.693769",
-      "updated_at": "2026-06-22T05:25:20.604738",
+      "updated_at": "2026-06-23T10:57:28.885934",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:memory_maintenance_sweep",
@@ -25049,7 +25569,7 @@
         }
       },
       "constraints": {},
-      "decision_reason": "Governor Mode active: memory-maintenance task approved without idle-window requirement.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "b6de5836-76fe-4e2d-bedb-7aed36936312",
@@ -25221,6 +25741,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "b2c54420-321a-43e3-b5cf-e4e0250f3a8f",
+          "status": "completed",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "1e595786-6dfa-4dcb-b95d-c34684daebb3",
+          "decided_at": "2026-06-23T10:57:28.885955",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -25429,9 +25962,9 @@
       "execution_kind": null,
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T05:20:19.833970",
-      "updated_at": "2026-06-22T05:27:57.624459",
+      "updated_at": "2026-06-23T10:57:32.174762",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "creativity:idle_learning_thread",
@@ -25951,7 +26484,7 @@
         "execution_policy": "learn_only",
         "must_not_modify_active_body": true
       },
-      "decision_reason": "Governor Mode active: self-learning task approved without idle-window requirement. Learn-only constraints still apply.",
+      "decision_reason": "expected string or bytes-like object, got 'NoneType'",
       "decision_history": [
         {
           "decision_id": "66e28d88-d2f0-4ef8-abad-cd6fbec9ac09",
@@ -26123,6 +26656,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "92df7bb4-cfcd-4319-8a86-b5fb6e289959",
+          "status": "completed",
+          "task_type": "self_learning",
+          "governance_task_type": "self_learning",
+          "task_family": "self_learning",
+          "execution_kind": null,
+          "trace_id": "8196edb9-e258-4334-bfaa-0b8efb38e35d",
+          "decided_at": "2026-06-23T10:57:32.174804",
+          "actor": "agent",
+          "reason": "expected string or bytes-like object, got 'NoneType'",
+          "context": {}
         }
       ],
       "execution_request": null
@@ -26138,9 +26684,9 @@
       "execution_kind": "general_self_evolution",
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T05:20:19.976021",
-      "updated_at": "2026-06-22T05:27:58.144979",
+      "updated_at": "2026-06-23T10:57:32.896733",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:queue_hygiene_review",
@@ -26378,7 +26924,7 @@
       "constraints": {
         "must_not_execute_without_review": true
       },
-      "decision_reason": "Task approved for the next execution handoff because the system is inside the execution window and idle requirements are satisfied.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "1811fa1b-7e60-45c5-b838-6096f259d899",
@@ -26550,6 +27096,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "0346c3f3-027b-491a-acee-823e95ef45ef",
+          "status": "completed",
+          "task_type": "self_evolution",
+          "governance_task_type": "self_evolution",
+          "task_family": "general_self_evolution",
+          "execution_kind": "general_self_evolution",
+          "trace_id": "9d1459f4-7b6c-49fe-9b4d-24bcb98ce9cc",
+          "decided_at": "2026-06-23T10:57:32.896783",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -26758,9 +27317,9 @@
       "execution_kind": "memory_maintenance",
       "source": "endogenous_drive",
       "priority": "high",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T05:27:58.391119",
-      "updated_at": "2026-06-22T05:33:00.384504",
+      "updated_at": "2026-06-23T10:57:33.765714",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:memory_maintenance_sweep",
@@ -27037,7 +27596,7 @@
         }
       },
       "constraints": {},
-      "decision_reason": "Governor Mode active: memory-maintenance task approved without idle-window requirement.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "51226949-25af-458d-b714-3e4cdb01b8ab",
@@ -27209,6 +27768,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "a6f321ac-d89c-46f9-84c5-3e559ba4c9aa",
+          "status": "completed",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "accd5bf2-5c0c-4205-a368-18d924fc6009",
+          "decided_at": "2026-06-23T10:57:33.765733",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -27417,9 +27989,9 @@
       "execution_kind": null,
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T05:27:58.540312",
-      "updated_at": "2026-06-22T05:35:50.498532",
+      "updated_at": "2026-06-23T10:57:37.552415",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "creativity:idle_learning_thread",
@@ -27939,7 +28511,7 @@
         "execution_policy": "learn_only",
         "must_not_modify_active_body": true
       },
-      "decision_reason": "Governor Mode active: self-learning task approved without idle-window requirement. Learn-only constraints still apply.",
+      "decision_reason": "expected string or bytes-like object, got 'NoneType'",
       "decision_history": [
         {
           "decision_id": "06c1aa73-2d92-4427-ae43-7c3631fc68d5",
@@ -28111,6 +28683,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "99d8e2e8-2f3f-4bff-9550-166002ca5a62",
+          "status": "completed",
+          "task_type": "self_learning",
+          "governance_task_type": "self_learning",
+          "task_family": "self_learning",
+          "execution_kind": null,
+          "trace_id": "49805308-ef18-42e2-8622-d9d2be0fc125",
+          "decided_at": "2026-06-23T10:57:37.552450",
+          "actor": "agent",
+          "reason": "expected string or bytes-like object, got 'NoneType'",
+          "context": {}
         }
       ],
       "execution_request": null
@@ -28126,9 +28711,9 @@
       "execution_kind": "general_self_evolution",
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T05:27:58.700124",
-      "updated_at": "2026-06-22T05:35:51.151182",
+      "updated_at": "2026-06-23T10:57:38.000085",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:queue_hygiene_review",
@@ -28366,7 +28951,7 @@
       "constraints": {
         "must_not_execute_without_review": true
       },
-      "decision_reason": "Task approved for the next execution handoff because the system is inside the execution window and idle requirements are satisfied.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "43e0a6cc-6b58-44ae-9932-689650badaa4",
@@ -28538,6 +29123,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "0c7e6ce3-2504-4b0a-80df-7f66ab269759",
+          "status": "completed",
+          "task_type": "self_evolution",
+          "governance_task_type": "self_evolution",
+          "task_family": "general_self_evolution",
+          "execution_kind": "general_self_evolution",
+          "trace_id": "22f38eaa-01d4-441b-971d-ceffd19c37a2",
+          "decided_at": "2026-06-23T10:57:38.000105",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
@@ -28746,9 +29344,9 @@
       "execution_kind": "memory_maintenance",
       "source": "endogenous_drive",
       "priority": "high",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-22T05:40:50.732624",
-      "updated_at": "2026-06-22T05:40:52.790350",
+      "updated_at": "2026-06-23T10:57:38.398502",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "continuity:memory_maintenance_sweep",
@@ -29025,7 +29623,7 @@
         }
       },
       "constraints": {},
-      "decision_reason": "Governor Mode active: memory-maintenance task approved without idle-window requirement.",
+      "decision_reason": "Agent only executes self_learning tasks",
       "decision_history": [
         {
           "decision_id": "a55a53f8-c2c6-4444-98ca-7721953cc69a",
@@ -29197,6 +29795,19 @@
               }
             }
           }
+        },
+        {
+          "decision_id": "7778ef15-f33a-4ede-ae34-4c9c1c6bf81e",
+          "status": "completed",
+          "task_type": "memory_maintenance",
+          "governance_task_type": "memory_maintenance",
+          "task_family": "memory_maintenance",
+          "execution_kind": "memory_maintenance",
+          "trace_id": "0ba7acb5-fbcf-4685-9a8f-c6dd41f9ef2f",
+          "decided_at": "2026-06-23T10:57:38.398540",
+          "actor": "agent",
+          "reason": "Agent only executes self_learning tasks",
+          "context": {}
         }
       ],
       "execution_request": {
