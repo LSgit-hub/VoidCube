@@ -1,5 +1,1123 @@
 from __future__ import annotations
 
+UI_HTML = r"""<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>虚空立方监督室</title>
+<style>
+/*━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  VoidCube Supervisor Room  v3 - Game Style UI
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━*/
+:root {
+  --bg-dark: #0a0e17;
+  --bg-panel: rgba(20, 30, 50, 0.85);
+  --bg-card: rgba(30, 45, 70, 0.7);
+  --border-glow: rgba(100, 150, 255, 0.3);
+  --text-primary: #e8f0ff;
+  --text-secondary: #8892a8;
+  --text-muted: #5a6478;
+  --accent-blue: #64b5f6;
+  --accent-green: #66bb6a;
+  --accent-yellow: #ffb74d;
+  --accent-red: #ef5350;
+  --accent-purple: #ab47bc;
+  --accent-cyan: #4dd0e1;
+  --glow-blue: rgba(100, 181, 246, 0.4);
+  --glow-green: rgba(102, 187, 106, 0.4);
+  --glow-yellow: rgba(255, 183, 77, 0.4);
+  --glow-red: rgba(239, 83, 80, 0.4);
+  --glow-purple: rgba(171, 71, 188, 0.4);
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+}
+
+* { box-sizing:border-box; }
+
+body {
+  margin:0; min-height:100vh; overflow:hidden;
+  font-family:"Inter","SF Pro Display","Segoe UI",system-ui,sans-serif;
+  background:var(--bg-dark);
+  color:var(--text-primary);
+}
+
+/* ── Room Background ── */
+.room-bg {
+  position:fixed; inset:0; z-index:0;
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(50, 80, 130, 0.15) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 100%, rgba(80, 50, 120, 0.1) 0%, transparent 40%),
+    radial-gradient(ellipse at 20% 100%, rgba(30, 80, 100, 0.1) 0%, transparent 40%),
+    linear-gradient(180deg, #0a0e17 0%, #0d1320 50%, #0a0e17 100%);
+}
+
+/* ── Grid Layout ── */
+.room {
+  position:relative; z-index:1;
+  display:grid;
+  grid-template-columns:280px 1fr 320px;
+  grid-template-rows:100vh;
+  height:100vh;
+}
+
+/* ── Sidebar: Left ── */
+.sidebar-left {
+  grid-column:1;
+  display:flex; flex-direction:column;
+  padding:16px; gap:12px;
+  overflow-y:auto;
+}
+
+/* ── Main Area ── */
+.main-area {
+  grid-column:2;
+  display:flex; flex-direction:column;
+  padding:16px; gap:12px;
+  overflow-y:auto;
+}
+
+/* ── Sidebar: Right ── */
+.sidebar-right {
+  grid-column:3;
+  display:flex; flex-direction:column;
+  padding:16px; gap:12px;
+  overflow-y:auto;
+}
+
+/* ── Card Base ── */
+.card {
+  background:var(--bg-card);
+  border:1px solid rgba(100, 150, 255, 0.15);
+  border-radius:var(--radius-md);
+  padding:14px;
+  backdrop-filter:blur(12px);
+  transition:all 0.3s ease;
+}
+.card:hover {
+  border-color:var(--border-glow);
+  box-shadow:0 0 20px rgba(100, 150, 255, 0.1);
+}
+.card-header {
+  display:flex; align-items:center; justify-content:space-between;
+  margin-bottom:10px;
+}
+.card-title {
+  font-size:13px; font-weight:600; color:var(--text-primary);
+  text-transform:uppercase; letter-spacing:0.06em;
+}
+.card-icon { font-size:16px; }
+
+/* ── Toggle Button ── */
+.toggle-btn {
+  width:24px; height:24px;
+  border:none; border-radius:var(--radius-sm);
+  background:rgba(100, 150, 255, 0.1);
+  color:var(--text-secondary);
+  cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  transition:all 0.2s ease;
+}
+.toggle-btn:hover {
+  background:rgba(100, 150, 255, 0.2);
+  color:var(--accent-blue);
+}
+
+/* ── Character Scene ── */
+.character-scene {
+  grid-column:2;
+  position:relative;
+  display:flex; align-items:center; justify-content:center;
+  min-height:300px;
+  border-radius:var(--radius-lg);
+  background:
+    radial-gradient(ellipse at 50% 80%, rgba(50, 70, 100, 0.15) 0%, transparent 60%),
+    rgba(20, 30, 50, 0.6);
+  border:1px solid rgba(100, 150, 255, 0.1);
+  overflow:hidden;
+}
+
+/* ── Character: 兮子 ── */
+.xizi {
+  position:relative;
+  width:160px; height:240px;
+  transition:transform 0.5s cubic-bezier(0.4,0,0.2,1);
+  animation:breathe 4s ease-in-out infinite;
+}
+@keyframes breathe {
+  0%,100% { transform:translateY(0); }
+  50% { transform:translateY(-8px); }
+}
+
+.xz-head {
+  position:absolute; left:38px; top:8px;
+  width:80px; height:76px;
+  border-radius:44% 44% 40% 42%;
+  background:linear-gradient(155deg,#ffe4c0,#f0cfa0);
+  box-shadow:inset -8px -8px rgba(190,120,90,.2);
+  z-index:4;
+}
+.xz-hair {
+  position:absolute; left:30px; top:0;
+  width:96px; height:62px;
+  border-radius:42px 42px 18px 18px;
+  background:#1a2028;
+  z-index:5;
+  clip-path:polygon(0 0,100% 0,92% 70%,70% 46%,54% 76%,36% 48%,20% 78%,6% 52%);
+}
+.xz-eye {
+  position:absolute; top:44px; width:10px; height:16px;
+  border-radius:50%; background:#1e2835; z-index:6;
+  animation:blink 6s infinite;
+}
+.xz-eye.l { left:62px; }
+.xz-eye.r { left:90px; }
+@keyframes blink {
+  0%,94%,100% { transform:scaleY(1); }
+  96%,98% { transform:scaleY(0.08); }
+}
+.xz-brow {
+  position:absolute; top:39px; width:14px; height:3px;
+  border-radius:2px; background:#4a3a30; z-index:6;
+}
+.xz-brow.l { left:60px; }
+.xz-brow.r { left:90px; }
+.xz-mouth {
+  position:absolute; left:76px; top:70px;
+  width:18px; height:8px;
+  border-bottom:3px solid #a06858;
+  border-radius:50%; z-index:6;
+}
+.xz-body {
+  position:absolute; left:44px; top:84px;
+  width:68px; height:92px;
+  border-radius:20px 20px 16px 16px;
+  background:linear-gradient(140deg,#4dd0e1,#26a69a);
+  box-shadow:inset -8px -8px rgba(20,80,90,0.15);
+  z-index:3;
+}
+.xz-arm {
+  position:absolute; top:106px;
+  width:24px; height:70px;
+  border-radius:14px;
+  background:linear-gradient(90deg,#ffe4c0,#f0cfa0);
+  transform-origin:top center; z-index:3;
+}
+.xz-arm.l { left:30px; transform:rotate(12deg); }
+.xz-arm.r { left:102px; transform:rotate(-14deg); }
+.xz-leg {
+  position:absolute; top:170px;
+  width:28px; height:72px;
+  border-radius:13px;
+  background:#253545; z-index:2;
+}
+.xz-leg.l { left:50px; }
+.xz-leg.r { left:86px; }
+.xz-prop {
+  position:absolute; left:110px; top:138px;
+  width:46px; height:34px;
+  border-radius:5px;
+  background:#e8f5e9;
+  border:3px solid #5d4037;
+  transform:rotate(-6deg);
+  z-index:7;
+}
+
+/* Scene-specific animations */
+body[data-scene="idle"] .xizi { transform:none; }
+body[data-scene="planning"] .xizi { transform:scale(1.05); }
+body[data-scene="planning"] .xz-arm.l { animation:arm-think 0.9s ease-in-out infinite; }
+body[data-scene="learning"] .xizi { transform:translateX(30px); }
+body[data-scene="learning"] .xz-prop { animation:card-flip 1.8s ease-in-out infinite; }
+body[data-scene="execution"] .xizi { transform:translateX(-20px); }
+body[data-scene="execution"] .xz-arm.l,
+body[data-scene="execution"] .xz-arm.r { animation:arm-type 0.4s ease-in-out infinite; }
+body[data-scene="execution"] .xz-arm.r { animation-delay:0.2s; }
+body[data-scene="memory"] .xizi { transform:translateX(-40px); }
+body[data-scene="memory"] .xz-arm.r { animation:arm-reach 1.2s ease-in-out infinite; }
+body[data-scene="maintenance"] .xizi { transform:translateX(-40px); }
+body[data-scene="maintenance"] .xz-arm.r { animation:arm-reach 1.2s ease-in-out infinite; }
+body[data-scene="drive"] .xizi { transform:scale(1.05); }
+body[data-scene="drive"] .xz-arm.l { animation:arm-think 0.9s ease-in-out infinite; }
+body[data-scene="body_switch"] .xizi { transform:translateX(-20px); }
+body[data-scene="body_switch"] .xz-arm.l,
+body[data-scene="body_switch"] .xz-arm.r { animation:arm-type 0.4s ease-in-out infinite; }
+body[data-scene="body_switch"] .xz-arm.r { animation-delay:0.2s; }
+
+@keyframes arm-think {
+  0%,100% { transform:rotate(12deg) translateY(0); }
+  50% { transform:rotate(32deg) translateY(-10px); }
+}
+@keyframes card-flip {
+  0%,100% { transform:rotate(-6deg) scale(1); }
+  50% { transform:rotate(12deg) scale(1.15); }
+}
+@keyframes arm-type {
+  0%,100% { transform:rotate(12deg) translateY(0); }
+  50% { transform:rotate(35deg) translateY(12px); }
+}
+@keyframes arm-reach {
+  0%,100% { transform:rotate(-14deg); }
+  50% { transform:rotate(-50deg) translateY(-12px); }
+}
+
+/* ── Thought Bubbles ── */
+.thoughts {
+  position:absolute; right:30px; top:40px;
+  transform:translate(30px,-20px);
+  width:100px; height:70px;
+  z-index:3;
+}
+.bubble {
+  position:absolute; border-radius:50%;
+  background:rgba(255,252,245,0.95);
+  border:2px solid rgba(100,150,255,0.3);
+  box-shadow:0 6px 16px rgba(0,0,0,0.2);
+  animation:bob 2.8s ease-in-out infinite;
+}
+.bubble.b1 { width:68px; height:44px; left:12px; top:0; }
+.bubble.b2 { width:18px; height:18px; left:0; top:40px; animation-delay:0.3s; }
+.bubble.b3 { width:10px; height:10px; left:-4px; top:56px; animation-delay:0.6s; }
+@keyframes bob {
+  0%,100% { transform:translateY(0); }
+  50% { transform:translateY(-10px); }
+}
+.glyph {
+  position:absolute; left:38px; top:4px;
+  font-size:26px; font-weight:800;
+  color:#3d5d6b;
+  animation:glyph-pulse 2s ease-in-out infinite;
+}
+@keyframes glyph-pulse {
+  0%,100% { transform:scale(1); opacity:0.7; }
+  50% { transform:scale(1.3); opacity:1; }
+}
+
+/* ── Status Orbs ── */
+.status-orbs {
+  position:absolute; bottom:16px; left:50%; transform:translateX(-50%);
+  display:flex; gap:12px;
+}
+.orb {
+  width:12px; height:12px; border-radius:50%;
+  transition:all 0.3s ease;
+}
+.orb.active {
+  box-shadow:0 0 12px currentColor;
+  animation:pulse-glow 2s ease-in-out infinite;
+}
+@keyframes pulse-glow {
+  0%,100% { transform:scale(1); opacity:1; }
+  50% { transform:scale(1.3); opacity:0.7; }
+}
+.orb.blue { background:#64b5f6; }
+.orb.green { background:#66bb6a; }
+.orb.yellow { background:#ffb74d; }
+.orb.red { background:#ef5350; }
+.orb.purple { background:#ab47bc; }
+
+/* ── Task Panel ── */
+.task-panel {
+  flex:1;
+  display:flex; flex-direction:column;
+  min-height:0;
+}
+.panel-content {
+  flex:1;
+  overflow-y:auto;
+  display:flex; flex-direction:column;
+  gap:8px;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar { width:6px; }
+::-webkit-scrollbar-track { background:rgba(100,150,255,0.05); border-radius:3px; }
+::-webkit-scrollbar-thumb { background:rgba(100,150,255,0.3); border-radius:3px; }
+::-webkit-scrollbar-thumb:hover { background:rgba(100,150,255,0.5); }
+
+/* ── Task Item ── */
+.task-item {
+  display:flex; flex-direction:column;
+  padding:12px;
+  background:rgba(40, 60, 90, 0.6);
+  border:1px solid rgba(100, 150, 255, 0.1);
+  border-radius:var(--radius-sm);
+  cursor:pointer;
+  transition:all 0.25s ease;
+}
+.task-item:hover {
+  background:rgba(50, 70, 100, 0.7);
+  border-color:rgba(100, 150, 255, 0.3);
+  transform:translateX(4px);
+}
+.task-header {
+  display:flex; align-items:center; justify-content:space-between;
+  margin-bottom:6px;
+}
+.task-title {
+  font-size:13px; font-weight:500; color:var(--text-primary);
+  display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical; overflow:hidden;
+}
+.task-badge {
+  font-size:10px; padding:2px 8px; border-radius:99px;
+  text-transform:uppercase; letter-spacing:0.04em;
+}
+.badge-running { background:rgba(100,181,246,0.15); color:#64b5f6; }
+.badge-planned { background:rgba(102,187,106,0.15); color:#66bb6a; }
+.badge-pending { background:rgba(255,183,77,0.15); color:#ffb74d; }
+.badge-completed { background:rgba(171,71,188,0.15); color:#ab47bc; }
+.badge-failed { background:rgba(239,83,80,0.15); color:#ef5350; }
+.task-meta {
+  display:flex; align-items:center; gap:8px;
+  font-size:11px; color:var(--text-muted);
+}
+.task-progress {
+  margin-top:8px;
+  height:4px;
+  background:rgba(100,150,255,0.1);
+  border-radius:2px;
+  overflow:hidden;
+}
+.task-progress-bar {
+  height:100%;
+  border-radius:2px;
+  transition:width 0.5s ease;
+}
+.progress-blue { background:linear-gradient(90deg,#64b5f6,#42a5f5); }
+.progress-green { background:linear-gradient(90deg,#66bb6a,#43a047); }
+.progress-yellow { background:linear-gradient(90deg,#ffb74d,#ffa726); }
+
+/* ── Metrics Grid ── */
+.metrics-grid {
+  display:grid;
+  grid-template-columns:repeat(2,1fr);
+  gap:8px;
+}
+.metric-card {
+  background:rgba(30, 50, 80, 0.6);
+  border:1px solid rgba(100,150,255,0.1);
+  border-radius:var(--radius-sm);
+  padding:12px;
+  text-align:center;
+  transition:all 0.3s ease;
+}
+.metric-card:hover {
+  border-color:var(--border-glow);
+  transform:scale(1.02);
+}
+.metric-value {
+  font-size:24px; font-weight:700;
+  font-variant-numeric:tabular-nums;
+}
+.metric-value.blue { color:#64b5f6; }
+.metric-value.green { color:#66bb6a; }
+.metric-value.yellow { color:#ffb74d; }
+.metric-value.red { color:#ef5350; }
+.metric-label {
+  font-size:10px; color:var(--text-muted);
+  text-transform:uppercase; letter-spacing:0.04em;
+  margin-top:2px;
+}
+
+/* ── Body Status ── */
+.body-status {
+  display:flex; align-items:center; gap:8px;
+  padding:10px;
+  background:rgba(30,50,80,0.6);
+  border-radius:var(--radius-sm);
+}
+.body-icon {
+  width:32px; height:32px;
+  border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  font-size:16px;
+}
+.body-icon.active { background:rgba(102,187,106,0.2); color:#66bb6a; }
+.body-icon.candidate { background:rgba(255,183,77,0.2); color:#ffb74d; }
+.body-info { flex:1; }
+.body-title { font-size:12px; color:var(--text-primary); font-weight:500; }
+.body-desc { font-size:10px; color:var(--text-muted); }
+
+/* ── Timeline ── */
+.timeline-list {
+  display:flex; flex-direction:column;
+  gap:6px;
+}
+.timeline-item {
+  display:flex; gap:10px;
+  padding:8px;
+  background:rgba(30,50,80,0.4);
+  border-left:3px solid rgba(100,150,255,0.3);
+  border-radius:0 var(--radius-sm) var(--radius-sm) 0;
+  transition:all 0.2s ease;
+}
+.timeline-item:hover {
+  background:rgba(40,60,90,0.6);
+  border-left-color:#64b5f6;
+}
+.timeline-icon { font-size:14px; }
+.timeline-content { flex:1; }
+.timeline-text { font-size:12px; color:var(--text-secondary); }
+.timeline-time { font-size:10px; color:var(--text-muted); }
+
+/* ── Candidates ── */
+.candidate-list {
+  display:flex; flex-direction:column;
+  gap:6px;
+}
+.candidate-item {
+  display:flex; align-items:center; gap:10px;
+  padding:10px;
+  background:rgba(30,50,80,0.4);
+  border-radius:var(--radius-sm);
+  border:1px solid rgba(100,150,255,0.1);
+  transition:all 0.2s ease;
+}
+.candidate-item:hover {
+  background:rgba(40,60,90,0.6);
+  border-color:rgba(255,183,77,0.3);
+}
+.candidate-bulb {
+  width:20px; height:20px;
+  border-radius:50%;
+  background:rgba(255,183,77,0.2);
+  color:#ffb74d;
+  display:flex; align-items:center; justify-content:center;
+  font-size:10px;
+}
+.candidate-title { font-size:12px; color:var(--text-primary); flex:1; }
+.candidate-utility { font-size:11px; font-weight:600; color:#ffb74d; }
+
+/* ── Scene Header ── */
+.scene-header {
+  display:flex; align-items:center; gap:12px;
+  padding:16px;
+  background:rgba(20,30,50,0.8);
+  border-radius:var(--radius-md);
+  border:1px solid rgba(100,150,255,0.1);
+}
+.scene-icon {
+  width:48px; height:48px;
+  border-radius:var(--radius-md);
+  display:flex; align-items:center; justify-content:center;
+  font-size:24px;
+}
+.scene-icon.idle { background:rgba(100,181,246,0.15); }
+.scene-icon.planning { background:rgba(255,183,77,0.15); }
+.scene-icon.learning { background:rgba(102,187,106,0.15); }
+.scene-icon.execution { background:rgba(239,83,80,0.15); }
+.scene-icon.memory { background:rgba(171,71,188,0.15); }
+.scene-title-area { flex:1; }
+.scene-title { font-size:18px; font-weight:600; color:var(--text-primary); }
+.scene-summary { font-size:12px; color:var(--text-secondary); margin-top:2px; }
+
+/* ── Schedule Countdown ── */
+.schedule-card {
+  text-align:center;
+  padding:14px;
+  background:rgba(30,50,80,0.5);
+  border-radius:var(--radius-md);
+  border:1px solid rgba(100,150,255,0.1);
+}
+.schedule-label {
+  font-size:11px; color:var(--text-muted);
+  text-transform:uppercase; letter-spacing:0.04em;
+}
+.schedule-countdown {
+  font-size:28px; font-weight:700;
+  font-variant-numeric:tabular-nums;
+  margin-top:6px;
+}
+.schedule-countdown.urgent { color:#ef5350; }
+.schedule-countdown.normal { color:#64b5f6; }
+
+/* ── Ambient Particles ── */
+.particles {
+  position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden;
+}
+.particle {
+  position:absolute; border-radius:50%;
+  animation:particle-drift linear infinite;
+}
+.particle.small { width:2px; height:2px; background:rgba(100,181,246,0.6); }
+.particle.medium { width:3px; height:3px; background:rgba(102,187,106,0.5); }
+.particle.large { width:4px; height:4px; background:rgba(255,183,77,0.4); }
+@keyframes particle-drift {
+  0% { transform:translateY(100vh) translateX(0); opacity:0; }
+  10% { opacity:1; }
+  90% { opacity:0.3; }
+  100% { transform:translateY(-10vh) translateX(50px); opacity:0; }
+}
+
+/* ── Responsive ── */
+@media (max-width:1200px) {
+  .room { grid-template-columns:240px 1fr 280px; }
+}
+@media (max-width:900px) {
+  .room { grid-template-columns:1fr; grid-template-rows:auto 300px 1fr; }
+  .sidebar-left { grid-row:1; }
+  .main-area { grid-row:2; padding:8px; }
+  .sidebar-right { grid-row:3; }
+}
+</style>
+</head>
+<body data-scene="idle">
+<div class="room-bg"></div>
+<div class="particles" id="particles"></div>
+
+<main class="room">
+  <!-- Left Sidebar -->
+  <aside class="sidebar-left">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Metrics</span>
+      </div>
+      <div class="metrics-grid" id="metrics"></div>
+    </div>
+    
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Body Status</span>
+      </div>
+      <div id="bodyStatus"></div>
+    </div>
+    
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Schedule</span>
+      </div>
+      <div id="schedule"></div>
+    </div>
+    
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Drive Candidates</span>
+        <button class="toggle-btn" id="toggleCandidates">▼</button>
+      </div>
+      <div class="panel-content" id="candidatesPanel">
+        <div id="candidateList"></div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Area -->
+  <section class="main-area">
+    <div class="scene-header">
+      <div class="scene-icon" id="sceneIcon">?</div>
+      <div class="scene-title-area">
+        <div class="scene-title" id="sceneTitle">Waking...</div>
+        <div class="scene-summary" id="sceneSummary">Connecting to supervisor...</div>
+      </div>
+      <div class="status-orbs" id="statusOrbs"></div>
+    </div>
+
+    <div class="character-scene">
+      <div class="thoughts">
+        <span class="bubble b1"></span>
+        <span class="bubble b2"></span>
+        <span class="bubble b3"></span>
+        <span class="glyph" id="glyph">?</span>
+      </div>
+      <div class="xizi">
+        <div class="xz-hair"></div>
+        <div class="xz-head"></div>
+        <div class="xz-brow l"></div><div class="xz-brow r"></div>
+        <div class="xz-eye l"></div><div class="xz-eye r"></div>
+        <div class="xz-mouth"></div>
+        <div class="xz-body"></div>
+        <div class="xz-arm l"></div><div class="xz-arm r"></div>
+        <div class="xz-leg l"></div><div class="xz-leg r"></div>
+        <div class="xz-prop"></div>
+      </div>
+    </div>
+
+    <div class="card task-panel">
+      <div class="card-header">
+        <span class="card-title">Task Queue</span>
+        <button class="toggle-btn" id="toggleTasks">▼</button>
+      </div>
+      <div class="panel-content" id="tasksPanel">
+        <div id="taskList"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Right Sidebar -->
+  <aside class="sidebar-right">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Active Executions</span>
+        <button class="toggle-btn" id="toggleExecutions">▼</button>
+      </div>
+      <div class="panel-content" id="executionsPanel">
+        <div id="execList"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Timeline</span>
+        <button class="toggle-btn" id="toggleTimeline">▼</button>
+      </div>
+      <div class="panel-content" id="timelinePanel">
+        <div id="timeline"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">System Info</span>
+      </div>
+      <div id="systemInfo"></div>
+    </div>
+  </aside>
+</main>
+
+<script>
+/*━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  VoidCube Supervisor Room  v3  — JS runtime
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━*/
+const $ = (sel, el) => (el||document).querySelector(sel);
+const $$ = (sel, el) => [...(el||document).querySelectorAll(sel)];
+
+/* ── DOM refs ── */
+const els = {
+  body: document.body,
+  sceneTitle: document.getElementById("sceneTitle"),
+  sceneSummary: document.getElementById("sceneSummary"),
+  sceneIcon: document.getElementById("sceneIcon"),
+  glyph: document.getElementById("glyph"),
+  metrics: document.getElementById("metrics"),
+  bodyStatus: document.getElementById("bodyStatus"),
+  schedule: document.getElementById("schedule"),
+  candidatesPanel: document.getElementById("candidatesPanel"),
+  candidateList: document.getElementById("candidateList"),
+  tasksPanel: document.getElementById("tasksPanel"),
+  taskList: document.getElementById("taskList"),
+  executionsPanel: document.getElementById("executionsPanel"),
+  execList: document.getElementById("execList"),
+  timelinePanel: document.getElementById("timelinePanel"),
+  timeline: document.getElementById("timeline"),
+  systemInfo: document.getElementById("systemInfo"),
+  statusOrbs: document.getElementById("statusOrbs"),
+  particles: document.getElementById("particles"),
+};
+
+/* ── Glyphs per scene ── */
+const GLYPHS = {
+  idle:"🌙", planning:"⚡", learning:"📚", execution:"🚀", 
+  memory:"💾", maintenance:"🔧", body_switch:"🔄", drive:"✨"
+};
+
+/* ── Scene icons ── */
+const SCENE_ICONS = {
+  idle:"🌙", planning:"⚡", learning:"📚", execution:"🚀",
+  memory:"💾", maintenance:"🔧", body_switch:"🔄", drive:"✨"
+};
+
+/* ── Event icons ── */
+const EVENT_ICONS = {
+  endogenous_drive_evaluated:"🧠", endogenous_drive_planned:"💡",
+  endogenous_drive_idle:"😴", task_planned:"📋", task_decided:"⚖️",
+  tasks_reviewed:"🔍", tasks_planned:"📝", execution_dispatched:"🚀",
+  self_learning_submitted:"📖", self_learning_completed:"✅",
+  memory_compression:"💾", task_decision:"⚖️",
+};
+
+/* ── Toggle buttons ── */
+const toggles = {
+  candidates: { btn: $("#toggleCandidates"), panel: els.candidatesPanel, expanded: true },
+  tasks: { btn: $("#toggleTasks"), panel: els.tasksPanel, expanded: true },
+  executions: { btn: $("#toggleExecutions"), panel: els.executionsPanel, expanded: true },
+  timeline: { btn: $("#toggleTimeline"), panel: els.timelinePanel, expanded: true },
+};
+
+function initToggles() {
+  Object.keys(toggles).forEach(key => {
+    const t = toggles[key];
+    t.btn.addEventListener("click", () => {
+      t.expanded = !t.expanded;
+      t.btn.textContent = t.expanded ? "▼" : "▶";
+      t.panel.style.display = t.expanded ? "flex" : "none";
+    });
+  });
+}
+
+/* ── Render metrics ── */
+function renderMetrics(state) {
+  els.metrics.replaceChildren();
+  const m = state.metrics||{};
+  const byPath = m.by_path||{};
+  
+  const metricConfigs = [
+    { label: "Total", value: m.queue_total||0, color: "blue" },
+    { label: "Learning", value: byPath.learning||0, color: "green" },
+    { label: "Maint", value: byPath.maintenance||0, color: "yellow" },
+    { label: "Errors", value: m.error_count||0, color: m.error_count > 0 ? "red" : "green" },
+  ];
+  
+  metricConfigs.forEach(cfg => {
+    const el = document.createElement("div");
+    el.className = "metric-card";
+    const val = document.createElement("div");
+    val.className = `metric-value ${cfg.color}`;
+    val.textContent = cfg.value;
+    const lab = document.createElement("div");
+    lab.className = "metric-label";
+    lab.textContent = cfg.label;
+    el.append(val, lab);
+    els.metrics.append(el);
+  });
+}
+
+/* ── Render body status ── */
+function renderBodyStatus(status) {
+  els.bodyStatus.replaceChildren();
+  if (!status || !status.active_slot) {
+    const el = document.createElement("div");
+    el.className = "body-desc";
+    el.textContent = "No body status available";
+    els.bodyStatus.append(el);
+    return;
+  }
+  
+  const isActive = !!status.candidate_slot;
+  const iconEl = document.createElement("div");
+  iconEl.className = `body-icon ${isActive ? "candidate" : "active"}`;
+  iconEl.textContent = isActive ? "🔄" : "🖥";
+  
+  const infoEl = document.createElement("div");
+  infoEl.className = "body-info";
+  const titleEl = document.createElement("div");
+  titleEl.className = "body-title";
+  titleEl.textContent = `Body: ${status.active_slot}`;
+  const descEl = document.createElement("div");
+  descEl.className = "body-desc";
+  if (status.candidate_slot) {
+    descEl.textContent = `Candidate: ${status.candidate_slot}`;
+  } else {
+    descEl.textContent = "No candidate";
+  }
+  infoEl.append(titleEl, descEl);
+  
+  els.bodyStatus.append(iconEl, infoEl);
+}
+
+/* ── Render schedule ── */
+function renderSchedule(schedule) {
+  els.schedule.replaceChildren();
+  const nextAt = schedule.next_review_at || schedule.next_drive_at;
+  
+  const labelEl = document.createElement("div");
+  labelEl.className = "schedule-label";
+  labelEl.textContent = "Next cycle";
+  
+  const cdEl = document.createElement("div");
+  cdEl.className = "schedule-countdown";
+  
+  if (!nextAt) {
+    cdEl.textContent = "--";
+    els.schedule.append(labelEl, cdEl);
+    return;
+  }
+  
+  const target = new Date(nextAt);
+  
+  function tick() {
+    const now = Date.now();
+    const diff = Math.max(0, target.getTime() - now);
+    const hours = Math.floor(diff / 3600000);
+    const mins = Math.floor((diff % 3600000) / 60000);
+    const secs = Math.floor((diff % 60000) / 1000);
+    
+    cdEl.textContent = hours > 0 
+      ? `${hours}:${mins.toString().padStart(2,'0')}:${secs.toString().padStart(2,'0')}`
+      : `${mins}:${secs.toString().padStart(2,'0')}`;
+    
+    cdEl.className = `schedule-countdown ${diff < 60000 ? "urgent" : "normal"}`;
+  }
+  
+  tick();
+  els.schedule.append(labelEl, cdEl);
+  setInterval(tick, 1000);
+}
+
+/* ── Render candidates ── */
+function renderCandidates(candidates) {
+  els.candidateList.replaceChildren();
+  if (!candidates || !candidates.length) {
+    const el = document.createElement("div");
+    el.className = "body-desc";
+    el.textContent = "No candidates";
+    els.candidateList.append(el);
+    return;
+  }
+  
+  candidates.slice(0,5).forEach(c => {
+    const el = document.createElement("div");
+    el.className = "candidate-item";
+    
+    const bulb = document.createElement("div");
+    bulb.className = "candidate-bulb";
+    bulb.textContent = "💡";
+    
+    const title = document.createElement("div");
+    title.className = "candidate-title";
+    title.textContent = (c.title||"Candidate").substring(0,35);
+    
+    const util = document.createElement("div");
+    util.className = "candidate-utility";
+    util.textContent = Math.round((c.utility||0)*100) + "%";
+    
+    el.append(bulb, title, util);
+    els.candidateList.append(el);
+  });
+}
+
+/* ── Task status badge ── */
+function getTaskBadge(status) {
+  switch(status) {
+    case "running": return { cls: "badge-running", text: "Running" };
+    case "planned": return { cls: "badge-planned", text: "Planned" };
+    case "approved": return { cls: "badge-pending", text: "Approved" };
+    case "completed": return { cls: "badge-completed", text: "Done" };
+    case "failed": return { cls: "badge-failed", text: "Failed" };
+    default: return { cls: "badge-pending", text: status };
+  }
+}
+
+/* ── Render tasks ── */
+function renderTasks(tasks) {
+  els.taskList.replaceChildren();
+  if (!tasks || !tasks.length) {
+    const el = document.createElement("div");
+    el.className = "body-desc";
+    el.textContent = "No tasks in queue";
+    els.taskList.append(el);
+    return;
+  }
+  
+  tasks.slice(0,10).forEach(t => {
+    const el = document.createElement("div");
+    el.className = "task-item";
+    
+    const header = document.createElement("div");
+    header.className = "task-header";
+    
+    const title = document.createElement("div");
+    title.className = "task-title";
+    title.textContent = (t.title||"Untitled").substring(0,45);
+    
+    const badgeInfo = getTaskBadge(t.status||"");
+    const badge = document.createElement("div");
+    badge.className = `task-badge ${badgeInfo.cls}`;
+    badge.textContent = badgeInfo.text;
+    
+    header.append(title, badge);
+    
+    const meta = document.createElement("div");
+    meta.className = "task-meta";
+    const type = document.createElement("span");
+    type.textContent = (t.task_family||t.governance_task_type||"").replace(/_/g," ").substring(0,25);
+    const time = document.createElement("span");
+    if (t.updated_at) {
+      const d = new Date(t.updated_at);
+      time.textContent = d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+    }
+    meta.append(type, time);
+    
+    el.append(header, meta);
+    els.taskList.append(el);
+  });
+}
+
+/* ── Render executions ── */
+function renderExecutions(tasks) {
+  els.execList.replaceChildren();
+  if (!tasks || !tasks.length) {
+    const el = document.createElement("div");
+    el.className = "body-desc";
+    el.textContent = "No active executions";
+    els.execList.append(el);
+    return;
+  }
+  
+  tasks.slice(0,5).forEach(t => {
+    const el = document.createElement("div");
+    el.className = "task-item";
+    
+    const header = document.createElement("div");
+    header.className = "task-header";
+    
+    const title = document.createElement("div");
+    title.className = "task-title";
+    title.textContent = (t.title||"Running").substring(0,40);
+    
+    const badge = document.createElement("div");
+    badge.className = "task-badge badge-running";
+    badge.textContent = "Running";
+    
+    header.append(title, badge);
+    
+    const meta = document.createElement("div");
+    meta.className = "task-meta";
+    meta.textContent = (t.task_family||"").replace(/_/g," ");
+    
+    const progress = document.createElement("div");
+    progress.className = "task-progress";
+    const bar = document.createElement("div");
+    bar.className = "task-progress-bar progress-blue";
+    bar.style.width = "60%";
+    progress.append(bar);
+    
+    el.append(header, meta, progress);
+    els.execList.append(el);
+  });
+}
+
+/* ── Render timeline ── */
+function renderTimeline(events) {
+  els.timeline.replaceChildren();
+  if (!events || !events.length) {
+    const el = document.createElement("div");
+    el.className = "body-desc";
+    el.textContent = "No recent events";
+    els.timeline.append(el);
+    return;
+  }
+  
+  events.slice(0,8).forEach(ev => {
+    const el = document.createElement("div");
+    el.className = "timeline-item";
+    
+    const icon = document.createElement("div");
+    icon.className = "timeline-icon";
+    icon.textContent = EVENT_ICONS[ev.event_type] || "●";
+    
+    const content = document.createElement("div");
+    content.className = "timeline-content";
+    
+    const text = document.createElement("div");
+    text.className = "timeline-text";
+    text.textContent = ev.summary||ev.event_type||"Activity";
+    
+    const time = document.createElement("div");
+    time.className = "timeline-time";
+    if (ev.recorded_at) {
+      const d = new Date(ev.recorded_at);
+      time.textContent = d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+    }
+    
+    content.append(text, time);
+    el.append(icon, content);
+    els.timeline.append(el);
+  });
+}
+
+/* ── Render status orbs ── */
+function renderStatusOrbs(state) {
+  els.statusOrbs.replaceChildren();
+  const m = state.metrics||{};
+  const orbs = [
+    { color: "green", active: true, title: "System" },
+    { color: "blue", active: m.running_count > 0, title: "Running" },
+    { color: "yellow", active: m.error_count > 0, title: "Errors" },
+    { color: "purple", active: m.drive_candidates > 0, title: "Candidates" },
+  ];
+  
+  orbs.forEach(o => {
+    const el = document.createElement("div");
+    el.className = `orb ${o.color} ${o.active ? "active" : ""}`;
+    el.title = o.title;
+    els.statusOrbs.append(el);
+  });
+}
+
+/* ── Apply state ── */
+function applyState(state) {
+  const scene = state.scene||"idle";
+  els.body.dataset.scene = scene;
+  els.glyph.textContent = GLYPHS[scene]||"?";
+  els.sceneIcon.textContent = SCENE_ICONS[scene]||"?";
+  els.sceneIcon.className = `scene-icon ${scene}`;
+  els.sceneTitle.textContent = state.title||"Supervisor Room";
+  els.sceneSummary.textContent = state.summary||"";
+  
+  renderMetrics(state);
+  renderBodyStatus(state.body_status||{});
+  renderSchedule(state.schedule||{});
+  renderCandidates(state.drive_candidates||[]);
+  renderTasks(state.tasks||[]);
+  renderExecutions(state.active_executions||[]);
+  renderTimeline(state.timeline||[]);
+  renderStatusOrbs(state);
+  
+  // Spawn particles on scene change
+  spawnParticles(scene);
+}
+
+/* ── Particles ── */
+function spawnParticles(scene) {
+  els.particles.replaceChildren();
+  const colors = {
+    idle: "#64b5f6", learning: "#66bb6a", 
+    planning: "#ffb74d", execution: "#ef5350",
+    memory: "#ab47bc", maintenance: "#4dd0e1"
+  };
+  const color = colors[scene] || "#64b5f6";
+  
+  for (let i=0; i<15; i++) {
+    const p = document.createElement("span");
+    const sizes = ["small", "medium", "large"];
+    p.className = `particle ${sizes[Math.floor(Math.random()*3)]}`;
+    p.style.left = Math.random() * 100 + "%";
+    p.style.animationDuration = (8 + Math.random() * 10) + "s";
+    p.style.animationDelay = Math.random() * 5 + "s";
+    p.style.background = color;
+    els.particles.append(p);
+  }
+}
+
+/* ── State fetching ── */
+async function refresh() {
+  try {
+    const resp = await fetch("/ui/state", {cache:"no-store"});
+    applyState(await resp.json());
+  } catch(e) {
+    els.body.dataset.scene = "idle";
+    els.sceneTitle.textContent = "Waiting for supervisor";
+    els.sceneSummary.textContent = "Connection not available yet";
+    els.glyph.textContent = "🌙";
+  }
+}
+
+let fallbackTimer = null;
+function startFallback() {
+  if (fallbackTimer) return;
+  refresh();
+  fallbackTimer = setInterval(refresh, 4000);
+}
+
+if ("EventSource" in window) {
+  const es = new EventSource("/ui/events");
+  es.addEventListener("state", function(ev) {
+    if (fallbackTimer) { clearInterval(fallbackTimer); fallbackTimer=null; }
+    applyState(JSON.parse(ev.data));
+  });
+  es.onerror = function() { startFallback(); };
+} else {
+  startFallback();
+}
+
+/* ── Init ── */
+initToggles();
+spawnParticles("idle");
+</script>
+</body>
+</html>
+"""
+
 import asyncio
 import json
 import os
@@ -15,1061 +1133,6 @@ from fastapi import Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from VoidCube_core.utils import atomic_json_write
-
-
-UI_HTML = r"""<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>VoidCube Supervisor Room</title>
-<style>
-/*━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  VoidCube Supervisor Room  v2
-  A living observability space for the mother-system's heartbeat.
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━*/
-:root {
-  color-scheme: dark;
-  --ink: #1e2c3a;
-  --paper: #fef9ed;
-  --wall: #e6d7b8;
-  --wall-dark: #d4c4a2;
-  --floor: #b07752;
-  --floor-dark: #8b5a3c;
-  --trim: #3d5d6b;
-  --mint: #7cc9a0;
-  --mint-glow: rgba(124,201,160,.55);
-  --coral: #e07362;
-  --coral-glow: rgba(224,115,98,.5);
-  --gold: #e2b04a;
-  --gold-glow: rgba(226,176,74,.55);
-  --blue: #5c8db8;
-  --blue-glow: rgba(92,141,184,.4);
-  --shadow: rgba(20,36,52,.28);
-  --lamp: rgba(255,220,150,.7);
-  --transition-speed: .5s;
-}
-
-* { box-sizing:border-box; }
-
-body {
-  margin:0; min-height:100vh; overflow:hidden;
-  font-family:"Inter","Segoe UI",system-ui,sans-serif;
-  background:#1e2c36;
-  color:var(--ink);
-  transition:background .8s ease;
-}
-
-/* ── Room shell ── */
-.room {
-  position:relative; min-height:100vh;
-  display:grid;
-  grid-template-columns:minmax(200px,26vw) 1fr minmax(200px,26vw);
-  grid-template-rows:1fr 28vh;
-  background:
-    /* ceiling gradient */
-    linear-gradient(180deg,rgba(255,255,255,.5) 0,rgba(255,255,255,0) 38%),
-    /* wallpaper stripes */
-    repeating-linear-gradient(90deg,rgba(61,93,107,.08) 0 1px,transparent 1px 64px),
-    /* wall base */
-    linear-gradient(175deg,var(--wall),var(--wall-dark));
-  transition:background .6s ease;
-}
-
-/* ── Floor ── */
-.room::after {
-  content:""; position:absolute; left:0;right:0;bottom:0; height:36vh; z-index:0;
-  background:
-    /* floor planks */
-    repeating-linear-gradient(90deg,rgba(60,30,18,.3) 0 2px,transparent 2px 88px),
-    repeating-linear-gradient(0deg,rgba(0,0,0,.06) 0 1px,transparent 1px 28px),
-    linear-gradient(170deg,var(--floor),var(--floor-dark));
-  clip-path:polygon(0 22%,100% 4%,100% 100%,0 100%);
-}
-
-/* ── Ceiling lamp glow ── */
-.lamp-glow {
-  position:absolute; left:50%; top:0; transform:translateX(-50%);
-  width:min(48vw,480px); height:18vh;
-  background:radial-gradient(ellipse at 50% 0,rgba(255,235,180,.18),transparent 72%);
-  z-index:0; pointer-events:none;
-  transition:opacity .6s ease;
-}
-
-/* ── Ambient particles container ── */
-.particles {
-  position:absolute; inset:0; z-index:0; pointer-events:none; overflow:hidden;
-}
-.particle {
-  position:absolute; border-radius:50%; pointer-events:none;
-  animation:drift linear infinite;
-}
-.particle.dust {
-  width:2px;height:2px; background:rgba(255,248,220,.6);
-  animation-duration:8s;
-}
-.particle.spark {
-  width:3px;height:3px; background:var(--gold); opacity:0;
-  box-shadow:0 0 6px var(--gold-glow);
-}
-.particle.data {
-  width:2px;height:4px; border-radius:1px;
-  background:var(--mint); opacity:0;
-  animation-duration:3s;
-}
-
-@keyframes drift {
-  0% { transform:translateY(0) translateX(0); opacity:0; }
-  10% { opacity:1; }
-  90% { opacity:.3; }
-  100% { transform:translateY(-60vh) translateX(30px); opacity:0; }
-}
-
-/* ── Window ── */
-.window {
-  grid-column:3; grid-row:1;
-  align-self:start; justify-self:start;
-  width:min(76%,270px); height:170px;
-  margin:8vh 0 0 4vw;
-  border:10px solid #efe5cf;
-  border-radius:10px;
-  position:relative; z-index:1;
-  background:linear-gradient(#8cc4e0,#c8e0ee 54%,#85bf8e 55%);
-  box-shadow:0 18px 34px var(--shadow),inset 0 0 40px rgba(255,255,255,.2);
-  transition:background .8s ease;
-  overflow:hidden;
-}
-.window::before,.window::after {
-  content:""; position:absolute; background:#efe5cf; z-index:2;
-}
-.window::before { left:50%;top:0;bottom:0;width:8px;transform:translateX(-50%); }
-.window::after { left:0;right:0;top:50%;height:8px;transform:translateY(-50%); }
-
-/* sun / moon */
-.window-frame {
-  position:absolute; z-index:1;
-  border-radius:50%; transition:all 1.2s ease;
-}
-.sun {
-  right:18%; top:16%;
-  width:38px;height:38px;
-  background:radial-gradient(circle,#fff8c4,#f7d86c);
-  box-shadow:0 0 32px rgba(255,220,100,.6);
-}
-.moon {
-  right:18%; top:16%;
-  width:28px;height:28px;
-  background:radial-gradient(circle at 38% 38%,#f0f4f8,#c8d6e0);
-  box-shadow:0 0 18px rgba(200,210,230,.5);
-  display:none;
-}
-.star {
-  position:absolute; border-radius:50%; background:#fff;
-  opacity:0; transition:opacity 1s ease;
-}
-
-/* ── Bookshelf ── */
-.shelf {
-  grid-column:1; grid-row:1/3;
-  align-self:end; justify-self:center;
-  width:min(76%,290px); height:44vh;
-  margin-bottom:19vh;
-  border:11px solid #5c3d2a;
-  border-radius:8px;
-  background:linear-gradient(#8b6345,#73502f);
-  box-shadow:0 22px 36px var(--shadow);
-  display:grid;
-  grid-template-rows:repeat(4,1fr);
-  padding:14px; gap:14px;
-  position:relative; z-index:1;
-  transition:box-shadow .5s ease;
-}
-.shelf-row {
-  border-bottom:9px solid #5c3d2a;
-  display:flex; align-items:end; gap:8px;
-}
-.book {
-  width:20px; border-radius:3px 3px 0 0;
-  box-shadow:inset -5px 0 rgba(255,255,255,.16);
-  transition:height .4s ease,background .4s ease,box-shadow .5s ease;
-}
-.book:nth-child(3n)   { height:58%; background:var(--blue); }
-.book:nth-child(3n+1) { height:78%; background:var(--coral); }
-.book:nth-child(3n+2) { height:68%; background:var(--gold); }
-
-/* bookshelf glow per scene */
-body[data-scene="memory"]   .shelf { box-shadow:0 22px 36px var(--shadow),0 0 40px var(--gold-glow); }
-body[data-scene="learning"] .shelf { box-shadow:0 22px 36px var(--shadow),0 0 40px var(--mint-glow); }
-
-/* ── Desk + lamp ── */
-.desk {
-  grid-column:2; grid-row:2;
-  align-self:center; justify-self:center;
-  width:min(62vw,520px); height:108px;
-  border-radius:10px;
-  background:linear-gradient(#704a35,#553320);
-  box-shadow:0 24px 30px var(--shadow);
-  position:relative; z-index:1;
-}
-.desk::before {
-  content:""; position:absolute;
-  left:6%;right:6%; top:-20px; height:30px;
-  border-radius:10px;
-  background:#8c5f44;
-}
-.desk-lamp {
-  position:absolute; left:12%; top:-76px;
-  width:52px; height:66px;
-  background:radial-gradient(ellipse at 50% 32%,#fce9b0,#d4954a);
-  border-radius:50% 50% 30% 30%;
-  box-shadow:0 0 38px var(--lamp);
-  z-index:2; transition:box-shadow .5s ease;
-}
-.desk-lamp::after {
-  content:""; position:absolute;
-  left:50%; bottom:-18px; width:8px; height:28px;
-  transform:translateX(-50%);
-  background:#3d2818; border-radius:2px;
-}
-
-/* lamp papers */
-.papers {
-  position:absolute; left:30%;right:12%; top:-32px; bottom:8px;
-  z-index:1; display:flex; gap:12px;
-}
-.paper {
-  flex:1; border-radius:4px;
-  background:var(--paper);
-  border:1px solid rgba(0,0,0,.08);
-  transform:rotate(var(--r,0deg));
-  transition:transform .4s ease,background .4s ease;
-  opacity:.85;
-}
-
-/* ── Console terminal ── */
-.console {
-  grid-column:2; grid-row:2;
-  align-self:start; justify-self:end;
-  width:156px; height:96px;
-  margin-right:10vw; margin-top:-22px;
-  border:8px solid #2d404c;
-  border-radius:8px;
-  background:
-    repeating-linear-gradient(0deg,rgba(255,255,255,.06) 0 2px,transparent 2px 18px),
-    linear-gradient(#538198,#34505e);
-  box-shadow:0 16px 22px var(--shadow);
-  position:relative; z-index:1;
-  overflow:hidden;
-}
-.console::after {
-  content:""; position:absolute;
-  left:50%; bottom:-30px;
-  width:56px; height:22px;
-  transform:translateX(-50%);
-  border-radius:4px; background:#2d404c;
-}
-.console-line {
-  position:absolute; left:6px; height:2px; border-radius:1px;
-  background:rgba(180,220,240,.6);
-  animation:console-scroll 2.4s linear infinite;
-}
-.console-line:nth-child(1) { top:12px; width:72%; animation-delay:0s; }
-.console-line:nth-child(2) { top:26px; width:48%; animation-delay:.3s; }
-.console-line:nth-child(3) { top:40px; width:84%; animation-delay:.6s; }
-.console-line:nth-child(4) { top:54px; width:36%; animation-delay:.9s; }
-.console-line:nth-child(5) { top:68px; width:64%; animation-delay:1.2s; }
-@keyframes console-scroll {
-  0% { transform:translateY(0); opacity:.9; }
-  80% { opacity:.5; }
-  100% { transform:translateY(-72px); opacity:0; }
-}
-
-/* ── Character: 兮子 ── */
-.xizi {
-  grid-column:2; grid-row:1/3;
-  align-self:end; justify-self:center;
-  width:180px; height:280px;
-  margin-bottom:14vh;
-  position:relative; z-index:2;
-  transition:transform var(--transition-speed) cubic-bezier(.4,0,.2,1);
-}
-/* character parts */
-.xz-head {
-  position:absolute; left:44px; top:14px;
-  width:88px; height:82px;
-  border-radius:44% 44% 40% 42%;
-  background:linear-gradient(155deg,#ffe4c0,#f0cfa0);
-  box-shadow:inset -9px -10px rgba(190,120,90,.22);
-  z-index:4; transition:transform .4s ease;
-}
-.xz-hair {
-  position:absolute; left:36px; top:2px;
-  width:106px; height:68px;
-  border-radius:46px 46px 20px 20px;
-  background:#242d38;
-  z-index:5;
-  clip-path:polygon(0 0,100% 0,93% 72%,72% 48%,56% 78%,38% 50%,22% 80%,8% 54%);
-}
-.xz-eye {
-  position:absolute; top:48px; width:10px; height:16px;
-  border-radius:50%; background:#1e2835; z-index:6;
-  transition:height .15s ease;
-}
-.xz-eye.l { left:70px; }
-.xz-eye.r { left:100px; }
-.xz-brow {
-  position:absolute; top:43px; width:14px; height:3px;
-  border-radius:2px; background:#4a3a30; z-index:6;
-  transition:transform .3s ease;
-}
-.xz-brow.l { left:68px; }
-.xz-brow.r { left:98px; }
-.xz-mouth {
-  position:absolute; left:83px; top:76px;
-  width:18px; height:8px;
-  border-bottom:3px solid #a06858;
-  border-radius:50%; z-index:6;
-  transition:all .4s ease;
-}
-.xz-body {
-  position:absolute; left:51px; top:92px;
-  width:74px; height:100px;
-  border-radius:22px 22px 18px 18px;
-  background:linear-gradient(140deg,var(--mint),#45997e);
-  box-shadow:inset -10px -10px rgba(20,70,60,.16);
-  z-index:3; transition:background .5s ease;
-}
-.xz-arm {
-  position:absolute; top:114px;
-  width:26px; height:76px;
-  border-radius:15px;
-  background:linear-gradient(90deg,#ffe4c0,#f0cfa0);
-  transform-origin:top center; z-index:3;
-  transition:transform .5s ease;
-}
-.xz-arm.l { left:35px; transform:rotate(12deg); }
-.xz-arm.r { left:115px; transform:rotate(-14deg); }
-.xz-leg {
-  position:absolute; top:184px;
-  width:30px; height:78px;
-  border-radius:14px;
-  background:#314453; z-index:2;
-}
-.xz-leg.l { left:58px; }
-.xz-leg.r { left:96px; }
-.xz-prop {
-  position:absolute; left:126px; top:146px;
-  width:50px; height:38px;
-  border-radius:5px;
-  background:var(--paper);
-  border:4px solid #6b4a34;
-  transform:rotate(-8deg);
-  z-index:7;
-  transition:all .5s ease;
-}
-/* character idle animation */
-.xizi { animation:xz-breathe 3s ease-in-out infinite; }
-@keyframes xz-breathe {
-  0%,100% { margin-bottom:14vh; }
-  50% { margin-bottom:calc(14vh + 6px); }
-}
-@keyframes xz-blink {
-  0%,94%,100% { transform:scaleY(1); }
-  96%,98% { transform:scaleY(.08); }
-}
-.xz-eye { animation:xz-blink 5s infinite; }
-
-/* ── Thought bubbles ── */
-.thoughts {
-  grid-column:2; grid-row:1;
-  align-self:center; justify-self:center;
-  transform:translate(120px,-48px);
-  width:120px; height:80px;
-  position:relative; z-index:3;
-  opacity:.85; transition:opacity .5s ease;
-}
-.bubble {
-  position:absolute; border-radius:50%;
-  background:rgba(255,250,240,.9);
-  border:3px solid rgba(45,60,75,.3);
-  box-shadow:0 8px 18px rgba(20,36,52,.14);
-  animation:bob 2.6s ease-in-out infinite;
-  transition:all .5s ease;
-}
-.bubble.b1 { width:76px;height:48px; left:18px; top:0; }
-.bubble.b2 { width:20px;height:20px; left:4px; top:44px; animation-delay:.25s; }
-.bubble.b3 { width:12px;height:12px; left:0; top:64px; animation-delay:.5s; }
-@keyframes bob {
-  0%,100% { transform:translateY(0); }
-  50% { transform:translateY(-8px); }
-}
-.glyph {
-  position:absolute; left:44px; top:6px;
-  font-size:30px; font-weight:800;
-  color:var(--trim);
-  animation:glyph-pulse 1.8s ease-in-out infinite;
-  transition:color .4s ease;
-}
-@keyframes glyph-pulse {
-  0%,100% { transform:scale(1); opacity:.75; }
-  50% { transform:scale(1.22); opacity:1; }
-}
-
-/* ── Status dashboard ── */
-.status {
-  grid-column:3; grid-row:2;
-  align-self:end; justify-self:center;
-  width:min(86%,370px); margin-bottom:3vh;
-  padding:18px 18px 14px;
-  border:2px solid rgba(30,44,58,.22);
-  border-radius:12px;
-  background:rgba(255,250,240,.88);
-  box-shadow:0 18px 32px var(--shadow);
-  backdrop-filter:blur(8px);
-  position:relative; z-index:3;
-  transition:border-color .4s ease;
-}
-.status h1 {
-  margin:0 0 4px; font-size:17px; line-height:1.25;
-  font-weight:650; letter-spacing:-.01em;
-}
-.status-summary {
-  margin:0 0 14px; color:#4a5a6a; font-size:12.5px; line-height:1.5;
-}
-/* metrics row */
-.metrics {
-  display:flex; gap:10px; margin-bottom:14px; flex-wrap:wrap;
-}
-.metric {
-  flex:1; min-width:60px; text-align:center;
-  padding:8px 6px; border-radius:10px;
-  background:rgba(255,255,255,.55);
-  border:1px solid rgba(30,44,58,.1);
-  transition:all .4s ease;
-}
-.metric-value {
-  font-size:22px; font-weight:700; line-height:1.1;
-  font-variant-numeric:tabular-nums;
-}
-.metric-label {
-  font-size:10px; color:#5a6b7a; margin-top:2px;
-  text-transform:uppercase; letter-spacing:.04em;
-}
-.metric.error .metric-value { color:var(--coral); }
-.metric.ok .metric-value { color:var(--mint); }
-/* schedule countdown */
-.schedule { text-align:center; margin-bottom:12px; padding:6px 10px;
-  border-radius:8px; background:rgba(61,93,107,.08); }
-.schedule-label { font-size:10px; color:#5a6b7a; text-transform:uppercase; letter-spacing:.04em; margin-bottom:2px; }
-.schedule-countdown { font-size:18px; font-weight:700; color:var(--trim);
-  font-variant-numeric:tabular-nums; }
-/* panels — grouped task display by execution path */
-.panels { display:grid; gap:10px; margin-bottom:12px; }
-.panel { margin-bottom:4px; }
-.panel-head {
-  font-size:10.5px; font-weight:600; text-transform:uppercase;
-  letter-spacing:.04em; color:#5a6b7a; padding:2px 0; margin-bottom:4px;
-  border-bottom:1px solid rgba(61,93,107,.12);
-}
-.panel.learning .panel-head { color:var(--mint); }
-.panel.maintenance .panel-head { color:var(--gold); }
-.panel.evolution .panel-head { color:var(--coral); }
-/* candidates */
-.candidates { margin-bottom:12px; display:grid; gap:5px; }
-.candidates-label {
-  font-size:10px; color:#5a6b7a; text-transform:uppercase;
-  letter-spacing:.04em; margin-bottom:2px;
-}
-.candidate {
-  display:grid; grid-template-columns:1fr auto auto; gap:8px;
-  align-items:center; min-height:28px; padding:4px 8px;
-  border-radius:6px; background:rgba(226,176,74,.08);
-  font-size:11px;
-}
-.candidate-tags { font-size:10px; color:#7a6b4a; }
-.candidate-utility { font-size:10px; font-weight:600; color:var(--gold); }
-/* body status */
-.body-status { margin-bottom:10px; }
-.body-info {
-  font-size:11px; padding:4px 8px; border-radius:6px;
-  background:rgba(61,93,107,.06); color:#3a5260;
-}
-/* queue */
-.queue { display:grid; gap:7px; margin-bottom:12px; }
-.task {
-  display:grid; grid-template-columns:10px 1fr auto; align-items:center;
-  gap:8px; min-height:32px; padding:6px 10px;
-  border:1px solid rgba(30,44,58,.12); border-radius:8px;
-  background:rgba(255,255,255,.5); font-size:11.5px;
-  transition:all .35s ease;
-}
-.task-dot {
-  width:10px; height:10px; border-radius:50%;
-  transition:background .4s ease;
-}
-.task-dot.memory   { background:var(--gold); box-shadow:0 0 6px var(--gold-glow); }
-.task-dot.learning { background:var(--mint); box-shadow:0 0 6px var(--mint-glow); }
-.task-dot.evolution{ background:var(--coral); box-shadow:0 0 6px var(--coral-glow); }
-.task-dot.planning { background:var(--blue); box-shadow:0 0 6px var(--blue-glow); }
-.task-badge {
-  min-width:56px; text-align:center; padding:3px 8px;
-  border-radius:99px; font-size:10.5px;
-  background:rgba(61,93,107,.1); color:#3a5260;
-}
-/* timeline */
-.timeline { display:grid; gap:5px; max-height:120px; overflow-y:auto; }
-.event {
-  display:grid; grid-template-columns:18px 58px 1fr; gap:7px;
-  align-items:start; min-height:26px; padding:5px 8px;
-  border-left:3px solid rgba(61,93,107,.35);
-  background:rgba(255,255,255,.32); border-radius:5px;
-  font-size:10.5px; animation:event-in .35s ease;
-}
-@keyframes event-in {
-  from { opacity:0; transform:translateX(6px); }
-  to { opacity:1; transform:translateX(0); }
-}
-.event-icon {
-  font-size:12px; text-align:center; line-height:1.4;
-}
-.event-time {
-  color:#5d6e7e; white-space:nowrap;
-  font-variant-numeric:tabular-nums; font-size:10px;
-}
-.event-text { color:#293b4a; line-height:1.4; }
-
-/* ── Scene states ── */
-/* idle: calm breathing, dim lamp, gentle window */
-body[data-scene="idle"] .desk-lamp { box-shadow:0 0 22px var(--lamp); }
-body[data-scene="idle"] .thoughts { opacity:.65; }
-body[data-scene="idle"] .glyph { color:var(--trim); }
-
-/* memory: character near shelf, gold theme, books highlighted */
-body[data-scene="memory"] .xizi { transform:translateX(-19vw); }
-body[data-scene="memory"] .xz-body { background:linear-gradient(140deg,#d4af6a,#b08830); }
-body[data-scene="memory"] .xz-prop { transform:rotate(6deg) scale(1.12); background:#f4dc82; }
-body[data-scene="memory"] .xz-arm.r { animation:arm-reach .9s ease-in-out infinite; }
-body[data-scene="memory"] .glyph { color:var(--gold); }
-body[data-scene="memory"] .status { border-color:rgba(226,176,74,.35); }
-body[data-scene="memory"] .bubble { background:rgba(255,245,210,.92); }
-
-/* learning: character right side, mint glow, card flipping */
-body[data-scene="learning"] .xizi { transform:translateX(15vw); }
-body[data-scene="learning"] .xz-body { background:linear-gradient(140deg,#5cc497,#3a8e6e); }
-body[data-scene="learning"] .xz-prop { background:#c0efd4; animation:card-flip 1.6s ease-in-out infinite; }
-body[data-scene="learning"] .glyph { color:var(--mint); }
-body[data-scene="learning"] .status { border-color:rgba(124,201,160,.35); }
-body[data-scene="learning"] .bubble { background:rgba(225,250,238,.92); }
-@keyframes card-flip {
-  0%,100% { transform:rotate(-6deg) scale(1); }
-  50% { transform:rotate(10deg) scale(1.1); box-shadow:0 0 24px var(--mint-glow); }
-}
-
-/* planning: centered, leaning forward, coral accent */
-body[data-scene="planning"] .xz-head { transform:translateY(-4px); }
-body[data-scene="planning"] .glyph { color:var(--coral); animation-duration:1.2s; }
-body[data-scene="planning"] .xz-arm.l { animation:arm-think .8s ease-in-out infinite; }
-body[data-scene="planning"] .bubble { animation-duration:1.8s; }
-body[data-scene="planning"] .status { border-color:rgba(224,115,98,.3); }
-@keyframes arm-think {
-  0%,100% { transform:rotate(12deg) translateY(0); }
-  50% { transform:rotate(28deg) translateY(-8px); }
-}
-
-/* execution: right-forward, typing, console active, coral glow */
-body[data-scene="execution"] .xizi { transform:translateX(10vw) translateY(6px); }
-body[data-scene="execution"] .xz-body { background:linear-gradient(140deg,var(--coral),#c55a48); }
-body[data-scene="execution"] .xz-arm.l { animation:arm-type .5s ease-in-out infinite; }
-body[data-scene="execution"] .xz-arm.r { animation:arm-type .5s ease-in-out .25s infinite; }
-body[data-scene="execution"] .glyph { color:var(--coral); }
-body[data-scene="execution"] .status { border-color:rgba(224,115,98,.4); }
-body[data-scene="execution"] .console { box-shadow:0 16px 22px var(--shadow),0 0 28px var(--coral-glow); }
-body[data-scene="execution"] .bubble { opacity:.55; }
-@keyframes arm-type {
-  0%,100% { transform:rotate(12deg) translateY(0); }
-  50% { transform:rotate(30deg) translateY(10px); }
-}
-@keyframes arm-reach {
-  0%,100% { transform:rotate(-14deg); }
-  50% { transform:rotate(-44deg) translateY(-10px); }
-}
-
-/* ── Error state (overlay on any scene) ── */
-body[data-has-errors="true"] .window { background:linear-gradient(#a890a0,#c8b8c8 50%,#9a8898 51%); }
-body[data-has-errors="true"] .xz-mouth { border-bottom-color:#b84040; width:14px; }
-body[data-has-errors="true"] .xz-brow.l { transform:rotate(-8deg) translateY(-2px); }
-body[data-has-errors="true"] .xz-brow.r { transform:rotate(8deg) translateY(-2px); }
-body[data-has-errors="true"] .desk-lamp { box-shadow:0 0 32px rgba(255,180,150,.7); }
-
-/* ── Execution window (night mode) ── */
-body[data-exec-window="false"] .sun { display:none; }
-body[data-exec-window="false"] .moon { display:block; }
-body[data-exec-window="false"] .window { background:linear-gradient(#1e3050,#2d4470 48%,#1a2e38 49%); }
-body[data-exec-window="false"] .star { opacity:1; }
-
-@keyframes twinkle {
-  0%,100% { opacity:.4; }
-  50% { opacity:1; }
-}
-
-/* ── Responsive ── */
-@media (max-width:820px) {
-  .room { grid-template-columns:1fr; grid-template-rows:22vh 42vh 36vh; }
-  .window { grid-column:1; grid-row:1; width:160px; height:110px; margin:4vh 6vw 0 0; }
-  .shelf { grid-column:1; grid-row:2; align-self:end; justify-self:start;
-    width:150px; height:220px; margin:0 0 16vh 4vw; }
-  .xizi { grid-column:1; grid-row:2/4; transform:scale(.8); margin-bottom:18vh; }
-  body[data-scene="memory"] .xizi { transform:translateX(-14vw) scale(.8); }
-  body[data-scene="learning"] .xizi,
-  body[data-scene="execution"] .xizi { transform:translateX(14vw) scale(.8); }
-  .desk { grid-column:1; grid-row:3; width:88vw; height:84px; }
-  .console { grid-column:1; grid-row:3; width:118px; height:76px; margin-right:8vw; }
-  .thoughts { grid-column:1; grid-row:2; transform:translate(80px,-10px); }
-  .status { grid-column:1; grid-row:3; width:92vw; margin-bottom:2vh; }
-  .desk-lamp { left:8%; top:-58px; width:38px; height:50px; }
-  .papers { left:22%; }
-}
-
-@media (max-width:480px) {
-  .shelf { display:none; }
-  .window { width:120px; height:90px; }
-  .console { display:none; }
-  .desk-lamp { display:none; }
-  .papers { display:none; }
-  .thoughts { transform:translate(60px,-20px) scale(.8); }
-}
-</style>
-</head>
-<body data-scene="idle" data-has-errors="false" data-exec-window="true">
-<main class="room" aria-label="VoidCube supervisor room">
-
-  <!-- ambient particles -->
-  <div class="particles" id="particles" aria-hidden="true"></div>
-
-  <!-- ceiling lamp -->
-  <div class="lamp-glow" aria-hidden="true"></div>
-
-  <!-- bookshelf -->
-  <section class="shelf" aria-hidden="true">
-    <div class="shelf-row"><span class="book"></span><span class="book"></span><span class="book"></span><span class="book"></span><span class="book"></span></div>
-    <div class="shelf-row"><span class="book"></span><span class="book"></span><span class="book"></span><span class="book"></span><span class="book"></span></div>
-    <div class="shelf-row"><span class="book"></span><span class="book"></span><span class="book"></span><span class="book"></span><span class="book"></span></div>
-    <div class="shelf-row"><span class="book"></span><span class="book"></span><span class="book"></span><span class="book"></span><span class="book"></span></div>
-  </section>
-
-  <!-- window with day/night -->
-  <div class="window" aria-hidden="true">
-    <div class="window-frame sun"></div>
-    <div class="window-frame moon"></div>
-    <span class="star" style="left:22%;top:18%;width:2px;height:2px;animation:twinkle 2.1s infinite;"></span>
-    <span class="star" style="left:48%;top:10%;width:3px;height:3px;animation:twinkle 3.4s infinite .5s;"></span>
-    <span class="star" style="left:68%;top:24%;width:2px;height:2px;animation:twinkle 2.7s infinite 1.2s;"></span>
-    <span class="star" style="left:34%;top:32%;width:2px;height:2px;animation:twinkle 1.9s infinite .8s;"></span>
-  </div>
-
-  <!-- thought bubbles -->
-  <div class="thoughts" aria-hidden="true">
-    <span class="bubble b1"></span>
-    <span class="bubble b2"></span>
-    <span class="bubble b3"></span>
-    <span class="glyph" id="glyph">?</span>
-  </div>
-
-  <!-- 兮子 character -->
-  <section class="xizi" aria-hidden="true">
-    <div class="xz-hair"></div>
-    <div class="xz-head"></div>
-    <div class="xz-brow l"></div><div class="xz-brow r"></div>
-    <div class="xz-eye l"></div><div class="xz-eye r"></div>
-    <div class="xz-mouth"></div>
-    <div class="xz-body"></div>
-    <div class="xz-arm l"></div><div class="xz-arm r"></div>
-    <div class="xz-leg l"></div><div class="xz-leg r"></div>
-    <div class="xz-prop"></div>
-  </section>
-
-  <!-- desk + lamp + papers -->
-  <div class="desk" aria-hidden="true">
-    <div class="desk-lamp"></div>
-    <div class="papers">
-      <span class="paper" style="--r:-5deg"></span>
-      <span class="paper" style="--r:3deg"></span>
-      <span class="paper" style="--r:-2deg"></span>
-    </div>
-  </div>
-
-  <!-- console terminal -->
-  <div class="console" aria-hidden="true">
-    <span class="console-line"></span><span class="console-line"></span>
-    <span class="console-line"></span><span class="console-line"></span>
-    <span class="console-line"></span>
-  </div>
-
-  <!-- status dashboard -->
-  <aside class="status" aria-live="polite">
-    <h1 id="sceneTitle">Waking supervisor room</h1>
-    <p class="status-summary" id="sceneSummary">Connecting to VoidCube supervisor…</p>
-    <div class="metrics" id="metrics"></div>
-    <div class="schedule" id="schedule" style="display:none;">
-      <div class="schedule-label">⏳ next auto-cycle</div>
-      <div class="schedule-countdown" id="countdown">—</div>
-    </div>
-    <div class="panels" id="panels"></div>
-    <div class="candidates" id="candidates" style="display:none;">
-      <div class="candidates-label">💡 内生驱动候选</div>
-      <div id="candidateList"></div>
-    </div>
-    <div class="executions" id="executions" style="display:none;">
-      <div class="exec-label">⚡ 执行中</div>
-      <div id="execList"></div>
-    </div>
-    <div class="body-status" id="bodyStatus"></div>
-    <div class="timeline" id="timeline"></div>
-  </aside>
-
-</main>
-<script>
-/*━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  VoidCube Supervisor Room  v2  — JS runtime
-  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━*/
-const $ = (sel, el) => (el||document).querySelector(sel);
-const $$ = (sel, el) => [...(el||document).querySelectorAll(sel)];
-
-/* ── DOM refs ── */
-const els = {
-  body: document.body,
-  title: document.getElementById("sceneTitle"),
-  summary: document.getElementById("sceneSummary"),
-  glyph: document.getElementById("glyph"),
-  panels: document.getElementById("panels"),
-  candidates: document.getElementById("candidates"),
-  candidateList: document.getElementById("candidateList"),
-  executions: document.getElementById("executions"),
-  execList: document.getElementById("execList"),
-  bodyStatus: document.getElementById("bodyStatus"),
-  timeline: document.getElementById("timeline"),
-  metrics: document.getElementById("metrics"),
-  particles: document.getElementById("particles"),
-};
-
-/* ── Glyphs per scene ── */
-const GLYPHS = {
-  idle:"?", drive:"✦", planning:"!", maintenance:"¶", learning:"λ", body_switch:"⟩", execution:"⟩"
-};
-
-/* ── Icons per event type ── */
-const EVENT_ICONS = {
-  endogenous_drive_evaluated:"🧠", endogenous_drive_planned:"💡",
-  endogenous_drive_idle:"😴", task_planned:"📋", task_decided:"⚖️",
-  tasks_reviewed:"🔍", tasks_planned:"📝", execution_dispatched:"🚀",
-  self_learning_submitted:"📖", self_learning_completed:"✅",
-  memory_compression:"💾", task_decision:"⚖️",
-};
-function eventIcon(type) {
-  return EVENT_ICONS[type] || "●";
-}
-
-/* ── Task dot class ── */
-function taskDotClass(task) {
-  var f = String(task.task_family||task.governance_task_type||"");
-  if (f.includes("memory")) return "memory";
-  if (f.includes("learning")) return "learning";
-  if (f.includes("evolution")||f.includes("body")) return "evolution";
-  return "planning";
-}
-
-/* ── Render grouped task panels ── */
-function renderPanels(panels) {
-  els.panels.replaceChildren();
-  if (!panels) return;
-  var groups = ["learning","maintenance","evolution"];
-  groups.forEach(function(key) {
-    var panel = panels[key];
-    if (!panel || !panel.count) return;
-    var section = document.createElement("div");
-    section.className = "panel " + key;
-    var head = document.createElement("div");
-    head.className = "panel-head";
-    head.textContent = panel.label + " (" + panel.count + ")";
-    section.append(head);
-    (panel.tasks||[]).slice(0,5).forEach(function(t) {
-      var row = document.createElement("div");
-      row.className = "task";
-      var dot = document.createElement("span");
-      dot.className = "task-dot " + taskDotClass(t);
-      var title = document.createElement("span");
-      title.textContent = (t.title||"Untitled").substring(0,48);
-      var badge = document.createElement("span");
-      badge.className = "task-badge";
-      badge.textContent = t.status||"queued";
-      row.append(dot,title,badge);
-      section.append(row);
-    });
-    els.panels.append(section);
-  });
-}
-
-/* ── Render drive candidates ── */
-function renderCandidates(candidates) {
-  if (!candidates || !candidates.length) {
-    els.candidates.style.display = "none";
-    return;
-  }
-  els.candidates.style.display = "block";
-  els.candidateList.replaceChildren();
-  candidates.slice(0,4).forEach(function(c) {
-    var row = document.createElement("div");
-    row.className = "candidate";
-    var title = document.createElement("span");
-    title.textContent = (c.title||"Candidate").substring(0,40);
-    var tags = document.createElement("span");
-    tags.className = "candidate-tags";
-    tags.textContent = (c.value_tags||[]).join(", ");
-    var util = document.createElement("span");
-    util.className = "candidate-utility";
-    util.textContent = Math.round((c.utility||0)*100) + "%";
-    row.append(title,tags,util);
-    els.candidateList.append(row);
-  });
-}
-
-/* ── Render body status ── */
-function renderBodyStatus(status) {
-  els.bodyStatus.replaceChildren();
-  if (!status || !status.active_slot) return;
-  var row = document.createElement("div");
-  row.className = "body-info";
-  var label = document.createElement("span");
-  label.textContent = "🖥 Body: " + status.active_slot;
-  if (status.candidate_slot) {
-    label.textContent += " → candidate " + status.candidate_slot;
-    row.style.color = "var(--coral)";
-  }
-  els.bodyStatus.append(row);
-}
-
-/* ── Render timeline ── */
-function renderTimeline(events) {
-  els.timeline.replaceChildren();
-  (events||[]).slice(0,6).forEach(function(ev) {
-    var row = document.createElement("div");
-    row.className = "event";
-    var icon = document.createElement("span");
-    icon.className = "event-icon";
-    icon.textContent = eventIcon(ev.event_type||"");
-    var time = document.createElement("span");
-    time.className = "event-time";
-    var d = ev.recorded_at ? new Date(ev.recorded_at) : null;
-    time.textContent = d&&!isNaN(d.getTime())
-      ? d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit",second:"2-digit"})
-      : "--:--:--";
-    var text = document.createElement("span");
-    text.className = "event-text";
-    text.textContent = ev.summary||ev.event_type||"Activity";
-    row.append(icon,time,text);
-    els.timeline.append(row);
-  });
-}
-
-/* ── Render active executions ── */
-function renderExecutions(tasks) {
-  els.execList.replaceChildren();
-  if (!tasks || !tasks.length) {
-    els.executions.style.display = "none";
-    return;
-  }
-  els.executions.style.display = "block";
-  tasks.slice(0,3).forEach(function(t) {
-    var row = document.createElement("div");
-    row.className = "exec-item";
-    var dot = document.createElement("span");
-    dot.className = "task-dot " + taskDotClass(t);
-    var title = document.createElement("span");
-    title.textContent = (t.title||"Untitled").substring(0,40);
-    var type = document.createElement("span");
-    type.className = "exec-type";
-    type.textContent = (t.governance_task_type||t.task_family||"").replace(/_/g," ");
-    row.append(dot,title,type);
-    els.execList.append(row);
-  });
-}
-
-/* ── Render metrics ── */
-function renderMetrics(state) {
-  els.metrics.replaceChildren();
-  var m = state.metrics||{};
-  var byPath = m.by_path||{};
-  var lr = m.learning_results||{};
-
-  function addMetric(cls,value,label) {
-    var d = document.createElement("div");
-    d.className = "metric "+cls;
-    var v = document.createElement("div");
-    v.className = "metric-value";
-    v.textContent = value;
-    var l = document.createElement("div");
-    l.className = "metric-label";
-    l.textContent = label;
-    d.append(v,l);
-    els.metrics.append(d);
-  }
-  addMetric("ok",m.queue_total||0,"Total");
-  addMetric("ok",byPath.learning||0,"Learning");
-  addMetric("ok",byPath.maintenance||0,"Maint");
-  addMetric((m.error_count||0)>0?"error":"ok",m.error_count||0,"Errors");
-  if (lr.completed||lr.failed) {
-    addMetric("ok",lr.completed+"/"+(lr.failed||0),"Done/Fail");
-  }
-  addMetric(m.body_switch_active?"warn":"ok",m.active_slot||"—","Body");
-  addMetric(state.in_execution_window!==false?"ok":"",state.in_execution_window!==false?"open":"closed","Window");
-}
-
-/* ── Schedule countdown ── */
-var _countdownTimer = null;
-var _nextReviewAt = null;
-
-function formatCountdown(seconds) {
-  if (seconds <= 0) return "due now";
-  var m = Math.floor(seconds / 60);
-  var s = Math.floor(seconds % 60);
-  if (m > 0) return m + "m " + (s < 10 ? "0" : "") + s + "s";
-  return s + "s";
-}
-
-function renderSchedule(schedule) {
-  var el = document.getElementById("schedule");
-  var cdEl = document.getElementById("countdown");
-  if (!el || !cdEl) return;
-
-  var nextAt = schedule.next_review_at || schedule.next_drive_at;
-
-  if (!nextAt) {
-    el.style.display = "none";
-    _nextReviewAt = null;
-    return;
-  }
-
-  _nextReviewAt = nextAt;
-  el.style.display = "block";
-
-  function tick() {
-    if (!_nextReviewAt) { cdEl.textContent = "—"; return; }
-    var d = new Date(_nextReviewAt);
-    if (isNaN(d.getTime())) { cdEl.textContent = "—"; return; }
-    var remaining = Math.max(0, (d.getTime() - Date.now()) / 1000);
-    cdEl.textContent = formatCountdown(remaining);
-    if (remaining <= 10) {
-      cdEl.style.color = "var(--coral)";
-    } else {
-      cdEl.style.color = "";
-    }
-  }
-  tick();
-  if (_countdownTimer) clearInterval(_countdownTimer);
-  _countdownTimer = setInterval(tick, 1000);
-}
-
-/* ── Apply full state ── */
-function applyState(state) {
-  var scene = state.scene||"idle";
-  var prevScene = els.body.dataset.scene;
-  els.body.dataset.scene = scene;
-  els.glyph.textContent = GLYPHS[scene]||"?";
-  els.title.textContent = state.title||"Supervisor room";
-  els.summary.textContent = state.summary||"";
-
-  /* execution window indicator */
-  var timeline = state.timeline||[];
-  els.body.dataset.execWindow = "true"; /* default; server could send this */
-
-  /* error indicator — from gateway error_count */
-  var hasErrors = (state.error_count||0) > 0;
-  els.body.dataset.hasErrors = hasErrors?"true":"false";
-
-  /* execution window */
-  els.body.dataset.execWindow = state.in_execution_window !== false ? "true" : "false";
-
-  renderPanels(state.panels||{});
-  renderCandidates(state.drive_candidates||[]);
-  renderExecutions(state.active_executions||[]);
-  renderBodyStatus(state.body_status||{});
-  renderTimeline(timeline);
-  renderMetrics(state);
-  if (state.schedule) renderSchedule(state.schedule);
-
-  /* scene transition: briefly flash particles */
-  if (scene !== prevScene) {
-    spawnParticles(scene, 12);
-  }
-}
-
-/* ── Ambient particles ── */
-var particleTimer = null;
-function spawnParticles(scene, count) {
-  var colors = {idle:"rgba(255,248,220,.6)",drive:"#e2b04a",learning:"#7cc9a0",planning:"#e07362",maintenance:"#e2b04a",body_switch:"#e07362",execution:"#e07362"};
-  var color = colors[scene]||"rgba(255,248,220,.5)";
-  for (var i=0;i<(count||6);i++) {
-    var p = document.createElement("span");
-    p.className = "particle " + (scene==="execution"?"spark":"dust");
-    p.style.left = (20+Math.random()*60)+"%";
-    p.style.bottom = (10+Math.random()*30)+"%";
-    p.style.animationDuration = (4+Math.random()*6)+"s";
-    p.style.animationDelay = Math.random()*2+"s";
-    if (scene==="execution") p.style.background = color;
-    els.particles.append(p);
-    setTimeout(function(){ p.remove(); }, 7000);
-  }
-}
-/* gentle ambient particles on idle */
-function ambientParticles() {
-  var s = els.body.dataset.scene;
-  if (s==="execution"||s==="body_switch") spawnParticles(s,3);
-}
-particleTimer = setInterval(ambientParticles, 5000);
-
-/* ── State fetching ── */
-async function refresh() {
-  try {
-    var resp = await fetch("/ui/state",{cache:"no-store"});
-    applyState(await resp.json());
-  } catch(e) {
-    els.body.dataset.scene = "idle";
-    els.title.textContent = "Supervisor room waiting";
-    els.summary.textContent = "State channel not available yet.";
-    els.glyph.textContent = "?";
-    els.metrics.replaceChildren();
-    els.panels.replaceChildren();
-    els.candidates.style.display = "none";
-    els.executions.style.display = "none";
-    els.bodyStatus.replaceChildren();
-    els.timeline.replaceChildren();
-  }
-}
-
-var fallbackTimer = null;
-function startFallback() {
-  if (fallbackTimer) return;
-  refresh();
-  fallbackTimer = setInterval(refresh,4000);
-}
-
-if ("EventSource" in window) {
-  var es = new EventSource("/ui/events");
-  es.addEventListener("state",function(ev) {
-    if (fallbackTimer) { clearInterval(fallbackTimer); fallbackTimer=null; }
-    applyState(JSON.parse(ev.data));
-  });
-  es.onerror = function(){ startFallback(); };
-} else {
-  startFallback();
-}
-
-/* initial ambient */
-ambientParticles();
-</script>
-</body>
-</html>
-"""
 
 
 class SupervisorUIMixin:

@@ -36,7 +36,7 @@ class i18n:
         if self._initialized:
             return
         
-        self._current_locale: str = "en_US"
+        self._current_locale: str = "zh_CN"
         self._translations: dict[str, Any] = {}
         self._locales_dir: Optional[Path] = None
         self._initialized = True

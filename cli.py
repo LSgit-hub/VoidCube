@@ -6612,6 +6612,156 @@ class VoidcubeCLI:
 
         threading.Thread(target=_call_deactivate_governor, daemon=True, name="governor-deactivate").start()
 
+    def _exit_auto_mode_fast(self) -> bool:
+        """Fast-path synchronous exit from AUTO mode — bypasses the message queue.
+
+        Called directly from the prompt_toolkit input handler so /auto-q takes
+        effect immediately even when the agent is blocked on an LLM call.
+        Returns True if the exit was successful.
+        """
+        if not self._auto_mode_active:
+            return True
+
+        _cprint(f"  🔄 Exiting AUTO mode (fast path)...")
+
+        # 1. Interrupt the running agent so the process loop can resume
+        if self._agent_running:
+            try:
+                self._interrupt_queue.put("__AUTO_Q_EXIT__")
+            except Exception:
+                pass
+
+        # 2. Synchronously deactivate Governor Mode on the supervisor
+        import json as _json
+        try:
+            from VoidCube_cli.config import load_config
+            cfg = load_config()
+            sv_cfg = cfg.get("supervisor", {})
+            host = sv_cfg.get("host", "127.0.0.1")
+            port = sv_cfg.get("port", 6002)
+            supervisor_url = f"http://{host}:{port}"
+        except Exception:
+            supervisor_url = "http://127.0.0.1:6002"
+
+        try:
+            import urllib.request as _req
+            r = _req.Request(
+                f"{supervisor_url}/governor-mode/deactivate",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            resp = _json.loads(_req.urlopen(r, timeout=10).read())
+            if not resp.get("governor_mode_active", True):
+                self._auto_mode_active = False
+                _cprint(f"  💤 Governor Mode [bold]DEACTIVATED[/] — returned to Memory Mode.")
+                _cprint(f"     Only health-check loop is running.")
+                _cprint(f"     Use /auto to re-enter Governor Mode.")
+                self._record_supervisor_ui_activity_safe("auto_mode_exit", scene="idle",
+                    summary="AUTO mode exited via fast-path /auto-q")
+                return True
+            else:
+                _cprint(f"  ⚠️  Governor Mode could not be deactivated (still active).")
+                return False
+        except Exception as exc:
+            # Supervisor unreachable — still exit local auto mode to unblock the user
+            self._auto_mode_active = False
+            _cprint(f"  ⚠️  Supervisor unreachable: {exc}")
+            _cprint(f"     Local AUTO mode deactivated (supervisor state may be stale).")
+            _cprint(f"     Run /auto to re-enter when supervisor is available.")
+            return True
+
+    def _force_quit_auto_mode(self) -> bool:
+        """Emergency force-quit: triple-Ctrl+C in AUTO mode triggers safe exit.
+
+        Attempts every available path to exit cleanly:
+        1. Interrupt the running agent (non-blocking)
+        2. Synchronously deactivate Governor Mode (with short timeout)
+        3. Mark in-progress learning tasks as interrupted via Gateway
+        4. Unregister from Gateway session
+        Returns True if cleanup was attempted (best-effort).
+        """
+        _cprint(f"\n  🚨 FORCE QUIT AUTO MODE — attempting emergency cleanup...")
+
+        # 1. Interrupt agent
+        if self._agent_running:
+            try:
+                self._interrupt_queue.put("__FORCE_QUIT__")
+            except Exception:
+                pass
+
+        # 2. Synchronous governor deactivation (short timeout)
+        import json as _json
+        try:
+            from VoidCube_cli.config import load_config
+            cfg = load_config()
+            sv_cfg = cfg.get("supervisor", {})
+            host = sv_cfg.get("host", "127.0.0.1")
+            port = sv_cfg.get("port", 6002)
+            supervisor_url = f"http://{host}:{port}"
+        except Exception:
+            supervisor_url = "http://127.0.0.1:6002"
+
+        try:
+            import urllib.request as _req
+            r = _req.Request(
+                f"{supervisor_url}/governor-mode/deactivate",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            _json.loads(_req.urlopen(r, timeout=5).read())
+            _cprint(f"  ✅ Governor Mode deactivated")
+        except Exception as exc:
+            _cprint(f"  ⚠️  Governor deactivation failed: {exc}")
+
+        # 3. Report in-progress learning task as interrupted via Gateway
+        current = getattr(self, '_current_learning_task', None)
+        if current is not None:
+            task_id = current.get("task_id", "")
+            try:
+                gateway_base = "http://127.0.0.1:6000"
+                payload = _json.dumps({
+                    "reason": "AUTO mode force-quit — task interrupted by user.",
+                    "context": {"source": "force_quit"},
+                }).encode()
+                r = _req.Request(
+                    f"{gateway_base}/v1/tasks/{task_id}/complete",
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                _req.urlopen(r, timeout=5)
+                _cprint(f"  ✅ Learning task {task_id[:8]}... marked interrupted")
+            except Exception:
+                _cprint(f"  ⚠️  Could not report task completion to Gateway")
+
+        # 4. Unregister from Gateway
+        try:
+            session_id = getattr(self, 'session_id', '')
+            if session_id:
+                gateway_base = "http://127.0.0.1:6000"
+                r = _req.Request(
+                    f"{gateway_base}/v1/sessions/{session_id}",
+                    method="DELETE",
+                )
+                _req.urlopen(r, timeout=5)
+                _cprint(f"  ✅ Gateway session unregistered")
+        except Exception:
+            pass
+
+        self._auto_mode_active = False
+        self._current_learning_task = None
+        _cprint(f"  🛡️  Force quit complete — returned to Memory Mode.")
+        return True
+
+    def _record_supervisor_ui_activity_safe(self, event_type: str, *, scene: str = "idle", summary: str = "") -> None:
+        """Non-fatal UI activity recording — best-effort, never throws."""
+        try:
+            self._record_supervisor_ui_activity(event_type, scene=scene, summary=summary)
+        except Exception:
+            pass
+
     def _handle_plan_command(self, cmd: str):
         """Handle /plan [request] — load the bundled plan skill."""
         parts = cmd.strip().split(maxsplit=1)
@@ -8775,6 +8925,11 @@ class VoidcubeCLI:
                     try:
                         interrupt_msg = self._interrupt_queue.get(timeout=0.1)
                         if interrupt_msg:
+                            # ── Sentinel values for internal control (not user messages) ──
+                            if isinstance(interrupt_msg, str) and interrupt_msg.startswith("__") and interrupt_msg.endswith("__"):
+                                # __AUTO_Q_EXIT__ / __FORCE_QUIT__ — just wake the loop,
+                                # don't pass to agent.interrupt()
+                                continue
                             # If clarify is active, the Enter handler routes
                             # input directly; this queue shouldn't have anything.
                             # But if it does (race condition), don't interrupt.
@@ -9564,17 +9719,20 @@ class VoidcubeCLI:
                 # Bundle text + images as a tuple when images are present
                 payload = (text, images) if images else text
 
-                # ── Auto mode guard: reject all non-/auto-q input ──
+                # ── Auto mode guard: /auto-q takes fast path, all else blocked ──
                 if self._auto_mode_active:
                     if text and _looks_like_slash_command(text):
                         _base = text.strip().lstrip("/").split()[0].lower()
                         if _base in ("auto-q", "auto-quit", "auto-stop"):
-                            self._pending_input.put(payload)
+                            # ── FAST PATH: exit immediately, bypass queue ──
                             event.app.current_buffer.reset(append_to_history=True)
+                            _cprint(f"  🔓 退出 AUTO 模式...")
+                            self._exit_auto_mode_fast()
+                            event.app.invalidate()
                             return
                     _cprint(
                         "  🔒 当前为全自动模式，agent 正在自主规划并探索学习。\n"
-                        "     如需 agent 辅助请退出 auto 模式，仅接受 /auto-q。"
+                        "     正常退出: /auto-q   紧急强制退出: Ctrl+D"
                     )
                     event.app.current_buffer.reset(append_to_history=True)
                     return
@@ -9792,7 +9950,15 @@ class VoidcubeCLI:
 
         @kb.add('c-d')
         def handle_ctrl_d(event):
-            """Handle Ctrl+D — clear input (no exit, use /quit instead)."""
+            """Handle Ctrl+D — emergency force-quit in AUTO mode, clear input otherwise."""
+            if self._auto_mode_active:
+                # ── AUTO mode: Ctrl+D = emergency force-quit ──
+                event.app.current_buffer.reset()
+                _cprint(f"\n  ⚡ Ctrl+D — 触发紧急强制退出 AUTO 模式...")
+                self._force_quit_auto_mode()
+                event.app.invalidate()
+                return
+            # Normal mode: clear input (no exit, use /quit instead)
             if event.app.current_buffer.text or self._attached_images:
                 event.app.current_buffer.reset()
                 self._attached_images.clear()
@@ -10954,7 +11120,7 @@ class VoidcubeCLI:
                     pass
                 app.run()
         except (EOFError, KeyboardInterrupt, BrokenPipeError):
-            pass
+            pass  # Normal exit via Ctrl+C or EOF
         except (KeyError, OSError) as _stdin_err:
             # Catch selector registration failures from broken stdin (#6393).
             # This is the fallback for cases that slip past the fstat() guard.
@@ -11295,6 +11461,13 @@ def main(
             ).strip()
             cli.preloaded_skills = loaded_skills
 
+    # Inject language preference based on current locale
+    lang_prompt = _get_language_preference_prompt()
+    if lang_prompt:
+        cli.system_prompt = "\n\n".join(
+            part for part in (cli.system_prompt, lang_prompt) if part
+        ).strip()
+
     # Inject worktree context into agent's system prompt
     if wt_info:
         wt_note = (
@@ -11371,6 +11544,31 @@ def main(
     
     # Run interactive mode
     cli.run()
+
+
+def _get_language_preference_prompt() -> str:
+    """Return a language preference injection based on the current i18n locale.
+
+    When the locale is zh_CN (Simplified Chinese), injects a directive
+    instructing the model to respond in Chinese.  Falls back gracefully
+    if i18n is not initialized or the locale file is missing.
+    """
+    try:
+        from VoidCube_cli.i18n import get_i18n
+        i18n = get_i18n()
+        locale = i18n.get_current_locale()
+    except Exception:
+        return ""
+
+    # Locale→language preference mapping
+    LOCALE_LANG_PROMPTS = {
+        "zh_CN": (
+            "## 语言偏好 (Language Preference)\n"
+            "请始终使用**简体中文**回复用户。代码注释、技术解释和对话都应使用中文。\n"
+            "代码本身（变量名、函数名等）保留英文。技术术语若没有通用中文译名可保留英文原文。"
+        ),
+    }
+    return LOCALE_LANG_PROMPTS.get(locale, "")
 
 
 if __name__ == "__main__":
