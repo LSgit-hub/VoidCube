@@ -259,7 +259,11 @@ class AgentInstance:
                 if resp.status != 200:
                     err = await resp.text()
                     raise HTTPException(status_code=502, detail=f"LLM upstream error: {resp.status}")
-                return await resp.json()
+                result = await resp.json()
+                result["slot_id"] = self.config.active_slot
+                result["body_version"] = self.config.body_version
+                result["agent_id"] = self._service_name()
+                return result
 
     def _latest_user_message(self, messages: List[Dict[str, Any]]) -> str:
         for message in reversed(messages):
