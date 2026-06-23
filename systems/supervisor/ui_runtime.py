@@ -73,7 +73,8 @@ body {
   transform-origin:center center;
   display:grid;
   grid-template-columns:minmax(200px,26%) 1fr minmax(200px,26%);
-  grid-template-rows:1fr 28%;
+  /* wall 68% / floor 32% — the wall/floor line sits at 32% from bottom */
+  grid-template-rows:1fr 32%;
   background:
     /* ceiling gradient */
     linear-gradient(180deg,rgba(255,255,255,.5) 0,rgba(255,255,255,0) 38%),
@@ -84,15 +85,16 @@ body {
   transition:background .6s ease;
 }
 
-/* ── Floor ── */
+/* ── Floor — straight horizontal wall/floor line, no perspective tilt ── */
 .room::after {
-  content:""; position:absolute; left:0;right:0;bottom:0; height:36%; z-index:0;
+  content:""; position:absolute; left:0;right:0;bottom:0; height:32%; z-index:0;
   background:
     /* floor planks */
     repeating-linear-gradient(90deg,rgba(60,30,18,.3) 0 2px,transparent 2px 88px),
     repeating-linear-gradient(0deg,rgba(0,0,0,.06) 0 1px,transparent 1px 28px),
-    linear-gradient(170deg,var(--floor),var(--floor-dark));
-  clip-path:polygon(0 22%,100% 4%,100% 100%,0 100%);
+    linear-gradient(180deg,var(--floor),var(--floor-dark));
+  /* straight horizontal top edge — this is the "wall/floor line" furniture rests on */
+  border-top:2px solid rgba(60,30,15,.35);
 }
 
 /* ── Ceiling lamp glow ── */
@@ -176,11 +178,11 @@ body {
   opacity:0; transition:opacity 1s ease;
 }
 
-/* ── Bookshelf — placed on the left wall, sitting on the floor ── */
+/* ── Bookshelf — sits on the left wall, bottom edge aligned to the wall/floor line ── */
 .shelf {
-  grid-column:1; grid-row:1/3;
+  grid-column:1; grid-row:1;
   align-self:end; justify-self:start;
-  width:min(88%,300px); height:62%;
+  width:min(88%,300px); height:55%;
   margin:0 0 0 4%;
   border:11px solid #5c3d2a;
   border-radius:8px;
@@ -313,12 +315,12 @@ body[data-scene="learning"] .shelf { box-shadow:0 22px 36px var(--shadow),0 0 40
 /* coffee stain on a paper for life */
 .paper.p2::before { box-shadow:0 6px 0 rgba(80,60,40,.18), 0 12px 0 rgba(80,60,40,.18), 0 18px 0 rgba(80,60,40,.12), 0 24px 0 rgba(80,60,40,.18), 38px 36px 0 -2px rgba(140,80,40,.22); }
 
-/* ── Computer desk (separate small desk) + laptop with boot animation ── */
+/* ── Computer desk (separate small desk) + laptop — lined up to the right of the sofa ── */
 .comp-desk {
   position:absolute;
-  /* sits on the floor against the back wall, just under the window, in the middle */
-  left:32%;
-  bottom:18%;
+  /* bottom edge sits exactly on the wall/floor line (32% from bottom) */
+  left:44%;
+  bottom:32%;
   width:200px; height:118px;
   z-index:2;
   transform:perspective(800px) rotateY(0deg);
@@ -463,15 +465,15 @@ body[data-scene="learning"] .shelf { box-shadow:0 22px 36px var(--shadow),0 0 40
   100% { transform:translate(-50%, -18px) scaleY(1.4); opacity:0; }
 }
 
-/* ── Sofa — sits on the floor in the left wall corner, just in front of the bookshelf ── */
+/* ── Sofa — bottom edge aligned to the wall/floor line, lined up between shelf and comp-desk ── */
 .sofa {
   position:absolute;
-  /* floor level, left side, angled to face the room center */
-  left:3%;
-  bottom:0;
+  /* bottom edge sits exactly on the wall/floor line (32% from bottom) */
+  left:24%;
+  bottom:32%;
   width:200px; height:88px;
   z-index:3;
-  transform:perspective(900px) rotateY(-6deg) rotateX(1deg);
+  transform:perspective(900px) rotateY(-3deg) rotateX(1deg);
   transform-origin:center bottom;
   filter:drop-shadow(0 14px 12px rgba(40,20,10,.18));
 }
@@ -595,14 +597,15 @@ body[data-scene="learning"] .shelf { box-shadow:0 22px 36px var(--shadow),0 0 40
   100% { transform:translateY(-72px); opacity:0; }
 }
 
-/* ── Character: 兮子 — stands in the middle of the room, in front of the comp-desk ── */
+/* ── Character: 兮子 — stands on the wall/floor line, moves to the right furniture per scene ── */
 .xizi {
-  grid-column:2; grid-row:1/3;
-  align-self:end; justify-self:center;
+  position:absolute;
+  bottom:32%; /* feet on the wall/floor line */
+  left:50%;
   width:170px; height:260px;
-  margin:0 0 10% 0;
-  position:relative; z-index:4;
-  transition:transform var(--transition-speed) cubic-bezier(.4,0,.2,1);
+  margin:0 0 0 -85px; /* center horizontally */
+  z-index:4;
+  transition:left .8s cubic-bezier(.4,0,.2,1), transform .8s cubic-bezier(.4,0,.2,1);
 }
 /* character parts */
 .xz-head {
@@ -849,34 +852,40 @@ body[data-scene="learning"] .shelf { box-shadow:0 22px 36px var(--shadow),0 0 40
 }
 .event-text { color:#293b4a; line-height:1.4; }
 
-/* ── Scene states ── */
-/* idle: calm breathing, dim lamp, gentle window */
+/* ── Scene states — task/character moves to the matching furniture ── */
+/* Furniture lineup along the back wall: shelf(0-22%) sofa(24-38%) comp-desk(44-58%) desk(74-94%) */
+
+/* idle: character relaxes on the sofa (left-of-center) */
+body[data-scene="idle"] .xizi { left:30%; margin-left:-85px; transform:scale(.96); }
 body[data-scene="idle"] .desk-lamp { box-shadow:0 0 22px var(--lamp); }
 body[data-scene="idle"] .thoughts { opacity:.65; }
 body[data-scene="idle"] .glyph { color:var(--trim); }
 
-/* memory: character near shelf, gold theme, books highlighted */
-body[data-scene="memory"] .xizi { transform:translateX(-19vw); }
+/* memory: character at the bookshelf (left), gold theme, books highlighted */
+body[data-scene="memory"] .xizi { left:8%; margin-left:-60px; }
 body[data-scene="memory"] .xz-body { background:linear-gradient(140deg,#d4af6a,#b08830); }
 body[data-scene="memory"] .xz-prop { transform:rotate(6deg) scale(1.12); background:#f4dc82; }
 body[data-scene="memory"] .xz-arm.r { animation:arm-reach .9s ease-in-out infinite; }
 body[data-scene="memory"] .glyph { color:var(--gold); }
 body[data-scene="memory"] .status { border-color:rgba(226,176,74,.35); }
 body[data-scene="memory"] .bubble { background:rgba(255,245,210,.92); }
+body[data-scene="memory"] .shelf { box-shadow:0 22px 36px var(--shadow),0 0 40px var(--gold-glow); }
 
-/* learning: character right side, mint glow, card flipping */
-body[data-scene="learning"] .xizi { transform:translateX(15vw); }
+/* learning: character at the bookshelf (left), reading a card, mint glow */
+body[data-scene="learning"] .xizi { left:8%; margin-left:-60px; }
 body[data-scene="learning"] .xz-body { background:linear-gradient(140deg,#5cc497,#3a8e6e); }
 body[data-scene="learning"] .xz-prop { background:#c0efd4; animation:card-flip 1.6s ease-in-out infinite; }
 body[data-scene="learning"] .glyph { color:var(--mint); }
 body[data-scene="learning"] .status { border-color:rgba(124,201,160,.35); }
 body[data-scene="learning"] .bubble { background:rgba(225,250,238,.92); }
+body[data-scene="learning"] .shelf { box-shadow:0 22px 36px var(--shadow),0 0 40px var(--mint-glow); }
 @keyframes card-flip {
   0%,100% { transform:rotate(-6deg) scale(1); }
   50% { transform:rotate(10deg) scale(1.1); box-shadow:0 0 24px var(--mint-glow); }
 }
 
-/* planning: centered, leaning forward, coral accent */
+/* planning: character at the main desk (right), thinking pose, coral accent */
+body[data-scene="planning"] .xizi { left:80%; margin-left:-100px; }
 body[data-scene="planning"] .xz-head { transform:translateY(-4px); }
 body[data-scene="planning"] .glyph { color:var(--coral); animation-duration:1.2s; }
 body[data-scene="planning"] .xz-arm.l { animation:arm-think .8s ease-in-out infinite; }
@@ -887,8 +896,8 @@ body[data-scene="planning"] .status { border-color:rgba(224,115,98,.3); }
   50% { transform:rotate(28deg) translateY(-8px); }
 }
 
-/* execution: right-forward, typing, console active, coral glow */
-body[data-scene="execution"] .xizi { transform:translateX(10vw) translateY(6px); }
+/* execution: character at the comp-desk (center), typing, console active, coral glow */
+body[data-scene="execution"] .xizi { left:50%; margin-left:-60px; transform:translateY(4px); }
 body[data-scene="execution"] .xz-body { background:linear-gradient(140deg,var(--coral),#c55a48); }
 body[data-scene="execution"] .xz-arm.l { animation:arm-type .5s ease-in-out infinite; }
 body[data-scene="execution"] .xz-arm.r { animation:arm-type .5s ease-in-out .25s infinite; }
@@ -896,6 +905,7 @@ body[data-scene="execution"] .glyph { color:var(--coral); }
 body[data-scene="execution"] .status { border-color:rgba(224,115,98,.4); }
 body[data-scene="execution"] .console { box-shadow:0 16px 22px var(--shadow),0 0 28px var(--coral-glow); }
 body[data-scene="execution"] .bubble { opacity:.55; }
+body[data-scene="execution"] .comp-desk { box-shadow:0 10px 8px rgba(40,20,10,.18), 0 0 24px var(--coral-glow); }
 @keyframes arm-type {
   0%,100% { transform:rotate(12deg) translateY(0); }
   50% { transform:rotate(30deg) translateY(10px); }
@@ -923,27 +933,32 @@ body[data-exec-window="false"] .star { opacity:1; }
   50% { opacity:1; }
 }
 
-/* ── Responsive ── */
+/* ── Responsive — small screens stack the room vertically (single column) ── */
 @media (max-width:820px) {
-  .room { grid-template-columns:1fr; grid-template-rows:22vh 42vh 36vh; }
-  .window { grid-column:1; grid-row:1; width:160px; height:110px; margin:4vh 6vw 0 0; }
+  .room { grid-template-columns:1fr; grid-template-rows:36vh 32vh 32vh; }
+  .window { grid-column:1; grid-row:1; width:160px; height:110px; margin:4vh auto 0; justify-self:center; }
   .shelf { grid-column:1; grid-row:2; align-self:end; justify-self:start;
-    width:150px; height:220px; margin:0 0 16vh 4vw; }
-  .xizi { grid-column:1; grid-row:2/4; transform:scale(.8); margin-bottom:18vh; }
-  body[data-scene="memory"] .xizi { transform:translateX(-14vw) scale(.8); }
-  body[data-scene="learning"] .xizi,
-  body[data-scene="execution"] .xizi { transform:translateX(14vw) scale(.8); }
-  .desk { grid-column:1; grid-row:3; width:88vw; height:84px; }
-  .console { grid-column:1; grid-row:3; width:118px; height:76px; margin-right:8vw; }
-  .thoughts { grid-column:1; grid-row:2; transform:translate(80px,-10px); }
-  .status { grid-column:1; grid-row:3; width:92vw; margin-bottom:2vh; }
+    width:140px; height:180px; margin:0 0 2vh 4vw; }
+  .xizi { left:50%; margin-left:-70px; bottom:32%; width:140px; height:220px; transform:scale(.85); transform-origin:center bottom; }
+  body[data-scene="idle"] .xizi { left:34%; margin-left:0; }
+  body[data-scene="memory"] .xizi,
+  body[data-scene="learning"] .xizi { left:20%; margin-left:0; }
+  body[data-scene="execution"] .xizi { left:54%; margin-left:0; }
+  body[data-scene="planning"] .xizi { left:78%; margin-left:0; }
+  .desk { grid-column:1; grid-row:3; align-self:end; justify-self:start;
+    width:80vw; max-width:340px; height:84px; margin:0 0 2vh 4vw; }
+  .console { grid-column:1; grid-row:1; justify-self:start; width:118px; height:76px; margin:4vh 0 0 4vw; }
+  .thoughts { left:50%; margin-left:-30px; bottom:55%; transform:none; }
+  .status { grid-column:1; grid-row:3; align-self:start; justify-self:center; width:92vw; max-width:340px; margin:2vh 0 0; }
   .desk-lamp { left:8%; top:-58px; width:38px; height:50px; }
-  .papers { left:48%; top:-20px; width:90px; height:60px; }
-  .comp-desk { left:auto; right:4vw; bottom:42vh; width:160px; height:120px; transform:perspective(800px) rotateY(-2deg); }
-  .comp-desk .cd-monitor { width:90px; height:66px; bottom:24px; }
-  .comp-desk .cd-screen { font-size:5px; }
-  .comp-desk .cd-keyboard { width:96px; height:22px; }
-  .comp-desk .cd-tower { width:18px; height:48px; bottom:24px; }
+  .papers { right:6%; top:-22px; width:90px; height:60px; }
+  .sofa { left:32%; bottom:32%; width:160px; height:72px; transform:perspective(800px) rotateY(-3deg) scale(.85); transform-origin:center bottom; }
+  .comp-desk { left:54%; bottom:32%; width:160px; height:96px; }
+  .comp-desk .cd-laptop { left:18px; bottom:14px; width:110px; height:62px; }
+  .comp-desk .cd-screen-wrap { width:100px; height:48px; }
+  .comp-desk .cd-keyboard { width:110px; height:14px; }
+  .comp-desk .cd-mug { right:6px; top:-2px; width:18px; height:22px; }
+  .char-card { max-width:200px; padding:8px 10px; }
 }
 
 @media (max-width:480px) {
