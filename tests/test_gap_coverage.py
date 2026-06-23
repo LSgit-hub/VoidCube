@@ -210,25 +210,25 @@ class TestCLIExecutorCanonicalPath:
         async def _run():
             from systems.supervisor.task_queue import SelfEvolutionExecutionRequest
             req = SelfEvolutionExecutionRequest(
-                task_id="t1", kind="body_upgrade",
+                task_id="t1", kind="general_self_evolution",
                 git_lineage={"candidate_commit": "abc", "rollback_commit": "def", "changed_files": ["agent/x.py"]},
                 target_slot_id="slot-B",
             )
             result = await facade.execute_self_evolution_request(req.model_dump(mode="json"))
             assert result["status"] == "formal_self_evolution_executed"
-            assert result["execution_metadata"]["execution_kind"] == "body_upgrade"
+            assert result["execution_metadata"]["execution_kind"] == "general_self_evolution"
 
             req2 = SelfEvolutionExecutionRequest(task_id="t2", kind="memory_maintenance")
             result2 = await facade.execute_self_evolution_request(req2.model_dump(mode="json"))
             assert result2["execution_metadata"]["execution_kind"] == "memory_maintenance"
 
             req3 = SelfEvolutionExecutionRequest(
-                task_id="t3", kind="body_switch",
+                task_id="t3", kind="general_self_evolution",
                 git_lineage={"candidate_commit": "abc", "rollback_commit": "def", "changed_files": ["agent/x.py"]},
                 target_slot_id="slot-B",
             )
             result3 = await facade.execute_self_evolution_request(req3.model_dump(mode="json"))
-            assert result3["execution_metadata"]["execution_kind"] == "body_switch"
+            assert result3["execution_metadata"]["execution_kind"] == "general_self_evolution"
 
         asyncio.run(_run())
 

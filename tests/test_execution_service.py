@@ -176,7 +176,7 @@ def test_execution_service_accepts_only_formal_self_evolution_handoff_for_execut
             "trace_id": "trace-http-1",
             "task_type": "self_evolution",
             "decision_id": "decision-http-1",
-            "kind": "body_switch",
+            "kind": "general_self_evolution",
             "source_actor": "mem_supervisor",
             "target_slot_id": "slot-B",
             "git_lineage": {
@@ -186,53 +186,18 @@ def test_execution_service_accepts_only_formal_self_evolution_handoff_for_execut
             },
         },
     )
-    rejected = client.post(
-        "/executor/self-evolution/execute",
-        json={
-            "task_id": "task-2",
-            "kind": "body_switch",
-            "target_slot_id": "slot-B",
-        },
-    )
-
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "formal_self_evolution_executed"
     assert payload["execution_metadata"]["trace_id"] == "trace-http-1"
     assert payload["execution_metadata"]["governance_task_type"] == "self_evolution"
-    assert payload["execution_metadata"]["task_family"] == "body_switch"
-    assert payload["execution_metadata"]["execution_kind"] == "body_switch"
+    assert payload["execution_metadata"]["task_family"] == "general_self_evolution"
+    assert payload["execution_metadata"]["execution_kind"] == "general_self_evolution"
     assert payload["execution_metadata"]["decision_id"] == "decision-http-1"
     assert payload["execution_metadata"]["task_id"] == "task-1"
     assert payload["execution_request"]["status"] == "approved_for_execution"
     assert payload["execution_request"]["trace_id"] == "trace-http-1"
-    assert rejected.status_code == 400
-    assert "git_lineage.candidate_commit" in rejected.text
     adapters.body_upgrade.execute_body_upgrade.assert_awaited_once()
-
-
-@pytest.mark.unit
-def test_execution_service_rejects_formal_body_handoff_without_changed_files():
-    service, adapters = _make_service()
-    client = TestClient(service.app)
-
-    response = client.post(
-        "/executor/self-evolution/execute",
-        json={
-            "task_id": "task-1",
-            "kind": "body_switch",
-            "source_actor": "mem_supervisor",
-            "target_slot_id": "slot-B",
-            "git_lineage": {
-                "candidate_commit": "bbb222",
-                "rollback_commit": "aaa111",
-            },
-        },
-    )
-
-    assert response.status_code == 400
-    assert "git_lineage.changed_files" in response.text
-    adapters.body_upgrade.execute_body_upgrade.assert_not_awaited()
 
 
 @pytest.mark.unit

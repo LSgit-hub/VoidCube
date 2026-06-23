@@ -208,7 +208,7 @@ async def test_execution_facade_delegates_to_current_adapters():
     formal_result = await facade.execute_self_evolution_request(
         {
             "task_id": "task-1",
-            "kind": "body_switch",
+            "kind": "general_self_evolution",
             "source_actor": "mem_supervisor",
             "target_slot_id": "slot-B",
             "git_lineage": {

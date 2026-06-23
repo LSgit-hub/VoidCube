@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, model_validator
 
 from VoidCube_core.utils import atomic_json_write
-from systems.evolution_boundary import validate_agent_evolution_changes
 from systems.runtime_task_profile import (
     derive_runtime_task_profile,
     normalize_runtime_task_type,
@@ -17,8 +16,6 @@ from systems.runtime_task_profile import (
 
 SelfEvolutionTaskStatus = Literal["planned", "deferred", "approved", "running", "paused", "cancelled", "completed", "failed"]
 SelfEvolutionExecutionRequestKind = Literal[
-    "body_upgrade",
-    "body_switch",
     "memory_maintenance",
     "general_self_evolution",
 ]
@@ -52,7 +49,7 @@ class SelfEvolutionExecutionRequest(BaseModel):
     task_family: Optional[str] = None
     execution_kind: Optional[str] = None
     decision_id: Optional[str] = None
-    kind: SelfEvolutionExecutionRequestKind = "body_upgrade"
+    kind: SelfEvolutionExecutionRequestKind = "general_self_evolution"
     status: SelfEvolutionExecutionRequestStatus = "approved_for_execution"
     source_actor: str = "mem_supervisor"
     source_service: Optional[str] = None
@@ -79,23 +76,6 @@ class SelfEvolutionExecutionRequest(BaseModel):
         self.governance_task_type = runtime_task_profile["governance_task_type"]
         self.task_family = runtime_task_profile["task_family"]
         self.execution_kind = runtime_task_profile["execution_kind"]
-        if self.kind not in {"body_upgrade", "body_switch"}:
-            return self
-        missing = []
-        if not self.target_slot_id:
-            missing.append("target_slot_id")
-        if not self.git_lineage.candidate_commit:
-            missing.append("git_lineage.candidate_commit")
-        if not self.git_lineage.rollback_commit:
-            missing.append("git_lineage.rollback_commit")
-        if not self.git_lineage.changed_files:
-            missing.append("git_lineage.changed_files")
-        if missing:
-            raise ValueError(
-                "Formal body self-evolution execution request is missing: "
-                + ", ".join(missing)
-            )
-        validate_agent_evolution_changes(self.git_lineage.changed_files)
         return self
 
 

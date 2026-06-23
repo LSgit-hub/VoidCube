@@ -7,7 +7,6 @@ from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
 
-from systems.evolution_boundary import classify_agent_evolution_changes
 from systems.runtime_task_profile import (
     derive_runtime_task_profile,
     normalize_runtime_task_family,
@@ -69,8 +68,6 @@ class PlanningRuntimeMixin:
     def _task_execution_kind(self, task: SelfEvolutionTask) -> Optional[str]:
         task_family = self._task_runtime_family(task)
         if task_family in {
-            "body_upgrade",
-            "body_switch",
             "memory_maintenance",
             "general_self_evolution",
         }:
@@ -606,7 +603,7 @@ class PlanningRuntimeMixin:
 
         # In Governor Mode, self_learning and memory_maintenance are
         # approved without idle-window gating — the user has explicitly
-        # authorised governance.  body_upgrade / body_switch keep their
+        # authorised governance.  Other task families keep their
         # existing idle-window and execution-window requirements.
         if governor_mode_active:
             if task_type == "self_learning":
@@ -637,16 +634,6 @@ class PlanningRuntimeMixin:
                     "approved",
                     "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
                 )
-            if task_family == "body_upgrade":
-                return (
-                    "approved",
-                    "Task approved for body-upgrade execution handoff because the system is inside the execution window and idle requirements are satisfied.",
-                )
-            if task_family == "body_switch":
-                return (
-                    "approved",
-                    "Task approved for body-switch execution handoff because the system is inside the execution window and idle requirements are satisfied.",
-                )
             return (
                 "approved",
                 "Task approved for the next execution handoff because the system is inside the execution window and idle requirements are satisfied.",
@@ -660,16 +647,6 @@ class PlanningRuntimeMixin:
             return (
                 "deferred",
                 "Task deferred because memory maintenance requires the execution window plus idle user, runtime, memory, and workflow facts.",
-            )
-        if task_family == "body_upgrade":
-            return (
-                "deferred",
-                "Task deferred because body-upgrade execution still requires the execution window and idle runtime facts before handoff.",
-            )
-        if task_family == "body_switch":
-            return (
-                "deferred",
-                "Task deferred because body-switch execution still requires the execution window and idle runtime facts before handoff.",
             )
         return (
             "deferred",
@@ -689,13 +666,6 @@ class PlanningRuntimeMixin:
         kind = self._task_execution_kind(task) or "general_self_evolution"
         task_family = self._task_runtime_family(task)
         governance_task_type = self._task_governance_type(task)
-        if kind not in {
-            "body_upgrade",
-            "body_switch",
-            "memory_maintenance",
-            "general_self_evolution",
-        }:
-            kind = "general_self_evolution"
 
         git_lineage = {
             **dict(task.evidence.get("git_lineage") or {}),
@@ -713,10 +683,6 @@ class PlanningRuntimeMixin:
         }
         if "governor_decision" in task.evidence:
             governor_decision["evidence_decision"] = task.evidence["governor_decision"]
-        if kind in {"body_upgrade", "body_switch"}:
-            governor_decision["evolution_boundary"] = classify_agent_evolution_changes(
-                git_lineage.get("changed_files") or []
-            ).model_dump()
 
         return SelfEvolutionExecutionRequest(
             task_id=task.task_id,
@@ -760,13 +726,7 @@ class PlanningRuntimeMixin:
         }
 
     def _self_evolution_task_boundary(self, task: SelfEvolutionTask) -> Optional[Dict[str, Any]]:
-        kind = self._task_execution_kind(task) or "general_self_evolution"
-        if kind not in {"body_upgrade", "body_switch"}:
-            return None
-
-        git_lineage = self._self_evolution_task_git_lineage(task)
-        changed_files = git_lineage.get("changed_files") or []
-        return classify_agent_evolution_changes(changed_files).model_dump()
+        return None
 
     def _record_self_evolution_boundary_defer(
         self,
@@ -1226,8 +1186,6 @@ class PlanningRuntimeMixin:
         )
 
         payload = execution_request.model_dump(mode="json")
-        if execution_request.execution_kind in {"body_upgrade", "body_switch"}:
-            self._watch_window_runtime.last_body_upgrade_trace_id = task.trace_id
         result = await self._execution_facade.execute_self_evolution_request(payload)
 
         # ── Failure recovery: clear dispatched flag so the task can be ──
