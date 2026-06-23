@@ -112,9 +112,11 @@ class AgentProxy:
     def __init__(
         self,
         gateway_url: str = "http://localhost:6000",
+        mode: str = "gateway",
         **agent_kwargs,
     ):
         self.gateway_url = gateway_url
+        self.mode = mode  # Always "gateway" — local mode removed per baseline §3.1/§4.2
         self._gateway_adapter: Optional[GatewayAgentAdapter] = None
         self._agent_kwargs = agent_kwargs
 
