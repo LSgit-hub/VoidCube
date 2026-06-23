@@ -376,17 +376,17 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
         result = await sv._run_self_evolution_cycle()
         assert result["dispatched"], f"No tasks dispatched: {result}"
 
-        # Verify execution was dispatched
+        # Verify execution was dispatched and completed
         updated = await sv.get_self_evolution_task(mem_task["task_id"])
-        assert updated["metadata"].get("execution_dispatched") is True, (
-            f"execution_dispatched not set. metadata={updated['metadata']}"
+        assert updated["status"] in ("running", "completed"), (
+            f"status not running/completed. status={updated.get('status')}, metadata={updated.get('metadata', {})}"
         )
         assert updated["metadata"].get("execution_result", {}).get("status") == "executed"
 
     @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_duplicate_dispatch_prevented(self, tmp_path):
-        """execution_dispatched flag prevents duplicate execution."""
+        """running status prevents duplicate execution."""
         sv = _make_supervisor(tmp_path)
         sv._fetch_gateway_activity_snapshot = AsyncMock(
             return_value=_idle_snapshot()
@@ -472,8 +472,8 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
         await sv._run_self_evolution_cycle()
 
         updated = await sv.get_self_evolution_task(task["task_id"])
-        assert updated["metadata"].get("execution_dispatched") is True, (
-            f"execution_dispatched not set. status={updated.get('status')}, "
+        assert updated["status"] in ("running", "completed"), (
+            f"Task was not dispatched. status={updated.get('status')}, "
             f"metadata={updated.get('metadata')}"
         )
         assert "trace_id" in updated, "Task should have trace_id"
@@ -657,7 +657,8 @@ class TestPhase1GovernorMode:
         )
 
         await sv._try_auto_dispatch()
-        sv._dispatch_self_learning_followup.assert_awaited_once()
+        # Self-learning tasks are NOT dispatched by auto-dispatch — they wait for Agent pull
+        sv._dispatch_self_learning_followup.assert_not_awaited()
 
     @pytest.mark.asyncio
     @pytest.mark.unit

@@ -626,7 +626,6 @@ async def test_supervisor_self_evolution_cycle_dispatches_approved_formal_task(t
     assert cycle["reviewed"] == 1
     assert cycle["dispatched"] == [{"task_id": task_id, "status": "formal_self_evolution_executed"}]
     assert queued["status"] == "completed"
-    assert queued["metadata"]["execution_dispatched"] is True
     assert queued["metadata"]["execution_result"]["status"] == "formal_self_evolution_executed"
     supervisor._body_upgrade_executor.execute_body_upgrade.assert_awaited_once()  # type: ignore[attr-defined]
 
@@ -686,25 +685,15 @@ async def test_supervisor_self_evolution_cycle_dispatches_self_learning_followup
     second = await supervisor._run_self_evolution_cycle()
 
     queued = await supervisor.get_self_evolution_task(task_id)
-    timeline = supervisor._recent_supervisor_ui_activity(limit=20)
 
+    # Self-learning tasks are reviewed but NOT dispatched by the evolution cycle.
+    # They wait for Agent pull via Gateway /v1/tasks API.
     assert first["reviewed"] == 1
-    assert first["dispatched"] == [{"task_id": task_id, "status": "self_learning_followup_executed"}]
+    assert first["dispatched"] == []  # self_learning tasks are not dispatched
     assert second["dispatched"] == []
-    assert queued["status"] in ("approved", "completed")
+    # Task remains approved (waiting for Agent pull), not completed
+    assert queued["status"] == "approved"
     assert queued["execution_request"] is None
-    assert queued["metadata"]["execution_dispatched"] is True
-    assert queued["metadata"]["self_learning_dispatched"] is True
-    assert queued["metadata"]["execution_result"]["status"] == "self_learning_followup_executed"
-    assert queued["metadata"]["execution_result"]["supervisor_submission"]["metadata"]["source_task_id"] == task_id
-    assert queued["metadata"]["execution_result"]["skill_execution"]["status"] == "skill_delegate_executed"
-    assert queued["metadata"]["execution_result"]["skill_execution"]["skill"]["name"] == "self-learning"
-    assert queued["metadata"]["execution_result"]["skill_execution"]["tool_execution"]["summary"]["succeeded"] >= 2
-    assert queued["metadata"]["execution_result"]["skill_execution"]["capability_boundary"]["performs_external_search"] is True
-    assert queued["metadata"]["execution_result"]["skill_execution"]["capability_boundary"]["performs_body_mutation"] is False
-    assert queued["metadata"]["self_learning_submission_result"]["status"] == "accepted"
-    assert queued["metadata"]["self_learning_submission_result"]["count"] == 0
-    assert "self_learning_completed" in [event["event_type"] for event in timeline]
     supervisor._body_upgrade_executor.execute_body_upgrade.assert_not_awaited()  # type: ignore[attr-defined]
 
 

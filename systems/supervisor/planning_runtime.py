@@ -459,7 +459,7 @@ class PlanningRuntimeMixin:
         keys: set[str] = set()
         for task in self._self_evolution_queue.list_tasks():
             is_active = task.status in active_statuses
-            if task.status == "approved" and not task.metadata.get("execution_dispatched"):
+            if task.status == "approved":
                 is_active = True
             if not is_active:
                 continue
@@ -586,6 +586,8 @@ class PlanningRuntimeMixin:
             "paused": "paused",
             "cancel": "cancelled",
             "cancelled": "cancelled",
+            "run": "running",
+            "running": "running",
             "complete": "completed",
             "completed": "completed",
             "auto": "auto",
@@ -1431,14 +1433,8 @@ class PlanningRuntimeMixin:
                 continue
 
             if self._task_governance_type(task) == "self_learning":
-                result = await self._dispatch_self_learning_followup(task)
-                if result is not None:
-                    dispatched.append(
-                        {
-                            "task_id": task.task_id,
-                            "status": result.get("status"),
-                        }
-                    )
+                # Self-learning tasks are pulled by Agent via Gateway /v1/tasks API.
+                # The supervisor only approves them; execution is Agent-initiated.
                 continue
 
             if task.execution_request is None:
@@ -1466,11 +1462,8 @@ class PlanningRuntimeMixin:
                 continue  # already running or permanently failed
 
             if self._task_governance_type(task) == "self_learning":
-                result = await self._dispatch_self_learning_followup(task)
-                if result is not None:
-                    dispatched.append(
-                        {"task_id": task.task_id, "status": result.get("status")}
-                    )
+                # Self-learning tasks are pulled by Agent via Gateway /v1/tasks API.
+                # The supervisor only approves them; execution is Agent-initiated.
                 continue
 
             if task.execution_request is None:

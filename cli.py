@@ -2231,16 +2231,99 @@ class VoidcubeCLI:
 
     _auto_mode_last_event_ts: str = ""
 
-    def _poll_auto_mode_workflow(self) -> None:
-        """No-op: self_learning dispatch is handled by the supervisor.
+    _current_learning_task: Dict[str, Any] | None = None
 
-        Per architecture baseline (§3.6, §3.7, §7.3), the supervisor
-        dispatches approved self_learning tasks through the canonical
-        executor path (execution_facade → executor → subagent).  The CLI
-        is the user entry point (§3.1, §4.2) and must NOT act as the
-        executor for background self-evolution tasks.
+    def _poll_auto_mode_workflow(self) -> None:
+        """Pull approved learning tasks from Gateway and execute them.
+
+        In AUTO mode, the CLI Agent actively pulls approved self_learning
+        tasks from the Supervisor's task list (via Gateway GET /v1/tasks)
+        and executes them.  Results are reported back via Gateway
+        POST /v1/tasks/{task_id}/complete to close the task lifecycle.
+
+        Architecture baseline: §3.3, §3.5, §3.6, §7.3, §7.5.
         """
-        return
+        import urllib.request as _req
+        import json as _json
+
+        gateway_base = "http://127.0.0.1:6000"
+
+        # ── If a learning task was just completed, report it ──
+        current = getattr(self, '_current_learning_task', None)
+        if current is not None:
+            task_id = current.get("task_id", "")
+            try:
+                payload = _json.dumps({
+                    "reason": "Learning task completed by CLI Agent in AUTO mode.",
+                    "context": {"source": "cli_agent_pull"},
+                }).encode()
+                r = _req.Request(
+                    f"{gateway_base}/v1/tasks/{task_id}/complete",
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                _req.urlopen(r, timeout=15)
+            except Exception:
+                pass  # Best-effort — supervisor will handle retry
+            self._current_learning_task = None
+
+        # ── Pull next approved learning task from Gateway ──
+        try:
+            url = f"{gateway_base}/v1/tasks?status=approved&task_type=self_learning"
+            resp = _json.loads(_req.urlopen(url, timeout=10).read())
+            tasks = resp.get("tasks", []) if isinstance(resp, dict) else []
+        except Exception:
+            return
+
+        if not tasks:
+            return
+
+        task = tasks[0]
+        task_id = task.get("task_id", "")
+        title = task.get("title", "Learning task")
+        summary = task.get("summary", "")
+
+        # ── Mark as running ──
+        try:
+            from VoidCube_cli.config import load_config
+            cfg = load_config()
+            sv_cfg = cfg.get("supervisor", {}) if isinstance(cfg, dict) else {}
+            sv_host = sv_cfg.get("host", "127.0.0.1")
+            sv_port = sv_cfg.get("port", 6002)
+            supervisor_url = f"http://{sv_host}:{sv_port}"
+        except Exception:
+            supervisor_url = "http://127.0.0.1:6002"
+
+        try:
+            run_payload = _json.dumps({
+                "decision": "running",
+                "actor": "cli_agent",
+                "reason": "Agent pulled task for execution in AUTO mode.",
+            }).encode()
+            r = _req.Request(
+                f"{supervisor_url}/self-evolution/tasks/{task_id}/decision",
+                data=run_payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            _req.urlopen(r, timeout=15)
+        except Exception:
+            return  # Can't mark running — skip
+
+        self._current_learning_task = task
+
+        # ── Push task as Agent input ──
+        prompt = (
+            f"[AUTO Learning Task] {title}\n\n"
+            f"{summary}\n\n"
+            f"Execute this research task thoroughly. "
+            f"Produce structured findings and conclusions."
+        )
+        try:
+            self._pending_input.put(prompt)
+        except Exception:
+            self._current_learning_task = None
 
     @staticmethod
     def _use_ascii_fallback() -> bool:

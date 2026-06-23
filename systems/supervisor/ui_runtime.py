@@ -1166,8 +1166,7 @@ class SupervisorUIMixin:
             "active_executions": [
                 self._serialize_self_evolution_task(task)
                 for task in self._self_evolution_queue.list_tasks()
-                if task.status == "approved"
-                and task.metadata.get("execution_dispatched")
+                if task.status == "running"
                 and not task.metadata.get("execution_failed")
             ],
         }
@@ -1202,7 +1201,7 @@ class SupervisorUIMixin:
             task_family = str(active.get("task_family") or active.get("governance_task_type") or "")
             status = str(active.get("status") or "queued")
             title = str(active.get("title") or "Supervisor task queued")
-            status_label = {"planned":"queued","deferred":"waiting","paused":"paused","approved":"ready"}.get(status, status)
+            status_label = {"planned":"queued","deferred":"waiting","paused":"paused","approved":"ready","running":"running"}.get(status, status)
             if "memory" in task_family:
                 return (
                     "memory",
@@ -1210,13 +1209,18 @@ class SupervisorUIMixin:
                     f"「{title}」is {status_label}. Long-term continuity is being guarded — memories compressed, lineage preserved.",
                 )
             if "learning" in task_family:
+                if status == "running":
+                    return (
+                        "learning",
+                        f"Xizi is researching{error_note}",
+                        f"「{title}」is {status_label}. Agent is actively executing this learning task.",
+                    )
                 if status == "approved":
                     return (
                         "planning",
                         f"Xizi has approved learning{error_note}",
                         f"「{title}」is {status_label}. Task awaits agent pull via /v1/tasks; agent body executes learn-only research.",
                     )
-                else:
                     return (
                         "planning",
                         f"Xizi is reviewing learning proposals{error_note}",
@@ -1224,6 +1228,12 @@ class SupervisorUIMixin:
                     )
             if "body" in task_family or "evolution" in task_family:
                 window_note = " · execution window open" if in_execution_window else " · awaiting execution window"
+                if status == "running":
+                    return (
+                        "execution",
+                        f"Xizi is at the console{error_note}{window_note}",
+                        f"「{title}」is {status_label}. Body evolution is executing now.",
+                    )
                 if status == "approved":
                     return (
                         "execution",
