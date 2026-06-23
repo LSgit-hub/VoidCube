@@ -304,10 +304,9 @@ class BodyLifecycleExecutor:
                 return runtime_task_profile
         return None
 
-    def _normalized_runtime_task_profile(
-        self,
-        payload: Dict[str, Any],
-    ) -> Optional[Dict[str, Any]]:
+    @staticmethod
+    def _normalized_runtime_task_profile(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Canonical runtime task profile — delegates to shared helper."""
         runtime_task_profile = payload.get("runtime_task_profile")
         if not isinstance(runtime_task_profile, dict):
             return None

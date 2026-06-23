@@ -105,6 +105,10 @@ def assemble_supervisor_execution_runtime(supervisor: Any) -> None:
         sync_gateway_body_activation=supervisor._sync_gateway_body_activation,
         attach_execution_route_hint=attach_execution_route_hint,
         agents=supervisor._agents,
+        governor_storage_root=(
+            getattr(getattr(supervisor, "_governor", None), "storage_root", None)
+            or str(runtime_root)
+        ),
     )
     supervisor._memory_maintenance_executor = MemoryMaintenanceExecutionAdapter(
         config=execution_config,

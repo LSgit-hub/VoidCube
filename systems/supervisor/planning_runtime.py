@@ -586,6 +586,8 @@ class PlanningRuntimeMixin:
             "paused": "paused",
             "cancel": "cancelled",
             "cancelled": "cancelled",
+            "complete": "completed",
+            "completed": "completed",
             "auto": "auto",
         }
         return mapping.get(normalized)
@@ -938,6 +940,12 @@ class PlanningRuntimeMixin:
             execution_request=execution_request,
         )
 
+        # Persist any metadata attached to the decision (e.g. executed_by_cli,
+        # execution_result from CLI agent execution).
+        decision_metadata = request.get("metadata")
+        if isinstance(decision_metadata, dict) and decision_metadata:
+            self._self_evolution_queue.update_metadata(task_id, metadata=decision_metadata)
+
         await self._touch_gateway_activity(
             self._planning_activity_kind_for_task(task.task_type),
             metadata=self._build_self_evolution_activity_metadata(
@@ -1197,14 +1205,19 @@ class PlanningRuntimeMixin:
             return None
 
         task_metadata = dict(task.metadata or {})
-        if task_metadata.get("execution_dispatched"):
+        if task.status == "running":
             return None
 
-        # ── Mark dispatched BEFORE any await to prevent double-dispatch ──
+        # ── Mark running BEFORE any await to prevent double-dispatch ──
+        self._self_evolution_queue.update_status(
+            task.task_id,
+            status="running",
+            actor="supervisor",
+            reason="Execution request dispatched",
+        )
         self._self_evolution_queue.update_metadata(
             task.task_id,
             metadata={
-                "execution_dispatched": True,
                 "executed_at": datetime.now(timezone.utc).isoformat(),
             },
             execution_request=execution_request,
@@ -1225,11 +1238,16 @@ class PlanningRuntimeMixin:
         if is_failure:
             failure_count = int(task_metadata.get("execution_failure_count") or 0) + 1
             if failure_count < max_retries:
-                # Allow retry — clear dispatched flag
+                # Allow retry — set back to approved so it can be re-dispatched
+                self._self_evolution_queue.update_status(
+                    task.task_id,
+                    status="approved",
+                    actor="supervisor",
+                    reason=f"Execution retry {failure_count}/{max_retries}",
+                )
                 self._self_evolution_queue.update_metadata(
                     task.task_id,
                     metadata={
-                        "execution_dispatched": False,
                         "execution_failed": True,
                         "execution_failure_count": failure_count,
                         "execution_result": result,
@@ -1284,8 +1302,16 @@ class PlanningRuntimeMixin:
         task: SelfEvolutionTask,
     ) -> Optional[Dict[str, Any]]:
         task_metadata = dict(task.metadata or {})
-        if task_metadata.get("execution_dispatched"):
+        if task.status == "running":
             return None
+
+        # Mark running before execution
+        self._self_evolution_queue.update_status(
+            task.task_id,
+            status="running",
+            actor="supervisor",
+            reason="Self-learning follow-up dispatched",
+        )
 
         result = await self._execution_facade.execute_self_learning_followup(
             {"task": self._serialize_self_evolution_task(task)}
@@ -1311,7 +1337,6 @@ class PlanningRuntimeMixin:
         self._self_evolution_queue.update_metadata(
             task.task_id,
             metadata={
-                "execution_dispatched": True,
                 "self_learning_dispatched": True,
                 "execution_result": result,
                 "self_learning_submission_result": submission_result,
@@ -1430,20 +1455,22 @@ class PlanningRuntimeMixin:
 
         # Pass 2: dispatch any previously-approved tasks that were never
         # dispatched, PLUS tasks whose previous dispatch failed and were
-        # cleared for retry (execution_dispatched=False, execution_failed=True,
-        # failure_count < max_retries).  Tasks that hit max_retries are left
-        # with execution_dispatched=True and skipped here.
+        # reset to approved for retry (execution_failed=True,
+        # failure_count < max_retries).  Tasks in running state or
+        # permanently failed are skipped here.
         dispatched_ids = {d["task_id"] for d in dispatched}
         for task in self._self_evolution_queue.list_tasks(status="approved"):
             if task.task_id in dispatched_ids:
                 continue
-            if task.metadata.get("execution_dispatched"):
-                continue  # already dispatched or permanently failed
+            if task.status == "running":
+                continue  # already running or permanently failed
 
             if self._task_governance_type(task) == "self_learning":
-                # Self-learning tasks are executed by the CLI's active agent
-                # (see cli.py:_poll_auto_mode_workflow).  The supervisor only
-                # plans and approves — it does NOT dispatch self_learning.
+                result = await self._dispatch_self_learning_followup(task)
+                if result is not None:
+                    dispatched.append(
+                        {"task_id": task.task_id, "status": result.get("status")}
+                    )
                 continue
 
             if task.execution_request is None:

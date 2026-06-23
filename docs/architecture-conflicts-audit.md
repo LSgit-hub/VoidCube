@@ -78,6 +78,8 @@
 | C-04 | 升级职责混合 | body upgrade pipeline 已可由 executor service 执行；正式触发已开始通过 self-evolution execution request 表达，但还未完全替代旧测试入口 | [systems/supervisor/supervisor.py](../systems/supervisor/supervisor.py)、[systems/supervisor/task_queue.py](../systems/supervisor/task_queue.py)、[systems/execution/](../systems/execution/) | 旧测试命令仍可能被误当成正式自进化入口 | 继续让正式触发只走 Mem / 监督者批准后的 `/self-evolution/execute`，CLI `body upgrade` 保持测试/验收/应急定位。 |
 | C-05 | 维护职责混合 | 记忆压缩入口已委托 `_memory_maintenance_executor`，并通过 executor 标准入口暴露推荐路径；但 supervisor 本地周期 loop 仍在触发这类执行维护 | [systems/supervisor/service_runtime.py](../systems/supervisor/service_runtime.py)、[systems/supervisor/supervisor.py](../systems/supervisor/supervisor.py)、[systems/execution/service.py](../systems/execution/service.py) | facade 已删除，但“治理壳顺手做维护动作”的运行时混用还没完全退出 | 记忆维护应继续向 memory service job 或 executor 标准入口收口，supervisor 只保留调度/裁决所需最小 runtime。 |
 | C-06 | Mem / self-learning 需要单独完善 | self-learning / Mem 深度集成尚未成熟，但主链路不能因此偏离 Mem 治理灵魂的目标设计 | [systems/self_learning/service.py](../systems/self_learning/service.py)、[plugins/memory/mem/](../plugins/memory/mem/)、[Mem/](../Mem/)、[mem-integration-contract.md](./mem-integration-contract.md) | 过早依赖未完成能力会不稳定；绕开 Mem 又会让架构跑偏 | 按 Mem 集成契约保留目标接法，先用轻量适配层占位，同时把 Mem 作为独立主线补完整。 |
+| C-07 | 任务列表由监督者管理，但 push 模式和子代理路径与基线冲突 | 监督者 (`planning_runtime.py`) 通过 push 模式直接 dispatch 到 Agent（`governance_task_proxy`），Agent 被动接收。正确做法：Agent 在 AUTO 模式下主动遍历监督者的任务列表（pull 模式）。当前 `delegate_task` 作为学习任务的强制子代理路径，应收口为 Agent 自主按需使用子代理的能力。CLI `_poll_auto_mode_workflow()` 是显式 no-op。Gateway 的 pull 式任务 API（`GET /v1/tasks`、`POST /v1/tasks/{id}/complete`）无消费者。`SelfEvolutionTaskQueue` 包含 body_upgrade/body_switch 任务类型，但身体切换不应由任务队列驱动。`SelfEvolutionTaskStatus` 缺少 `running` 状态。`systems/self_learning/service.py` 作为独立运行服务存在，但基线中不存在独立的"自学系统"。 | [systems/supervisor/planning_runtime.py](../systems/supervisor/planning_runtime.py)、[systems/supervisor/service_runtime.py](../systems/supervisor/service_runtime.py)、[systems/supervisor/task_queue.py](../systems/supervisor/task_queue.py)、[systems/gateway/internal_gateway.py](../systems/gateway/internal_gateway.py) L987-L1045、[systems/agent/run_agent_instance.py](../systems/agent/run_agent_instance.py)、[cli.py](../cli.py) L2234-L2243、[systems/self_learning/service.py](../systems/self_learning/service.py)、[docs/voidcube架构基线.md](./voidcube架构基线.md) | Agent 从未成功完成学习任务；学习总结逻辑无从验证；push API 和子代理路径是死代码。 | 废弃 push 模式（`governance_task_proxy`），激活 Agent pull 模式（CLI `_poll_auto_mode_workflow()` 遍历任务列表）。子代理收口为 Agent 自主能力而非学习任务强制模式。清理 `SelfEvolutionTaskQueue` 中 body_upgrade/body_switch 类型。补齐 `running` 状态。收口 `systems/self_learning/service.py`：学习任务的生产归监督者，执行归 Agent，存储归 Mem。 |
+| C-08 | 监督者监控 UI 无法展示全量任务，执行路径不可见 | 当前 Supervisor Room UI 任务面板只展示前 5 条任务（`renderQueue` 中 `slice(0,5)`），不区分执行路径。身体切换状态在 UI 中完全不可见。内生驱动候选与 Agent 学习任务混杂展示。5 个静态场景（memory/learning/planning/execution/idle）无法表达系统真实状态。指标面板仅 4 个数字（Queued/Approved/Errors/Exec Win）。 | [systems/supervisor/ui_runtime.py](../systems/supervisor/ui_runtime.py) | 无法观察学习任务是否被 Agent 执行、身体切换进行到哪一步、内生驱动产出了哪些候选。开发和排障时完全盲飞。 | 按基线 §8.1 重新设计 UI：任务面板按执行路径分组（学习任务/身体切换/内生驱动/记忆维护），全量展示；场景由真实任务活动驱动；补齐身体切换状态面板和内生驱动候选面板；任务生命周期可追踪（planned→approved→running→completed）。 |
 
 ## 5. 中优先级干扰点
 
@@ -122,6 +124,10 @@
 - 当前 `supervisor` 的周期任务与自动 review/runtime loop 仍属于配套运行时，不应被误当成当前第一优先级主战场。
 - 在 agent body 尚未稳定前，过早推进 Mem / self-learning / 自动自改进大架构，只会放大错误来源并增加排障难度。
 
-## 8. 一句话结论
+## 8. 实现计划
 
-文档目标已经基本稳定，当前架构收口的主战场已经转到代码：让 supervisor 退出执行职责，让 executor 成为唯一动作执行面，让 gateway 成为空闲判断与路由事实源；Mem / self-learning 是下一条需要单独补完整的关键主线，但 VoidCube 主链路从现在起就按 Mem 治理灵魂的目标契约设计。
+Phase 2 具体实现任务（含优先级、依赖、验收标准）见 [phase-2-implementation-plan.md](./phase-2-implementation-plan.md)。
+
+## 9. 一句话结论
+
+当前架构收口的主战场已经转到代码：补齐 `running` 状态、激活 Agent pull 模式、废弃 push 路径、收口 self-learning、清理任务队列、重新设计监控 UI。按 [phase-2-implementation-plan.md](./phase-2-implementation-plan.md) 的顺序逐步实现。

@@ -124,6 +124,7 @@ class SelfLearningService:
         # Failure here must not block the conclusion save or the supervisor
         # submission — Mem is the long-term soul layer, but the local file
         # is the authoritative store for now.
+        # ── Write to local authoritative store ──
         try:
             from memai.governance import GovernanceEvent, GovernanceEventType, GovernanceDecision
             from memai.governance_repository import GovernanceEventRepository
@@ -138,6 +139,30 @@ class SelfLearningService:
             ))
         except Exception:
             pass
+
+        # ── Best-effort mirror to Gateway Mem service (§7.2) ──
+        try:
+            import urllib.request, json as _json
+            gateway = self.gateway_url if getattr(self, "gateway_url", None) else "http://127.0.0.1:6000"
+            payload = _json.dumps({
+                "event_type": "self_learning_conclusion",
+                "conclusion_id": conclusion.conclusion_id,
+                "topic_id": conclusion.topic.topic_id,
+                "title": conclusion.topic.title,
+                "summary": conclusion.summary[:200],
+                "verified": conclusion.verified,
+                "recommendations_count": len(conclusion.recommendations),
+            }).encode()
+            req = urllib.request.Request(
+                f"{gateway}/mem/governance",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=5)
+        except Exception:
+            pass  # best-effort mirror; local file is authoritative
+
         return conclusion
 
     def record_feedback(self, conclusion_id: str, *, useful: bool) -> Dict[str, Any]:

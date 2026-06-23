@@ -66,6 +66,9 @@ class VoidCubeExecutionFacade:
             "decision_id": execution_request.decision_id,
             "kind": execution_request.kind,
             "source_actor": execution_request.source_actor,
+            "source_service": execution_request.source_service or "supervisor",
+            "target_service": execution_request.target_service or "executor",
+            "session_id": execution_request.session_id,
         }
         payload = {
             "slot_id": execution_request.target_slot_id,

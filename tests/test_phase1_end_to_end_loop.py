@@ -21,7 +21,6 @@ from systems.supervisor.endogenous_drive import EndogenousDriveEngine
 from systems.supervisor.supervisor import (
     Supervisor,
     SupervisorConfig,
-    WatchWindowRuntimeState,
 )
 from systems.supervisor.task_queue import SelfEvolutionTaskQueue
 
@@ -64,7 +63,7 @@ def _make_supervisor(tmp_path: Path) -> Supervisor:
     sv._touch_gateway_activity = AsyncMock()
     sv._fetch_gateway_activity_snapshot = AsyncMock()
     sv._endogenous_drive_task = None
-    sv._watch_window_runtime = WatchWindowRuntimeState()
+    sv._watch_window_runtime = type("_W", (), {"task": None, "last_outcome": None, "last_body_upgrade_trace_id": None})()
     return sv
 
 

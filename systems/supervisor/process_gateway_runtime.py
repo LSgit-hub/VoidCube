@@ -27,96 +27,34 @@ class ProcessGatewayRuntimeMixin:
         raise HTTPException(status_code=404, detail="Agent not found")
 
     async def _spawn_agent_process(self, agent) -> None:
-        """Delegate to AgentProcessManager (S-01)."""
-        try:
-            target = self._body_registry.load_active_body_pointer()
-            pm = getattr(self, '_process_manager', None)
-            if pm is not None:
-                pm.spawn(
-                    agent=agent,
-                    body_target=target,
-                    gateway_address=self.config.execution.gateway_address,
-                )
-            else:
-                # Fallback for tests that don't wire the full assembler
-                await self.__spawn_agent_process_impl(agent, target)
-        except Exception as exc:
-            logger.error("Failed to spawn agent process: %s", exc)
-            raise
+        """Delegate to AgentProcessManager (S-01).
 
-    async def __spawn_agent_process_impl(self, agent, target) -> None:
-        """Legacy inline implementation — used only when ProcessManager is absent."""
-        env = os.environ.copy()
-        env["AGENT_PORT"] = str(agent.port)
-        env["GATEWAY_ADDRESS"] = self.config.execution.gateway_address
-        env["VOIDCUBE_ACTIVE_SLOT"] = target.slot_id
-        env["VOIDCUBE_BODY_WORKTREE"] = target.worktree_path
-        env["VOIDCUBE_BODY_RUNTIME"] = target.runtime_path
-        env["VOIDCUBE_BODY_LOGS"] = target.logs_path
-        env["VOIDCUBE_BODY_VERSION"] = target.body_version
-        script_path = Path(target.launch_script_path)
-        if sys.platform == "win32":
-            process = self._subprocess_module.Popen(
-                [sys.executable, str(script_path), "--port", str(agent.port)],
-                env=env, cwd=target.launch_cwd,
-                creationflags=self._subprocess_module.CREATE_NEW_PROCESS_GROUP,
+        Architecture baseline §3.6: Supervisor must not directly start/stop
+        agent processes.  If ProcessManager is absent this fails explicitly
+        rather than falling back to inline Popen.
+        """
+        pm = getattr(self, '_process_manager', None)
+        if pm is None:
+            raise RuntimeError(
+                "AgentProcessManager not wired — supervisor cannot spawn "
+                "agent processes directly per architecture baseline §3.6."
             )
-        else:
-            process = self._subprocess_module.Popen(
-                [sys.executable, str(script_path), "--port", str(agent.port)],
-                env=env, cwd=target.launch_cwd, start_new_session=True,
-            )
-        agent.pid = process.pid
-        agent.status = "running"
-        agent.started_at = datetime.now()
-        agent.healthy = False
-        agent.version = target.body_version
-        agent.slot_id = target.slot_id
-        agent.name = f"agent-{target.slot_id}"
-        agent.body_worktree = target.worktree_path
-        agent.body_runtime = target.runtime_path
-        agent.body_logs = target.logs_path
-        asyncio.create_task(self._monitor_agent(process, agent))
+        target = self._body_registry.load_active_body_pointer()
+        pm.spawn(
+            agent=agent,
+            body_target=target,
+            gateway_address=self.config.execution.gateway_address,
+        )
 
     async def _terminate_agent_process(self, agent) -> None:
         """Delegate to AgentProcessManager (S-01)."""
         pm = getattr(self, '_process_manager', None)
-        if pm is not None:
-            pm.terminate(agent)
-        elif agent.pid:
-            # Legacy fallback
-            if sys.platform == "win32":
-                self._subprocess_module.run(["taskkill", "/F", "/T", "/PID", str(agent.pid)], check=False)
-            else:
-                self._subprocess_module.run(["kill", "-TERM", str(agent.pid)], check=True)
-                time.sleep(1)
-                self._subprocess_module.run(["kill", "-KILL", str(agent.pid)], check=False)
-
-    async def _monitor_agent(self, process, agent) -> None:
-        while True:
-            retcode = process.poll()
-            if retcode is not None:
-                agent.status = "exited"
-                agent.healthy = False
-                logger.warning(f"Agent {agent.name} exited with code {retcode}")
-
-                if retcode != 0:
-                    await asyncio.sleep(5)
-                    await self._restart_agent(agent)
-
-                break
-
-            await asyncio.sleep(1)
-
-    async def _restart_agent(self, agent) -> None:
-        logger.info(f"Restarting failed agent: {agent.name}")
-        agent.status = "restarting"
-
-        try:
-            await self._spawn_agent_process(agent)
-            logger.info(f"Agent {agent.name} restarted successfully")
-        except Exception as exc:
-            logger.error(f"Failed to restart agent {agent.name}: {exc}")
+        if pm is None:
+            raise RuntimeError(
+                "AgentProcessManager not wired — supervisor cannot terminate "
+                "agent processes directly per architecture baseline §3.6."
+            )
+        pm.terminate(agent)
 
     async def _register_agent_with_gateway(self, agent) -> Optional[str]:
         try:

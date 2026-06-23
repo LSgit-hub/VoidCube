@@ -366,27 +366,28 @@ class ServiceRuntimeMixin:
             return  # agent is still working or was recently active
 
         # Find an approved, undispatched task
+        # Self-learning tasks are pulled by Agent via gateway /v1/tasks API
+        # Body evolution tasks (upgrade/switch) are dispatched by executor
         for task in self._self_evolution_queue.list_tasks(status="approved"):
-            if task.metadata.get("execution_dispatched"):
+            if task.status == "running":
                 continue
             governance_type = self._task_governance_type(task) if hasattr(self, '_task_governance_type') else task.governance_task_type
-            logger.info("Auto-dispatching approved task '%s' (idle=%.0fs)", task.title, idle_seconds)
-
+            
             if governance_type == "self_learning":
-                result = await self._dispatch_self_learning_followup(task)
-            elif task.execution_request is not None:
-                result = await self._dispatch_self_evolution_execution_request(task)
-            else:
+                logger.debug("Self-learning task '%s' waiting for agent to pull (via /v1/tasks)", task.title)
                 continue
-
-            status = result.get("status") if isinstance(result, dict) else "dispatched"
-            self._record_supervisor_ui_activity(
-                "auto_dispatched",
-                scene="execution",
-                summary=f"Auto-dispatched: '{task.title}' (idle={idle_seconds:.0f}s)",
-                metadata={"task_id": task.task_id, "status": status},
-            )
-            return  # one at a time
+            
+            if task.execution_request is not None:
+                logger.info("Auto-dispatching approved task '%s' (idle=%.0fs)", task.title, idle_seconds)
+                result = await self._dispatch_self_evolution_execution_request(task)
+                status = result.get("status") if isinstance(result, dict) else "dispatched"
+                self._record_supervisor_ui_activity(
+                    "auto_dispatched",
+                    scene="execution",
+                    summary=f"Auto-dispatched: '{task.title}' (idle={idle_seconds:.0f}s)",
+                    metadata={"task_id": task.task_id, "status": status},
+                )
+                return  # one at a time
 
     async def _stop_governor_mode(self) -> None:
         """Exit Governor Mode: stop review and drive loops immediately.

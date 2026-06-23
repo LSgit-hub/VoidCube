@@ -1210,18 +1210,32 @@ class SupervisorUIMixin:
                     f"「{title}」is {status_label}. Long-term continuity is being guarded — memories compressed, lineage preserved.",
                 )
             if "learning" in task_family:
-                return (
-                    "learning",
-                    f"Xizi is studying by lamplight{error_note}",
-                    f"「{title}」is {status_label}. Evidence is being gathered within learn-only boundaries; the agent body does the research.",
-                )
+                if status == "approved":
+                    return (
+                        "planning",
+                        f"Xizi has approved learning{error_note}",
+                        f"「{title}」is {status_label}. Task awaits agent pull via /v1/tasks; agent body executes learn-only research.",
+                    )
+                else:
+                    return (
+                        "planning",
+                        f"Xizi is reviewing learning proposals{error_note}",
+                        f"「{title}」is {status_label}. Assessing whether to approve this learning task.",
+                    )
             if "body" in task_family or "evolution" in task_family:
                 window_note = " · execution window open" if in_execution_window else " · awaiting execution window"
-                return (
-                    "execution",
-                    f"Xizi is at the console{error_note}{window_note}",
-                    f"「{title}」is {status_label}. Body evolution follows governance → probe → activate → watch-window → rollback rules.",
-                )
+                if status == "approved":
+                    return (
+                        "execution",
+                        f"Xizi is at the console{error_note}{window_note}",
+                        f"「{title}」is {status_label}. Body evolution follows governance → probe → activate → watch-window → rollback rules.",
+                    )
+                else:
+                    return (
+                        "planning",
+                        f"Xizi is reviewing evolution proposals{error_note}{window_note}",
+                        f"「{title}」is {status_label}. Weighing evidence strength and rollback safety before approval.",
+                    )
             return (
                 "planning",
                 f"Xizi is reviewing the queue{error_note}",

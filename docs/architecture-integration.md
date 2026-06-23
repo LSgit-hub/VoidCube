@@ -27,11 +27,12 @@
 
 自提升链路：
 
-自学系统
-  -> Mem
-  -> 监督者裁决
-  -> 执行器
-  -> body slot / gateway activation
+监督者 (API-B, 内生驱动)
+  -> 产出学习任务 → 任务列表
+  -> Agent (API-A) 遍历任务列表 → 执行学习任务 → 成果写入 Mem
+  -> Agent 根据学习成果编辑 shell 替身代码 → 进展写入 Mem
+  -> 监督者整理记忆 → 判断替身进展 → 裁决身体切换
+  -> 执行器执行身体切换机械流程
   -> 执行结果写回 Mem
 ```
 
@@ -40,7 +41,7 @@
 - CLI 是用户入口
 - 网关是内部组件入口
 
-开发调试时可以直连内部服务端口，但正式架构叙事中，Memory Service、Self-Learning、Executor 都不应成为日常用户入口。
+开发调试时可以直连内部服务端口，但正式架构叙事中，Memory Service、Executor 都不应成为日常用户入口。
 
 ## 3. 服务角色与连接方向
 
@@ -90,7 +91,7 @@ CLI 不应绕过治理链路直接完成身体切换、回滚或升级。
 
 Mem 连接方向：
 
-- 接收 Agent、自学系统、治理链路的长期记忆读写
+- 接收 Agent、监督者、治理链路的长期记忆读写
 - 接收学习结论与治理记录写入
 - 在监督者身份下输出结构化裁决
 - 将裁决历史与执行结果持久化
@@ -109,17 +110,15 @@ Agent 连接方向：
 
 Agent 不应直接决定自己成为新 active，也不应把长期身份真相只保存在本地。
 
-### 3.5 自学系统
+### 3.5 学习任务框架
 
-自学系统连接方向：
+学习任务不由独立的"自学系统"服务执行。学习任务的生产者是监督者（内生驱动产出），执行者是 Agent（AUTO 模式下遍历任务列表），存储位置是 Mem。
 
-- 从 Mem 或指定资料源读取材料
-- 使用 API-A 做研究、实验和验证
-- 输出结构化学习结论
-- 将结论写回 Mem
-- 形成可被监督者读取的建议事项
+- 监督者内生驱动 → 产出探索式学习任务 → 放入任务列表
+- Agent (API-A) → AUTO 模式下遍历任务列表 → 直接执行学习任务 → 成果写入 Mem
+- 不存在独立的"自学系统"运行服务
 
-自学系统不直接调用执行器做发布或切换。
+当前 `systems/self_learning/` 是过渡实现，应收口为：学习任务生产归监督者，执行归 Agent，存储归 Mem。
 
 ### 3.6 执行器
 
@@ -147,6 +146,20 @@ Agent 不应直接决定自己成为新 active，也不应把长期身份真相�
 - body activation 标准入口：`/api/executor/body/activate`
 - supervisor 仅保留 runtime / governance 路由，以及少量 execution route hint 元数据
 
+### 3.7 任务列表（监督者管理）
+
+任务列表不是独立的架构组件，而是由监督者直接管理的数据结构（`SelfEvolutionTaskQueue`）。
+
+连接方向：
+
+- 监督者内生驱动 → 产出探索式学习任务 → 放入任务列表
+- Agent (API-A) → AUTO 模式下通过网关遍历任务列表 → 拉取并执行学习任务
+- Agent → 执行完成后学习成果写入 Mem
+
+任务列表仅包含探索式学习任务（身体改造进化的依据），不包含身体切换任务。身体切换由监督者在整理记忆后内生判断替身进展，直接裁决交由执行器执行。
+
+当前过渡状态：Gateway 已有 pull 式任务 API（`GET /v1/tasks`、`POST /v1/tasks/{id}/complete`）但无消费者；当前实际使用的是 push 模式（supervisor → gateway `governance_task_proxy` → agent）。重构方向是废弃 push 模式、删除子代理路径、激活 Agent 在 AUTO 模式下遍历任务列表的 pull 模式。
+
 ## 4. 标准链路
 
 ### 4.1 用户任务链路
@@ -172,7 +185,7 @@ Agent 不应直接决定自己成为新 active，也不应把长期身份真相�
 ### 4.2 记忆写入链路
 
 ```text
-Agent / 自学系统 / 执行器
+Agent / 监督者 / 执行器
   -> 网关
   -> Mem
 ```
@@ -186,50 +199,52 @@ Agent / 自学系统 / 执行器
 - 执行结果
 - 治理历史
 
-### 4.3 自学习链路
+### 4.3 学习任务链路（AUTO 模式）
 
 ```text
-自学系统
-  -> 资料采集 / 实验验证
-  -> 学习结论
-  -> Mem
-  -> 监督者读取
+监督者 (API-B, 内生驱动)
+  -> 产出探索式学习任务
+  -> 放入任务列表
+
+Agent (API-A, AUTO 模式下通过网关)
+  -> 遍历任务列表
+  -> 拉取并执行学习任务（Agent 自主决定是否使用子代理辅助）
+  -> 学习成果写入 Mem
 ```
 
-自学系统产出的是证据和建议，不是执行许可。
+学习任务由监督者内生驱动产出，Agent 主动拉取执行。不存在独立的”自学系统”运行服务。
 
-### 4.4 自提升链路
+### 4.4 身体升级链路（Agent 编辑替身代码）
 
 ```text
-Mem / 监督者
-  -> 任务规划
-  -> 裁决
-  -> 执行器
-  -> body slot / Agent process / gateway activation
-  -> 执行结果
-  -> Mem
+Agent (API-A)
+  -> 根据 Mem 中的学习成果
+  -> 编辑 shell 槽位替身 Agent 代码
+  -> 提交进展到 Mem（简化的过程描述）
+
+监督者 (API-B)
+  -> 整理记忆
+  -> 内生驱动判断替身进展
+  -> 裁决是否允许身体切换
 ```
 
-执行器必须把实际动作结果写回 Mem，让后续治理拥有历史依据。
+身体升级（代码编辑）由 Agent 直接执行，不由执行器代劳。
 
-当自提升涉及 Git 变更时，推荐接线为：
+### 4.5 身体切换链路（监督者裁决 + 执行器执行）
 
 ```text
-自学系统
-  -> 学习证据 / 改进建议
-  -> Mem
-  -> 监督者裁决
-  -> executor
-  -> Git worktree / evolution branch
-  -> probe / diff / test report
-  -> 监督者切换裁决
-  -> active body
-  -> Git 谱系与执行结果写回 Mem
+监督者
+  -> 裁决允许身体切换
+  -> 通知执行器
+
+执行器
+  -> shell → prepare → candidate → probe
+  -> 监督者最终确认
+  -> activate → 旧 active retired
+  -> 执行结果写回 Mem
 ```
 
-Git 负责记录“改了什么、从哪来、如何回滚”；Mem / 监督者负责判断“为什么改、是否可信、何时切换”。
-
-### 4.5 身体切换链路
+身体切换不由任务队列驱动。执行器只做切换的机械流程。
 
 ```text
 shell slot
@@ -304,15 +319,15 @@ shell slot
 1. Mem / 记忆服务
 2. 内部网关
 3. 当前 active body 对应的 agent 进程
-4. 自学系统
-5. 执行器或看门狗
+4. 执行器或看门狗
 
 原因：
 
 - Mem 先启动，保证长期记忆与治理记录可写
 - 网关随后启动，接收服务注册
 - active body 对应 agent 进程启动后注册到网关
-- 自学系统和执行器再加入内部链路
+- 执行器再加入内部链路
+- 监督者和任务列表属于 Mem/网关进程内能力，不需要独立启动
 
 调试时可以只启动部分进程，但这只是接线完成度差异，不代表存在第二套正式架构。
 
@@ -324,8 +339,10 @@ shell slot
 | 网关 | `systems/gateway/internal_gateway.py` | 服务注册、路由、活动事实、body activation |
 | Agent 实例 | `run_agent.py`、`agent/`、`systems/agent/run_agent_instance.py` | 用户任务执行体与独立实例运行入口 |
 | Mem / 记忆服务 | `systems/memory/`、`plugins/memory/mem/`、`Mem/` | 长期记忆、API-B、治理历史 |
-| 自学系统 | `systems/self_learning/` | 学习结论、建议事项、实验记录 |
-| 执行器 | `systems/execution/service.py`、`systems/execution/`、`systems/lifecycle.py` | executor 标准入口、执行门面、动作适配、确定性状态迁移。 |
+| 学习任务框架 | `systems/self_learning/`（过渡，应收口） | 学习任务的数据模型和记录。学习任务的生产归监督者，执行归 Agent，存储归 Mem。不存在独立的"自学系统"运行服务 |
+| 监督者 | `systems/supervisor/` | 内生驱动产出学习任务、管理任务列表、整理记忆、判断身体切换时机 |
+| 任务列表 | `systems/supervisor/task_queue.py` | 监督者管理的 `SelfEvolutionTaskQueue`，仅包含学习任务。Agent 在 AUTO 模式下遍历执行 |
+| 执行器 | `systems/execution/service.py`、`systems/execution/`、`systems/lifecycle.py` | 仅负责身体切换机械流程（shell→candidate→probe→active→retired）。不做学习、不做升级 |
 | 治理语义 | `systems/governor.py`、`plugins/memory/mem/governor_bridge.py` | 裁决 schema、确定性裁决、Mem 侧历史 |
 | 身体注册 | `systems/body_registry.py` | slot、active pointer、watch-window、runtime/logs/meta |
 | Probe | `systems/probe.py` | 候选体结构化健康检查 |
@@ -337,14 +354,17 @@ shell slot
 - CLI 能通过标准入口触发用户任务
 - 网关能识别当前 active body 对应的服务实例
 - Agent 能通过网关访问 Mem
-- 自学系统能把结构化结论写入 Mem
+- Agent 能把学习结论写入 Mem
 - 监督者能输出结构化裁决
+- 任务管理器能持有任务队列并执行状态机
+- Agent 能从任务管理器拉取 approved 任务并执行
+- Agent 能将执行结果回报任务管理器
 - 执行器能消费裁决并执行动作
 - body slot 的 `worktree/runtime/logs/meta` 不互相污染
 - active body pointer 与网关 activation 能保持一致
 - 切换、回滚、回收结果能写回 Mem
+- 监督者监控 UI 能展示全部任务（学习任务、身体切换、内生驱动候选），按执行路径分组，生命周期可追踪
 - `trace_id` 与 broad `task_type` 能贯穿关键链路
-- 涉及 runtime policy、治理裁决与 execution handoff 的链路，`governance_task_type`、`task_family`、`execution_kind` 也能贯穿
 - 这些 canonical runtime 字段的归一化应复用 [`systems/runtime_task_profile.py`](../systems/runtime_task_profile.py)，而不是在 gateway / supervisor / executor / governor / Mem bridge 各自复制判断分支
 
 ## 9. 当前过渡边界
@@ -355,7 +375,7 @@ shell slot
 - executor service 已有标准入口，gateway 已支持 `/executor/` 标准内部路由
 - 网关活动分类已区分 `self_learning`、self-evolution planning / execution；`planning_runtime` 也已把这些事实接到 `governance_task_type`、`task_family`、`execution_kind` 与 idle policy，后续重点转为继续下沉到 trace 归因和更多 runtime policy
 - canonical runtime task profile 的归一化逻辑已收敛到共享 helper [`systems/runtime_task_profile.py`](../systems/runtime_task_profile.py)，主链不应再新增本地复制版推导
-- 自学系统仍需加强为完整独立运行单元
+- 学习任务链路应收口：生产归监督者，执行归 Agent，存储归 Mem。不再作为独立运行单元
 - CLI 已挂载常用 executor 运维命令，但其定位是测试、验收、排障与应急恢复
 - 正式自进化切换仍需进一步由 Mem / 监督者自动触发
 - Git 谱系、diff、回滚点与 Mem 治理记录之间的接线仍需继续做实
@@ -365,4 +385,4 @@ shell slot
 
 ## 10. 一句话结论
 
-`architecture-integration.md` 的职责不是重新解释 VoidCube 是什么，而是把核心基线落成可接线的组件关系：CLI 进入，网关路由，Agent 工作，Mem 保存长期真相并输出治理裁决，自学系统提供证据，执行器消费裁决并执行身体生命周期动作。
+`architecture-integration.md` 的职责不是重新解释 VoidCube 是什么，而是把核心基线落成可接线的组件关系：CLI 进入，网关路由，Agent 工作（用户任务 + 学习任务 + 身体升级），Mem 保存长期真相，监督者内生驱动、管理任务列表、判断身体切换，执行器消费裁决并执行身体切换机械流程。

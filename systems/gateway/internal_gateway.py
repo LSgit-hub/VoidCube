@@ -153,6 +153,8 @@ class InternalGateway:
         self.app.add_api_route("/v1/agent/governance-task", self.governance_task_proxy, methods=["POST"])
         self.app.add_api_route("/v1/sessions/{session_id}", self.get_session_info, methods=["GET"])
         self.app.add_api_route("/v1/sessions/{session_id}", self.delete_session, methods=["DELETE"])
+        self.app.add_api_route("/v1/tasks", self.get_approved_tasks, methods=["GET"])
+        self.app.add_api_route("/v1/tasks/{task_id}/complete", self.complete_task, methods=["POST"])
         self.app.add_api_route("/admin/traces/{trace_id}", self.get_trace, methods=["GET"])
 
     async def health_check(self):
@@ -981,6 +983,66 @@ class InternalGateway:
         except Exception as e:
             logger.error(f"Governance task proxy failed: {e}")
             raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
+
+    async def get_approved_tasks(self, task_type: Optional[str] = None):
+        supervisor_service = None
+        for service in self._services.values():
+            if service.service_type == "supervisor" and service.healthy:
+                supervisor_service = service
+                break
+        if not supervisor_service:
+            raise HTTPException(status_code=503, detail="Supervisor unavailable")
+        
+        url = f"{supervisor_service.address}/self-evolution/tasks"
+        params = {"status": "approved"}
+        if task_type:
+            params["task_type"] = task_type
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    if resp.status != 200:
+                        raise HTTPException(status_code=resp.status, detail=f"Supervisor returned {resp.status}")
+                    result = await resp.json()
+            return result
+        except Exception as e:
+            logger.error(f"Failed to fetch approved tasks: {e}")
+            raise HTTPException(status_code=502, detail=f"Failed to fetch tasks: {e}")
+
+    async def complete_task(self, task_id: str, request: Request):
+        supervisor_service = None
+        for service in self._services.values():
+            if service.service_type == "supervisor" and service.healthy:
+                supervisor_service = service
+                break
+        if not supervisor_service:
+            raise HTTPException(status_code=503, detail="Supervisor unavailable")
+        
+        url = f"{supervisor_service.address}/self-evolution/tasks/{task_id}/decision"
+        
+        try:
+            body = await request.body()
+            data = json.loads(body.decode("utf-8")) if body else {}
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid JSON")
+        
+        payload = {
+            "decision": "completed",
+            "reason": data.get("reason", "Task completed by agent"),
+            "actor": "agent",
+            "context": data.get("context", {}),
+        }
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    if resp.status != 200:
+                        raise HTTPException(status_code=resp.status, detail=f"Supervisor returned {resp.status}")
+                    result = await resp.json()
+            return result
+        except Exception as e:
+            logger.error(f"Failed to complete task: {e}")
+            raise HTTPException(status_code=502, detail=f"Failed to complete task: {e}")
 
     async def chat_completions_proxy(self, request: Request):
         self._evict_stale_sessions()

@@ -53,9 +53,20 @@ class AgentInstance:
                 logger.info("Agent registered with gateway: %s", svc_id)
             else:
                 logger.warning("Agent failed to register with gateway")
+            
+            self._task_polling_task = asyncio.create_task(self._task_polling_loop())
+            logger.info("Task polling loop started")
+            
             try:
                 yield
             finally:
+                if self._task_polling_task:
+                    self._task_polling_task.cancel()
+                    try:
+                        await self._task_polling_task
+                    except asyncio.CancelledError:
+                        pass
+                    logger.info("Task polling loop stopped")
                 # Deregister on shutdown
                 try:
                     import aiohttp
@@ -75,6 +86,7 @@ class AgentInstance:
         self._session_data: Dict[str, Dict[str, Any]] = {}
         self._runtime_paths = self._initialize_runtime_paths()
         self._setup_routes()
+        self._task_polling_task: Optional[asyncio.Task] = None
 
     def _setup_routes(self):
         self.app.add_api_route("/", self.health_check, methods=["GET"])
@@ -564,6 +576,153 @@ class AgentInstance:
 
         logger.warning("Failed to register with gateway after %d attempts", max_retries)
         return None
+
+    async def _task_polling_loop(self):
+        """Periodically poll the gateway for approved self-learning tasks.
+        
+        Agent pulls tasks from the shared task manager (via gateway) instead of
+        being pushed tasks by the supervisor. This follows the principle that
+        the supervisor only manages/decides, and the agent executes.
+        """
+        import aiohttp, json
+        
+        poll_interval = 30
+        processing_tasks = set()
+        
+        while True:
+            try:
+                await asyncio.sleep(poll_interval)
+                
+                url = f"{self.config.gateway_address}/v1/tasks?task_type=self_learning"
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                            if resp.status != 200:
+                                logger.debug("Failed to fetch tasks: %d", resp.status)
+                                continue
+                            result = await resp.json()
+                except Exception as e:
+                    logger.debug("Task polling failed: %s", e)
+                    continue
+                
+                tasks = result.get("tasks", [])
+                if not tasks:
+                    continue
+                
+                for task in tasks:
+                    task_id = task.get("task_id", "")
+                    if not task_id or task_id in processing_tasks:
+                        continue
+                    
+                    processing_tasks.add(task_id)
+                    logger.info("Found approved learning task: %s", task.get("title", task_id))
+                    
+                    try:
+                        result = await self._execute_approved_task(task)
+                        
+                        complete_url = f"{self.config.gateway_address}/v1/tasks/{task_id}/complete"
+                        complete_payload = {
+                            "reason": result.get("reason", "Task completed by agent"),
+                            "context": {
+                                "status": result.get("status", "completed"),
+                                "parsed_output": result.get("parsed_output"),
+                                "tool_events": result.get("tool_events", []),
+                                "api_calls": result.get("api_calls", 0),
+                            },
+                        }
+                        async with aiohttp.ClientSession() as session:
+                            async with session.post(complete_url, json=complete_payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                                if resp.status == 200:
+                                    logger.info("Task %s marked as completed", task_id)
+                                else:
+                                    logger.warning("Failed to complete task %s: %d", task_id, resp.status)
+                    except Exception as e:
+                        logger.error("Failed to execute task %s: %s", task_id, e)
+                    finally:
+                        processing_tasks.discard(task_id)
+            
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("Task polling loop error: %s", e)
+                await asyncio.sleep(poll_interval)
+
+    async def _execute_approved_task(self, task: dict) -> dict:
+        """Execute an approved self-learning task via sub-agent.
+        
+        Reuses the existing governance task execution logic but adapts it for
+        agent-initiated task execution.
+        """
+        task_type = task.get("task_type") or task.get("governance_task_type", "")
+        if task_type != "self_learning":
+            return {"status": "rejected", "reason": f"Agent only executes self_learning tasks"}
+        
+        title = task.get("title", "Learning task")
+        summary = task.get("summary", "")
+        prompt = summary if summary else title
+        
+        if not prompt:
+            return {"status": "rejected", "reason": "No prompt or summary provided"}
+        
+        try:
+            from tools.delegate_tool import _build_child_agent, _resolve_delegation_credentials
+            from VoidCube_cli.config import load_config
+            
+            cfg = load_config()
+            creds = _resolve_delegation_credentials(cfg, None) or {}
+            child = _build_child_agent(
+                task_index=0,
+                goal=prompt,
+                context=None,
+                toolsets=["learn"],
+                model=None,
+                max_iterations=30,
+                parent_agent=None,
+            )
+            result = child.run_conversation(
+                user_message=prompt,
+                task_id=f"agent-task-{task.get('task_id', '')}",
+            )
+            final_response = result.get("final_response", "")
+            
+            tool_events = []
+            messages = result.get("messages", [])
+            for msg in messages:
+                role = msg.get("role", "")
+                if role == "tool":
+                    tool_name = msg.get("name", "") or msg.get("tool_name", "")
+                    tool_args_preview = str(msg.get("tool_args", "") or "")[:120]
+                    result_preview = str(msg.get("content", "") or "")[:200]
+                    tool_events.append({
+                        "tool": tool_name,
+                        "kind": "tool",
+                        "args_preview": tool_args_preview,
+                        "result_preview": result_preview,
+                    })
+            
+            import re, json
+            parsed = None
+            fence = re.findall(r"```(?:json)?\s*\n(.*?)\n```", final_response, re.DOTALL | re.IGNORECASE)
+            for c in reversed(fence):
+                try:
+                    p = json.loads(c.strip())
+                    if isinstance(p, dict) and "technology_evaluations" in p:
+                        parsed = p; break
+                except Exception:
+                    pass
+            
+            return {
+                "status": "completed",
+                "final_response": final_response,
+                "parsed_output": parsed,
+                "tool_events": tool_events,
+                "api_calls": result.get("api_calls", 0),
+                "model": getattr(child, "model", ""),
+                "reason": f"Self-learning task '{title}' completed",
+            }
+        except Exception as e:
+            logger.error(f"Approved task execution failed: {e}")
+            return {"status": "error", "reason": str(e)}
 
     async def start(self):
         import uvicorn

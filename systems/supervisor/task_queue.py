@@ -15,7 +15,7 @@ from systems.runtime_task_profile import (
     normalize_runtime_task_type,
 )
 
-SelfEvolutionTaskStatus = Literal["planned", "deferred", "approved", "paused", "cancelled", "completed", "failed"]
+SelfEvolutionTaskStatus = Literal["planned", "deferred", "approved", "running", "paused", "cancelled", "completed", "failed"]
 SelfEvolutionExecutionRequestKind = Literal[
     "body_upgrade",
     "body_switch",
@@ -55,7 +55,10 @@ class SelfEvolutionExecutionRequest(BaseModel):
     kind: SelfEvolutionExecutionRequestKind = "body_upgrade"
     status: SelfEvolutionExecutionRequestStatus = "approved_for_execution"
     source_actor: str = "mem_supervisor"
+    source_service: Optional[str] = None
     target_slot_id: Optional[str] = None
+    target_service: Optional[str] = None
+    session_id: Optional[str] = None
     git_lineage: SelfEvolutionGitLineage = Field(default_factory=SelfEvolutionGitLineage)
     probe_report_ref: Optional[str] = None
     idle_window_evidence: Dict[str, Any] = Field(default_factory=dict)

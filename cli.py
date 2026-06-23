@@ -2232,126 +2232,15 @@ class VoidcubeCLI:
     _auto_mode_last_event_ts: str = ""
 
     def _poll_auto_mode_workflow(self) -> None:
-        """Poll supervisor for pending learning tasks and execute them via CLI agent.
+        """No-op: self_learning dispatch is handled by the supervisor.
 
-        The active CLI agent directly executes approved self_learning tasks,
-        showing all tool calls, API interactions, and results in real time.
-        No sub-agent — the CLI agent IS the learning executor.
+        Per architecture baseline (§3.6, §3.7, §7.3), the supervisor
+        dispatches approved self_learning tasks through the canonical
+        executor path (execution_facade → executor → subagent).  The CLI
+        is the user entry point (§3.1, §4.2) and must NOT act as the
+        executor for background self-evolution tasks.
         """
-        import time, threading, json as _json
-
-        if getattr(self, "_auto_poll_busy", False):
-            return
-        if getattr(self, "_auto_executing", False):
-            return  # Already executing a task
-        self._auto_poll_busy = True
-
-        # Resolve supervisor URL once (used in both fetch and decision POST)
-        sup_url = self._get_supervisor_url().rstrip('/ui/state')
-
-        def _fetch_and_execute():
-            import urllib.request as _req
-            try:
-                # Fetch approved self_learning tasks from supervisor queue
-                url = f"{sup_url}/self-evolution/tasks"
-                r = _req.Request(url, headers={"Accept": "application/json"})
-                resp = _json.loads(_req.urlopen(r, timeout=3).read())
-                tasks = resp.get("tasks", [])
-            except Exception:
-                self._auto_poll_busy = False
-                return
-
-            # Find an approved self_learning task not yet executed by CLI agent.
-            # (Supervisor marks execution_dispatched=True BEFORE agent runs,
-            #  so we check for actual execution result instead.)
-            pending = [
-                t for t in tasks
-                if t.get("status") == "approved"
-                and t.get("governance_task_type") == "self_learning"
-                and not t.get("metadata", {}).get("executed_by_cli")
-            ]
-            if not pending:
-                self._auto_poll_busy = False
-                return
-
-            task = pending[0]
-            task_id = task.get("task_id", "")
-            title = task.get("title", "Learning task")
-            summary = task.get("summary", "")
-            prompt = (
-                f"## Learning Task: {title}\n\n{summary}\n\n"
-                "Execute this self-learning task using available tools. "
-                "Research, verify, and produce a structured conclusion."
-            )
-
-            _cprint(f"\n  [bold green]📝 学习任务: {title}[/]")
-            if summary:
-                _cprint(f"  [dim]{summary[:200]}[/]")
-
-            # Execute directly via CLI agent — all tool calls visible
-            self._auto_executing = True
-            self._auto_poll_busy = False
-            try:
-                agent = getattr(self, "agent", None)
-                if agent is None:
-                    _cprint("  ⚠️  Agent not initialized")
-                    return
-
-                # Temporarily restore direct LLM access (Gateway blocks
-                # agent_query during Governor Mode per baseline §13.4).
-                _saved_base_url = getattr(agent, "base_url", None)
-                try:
-                    from VoidCube_cli.config import load_config
-                    cfg = load_config()
-                    active_prov = cfg.get("runtime", {}).get("active_provider", "")
-                    providers = cfg.get("providers", {})
-                    pc = providers.get(active_prov, {})
-                    direct_url = pc.get("base_url", "")
-                    if direct_url:
-                        agent.base_url = direct_url
-                except Exception:
-                    pass
-
-                result = agent.run_conversation(
-                    user_message=prompt,
-                    task_id=f"auto-{task_id}",
-                )
-
-                # Restore Gateway base_url
-                if _saved_base_url:
-                    agent.base_url = _saved_base_url
-
-                final = result.get("final_response", "")
-                _cprint(f"\n  [bold]✅ 任务完成: {title}[/]")
-                if final:
-                    _cprint(f"  [dim]{final[:300]}[/]")
-
-                # Mark task as executed via supervisor decision endpoint
-                try:
-                    data = _json.dumps({
-                        "decision": "approve",
-                        "metadata": {
-                            "executed_by_cli": True,
-                            "execution_result": final[:500] if final else "",
-                        },
-                    }).encode()
-                    dec_url = f"{sup_url}/self-evolution/tasks/{task_id}/decision"
-                    dr = _req.Request(
-                        dec_url, data=data,
-                        headers={"Content-Type": "application/json"},
-                        method="POST",
-                    )
-                    _req.urlopen(dr, timeout=5)
-                except Exception:
-                    pass
-
-            except Exception as exc:
-                _cprint(f"  ❌ 学习任务失败: {exc}")
-            finally:
-                self._auto_executing = False
-                self._auto_poll_busy = False
-
-        threading.Thread(target=_fetch_and_execute, daemon=True, name="auto-exec").start()
+        return
 
     @staticmethod
     def _use_ascii_fallback() -> bool:
@@ -2456,10 +2345,7 @@ class VoidcubeCLI:
 
             # Context %: from supervisor's own token accumulator
             mem_pct = mem_usage.get("context_percent") if mem_usage else None
-            if sup_active and mem_pct == 0:
-                # Supervisor is working but hasn't made LLM calls yet
-                frags.append(("bg:#1a1a2e #C0FFC0", " ···"))
-            elif mem_pct is not None and mem_pct > 0:
+            if mem_pct is not None and mem_pct > 0:
                 if mem_pct >= 80:
                     mem_pct_color = "#FF6B6B"
                 elif mem_pct >= 60:

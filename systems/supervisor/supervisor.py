@@ -53,15 +53,6 @@ class HealthCheckResult(BaseModel):
     details: Dict[str, Any] = {}
 
 
-# TODO(S-02/S-03): Per conflicts audit C-02/C-03, watch-window loop
-# protocol and runtime state should migrate to executor.
-# The supervisor should only trigger evaluation events.
-@dataclass(slots=True)
-class WatchWindowRuntimeState:
-    task: Optional[Any] = None
-    last_outcome: Optional[Dict[str, Any]] = None
-    last_body_upgrade_trace_id: Optional[str] = None
-
 
 class Supervisor(
     PlanningRuntimeMixin,
@@ -81,12 +72,15 @@ class Supervisor(
         self._agent_model = AgentInstance
         self._agents: Dict[str, AgentInstance] = {}
         self._initialize_service_runtime()
-        self._watch_window_runtime = WatchWindowRuntimeState()
+        # Watch-window state is owned by executor adapter (§3.6 / S-02/03).
+        # Supervisor holds a plain holder that gets proxied after assembly.
+        self._watch_window_runtime: Any = type("_WatchWindowHolder", (), {
+            "task": None, "last_outcome": None, "last_body_upgrade_trace_id": None,
+        })()
         assemble_supervisor_runtime_state(self)
         self._initialize_supervisor_ui_runtime()
         assemble_supervisor_execution_runtime(self)
-        # S-02/03: watch-window state is now owned by the executor adapter.
-        # Proxy supervisor._watch_window_runtime → adapter._state for compat.
+        # Proxy supervisor._watch_window_runtime → adapter._state
         if hasattr(self, '_watch_window_executor'):
             self._watch_window_runtime = self._watch_window_executor._state
         self._setup_routes()
