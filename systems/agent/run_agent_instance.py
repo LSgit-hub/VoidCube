@@ -95,7 +95,6 @@ class AgentInstance:
         self.app.add_api_route("/v1/agent/query", self.handle_agent_query, methods=["POST"])
         self.app.add_api_route("/v1/chat/completions", self.handle_chat_completions, methods=["POST"])
         self.app.add_api_route("/memory", self.handle_memory_operation, methods=["POST"])
-        self.app.add_api_route("/v1/agent/governance-task", self.handle_governance_task, methods=["POST"])
 
     def _service_name(self) -> str:
         return f"agent-{self.config.active_slot}"
@@ -175,92 +174,6 @@ class AgentInstance:
             "body_version": self.config.body_version,
             "agent_id": self._service_name(),
         }
-
-    async def handle_governance_task(self, request: dict):
-        """Execute a supervisor-assigned governance task via sub-agent.
-
-        Only self_learning tasks are executed by the Agent. Other task types
-        (body_upgrade, memory_maintenance) are handled by executors.
-        """
-        task_type = request.get("task_type") or request.get("governance_task_type", "")
-        if task_type != "self_learning":
-            return {
-                "status": "rejected",
-                "reason": f"Agent only executes self_learning tasks, got '{task_type}'",
-            }
-
-        title = request.get("title", "Learning task")
-        prompt = request.get("prompt", "")
-        if not prompt:
-            return {"status": "rejected", "reason": "No prompt provided"}
-
-        try:
-            from tools.delegate_tool import _build_child_agent, _resolve_delegation_credentials
-            from VoidCube_cli.config import load_config
-
-            cfg = load_config()
-            creds = _resolve_delegation_credentials(cfg, None) or {}
-            child = _build_child_agent(
-                task_index=0,
-                goal=prompt,
-                context=None,
-                toolsets=["learn"],
-                model=None,
-                max_iterations=30,
-                parent_agent=None,
-            )
-            result = child.run_conversation(
-                user_message=prompt,
-                task_id=f"governance-{request.get('task_id', '')}",
-            )
-            final_response = result.get("final_response", "")
-
-            # Capture sub-agent tool events for CLI visibility
-            tool_events = []
-            messages = result.get("messages", [])
-            for msg in messages:
-                role = msg.get("role", "")
-                if role == "tool":
-                    tool_name = msg.get("name", "") or msg.get("tool_name", "")
-                    tool_args_preview = str(msg.get("tool_args", "") or "")[:120]
-                    result_preview = str(msg.get("content", "") or "")[:200]
-                    tool_events.append({
-                        "tool": tool_name,
-                        "kind": "tool",
-                        "args_preview": tool_args_preview,
-                        "result_preview": result_preview,
-                    })
-                elif role == "assistant" and msg.get("content"):
-                    thinking = str(msg.get("content", ""))[:150]
-                    if thinking.strip():
-                        tool_events.append({
-                            "tool": "thinking",
-                            "kind": "thinking",
-                            "args_preview": thinking,
-                        })
-
-            # Parse structured output from sub-agent
-            import re, json
-            parsed = None
-            fence = re.findall(r"```(?:json)?\s*\n(.*?)\n```", final_response, re.DOTALL | re.IGNORECASE)
-            for c in reversed(fence):
-                try:
-                    p = json.loads(c.strip())
-                    if isinstance(p, dict) and "technology_evaluations" in p:
-                        parsed = p; break
-                except Exception:
-                    pass
-            return {
-                "status": "completed",
-                "final_response": final_response,
-                "parsed_output": parsed,
-                "tool_events": tool_events,
-                "api_calls": result.get("api_calls", 0),
-                "model": getattr(child, "model", ""),
-            }
-        except Exception as e:
-            logger.error(f"Governance task failed: {e}")
-            return {"status": "error", "error": str(e)}
 
     async def handle_chat_completions(self, request: dict):
         """Transparently proxy chat completions to the configured LLM provider.

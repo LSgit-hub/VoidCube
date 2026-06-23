@@ -208,16 +208,12 @@ async def test_execution_facade_delegates_to_current_adapters():
     memory_maintenance = SimpleNamespace(
         trigger_memory_compression=AsyncMock(return_value={"status": "compressed"}),
     )
-    self_learning = SimpleNamespace(
-        execute_self_learning_followup=AsyncMock(return_value={"status": "self_learning_followup_executed"}),
-    )
     facade = VoidCubeExecutionFacade(
         agent_lifecycle=agent_lifecycle,
         watch_window=watch_window,
         body_lifecycle=body_lifecycle,
         body_upgrade=body_upgrade,
         memory_maintenance=memory_maintenance,
-        self_learning=self_learning,
     )
 
     assert await facade.start_managed_agent({}) == {"status": "started"}
@@ -248,9 +244,6 @@ async def test_execution_facade_delegates_to_current_adapters():
     assert await facade.record_body_probe_report({"slot_id": "slot-B"}) == {"status": "probe_report_recorded"}
     assert await facade.run_body_probe({"slot_id": "slot-B"}) == {"status": "probe_executed"}
     assert await facade.trigger_memory_compression({}) == {"status": "compressed"}
-    assert await facade.execute_self_learning_followup({"task": {}}) == {
-        "status": "self_learning_followup_executed"
-    }
 
     agent_lifecycle.start_managed_agent.assert_awaited_once_with({})
     watch_window.get_watch_window_status.assert_called_once_with()
@@ -267,109 +260,8 @@ async def test_execution_facade_delegates_to_current_adapters():
     )
     assert formal_result["status"] == "formal_self_evolution_executed"
     memory_maintenance.trigger_memory_compression.assert_awaited_once_with({})
-    self_learning.execute_self_learning_followup.assert_awaited_once_with({"task": {}})
 
 
-@pytest.mark.asyncio
-@pytest.mark.unit
-async def test_self_learning_execution_adapter_records_learn_only_followup(tmp_path: Path):
-    learning = SelfLearningService(tmp_path / "self-learning")
-    runner = FakeSelfLearningToolRunner()
-    adapter = SelfLearningExecutionAdapter(
-        learning_service=learning,
-        attach_execution_route_hint=_attach_route_hint,
-        skill_delegate=SelfLearningSkillDelegate(tool_runner=runner, max_iterations=1),
-    )
-
-    result = await adapter.execute_self_learning_followup(
-        {
-            "task": {
-                "task_id": "task-learning-1",
-                "trace_id": "trace-learning-1",
-                "title": "Review correction signals",
-                "summary": "Study why recent uncertainty increased.",
-                "task_type": "self_learning_followup",
-                "governance_task_type": "self_learning",
-                "task_family": "self_learning",
-                "metadata": {"governance_task_type": "self_learning"},
-                "evidence": {
-                    "hypothesis": "Correction signals reveal a useful learning topic.",
-                    "observations": ["uncertainty rose during idle review"],
-                    "comparisons": ["uncertainty trend"],
-                },
-            }
-        }
-    )
-
-    assert result["status"] == "self_learning_followup_executed"
-    assert result["execution_metadata"]["task_id"] == "task-learning-1"
-    assert result["execution_metadata"]["governance_task_type"] == "self_learning"
-    assert result["execution_route_hint"]["interface_id"] == "self_learning.execute"
-    submission = result["supervisor_submission"]
-    assert submission["source"] == "self_learning"
-    assert submission["metadata"]["source_task_id"] == "task-learning-1"
-    assert submission["metadata"]["trace_id"] == "trace-learning-1"
-    assert submission["metadata"]["skill_delegate"] == "SelfLearningSkillDelegate"
-    assert submission["metadata"]["skill_backend"] == "iterative_bounded_tool_runner"
-    assert submission["metadata"]["skill_evidence_summary"]["source_mix"] == ["external_web"]
-    assert submission["metadata"]["skill_evidence_summary"]["total_calls"] == 2
-    assert submission["metadata"]["skill_evidence_summary"]["succeeded"] == 2
-    assert submission["metadata"]["skill_evidence_summary"]["failed"] == 0
-    assert submission["metadata"]["skill_evidence_summary"]["evidence_preview"][0]["url"] == "https://example.test/evidence"
-    assert result["skill_execution"]["status"] == "skill_delegate_executed"
-    assert result["skill_execution"]["capability_boundary"]["uses_agent_skill_contract"] is True
-    assert result["skill_execution"]["capability_boundary"]["performs_external_search"] is True
-    assert result["skill_execution"]["capability_boundary"]["performs_body_mutation"] is False
-    assert result["skill_execution"]["learning_plan"]["search_queries"]
-    assert result["skill_execution"]["tool_execution"]["summary"]["succeeded"] == 2
-    assert runner.calls[0]["task_id"] == "task-learning-1"
-    assert submission["proposals"] == []
-    assert (tmp_path / "self-learning" / "conclusions").exists()
-    experiment_path = tmp_path / "self-learning" / "experiments" / f"{result['learning_records']['experiment_id']}.json"
-    experiment_payload = experiment_path.read_text(encoding="utf-8")
-    assert "Self-learning evidence summary: 2 succeeded, 0 failed, 2 total calls." in experiment_payload
-    assert "Evidence preview: Evidence <https://example.test/evidence>." in experiment_payload
-
-
-@pytest.mark.asyncio
-@pytest.mark.unit
-async def test_self_learning_execution_adapter_promotes_failed_evidence_summary(tmp_path: Path):
-    learning = SelfLearningService(tmp_path / "self-learning")
-    adapter = SelfLearningExecutionAdapter(
-        learning_service=learning,
-        attach_execution_route_hint=_attach_route_hint,
-        skill_delegate=SelfLearningSkillDelegate(
-            tool_runner=FakeSelfLearningToolRunner(fail=True),
-            max_iterations=1,
-        ),
-    )
-
-    result = await adapter.execute_self_learning_followup(
-        {
-            "task": {
-                "task_id": "task-learning-failed-evidence",
-                "title": "Review failed evidence path",
-                "governance_task_type": "self_learning",
-                "task_family": "self_learning",
-                "metadata": {"governance_task_type": "self_learning"},
-            }
-        }
-    )
-
-    summary = result["supervisor_submission"]["metadata"]["skill_evidence_summary"]
-    assert summary["status"] == "failed"
-    assert summary["total_calls"] == 2
-    assert summary["succeeded"] == 0
-    assert summary["failed"] == 2
-    assert summary["failed_tools"][0] == {
-        "tool": "web_search",
-        "source_type": "external_web",
-        "error": "search backend unavailable",
-    }
-    experiment_path = tmp_path / "self-learning" / "experiments" / f"{result['learning_records']['experiment_id']}.json"
-    experiment_payload = experiment_path.read_text(encoding="utf-8")
-    assert "Self-learning evidence summary: 0 succeeded, 2 failed, 2 total calls." in experiment_payload
-    assert "Self-learning evidence tool failed: web_search (external_web): search backend unavailable" in experiment_payload
 
 
 @pytest.mark.unit

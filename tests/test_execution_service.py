@@ -48,11 +48,6 @@ def _make_service() -> tuple[VoidCubeExecutionService, SimpleNamespace]:
         memory_maintenance=SimpleNamespace(
             trigger_memory_compression=AsyncMock(return_value={"status": "compressed"}),
         ),
-        self_learning=SimpleNamespace(
-            execute_self_learning_followup=AsyncMock(
-                return_value={"status": "self_learning_followup_executed"}
-            ),
-        ),
     )
     facade = VoidCubeExecutionFacade(
         agent_lifecycle=adapters.agent_lifecycle,
@@ -60,7 +55,6 @@ def _make_service() -> tuple[VoidCubeExecutionService, SimpleNamespace]:
         body_lifecycle=adapters.body_lifecycle,
         body_upgrade=adapters.body_upgrade,
         memory_maintenance=adapters.memory_maintenance,
-        self_learning=adapters.self_learning,
     )
     service = VoidCubeExecutionService(facade)
     return service, adapters
@@ -254,43 +248,3 @@ def test_execution_service_delegates_maintenance_route():
     assert missing_legacy.status_code == 404
 
 
-@pytest.mark.unit
-def test_execution_service_delegates_self_learning_execution_route():
-    service, adapters = _make_service()
-    client = TestClient(service.app)
-
-    response = client.post(
-        "/executor/self-learning/execute",
-        json={
-            "task": {
-                "task_id": "task-learning-1",
-                "governance_task_type": "self_learning",
-                "task_family": "self_learning",
-            }
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "self_learning_followup_executed"
-    adapters.self_learning.execute_self_learning_followup.assert_awaited_once_with(
-        {
-            "task": {
-                "task_id": "task-learning-1",
-                "governance_task_type": "self_learning",
-                "task_family": "self_learning",
-            }
-        }
-    )
-
-
-@pytest.mark.unit
-def test_execution_service_no_longer_accepts_unprefixed_direct_routes():
-    service, _ = _make_service()
-    client = TestClient(service.app)
-
-    assert client.post("/agents/start", json={}).status_code == 404
-    assert client.get("/body/registry").status_code == 404
-    assert client.post("/body/upgrade/execute", json={"slot_id": "slot-B"}).status_code == 404
-    assert client.post("/self-evolution/execute", json={}).status_code == 404
-    assert client.post("/self-learning/execute", json={}).status_code == 404
-    assert client.post("/memory/compress", json={"namespace": "default"}).status_code == 404

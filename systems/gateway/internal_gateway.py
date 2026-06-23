@@ -150,7 +150,6 @@ class InternalGateway:
         
         self.app.add_api_route("/v1/chat/completions", self.chat_completions_proxy, methods=["POST"])
         self.app.add_api_route("/v1/agent/query", self.agent_query_proxy, methods=["POST"])
-        self.app.add_api_route("/v1/agent/governance-task", self.governance_task_proxy, methods=["POST"])
         self.app.add_api_route("/v1/sessions/{session_id}", self.get_session_info, methods=["GET"])
         self.app.add_api_route("/v1/sessions/{session_id}", self.delete_session, methods=["DELETE"])
         self.app.add_api_route("/v1/tasks", self.get_approved_tasks, methods=["GET"])
@@ -954,35 +953,6 @@ class InternalGateway:
         ]
         for sid in stale:
             del self._agent_session_cache[sid]
-
-    async def governance_task_proxy(self, request: Request):
-        """Proxy a supervisor governance task to the active agent for sub-agent execution."""
-        try:
-            data = await request.json()
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid JSON")
-
-        if not self._active_body_service_id:
-            raise HTTPException(status_code=503, detail="No active agent available")
-
-        target = self._services.get(self._active_body_service_id)
-        if not target or not target.healthy:
-            raise HTTPException(status_code=503, detail="Active agent unavailable")
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                agent_url = f"{target.address}/v1/agent/governance-task"
-                async with session.post(agent_url, json=data, timeout=aiohttp.ClientTimeout(total=600)) as resp:
-                    result = await resp.json()
-            self._touch_activity("agent_work", source_service="gateway",
-                                 metadata={"task_type": data.get("task_type", ""),
-                                            "title": data.get("title", "")[:80]})
-            return result
-        except asyncio.TimeoutError:
-            raise HTTPException(status_code=504, detail="Agent governance task timed out")
-        except Exception as e:
-            logger.error(f"Governance task proxy failed: {e}")
-            raise HTTPException(status_code=502, detail=f"Agent unreachable: {e}")
 
     async def get_approved_tasks(self, task_type: Optional[str] = None):
         supervisor_service = None

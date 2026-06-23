@@ -15,7 +15,7 @@ class VoidCubeExecutionFacade:
     body_lifecycle: Any
     body_upgrade: Any
     memory_maintenance: Any
-    self_learning: Any
+    self_learning: Any = None
 
     async def start_managed_agent(self, request: dict) -> Dict[str, Any]:
         return await self.agent_lifecycle.start_managed_agent(request)
@@ -115,5 +115,3 @@ class VoidCubeExecutionFacade:
     async def trigger_memory_compression(self, request: dict | None = None) -> Dict[str, Any]:
         return await self.memory_maintenance.trigger_memory_compression(request)
 
-    async def execute_self_learning_followup(self, request: dict | None = None) -> Dict[str, Any]:
-        return await self.self_learning.execute_self_learning_followup(request)

@@ -40,7 +40,6 @@ class VoidCubeExecutionService:
         self.app.add_api_route(f"{prefix}/body/probe/report", self.record_body_probe_report, methods=["POST"])
         self.app.add_api_route(f"{prefix}/body/probe/run", self.run_body_probe, methods=["POST"])
         self.app.add_api_route(f"{prefix}/self-evolution/execute", self.execute_self_evolution_request, methods=["POST"])
-        self.app.add_api_route(f"{prefix}/self-learning/execute", self.execute_self_learning_followup, methods=["POST"])
         self.app.add_api_route(f"{prefix}/memory/compress", self.trigger_memory_compression, methods=["POST"])
 
     async def health_check(self) -> Dict[str, Any]:
@@ -132,5 +131,3 @@ class VoidCubeExecutionService:
     async def trigger_memory_compression(self, request: Optional[dict] = Body(default=None)) -> Dict[str, Any]:
         return await self.facade.trigger_memory_compression(request)
 
-    async def execute_self_learning_followup(self, request: Optional[dict] = Body(default=None)) -> Dict[str, Any]:
-        return await self.facade.execute_self_learning_followup(request)

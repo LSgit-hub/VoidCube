@@ -127,7 +127,6 @@ class TestServiceRuntimeLifecycle:
         sv._body_registry.load_slot_meta = Mock()
         sv._execution_facade = Mock()
         sv._execution_facade.execute_self_evolution_request = AsyncMock()
-        sv._execution_facade.execute_self_learning_followup = AsyncMock()
         sv._execution_facade.get_body_registry = Mock(return_value={})
         sv._execution_facade.list_body_slots = Mock(return_value={"slots": {}})
         sv._endogenous_drive_task = None
