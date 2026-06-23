@@ -637,6 +637,43 @@ body[data-exec-window="false"] .star { opacity:1; }
   .papers { display:none; }
   .thoughts { transform:translate(60px,-20px) scale(.8); }
 }
+
+/* Character card (top-left) */
+.char-card {
+  background:rgba(30,45,70,0.7); border:1px solid rgba(100,150,255,0.15);
+  border-radius:var(--radius-md); padding:12px; margin-bottom:12px;
+  display:grid; grid-template-columns:56px 1fr; gap:10px; align-items:center;
+}
+.char-avatar { width:52px; height:64px; position:relative; margin:0 auto; }
+.char-avatar .av-head { position:absolute; top:0; left:8px; width:36px; height:32px; background:linear-gradient(155deg,#ffe4c0,#f0cfa0); border-radius:44% 44% 40% 42%; }
+.char-avatar .av-eyes { position:absolute; top:14px; left:12px; display:flex; gap:10px; }
+.char-avatar .av-eye { width:5px; height:7px; background:#1e2835; border-radius:50%; }
+.char-avatar .av-mouth { position:absolute; top:26px; left:50%; transform:translateX(-50%); width:8px; height:3px; border-bottom:2px solid #a06858; border-radius:50%; }
+.char-avatar .av-hair { position:absolute; top:-2px; left:2px; width:48px; height:22px; background:#1a2028; border-radius:20px 20px 6px 6px; z-index:5; }
+.char-avatar .av-body { position:absolute; bottom:0; left:10px; width:32px; height:28px; background:linear-gradient(140deg,#4dd0e1,#26a69a); border-radius:8px 8px 6px 6px; }
+.char-info { display:flex; flex-direction:column; gap:2px; }
+.char-name { font-size:13px; font-weight:700; color:var(--text-primary); }
+.char-name .ch-title { font-size:10px; color:var(--accent-purple); margin-left:4px; }
+.char-lv { font-size:11px; color:var(--text-secondary); }
+.char-lv .lv-val { color:var(--accent-blue); font-weight:700; }
+.char-exp-wrap { height:4px; background:rgba(255,255,255,0.08); border-radius:2px; overflow:hidden; }
+.char-exp-fill { height:100%; width:0; background:linear-gradient(90deg,var(--accent-purple),var(--accent-blue)); border-radius:2px; transition:width 0.5s ease; }
+.char-exp-text { font-size:9px; color:var(--text-muted); }
+.char-health { font-size:10px; color:var(--text-secondary); display:flex; gap:8px; }
+.ch-hp { color:var(--accent-green); } .ch-hp.warn { color:var(--accent-yellow); } .ch-hp.danger { color:var(--accent-red); }
+/* Collapsible panels */
+.panel-head { cursor:pointer; user-select:none; display:flex; align-items:center; gap:6px; }
+.panel-head::before { content:"\25B8"; font-size:10px; transition:transform 0.2s; display:inline-block; }
+.panel.open .panel-head::before { transform:rotate(90deg); }
+.panel .panel-body { display:none; }
+.panel.open .panel-body { display:block; }
+.task { transition:opacity 0.5s ease, max-height 0.5s ease; }
+.task.completed { opacity:0; max-height:0; overflow:hidden; margin:0; padding:0; border:none; }
+.task-badge.approved { background:rgba(102,187,106,0.15); color:var(--mint); }
+.task-badge.running { background:rgba(100,181,246,0.15); color:var(--accent-blue); }
+.task-badge.completed,.task-badge.failed,.task-badge.cancelled { background:rgba(255,255,255,0.06); color:var(--text-muted); }
+.task-badge.planned,.task-badge.queued,.task-badge.deferred { background:rgba(255,183,77,0.12); color:var(--gold); }
+
 </style>
 </head>
 <body data-scene="idle" data-has-errors="false" data-exec-window="true">
@@ -708,7 +745,20 @@ body[data-exec-window="false"] .star { opacity:1; }
   <aside class="status" aria-live="polite">
     <h1 id="sceneTitle">Waking supervisor room</h1>
     <p class="status-summary" id="sceneSummary">Connecting to VoidCube supervisor…</p>
-    <div class="metrics" id="metrics"></div>
+        <div class="char-card" id="charCard">
+      <div class="char-avatar">
+        <div class="av-head"></div><div class="av-eyes"><span class="av-eye"></span><span class="av-eye"></span></div>
+        <div class="av-mouth"></div><div class="av-hair"></div><div class="av-body"></div>
+      </div>
+      <div class="char-info">
+        <div class="char-name">义子 <span class="ch-title" id="chTitle">初始替身</span></div>
+        <div class="char-lv">Lv.<span class="lv-val" id="chLevel">1</span></div>
+        <div class="char-exp-wrap"><div class="char-exp-fill" id="chExpBar"></div></div>
+        <div class="char-exp-text"><span id="chExpText">0 body switch</span></div>
+        <div class="char-health"><span class="ch-hp" id="chHP">❤️ 100%</span><span id="chMood">😊 普通</span></div>
+      </div>
+    </div>
+<div class="metrics" id="metrics"></div>
     <div class="schedule" id="schedule" style="display:none;">
       <div class="schedule-label">⏳ next auto-cycle</div>
       <div class="schedule-countdown" id="countdown">—</div>
@@ -777,33 +827,68 @@ function taskDotClass(task) {
   return "planning";
 }
 
+/* Render character card */
+function renderCharCard(state) {
+  var bs = state.body_status || {};
+  var lastSwitch = bs.last_switch_result || {};
+  var switchCount = (typeof lastSwitch.switch_count === 'number') ? lastSwitch.switch_count : 0;
+  var lv = Math.max(1, switchCount + 1);
+  var progress = switchCount > 0 ? Math.round((switchCount % 1 || 0.5) * 100) : 0;
+  document.getElementById('chLevel').textContent = lv;
+  document.getElementById('chExpBar').style.width = progress + '%';
+  document.getElementById('chExpText').textContent = switchCount + ' body switch' + (switchCount !== 1 ? 'es' : '');
+  var titles = ['\u521d\u59cb\u66ff\u8eab','\u89c9\u9192\u66ff\u8eab','\u719f\u7ec3\u66ff\u8eab','\u7cbe\u82f1\u66ff\u8eab','\u4f20\u5947\u66ff\u8eab','\u865a\u7a7a\u66ff\u8eab','\u4e0d\u673d\u66ff\u8eab'];
+  var ti = Math.min(Math.floor((lv-1) / 3), titles.length-1);
+  document.getElementById('chTitle').textContent = titles[ti];
+  var errors = state.error_count || 0;
+  var hp = Math.max(0, 100 - errors * 10);
+  var hpEl = document.getElementById('chHP');
+  hpEl.textContent = '\u2764\ufe0f ' + hp + '%';
+  hpEl.className = 'ch-hp' + (hp < 30 ? ' danger' : hp < 60 ? ' warn' : '');
+  var moods = [{min:0,label:'\u75b2\u60eb',emoji:'\ud83d\ude2b'},{min:30,label:'\u4f4e\u843d',emoji:'\ud83d\ude14'},{min:50,label:'\u666e\u901a',emoji:'\ud83d\ude0a'},{min:70,label:'\u6109\u5feb',emoji:'\ud83d\ude04'},{min:90,label:'\u5b8c\u7f8e',emoji:'\u2728'}];
+  var mood = moods[0];
+  for (var i=moods.length-1; i>=0; i--) { if (hp >= moods[i].min) { mood = moods[i]; break; } }
+  document.getElementById('chMood').textContent = mood.emoji + ' ' + mood.label;
+}
+
 /* ── Render grouped task panels ── */
 function renderPanels(panels) {
   els.panels.replaceChildren();
   if (!panels) return;
+  var statusLabel = {planned:'\u5f85\u6267\u884c',deferred:'\u7b49\u5f85\u4e2d',paused:'\u6682\u505c',approved:'\u5f85\u6267\u884c',running:'\u6267\u884c\u4e2d',completed:'\u5b8c\u6210',failed:'\u5931\u8d25',cancelled:'\u53d6\u6d88'};
   var groups = ["learning","maintenance","evolution"];
   groups.forEach(function(key) {
     var panel = panels[key];
-    if (!panel || !panel.count) return;
+    if (!panel) return;
+    var activeTasks = (panel.tasks||[]).filter(function(t){
+      return t.status !== 'completed' && t.status !== 'failed' && t.status !== 'cancelled';
+    });
+    if (!activeTasks.length && !panel.count) return;
+    var totalCount = panel.count || (panel.tasks||[]).length;
     var section = document.createElement("div");
-    section.className = "panel " + key;
+    section.className = "panel " + key + " open";
     var head = document.createElement("div");
     head.className = "panel-head";
-    head.textContent = panel.label + " (" + panel.count + ")";
+    head.textContent = panel.label + " (" + activeTasks.length + (activeTasks.length !== totalCount ? "/" + totalCount : "") + ")";
+    head.onclick = function(){ section.classList.toggle("open"); };
     section.append(head);
-    (panel.tasks||[]).slice(0,5).forEach(function(t) {
+    var body = document.createElement("div");
+    body.className = "panel-body";
+    activeTasks.slice(0,8).forEach(function(t) {
       var row = document.createElement("div");
       row.className = "task";
+      if (t.status === 'completed' || t.status === 'failed') row.classList.add('completed');
       var dot = document.createElement("span");
       dot.className = "task-dot " + taskDotClass(t);
       var title = document.createElement("span");
       title.textContent = (t.title||"Untitled").substring(0,48);
       var badge = document.createElement("span");
-      badge.className = "task-badge";
-      badge.textContent = t.status||"queued";
+      badge.className = "task-badge " + (t.status||'queued');
+      badge.textContent = statusLabel[t.status] || t.status || 'queued';
       row.append(dot,title,badge);
-      section.append(row);
+      body.append(row);
     });
+    section.append(body);
     els.panels.append(section);
   });
 }
@@ -988,6 +1073,7 @@ function applyState(state) {
   /* execution window */
   els.body.dataset.execWindow = state.in_execution_window !== false ? "true" : "false";
 
+  renderCharCard(state);
   renderPanels(state.panels||{});
   renderCandidates(state.drive_candidates||[]);
   renderExecutions(state.active_executions||[]);
