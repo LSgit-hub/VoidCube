@@ -463,6 +463,37 @@ body[data-scene="learning"] .shelf { box-shadow:0 22px 36px var(--shadow),0 0 40
 .schedule-label { font-size:10px; color:#5a6b7a; text-transform:uppercase; letter-spacing:.04em; margin-bottom:2px; }
 .schedule-countdown { font-size:18px; font-weight:700; color:var(--trim);
   font-variant-numeric:tabular-nums; }
+/* panels — grouped task display by execution path */
+.panels { display:grid; gap:10px; margin-bottom:12px; }
+.panel { margin-bottom:4px; }
+.panel-head {
+  font-size:10.5px; font-weight:600; text-transform:uppercase;
+  letter-spacing:.04em; color:#5a6b7a; padding:2px 0; margin-bottom:4px;
+  border-bottom:1px solid rgba(61,93,107,.12);
+}
+.panel.learning .panel-head { color:var(--mint); }
+.panel.maintenance .panel-head { color:var(--gold); }
+.panel.evolution .panel-head { color:var(--coral); }
+/* candidates */
+.candidates { margin-bottom:12px; display:grid; gap:5px; }
+.candidates-label {
+  font-size:10px; color:#5a6b7a; text-transform:uppercase;
+  letter-spacing:.04em; margin-bottom:2px;
+}
+.candidate {
+  display:grid; grid-template-columns:1fr auto auto; gap:8px;
+  align-items:center; min-height:28px; padding:4px 8px;
+  border-radius:6px; background:rgba(226,176,74,.08);
+  font-size:11px;
+}
+.candidate-tags { font-size:10px; color:#7a6b4a; }
+.candidate-utility { font-size:10px; font-weight:600; color:var(--gold); }
+/* body status */
+.body-status { margin-bottom:10px; }
+.body-info {
+  font-size:11px; padding:4px 8px; border-radius:6px;
+  background:rgba(61,93,107,.06); color:#3a5260;
+}
 /* queue */
 .queue { display:grid; gap:7px; margin-bottom:12px; }
 .task {
@@ -683,11 +714,16 @@ body[data-exec-window="false"] .star { opacity:1; }
       <div class="schedule-label">⏳ next auto-cycle</div>
       <div class="schedule-countdown" id="countdown">—</div>
     </div>
-    <div class="queue" id="queue"></div>
+    <div class="panels" id="panels"></div>
+    <div class="candidates" id="candidates" style="display:none;">
+      <div class="candidates-label">💡 内生驱动候选</div>
+      <div id="candidateList"></div>
+    </div>
     <div class="executions" id="executions" style="display:none;">
       <div class="exec-label">⚡ 执行中</div>
       <div id="execList"></div>
     </div>
+    <div class="body-status" id="bodyStatus"></div>
     <div class="timeline" id="timeline"></div>
   </aside>
 
@@ -705,9 +741,12 @@ const els = {
   title: document.getElementById("sceneTitle"),
   summary: document.getElementById("sceneSummary"),
   glyph: document.getElementById("glyph"),
-  queue: document.getElementById("queue"),
+  panels: document.getElementById("panels"),
+  candidates: document.getElementById("candidates"),
+  candidateList: document.getElementById("candidateList"),
   executions: document.getElementById("executions"),
   execList: document.getElementById("execList"),
+  bodyStatus: document.getElementById("bodyStatus"),
   timeline: document.getElementById("timeline"),
   metrics: document.getElementById("metrics"),
   particles: document.getElementById("particles"),
@@ -715,7 +754,7 @@ const els = {
 
 /* ── Glyphs per scene ── */
 const GLYPHS = {
-  idle:"?", planning:"!", memory:"¶", learning:"λ", execution:"⟩"
+  idle:"?", drive:"✦", planning:"!", maintenance:"¶", learning:"λ", body_switch:"⟩", execution:"⟩"
 };
 
 /* ── Icons per event type ── */
@@ -739,22 +778,74 @@ function taskDotClass(task) {
   return "planning";
 }
 
-/* ── Render queue ── */
-function renderQueue(tasks) {
-  els.queue.replaceChildren();
-  (tasks||[]).slice(0,5).forEach(function(t) {
-    var row = document.createElement("div");
-    row.className = "task";
-    var dot = document.createElement("span");
-    dot.className = "task-dot " + taskDotClass(t);
-    var title = document.createElement("span");
-    title.textContent = t.title||"Untitled";
-    var badge = document.createElement("span");
-    badge.className = "task-badge";
-    badge.textContent = t.status||t.priority||"queued";
-    row.append(dot,title,badge);
-    els.queue.append(row);
+/* ── Render grouped task panels ── */
+function renderPanels(panels) {
+  els.panels.replaceChildren();
+  if (!panels) return;
+  var groups = ["learning","maintenance","evolution"];
+  groups.forEach(function(key) {
+    var panel = panels[key];
+    if (!panel || !panel.count) return;
+    var section = document.createElement("div");
+    section.className = "panel " + key;
+    var head = document.createElement("div");
+    head.className = "panel-head";
+    head.textContent = panel.label + " (" + panel.count + ")";
+    section.append(head);
+    (panel.tasks||[]).slice(0,5).forEach(function(t) {
+      var row = document.createElement("div");
+      row.className = "task";
+      var dot = document.createElement("span");
+      dot.className = "task-dot " + taskDotClass(t);
+      var title = document.createElement("span");
+      title.textContent = (t.title||"Untitled").substring(0,48);
+      var badge = document.createElement("span");
+      badge.className = "task-badge";
+      badge.textContent = t.status||"queued";
+      row.append(dot,title,badge);
+      section.append(row);
+    });
+    els.panels.append(section);
   });
+}
+
+/* ── Render drive candidates ── */
+function renderCandidates(candidates) {
+  if (!candidates || !candidates.length) {
+    els.candidates.style.display = "none";
+    return;
+  }
+  els.candidates.style.display = "block";
+  els.candidateList.replaceChildren();
+  candidates.slice(0,4).forEach(function(c) {
+    var row = document.createElement("div");
+    row.className = "candidate";
+    var title = document.createElement("span");
+    title.textContent = (c.title||"Candidate").substring(0,40);
+    var tags = document.createElement("span");
+    tags.className = "candidate-tags";
+    tags.textContent = (c.value_tags||[]).join(", ");
+    var util = document.createElement("span");
+    util.className = "candidate-utility";
+    util.textContent = Math.round((c.utility||0)*100) + "%";
+    row.append(title,tags,util);
+    els.candidateList.append(row);
+  });
+}
+
+/* ── Render body status ── */
+function renderBodyStatus(status) {
+  els.bodyStatus.replaceChildren();
+  if (!status || !status.active_slot) return;
+  var row = document.createElement("div");
+  row.className = "body-info";
+  var label = document.createElement("span");
+  label.textContent = "🖥 Body: " + status.active_slot;
+  if (status.candidate_slot) {
+    label.textContent += " → candidate " + status.candidate_slot;
+    row.style.color = "var(--coral)";
+  }
+  els.bodyStatus.append(row);
 }
 
 /* ── Render timeline ── */
@@ -806,29 +897,31 @@ function renderExecutions(tasks) {
 /* ── Render metrics ── */
 function renderMetrics(state) {
   els.metrics.replaceChildren();
-  var tasks = state.tasks||[];
-  var queueCount = tasks.length;
-  var approved = tasks.filter(function(t){return t.status==="approved";}).length;
-  var candidates = (state.drive_candidates||[]).length;
-  var errors = state.error_count||0;
-  var inWindow = state.in_execution_window !== false;
+  var m = state.metrics||{};
+  var byPath = m.by_path||{};
+  var lr = m.learning_results||{};
 
   function addMetric(cls,value,label) {
-    var m = document.createElement("div");
-    m.className = "metric "+cls;
+    var d = document.createElement("div");
+    d.className = "metric "+cls;
     var v = document.createElement("div");
     v.className = "metric-value";
     v.textContent = value;
     var l = document.createElement("div");
     l.className = "metric-label";
     l.textContent = label;
-    m.append(v,l);
-    els.metrics.append(m);
+    d.append(v,l);
+    els.metrics.append(d);
   }
-  addMetric("ok",queueCount,"Queued");
-  addMetric(approved>0?"ok":"","",approved>0?approved:"—","Approved");
-  addMetric(errors>0?"error":"ok",errors>0?errors:"—","Errors");
-	  addMetric(inWindow?"ok":"",inWindow?"open":"closed","Exec Win");
+  addMetric("ok",m.queue_total||0,"Total");
+  addMetric("ok",byPath.learning||0,"Learning");
+  addMetric("ok",byPath.maintenance||0,"Maint");
+  addMetric((m.error_count||0)>0?"error":"ok",m.error_count||0,"Errors");
+  if (lr.completed||lr.failed) {
+    addMetric("ok",lr.completed+"/"+(lr.failed||0),"Done/Fail");
+  }
+  addMetric(m.body_switch_active?"warn":"ok",m.active_slot||"—","Body");
+  addMetric(state.in_execution_window!==false?"ok":"",state.in_execution_window!==false?"open":"closed","Window");
 }
 
 /* ── Schedule countdown ── */
@@ -896,8 +989,10 @@ function applyState(state) {
   /* execution window */
   els.body.dataset.execWindow = state.in_execution_window !== false ? "true" : "false";
 
-  renderQueue(state.tasks||[]);
+  renderPanels(state.panels||{});
+  renderCandidates(state.drive_candidates||[]);
   renderExecutions(state.active_executions||[]);
+  renderBodyStatus(state.body_status||{});
   renderTimeline(timeline);
   renderMetrics(state);
   if (state.schedule) renderSchedule(state.schedule);
@@ -911,7 +1006,7 @@ function applyState(state) {
 /* ── Ambient particles ── */
 var particleTimer = null;
 function spawnParticles(scene, count) {
-  var colors = {memory:"#e2b04a",learning:"#7cc9a0",planning:"#e07362",execution:"#e07362",idle:"rgba(255,248,220,.6)"};
+  var colors = {idle:"rgba(255,248,220,.6)",drive:"#e2b04a",learning:"#7cc9a0",planning:"#e07362",maintenance:"#e2b04a",body_switch:"#e07362",execution:"#e07362"};
   var color = colors[scene]||"rgba(255,248,220,.5)";
   for (var i=0;i<(count||6);i++) {
     var p = document.createElement("span");
@@ -927,7 +1022,8 @@ function spawnParticles(scene, count) {
 }
 /* gentle ambient particles on idle */
 function ambientParticles() {
-  if (els.body.dataset.scene==="execution") spawnParticles("execution",3);
+  var s = els.body.dataset.scene;
+  if (s==="execution"||s==="body_switch") spawnParticles(s,3);
 }
 particleTimer = setInterval(ambientParticles, 5000);
 
@@ -942,7 +1038,10 @@ async function refresh() {
     els.summary.textContent = "State channel not available yet.";
     els.glyph.textContent = "?";
     els.metrics.replaceChildren();
-    els.queue.replaceChildren();
+    els.panels.replaceChildren();
+    els.candidates.style.display = "none";
+    els.executions.style.display = "none";
+    els.bodyStatus.replaceChildren();
     els.timeline.replaceChildren();
   }
 }
@@ -1084,19 +1183,22 @@ class SupervisorUIMixin:
         return f"event: {event_name}\ndata: {data}\n\n"
 
     async def get_supervisor_ui_state(self) -> Dict[str, Any]:
-        tasks = [
+        all_tasks = [
             self._serialize_self_evolution_task(task)
             for task in self._self_evolution_queue.list_tasks()
-            if task.status in {"planned", "deferred", "paused", "approved"}
+            if task.status in {"planned", "deferred", "paused", "approved", "running", "completed", "failed"}
         ]
-        tasks.sort(key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
+        all_tasks.sort(key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
+
+        # ── Grouped task panels by execution path ──
+        panels = self._build_task_panels(all_tasks)
 
         drive_candidates: List[Dict[str, Any]] = []
         drive_available = True
         idle_snapshot: Dict[str, Any] = {}
         try:
             drive = await self.evaluate_endogenous_drive(
-                {"max_candidates": 3, "record_activity": False}
+                {"max_candidates": 6, "record_activity": False}
             )
             drive_candidates = list(drive.get("candidates") or [])
             idle_snapshot = dict(drive.get("idle_window") or {})
@@ -1110,7 +1212,21 @@ class SupervisorUIMixin:
         error_count = int(counts.get("error_count") or 0)
         in_execution_window = bool(checks.get("in_execution_window", True))
 
-        # ── Schedule visibility: expose next-review / next-drive timestamps ──
+        # ── Body status (direct from registry, not task queue) ──
+        body_status: Dict[str, Any] = {}
+        try:
+            registry = self._body_registry
+            body_status = {
+                "active_slot": getattr(registry, "active_slot", None),
+                "candidate_slot": getattr(registry, "candidate_slot", None),
+                "retired_slot": getattr(registry, "retired_slot", None),
+                "shell_agents": getattr(registry, "shell_agent_count", 0),
+                "last_switch_result": dict(getattr(registry, "last_switch_result", {}) or {}),
+            }
+        except Exception:
+            pass
+
+        # ── Schedule visibility ──
         schedule: Dict[str, Any] = {
             "review_interval_seconds": self.config.service_runtime.self_evolution_review_interval,
             "drive_interval_seconds": self.config.service_runtime.endogenous_drive_interval,
@@ -1122,7 +1238,7 @@ class SupervisorUIMixin:
             schedule["next_drive_at"] = self._service_runtime.next_drive_at.isoformat()
             schedule["last_drive_at"] = self._service_runtime.last_drive_at.isoformat() if self._service_runtime.last_drive_at else None
 
-        # ── Supervisor's own LLM token usage (from MemAI pipeline) ──
+        # ── LLM token usage ──
         mem_usage: Dict[str, Any] = {}
         try:
             from memai.llm_client import get_memory_token_usage
@@ -1140,8 +1256,12 @@ class SupervisorUIMixin:
         except Exception:
             pass
 
+        # ── Metrics panel (upgraded with per-path stats) ──
+        metrics = self._build_ui_metrics(all_tasks, panels, drive_candidates, body_status, error_count)
+
         scene, title, summary = self._map_supervisor_scene(
-            tasks=tasks,
+            panels=panels,
+            all_tasks=all_tasks,
             drive_candidates=drive_candidates,
             drive_available=drive_available,
             error_count=error_count,
@@ -1153,10 +1273,13 @@ class SupervisorUIMixin:
             "title": title,
             "summary": summary,
             "generated_at": datetime.utcnow().isoformat(),
-            "tasks": tasks[:6],
+            "panels": panels,
+            "tasks": all_tasks[:12],
             "schedule": schedule,
+            "metrics": metrics,
             "mem_usage": mem_usage,
-            "drive_candidates": drive_candidates[:3],
+            "body_status": body_status,
+            "drive_candidates": drive_candidates,
             "drive_available": drive_available,
             "error_count": error_count,
             "in_execution_window": in_execution_window,
@@ -1169,6 +1292,67 @@ class SupervisorUIMixin:
                 if task.status == "running"
                 and not task.metadata.get("execution_failed")
             ],
+        }
+
+    def _build_task_panels(self, all_tasks: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Group tasks by execution path for panel display."""
+        learning: List[Dict[str, Any]] = []
+        maintenance: List[Dict[str, Any]] = []
+        evolution: List[Dict[str, Any]] = []
+        for task in all_tasks:
+            tf = str(task.get("task_family") or task.get("governance_task_type") or "")
+            if "learning" in tf:
+                learning.append(task)
+            elif "memory" in tf:
+                maintenance.append(task)
+            else:
+                evolution.append(task)
+        return {
+            "learning": {"label": "Learning", "count": len(learning), "tasks": learning},
+            "maintenance": {"label": "Maintenance", "count": len(maintenance), "tasks": maintenance},
+            "evolution": {"label": "Evolution", "count": len(evolution), "tasks": evolution},
+        }
+
+    def _build_ui_metrics(
+        self,
+        all_tasks: List[Dict[str, Any]],
+        panels: Dict[str, Any],
+        drive_candidates: List[Dict[str, Any]],
+        body_status: Dict[str, Any],
+        error_count: int,
+    ) -> Dict[str, Any]:
+        """Build upgraded metrics with per-path grouping stats."""
+        queue_total = len(all_tasks)
+        learning_count = panels.get("learning", {}).get("count", 0)
+        maintenance_count = panels.get("maintenance", {}).get("count", 0)
+        evolution_count = panels.get("evolution", {}).get("count", 0)
+
+        # Recent learning results (completed/failed in last 20 tasks)
+        learning_completed = sum(
+            1 for t in all_tasks
+            if "learning" in str(t.get("task_family", "")) and t.get("status") == "completed"
+        )
+        learning_failed = sum(
+            1 for t in all_tasks
+            if "learning" in str(t.get("task_family", "")) and t.get("status") == "failed"
+        )
+
+        return {
+            "queue_total": queue_total,
+            "by_path": {
+                "learning": learning_count,
+                "maintenance": maintenance_count,
+                "evolution": evolution_count,
+            },
+            "learning_results": {
+                "completed": learning_completed,
+                "failed": learning_failed,
+            },
+            "drive_candidates": len(drive_candidates),
+            "body_switch_active": bool(body_status.get("candidate_slot")),
+            "active_slot": body_status.get("active_slot"),
+            "error_count": error_count,
+            "running_count": sum(1 for t in all_tasks if t.get("status") == "running"),
         }
 
     async def _recent_supervisor_observation_timeline(self, limit: int = 10) -> List[Dict[str, Any]]:
@@ -1188,80 +1372,74 @@ class SupervisorUIMixin:
     def _map_supervisor_scene(
         self,
         *,
-        tasks: List[Dict[str, Any]],
+        panels: Dict[str, Any],
+        all_tasks: List[Dict[str, Any]],
         drive_candidates: List[Dict[str, Any]],
         drive_available: bool,
         error_count: int = 0,
         in_execution_window: bool = True,
     ) -> tuple[str, str, str]:
-        active = tasks[0] if tasks else None
+        """Redefined scenes driven by real activity rather than static heuristics."""
         error_note = f" · {error_count} recent error(s)" if error_count > 0 else ""
 
-        if active is not None:
-            task_family = str(active.get("task_family") or active.get("governance_task_type") or "")
-            status = str(active.get("status") or "queued")
-            title = str(active.get("title") or "Supervisor task queued")
-            status_label = {"planned":"queued","deferred":"waiting","paused":"paused","approved":"ready","running":"running"}.get(status, status)
-            if "memory" in task_family:
+        # ── Scene priority: running > drive > queued > idle ──
+
+        # 1. Active execution: body_switch
+        running = [t for t in all_tasks if t.get("status") == "running"]
+        if running:
+            r = running[0]
+            rtitle = str(r.get("title") or "Running task")
+            rfamily = str(r.get("task_family") or "")
+            if "learning" in rfamily:
                 return (
-                    "memory",
-                    f"Xizi is tending the memory shelves{error_note}",
-                    f"「{title}」is {status_label}. Long-term continuity is being guarded — memories compressed, lineage preserved.",
+                    "learning",
+                    f"Xizi is researching{error_note}",
+                    f"「{rtitle}」Agent is actively executing this learning task.",
                 )
-            if "learning" in task_family:
-                if status == "running":
-                    return (
-                        "learning",
-                        f"Xizi is researching{error_note}",
-                        f"「{title}」is {status_label}. Agent is actively executing this learning task.",
-                    )
-                if status == "approved":
-                    return (
-                        "planning",
-                        f"Xizi has approved learning{error_note}",
-                        f"「{title}」is {status_label}. Task awaits agent pull via /v1/tasks; agent body executes learn-only research.",
-                    )
-                    return (
-                        "planning",
-                        f"Xizi is reviewing learning proposals{error_note}",
-                        f"「{title}」is {status_label}. Assessing whether to approve this learning task.",
-                    )
-            if "body" in task_family or "evolution" in task_family:
-                window_note = " · execution window open" if in_execution_window else " · awaiting execution window"
-                if status == "running":
-                    return (
-                        "execution",
-                        f"Xizi is at the console{error_note}{window_note}",
-                        f"「{title}」is {status_label}. Body evolution is executing now.",
-                    )
-                if status == "approved":
-                    return (
-                        "execution",
-                        f"Xizi is at the console{error_note}{window_note}",
-                        f"「{title}」is {status_label}. Body evolution follows governance → probe → activate → watch-window → rollback rules.",
-                    )
-                else:
-                    return (
-                        "planning",
-                        f"Xizi is reviewing evolution proposals{error_note}{window_note}",
-                        f"「{title}」is {status_label}. Weighing evidence strength and rollback safety before approval.",
-                    )
+            if "memory" in rfamily:
+                return (
+                    "maintenance",
+                    f"Xizi is tending memory{error_note}",
+                    f"「{rtitle}」Memory maintenance is executing now.",
+                )
             return (
-                "planning",
-                f"Xizi is reviewing the queue{error_note}",
-                f"「{title}」is {status_label}. The supervisor weighs idle-window conditions, evidence strength, and rollback safety.",
+                "body_switch",
+                f"Xizi is at the console{error_note}",
+                f"「{rtitle}」Body evolution is executing now.",
             )
 
+        # 2. Learning tasks awaiting Agent pull
+        learning_pending = [t for t in all_tasks if "learning" in str(t.get("task_family", "")) and t.get("status") == "approved"]
+        if learning_pending:
+            lp = learning_pending[0]
+            return (
+                "learning",
+                f"Xizi has approved learning{error_note}",
+                f"「{lp.get('title', 'Learning task')}」is ready. Agent pulls via /v1/tasks; learn-only research awaits execution.",
+            )
+
+        # 3. Endogenous drive active
         if drive_candidates:
             first = drive_candidates[0]
             value_tags = ", ".join(first.get("value_tags") or [])
             utility_pct = int((first.get("utility") or 0) * 100)
             return (
-                "planning",
+                "drive",
                 f"Xizi senses something worth doing{error_note}",
                 f"「{first.get('title', 'A candidate task')}」emerged from core values [{value_tags}] with utility {utility_pct}%. Awaiting governance review.",
             )
 
+        # 4. Memory maintenance queued
+        maintenance_pending = [t for t in all_tasks if "memory" in str(t.get("task_family", "")) and t.get("status") in ("approved", "planned")]
+        if maintenance_pending:
+            mp = maintenance_pending[0]
+            return (
+                "maintenance",
+                f"Xizi is tending the memory shelves{error_note}",
+                f"「{mp.get('title', 'Maintenance task')}」Long-term continuity is being guarded.",
+            )
+
+        # 5. Drive unavailable
         if not drive_available:
             return (
                 "idle",
@@ -1269,6 +1447,7 @@ class SupervisorUIMixin:
                 "Gateway activity is unreachable. The room shows local supervisor state — endogenous drive will resume when the signal returns.",
             )
 
+        # 6. Truly idle
         window_mood = "The execution window is open and the system is quiet." if in_execution_window else "Outside the execution window, the system rests."
         return (
             "idle",

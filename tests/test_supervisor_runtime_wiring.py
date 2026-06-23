@@ -160,7 +160,7 @@ def test_supervisor_mounts_built_in_room_ui_when_enabled(tmp_path):
     assert state.status_code == 200
     payload = state.json()
     assert payload["status"] == "ok"
-    assert payload["scene"] in {"idle", "planning", "memory", "learning", "execution"}
+    assert payload["scene"] in {"idle", "drive", "maintenance", "learning", "body_switch", "execution"}
     assert "timeline" in payload
 
 
@@ -452,7 +452,7 @@ async def test_supervisor_room_state_maps_memory_task_to_memory_scene(tmp_path):
 
     state = await supervisor.get_supervisor_ui_state()
 
-    assert state["scene"] == "memory"
+    assert state["scene"] == "maintenance"
     assert state["tasks"][0]["title"] == "Run memory continuity sweep"
     assert "tending the memory" in state["title"]
     assert "tasks_planned" in [event["event_type"] for event in state["timeline"]]
