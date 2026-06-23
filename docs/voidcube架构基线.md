@@ -14,14 +14,12 @@
 - 整个架构到底在服务谁、升级谁
 - 哪些职责必须收口，哪些能力暂时不做
 
-详细协议、操作步骤和阶段计划分别放在：
+详细协议、操作步骤和阶段计划已移至代码内文档和架构基线。本文件为单一真实源（single source of truth）。
 
-- [architecture-integration.md](./architecture-integration.md)
-- [body-lifecycle.md](./body-lifecycle.md)
-- [switch-protocol.md](./switch-protocol.md)
-- [state-boundary.md](./state-boundary.md)
-- [phase-1-experiment-roadmap.md](./phase-1-experiment-roadmap.md)
-- [body-runtime-runbook.md](./body-runtime-runbook.md)
+参考：
+- Mem 子系统文档：`Mem/docs/`
+- 技能文档：`skills/`
+- 系统代码即文档：`systems/`、`agent/`、`tools/`
 
 ## 2. 核心结论
 

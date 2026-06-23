@@ -221,6 +221,9 @@ class SubagentDisplayManager:
         # Track active tools for each task (for nesting)
         self._active_tools: Dict[str, List[str]] = {}
         
+        # Track completion time for memory cleanup
+        self._completed_tasks: Dict[str, float] = {}
+        
     @property
     def print_fn(self) -> Callable:
         """Get the print function."""
@@ -446,6 +449,9 @@ class SubagentDisplayManager:
                 task.tokens_used = tokens
             if model:
                 task.model = model
+            
+            # Track completion time for cleanup
+            self._completed_tasks[task_id] = time.time()
         
         # Print final summary
         self._print_final_summary(task)
@@ -459,6 +465,7 @@ class SubagentDisplayManager:
                 task.completed_at = time.time()
                 task.duration_seconds = task.completed_at - task.started_at
                 task.exit_reason = "interrupted"
+                self._completed_tasks[task_id] = time.time()
         
         self._print_interrupt(task)
     
@@ -471,6 +478,7 @@ class SubagentDisplayManager:
                 task.completed_at = time.time()
                 task.duration_seconds = task.completed_at - task.started_at
                 task.exit_reason = "cancelled"
+                self._completed_tasks[task_id] = time.time()
         
         self._print_cancel(task)
     
@@ -481,10 +489,11 @@ class SubagentDisplayManager:
     def render(self, clear: bool = True) -> None:
         """Render the current state of all tasks."""
         with self._render_lock:
-            tasks = self.list_tasks(include_background=False)
-            active_tasks = [t for t in tasks if t.status not in 
-                          (SubagentStatus.COMPLETED, SubagentStatus.FAILED, 
-                           SubagentStatus.INTERRUPTED, SubagentStatus.CANCELLED)]
+            with self._lock:
+                tasks = list(self._tasks.values())
+                active_tasks = [t for t in tasks if t.status not in 
+                              (SubagentStatus.COMPLETED, SubagentStatus.FAILED, 
+                               SubagentStatus.INTERRUPTED, SubagentStatus.CANCELLED)]
             
             if not tasks:
                 return
@@ -498,7 +507,7 @@ class SubagentDisplayManager:
             # Header
             lines.append(self._render_header(active_tasks))
             
-            # Task panels
+            # Task panels (rendering doesn't need lock since we already copied tasks)
             for task in tasks:
                 lines.extend(self._render_task(task))
             
@@ -814,8 +823,23 @@ class SubagentDisplayManager:
     
     def _refresh_loop(self) -> None:
         """Background refresh loop for real-time updates."""
+        CLEANUP_AFTER_SECONDS = 30  # Clean up completed tasks after 30 seconds
+        
         while not self._stop_refresh.is_set():
             try:
+                # Clean up completed tasks that are older than cleanup threshold
+                current_time = time.time()
+                with self._lock:
+                    to_remove = [
+                        tid for tid, completed_at in self._completed_tasks.items()
+                        if current_time - completed_at > CLEANUP_AFTER_SECONDS
+                    ]
+                    for tid in to_remove:
+                        self._tasks.pop(tid, None)
+                        self._background_tasks.pop(tid, None)
+                        self._active_tools.pop(tid, None)
+                        self._completed_tasks.pop(tid, None)
+                
                 # Only render if there are active tasks
                 if self.get_active_count() > 0:
                     self.render(clear=True)

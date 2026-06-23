@@ -6897,6 +6897,8 @@ class AIAgent:
                     goal_preview = (function_args.get("goal") or "")[:30]
                     spinner_label = f"🔀 {goal_preview}" if goal_preview else "🔀 委派中"
                 spinner = None
+                # Skip traditional spinner when SubagentDisplayManager handles display
+                # delegate_task now manages its own rich display
                 if self._should_emit_quiet_tool_messages() and self._should_start_quiet_spinner():
                     face = random.choice(KawaiiSpinner.KAWAII_WAITING)
                     spinner = KawaiiSpinner(f"{face} {spinner_label}", spinner_type='dots', print_fn=self._print_fn)
@@ -6911,6 +6913,7 @@ class AIAgent:
                         tasks=tasks_arg,
                         max_iterations=function_args.get("max_iterations"),
                         parent_agent=self,
+                        enable_display=False,  # Use traditional spinner for CLI
                     )
                     _delegate_result = function_result
                 finally:

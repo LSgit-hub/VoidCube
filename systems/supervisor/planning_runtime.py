@@ -713,9 +713,6 @@ class PlanningRuntimeMixin:
     def _serialize_self_evolution_task(self, task: SelfEvolutionTask) -> Dict[str, Any]:
         payload = task.model_dump(mode="json")
         payload.update(self._task_runtime_profile(task))
-        boundary = self._self_evolution_task_boundary(task)
-        if boundary is not None:
-            payload["evolution_boundary"] = boundary
         return payload
 
     def _self_evolution_task_git_lineage(self, task: SelfEvolutionTask) -> Dict[str, Any]:
@@ -724,45 +721,6 @@ class PlanningRuntimeMixin:
             **dict(task.evidence.get("git_lineage") or {}),
             **dict(execution.get("git_lineage") or {}),
         }
-
-    def _self_evolution_task_boundary(self, task: SelfEvolutionTask) -> Optional[Dict[str, Any]]:
-        return None
-
-    def _record_self_evolution_boundary_defer(
-        self,
-        *,
-        task: SelfEvolutionTask,
-        actor: str,
-        reason: str,
-        boundary: Dict[str, Any],
-    ) -> None:
-        try:
-            execution = dict(task.metadata.get("execution_request") or {})
-            self._governor.record_boundary_defer(
-                task_id=task.task_id,
-                trace_id=task.trace_id,
-                task_type=task.task_type,
-                governance_task_type=self._task_governance_type(task),
-                task_family=self._task_runtime_family(task),
-                execution_kind=self._task_execution_kind(task),
-                decision_id=(
-                    task.decision_history[-1].decision_id
-                    if task.decision_history
-                    else None
-                ),
-                title=task.title,
-                body_id=(
-                    execution.get("target_slot_id")
-                    or task.metadata.get("target_slot_id")
-                    or task.constraints.get("target_slot_id")
-                ),
-                source_actor=actor,
-                reason=reason,
-                git_lineage=self._self_evolution_task_git_lineage(task),
-                evolution_boundary=boundary,
-            )
-        except Exception as exc:
-            logger.warning("Failed to record boundary defer governance history: %s", exc)
 
     async def list_self_evolution_tasks(self, status: Optional[str] = None):
         normalized_status = None
@@ -982,32 +940,6 @@ class PlanningRuntimeMixin:
             )
             execution_request = None
             if target_status == "approved":
-                boundary = self._self_evolution_task_boundary(task)
-                if boundary is not None and not boundary["ok"]:
-                    violations = ", ".join(boundary["violations"])
-                    actor = str(request.get("actor", "supervisor"))
-                    decision_id = str(request.get("decision_id") or uuid.uuid4())
-                    reason = (
-                        "Task deferred because body self-evolution changes cross the "
-                        f"child-agent boundary: {violations}."
-                    )
-                    updated = self._self_evolution_queue.update_status(
-                        task.task_id,
-                        status="deferred",
-                        decision_id=decision_id,
-                        actor=actor,
-                        reason=reason,
-                        context={"idle_window": task_idle_window, "evolution_boundary": boundary},
-                    )
-                    self._record_self_evolution_boundary_defer(
-                        task=updated,
-                        actor=actor,
-                        reason=reason,
-                        boundary=boundary,
-                    )
-                    reviewed.append(updated)
-                    reviewed_statuses.append(updated.status)
-                    continue
                 if self._task_requires_execution_request(task):
                     decision_id = str(request.get("decision_id") or uuid.uuid4())
                     try:

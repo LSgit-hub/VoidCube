@@ -174,10 +174,13 @@ def _build_child_progress_callback(
     """
     # Priority 1: Use SubagentDisplayManager if available (Claude Code-style UI)
     if display_manager is not None:
+        # Get goal from parent_agent if available
+        goal = getattr(parent_agent, '_current_delegate_goal', "")
         return _build_subagent_display_callback(
             task_id or f"task-{task_index}",
             task_index,
             display_manager,
+            goal=goal,
         )
     
     # Priority 2: Legacy CLI spinner callback
@@ -251,7 +254,7 @@ def _build_child_progress_callback(
     return _callback
 
 
-def _build_subagent_display_callback(task_id: str, task_index: int, display_manager):
+def _build_subagent_display_callback(task_id: str, task_index: int, display_manager, goal: str = ""):
     """Build a callback using SubagentDisplayManager for rich CLI visualization.
     
     This provides Claude Code-style display with:
@@ -259,27 +262,26 @@ def _build_subagent_display_callback(task_id: str, task_index: int, display_mana
     - Tree-view tool call visualization
     - Thinking/reasoning display
     - Background task management
-    """
-    # Create task tracking entry
-    display_manager.create_task(
-        task_id=task_id,
-        goal="",
-        task_index=task_index,
-        max_iterations=50,
-    )
     
+    Note: Task entry is typically created by delegate_task() before this callback
+    is built, so we don't create it here to avoid duplicates.
+    """
     _tool_depth = 1  # Current tool nesting depth
     _iteration = 0   # Current iteration
     
     def _callback(event_type: str, tool_name: str = None, preview: str = None, args=None, **kwargs):
         nonlocal _tool_depth, _iteration
         
-        if event_type in ("_thinking", "reasoning.available", "thinking"):
-            # Thinking/reasoning events
-            display_manager.on_thinking(task_id, preview or tool_name or "", _iteration)
+        # Thinking/reasoning events
+        # Subagent sends: "_thinking", "reasoning.available"
+        if event_type in ("_thinking", "reasoning.available"):
+            # For "_thinking", tool_name contains the text
+            # For "reasoning.available", preview contains the text
+            thinking_text = preview or tool_name or ""
+            display_manager.on_thinking(task_id, thinking_text, _iteration)
         
+        # Tool execution started
         elif event_type == "tool.started":
-            # Tool execution started
             display_manager.on_tool_start(
                 task_id,
                 tool_name or "",
@@ -288,14 +290,15 @@ def _build_subagent_display_callback(task_id: str, task_index: int, display_mana
                 iteration=_iteration,
             )
         
-        elif event_type in ("tool.completed", "tool.done"):
-            # Tool execution completed
+        # Tool execution completed
+        elif event_type == "tool.completed":
             status = "ok"
-            result = preview or ""
+            result = ""
+            is_error = kwargs.get("is_error", False)
             
-            # Check for error in result
-            if result and "error" in result.lower()[:50]:
+            if is_error:
                 status = "error"
+                result = kwargs.get("error", "")
             
             display_manager.on_tool_complete(
                 task_id,
@@ -303,19 +306,6 @@ def _build_subagent_display_callback(task_id: str, task_index: int, display_mana
                 result_preview=result,
                 status=status,
             )
-        
-        elif event_type == "iteration":
-            # Iteration update
-            _iteration = kwargs.get("iteration", _iteration + 1)
-            display_manager.on_api_call(task_id, _iteration)
-        
-        elif event_type == "tool.starting":
-            # Tool about to execute
-            _tool_depth += 1
-        
-        elif event_type == "tool.ending":
-            # Tool about to complete
-            _tool_depth = max(1, _tool_depth - 1)
     
     def _flush():
         """Called when subagent completes."""
@@ -832,6 +822,16 @@ def delegate_task(
     try:
         for i, t in enumerate(task_list):
             task_id = f"delegate-{int(time.time() * 1000)}-{i}"
+            
+            # Create task entry in display manager with goal before building agent
+            if display_manager:
+                display_manager.create_task(
+                    task_id=task_id,
+                    goal=t["goal"],
+                    task_index=i,
+                    max_iterations=effective_max_iter,
+                )
+            
             child = _build_child_agent(
                 task_index=i, goal=t["goal"], context=t.get("context"),
                 toolsets=t.get("toolsets") or toolsets, model=creds["model"],
