@@ -99,9 +99,17 @@ SERVICES: Dict[str, ServiceInfo] = {
 def _pid_alive(pid: int) -> bool:
     """Check if a process with the given PID is alive."""
     try:
-        os.kill(pid, 0)
-        return True
-    except (OSError, ProcessLookupError):
+        if sys.platform == "win32":
+            import subprocess
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV"],
+                capture_output=True, text=True, timeout=5
+            )
+            return f'"{pid}"' in result.stdout
+        else:
+            os.kill(pid, 0)
+            return True
+    except (OSError, ProcessLookupError, subprocess.CalledProcessError, TimeoutError):
         return False
 
 

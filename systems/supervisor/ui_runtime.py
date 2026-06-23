@@ -1,5 +1,21 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import os
+import threading
+import webbrowser
+from collections import deque
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Deque, Dict, List, Optional
+import uuid
+
+from fastapi import Request
+from fastapi.responses import HTMLResponse, StreamingResponse
+
+from VoidCube_core.utils import atomic_json_write
+
 UI_HTML = r"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1117,22 +1133,6 @@ spawnParticles("idle");
 </body>
 </html>
 """
-
-import asyncio
-import json
-import os
-import threading
-import webbrowser
-from collections import deque
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional
-import uuid
-
-from fastapi import Request
-from fastapi.responses import HTMLResponse, StreamingResponse
-
-from VoidCube_core.utils import atomic_json_write
 
 
 class SupervisorUIMixin:
