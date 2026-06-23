@@ -155,16 +155,32 @@ def _strip_blocked_tools(toolsets: List[str]) -> List[str]:
     return [t for t in toolsets if t not in blocked_toolset_names]
 
 
-def _build_child_progress_callback(task_index: int, parent_agent, task_count: int = 1) -> Optional[callable]:
+def _build_child_progress_callback(
+    task_index: int,
+    parent_agent,
+    task_count: int = 1,
+    display_manager=None,
+    task_id: str = None,
+) -> Optional[callable]:
     """Build a callback that relays child agent tool calls to the parent display.
 
-    Two display paths:
-      CLI:     prints tree-view lines above the parent's delegation spinner
-      Gateway: batches tool names and relays to parent's progress callback
+    Three display paths (in order of priority):
+      1. SubagentDisplayManager: Rich CLI visualization (tree view, status panel)
+      2. CLI spinner: Tree-view lines above the parent's delegation spinner
+      3. Gateway: Batches tool names and relays to parent's progress callback
 
     Returns None if no display mechanism is available, in which case the
     child agent runs with no progress callback (identical to current behavior).
     """
+    # Priority 1: Use SubagentDisplayManager if available (Claude Code-style UI)
+    if display_manager is not None:
+        return _build_subagent_display_callback(
+            task_id or f"task-{task_index}",
+            task_index,
+            display_manager,
+        )
+    
+    # Priority 2: Legacy CLI spinner callback
     spinner = getattr(parent_agent, '_delegate_spinner', None)
     parent_cb = getattr(parent_agent, 'tool_progress_callback', None)
 
@@ -235,6 +251,81 @@ def _build_child_progress_callback(task_index: int, parent_agent, task_count: in
     return _callback
 
 
+def _build_subagent_display_callback(task_id: str, task_index: int, display_manager):
+    """Build a callback using SubagentDisplayManager for rich CLI visualization.
+    
+    This provides Claude Code-style display with:
+    - Real-time status panel
+    - Tree-view tool call visualization
+    - Thinking/reasoning display
+    - Background task management
+    """
+    # Create task tracking entry
+    display_manager.create_task(
+        task_id=task_id,
+        goal="",
+        task_index=task_index,
+        max_iterations=50,
+    )
+    
+    _tool_depth = 1  # Current tool nesting depth
+    _iteration = 0   # Current iteration
+    
+    def _callback(event_type: str, tool_name: str = None, preview: str = None, args=None, **kwargs):
+        nonlocal _tool_depth, _iteration
+        
+        if event_type in ("_thinking", "reasoning.available", "thinking"):
+            # Thinking/reasoning events
+            display_manager.on_thinking(task_id, preview or tool_name or "", _iteration)
+        
+        elif event_type == "tool.started":
+            # Tool execution started
+            display_manager.on_tool_start(
+                task_id,
+                tool_name or "",
+                args_preview=preview or "",
+                depth=_tool_depth,
+                iteration=_iteration,
+            )
+        
+        elif event_type in ("tool.completed", "tool.done"):
+            # Tool execution completed
+            status = "ok"
+            result = preview or ""
+            
+            # Check for error in result
+            if result and "error" in result.lower()[:50]:
+                status = "error"
+            
+            display_manager.on_tool_complete(
+                task_id,
+                tool_name or "",
+                result_preview=result,
+                status=status,
+            )
+        
+        elif event_type == "iteration":
+            # Iteration update
+            _iteration = kwargs.get("iteration", _iteration + 1)
+            display_manager.on_api_call(task_id, _iteration)
+        
+        elif event_type == "tool.starting":
+            # Tool about to execute
+            _tool_depth += 1
+        
+        elif event_type == "tool.ending":
+            # Tool about to complete
+            _tool_depth = max(1, _tool_depth - 1)
+    
+    def _flush():
+        """Called when subagent completes."""
+        # Render final state
+        display_manager.render(clear=False)
+    
+    _callback._flush = _flush
+    return _callback
+
+
 def _build_child_agent(
     task_index: int,
     goal: str,
@@ -251,6 +342,9 @@ def _build_child_agent(
     # ACP transport overrides — lets a non-ACP parent spawn ACP child agents
     override_acp_command: Optional[str] = None,
     override_acp_args: Optional[List[str]] = None,
+    # Display manager for rich CLI visualization
+    display_manager=None,
+    task_id: str = None,
 ):
     """
     Build a child AIAgent on the main thread (thread-safe construction).
@@ -298,7 +392,9 @@ def _build_child_agent(
         parent_api_key = parent_agent._client_kwargs.get("api_key")
 
     # Build progress callback to relay tool calls to parent display
-    child_progress_cb = _build_child_progress_callback(task_index, parent_agent)
+    child_progress_cb = _build_child_progress_callback(
+        task_index, parent_agent, display_manager=display_manager, task_id=task_id
+    )
 
     # Each subagent gets its own iteration budget capped at max_iterations
     # (configurable via delegation.max_iterations, default 50).  This means
@@ -629,6 +725,8 @@ def delegate_task(
     acp_command: Optional[str] = None,
     acp_args: Optional[List[str]] = None,
     parent_agent=None,
+    # CLI display options
+    enable_display: bool = True,
 ) -> str:
     """
     Spawn one or more child agents to handle delegated tasks.
@@ -638,6 +736,13 @@ def delegate_task(
       - Batch:  provide tasks array [{goal, context, toolsets}, ...]
 
     Returns JSON with results array, one entry per task.
+    
+    When enable_display=True (default), uses SubagentDisplayManager for
+    Claude Code-style rich CLI visualization including:
+    - Real-time status panel with animated indicators
+    - Tree-view tool call visualization
+    - Thinking/reasoning process display
+    - Background task management (/tasks command)
     """
     if parent_agent is None:
         return tool_error("delegate_task requires a parent agent context.")
@@ -699,6 +804,21 @@ def delegate_task(
     # Track goal labels for progress display (truncated for readability)
     task_labels = [t["goal"][:40] for t in task_list]
 
+    # Initialize display manager for rich CLI visualization
+    display_manager = None
+    if enable_display:
+        try:
+            from agent.subagent_display import SubagentDisplayManager
+            display_manager = SubagentDisplayManager(
+                show_thinking=True,
+                show_tool_args=False,
+                max_tool_args_len=50,
+            )
+            display_manager.start()
+        except ImportError:
+            logger.debug("SubagentDisplayManager not available, using legacy display")
+            display_manager = None
+
     # Save parent tool names BEFORE any child construction mutates the global.
     # _build_child_agent() calls AIAgent() which calls get_tool_definitions(),
     # which overwrites model_tools._last_resolved_tool_names with child's toolset.
@@ -711,6 +831,7 @@ def delegate_task(
     children = []
     try:
         for i, t in enumerate(task_list):
+            task_id = f"delegate-{int(time.time() * 1000)}-{i}"
             child = _build_child_agent(
                 task_index=i, goal=t["goal"], context=t.get("context"),
                 toolsets=t.get("toolsets") or toolsets, model=creds["model"],
@@ -720,87 +841,140 @@ def delegate_task(
                 override_api_mode=creds["api_mode"],
                 override_acp_command=t.get("acp_command") or acp_command,
                 override_acp_args=t.get("acp_args") or acp_args,
+                display_manager=display_manager,
+                task_id=task_id,
             )
             # Override with correct parent tool names (before child construction mutated global)
             child._delegate_saved_tool_names = _parent_tool_names
-            children.append((i, t, child))
+            # Store task_id on child for display manager updates
+            child._delegate_task_id = task_id
+            children.append((i, t, child, task_id))
     finally:
         # Authoritative restore: reset global to parent's tool names after all children built
         _model_tools._last_resolved_tool_names = _parent_tool_names
 
-    if n_tasks == 1:
-        # Single task -- run directly (no thread pool overhead)
-        _i, _t, child = children[0]
-        result = _run_single_child(0, _t["goal"], child, parent_agent)
-        results.append(result)
-    else:
-        # Batch -- run in parallel with per-task progress lines
-        completed_count = 0
-        spinner_ref = getattr(parent_agent, '_delegate_spinner', None)
-
-        with ThreadPoolExecutor(max_workers=max_children) as executor:
-            futures = {}
-            for i, t, child in children:
-                future = executor.submit(
-                    _run_single_child,
-                    task_index=i,
-                    goal=t["goal"],
-                    child=child,
-                    parent_agent=parent_agent,
-                )
-                futures[future] = i
-
-            for future in as_completed(futures):
-                try:
-                    entry = future.result()
-                except Exception as exc:
-                    idx = futures[future]
-                    entry = {
-                        "task_index": idx,
-                        "status": "error",
-                        "summary": None,
-                        "error": str(exc),
-                        "api_calls": 0,
-                        "duration_seconds": 0,
-                    }
-                results.append(entry)
-                completed_count += 1
-
-                # Print per-task completion line above the spinner
-                idx = entry["task_index"]
-                label = task_labels[idx] if idx < len(task_labels) else f"Task {idx}"
-                dur = entry.get("duration_seconds", 0)
-                status = entry.get("status", "?")
-                icon = "✓" if status == "completed" else "✗"
-                remaining = n_tasks - completed_count
-                completion_line = f"{icon} [{idx+1}/{n_tasks}] {label}  ({dur}s)"
-                if spinner_ref:
-                    try:
-                        spinner_ref.print_above(completion_line)
-                    except Exception:
-                        print(f"  {completion_line}")
+    try:
+        if n_tasks == 1:
+            # Single task -- run directly (no thread pool overhead)
+            _i, _t, child, _task_id = children[0]
+            result = _run_single_child(0, _t["goal"], child, parent_agent)
+            results.append(result)
+            
+            # Update display manager with completion status for single task
+            if display_manager:
+                if result.get("status") == "error":
+                    display_manager.on_complete(
+                        _task_id,
+                        summary="",
+                        error=result.get("error", "Unknown error"),
+                        exit_reason="error",
+                    )
                 else:
-                    print(f"  {completion_line}")
+                    display_manager.on_complete(
+                        _task_id,
+                        summary=result.get("summary", ""),
+                        exit_reason=result.get("exit_reason", "completed"),
+                    )
+        else:
+            # Batch -- run in parallel with per-task progress lines
+            completed_count = 0
+            spinner_ref = getattr(parent_agent, '_delegate_spinner', None)
 
-                # Update spinner text to show remaining count
-                if spinner_ref and remaining > 0:
+            with ThreadPoolExecutor(max_workers=max_children) as executor:
+                futures = {}
+                for i, t, child, task_id in children:
+                    future = executor.submit(
+                        _run_single_child,
+                        task_index=i,
+                        goal=t["goal"],
+                        child=child,
+                        parent_agent=parent_agent,
+                    )
+                    futures[future] = (i, t, child, task_id)
+
+                for future in as_completed(futures):
                     try:
-                        spinner_ref.update_text(f"🔀 {remaining} task{'s' if remaining != 1 else ''} remaining")
-                    except Exception as e:
-                        logger.debug("Spinner update_text failed: %s", e)
+                        entry = future.result()
+                    except Exception as exc:
+                        idx, _, _, _ = futures[future]
+                        entry = {
+                            "task_index": idx,
+                            "status": "error",
+                            "summary": None,
+                            "error": str(exc),
+                            "api_calls": 0,
+                            "duration_seconds": 0,
+                        }
+                    results.append(entry)
+                    completed_count += 1
 
-        # Sort by task_index so results match input order
-        results.sort(key=lambda r: r["task_index"])
+                    # Update display manager with completion status
+                    if display_manager:
+                        task_info = futures[future]
+                        _, t, child, task_id = task_info
+                        if entry.get("status") == "error":
+                            display_manager.on_complete(
+                                task_id,
+                                summary="",
+                                error=entry.get("error", "Unknown error"),
+                                exit_reason="error",
+                            )
+                        else:
+                            display_manager.on_complete(
+                                task_id,
+                                summary=entry.get("summary", ""),
+                                exit_reason=entry.get("exit_reason", "completed"),
+                            )
+
+                    # Print per-task completion line above the spinner
+                    idx = entry["task_index"]
+                    label = task_labels[idx] if idx < len(task_labels) else f"Task {idx}"
+                    dur = entry.get("duration_seconds", 0)
+                    status = entry.get("status", "?")
+                    icon = "✓" if status == "completed" else "✗"
+                    remaining = n_tasks - completed_count
+                    completion_line = f"{icon} [{idx+1}/{n_tasks}] {label}  ({dur}s)"
+                    if spinner_ref:
+                        try:
+                            spinner_ref.print_above(completion_line)
+                        except Exception:
+                            print(f"  {completion_line}")
+                    else:
+                        print(f"  {completion_line}")
+
+                    # Update spinner text to show remaining count
+                    if spinner_ref and remaining > 0:
+                        try:
+                            spinner_ref.update_text(f"🔀 {remaining} task{'s' if remaining != 1 else ''} remaining")
+                        except Exception as e:
+                            logger.debug("Spinner update_text failed: %s", e)
+
+            # Sort by task_index so results match input order
+            results.sort(key=lambda r: r["task_index"])
+    finally:
+        # Stop display manager and render final state
+        if display_manager:
+            try:
+                display_manager.stop()
+                display_manager.render(clear=False)
+            except Exception as e:
+                logger.debug("Display manager cleanup failed: %s", e)
 
     # Notify parent's memory provider of delegation outcomes
     if parent_agent and hasattr(parent_agent, '_memory_manager') and parent_agent._memory_manager:
         for entry in results:
             try:
                 _task_goal = task_list[entry["task_index"]]["goal"] if entry["task_index"] < len(task_list) else ""
+                # Find child session_id from children list
+                child_session_id = ""
+                for child_info in children:
+                    if child_info[0] == entry["task_index"]:
+                        child_session_id = getattr(child_info[2], "session_id", "")
+                        break
                 parent_agent._memory_manager.on_delegation(
                     task=_task_goal,
                     result=entry.get("summary", "") or "",
-                    child_session_id=getattr(children[entry["task_index"]][2], "session_id", "") if entry["task_index"] < len(children) else "",
+                    child_session_id=child_session_id,
                 )
             except Exception:
                 pass
