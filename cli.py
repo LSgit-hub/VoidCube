@@ -2232,6 +2232,7 @@ class VoidcubeCLI:
     _auto_mode_last_event_ts: str = ""
 
     _current_learning_task: Dict[str, Any] | None = None
+    _current_learning_task_started_at: float = 0.0
 
     def _poll_auto_mode_workflow(self) -> None:
         """Pull approved learning tasks from Gateway and execute them.
@@ -2252,21 +2253,46 @@ class VoidcubeCLI:
         current = getattr(self, '_current_learning_task', None)
         if current is not None:
             task_id = current.get("task_id", "")
-            try:
-                payload = _json.dumps({
-                    "reason": "Learning task completed by CLI Agent in AUTO mode.",
-                    "context": {"source": "cli_agent_pull"},
-                }).encode()
-                r = _req.Request(
-                    f"{gateway_base}/v1/tasks/{task_id}/complete",
-                    data=payload,
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                _req.urlopen(r, timeout=15)
-            except Exception:
-                pass  # Best-effort — supervisor will handle retry
-            self._current_learning_task = None
+            import time as _time
+            started_at = getattr(self, '_current_learning_task_started_at', 0)
+            elapsed = _time.time() - started_at if started_at else -1
+            # ── Timeout check: if task ran > 30 min, report as failed ──
+            if elapsed > 1800:
+                try:
+                    timeout_payload = _json.dumps({
+                        "reason": "Learning task timed out (30 min).",
+                        "context": {"source": "cli_agent_pull", "error": "timeout", "elapsed_s": int(elapsed)},
+                    }).encode()
+                    r = _req.Request(
+                        f"{gateway_base}/v1/tasks/{task_id}/complete",
+                        data=timeout_payload,
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    _req.urlopen(r, timeout=15)
+                    _cprint(f"  ⏰  Learning task {task_id[:8]}... timed out ({int(elapsed)}s)")
+                except Exception:
+                    pass
+                self._current_learning_task = None
+                self._current_learning_task_started_at = 0
+            elif not self._agent_running:
+                # Agent is idle → task completed normally
+                try:
+                    payload = _json.dumps({
+                        "reason": "Learning task completed by CLI Agent in AUTO mode.",
+                        "context": {"source": "cli_agent_pull", "elapsed_s": int(elapsed)},
+                    }).encode()
+                    r = _req.Request(
+                        f"{gateway_base}/v1/tasks/{task_id}/complete",
+                        data=payload,
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    _req.urlopen(r, timeout=15)
+                except Exception:
+                    pass  # Best-effort — supervisor will handle retry
+                self._current_learning_task = None
+                self._current_learning_task_started_at = 0
 
         # ── Pull next approved learning task from Gateway ──
         try:
@@ -2311,7 +2337,9 @@ class VoidcubeCLI:
         except Exception:
             return  # Can't mark running — skip
 
+        import time as _time
         self._current_learning_task = task
+        self._current_learning_task_started_at = _time.time()
 
         # ── Push task as Agent input ──
         prompt = (
@@ -2323,6 +2351,23 @@ class VoidcubeCLI:
         try:
             self._pending_input.put(prompt)
         except Exception:
+            # Queue failure — report task as failed so supervisor can retry
+            import time as _time
+            _cprint(f"  ⚠️  Failed to enqueue learning task {task_id[:8]}...")
+            try:
+                fail_payload = _json.dumps({
+                    "reason": "CLI Agent failed to enqueue task for execution.",
+                    "context": {"source": "cli_agent_pull", "error": "queue_put_failed"},
+                }).encode()
+                r = _req.Request(
+                    f"{gateway_base}/v1/tasks/{task_id}/complete",
+                    data=fail_payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                _req.urlopen(r, timeout=15)
+            except Exception:
+                pass
             self._current_learning_task = None
 
     @staticmethod
