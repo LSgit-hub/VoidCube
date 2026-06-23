@@ -104,6 +104,7 @@ logs/
 soul-runtime/
 .mem/
 state/
+mem_governance.jsonl
 
 # ==========================================
 # 🔧 编译输出和二进制
