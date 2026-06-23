@@ -216,6 +216,7 @@ body[data-scene="learning"] .shelf { box-shadow:0 22px 36px var(--shadow),0 0 40
   border-radius:10px;
   background:#8c5f44;
 }
+.desk { position:absolute; bottom:0; left:0; right:0; height:220px; z-index:3; }
 .desk-lamp {
   position:absolute; left:12%; top:-76px;
   width:52px; height:66px;
@@ -289,7 +290,7 @@ body[data-scene="learning"] .shelf { box-shadow:0 22px 36px var(--shadow),0 0 40
   align-self:end; justify-self:center;
   width:180px; height:280px;
   margin-bottom:14vh;
-  position:relative; z-index:2;
+  position:relative; z-index:1;
   transition:transform var(--transition-speed) cubic-bezier(.4,0,.2,1);
 }
 /* character parts */
@@ -638,11 +639,14 @@ body[data-exec-window="false"] .star { opacity:1; }
   .thoughts { transform:translate(60px,-20px) scale(.8); }
 }
 
-/* Character card (top-left) */
+/* Character card — positioned in scene, right side */
 .char-card {
-  background:rgba(30,45,70,0.7); border:1px solid rgba(100,150,255,0.15);
-  border-radius:var(--radius-md); padding:12px; margin-bottom:12px;
-  display:grid; grid-template-columns:56px 1fr; gap:10px; align-items:center;
+  position:absolute; right:20px; top:30px; z-index:20;
+  background:rgba(20,30,50,0.88); border:1px solid rgba(100,150,255,0.25);
+  border-radius:var(--radius-md); padding:10px 14px;
+  display:grid; grid-template-columns:44px 1fr; gap:8px; align-items:center;
+  backdrop-filter:blur(8px);
+  min-width:200px;
 }
 .char-avatar { width:52px; height:64px; position:relative; margin:0 auto; }
 .char-avatar .av-head { position:absolute; top:0; left:8px; width:36px; height:32px; background:linear-gradient(155deg,#ffe4c0,#f0cfa0); border-radius:44% 44% 40% 42%; }
@@ -673,6 +677,31 @@ body[data-exec-window="false"] .star { opacity:1; }
 .task-badge.running { background:rgba(100,181,246,0.15); color:var(--accent-blue); }
 .task-badge.completed,.task-badge.failed,.task-badge.cancelled { background:rgba(255,255,255,0.06); color:var(--text-muted); }
 .task-badge.planned,.task-badge.queued,.task-badge.deferred { background:rgba(255,183,77,0.12); color:var(--gold); }
+
+
+/* Monitor */
+.monitor { position:absolute; bottom:90px; left:35%; z-index:3; transform:rotateY(-15deg) rotateX(5deg); }
+.monitor-screen {
+  width:180px; height:110px;
+  background:linear-gradient(180deg,#1a2a3a 0%,#1e3040 20%,#243648 50%,#1a2a3a 100%);
+  border:8px solid #2a3040; border-radius:8px 8px 2px 2px;
+  box-shadow:0 0 30px rgba(100,180,255,0.1), inset 0 0 60px rgba(0,0,0,0.3);
+  position:relative; overflow:hidden;
+}
+.monitor-screen::after {
+  content:''; position:absolute; top:0; left:0; right:0; height:40%;
+  background:linear-gradient(180deg,rgba(255,255,255,0.03) 0%,transparent 100%);
+}
+.monitor-content { padding:14px 12px; }
+.mon-line { height:3px; background:rgba(100,180,255,0.15); margin-bottom:8px; border-radius:2px; }
+.mon-line.short { width:60%; }
+.monitor-stand { width:30px; height:20px; background:linear-gradient(180deg,#3a4050,#2a3040); margin:0 auto; }
+.monitor-base { width:70px; height:6px; background:#2a3040; margin:0 auto; border-radius:2px; }
+/* Keyboard */
+.keyboard { position:absolute; bottom:78px; left:32%; z-index:4; transform:rotateX(25deg) rotateY(-5deg); }
+.kb-row { display:flex; gap:2px; margin-bottom:2px; }
+.kb-key { width:10px; height:7px; background:linear-gradient(180deg,#3a4050,#282e38); border-radius:1px; }
+.kb-key.wide { width:30px; }
 
 </style>
 </head>
@@ -724,9 +753,42 @@ body[data-exec-window="false"] .star { opacity:1; }
     <div class="xz-prop"></div>
   </section>
 
-  <!-- desk + lamp + papers -->
+  <!-- character info card (floating in scene) -->
+  <div class="char-card" id="charCard">
+    <div class="char-avatar">
+      <div class="av-head"></div><div class="av-eyes"><span class="av-eye"></span><span class="av-eye"></span></div>
+      <div class="av-mouth"></div><div class="av-hair"></div><div class="av-body"></div>
+    </div>
+    <div class="char-info">
+      <div class="char-name">义子 <span class="ch-title" id="chTitle">初始替身</span></div>
+      <div class="char-lv">Lv.<span class="lv-val" id="chLevel">1</span></div>
+      <div class="char-exp-wrap"><div class="char-exp-fill" id="chExpBar"></div></div>
+      <div class="char-exp-text"><span id="chExpText">0 body switch</span></div>
+      <div class="char-health"><span class="ch-hp" id="chHP">❤️ 100%</span><span id="chMood">😊 普通</span></div>
+    </div>
+  </div>
+
+
+  <!-- desk + monitor + keyboard + lamp -->
   <div class="desk" aria-hidden="true">
     <div class="desk-lamp"></div>
+    <!-- Monitor at 45deg angle -->
+    <div class="monitor">
+      <div class="monitor-screen" id="monitorScreen">
+        <div class="monitor-content">
+          <span class="mon-line"></span><span class="mon-line short"></span>
+          <span class="mon-line"></span><span class="mon-line short"></span>
+        </div>
+      </div>
+      <div class="monitor-stand"></div>
+      <div class="monitor-base"></div>
+    </div>
+    <!-- Keyboard below monitor -->
+    <div class="keyboard">
+      <div class="kb-row"><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span></div>
+      <div class="kb-row"><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span></div>
+      <div class="kb-row"><span class="kb-key wide"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key wide"></span></div>
+    </div>
     <div class="papers">
       <span class="paper" style="--r:-5deg"></span>
       <span class="paper" style="--r:3deg"></span>
@@ -745,19 +807,6 @@ body[data-exec-window="false"] .star { opacity:1; }
   <aside class="status" aria-live="polite">
     <h1 id="sceneTitle">Waking supervisor room</h1>
     <p class="status-summary" id="sceneSummary">Connecting to VoidCube supervisor…</p>
-        <div class="char-card" id="charCard">
-      <div class="char-avatar">
-        <div class="av-head"></div><div class="av-eyes"><span class="av-eye"></span><span class="av-eye"></span></div>
-        <div class="av-mouth"></div><div class="av-hair"></div><div class="av-body"></div>
-      </div>
-      <div class="char-info">
-        <div class="char-name">义子 <span class="ch-title" id="chTitle">初始替身</span></div>
-        <div class="char-lv">Lv.<span class="lv-val" id="chLevel">1</span></div>
-        <div class="char-exp-wrap"><div class="char-exp-fill" id="chExpBar"></div></div>
-        <div class="char-exp-text"><span id="chExpText">0 body switch</span></div>
-        <div class="char-health"><span class="ch-hp" id="chHP">❤️ 100%</span><span id="chMood">😊 普通</span></div>
-      </div>
-    </div>
 <div class="metrics" id="metrics"></div>
     <div class="schedule" id="schedule" style="display:none;">
       <div class="schedule-label">⏳ next auto-cycle</div>
