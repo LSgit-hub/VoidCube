@@ -52,7 +52,7 @@ UI_HTML = r"""<!doctype html>
 * { box-sizing:border-box; }
 
 body {
-  margin:0; min-height:100vh; overflow:hidden;
+  margin:0; overflow:hidden;
   font-family:"Inter","Segoe UI",system-ui,sans-serif;
   background:#1e2c36;
   color:var(--ink);
@@ -60,11 +60,20 @@ body {
 }
 
 /* ── Room shell ── */
+.room-stage {
+  position:fixed; inset:0;
+  display:flex; align-items:center; justify-content:center;
+  overflow:hidden;
+}
 .room {
-  position:relative; min-height:100vh;
+  /* fixed design size — JS will scale this to fit any viewport */
+  width:1440px; height:810px;
+  position:relative;
+  transform:scale(var(--room-scale,1));
+  transform-origin:center center;
   display:grid;
-  grid-template-columns:minmax(200px,26vw) 1fr minmax(200px,26vw);
-  grid-template-rows:1fr 28vh;
+  grid-template-columns:minmax(200px,26%) 1fr minmax(200px,26%);
+  grid-template-rows:1fr 28%;
   background:
     /* ceiling gradient */
     linear-gradient(180deg,rgba(255,255,255,.5) 0,rgba(255,255,255,0) 38%),
@@ -77,7 +86,7 @@ body {
 
 /* ── Floor ── */
 .room::after {
-  content:""; position:absolute; left:0;right:0;bottom:0; height:36vh; z-index:0;
+  content:""; position:absolute; left:0;right:0;bottom:0; height:36%; z-index:0;
   background:
     /* floor planks */
     repeating-linear-gradient(90deg,rgba(60,30,18,.3) 0 2px,transparent 2px 88px),
@@ -89,7 +98,7 @@ body {
 /* ── Ceiling lamp glow ── */
 .lamp-glow {
   position:absolute; left:50%; top:0; transform:translateX(-50%);
-  width:min(48vw,480px); height:18vh;
+  width:min(48%,480px); height:18%;
   background:radial-gradient(ellipse at 50% 0,rgba(255,235,180,.18),transparent 72%);
   z-index:0; pointer-events:none;
   transition:opacity .6s ease;
@@ -121,15 +130,15 @@ body {
   0% { transform:translateY(0) translateX(0); opacity:0; }
   10% { opacity:1; }
   90% { opacity:.3; }
-  100% { transform:translateY(-60vh) translateX(30px); opacity:0; }
+  100% { transform:translateY(-60%) translateX(30px); opacity:0; }
 }
 
 /* ── Window ── */
 .window {
-  grid-column:3; grid-row:1;
-  align-self:start; justify-self:start;
-  width:min(76%,270px); height:170px;
-  margin:8vh 0 0 4vw;
+  grid-column:2; grid-row:1;
+  align-self:start; justify-self:center;
+  width:min(60%,280px); height:170px;
+  margin:6% 0 0 0;
   border:10px solid #efe5cf;
   border-radius:10px;
   position:relative; z-index:1;
@@ -167,48 +176,94 @@ body {
   opacity:0; transition:opacity 1s ease;
 }
 
-/* ── Bookshelf ── */
+/* ── Bookshelf — placed on the left wall, sitting on the floor ── */
 .shelf {
   grid-column:1; grid-row:1/3;
-  align-self:end; justify-self:center;
-  width:min(76%,290px); height:44vh;
-  margin-bottom:19vh;
+  align-self:end; justify-self:start;
+  width:min(88%,300px); height:62%;
+  margin:0 0 0 4%;
   border:11px solid #5c3d2a;
   border-radius:8px;
-  background:linear-gradient(#8b6345,#73502f);
-  box-shadow:0 22px 36px var(--shadow);
+  background:
+    repeating-linear-gradient(90deg,rgba(60,30,18,.18) 0 2px,transparent 2px 18px),
+    linear-gradient(#8b6345,#73502f);
+  box-shadow:0 22px 36px var(--shadow), inset 0 0 30px rgba(60,30,15,.25);
   display:grid;
   grid-template-rows:repeat(4,1fr);
-  padding:14px; gap:14px;
+  padding:14px; gap:12px;
   position:relative; z-index:1;
   transition:box-shadow .5s ease;
 }
+.shelf::before, .shelf::after {
+  content:""; position:absolute; left:14px; right:14px; height:6px;
+  background:linear-gradient(180deg,#4a2f1f,#3a2210);
+  border-radius:3px;
+}
+.shelf::before { top:-4px; }
+.shelf::after  { bottom:-4px; }
 .shelf-row {
-  border-bottom:9px solid #5c3d2a;
-  display:flex; align-items:end; gap:8px;
+  border-bottom:none;
+  display:flex; align-items:flex-end; gap:5px;
+  padding:0 4px;
+  position:relative;
+}
+.shelf-row::after {
+  content:""; position:absolute; left:0; right:0; bottom:-2px; height:6px;
+  background:linear-gradient(180deg,#4a2f1f,#3a2210);
+  border-radius:2px;
+  box-shadow:0 2px 4px rgba(0,0,0,.25);
 }
 .book {
-  width:20px; border-radius:3px 3px 0 0;
-  box-shadow:inset -5px 0 rgba(255,255,255,.16);
+  width:18px; border-radius:2px 2px 0 0;
+  box-shadow:inset -4px 0 rgba(255,255,255,.18), inset 2px 0 rgba(0,0,0,.12);
   transition:height .4s ease,background .4s ease,box-shadow .5s ease;
+  position:relative;
 }
-.book:nth-child(3n)   { height:58%; background:var(--blue); }
-.book:nth-child(3n+1) { height:78%; background:var(--coral); }
-.book:nth-child(3n+2) { height:68%; background:var(--gold); }
+.book::after {
+  content:""; position:absolute;
+  left:50%; top:18%;
+  width:2px; height:60%;
+  transform:translateX(-50%);
+  background:rgba(255,255,255,.25);
+  border-radius:1px;
+}
+.book.b1  { height:72%; background:linear-gradient(180deg,#7ba8c8,#4a7a9a); }
+.book.b2  { height:58%; background:linear-gradient(180deg,#e89a8a,#c66858); }
+.book.b3  { height:84%; background:linear-gradient(180deg,#e8c878,#b08830); }
+.book.b4  { height:64%; background:linear-gradient(180deg,#a8c89a,#689070); }
+.book.b5  { height:78%; background:linear-gradient(180deg,#c8a0c8,#906098); }
+.book.b6  { height:54%; background:linear-gradient(180deg,#e8a878,#b87848); }
+.book.b7  { height:68%; background:linear-gradient(180deg,#88b0c0,#588098); }
+.book.b8  { height:80%; background:linear-gradient(180deg,#d4a878,#a47840); }
+.book.b9  { height:60%; background:linear-gradient(180deg,#b8c8d0,#7890a0); }
+.book.b10 { height:74%; background:linear-gradient(180deg,#e89898,#b06868); }
+.book.lean-l { transform:rotate(-6deg) translateY(2px); }
+.book.lean-r { transform:rotate(5deg) translateY(1px); }
+.book.short  { height:36% !important; }
+.book.tall   { height:92% !important; }
+.book.flat {
+  height:14%; width:54px;
+  border-radius:1px;
+  align-self:flex-start;
+  margin-top:auto;
+  box-shadow:inset 0 -3px rgba(0,0,0,.18);
+}
+.book.flat::after { display:none; }
 
 /* bookshelf glow per scene */
 body[data-scene="memory"]   .shelf { box-shadow:0 22px 36px var(--shadow),0 0 40px var(--gold-glow); }
 body[data-scene="learning"] .shelf { box-shadow:0 22px 36px var(--shadow),0 0 40px var(--mint-glow); }
 
-/* ── Desk + lamp ── */
+/* ── Desk + lamp — main desk, sits on the floor against the right wall ── */
 .desk {
-  grid-column:2; grid-row:2;
-  align-self:center; justify-self:center;
-  width:min(62vw,520px); height:108px;
+  grid-column:3; grid-row:2;
+  align-self:end; justify-self:start;
+  width:min(94%,360px); height:108px;
   border-radius:10px;
   background:linear-gradient(#704a35,#553320);
   box-shadow:0 24px 30px var(--shadow);
-  position:relative; z-index:1;
+  position:relative; z-index:2;
+  margin:0 0 4% 2%;
 }
 .desk::before {
   content:""; position:absolute;
@@ -216,7 +271,6 @@ body[data-scene="learning"] .shelf { box-shadow:0 22px 36px var(--shadow),0 0 40
   border-radius:10px;
   background:#8c5f44;
 }
-.desk { position:absolute; bottom:0; left:0; right:0; height:220px; z-index:3; }
 .desk-lamp {
   position:absolute; left:12%; top:-76px;
   width:52px; height:66px;
@@ -232,26 +286,283 @@ body[data-scene="learning"] .shelf { box-shadow:0 22px 36px var(--shadow),0 0 40
   background:#3d2818; border-radius:2px;
 }
 
-/* lamp papers */
+/* papers on the main desk — appropriately sized, realistic detail */
 .papers {
-  position:absolute; left:30%;right:12%; top:-32px; bottom:8px;
-  z-index:1; display:flex; gap:12px;
+  position:absolute; right:8%; top:-30px;
+  width:120px; height:80px;
+  z-index:3;
 }
 .paper {
-  flex:1; border-radius:4px;
-  background:var(--paper);
-  border:1px solid rgba(0,0,0,.08);
+  position:absolute; border-radius:2px;
+  background:linear-gradient(180deg,#fdf6e3 0%,#f0e2c0 100%);
+  border:1px solid rgba(120,80,40,.18);
+  box-shadow:0 3px 6px rgba(60,30,15,.25), inset 0 -1px 0 rgba(120,80,40,.08);
   transform:rotate(var(--r,0deg));
   transition:transform .4s ease,background .4s ease;
-  opacity:.85;
+}
+/* paper content — subtle text lines */
+.paper::before, .paper::after {
+  content:""; position:absolute; left:8px; right:8px; height:1px;
+  background:rgba(80,60,40,.18); border-radius:1px;
+}
+.paper::before { top:14px; box-shadow:0 6px 0 rgba(80,60,40,.18), 0 12px 0 rgba(80,60,40,.18), 0 18px 0 rgba(80,60,40,.12), 0 24px 0 rgba(80,60,40,.18); }
+.paper::after  { top:36px; width:60%; box-shadow:0 6px 0 rgba(80,60,40,.18), 0 12px 0 rgba(80,60,40,.12); }
+.paper.p1 { left:0;  top:6px;  width:74px; height:60px; --r:-7deg; }
+.paper.p2 { left:24px; top:0;  width:74px; height:60px; --r:4deg; }
+.paper.p3 { left:50px; top:10px; width:70px; height:56px; --r:-3deg; }
+/* coffee stain on a paper for life */
+.paper.p2::before { box-shadow:0 6px 0 rgba(80,60,40,.18), 0 12px 0 rgba(80,60,40,.18), 0 18px 0 rgba(80,60,40,.12), 0 24px 0 rgba(80,60,40,.18), 38px 36px 0 -2px rgba(140,80,40,.22); }
+
+/* ── Computer desk (separate small desk) + laptop with boot animation ── */
+.comp-desk {
+  position:absolute;
+  /* sits on the floor against the back wall, just under the window, in the middle */
+  left:32%;
+  bottom:18%;
+  width:200px; height:118px;
+  z-index:2;
+  transform:perspective(800px) rotateY(0deg);
+  transform-origin:center bottom;
+  filter:drop-shadow(0 10px 8px rgba(40,20,10,.18));
+}
+/* wooden top */
+.cd-top {
+  position:absolute; left:0; right:0; top:0;
+  height:14px;
+  background:linear-gradient(180deg,#8c5f44,#5c3820);
+  border-radius:4px 4px 2px 2px;
+  box-shadow:0 2px 3px rgba(0,0,0,.25);
+}
+/* legs */
+.cd-leg {
+  position:absolute; bottom:-22px; width:8px; height:24px;
+  background:linear-gradient(180deg,#4a2c18,#2a1608);
+  border-radius:1px;
+}
+.cd-leg.l { left:8px; }
+.cd-leg.r { right:8px; }
+/* laptop base */
+.cd-laptop {
+  position:absolute;
+  left:30px; bottom:18px;
+  width:140px; height:78px;
+  z-index:2;
+}
+/* laptop screen (the lid, tilted up) */
+.cd-screen-wrap {
+  position:absolute; left:6px; top:0;
+  width:128px; height:60px;
+  transform-origin:bottom left;
+  transform:perspective(280px) rotateX(-22deg);
+}
+.cd-screen {
+  position:absolute; inset:0;
+  border:4px solid #1a1f28;
+  border-radius:4px 4px 1px 1px;
+  background:#02060c; /* off-state */
+  overflow:hidden;
+  box-shadow:0 2px 6px rgba(0,0,0,.4);
+  animation:cd-boot 5s ease-in-out infinite;
+}
+@keyframes cd-boot {
+  0%   { background:#02060c; box-shadow:0 2px 6px rgba(0,0,0,.4); }
+  18%  { background:#04101c; box-shadow:0 2px 6px rgba(0,0,0,.4), inset 0 0 12px rgba(80,180,220,.15); }
+  35%  { background:#082030; box-shadow:0 2px 6px rgba(0,0,0,.4), inset 0 0 18px rgba(80,180,220,.4); }
+  60%  { background:#0c3055; box-shadow:0 2px 8px rgba(0,0,0,.4), inset 0 0 22px rgba(120,210,255,.6); }
+  85%,100% { background:linear-gradient(180deg,#0a2540 0%,#0e3a66 100%);
+             box-shadow:0 2px 8px rgba(0,0,0,.4), inset 0 0 28px rgba(120,210,255,.55); }
+}
+/* faint scan lines on the screen */
+.cd-screen::before {
+  content:""; position:absolute; inset:0;
+  background:repeating-linear-gradient(0deg,rgba(255,255,255,.04) 0 1px,transparent 1px 3px);
+  pointer-events:none;
+}
+/* glowing power LED */
+.cd-led {
+  position:absolute; right:14px; bottom:8px;
+  width:3px; height:3px; border-radius:50%;
+  background:var(--mint);
+  box-shadow:0 0 6px var(--mint-glow);
+  animation:cd-led 1.6s ease-in-out infinite;
+}
+@keyframes cd-led {
+  0%,100% { opacity:.4; }
+  50% { opacity:1; }
+}
+/* tiny blinking cursor on screen */
+.cd-screen::after {
+  content:"_"; position:absolute;
+  left:18%; top:62%;
+  color:#7ee0c0; font:700 8px/1 "Courier New",monospace;
+  animation:cd-cursor 1s steps(2) infinite;
+}
+@keyframes cd-cursor {
+  50% { opacity:0; }
+}
+/* laptop base (keyboard deck) */
+.cd-keyboard {
+  position:absolute; left:0; bottom:0;
+  width:140px; height:18px;
+  background:linear-gradient(180deg,#3a3f48,#1e2228);
+  border:3px solid #1a1f28;
+  border-radius:3px 3px 5px 5px;
+  box-shadow:0 3px 4px rgba(0,0,0,.35);
+  z-index:3;
+}
+/* trackpad groove */
+.cd-keyboard::before {
+  content:""; position:absolute;
+  left:50%; top:50%; transform:translate(-50%,-50%);
+  width:36px; height:8px;
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:2px;
+}
+/* coffee mug on the desk */
+.cd-mug {
+  position:absolute;
+  right:10px; top:-4px;
+  width:22px; height:26px;
+  z-index:3;
+}
+.cd-mug-body {
+  position:absolute; inset:0;
+  background:linear-gradient(180deg,#e6d7b8,#c8a878);
+  border-radius:3px 3px 6px 6px;
+  box-shadow:inset -3px 0 rgba(120,80,40,.18), inset 0 -3px rgba(120,80,40,.2);
+}
+.cd-mug-handle {
+  position:absolute; right:-7px; top:5px;
+  width:8px; height:12px;
+  border:2px solid #c8a878;
+  border-left:none;
+  border-radius:0 6px 6px 0;
+}
+/* coffee surface */
+.cd-mug::after {
+  content:""; position:absolute;
+  left:3px; right:3px; top:3px; height:4px;
+  background:radial-gradient(ellipse,#5a3a20,#3a2210);
+  border-radius:50%;
+}
+/* steam from coffee */
+.cd-steam {
+  position:absolute;
+  left:50%; top:-10px;
+  width:2px; height:8px;
+  background:rgba(255,255,255,.5);
+  border-radius:2px;
+  transform:translateX(-50%);
+  animation:cd-steam 2.4s ease-in-out infinite;
+}
+.cd-steam.s2 { left:60%; animation-delay:.8s; height:6px; }
+.cd-steam.s3 { left:40%; animation-delay:1.4s; height:7px; }
+@keyframes cd-steam {
+  0%   { transform:translate(-50%, 0) scaleY(1); opacity:0; }
+  30%  { opacity:.7; }
+  100% { transform:translate(-50%, -18px) scaleY(1.4); opacity:0; }
 }
 
-/* ── Console terminal ── */
+/* ── Sofa — sits on the floor in the left wall corner, just in front of the bookshelf ── */
+.sofa {
+  position:absolute;
+  /* floor level, left side, angled to face the room center */
+  left:3%;
+  bottom:0;
+  width:200px; height:88px;
+  z-index:3;
+  transform:perspective(900px) rotateY(-6deg) rotateX(1deg);
+  transform-origin:center bottom;
+  filter:drop-shadow(0 14px 12px rgba(40,20,10,.18));
+}
+/* back of the sofa (vertical, behind the cushions) */
+.sofa-back {
+  position:absolute;
+  left:0; right:0; top:0;
+  height:60px;
+  background:linear-gradient(180deg,#c98c6e 0%,#a8694f 60%,#8a4f38 100%);
+  border-radius:14px 14px 4px 4px;
+  box-shadow:inset 0 -8px rgba(80,40,20,.25), inset 0 2px 0 rgba(255,255,255,.18);
+}
+/* base / seat platform */
+.sofa-base {
+  position:absolute;
+  left:0; right:0; bottom:6px;
+  height:38px;
+  background:linear-gradient(180deg,#b07a5e 0%,#8c5a44 70%,#6a4030 100%);
+  border-radius:6px;
+  box-shadow:inset 0 -2px rgba(0,0,0,.2), 0 4px 8px rgba(0,0,0,.2);
+}
+/* back cushions */
+.sofa-cushion {
+  position:absolute;
+  border-radius:8px 8px 4px 4px;
+  box-shadow:inset 0 -3px rgba(80,40,20,.18), inset 0 1px 0 rgba(255,255,255,.2), 0 2px 4px rgba(0,0,0,.18);
+}
+.sofa-cushion.back-l { left:8px;  top:6px;  width:104px; height:38px; background:linear-gradient(180deg,#d49a78,#a8694f); }
+.sofa-cushion.back-r { right:8px; top:6px;  width:104px; height:38px; background:linear-gradient(180deg,#d49a78,#a8694f); }
+/* seat cushions */
+.sofa-cushion.seat-l { left:8px;  bottom:14px; width:108px; height:32px; background:linear-gradient(180deg,#dc9e7c,#b07558); }
+.sofa-cushion.seat-r { right:8px; bottom:14px; width:108px; height:32px; background:linear-gradient(180deg,#dc9e7c,#b07558); }
+/* armrests */
+.sofa-arm {
+  position:absolute;
+  bottom:6px; width:24px; height:64px;
+  background:linear-gradient(180deg,#c98c6e 0%,#8a4f38 100%);
+  border-radius:6px 6px 4px 4px;
+  box-shadow:inset -2px 0 rgba(80,40,20,.2), inset 0 1px 0 rgba(255,255,255,.2);
+}
+.sofa-arm.l { left:-4px; }
+.sofa-arm.r { right:-4px; }
+/* legs (small wooden feet) */
+.sofa-leg {
+  position:absolute; bottom:-4px;
+  width:10px; height:8px;
+  background:linear-gradient(180deg,#5a3520,#3a2010);
+  border-radius:1px;
+  box-shadow:0 2px 3px rgba(0,0,0,.3);
+}
+.sofa-leg.l { left:6px; }
+.sofa-leg.m { left:50%; transform:translateX(-50%); }
+.sofa-leg.r { right:6px; }
+/* decorative pillow on the left seat */
+.sofa-pillow {
+  position:absolute;
+  left:14px; bottom:18px;
+  width:32px; height:24px;
+  background:linear-gradient(135deg,#7cc9a0,#45997e);
+  border-radius:5px;
+  box-shadow:inset 0 -2px rgba(0,0,0,.15), inset 0 1px 0 rgba(255,255,255,.25), 0 2px 4px rgba(0,0,0,.2);
+  transform:rotate(-6deg);
+}
+.sofa-pillow::before {
+  content:""; position:absolute;
+  left:50%; top:50%;
+  width:6px; height:6px;
+  transform:translate(-50%,-50%) rotate(45deg);
+  background:rgba(255,255,255,.18);
+  border-radius:1px;
+}
+/* a folded throw blanket draped on the right armrest */
+.sofa-throw {
+  position:absolute;
+  right:2px; top:18px;
+  width:60px; height:36px;
+  background:
+    linear-gradient(90deg,rgba(255,255,255,.1) 0 2px,transparent 2px 6px),
+    linear-gradient(135deg,#e2b04a 0%,#c8983a 50%,#a87820 100%);
+  border-radius:3px;
+  box-shadow:inset 0 -3px rgba(80,40,10,.25), 0 2px 4px rgba(0,0,0,.2);
+  transform:rotate(8deg);
+  opacity:.95;
+}
+
+/* ── Console terminal — floats on the back wall next to the window ── */
 .console {
-  grid-column:2; grid-row:2;
-  align-self:start; justify-self:end;
+  grid-column:2; grid-row:1;
+  align-self:start; justify-self:start;
   width:156px; height:96px;
-  margin-right:10vw; margin-top:-22px;
+  margin:6% 0 0 4%;
   border:8px solid #2d404c;
   border-radius:8px;
   background:
@@ -284,13 +595,13 @@ body[data-scene="learning"] .shelf { box-shadow:0 22px 36px var(--shadow),0 0 40
   100% { transform:translateY(-72px); opacity:0; }
 }
 
-/* ── Character: 兮子 ── */
+/* ── Character: 兮子 — stands in the middle of the room, in front of the comp-desk ── */
 .xizi {
   grid-column:2; grid-row:1/3;
   align-self:end; justify-self:center;
-  width:180px; height:280px;
-  margin-bottom:14vh;
-  position:relative; z-index:1;
+  width:170px; height:260px;
+  margin:0 0 10% 0;
+  position:relative; z-index:4;
   transition:transform var(--transition-speed) cubic-bezier(.4,0,.2,1);
 }
 /* character parts */
@@ -370,8 +681,8 @@ body[data-scene="learning"] .shelf { box-shadow:0 22px 36px var(--shadow),0 0 40
 /* character idle animation */
 .xizi { animation:xz-breathe 3s ease-in-out infinite; }
 @keyframes xz-breathe {
-  0%,100% { margin-bottom:14vh; }
-  50% { margin-bottom:calc(14vh + 6px); }
+  0%,100% { margin-bottom:14%; }
+  50% { margin-bottom:calc(14% + 6px); }
 }
 @keyframes xz-blink {
   0%,94%,100% { transform:scaleY(1); }
@@ -415,11 +726,11 @@ body[data-scene="learning"] .shelf { box-shadow:0 22px 36px var(--shadow),0 0 40
   50% { transform:scale(1.22); opacity:1; }
 }
 
-/* ── Status dashboard ── */
+/* ── Status dashboard — upper right wall, above the desk ── */
 .status {
-  grid-column:3; grid-row:2;
-  align-self:end; justify-self:center;
-  width:min(86%,370px); margin-bottom:3vh;
+  grid-column:3; grid-row:1;
+  align-self:start; justify-self:start;
+  width:min(94%,360px); margin:6% 0 0 4%;
   padding:18px 18px 14px;
   border:2px solid rgba(30,44,58,.22);
   border-radius:12px;
@@ -627,7 +938,12 @@ body[data-exec-window="false"] .star { opacity:1; }
   .thoughts { grid-column:1; grid-row:2; transform:translate(80px,-10px); }
   .status { grid-column:1; grid-row:3; width:92vw; margin-bottom:2vh; }
   .desk-lamp { left:8%; top:-58px; width:38px; height:50px; }
-  .papers { left:22%; }
+  .papers { left:48%; top:-20px; width:90px; height:60px; }
+  .comp-desk { left:auto; right:4vw; bottom:42vh; width:160px; height:120px; transform:perspective(800px) rotateY(-2deg); }
+  .comp-desk .cd-monitor { width:90px; height:66px; bottom:24px; }
+  .comp-desk .cd-screen { font-size:5px; }
+  .comp-desk .cd-keyboard { width:96px; height:22px; }
+  .comp-desk .cd-tower { width:18px; height:48px; bottom:24px; }
 }
 
 @media (max-width:480px) {
@@ -637,16 +953,17 @@ body[data-exec-window="false"] .star { opacity:1; }
   .desk-lamp { display:none; }
   .papers { display:none; }
   .thoughts { transform:translate(60px,-20px) scale(.8); }
+  .comp-desk { display:none; }
 }
 
-/* Character card — positioned in scene, right side */
+/* Character card — floats top-left, above the bookshelf */
 .char-card {
-  position:absolute; right:20px; top:30px; z-index:20;
+  position:absolute; left:14px; top:14px; z-index:20;
   background:rgba(20,30,50,0.88); border:1px solid rgba(100,150,255,0.25);
   border-radius:var(--radius-md); padding:10px 14px;
   display:grid; grid-template-columns:44px 1fr; gap:8px; align-items:center;
   backdrop-filter:blur(8px);
-  min-width:200px;
+  min-width:200px; max-width:240px;
 }
 .char-avatar { width:52px; height:64px; position:relative; margin:0 auto; }
 .char-avatar .av-head { position:absolute; top:0; left:8px; width:36px; height:32px; background:linear-gradient(155deg,#ffe4c0,#f0cfa0); border-radius:44% 44% 40% 42%; }
@@ -679,33 +996,12 @@ body[data-exec-window="false"] .star { opacity:1; }
 .task-badge.planned,.task-badge.queued,.task-badge.deferred { background:rgba(255,183,77,0.12); color:var(--gold); }
 
 
-/* Monitor */
-.monitor { position:absolute; bottom:90px; left:35%; z-index:3; transform:rotateY(-15deg) rotateX(5deg); }
-.monitor-screen {
-  width:180px; height:110px;
-  background:linear-gradient(180deg,#1a2a3a 0%,#1e3040 20%,#243648 50%,#1a2a3a 100%);
-  border:8px solid #2a3040; border-radius:8px 8px 2px 2px;
-  box-shadow:0 0 30px rgba(100,180,255,0.1), inset 0 0 60px rgba(0,0,0,0.3);
-  position:relative; overflow:hidden;
-}
-.monitor-screen::after {
-  content:''; position:absolute; top:0; left:0; right:0; height:40%;
-  background:linear-gradient(180deg,rgba(255,255,255,0.03) 0%,transparent 100%);
-}
-.monitor-content { padding:14px 12px; }
-.mon-line { height:3px; background:rgba(100,180,255,0.15); margin-bottom:8px; border-radius:2px; }
-.mon-line.short { width:60%; }
-.monitor-stand { width:30px; height:20px; background:linear-gradient(180deg,#3a4050,#2a3040); margin:0 auto; }
-.monitor-base { width:70px; height:6px; background:#2a3040; margin:0 auto; border-radius:2px; }
-/* Keyboard */
-.keyboard { position:absolute; bottom:78px; left:32%; z-index:4; transform:rotateX(25deg) rotateY(-5deg); }
-.kb-row { display:flex; gap:2px; margin-bottom:2px; }
-.kb-key { width:10px; height:7px; background:linear-gradient(180deg,#3a4050,#282e38); border-radius:1px; }
-.kb-key.wide { width:30px; }
+/* Monitor (existing, on the main desk) — REMOVED, see sofa */
 
 </style>
 </head>
 <body data-scene="idle" data-has-errors="false" data-exec-window="true">
+<div class="room-stage">
 <main class="room" aria-label="VoidCube supervisor room">
 
   <!-- ambient particles -->
@@ -716,10 +1012,10 @@ body[data-exec-window="false"] .star { opacity:1; }
 
   <!-- bookshelf -->
   <section class="shelf" aria-hidden="true">
-    <div class="shelf-row"><span class="book"></span><span class="book"></span><span class="book"></span><span class="book"></span><span class="book"></span></div>
-    <div class="shelf-row"><span class="book"></span><span class="book"></span><span class="book"></span><span class="book"></span><span class="book"></span></div>
-    <div class="shelf-row"><span class="book"></span><span class="book"></span><span class="book"></span><span class="book"></span><span class="book"></span></div>
-    <div class="shelf-row"><span class="book"></span><span class="book"></span><span class="book"></span><span class="book"></span><span class="book"></span></div>
+    <div class="shelf-row"><span class="book b1"></span><span class="book b2 lean-r"></span><span class="book b3"></span><span class="book b4 short"></span><span class="book b5"></span><span class="book b6"></span><span class="book b7 lean-l"></span><span class="book b8"></span><span class="book b9 short"></span><span class="book b10"></span></div>
+    <div class="shelf-row"><span class="book b2"></span><span class="book b5 lean-l"></span><span class="book b8"></span><span class="book b1 short"></span><span class="book b3"></span><span class="book b6 lean-r"></span><span class="book b9"></span><span class="book b4"></span></div>
+    <div class="shelf-row"><span class="book b7"></span><span class="book b10"></span><span class="book b2 lean-r"></span><span class="book b5"></span><span class="book b8 lean-l"></span><span class="book flat b3"></span><span class="book flat b4"></span><span class="book b1 short"></span><span class="book b6"></span></div>
+    <div class="shelf-row"><span class="book b3"></span><span class="book b9 lean-r"></span><span class="book b1 tall"></span><span class="book b4"></span><span class="book b7 lean-l"></span><span class="book b2"></span><span class="book b5"></span><span class="book b10 short"></span><span class="book b8"></span></div>
   </section>
 
   <!-- window with day/night -->
@@ -769,31 +1065,53 @@ body[data-exec-window="false"] .star { opacity:1; }
   </div>
 
 
-  <!-- desk + monitor + keyboard + lamp -->
+  <!-- desk + lamp + papers (monitors removed) -->
   <div class="desk" aria-hidden="true">
     <div class="desk-lamp"></div>
-    <!-- Monitor at 45deg angle -->
-    <div class="monitor">
-      <div class="monitor-screen" id="monitorScreen">
-        <div class="monitor-content">
-          <span class="mon-line"></span><span class="mon-line short"></span>
-          <span class="mon-line"></span><span class="mon-line short"></span>
-        </div>
-      </div>
-      <div class="monitor-stand"></div>
-      <div class="monitor-base"></div>
-    </div>
-    <!-- Keyboard below monitor -->
-    <div class="keyboard">
-      <div class="kb-row"><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span></div>
-      <div class="kb-row"><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span></div>
-      <div class="kb-row"><span class="kb-key wide"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key"></span><span class="kb-key wide"></span></div>
-    </div>
+    <!-- Stack of papers / documents on the desk -->
     <div class="papers">
-      <span class="paper" style="--r:-5deg"></span>
-      <span class="paper" style="--r:3deg"></span>
-      <span class="paper" style="--r:-2deg"></span>
+      <span class="paper p1"></span>
+      <span class="paper p2"></span>
+      <span class="paper p3"></span>
     </div>
+  </div>
+
+  <!-- computer desk + laptop (with boot animation) — small secondary desk -->
+  <div class="comp-desk" aria-hidden="true">
+    <div class="cd-top"></div>
+    <div class="cd-leg l"></div>
+    <div class="cd-leg r"></div>
+    <div class="cd-laptop">
+      <div class="cd-screen-wrap">
+        <div class="cd-screen"></div>
+        <div class="cd-led"></div>
+      </div>
+      <div class="cd-keyboard"></div>
+    </div>
+    <div class="cd-mug">
+      <div class="cd-mug-body"></div>
+      <div class="cd-mug-handle"></div>
+      <span class="cd-steam"></span>
+      <span class="cd-steam s2"></span>
+      <span class="cd-steam s3"></span>
+    </div>
+  </div>
+
+  <!-- sofa — tucked in the left wall corner on the floor -->
+  <div class="sofa" aria-hidden="true">
+    <div class="sofa-back"></div>
+    <div class="sofa-cushion back-l"></div>
+    <div class="sofa-cushion back-r"></div>
+    <div class="sofa-cushion seat-l"></div>
+    <div class="sofa-cushion seat-r"></div>
+    <div class="sofa-arm l"></div>
+    <div class="sofa-arm r"></div>
+    <div class="sofa-base"></div>
+    <div class="sofa-leg l"></div>
+    <div class="sofa-leg r"></div>
+    <div class="sofa-leg m"></div>
+    <div class="sofa-pillow"></div>
+    <div class="sofa-throw"></div>
   </div>
 
   <!-- console terminal -->
@@ -826,12 +1144,31 @@ body[data-exec-window="false"] .star { opacity:1; }
   </aside>
 
 </main>
+</div><!-- /room-stage -->
 <script>
 /*━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   VoidCube Supervisor Room  v2  — JS runtime
   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━*/
 const $ = (sel, el) => (el||document).querySelector(sel);
 const $$ = (sel, el) => [...(el||document).querySelectorAll(sel)];
+
+/* ── Responsive room scaling ──
+   The .room is a fixed 1440x810 design canvas.
+   We scale it uniformly to fit the viewport so all items
+   (desk, sofa, books, character, etc.) resize together. */
+const ROOM_DESIGN_W = 1440;
+const ROOM_DESIGN_H = 810;
+
+function updateRoomScale() {
+  const stage = document.querySelector('.room-stage');
+  const room  = document.querySelector('.room');
+  if (!stage || !room) return;
+  const sw = stage.clientWidth  || window.innerWidth;
+  const sh = stage.clientHeight || window.innerHeight;
+  if (sw <= 0 || sh <= 0) return;
+  const scale = Math.min(sw / ROOM_DESIGN_W, sh / ROOM_DESIGN_H);
+  document.documentElement.style.setProperty('--room-scale', scale);
+}
 
 /* ── DOM refs ── */
 const els = {
@@ -1200,6 +1537,16 @@ if ("EventSource" in window) {
 
 /* initial ambient */
 ambientParticles();
+
+/* ── Boot responsive scaling ── */
+function bootRoomScale() {
+  updateRoomScale();
+}
+bootRoomScale();
+window.addEventListener('resize', updateRoomScale);
+window.addEventListener('orientationchange', updateRoomScale);
+/* run again after fonts/layout settle to avoid 1-frame flicker */
+window.addEventListener('load', updateRoomScale);
 </script>
 </body>
 </html>

@@ -6598,6 +6598,7 @@ class VoidcubeCLI:
             try:
                 active = resp.get("governor_mode_active", False)
                 if active:
+                    self._auto_mode_active = True
                     _cprint(f"  ✅ Governor Mode [bold green]ACTIVE[/]")
                     _cprint(f"     Drive loop:  {'running' if resp.get('drive_loop_running') else 'stopped'}")
                     _cprint(f"     Review loop: {'running' if resp.get('review_loop_running') else 'stopped'}")
@@ -6606,14 +6607,12 @@ class VoidcubeCLI:
                     _cprint(f"     Use /auto-q to return to Memory Mode.")
                     _cprint(f"     Monitor: {supervisor_url}/ui")
                 else:
-                    self._auto_mode_active = False
                     _cprint(f"  ⚠️  Governor Mode activation failed.")
                     if not resp.get("endogenous_drive_enabled", True):
                         _cprint(f"     endogenous_drive_enabled is False in config.")
             except Exception:
                 pass  # best-effort reporting; the API call succeeded
 
-        self._auto_mode_active = True
         threading.Thread(target=_call_activate_governor, daemon=True, name="governor-activate").start()
 
     def _handle_auto_q_command(self):
