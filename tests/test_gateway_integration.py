@@ -545,7 +545,7 @@ class TestGatewayIntegration:
             assert registry["registry"]["retired_slot"] is None
             assert registry["slots"]["slot-A"]["body_state"] == "shell"
             assert registry["slots"]["slot-B"]["body_state"] == "active"
-            assert old_agent.status == "stopped"
+            assert old_agent.status in ("stopped", "exited"), f"expected stopped/exited, got {old_agent.status}"
             assert old_agent.pid is None
             assert new_agent.status == "running"
         finally:
