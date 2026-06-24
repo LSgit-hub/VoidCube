@@ -2341,6 +2341,23 @@ class VoidcubeCLI:
         self._current_learning_task = task
         self._current_learning_task_started_at = _time.time()
 
+        # ── Notify Gateway that agent is starting work ──
+        try:
+            touch_payload = _json.dumps({
+                "activity_kind": "agent_work",
+                "source_service": "cli_agent",
+                "metadata": {"task_id": task_id, "title": title, "source": "auto_mode_pull"},
+            }).encode()
+            r = _req.Request(
+                f"{gateway_base}/admin/activity/touch",
+                data=touch_payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            _req.urlopen(r, timeout=10)
+        except Exception:
+            pass
+
         # ── Push task as Agent input ──
         prompt = (
             f"[AUTO Learning Task] {title}\n\n"

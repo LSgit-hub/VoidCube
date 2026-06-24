@@ -962,18 +962,20 @@ class InternalGateway:
                 break
         if not supervisor_service:
             raise HTTPException(status_code=503, detail="Supervisor unavailable")
-        
+
         url = f"{supervisor_service.address}/self-evolution/tasks"
         params = {"status": "approved"}
         if task_type:
             params["task_type"] = task_type
-        
+
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                     if resp.status != 200:
                         raise HTTPException(status_code=resp.status, detail=f"Supervisor returned {resp.status}")
                     result = await resp.json()
+            self._touch_activity("self_learning", source_service="gateway",
+                                metadata={"task_type": task_type})
             return result
         except Exception as e:
             logger.error(f"Failed to fetch approved tasks: {e}")
@@ -1009,6 +1011,8 @@ class InternalGateway:
                     if resp.status != 200:
                         raise HTTPException(status_code=resp.status, detail=f"Supervisor returned {resp.status}")
                     result = await resp.json()
+            self._touch_activity("agent_work", source_service="gateway",
+                                metadata={"task_id": task_id, "decision": "completed"})
             return result
         except Exception as e:
             logger.error(f"Failed to complete task: {e}")

@@ -158,10 +158,100 @@ Mem 负责：
 
 Mem 不替代 Agent 的临时上下文管理；Agent 临时记忆服务短期工作，Mem 承担长期真相。
 
-Mem 的记忆压缩分两个层级运作：
+Mem 的记忆架构采用**短长期双层设计**，从根本上解决"压缩即遗忘"的问题：
 
-- **扁平压缩**（memory\_service）：对 SQLite 中的对话条目做 API-B LLM 摘要合并与衰减，已接入运行时周期 loop。
-- **结构化四级压缩**（MemoryMaintenanceEngine）：对 Event→Scene→Arc→Epoch 四层对象做分层压缩与替代（supersede），超期 Scene（>30天）压缩入父 Arc，超期 Arc（>180天）压缩入父 Epoch，超期 Epoch（>365天）进一步压缩。默认使用 LLMScholarBackend（API-B）生成自然压缩摘要，无 API 凭据时自动降级到 HeuristicScholarBackend。**已接入运行时**：Governor Mode 下通过内生驱动→任务队列触发，Memory Mode 下每 3600s 自动执行。
+### 3.4.1 双层记忆架构
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Mem 双层记忆架构                               │
+│                                                                 │
+│   Tier 1：短期会话存储（SQLite）                                   │
+│   ┌─────────────────────────────────────────────────────────┐   │
+│   │ · 最近 30 天内所有会话内容完整保存，不做任何压缩            │   │
+│   │ · 按 session → turn 树形目录组织，带完整时间轴索引         │   │
+│   │ · 支持按时间点/时间段/会话/主题 精确检索原始对话            │   │
+│   │ · relevance_score 指数衰减，但原始内容永久可读             │   │
+│   │ · 每个 turn 有唯一 turn_id，作为上层引用的锚点             │   │
+│   └──────────────────────────┬──────────────────────────────┘   │
+│                              │                                   │
+│   Tier 2：长期编年史记忆（Mem Pipeline）                          │
+│   ┌─────────────────────────────────────────────────────────┐   │
+│   │ · 超过 30 天的会话通过 ChroniclePipeline 压缩为结构化记忆 │   │
+│   │ · Event → Scene → Arc → Epoch 四级金字塔                  │   │
+│   │ · 每个 Event 通过 source_turns 反向引用 Tier 1 原始 turn  │   │
+│   │ · ProfileMemory 从原始对话中提取偏好/约束/定义/事实       │   │
+│   │ · 压缩后的原始 turn 可从 Tier 1 删除，但保留摘要可追溯    │   │
+│   └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│   关键原则：                                                      │
+│   - 30 天内：保留完整，不做压缩（"先记住，再总结"）              │
+│   - 30 天后：压缩入 Mem Pipeline，但保留 Tier 1 的 turn_id 引用  │
+│   - 衰减而非删除：不重要内容先降 relevance，再考虑压缩           │
+│   - 可追溯：从 Arc/Scene/Event 可沿 source_turns 回到原始对话   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Tier 1 — 短期会话存储（SQLite）**：
+
+- **数据模型**：`sessions` 表 + `turns` 表 + `turns_archive` 表。session 为根节点，turns 为叶子节点，形成会话树形目录
+- **保留窗口**：默认 30 天。窗口内的所有会话内容完整保存，不做摘要、不合并、不删除
+- **时间轴索引**：`idx_turns_timestamp` + `idx_turns_session`，支持按时间点/时间段/会话快速检索原始对话
+- **衰减机制**：relevance_score 按指数衰减（默认每天 ×0.99），低于阈值（默认 0.1）的 turn 标记为可压缩候选，但内容不自动删除
+- **与现有 memory_service 的关系**：直接扩展 `systems/memory/memory_service.py` 的 SQLite schema，增加 sessions/turns/turns_archive 三张表，复用现有的 FastAPI 路由、decay loop、gateway 注册等基础设施
+
+**Tier 2 — 长期编年史记忆（Mem Pipeline）**：
+
+- **触发时机**：turn 超过 30 天保留窗口 OR Tier 1 turns 表行数超过阈值（默认 10000 条）
+- **压缩流程**：选中的 turns → TranscriptTurn 序列 → ChroniclePipeline.ingest() → Event/Scene/Arc/Epoch + ProfileMemory
+- **反向引用**：每个 Event 的 `source_turns` 字段记录原始 turn_id 列表，Scene/Arc 通过 `evidence_refs` 可逐层追溯到原始对话
+- **压缩后处理**：压缩完成的 turns 从 `turns` 表移至 `turns_archive` 表（保留 turn_id + 时间锚点 + 摘要，原始内容可选删除）
+- **与现有 Mem Pipeline 完全兼容**：Tier 2 就是现有的 ChroniclePipeline + MemoryMaintenanceEngine，不需要修改任何 Mem 内部逻辑
+
+**双层协作流程**：
+
+```text
+用户对话 → Gateway 记录 → Tier 1 SQLite (sessions + turns, 完整保留)
+
+每天定时检查 (memory_service decay loop):
+  ├── turns 超过 30 天 → 标记为压缩候选
+  ├── 批量取出候选 turns → 转换为 TranscriptTurn 序列
+  ├── ChroniclePipeline.ingest(turns) → 产出 Event/Scene/Arc/Epoch
+  ├── 新产出的结构化记忆存入 mem_state.json（或现有持久化路径）
+  ├── 原始 turns 移至 turns_archive（保留 turn_id + 时间锚点 + 摘要）
+  └── 更新 Tier 2 ↔ Tier 1 的 source_turns 反向引用
+
+查询时:
+  ├── 30 天内 → 直接查 Tier 1 SQLite，返回原始对话全文
+  ├── 30 天外 → 先查 Tier 2 (Arc/Scene/Event 摘要)，再沿 source_turns 回 Tier 1 archive 查原文摘要
+  ├── 主题演化 → Tier 2 MemoryQueryEngine.theme_evolution()
+  └── 证据追溯 → MemoryQueryEngine.evidence_trace(target_id) 沿 child_ids 递归展开
+```
+
+**与现有系统的复用关系**（避免重复造轮子）：
+
+| 现有组件 | 复用方式 |
+|---------|---------|
+| `systems/memory/memory_service.py` | 扩展 SQLite schema，增加 sessions/turns/turns_archive 三张表 |
+| `Mem/src/memai/pipeline.py` (ChroniclePipeline) | 直接作为 Tier 2 压缩引擎，无需修改 |
+| `Mem/src/memai/schema.py` (TranscriptTurn) | 作为 Tier 1 → Tier 2 的数据转换格式 |
+| `Mem/src/memai/query.py` (MemoryQueryEngine) | 扩展 source_turns 回查 Tier 1 的能力 |
+| `Mem/src/memai/repository.py` (MemoryStateRepository) | 增量更新机制不变 |
+| `Mem/src/memai/maintenance.py` (MemoryMaintenanceEngine) | 四级结构化压缩不变 |
+| `Mem/src/memai/governance.py` + `governance_repository.py` | 压缩事件记录为治理审计日志 |
+| `plugins/memory/mem/governor_bridge.py` | 治理桥接不变 |
+
+### 3.4.2 记忆压缩双层体系（更新）
+
+在双层架构下，Mem 的压缩分两个阶段运作：
+
+- **Tier 1 衰减管理**（memory_service）：turns 在 30 天保留窗口内完整保留。超过 30 天后，先降 relevance_score（指数衰减），再标记为压缩候选。**仅当 Tier 2 已生成对应的结构化记忆（Event/Scene）后，才将原始 turn 移至 archive 表。不压缩、不合并原始对话文本——只做时间窗口管理和衰减标记。**
+
+- **Tier 2 编年史压缩**（ChroniclePipeline）：将超过保留窗口的 turns 批量送入 ChroniclePipeline，经 API-B LLM 提取 Event → 构建 Scene → 绑定 Arc → 聚合 Epoch。**这是从原始对话到结构化记忆的唯一转换路径，不可逆，但通过 source_turns 保留反向引用链路。**
+
+- **Tier 2 结构化四级压缩**（MemoryMaintenanceEngine）：对 Event→Scene→Arc→Epoch 四层对象做分层压缩与替代（supersede），超期 Scene（>30天）压缩入父 Arc，超期 Arc（>180天）压缩入父 Epoch，超期 Epoch（>365天）进一步压缩。默认使用 LLMScholarBackend（API-B）生成自然压缩摘要，无 API 凭据时自动降级到 HeuristicScholarBackend。**已接入运行时**：Governor Mode 下通过内生驱动→任务队列触发，Memory Mode 下每 3600s 自动执行。
+
+**关键改进**：旧设计中，SQLite 中的对话条目直接做摘要合并（扁平压缩），原始文本不可恢复。新设计中，30 天内的原始对话完整保留在 Tier 1，超过 30 天才送入 Tier 2 压缩，且保留 turn_id 反向引用。这使得从 Arc 摘要可以逐层追溯到原始对话。
 
 在当前基线中，记忆管理者与监督者共用同一条 API-B 能力链。二者不是两套互相割裂的灵魂系统，而是同一长期记忆与治理能力在不同时间窗口、不同权限上下文下的两种身份：
 

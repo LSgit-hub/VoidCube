@@ -1,14 +1,14 @@
 {
-  "record_id": "f0a996e1-b9b8-47b6-a2a1-c3cc76fe4ded",
+  "record_id": "f4b85701-4e64-49aa-95d2-55116c31b591",
   "kind": "supervisor_activity",
-  "created_at": "2026-06-23T10:57:38.696642",
+  "created_at": "2026-06-24T02:14:31.874103",
   "request": {
-    "event_id": "5e429ff1-d08e-4da5-84f7-5d2b8a944748",
+    "event_id": "b2394761-9ecc-4bff-b2c2-0d95ebb7e7f6",
     "event_type": "task_decided",
     "scene": "planning",
     "summary": "Task 'Maintain long-term memory continuity' was marked completed.",
-    "trace_id": "0ba7acb5-fbcf-4685-9a8f-c6dd41f9ef2f",
-    "task_id": "2a718b30-7aff-4aa4-995c-4ba7c609279b",
+    "trace_id": "2a10c7fd-86bc-4c5f-92e8-bd55f9baa3bc",
+    "task_id": "3be0b734-4169-4bc2-8d1c-e6552887cc0b",
     "task_type": "memory_maintenance",
     "governance_task_type": "memory_maintenance",
     "task_family": "memory_maintenance",
@@ -24,7 +24,7 @@
   "execution_report": null,
   "registry": null,
   "evolution_lineage": {
-    "trace_id": "0ba7acb5-fbcf-4685-9a8f-c6dd41f9ef2f",
+    "trace_id": "2a10c7fd-86bc-4c5f-92e8-bd55f9baa3bc",
     "task_type": "memory_maintenance",
     "governance_task_type": "memory_maintenance",
     "task_family": "memory_maintenance",

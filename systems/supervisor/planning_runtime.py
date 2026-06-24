@@ -722,13 +722,15 @@ class PlanningRuntimeMixin:
             **dict(execution.get("git_lineage") or {}),
         }
 
-    async def list_self_evolution_tasks(self, status: Optional[str] = None):
+    async def list_self_evolution_tasks(self, status: Optional[str] = None, task_type: Optional[str] = None):
         normalized_status = None
         if status is not None:
             normalized_status = self._normalize_self_evolution_decision(status)
             if normalized_status is None or normalized_status == "auto":
                 raise HTTPException(status_code=400, detail=f"Unsupported task status filter: {status}")
         tasks = self._self_evolution_queue.list_tasks(status=normalized_status)
+        if task_type:
+            tasks = [t for t in tasks if self._task_governance_type(t) == str(task_type).strip()]
         return {
             "tasks": [self._serialize_self_evolution_task(task) for task in tasks],
             "count": len(tasks),
