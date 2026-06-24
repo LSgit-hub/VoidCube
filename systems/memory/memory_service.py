@@ -574,8 +574,8 @@ class MemoryService:
                     else:
                         conn.execute(
                             "UPDATE compressed_memories SET status = 'purged', "
-                            "weight = 0.0 WHERE memory_id = ?",
-                            (mem_id,),
+                            "weight = 0.0, compressed_at = ? WHERE memory_id = ?",
+                            (now.isoformat(), mem_id),
                         )
                         purged += 1
                     continue

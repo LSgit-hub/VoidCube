@@ -146,7 +146,24 @@ Agent 可以拥有临时记忆，但这不等于 Mem 长期记忆。所有需要
 
 Mem 是 VoidCube 的长期记忆与治理灵魂，使用 API-B。
 
-**LLM-First 原则**：Mem 的核心价值在于智能——充分利用大模型的理解能力来压缩总结、判断问题、给出学习方向。LLM 是 Mem 的核心引擎，不是可选插件。**需要智能的环节**（压缩提取、场景/弧线/纪元摘要、升级重摘要、内生驱动学习主题）由 LLM 驱动。**不需要智能的环节**（Tier 1 字节存取、衰减公式、清退删除、时间阈值判断）直接用程序执行。LLM Provider 已作为第一公民配置，启动时自动验证连通性，周期健康检查（每 5 个压缩周期），状态通过 `GET /llm/health` 和 `GET /compressed/rules-status` 暴露。无 LLM 时系统进入显式降级模式并记录告警日志。详见 [mem-llm-first-redesign.md](mem-llm-first-redesign.md)。
+**LLM-First 原则**：Mem 的核心价值在于智能——充分利用已配置的记忆模型（API-B）来理解内容。LLM 参与和不参与有明确边界：
+
+**LLM 参与（需要内容理解）**：
+- 对话→事件提取（`LLMEventExtractionBackend` 语义理解 vs 关键词正则）
+- 场景/弧线/纪元摘要（`LLMScholarBackend` 自然语言生成 vs 模板填充）
+- 升级重摘要（`_llm_escalate_summary()` 逐级提升抽象层次）
+- 清退终审（`_llm_purge_review()` 判断历史价值防误删）
+- 内生驱动学习主题（`_llm_generate_learning_topics()` 分析记忆生成研究方向）
+- 治理模糊裁决（`LLMGovernorReasoner` 评估证据、发现盲点）
+- 语义搜索（LLM Embedding 余弦相似度）
+
+**程序执行（不需要智能）**：
+- Tier 1 存取（SQLite CRUD）、衰减公式（`score *= 0.99`）、权重计算（`compute_dynamic_weight()` 数学公式）
+- Pin/Hide（布尔标记）、访问/引用计数（SQL UPDATE）、升级触发（年龄比较）
+- 最终 DELETE（`WHERE status='purged' AND age>90d` 纯 SQL）
+- 空闲窗口判断（时间戳减法）、任务审批（状态机）、身体切换（机械流程）
+
+LLM Provider 启动时验证一次连通性（`GET /llm/health`），状态随 `GET /compressed/rules-status` 暴露。无 LLM 时降级路径明确记录告警日志。
 
 Mem 负责：
 
