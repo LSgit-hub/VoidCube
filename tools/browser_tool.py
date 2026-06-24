@@ -2289,7 +2289,8 @@ if __name__ == "__main__":
             print(f"     Install: {_browser_install_hint()}")
         if _cp is not None and not _cp.is_configured():
             print(f"   - {_cp.provider_name()} credentials not configured")
-            print(f"   {t('tips.browser_local_mode', default='Tip: set browser.cloud_provider to \'local\' to use free local mode instead')}")
+            _local_mode_default = "Tip: set browser.cloud_provider to 'local' to use free local mode instead"
+            print(f"   {t('tips.browser_local_mode', default=_local_mode_default)}")
     
     print("\n📋 Available Browser Tools:")
     for schema in BROWSER_TOOL_SCHEMAS:

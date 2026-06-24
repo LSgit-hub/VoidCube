@@ -214,26 +214,29 @@ class Tier1ToTier2Bridge:
     # ── Bridge to Tier 2 ──────────────────────────────────────────
 
     def _build_pipeline(self):
-        """Build ChroniclePipeline — LLM-first with heuristic fallback."""
-        import os
+        """Build ChroniclePipeline — LLM-first with heuristic fallback.
+
+        LLM credentials are resolved by
+        ``memai.model_config.resolve_mem_llm_client`` — the same source
+        the supervisor's endogenous drive and the rest of
+        ``MemoryService`` use, so the model selection is consistent
+        across all Mem LLM callers and is controlled entirely by the
+        CLI ``/api`` command's writes to ``memory.llm.*``.
+        """
         from memai.pipeline import ChroniclePipeline
 
-        api_key = (
-            os.environ.get("DEEPSEEK_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
-            or ""
-        ).strip()
-        if not api_key:
+        try:
+            from memai.model_config import resolve_mem_llm_client
+            llm_client, _ = resolve_mem_llm_client(role="default")
+        except Exception:
+            llm_client = None
+
+        if llm_client is None:
             return ChroniclePipeline()
 
         try:
-            from memai.llm_client import OpenAICompatibleLLMClient
             from memai.extraction import EventExtractor, LLMEventExtractionBackend
             from memai.scholar import LLMScholarBackend
-
-            model = os.environ.get("MEMAI_LLM_MODEL", "deepseek-chat")
-            base_url = os.environ.get("MEMAI_LLM_BASE_URL", "https://api.deepseek.com/v1")
-            llm_client = OpenAICompatibleLLMClient(model=model, api_key=api_key, base_url=base_url)
 
             class _LLMExtractionAdapter:
                 def __init__(self, llm):

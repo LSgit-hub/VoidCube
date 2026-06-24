@@ -836,12 +836,43 @@ Agent (API-A)
    | **内生驱动** | 四类候选任务的最近产出记录 | 监督者内生驱动 → 各处置路径 |
    | **记忆维护** | 记忆压缩、队列卫生等内部维护任务 | 监督者 → 内部机制 |
 
-5. **当前场景（scene）保留但精简**：当前 UI 的 5 个场景（memory/learning/planning/execution/idle）过度简化了系统状态。改为基于实际任务活动驱动的场景切换：
-   - `idle`：无任何活动
-   - `drive`：内生驱动正在评估产出候选
-   - `learning`：Agent 正在执行学习任务
-   - `body_switch`：执行器正在执行身体切换
-   - `maintenance`：记忆维护/队列卫生
+5. **场景（scene）按报告者分域**：场景不是全局单值。每个运行实体只声明自己的"当前在做什么"——
+   谁执行、谁上报。这与 §3.6 监督者职责一致（监督者只管理，不执行学习/身体升级/身体切换机械流程），
+   也与 §3.4 "记忆管理者与监督者共用 API-B 能力链，但执行者是另一域" 一致。
+
+   | 报告者 | 域 | 合法 scene 值 | 含义 |
+   |--------|----|--------------|------|
+   | **监督者 (Supervisor, API-B)** | 治理身份 | `idle` | 无活动 |
+   |  |  | `planning` | 决策/批准/拒绝任务（管理任务列表） |
+   |  |  | `drive` | 内生驱动：产出候选 |
+   |  |  | `memory` | 直接触摸长期记忆（Mem 内部操作） |
+   |  |  | `maintenance` | 记忆维护/队列卫生 |
+   |  |  | `dispatch` | 发送执行请求到身体执行器 |
+   | **Agent (API-A)** | 学习/升级执行体 | `idle` | 无活动 |
+   |  |  | `learning` | 正在执行学习任务（拉取任务列表后） |
+   |  |  | `code_editing` | 正在编辑替身代码（身体升级） |
+   |  |  | `executing` | 正在执行其他用户任务（直接对话响应） |
+   | **执行器 (Executor)** | 身体切换机械面 | `idle` | 无活动 |
+   |  |  | `body_switch` | 正在执行身体切换流程 |
+
+   显式边界：
+   - 监督者**永远不**上报 `learning` / `code_editing` / `executing` / `body_switch`（§3.6 边界）
+   - Agent **永远不**上报 `body_switch`（§3.5 边界：身体切换由执行器执行）
+   - 执行器**永远不**上报 `learning` / `code_editing`（§3.5 边界：学习由 Agent 执行）
+   - 三个报告者的 scene 互不耦合——一个实体可以处于 `idle`，另一个处于 `learning`，互不影响
+
+   旧"5 scene 全局"列表（`idle` / `drive` / `learning` / `body_switch` / `maintenance`）作废。
+   任何代码、文档、UI 必须按上表的"报告者→scene"对应关系上报与展示。
+
+   **三段式状态栏（CLI 状态展示）**：
+   网关 `/admin/scenes` 端点聚合三域 scene；CLI `VoidCube status` 与 `VoidCube dashboard`
+   在"Gateway Service"区块以三段式水平状态栏呈现：
+   - `🧠 API-B (Supervisor) — <scene> — <title>`
+   - `🤖 API-A (Agent) — <scene> — <task_id|—>`
+   - `⚙️ Executor — <scene> — <title>`
+   每段含 reachability 指示：✅ 节点可达 / ⚠️ 节点失联（默认 idle）。
+   三段独立呈现，**不允许**把监督者的 `idle` 渲染成"学习中"，
+   也不允许把 Agent 的 `learning` 错配到监督者段。
 
 6. **任务与事件分离**：任务面板展示的是"待完成、正在做、已完成"的任务状态；时间线展示的是"刚刚发生了什么"的事件流。两者不应混淆。
 

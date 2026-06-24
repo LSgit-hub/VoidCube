@@ -116,6 +116,37 @@ class InternalGateway:
                 "self_evolution_execute": None,
             },
         }
+        # ── Scene cache (baseline §8.1 — per-reporter) ──
+        # The gateway never decides a reporter's scene; it only relays
+        # what each registered service reports.  Cache is best-effort
+        # and re-validated on every /admin/scenes fetch.
+        self._scenes_cache: Dict[str, Dict[str, Any]] = {
+            "supervisor": {
+                "scene": "idle",
+                "title": None,
+                "summary": None,
+                "service_id": None,
+                "address": None,
+                "reachable": False,
+                "last_fetched_at": None,
+            },
+            "agent": {
+                "scene": "idle",
+                "scene_task_id": None,
+                "service_id": None,
+                "address": None,
+                "slot_id": None,
+                "reachable": False,
+                "last_fetched_at": None,
+            },
+            "executor": {
+                "scene": "idle",
+                "service_id": None,
+                "address": None,
+                "reachable": False,
+                "last_fetched_at": None,
+            },
+        }
         # Auto-derive persistence path when not explicitly configured.
         # Skip under pytest to avoid test-isolation issues from shared
         # persisted state across gateway test cases.
@@ -146,7 +177,14 @@ class InternalGateway:
         self.app.add_api_route("/admin/activity/log", self.get_activity_log, methods=["GET"])
         self.app.add_api_route("/admin/activity/touch", self.touch_activity, methods=["POST"])
         self.app.add_api_route("/admin/governor-mode", self.set_governor_mode, methods=["POST"])
-        
+        # ── Scene aggregation (baseline §8.1) ──
+        # Scene is per-reporter, not global.  The gateway collects the
+        # supervisor / active-agent / executor scenes and presents a
+        # three-segment view for the CLI status bar.  Each reporter
+        # declares its own scene only; the gateway never reinterprets.
+        self.app.add_api_route("/admin/scenes", self.get_scenes, methods=["GET"])
+        self.app.add_api_route("/admin/scenes/refresh", self.refresh_scenes, methods=["POST"])
+
         self.app.add_api_route("/register", self.register_service, methods=["POST"])
         self.app.add_api_route("/health/{service_id}", self.update_health, methods=["POST"])
         
@@ -873,6 +911,179 @@ class InternalGateway:
             logger.info(f"Route deleted: {path_prefix}")
             return {"status": "deleted"}
         raise HTTPException(status_code=404, detail="Route not found")
+
+    # ── Scene aggregation (baseline §8.1) ──
+    #
+    # Scene is per-reporter.  Each of the three reporters (supervisor,
+    # active agent, executor) declares its own scene.  The gateway
+    # merely relays those declarations and presents them in a
+    # three-segment view for the CLI status bar.  The gateway itself
+    # never reinterprets or rewrites a reporter's scene.
+
+    SUPERVISOR_LEGAL_SCENES: frozenset = frozenset(
+        {"idle", "planning", "drive", "memory", "maintenance", "dispatch"}
+    )
+    AGENT_LEGAL_SCENES: frozenset = frozenset(
+        {"idle", "learning", "code_editing", "executing"}
+    )
+    EXECUTOR_LEGAL_SCENES: frozenset = frozenset({"idle", "body_switch"})
+
+    async def get_scenes(self, refresh: bool = False):
+        """Return the aggregated per-reporter scene view.
+
+        Optional ``refresh=true`` forces re-fetch from every reachable
+        service before returning.  Otherwise the cache from the last
+        refresh is returned (and refreshed on a short cadence by
+        ``refresh_scenes``).
+        """
+        if refresh:
+            await self.refresh_scenes()
+        return {
+            "status": "ok",
+            "scenes": self._scenes_cache,
+            "summary": self._build_scene_summary(),
+            "generated_at": datetime.now().isoformat(),
+        }
+
+    async def refresh_scenes(self):
+        """Force a fresh scene fetch from every reachable service."""
+        await self._refresh_supervisor_scene()
+        await self._refresh_agent_scene()
+        await self._refresh_executor_scene()
+        return {"status": "refreshed", "scenes": self._scenes_cache}
+
+    def _build_scene_summary(self) -> Dict[str, str]:
+        """Three-segment headline view for the CLI status bar."""
+        scenes = self._scenes_cache
+        return {
+            "supervisor": scenes["supervisor"].get("scene") or "idle",
+            "agent": scenes["agent"].get("scene") or "idle",
+            "executor": scenes["executor"].get("scene") or "idle",
+        }
+
+    def _find_services(self, service_type: str) -> List[ServiceInfo]:
+        return [s for s in self._services.values() if s.service_type == service_type]
+
+    async def _http_get_json(self, url: str, timeout: float = 2.0) -> Optional[Dict[str, Any]]:
+        """Best-effort JSON GET.  Returns None on any failure."""
+        try:
+            import aiohttp
+            timeout_obj = aiohttp.ClientTimeout(total=max(timeout, 0.1))
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=timeout_obj) as resp:
+                    if resp.status >= 400:
+                        return None
+                    return await resp.json()
+        except Exception as exc:
+            logger.debug("Gateway scene fetch %s failed: %s", url, exc)
+            return None
+
+    def _validate_scene(self, scene: Optional[str], allowed: frozenset, default: str = "idle") -> str:
+        candidate = str(scene or "").strip()
+        if candidate in allowed:
+            return candidate
+        return default
+
+    async def _refresh_supervisor_scene(self) -> None:
+        supervisors = self._find_services("supervisor")
+        cache = self._scenes_cache["supervisor"]
+        cache["reachable"] = False
+        if not supervisors:
+            cache["last_fetched_at"] = datetime.now().isoformat()
+            return
+        # Use the first healthy supervisor; a real deployment typically
+        # has exactly one supervisor instance.
+        target = next((s for s in supervisors if s.healthy), supervisors[0])
+        address = (target.address or "").rstrip("/")
+        url = f"{address}/ui/state" if address else None
+        if not url:
+            cache["last_fetched_at"] = datetime.now().isoformat()
+            return
+        payload = await self._http_get_json(url, timeout=2.0)
+        cache["service_id"] = target.service_id
+        cache["address"] = address
+        cache["last_fetched_at"] = datetime.now().isoformat()
+        if not isinstance(payload, dict):
+            return
+        cache["reachable"] = True
+        cache["scene"] = self._validate_scene(
+            payload.get("scene"),
+            self.SUPERVISOR_LEGAL_SCENES,
+        )
+        cache["title"] = payload.get("title")
+        cache["summary"] = payload.get("summary")
+        # Carry across the supervisor's activity touch point (best-effort).
+        try:
+            cache["scene_changed_at"] = payload.get("generated_at")
+        except Exception:
+            pass
+
+    async def _refresh_agent_scene(self) -> None:
+        """Pull the *active* agent's scene.
+
+        We only surface the active body's scene in the three-segment
+        view — shell bodies are not user-visible.  If the active body
+        is not an agent (which is the normal case), we look up the
+        currently registered agent instance.
+        """
+        cache = self._scenes_cache["agent"]
+        cache["reachable"] = False
+        target: Optional[ServiceInfo] = None
+        if self._active_body_service_id:
+            target = self._services.get(self._active_body_service_id)
+            if target and target.service_type != "agent":
+                target = None
+        if target is None:
+            agents = [s for s in self._find_services("agent") if s.healthy]
+            if not agents:
+                cache["last_fetched_at"] = datetime.now().isoformat()
+                return
+            target = agents[0]
+        address = (target.address or "").rstrip("/")
+        url = f"{address}/v1/agent/scene" if address else None
+        if not url:
+            cache["last_fetched_at"] = datetime.now().isoformat()
+            return
+        payload = await self._http_get_json(url, timeout=2.0)
+        cache["service_id"] = target.service_id
+        cache["address"] = address
+        cache["slot_id"] = target.metadata.get("slot_id") if target.metadata else None
+        cache["last_fetched_at"] = datetime.now().isoformat()
+        if not isinstance(payload, dict):
+            return
+        cache["reachable"] = True
+        cache["scene"] = self._validate_scene(
+            payload.get("scene"),
+            self.AGENT_LEGAL_SCENES,
+        )
+        cache["scene_task_id"] = payload.get("scene_task_id")
+        cache["scene_changed_at"] = payload.get("scene_changed_at")
+
+    async def _refresh_executor_scene(self) -> None:
+        cache = self._scenes_cache["executor"]
+        cache["reachable"] = False
+        executors = self._find_services("executor")
+        if not executors:
+            cache["last_fetched_at"] = datetime.now().isoformat()
+            return
+        target = next((s for s in executors if s.healthy), executors[0])
+        address = (target.address or "").rstrip("/")
+        url = f"{address}/executor/scene" if address else None
+        if not url:
+            cache["last_fetched_at"] = datetime.now().isoformat()
+            return
+        payload = await self._http_get_json(url, timeout=2.0)
+        cache["service_id"] = target.service_id
+        cache["address"] = address
+        cache["last_fetched_at"] = datetime.now().isoformat()
+        if not isinstance(payload, dict):
+            return
+        cache["reachable"] = True
+        cache["scene"] = self._validate_scene(
+            payload.get("scene"),
+            self.EXECUTOR_LEGAL_SCENES,
+        )
+        cache["scene_changed_at"] = payload.get("scene_changed_at")
 
     async def route_request(self, path: str, request: Request):
         self._request_counter += 1

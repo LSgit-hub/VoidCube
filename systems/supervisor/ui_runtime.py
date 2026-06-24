@@ -1593,6 +1593,21 @@ class SupervisorUIMixin:
         summary: str = "",
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        # Per baseline §3.4/§3.6 the supervisor (API-B) is the
+        # governance identity of Mem — it MANAGES the task list and
+        # runs endogenous drive; it never executes learning or
+        # body-upgrade code.  Reject any scene that implies execution
+        # (`learning`, `execution`) which is API-A territory.
+        from systems.supervisor.planning_runtime import SUPERVISOR_LEGAL_SCENES
+
+        if scene not in SUPERVISOR_LEGAL_SCENES:
+            logger.warning(
+                "Refusing illegal supervisor scene=%r for event_type=%r; "
+                "falling back to 'planning'. Legal supervisor scenes: %s",
+                scene, event_type, sorted(SUPERVISOR_LEGAL_SCENES),
+            )
+            scene = "planning"
+
         event = {
             "event_id": str(uuid.uuid4()),
             "event_type": event_type,
@@ -1943,41 +1958,55 @@ class SupervisorUIMixin:
         in_execution_window: bool = True,
         memory_active: bool = False,
     ) -> tuple[str, str, str]:
-        """Redefined scenes driven by real activity rather than static heuristics."""
+        """Map current supervisor activity to one of SUPERVISOR_LEGAL_SCENES.
+
+        Per architectural baseline §3.4/§3.6/§8.1, the supervisor (API-B)
+        only MANAGES tasks — it never executes learning or body-upgrade
+        code.  Therefore the supervisor's `scene` is restricted to:
+          idle, planning, drive, memory, maintenance, dispatch
+        The "learning", "code_editing", "executing", "body_switch" scenes
+        belong to the Agent (API-A) or Executor, and are not legal
+        returns from this method.  When the supervisor is judging a
+        body-switch request, it reports `dispatch` (it has decided to
+        hand off to the executor) — the executor then reports
+        `body_switch` while mechanically executing the switch.
+        """
         error_note = f" · {error_count} recent error(s)" if error_count > 0 else ""
 
         # ── Scene priority: running > memory_active > drive > queued > idle ──
 
-        # 1. Active execution: body_switch
+        # 1. Active execution: dispatch if a task is running (we just dispatched it;
+        #    the actual execution is the Agent's / Executor's responsibility).
         running = [t for t in all_tasks if t.get("status") == "running"]
         if running:
             r = running[0]
             rtitle = str(r.get("title") or "Running task")
             rfamily = str(r.get("task_family") or "")
-            if "learning" in rfamily:
-                return (
-                    "learning",
-                    f"Xizi is researching{error_note}",
-                    f"「{rtitle}」Agent is actively executing this learning task.",
-                )
+            # Memory maintenance is the one case the supervisor is genuinely
+            # "doing" the work itself (§3.4 — handled by supervisor's
+            # internal memory service, not by Agent pull).
             if "memory" in rfamily:
                 return (
                     "maintenance",
                     f"Xizi is tending memory{error_note}",
                     f"「{rtitle}」Memory maintenance is executing now.",
                 )
+            # For learning / body-upgrade running tasks, the supervisor
+            # just dispatched them — show `dispatch` (NOT `learning` or
+            # `body_switch`, which are Agent / Executor scenes).
             return (
-                "body_switch",
-                f"Xizi is at the console{error_note}",
-                f"「{rtitle}」Body evolution is executing now.",
+                "dispatch",
+                f"Xizi dispatched{error_note}",
+                f"「{rtitle}」Dispatched. The Agent (API-A) or Executor is now executing this; the supervisor is waiting for the result.",
             )
 
-        # 2. Learning tasks awaiting Agent pull
+        # 2. Learning / body-upgrade tasks awaiting Agent pull — supervisor
+        #    is managing the list, not learning.
         learning_pending = [t for t in all_tasks if "learning" in str(t.get("task_family", "")) and t.get("status") == "approved"]
         if learning_pending:
             lp = learning_pending[0]
             return (
-                "learning",
+                "planning",
                 f"Xizi has approved learning{error_note}",
                 f"「{lp.get('title', 'Learning task')}」is ready. Agent pulls via /v1/tasks; learn-only research awaits execution.",
             )

@@ -20,6 +20,28 @@ GATEWAY_URL = "http://127.0.0.1:6000"
 SUPERVISOR_URL = "http://127.0.0.1:6002"
 REQUEST_TIMEOUT = 5  # seconds per HTTP call
 
+# Scene→human label and color hint (per baseline §8.1 reporter-scene mapping).
+# The CLI status bar reads the per-reporter scene and renders a three-
+# segment headline.  This map is the *only* translation layer between
+# scene names and the user-facing label.  Adding a new scene must
+# extend SUPERVISOR_LEGAL_SCENES / AGENT_LEGAL_SCENES / EXECUTOR_LEGAL_SCENES
+# first; the label map is purely cosmetic.
+SCENE_LABEL: Dict[str, str] = {
+    # Supervisor (API-B)
+    "idle": "idle",
+    "planning": "planning",
+    "drive": "drive",
+    "memory": "memory",
+    "maintenance": "maintenance",
+    "dispatch": "dispatch",
+    # Agent (API-A)
+    "learning": "learning",
+    "code_editing": "code_editing",
+    "executing": "executing",
+    # Executor
+    "body_switch": "body_switch",
+}
+
 
 # ── HTTP helpers ───────────────────────────────────────────────────────
 
@@ -296,6 +318,74 @@ def build_dashboard() -> Dict[str, Any]:
 
 # ── Terminal display ───────────────────────────────────────────────────
 
+# ── Three-segment scene bar (baseline §8.1) ──
+# Each reporter (supervisor / agent / executor) declares its own scene;
+# the CLI status bar surfaces all three side-by-side.  The legacy single
+# "API-B status" field that mixed the supervisor's scene with the agent's
+# has been split into per-reporter segments so the user can tell who is
+# actually doing the work.
+
+REPORTER_SEGMENT: List[Dict[str, str]] = [
+    {"key": "supervisor", "icon": "🧠", "name": "API-B"},
+    {"key": "agent",      "icon": "🤖", "name": "API-A"},
+    {"key": "executor",   "icon": "⚙️",  "name": "Executor"},
+]
+
+
+def fetch_scenes_aggregated(force_refresh: bool = True) -> Dict[str, Any]:
+    """Fetch the gateway's aggregated per-reporter scene view.
+
+    ``force_refresh=True`` triggers a fresh fetch from each registered
+    service so the status bar reflects current activity.  Returns an
+    empty envelope if the gateway is unreachable.
+    """
+    if force_refresh:
+        # /admin/scenes/refresh is a POST endpoint that forces a re-fetch
+        # of every reporter's scene before returning the cached view.
+        return _post_json(f"{GATEWAY_URL}/admin/scenes/refresh", {}) or {}
+    return _get_json(f"{GATEWAY_URL}/admin/scenes") or {}
+
+
+def _format_segment_line(seg: Dict[str, str], state: Dict[str, Any]) -> str:
+    info = state.get(seg["key"]) or {}
+    scene = str(info.get("scene") or "idle")
+    label = SCENE_LABEL.get(scene, scene)
+    reachable = bool(info.get("reachable"))
+    icon = seg["icon"]
+    if not reachable:
+        return f"{icon} {seg['name']}: ⛔ unreachable"
+    task_hint = ""
+    if seg["key"] == "agent":
+        task_id = info.get("scene_task_id")
+        if task_id:
+            short = str(task_id)[:8]
+            task_hint = f" · task {short}"
+    elif seg["key"] == "supervisor":
+        title = info.get("title")
+        if title:
+            task_hint = f" · {str(title)[:24]}"
+    return f"{icon} {seg['name']}: {label}{task_hint}"
+
+
+def print_three_segment_status_bar() -> None:
+    """Render the per-reporter scene status bar at the CLI prompt.
+
+    The bar reads the gateway's ``/admin/scenes`` aggregation and prints
+    three independent segments — never a fused string.  When the gateway
+    or any reporter is unreachable, the segment shows the ⛔ marker
+    instead of fabricating a scene.
+    """
+    payload = fetch_scenes_aggregated(force_refresh=True)
+    scenes = payload.get("scenes") or {}
+    if not scenes:
+        print("  ⛔ Scene status unavailable (gateway offline)")
+        return
+    print("  ┌─ Scene Status (per-reporter) ─────────────────────────────")
+    for seg in REPORTER_SEGMENT:
+        print(f"  │  {_format_segment_line(seg, scenes)}")
+    print("  └───────────────────────────────────────────────────────────")
+
+
 def print_dashboard() -> None:
     """Print a rich terminal dashboard with execution visibility."""
     db = build_dashboard()
@@ -311,6 +401,8 @@ def print_dashboard() -> None:
     print("  ╔══════════════════════════════════════════════════════════╗")
     print("  ║          VoidCube Supervisor — Live Status               ║")
     print("  ╠══════════════════════════════════════════════════════════╣")
+    print_three_segment_status_bar()
+    print()
 
     # ── Services ────────────────────────────────────────────────────
     agent_n = svc["agents"]

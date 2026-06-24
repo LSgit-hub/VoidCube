@@ -24,6 +24,33 @@ from systems.supervisor.task_queue import (
 logger = logging.getLogger("supervisor")
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Supervisor scene taxonomy (baseline §3.4 / §3.6 / §13.2)
+# ──────────────────────────────────────────────────────────────────────
+# The supervisor (API-B) is the governance identity of Mem.  It only
+# MANAGES the task list and runs endogenous drive — it never executes
+# learning or body-upgrade code.  Therefore the supervisor's `scene`
+# field is restricted to the values below.  The Agent (API-A) is the
+# only component that may surface "learning" / "execution" scenes.
+#
+#   idle         - at rest
+#   planning     - deciding / approving / denying a task (managing list)
+#   memory       - actively touching long-term memory (Mem internal)
+#   drive        - endogenous drive: producing candidate tasks
+#   dispatch     - sending an execution request to the body executor
+#   maintenance  - memory-maintenance sweep (long-term memory hygiene)
+#   body_switch  - judging a body switch request
+#
+# Forbidden scenes for the supervisor (API-A territory):
+#   "learning"   - the Agent is doing learning work
+#   "execution"  - the Agent or executor is doing work
+# ──────────────────────────────────────────────────────────────────────
+SUPERVISOR_LEGAL_SCENES: frozenset[str] = frozenset(
+    {"idle", "planning", "memory", "drive", "dispatch", "maintenance"}
+)
+
+
+
 class PlanningRuntimeMixin:
     """Supervisor planning, idle-window, and self-evolution orchestration."""
 
@@ -296,6 +323,38 @@ class PlanningRuntimeMixin:
         )
         self_evolution_idle_seconds = self._idle_seconds_since(last_self_evolution_activity_at, now=now)
 
+        # ── correction_signals for truthfulness drive ──
+        # Source of truth: Gateway activity_state (architectural baseline §4.2
+        # — gateway is the activity fact source).  Counts are best-effort —
+        # a missing field defaults to 0 so the candidate simply does not fire
+        # when no error/uncertainty has been reported in the current session.
+        raw_error_count = snapshot.get("error_count")
+        raw_uncertainty_count = snapshot.get("uncertainty_high_count")
+        try:
+            error_count = int(raw_error_count) if raw_error_count is not None else 0
+        except (TypeError, ValueError):
+            error_count = 0
+        try:
+            uncertainty_count = int(raw_uncertainty_count) if raw_uncertainty_count is not None else 0
+        except (TypeError, ValueError):
+            uncertainty_count = 0
+        # Decay: a half-life of 4 hours reduces the count toward 0 unless new
+        # signals keep arriving.  This keeps truthfulness candidates from
+        # being permanently produced by one old error long after the system
+        # has self-corrected.  We use the user-idle window as a coarse proxy
+        # for "how long has the system been calm" — when the user has been
+        # idle for a long time, an old error should weigh less, since a
+        # working session would have produced new activity.  This is a
+        # best-effort heuristic (Gateway does not expose per-signal
+        # timestamps) and matches the architectural baseline §4.2
+        # "activity facts come from gateway" without requiring a new field.
+        if user_idle_seconds is None:
+            user_idle_hours = 24.0
+        else:
+            user_idle_hours = min(user_idle_seconds / 3600.0, 24.0)
+        decay_factor = max(0.0, 1.0 - user_idle_hours / 4.0)
+        correction_signals = int(round((error_count + uncertainty_count) * decay_factor))
+
         has_user_idle = user_idle_seconds is None or user_idle_seconds >= user_idle_threshold
         has_memory_idle = memory_idle_seconds is None or memory_idle_seconds >= memory_idle_threshold
         has_agent_idle = agent_idle_seconds is None or agent_idle_seconds >= workflow_idle_threshold
@@ -388,6 +447,14 @@ class PlanningRuntimeMixin:
             "execution_kind": requested_task_profile.get("execution_kind"),
             "task_profile": requested_task_profile,
             "activity": snapshot,
+            "correction_signals": correction_signals,
+            "error_count": error_count,
+            "uncertainty_high_count": uncertainty_count,
+            "correction_signal_decay": {
+                "factor": round(decay_factor, 4),
+                "user_idle_hours": round(user_idle_hours, 2),
+                "half_life_hours": 4.0,
+            },
             "idle_seconds": {
                 "user": user_idle_seconds,
                 "agent": agent_idle_seconds,
@@ -880,7 +947,7 @@ class PlanningRuntimeMixin:
         )
         self._record_supervisor_ui_activity(
             "task_decided",
-            scene="planning" if normalized != "approved" else "execution",
+            scene="planning",
             summary=f"Task '{updated_task.title}' was marked {normalized}.",
             metadata={
                 **self._task_activity_metadata(updated_task),
@@ -989,7 +1056,7 @@ class PlanningRuntimeMixin:
             unique_statuses = sorted(set(reviewed_statuses))
             self._record_supervisor_ui_activity(
                 "tasks_reviewed",
-                scene="planning" if "approved" not in unique_statuses else "execution",
+                scene="planning",
                 summary=f"Supervisor reviewed {len(reviewed)} task(s): {', '.join(unique_statuses)}.",
                 metadata=self._build_self_evolution_activity_metadata(
                     reviewed,
@@ -1066,7 +1133,7 @@ class PlanningRuntimeMixin:
         if created:
             self._record_supervisor_ui_activity(
                 "self_learning_submitted",
-                scene="learning",
+                scene="drive",
                 summary=f"Self-learning submitted {len(created)} proposal task(s).",
                 metadata={
                     "count": len(created),
@@ -1133,6 +1200,46 @@ class PlanningRuntimeMixin:
         is_failure = isinstance(result_status, str) and result_status in _ERROR_STATUSES
         if is_failure:
             failure_count = int(task_metadata.get("execution_failure_count") or 0) + 1
+            task_governance_type = self._task_governance_type(task)
+            # memory_maintenance tasks are handled by the supervisor's internal
+            # memory service (baseline §3.4).  Agent pull paths only ever see
+            # self_learning tasks, so on failure we route these tasks back to
+            # deferred/failed rather than approved, keeping the queue free of
+            # memory_maintenance entries that would otherwise be invisible to
+            # the Agent poll filter.
+            if task_governance_type == "memory_maintenance":
+                if failure_count < max_retries:
+                    self._self_evolution_queue.update_status(
+                        task.task_id,
+                        status="deferred",
+                        actor="supervisor_memory_service",
+                        reason=(
+                            f"Memory-maintenance dispatch failed "
+                            f"({failure_count}/{max_retries}); deferred so the "
+                            f"supervisor's next cycle can re-dispatch. "
+                            f"executor_status={str(result_status)[:60]}"
+                        ),
+                    )
+                else:
+                    self._self_evolution_queue.update_status(
+                        task.task_id,
+                        status="failed",
+                        actor="supervisor_memory_service",
+                        reason=(
+                            f"Memory-maintenance dispatch permanently failed "
+                            f"after {max_retries} retries. "
+                            f"executor_status={str(result_status)[:60]}"
+                        ),
+                    )
+                self._self_evolution_queue.update_metadata(
+                    task.task_id,
+                    metadata={
+                        "execution_failed": True,
+                        "execution_failure_count": failure_count,
+                        "execution_result": result,
+                    },
+                )
+                return result
             if failure_count < max_retries:
                 # Allow retry — set back to approved so it can be re-dispatched
                 self._self_evolution_queue.update_status(
@@ -1161,12 +1268,39 @@ class PlanningRuntimeMixin:
                 )
             return result
 
-        # Success path — mark completed
+        # Success path — mark completed.  Reason text is split by execution
+        # path so the audit trail is honest about WHO closed the task.  The
+        # architectural baseline §3.4 says memory_maintenance is handled
+        # internally by the memory service (not by Agent pull), so its
+        # reason reflects the supervisor's internal completion.  Body
+        # upgrade / switch go through the executor body_lifecycle.  Agent
+        # pull (cli_agent or run_agent_instance) only ever sees self_learning
+        # tasks, so this success path is the supervisor's own.
+        task_governance_type = self._task_governance_type(task)
+        if task_governance_type == "memory_maintenance":
+            actor = "supervisor_memory_service"
+            completion_reason = (
+                "Memory-maintenance task completed by the supervisor's "
+                "internal memory service (baseline §3.4 — Agent pull only "
+                "sees self_learning tasks). "
+                f"executor_status={str(result_status)[:60] if result_status else 'ok'}"
+            )
+        elif task_governance_type == "self_evolution":
+            actor = "supervisor_executor"
+            completion_reason = (
+                "Self-evolution task completed by the supervisor's body "
+                f"executor. executor_status={str(result_status)[:60] if result_status else 'ok'}"
+            )
+        else:
+            actor = "supervisor"
+            completion_reason = (
+                f"Execution request completed: {str(result_status)[:100]}"
+            )
         self._self_evolution_queue.update_status(
             task.task_id,
             status="completed",
-            actor="supervisor",
-            reason=f"Execution request completed: {str(result_status)[:100]}",
+            actor=actor,
+            reason=completion_reason,
         )
         self._self_evolution_queue.update_metadata(
             task.task_id,
@@ -1182,7 +1316,7 @@ class PlanningRuntimeMixin:
         )
         self._record_supervisor_ui_activity(
             "execution_dispatched",
-            scene="execution",
+            scene="dispatch",
             summary=f"Execution request dispatched for '{task.title}'.",
             metadata={
                 **self._task_activity_metadata(task),
@@ -1333,7 +1467,7 @@ class PlanningRuntimeMixin:
         total_planned = phases.get("drive", {}).get("planned", 0)
         self._record_supervisor_ui_activity(
             "auto_cycle_completed",
-            scene="execution" if total_dispatched > 0 else "planning",
+            scene="dispatch" if total_dispatched > 0 else "planning",
             summary=(
                 f"Auto cycle complete: {total_planned} planned, "
                 f"{total_dispatched} dispatched for execution."

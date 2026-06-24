@@ -648,24 +648,20 @@ class MemoryService:
         With LLM: generates a genuinely more abstract summary appropriate for
         the target level (Scene→Arc: synthesize scene into arc narrative,
         Arc→Epoch: distill arc into epoch-level historical significance).
+
+        LLM credentials are resolved from ``memory.llm.*`` via
+        ``_resolve_mem_llm_client`` — the same key the CLI ``/api [3]``
+        command writes — so retargeting the Mem model is a single-step
+        operation in the CLI rather than scattered env-var management.
         """
         level_names = {0: "事件", 1: "场景", 2: "弧线", 3: "纪元", 4: "终章"}
         from_name = level_names.get(from_level, str(from_level))
         to_name = level_names.get(to_level, str(to_level))
 
-        # Try LLM
+        # Try LLM via the unified resolver
         try:
-            api_key = (
-                os.environ.get("DEEPSEEK_API_KEY")
-                or os.environ.get("OPENAI_API_KEY")
-                or ""
-            ).strip()
-            if api_key:
-                from memai.llm_client import OpenAICompatibleLLMClient
-                model = os.environ.get("MEMAI_LLM_MODEL", "deepseek-chat")
-                base_url = os.environ.get("MEMAI_LLM_BASE_URL", "https://api.deepseek.com/v1")
-                client = OpenAICompatibleLLMClient(model=model, api_key=api_key, base_url=base_url)
-
+            client, _ = self._resolve_mem_llm_client()
+            if client is not None:
                 prompt = (
                     f"将以下{from_name}级别的记忆升级为{to_name}级别的摘要。\n"
                     f"原始标题: {title}\n"
@@ -699,26 +695,23 @@ class MemoryService:
         fallback_title = f"[{to_name}] {title}"
         fallback_summary = (
             f"【从{from_name}升级】{summary}\n"
-            f"（自动升级，非LLM重摘要。设置API密钥以启用智能升级。）"
+            f"（自动升级，非LLM重摘要。设置memory.llm.api_key_env对应的API密钥以启用智能升级。）"
         )
         return fallback_title, fallback_summary
 
     async def _llm_purge_review(
         self, *, mem_id: str, title: str, summary: str, topics: list,
     ) -> bool:
-        """LLM final review before permanent deletion (>730 days old)."""
+        """LLM final review before permanent deletion (>730 days old).
+
+        Uses the same ``_resolve_mem_llm_client`` helper as the rest of
+        Mem, so the LLM (or its absence) is consistent with escalation
+        and Tier 2 compression.
+        """
         try:
-            api_key = (
-                os.environ.get("DEEPSEEK_API_KEY")
-                or os.environ.get("OPENAI_API_KEY")
-                or ""
-            ).strip()
-            if not api_key:
+            client, _ = self._resolve_mem_llm_client()
+            if client is None:
                 return False  # No LLM → purge (safe: entries are >2 years old)
-            from memai.llm_client import OpenAICompatibleLLMClient
-            model = os.environ.get("MEMAI_LLM_MODEL", "deepseek-chat")
-            base_url = os.environ.get("MEMAI_LLM_BASE_URL", "https://api.deepseek.com/v1")
-            client = OpenAICompatibleLLMClient(model=model, api_key=api_key, base_url=base_url)
             prompt = (
                 f"以下是一条即将被永久删除的长期记忆（超过730天）。"
                 f"判断是否具有持久历史价值应保留。\n"
@@ -788,7 +781,27 @@ class MemoryService:
         self.app.add_api_route("/compressed/rules-status", self.rules_status, methods=["GET"])
         self.app.add_api_route("/llm/health", self.llm_health, methods=["GET"])
 
-    @asynccontextmanager
+    def _resolve_mem_llm_client(self):
+        """Resolve a configured Mem LLM client.
+
+        Thin pass-through to the canonical resolver at
+        ``memai.model_config.resolve_mem_llm_client`` — kept as an
+        instance method for backwards compatibility with the rest of
+        MemoryService.  All resolution logic (memory.llm.* priority,
+        env fallback, OpenAICompatibleLLMClient construction) lives in
+        one place inside the memai package; this method is just a
+        convenient accessor.
+
+        Returns ``(client, model_name)``.  ``client`` is ``None`` when
+        no API key is available; callers must degrade to heuristic /
+        mechanical paths in that case.
+        """
+        try:
+            from memai.model_config import resolve_mem_llm_client
+            return resolve_mem_llm_client(role="default")
+        except Exception:
+            return None, ""
+
     async def _app_lifespan(self, app: FastAPI):
         """Register with Gateway on startup, run compression loop, cleanup on shutdown."""
         del app
@@ -1275,10 +1288,14 @@ class MemoryService:
             raise HTTPException(status_code=500, detail=str(e))
 
     async def _call_llm_for_summary(self, content: str) -> str:
-        """Summarise via MemAI LLM pipeline (API-B, baseline SS4.3, M-04)."""
+        """Summarise via MemAI LLM pipeline (API-B, baseline SS4.3, M-04).
+
+        Goes through ``_resolve_mem_llm_client`` so the LLM (and its
+        key/model/base_url) is identical to the rest of Mem — no
+        parallel config branch.
+        """
         try:
             from memai.llm_client import OpenAICompatibleLLMClient
-            from memai.model_config import load_voidcube_mem_model_config
             import asyncio as _asyncio
 
             prompt = (
@@ -1288,15 +1305,9 @@ class MemoryService:
             )
 
             def _run_sync() -> str:
-                mem_cfg = load_voidcube_mem_model_config()
-                api_key = os.environ.get(mem_cfg.api_key_env or "", "")
-                if not api_key:
-                    raise ValueError(f"Missing API key: {mem_cfg.api_key_env}")
-                client = OpenAICompatibleLLMClient(
-                    model=mem_cfg.model or "deepseek-chat",
-                    api_key=api_key,
-                    base_url=mem_cfg.base_url or "https://api.deepseek.com/v1",
-                )
+                client, _ = self._resolve_mem_llm_client()
+                if client is None:
+                    raise ValueError("No Mem LLM configured (memory.llm.* or env fallback)")
                 result = client.complete_json(
                     system_prompt="You are a precise content summariser.",
                     user_payload={"text": prompt},
@@ -1621,23 +1632,20 @@ class MemoryService:
         }
 
     async def _check_llm_health(self) -> bool:
-        """Verify LLM connectivity once at startup — simple ping, no periodic loop."""
-        api_key = (
-            os.environ.get("DEEPSEEK_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
-            or ""
-        ).strip()
-        if not api_key:
+        """Verify LLM connectivity once at startup — simple ping, no periodic loop.
+
+        Reads from the same ``memory.llm.*`` config as the rest of Mem via
+        ``_resolve_mem_llm_client``.  When no key is configured the
+        service runs in fully-degraded mode (no LLM features).
+        """
+        client, model = self._resolve_mem_llm_client()
+        if client is None:
             self._llm_healthy = False
             self._llm_model = "none"
             return False
         try:
-            from memai.llm_client import OpenAICompatibleLLMClient
             import asyncio as _asyncio
-            model = os.environ.get("MEMAI_LLM_MODEL", "deepseek-chat")
-            base_url = os.environ.get("MEMAI_LLM_BASE_URL", "https://api.deepseek.com/v1")
             def _ping():
-                client = OpenAICompatibleLLMClient(model=model, api_key=api_key, base_url=base_url)
                 result = client.complete_json(
                     system_prompt="Reply with exactly: {\"ok\": true}",
                     user_payload={"ping": True},
@@ -1662,9 +1670,13 @@ class MemoryService:
         When LLM is healthy: uses LLMEventExtractionBackend + LLMScholarBackend.
         When LLM is degraded: falls back to heuristic (keyword-based).
         Caller should check self._llm_healthy to decide whether to proceed.
+
+        LLM credentials come from ``_resolve_mem_llm_client`` (i.e.
+        ``memory.llm.*`` in voidcube config) — the same source the rest
+        of Mem uses, so the model cannot drift between Tier 2
+        compression, escalation, and purge review.
         """
         from memai.pipeline import ChroniclePipeline
-        from memai.llm_client import OpenAICompatibleLLMClient
         from memai.extraction import (
             EventExtractor,
             LLMEventExtractionBackend,
@@ -1675,25 +1687,12 @@ class MemoryService:
             logger.warning("LLM unhealthy — using heuristic compression (degraded mode)")
             return ChroniclePipeline()
 
-        api_key = (
-            os.environ.get("DEEPSEEK_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
-            or ""
-        ).strip()
-        if not api_key:
+        llm_client, model = self._resolve_mem_llm_client()
+        if llm_client is None:
             logger.warning("No LLM API key — using heuristic compression")
             return ChroniclePipeline()
 
-        model = os.environ.get("MEMAI_LLM_MODEL", "deepseek-chat")
-        base_url = os.environ.get(
-            "MEMAI_LLM_BASE_URL", "https://api.deepseek.com/v1"
-        )
-
         try:
-            llm_client = OpenAICompatibleLLMClient(
-                model=model, api_key=api_key, base_url=base_url
-            )
-
             # LLMEventExtractionBackend needs an LLMExtractionClient protocol;
             # wrap OpenAICompatibleLLMClient into an adapter
             class LLMExtractionAdapter:
@@ -2105,22 +2104,21 @@ class MemoryService:
         }
 
     async def _generate_embedding(self, text: str) -> list[float] | None:
-        """Generate embedding vector via the configured Mem LLM."""
+        """Generate embedding vector via the configured Mem LLM.
+
+        Routes through ``_resolve_mem_llm_client`` so the embedding model
+        is whatever the user has selected in ``memory.llm.*`` (or the
+        legacy env fallback).  Falls back to a deterministic hash-based
+        pseudo-embedding when the LLM is unavailable.
+        """
         try:
             from memai.llm_client import OpenAICompatibleLLMClient
-            from memai.model_config import load_voidcube_mem_model_config
             import asyncio as _asyncio
 
             def _run() -> list[float]:
-                mem_cfg = load_voidcube_mem_model_config()
-                api_key = os.environ.get(mem_cfg.api_key_env or "", "")
-                if not api_key:
-                    raise ValueError("No API key")
-                client = OpenAICompatibleLLMClient(
-                    model=mem_cfg.model or "deepseek-chat",
-                    api_key=api_key,
-                    base_url=mem_cfg.base_url or "https://api.deepseek.com/v1",
-                )
+                client, _ = self._resolve_mem_llm_client()
+                if client is None:
+                    raise ValueError("No Mem LLM configured")
                 # Use the embeddings endpoint if available, else fallback to completion
                 result = client.complete_json(
                     system_prompt="You are an embedding generator. Output JSON: {\"embedding\": [float, ...]}",

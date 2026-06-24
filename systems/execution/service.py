@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 from fastapi import Body, FastAPI, HTTPException
@@ -14,12 +16,22 @@ class VoidCubeExecutionService:
     point without moving decision logic into the executor.
     """
 
+    EXECUTOR_LEGAL_SCENES: frozenset = frozenset({"idle", "body_switch"})
+
     def __init__(
         self,
         facade: VoidCubeExecutionFacade,
     ) -> None:
         self.facade = facade
         self.app = FastAPI(title="VoidCube Executor", version="1.0")
+        # ── Scene state (baseline §3.5 / §8.1) ──
+        # The executor (body lifecycle mechanical surface) is the only
+        # component that may report `body_switch`.  The supervisor and
+        # Agent never report it (§3.6 边界).
+        self._scene: str = "idle"
+        self._scene_lock = asyncio.Lock()
+        self._scene_changed_at: datetime = datetime.utcnow()
+        self._scene_idle_timeout_seconds: float = 120.0
         self._setup_routes()
 
     def _setup_routes(self) -> None:
@@ -41,8 +53,12 @@ class VoidCubeExecutionService:
         self.app.add_api_route(f"{prefix}/body/probe/run", self.run_body_probe, methods=["POST"])
         self.app.add_api_route(f"{prefix}/self-evolution/execute", self.execute_self_evolution_request, methods=["POST"])
         self.app.add_api_route(f"{prefix}/memory/compress", self.trigger_memory_compression, methods=["POST"])
+        # ── Scene endpoints (baseline §8.1) ──
+        self.app.add_api_route("/executor/scene", self.get_executor_scene, methods=["GET"])
+        self.app.add_api_route("/executor/scene", self.set_executor_scene, methods=["POST"])
 
     async def health_check(self) -> Dict[str, Any]:
+        await self._maybe_revert_stale_scene()
         return {
             "status": "healthy",
             "service": "executor",
@@ -51,6 +67,8 @@ class VoidCubeExecutionService:
             "facade": "VoidCubeExecutionFacade",
             "preferred_gateway_prefix": "/api/executor",
             "direct_executor_prefix": "/executor",
+            "scene": self._scene,
+            "scene_changed_at": self._scene_changed_at.isoformat(),
             "executor_access_policy": {
                 "failure_mode": "executor_required",
             },
@@ -71,6 +89,56 @@ class VoidCubeExecutionService:
                 "memory_maintenance": ["/memory/compress"],
             },
         }
+
+    # ── Scene control (baseline §8.1) ──
+
+    async def get_executor_scene(self) -> Dict[str, Any]:
+        await self._maybe_revert_stale_scene()
+        return {
+            "service": "executor",
+            "scene": self._scene,
+            "scene_changed_at": self._scene_changed_at.isoformat(),
+            "legal_scenes": sorted(self.EXECUTOR_LEGAL_SCENES),
+        }
+
+    async def set_executor_scene(self, request: dict) -> Dict[str, Any]:
+        scene = str(request.get("scene") or "").strip()
+        if scene not in self.EXECUTOR_LEGAL_SCENES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Invalid executor scene={scene!r}. Legal scenes: "
+                    f"{sorted(self.EXECUTOR_LEGAL_SCENES)}"
+                ),
+            )
+        async with self._scene_lock:
+            self._scene = scene
+            self._scene_changed_at = datetime.utcnow()
+        return await self.get_executor_scene()
+
+    async def _maybe_revert_stale_scene(self) -> None:
+        """Auto-revert stale `body_switch` scene to `idle`.
+
+        Body switches should complete (or fail) within a bounded window.
+        If something hangs, this prevents the status bar from being
+        stuck in `body_switch` forever.
+        """
+        if self._scene == "idle":
+            return
+        age = (datetime.utcnow() - self._scene_changed_at).total_seconds()
+        if age < self._scene_idle_timeout_seconds:
+            return
+        async with self._scene_lock:
+            if self._scene == "idle":
+                return
+            import logging
+            logger = logging.getLogger("executor")
+            logger.info(
+                "Executor scene %r aged %.1fs (timeout=%.1fs); reverting to idle",
+                self._scene, age, self._scene_idle_timeout_seconds,
+            )
+            self._scene = "idle"
+            self._scene_changed_at = datetime.utcnow()
 
     async def start_agent(self, request: Optional[dict] = Body(default=None)) -> Dict[str, Any]:
         return await self.facade.start_managed_agent(request or {})

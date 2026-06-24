@@ -383,7 +383,7 @@ class ServiceRuntimeMixin:
                 status = result.get("status") if isinstance(result, dict) else "dispatched"
                 self._record_supervisor_ui_activity(
                     "auto_dispatched",
-                    scene="execution",
+                    scene="dispatch",
                     summary=f"Auto-dispatched: '{task.title}' (idle={idle_seconds:.0f}s)",
                     metadata={"task_id": task.task_id, "status": status},
                 )

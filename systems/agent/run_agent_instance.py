@@ -85,8 +85,27 @@ class AgentInstance:
         )
         self._session_data: Dict[str, Dict[str, Any]] = {}
         self._runtime_paths = self._initialize_runtime_paths()
+        # ── Scene state (baseline §3.5 / §8.1) ──
+        # The Agent (API-A) is the learning/code-editing execution body.
+        # It reports its own scene to the gateway so the supervisor's
+        # /ui/state can surface it on the CLI status bar.  The supervisor
+        # never reports `learning` / `code_editing` / `executing` —
+        # those are Agent scenes exclusively.
+        self._scene: str = "idle"
+        self._scene_lock = asyncio.Lock()
+        self._scene_task_id: Optional[str] = None  # task being executed, if any
+        self._scene_changed_at: datetime = datetime.now()
+        # How long an "executing" scene survives without explicit
+        # re-assertion.  After this, the agent reverts to "idle" so the
+        # UI does not get stuck.
+        self._scene_idle_timeout_seconds: float = 60.0
         self._setup_routes()
         self._task_polling_task: Optional[asyncio.Task] = None
+
+    # ── Scene legal values (baseline §8.1) ──
+    AGENT_LEGAL_SCENES: frozenset = frozenset(
+        {"idle", "learning", "code_editing", "executing"}
+    )
 
     def _setup_routes(self):
         self.app.add_api_route("/", self.health_check, methods=["GET"])
@@ -95,11 +114,17 @@ class AgentInstance:
         self.app.add_api_route("/v1/agent/query", self.handle_agent_query, methods=["POST"])
         self.app.add_api_route("/v1/chat/completions", self.handle_chat_completions, methods=["POST"])
         self.app.add_api_route("/memory", self.handle_memory_operation, methods=["POST"])
+        # ── Scene endpoints (baseline §8.1) ──
+        self.app.add_api_route("/v1/agent/scene", self.get_agent_scene, methods=["GET"])
+        self.app.add_api_route("/v1/agent/scene", self.set_agent_scene, methods=["POST"])
 
     def _service_name(self) -> str:
         return f"agent-{self.config.active_slot}"
 
     async def health_check(self):
+        # Auto-revert stale "executing" / "learning" / "code_editing" scenes
+        # to "idle" so the status bar does not get stuck.
+        await self._maybe_revert_stale_scene()
         return {
             "status": "healthy",
             "agent_id": self._service_name(),
@@ -109,48 +134,145 @@ class AgentInstance:
             "body_worktree": self.config.body_worktree,
             "body_runtime": self.config.body_runtime,
             "runtime_paths": self._runtime_paths,
+            "scene": self._scene,
+            "scene_changed_at": self._scene_changed_at.isoformat(),
+            "scene_task_id": self._scene_task_id,
             "timestamp": datetime.now().isoformat()
         }
+
+    # ── Scene control (baseline §8.1) ──
+
+    async def get_agent_scene(self) -> Dict[str, Any]:
+        await self._maybe_revert_stale_scene()
+        return {
+            "agent_id": self._service_name(),
+            "scene": self._scene,
+            "scene_changed_at": self._scene_changed_at.isoformat(),
+            "scene_task_id": self._scene_task_id,
+            "legal_scenes": sorted(self.AGENT_LEGAL_SCENES),
+        }
+
+    async def set_agent_scene(self, request: dict) -> Dict[str, Any]:
+        scene = str(request.get("scene") or "").strip()
+        if scene not in self.AGENT_LEGAL_SCENES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Invalid agent scene={scene!r}. Legal scenes: "
+                    f"{sorted(self.AGENT_LEGAL_SCENES)}"
+                ),
+            )
+        async with self._scene_lock:
+            self._scene = scene
+            self._scene_changed_at = datetime.now()
+            self._scene_task_id = request.get("task_id") or None
+        # Best-effort push to gateway; never let this break the call.
+        try:
+            await self._push_scene_to_gateway()
+        except Exception as exc:
+            logger.debug("Agent → gateway scene push failed: %s", exc)
+        return await self.get_agent_scene()
+
+    async def _maybe_revert_stale_scene(self) -> None:
+        """Revert to `idle` if the active scene is stale.
+
+        Non-idle scenes are time-bounded.  If the agent crashed or hung
+        mid-task, this prevents the status bar from being stuck in
+        `learning` / `executing` forever.
+        """
+        if self._scene == "idle":
+            return
+        age = (datetime.now() - self._scene_changed_at).total_seconds()
+        if age < self._scene_idle_timeout_seconds:
+            return
+        async with self._scene_lock:
+            if self._scene == "idle":
+                return
+            logger.info(
+                "Agent scene %r aged %.1fs (timeout=%.1fs); reverting to idle",
+                self._scene, age, self._scene_idle_timeout_seconds,
+            )
+            self._scene = "idle"
+            self._scene_changed_at = datetime.now()
+            self._scene_task_id = None
+            try:
+                await self._push_scene_to_gateway()
+            except Exception:
+                pass
+
+    async def _push_scene_to_gateway(self) -> None:
+        """Push the current scene to the gateway's activity state."""
+        import aiohttp
+        try:
+            async with aiohttp.ClientSession() as session:
+                payload = {
+                    "activity_kind": "agent_scene",
+                    "source_service": self._service_name(),
+                    "metadata": {
+                        "scene": self._scene,
+                        "task_id": self._scene_task_id,
+                    },
+                }
+                async with session.post(
+                    f"{self.config.gateway_address}/admin/activity/touch",
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=3),
+                ) as resp:
+                    if resp.status >= 400:
+                        logger.debug("Gateway rejected scene push: %d", resp.status)
+        except Exception as exc:
+            logger.debug("Agent scene push error: %s", exc)
 
     async def handle_chat(self, request: dict):
         try:
             message = request.get("message")
             session_id = request.get("session_id")
             context = request.get("context", {})
-            
+
             if not message:
                 raise HTTPException(status_code=400, detail="Message is required")
-            
+
             if session_id not in self._session_data:
                 self._session_data[session_id] = {"messages": [], "context": {}}
-            
+
             self._session_data[session_id]["messages"].append({
                 "role": "user",
                 "content": message,
                 "timestamp": datetime.now().isoformat()
             })
-            
+
+            # ── Agent scene: executing (user-task handling) ──
+            await self.set_agent_scene({"scene": "executing"})
+
             response = await self._generate_response(message, context)
-            
+
             self._session_data[session_id]["messages"].append({
                 "role": "assistant",
                 "content": response,
                 "timestamp": datetime.now().isoformat()
             })
             self._persist_session_snapshot(session_id)
-            
+
             return {
                 "response": response,
                 "session_id": session_id,
                 "context": context,
                 "slot_id": self.config.active_slot,
             }
-        
+
         except HTTPException:
             raise
         except Exception as e:
             logger.error(f"Error handling chat: {e}")
             raise HTTPException(status_code=500, detail=str(e))
+        finally:
+            # Scene reverts to idle after the call returns; the
+            # stale-timeout in `_maybe_revert_stale_scene` is a safety
+            # net for crashed handlers.
+            try:
+                await self.set_agent_scene({"scene": "idle"})
+            except Exception:
+                pass
 
     async def handle_agent_query(self, request: dict):
         messages = request.get("messages") or []
@@ -566,25 +688,29 @@ class AgentInstance:
 
     async def _execute_approved_task(self, task: dict) -> dict:
         """Execute an approved self-learning task via sub-agent.
-        
+
         Reuses the existing governance task execution logic but adapts it for
         agent-initiated task execution.
         """
         task_type = task.get("task_type") or task.get("governance_task_type", "")
         if task_type != "self_learning":
             return {"status": "rejected", "reason": f"Agent only executes self_learning tasks"}
-        
+
         title = task.get("title", "Learning task")
         summary = task.get("summary", "")
         prompt = summary if summary else title
-        
+
         if not prompt:
             return {"status": "rejected", "reason": "No prompt or summary provided"}
-        
+
+        # ── Agent scene: learning (executing a self-learning task) ──
+        task_id = task.get("task_id", "")
+        await self.set_agent_scene({"scene": "learning", "task_id": task_id})
+
         try:
             from tools.delegate_tool import _build_child_agent, _resolve_delegation_credentials
             from VoidCube_cli.config import load_config
-            
+
             cfg = load_config()
             creds = _resolve_delegation_credentials(cfg, None) or {}
             child = _build_child_agent(
@@ -601,7 +727,7 @@ class AgentInstance:
                 task_id=f"agent-task-{task.get('task_id', '')}",
             )
             final_response = result.get("final_response", "")
-            
+
             tool_events = []
             messages = result.get("messages", [])
             for msg in messages:
@@ -616,7 +742,7 @@ class AgentInstance:
                         "args_preview": tool_args_preview,
                         "result_preview": result_preview,
                     })
-            
+
             import re, json
             parsed = None
             fence = re.findall(r"```(?:json)?\s*\n(.*?)\n```", final_response, re.DOTALL | re.IGNORECASE)
@@ -627,7 +753,7 @@ class AgentInstance:
                         parsed = p; break
                 except Exception:
                     pass
-            
+
             return {
                 "status": "completed",
                 "final_response": final_response,
@@ -640,6 +766,11 @@ class AgentInstance:
         except Exception as e:
             logger.error(f"Approved task execution failed: {e}")
             return {"status": "error", "reason": str(e)}
+        finally:
+            try:
+                await self.set_agent_scene({"scene": "idle"})
+            except Exception:
+                pass
 
     async def start(self):
         import uvicorn

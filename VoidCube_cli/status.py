@@ -96,6 +96,84 @@ def _effective_provider_label(config: dict) -> str:
 from VoidCube_core.constants import is_termux as _is_termux
 
 
+def _print_three_segment_scene_bar() -> None:
+    """Render the per-reporter scene bar (baseline §8.1).
+
+    Reads ``/admin/scenes`` from the gateway and prints three independent
+    segments — supervisor (API-B), agent (API-A), executor.  Each segment
+    reflects the *reporter's own* scene; the gateway never fuses them.
+    When the gateway is unreachable, prints a single ⛔ line and returns.
+    """
+    import json
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    gateway_base = os.environ.get("VOIDCUBE_GATEWAY_URL", "http://127.0.0.1:6000")
+    # /admin/scenes is a GET endpoint; pass refresh=true via the query string
+    # so the gateway re-validates each reporter's scene before responding.
+    url = f"{gateway_base}/admin/scenes?refresh=true"
+    payload: Dict[str, Any] = {}
+    try:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            if resp.status == 200:
+                payload = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError):
+        pass
+
+    scenes = (payload or {}).get("scenes") or {}
+    if not scenes:
+        print("  Scene Status:  ⛔ gateway offline")
+        return
+
+    # Per-reporter legal labels (baseline §8.1).  Any scene returned by
+    # the gateway that does not appear in this map is rendered as the
+    # raw scene name so misclassified scenes are still visible.
+    scene_labels = {
+        # supervisor (API-B)
+        "idle": "idle",
+        "planning": "planning",
+        "drive": "drive",
+        "memory": "memory",
+        "maintenance": "maintenance",
+        "dispatch": "dispatch",
+        "body_switch": "body_switch",
+        # agent (API-A)
+        "learning": "learning",
+        "code_editing": "code_editing",
+        "executing": "executing",
+    }
+
+    def _render(key: str, name: str) -> str:
+        info = scenes.get(key) or {}
+        if not info.get("reachable"):
+            return f"{name}: ⛔"
+        scene = str(info.get("scene") or "idle")
+        label = scene_labels.get(scene, scene)
+        suffix = ""
+        if key == "agent":
+            task_id = info.get("scene_task_id")
+            if task_id:
+                suffix = f" · {str(task_id)[:8]}"
+        elif key == "supervisor":
+            title = info.get("title")
+            if title:
+                suffix = f" · {str(title)[:24]}"
+        return f"{name}: {label}{suffix}"
+
+    print(
+        "  Scene Status:  "
+        + "   ".join(
+            [
+                _render("supervisor", "🧠 API-B"),
+                _render("agent",      "🤖 API-A"),
+                _render("executor",   "⚙️ Executor"),
+            ]
+        )
+    )
+
+
 def show_status(args):
     """Show status of all Voidcube Agent components."""
     show_all = getattr(args, 'all', False)
@@ -347,6 +425,11 @@ def show_status(args):
     # =========================================================================
     print()
     print(color("◆ Gateway Service", Colors.CYAN, Colors.BOLD))
+
+    # Three-segment scene bar (baseline §8.1) — supervisor / agent / executor.
+    # Rendered *before* the rest of the gateway block so users always see
+    # the live activity of each reporter at a glance.
+    _print_three_segment_scene_bar()
     
     if _is_termux():
         try:

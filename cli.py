@@ -2504,24 +2504,32 @@ class VoidcubeCLI:
             pass
 
         # ── Supervisor scene (reuse `sup` from memory-model section above) ──
+        # Per architectural baseline §3.4/§3.6, the supervisor (API-B) only
+        # manages the task list and runs endogenous drive — it never
+        # executes learning or body-upgrade code.  Scenes that imply
+        # execution (`learning`, `execution`) are API-A territory and are
+        # not legal values for the supervisor's `scene` field; they remain
+        # in the map below as defensive fallbacks (the Agent may surface
+        # its own scene in the future) but the supervisor will never
+        # emit them.
         try:
             if scene:
                 if ascii_mode:
                     scene_icons = {
                         "idle": "(-)", "planning": "(?)", "memory": "(M)",
-                        "learning": "(L)", "execution": "(E)", "drive": "(D)",
-                        "maintenance": "(M)", "body_switch": "(S)",
+                        "drive": "(D)", "dispatch": "(>)", "maintenance": "(M)",
+                        "body_switch": "(S)",
                     }
                 else:
                     scene_icons = {
                         "idle": "💤", "planning": "🤔", "memory": "🧠",
-                        "learning": "📖", "execution": "▶", "drive": "💡",
-                        "maintenance": "🔧", "body_switch": "🔄",
+                        "drive": "💡", "dispatch": "📤", "maintenance": "🔧",
+                        "body_switch": "🔄",
                     }
                 scene_colors = {
                     "idle": "#8B8682", "planning": "#E07362", "memory": "#7CC9A0",
-                    "learning": "#7CC9A0", "execution": "#E07362", "drive": "#E2B04A",
-                    "maintenance": "#60A5FA", "body_switch": "#C084FC",
+                    "drive": "#E2B04A", "dispatch": "#A78BFA", "maintenance": "#60A5FA",
+                    "body_switch": "#C084FC",
                 }
                 icon = scene_icons.get(scene, "●")
                 color = scene_colors.get(scene, "#9CA3AF")
@@ -2532,8 +2540,8 @@ class VoidcubeCLI:
                 # compact scene label
                 scene_labels = {
                     "idle": "休眠", "planning": "规划", "memory": "记忆",
-                    "learning": "学习", "execution": "执行", "drive": "驱动",
-                    "maintenance": "维护", "body_switch": "切换",
+                    "drive": "驱动", "dispatch": "分发", "maintenance": "维护",
+                    "body_switch": "切换",
                 }
                 label = scene_labels.get(scene, scene)
                 frags.append((f"bg:#1a1a2e {color}", label))

@@ -7,6 +7,7 @@
 from typing import Optional, Dict, Any, List
 import os
 import threading
+from pathlib import Path
 
 class ProviderConfig(dict):
     """提供者配置类，支持字典和属性访问"""
