@@ -795,7 +795,10 @@ class InternalGateway:
     async def remove_service(self, service_id: str):
         if service_id in self._services:
             service = self._services.pop(service_id)
-            
+            # Invalidate cached memory service URL
+            if service.service_type == "memory":
+                self._memory_service_url = None
+
             if self._active_body_service_id == service_id:
                 self._active_body_service_id = None
                 for sid, s in self._services.items():
@@ -977,10 +980,10 @@ class InternalGateway:
             return
         try:
             async with aiohttp.ClientSession() as s:
-                # Ensure session exists (lazy-create)
+                # Ensure session exists (lazy-create with caller's session_id)
                 await s.post(
                     f"{memory_url}/sessions",
-                    json={"metadata": {"source": "gateway", "session_id": session_id}},
+                    json={"session_id": session_id, "metadata": {"source": "gateway"}},
                     timeout=aiohttp.ClientTimeout(total=2),
                 )
                 # Record the turn

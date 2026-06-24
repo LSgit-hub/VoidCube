@@ -2509,16 +2509,19 @@ class VoidcubeCLI:
                 if ascii_mode:
                     scene_icons = {
                         "idle": "(-)", "planning": "(?)", "memory": "(M)",
-                        "learning": "(L)", "execution": "(E)",
+                        "learning": "(L)", "execution": "(E)", "drive": "(D)",
+                        "maintenance": "(M)", "body_switch": "(S)",
                     }
                 else:
                     scene_icons = {
-                        "idle": "💤", "planning": "🤔", "memory": "📚",
-                        "learning": "📖", "execution": "▶",
+                        "idle": "💤", "planning": "🤔", "memory": "🧠",
+                        "learning": "📖", "execution": "▶", "drive": "💡",
+                        "maintenance": "🔧", "body_switch": "🔄",
                     }
                 scene_colors = {
-                    "idle": "#8B8682", "planning": "#E07362", "memory": "#E2B04A",
-                    "learning": "#7CC9A0", "execution": "#E07362",
+                    "idle": "#8B8682", "planning": "#E07362", "memory": "#7CC9A0",
+                    "learning": "#7CC9A0", "execution": "#E07362", "drive": "#E2B04A",
+                    "maintenance": "#60A5FA", "body_switch": "#C084FC",
                 }
                 icon = scene_icons.get(scene, "●")
                 color = scene_colors.get(scene, "#9CA3AF")
@@ -2529,7 +2532,8 @@ class VoidcubeCLI:
                 # compact scene label
                 scene_labels = {
                     "idle": "休眠", "planning": "规划", "memory": "记忆",
-                    "learning": "学习", "execution": "执行",
+                    "learning": "学习", "execution": "执行", "drive": "驱动",
+                    "maintenance": "维护", "body_switch": "切换",
                 }
                 label = scene_labels.get(scene, scene)
                 frags.append((f"bg:#1a1a2e {color}", label))

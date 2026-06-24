@@ -46,6 +46,7 @@ class CompressionRequest(BaseModel):
 # ── Tier 1 Models (Short-term conversation store) ──────────────────
 
 class SessionCreate(BaseModel):
+    session_id: str = ""  # Optional: caller-provided ID; auto-generated if empty
     metadata: Dict[str, Any] = {}
 
 
@@ -137,15 +138,15 @@ def _write_compressed_memories(conn, pipeline_result, now: str) -> int:
         )
         written += 1
     # Write Scenes (level=1, base_weight=0.7)
-    # Derive dominant event_kind from child events
-    child_event_kinds = [
-        e.event_kind.value if hasattr(e.event_kind, 'value') else str(e.event_kind)
-        for e in pipeline_result.events
-        if e.id in (scene.child_ids if hasattr(scene, 'child_ids') else [])
-    ]
-    scene_kind = max(set(child_event_kinds), key=child_event_kinds.count) if child_event_kinds else None
     for scene in pipeline_result.scenes:
         scene_arc_id = scene.parent_ids[0] if scene.parent_ids else None
+        # Derive dominant event_kind from child events for this scene
+        child_kinds = [
+            e.event_kind.value if hasattr(e.event_kind, 'value') else str(e.event_kind)
+            for e in pipeline_result.events
+            if e.id in (scene.child_ids if hasattr(scene, 'child_ids') else [])
+        ]
+        scene_kind = max(set(child_kinds), key=child_kinds.count) if child_kinds else None
         conn.execute(
             "INSERT OR REPLACE INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
@@ -527,7 +528,7 @@ class MemoryService:
         ("scene", 1): 180,    # Scene → escalate to Arc after 180d
         ("arc", 2): 365,      # Arc → escalate to Epoch after 365d
         ("epoch", 3): 730,    # Epoch → escalate to Final after 730d
-        ("epoch", 4): 9999,   # Final → purge candidate (kept for audit)
+        ("epoch", 4): 90,     # Final → purge candidate after 90d audit window
     }
 
     async def _apply_compression_lifecycle(self) -> Dict[str, Any]:
@@ -826,8 +827,6 @@ class MemoryService:
         while True:
             await asyncio.sleep(self.config.compression_interval)
             try:
-                for namespace in list(self._namespace_cache.keys()):
-                    await self._compress_namespace(namespace)
                 # ── Tier 1 decay + Tier 2 bridge + Lifecycle ─────
                 await self._run_all_rules_internal()
             except asyncio.CancelledError:
@@ -888,12 +887,12 @@ class MemoryService:
         """Apply exponential decay to Tier 1 turn relevance scores."""
         conn = sqlite3.connect(str(self._db_path))
         rate = self.config.tier1_decay_rate
-        conn.execute(
+        cur = conn.execute(
             "UPDATE turns SET relevance_score = relevance_score * ? "
             "WHERE compressed_to_tier2 = 0",
             (rate,),
         )
-        updated = conn.rowcount
+        updated = cur.rowcount
         conn.commit()
         conn.close()
         if updated:
@@ -1381,12 +1380,12 @@ class MemoryService:
     # ── Tier 1: Short-term Conversation Store ──────────────────────
 
     async def create_session(self, request: SessionCreate):
-        """Create a new conversation session."""
-        session_id = str(uuid.uuid4())
+        """Create a new conversation session. Uses caller-provided ID if given."""
+        session_id = request.session_id.strip() if request.session_id else str(uuid.uuid4())
         now = datetime.now().isoformat()
         conn = sqlite3.connect(str(self._db_path))
         conn.execute(
-            "INSERT INTO sessions (session_id, created_at, updated_at, metadata) VALUES (?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO sessions (session_id, created_at, updated_at, metadata) VALUES (?, ?, ?, ?)",
             (session_id, now, now, json.dumps(request.metadata)),
         )
         conn.commit()
@@ -1784,7 +1783,9 @@ class MemoryService:
                 "(keyword matching, template summaries). Quality will be low."
             )
         pipeline = self._build_compression_pipeline()
-        result = pipeline.ingest(transcript_turns)
+        # Run synchronous pipeline.ingest in thread to avoid blocking event loop
+        import asyncio as _asyncio
+        result = await _asyncio.to_thread(pipeline.ingest, transcript_turns)
         # ... rest unchanged
 
         # Archive processed turns with back-references
@@ -1802,34 +1803,35 @@ class MemoryService:
 
         now = datetime.now().isoformat()
         conn = sqlite3.connect(str(self._db_path))
-        for r in rows:
-            turn_id, session_id, speaker, text, timestamp_str, relevance = r
-            event_ids = turn_to_events.get(turn_id, [])
-            scene_ids = turn_to_scenes.get(turn_id, [])
-            original_text = text if self.config.tier1_archive_keep_original else None
-            text_summary = text[:500] if len(text) > 500 else text
-            conn.execute(
-                "INSERT OR REPLACE INTO turns_archive "
-                "(turn_id, session_id, speaker, text_summary, original_text, "
-                "timestamp, compressed_at, event_ids, scene_ids) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    turn_id, session_id, speaker, text_summary, original_text,
-                    timestamp_str, now,
-                    json.dumps(event_ids), json.dumps(scene_ids),
-                ),
-            )
-            conn.execute(
-                "UPDATE turns SET compressed_to_tier2 = 1 WHERE turn_id = ?",
-                (turn_id,),
-            )
+        try:
+            for r in rows:
+                turn_id, session_id, speaker, text, timestamp_str, relevance = r
+                event_ids = turn_to_events.get(turn_id, [])
+                scene_ids = turn_to_scenes.get(turn_id, [])
+                original_text = text if self.config.tier1_archive_keep_original else None
+                text_summary = text[:500] if len(text) > 500 else text
+                conn.execute(
+                    "INSERT OR REPLACE INTO turns_archive "
+                    "(turn_id, session_id, speaker, text_summary, original_text, "
+                    "timestamp, compressed_at, event_ids, scene_ids) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        turn_id, session_id, speaker, text_summary, original_text,
+                        timestamp_str, now,
+                        json.dumps(event_ids), json.dumps(scene_ids),
+                    ),
+                )
+                conn.execute(
+                    "UPDATE turns SET compressed_to_tier2 = 1 WHERE turn_id = ?",
+                    (turn_id,),
+                )
 
-        # ── Write compressed memories back to SQLite ─────────────
-        # Store Event/Scene/Arc summaries so they are queryable from SQLite
-        _write_compressed_memories(conn, result, now)
+            # ── Write compressed memories back to SQLite ─────────────
+            _write_compressed_memories(conn, result, now)
 
-        conn.commit()
-        conn.close()
+            conn.commit()
+        finally:
+            conn.close()
 
         logger.info(
             "Tier2 bridge: %d turns → %d events, %d scenes, %d arcs",
@@ -2003,12 +2005,12 @@ class MemoryService:
     async def pin_memory(self, memory_id: str):
         """Pin a memory: lock weight at 1.0, immune to decay/escalation."""
         conn = sqlite3.connect(str(self._db_path))
-        conn.execute(
+        cur = conn.execute(
             "UPDATE compressed_memories SET pinned = 1, hidden = 0, "
             "weight = 1.0 WHERE memory_id = ?",
             (memory_id,),
         )
-        if conn.rowcount == 0:
+        if cur.rowcount == 0:
             conn.close()
             raise HTTPException(status_code=404, detail="Memory not found")
         conn.commit()
@@ -2018,12 +2020,12 @@ class MemoryService:
     async def hide_memory(self, memory_id: str):
         """Hide a memory: weight = 0.0, excluded from default queries."""
         conn = sqlite3.connect(str(self._db_path))
-        conn.execute(
+        cur = conn.execute(
             "UPDATE compressed_memories SET hidden = 1, pinned = 0, "
             "weight = 0.0 WHERE memory_id = ?",
             (memory_id,),
         )
-        if conn.rowcount == 0:
+        if cur.rowcount == 0:
             conn.close()
             raise HTTPException(status_code=404, detail="Memory not found")
         conn.commit()

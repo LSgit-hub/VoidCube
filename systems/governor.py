@@ -527,7 +527,7 @@ class LLMGovernorReasoner:
                 f"证据摘要:\n"
                 f"  - build_complete: {evidence.get('build_complete')}\n"
                 f"  - probe_passed: {evidence.get('probe_passed')}\n"
-                f"  - git_lineage: {json.dumps(dict(evidence.get('git_lineature') or {}), default=str)[:500] if evidence.get('git_lineature') else '无'}\n"
+                f"  - git_lineage: {json.dumps(dict(evidence.get('git_lineage') or {}), default=str)[:500] if evidence.get('git_lineage') else '无'}\n"
                 f"  - slot_state: {slot_meta.body_state if slot_meta else 'unknown'}\n\n"
                 f"请提供:\n"
                 f"1. 对当前证据质量的评估\n"

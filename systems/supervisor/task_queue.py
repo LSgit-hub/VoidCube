@@ -224,11 +224,31 @@ class SelfEvolutionTaskQueue:
         context: Optional[Dict[str, Any]] = None,
         execution_request: Optional[SelfEvolutionExecutionRequest] = None,
     ) -> SelfEvolutionTask:
+        # ── Validate state transition ──
+        _LEGAL_TRANSITIONS: dict[str, set[str]] = {
+            "planned": {"approved", "paused", "cancelled", "deferred"},
+            "approved": {"running", "cancelled"},
+            "running": {"completed", "failed", "paused"},
+            "paused": {"planned", "cancelled"},
+            "deferred": {"planned", "cancelled"},
+            "completed": set(),   # terminal
+            "failed": set(),      # terminal
+            "cancelled": set(),   # terminal
+        }
+        target = status.value if hasattr(status, 'value') else str(status)
+
         with self._lock:
             snapshot = self._load_snapshot()
             for index, task in enumerate(snapshot.tasks):
                 if task.task_id != task_id:
                     continue
+                current = task.status.value if hasattr(task.status, 'value') else str(task.status)
+                legal = _LEGAL_TRANSITIONS.get(current, set())
+                if target not in legal and legal:  # empty legal = terminal
+                    raise ValueError(
+                        f"Illegal task state transition: {current} → {target} "
+                        f"(legal: {', '.join(sorted(legal)) if legal else 'terminal'})"
+                    )
                 task.status = status
                 task.updated_at = datetime.utcnow()
                 task.decision_reason = reason

@@ -80,15 +80,15 @@ class EndogenousDriveEngine:
         max_candidates: int = 3,
     ) -> List[EndogenousTaskCandidate]:
         existing_keys = set(existing_drive_keys)
-        candidates = [
-            candidate
-            for candidate in self._candidate_stream(idle_window)
-            if candidate.stable_key not in existing_keys
-        ]
+        candidates = self._candidate_stream(idle_window, existing_keys=existing_keys)
         candidates.sort(key=lambda candidate: candidate.utility, reverse=True)
         return candidates[:max(max_candidates, 0)]
 
-    def _candidate_stream(self, idle_window: Dict[str, Any]) -> List[EndogenousTaskCandidate]:
+    def _candidate_stream(
+        self, idle_window: Dict[str, Any], *, existing_keys: set[str] = None
+    ) -> List[EndogenousTaskCandidate]:
+        if existing_keys is None:
+            existing_keys = set()
         activity = dict(idle_window.get("activity") or {})
         counts = dict(activity.get("counts") or {})
         decisions_by_family = dict(idle_window.get("task_family_decisions") or {})
@@ -111,7 +111,7 @@ class EndogenousDriveEngine:
         )
 
         candidates: List[EndogenousTaskCandidate] = []
-        if memory_plan.get("eligible_for_planning"):
+        if memory_plan.get("eligible_for_planning") and "continuity:memory_maintenance_sweep" not in existing_keys:
             candidates.append(
                 EndogenousTaskCandidate(
                     stable_key="continuity:memory_maintenance_sweep",
@@ -140,7 +140,7 @@ class EndogenousDriveEngine:
             or 0
         )
         correction_signals = recent_errors + uncertainty_count
-        if correction_signals > 0 and self_learning_plan.get("eligible_for_planning"):
+        if correction_signals > 0 and self_learning_plan.get("eligible_for_planning") and "truthfulness:review_correction_signals" not in existing_keys:
             candidates.append(
                 EndogenousTaskCandidate(
                     stable_key="truthfulness:review_correction_signals",
@@ -165,32 +165,68 @@ class EndogenousDriveEngine:
         active_sessions = int(activity.get("active_sessions") or 0)
         if active_sessions == 0 and self_learning_plan.get("eligible_for_planning"):
             # Try LLM-generated topics first; fall back to mechanical extraction
-            llm_topics = self._llm_generate_learning_topics(activity, max_topics=1)
-            if llm_topics:
-                topic = llm_topics[0]
+            llm_topics = self._llm_generate_learning_topics(activity, max_topics=3)
+            generated_count = 0
+            for topic in (llm_topics if llm_topics else []):
+                topic_key = _stable_key_for_topic(topic["title"])
+                if topic_key in existing_keys:
+                    continue  # Skip duplicate topic
                 title = f"Research: {topic['title']}"
                 summary = topic['summary']
-                utility = 0.72  # LLM-generated topics get higher utility
-                learning_topic = topic['title']
-            else:
+                candidates.append(
+                    EndogenousTaskCandidate(
+                        stable_key=topic_key,  # Dynamic key: "creativity:idle_learning:{hash}"
+                        title=title,
+                        summary=summary,
+                        priority="normal",
+                        governance_task_type="self_learning",
+                        task_family="self_learning",
+                        execution_kind=None,
+                        value_tags=["creativity"],
+                        utility=0.72,
+                        evidence={
+                            "active_sessions": active_sessions,
+                            "trigger": "idle_capacity",
+                            "learning_topic": topic['title'],
+                            "llm_generated": True,
+                        },
+                        constraints={
+                            "execution_policy": "learn_only",
+                            "must_not_modify_active_body": True,
+                        },
+                    )
+                )
+                existing_keys.add(topic_key)
+                generated_count += 1
+                if generated_count >= 2:
+                    break
+
+            # Fallback: mechanical extraction if no LLM topics
+            if generated_count == 0:
                 learning_topic = self._extract_learning_topic(activity)
-                title = (
-                    f"Research: {learning_topic}"
+                topic_key = (
+                    _stable_key_for_topic(learning_topic)
                     if learning_topic
-                    else "Explore one unresolved learning thread"
+                    else "creativity:idle_learning:fallback"
                 )
-                summary = (
-                    f"Use idle capacity to research '{learning_topic}' — the most recent "
-                    f"user-discussed topic that may benefit from deeper investigation."
-                    if learning_topic
-                    else "Use idle capacity to ask the agent for one evidence-producing "
-                         "learning pass over unresolved recent topics."
-                )
-                utility = 0.68 if learning_topic else 0.58
-            candidates.append(
-                EndogenousTaskCandidate(
-                    stable_key="creativity:idle_learning_thread",
-                    title=title,
+                if topic_key not in existing_keys:
+                    title = (
+                        f"Research: {learning_topic}"
+                        if learning_topic
+                        else "Explore one unresolved learning thread"
+                    )
+                    summary = (
+                        f"Use idle capacity to research '{learning_topic}' — the most recent "
+                        f"user-discussed topic that may benefit from deeper investigation."
+                        if learning_topic
+                        else "Use idle capacity to ask the agent for one evidence-producing "
+                             "learning pass over unresolved recent topics."
+                    )
+                    utility = 0.68 if learning_topic else 0.58
+                    candidates.append(
+                        EndogenousTaskCandidate(
+                            stable_key=topic_key,
+                            title=title,
                     summary=summary,
                     priority="normal",
                     governance_task_type="self_learning",
@@ -211,7 +247,7 @@ class EndogenousDriveEngine:
                 )
             )
 
-        if self_evolution_plan.get("eligible_for_planning"):
+        if self_evolution_plan.get("eligible_for_planning") and "continuity:queue_hygiene_review" not in existing_keys:
             candidates.append(
                 EndogenousTaskCandidate(
                     stable_key="continuity:queue_hygiene_review",
@@ -298,7 +334,9 @@ class EndogenousDriveEngine:
             base_url = os.environ.get("MEMAI_LLM_BASE_URL", "https://api.deepseek.com/v1")
             client = OpenAICompatibleLLMClient(model=model, api_key=api_key, base_url=base_url)
 
-            # Build context from recent activity
+            # ── Fetch real memory context from memory_service ──
+            memory_context = self._fetch_memory_context()
+
             recent = dict(activity.get("recent_metadata") or {})
             user_req = str(recent.get("user_request", {}).get("text", ""))[:500]
             agent_resp = str(recent.get("agent_work", {}).get("summary", ""))[:500]
@@ -306,21 +344,21 @@ class EndogenousDriveEngine:
             uncertainty = int(activity.get("counts", {}).get("uncertainty_high_count", 0))
 
             prompt = (
-                f"基于以下 VoidCube 系统状态，生成 {max_topics} 个值得探索的学习方向。\n\n"
-                f"最近用户请求: {user_req if user_req else '无'}\n"
-                f"最近 Agent 响应摘要: {agent_resp if agent_resp else '无'}\n"
-                f"系统错误计数: {errors}\n"
-                f"高不确定性事件: {uncertainty}\n\n"
-                f"每个学习方向应该是具体的、可通过搜索和实验验证的。"
-                f"优先考虑: 代码改进方向、架构优化机会、未解决的技术问题、"
-                f"可从外部获取的新知识。\n"
+                f"基于以下 VoidCube 系统状态和长期记忆，生成 {max_topics} 个值得探索的学习方向。\n\n"
+                f"【最近用户请求】{user_req if user_req else '无'}\n"
+                f"【最近 Agent 响应】{agent_resp if agent_resp else '无'}\n"
+                f"【系统错误】{errors}  【高不确定性】{uncertainty}\n\n"
+                f"【压缩记忆上下文 — 最近的活跃弧线和场景】\n"
+                f"{memory_context if memory_context else '(暂无压缩记忆)'}\n\n"
+                f"基于以上所有信息生成学习方向。不要泛泛而谈——"
+                f"基于记忆中的实际问题、未解决的疑问、代码改进机会来生成。"
                 f"输出JSON数组: [{{\"title\": \"...\", \"summary\": \"...\"}}]"
             )
             result = client.complete_json(
                 system_prompt=(
-                    "你是 VoidCube 的内生驱动器。基于系统当前状态和历史记忆，"
-                    "生成有实质价值的学习方向——不是泛泛的搜索建议，"
-                    "而是具体的、可操作的研究主题。"
+                    "你是 VoidCube 的内生驱动器。你有权访问系统的压缩长期记忆。"
+                    "基于记忆中的实际问题、架构讨论、代码改进机会和未解决的疑问，"
+                    "生成有实质价值的学习方向——具体的、可操作的、基于真实上下文。"
                 ),
                 user_payload={"context": prompt},
                 task="extractor.events",
@@ -339,6 +377,53 @@ class EndogenousDriveEngine:
         except Exception:
             return []
 
+    def _fetch_memory_context(self) -> str:
+        """Fetch recent compressed memory summaries from memory_service for LLM context."""
+        try:
+            import urllib.request, json as _json
+            # Resolve memory service URL via gateway (same as ui_runtime does)
+            memory_url = self._resolve_memory_url()
+            if not memory_url:
+                return ""
+            req = _json.dumps({
+                "memory_type": "arc", "limit": 5, "include_superseded": False,
+            }).encode()
+            resp = urllib.request.urlopen(
+                urllib.request.Request(
+                    f"{memory_url}/compressed/search",
+                    data=req, headers={"Content-Type": "application/json"},
+                ), timeout=3,
+            )
+            data = _json.loads(resp.read())
+            results = data.get("results", [])
+            if not results:
+                return ""
+            lines = []
+            for r in results[:5]:
+                lines.append(
+                    f"- [{r.get('memory_type', '?')}] {r.get('title', '')}: "
+                    f"{r.get('summary', '')[:200]}"
+                )
+            return "\n".join(lines)
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _resolve_memory_url() -> str | None:
+        """Resolve memory service URL via gateway service discovery."""
+        try:
+            import urllib.request, json as _json
+            resp = urllib.request.urlopen(
+                "http://127.0.0.1:6000/admin/services", timeout=2,
+            )
+            services = _json.loads(resp.read()).get("services", {})
+            for svc in services.values():
+                if svc.get("service_type") == "memory":
+                    return svc.get("address")
+        except Exception:
+            pass
+        return None
+
     def _decision_for(
         self,
         family: str,
@@ -351,3 +436,17 @@ class EndogenousDriveEngine:
         if family in {"memory_maintenance", "self_learning", "user"}:
             governance = family
         return dict(decisions_by_governance.get(governance) or {})
+
+
+def _stable_key_for_topic(topic: str) -> str:
+    """Generate a stable dedup key from a learning topic string.
+
+    Uses a short hash so that genuinely different topics get different keys,
+    allowing multiple creativity candidates to coexist in the queue.
+    """
+    import hashlib
+    normalized = topic.strip().lower()
+    if not normalized:
+        return "creativity:idle_learning:fallback"
+    h = hashlib.md5(normalized.encode()).hexdigest()[:8]
+    return f"creativity:idle_learning:{h}"

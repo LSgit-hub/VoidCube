@@ -497,7 +497,14 @@ class MemoryQueryEngine:
         include_superseded: bool = True,
         resolve_turns: bool = False,
     ) -> dict[str, Any]:
-        target = self._index[target_id]
+        target = self._index.get(target_id)
+        if target is None:
+            return {
+                "result_type": "evidence_trace",
+                "target_id": target_id,
+                "error": f"Memory unit '{target_id}' not found in any collection.",
+                "support_chain": [],
+            }
         if target.status == Status.SUPERSEDED and not include_superseded:
             raise KeyError(
                 f"Target id {target_id} is superseded; set include_superseded to inspect historical versions."

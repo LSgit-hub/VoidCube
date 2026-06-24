@@ -1770,6 +1770,7 @@ class SupervisorUIMixin:
             drive_available=drive_available,
             error_count=error_count,
             in_execution_window=in_execution_window,
+            memory_active=tier1_stats.get("memory_active", False),
         )
         return {
             "status": "ok",
@@ -1819,10 +1820,9 @@ class SupervisorUIMixin:
         }
 
     async def _fetch_tier1_stats(self) -> Dict[str, Any]:
-        """Fetch Tier 1 short-term memory statistics from memory-service."""
+        """Fetch Tier 1 stats + memory_service rule execution status."""
         try:
             import aiohttp
-            # Resolve memory-service URL from gateway registered services
             gateway_url = "http://127.0.0.1:6000"
             async with aiohttp.ClientSession() as session:
                 async with session.get(
@@ -1838,11 +1838,40 @@ class SupervisorUIMixin:
                         break
                 if not memory_url:
                     return {}
+                # Fetch both stats and rules status in parallel
+                stats_data = {}
+                rules_data = {}
                 async with session.get(
                     f"{memory_url}/tier1/stats", timeout=aiohttp.ClientTimeout(total=3)
                 ) as resp:
                     if resp.status == 200:
-                        return await resp.json()
+                        stats_data = await resp.json()
+                async with session.get(
+                    f"{memory_url}/compressed/rules-status", timeout=aiohttp.ClientTimeout(total=3)
+                ) as resp:
+                    if resp.status == 200:
+                        rules_data = await resp.json()
+                result = dict(stats_data)
+                result["rules"] = rules_data.get("rules", {})
+                result["llm_healthy"] = rules_data.get("llm_healthy", False)
+                # Compute memory_active: any rule ran in the last 2 cycles
+                from datetime import datetime, timedelta, timezone
+                recent = datetime.now(timezone.utc) - timedelta(seconds=7200)
+                memory_active = False
+                for rule_name, rule_info in result.get("rules", {}).items():
+                    last_run = rule_info.get("last_run")
+                    if last_run:
+                        try:
+                            t = datetime.fromisoformat(last_run)
+                            if t.tzinfo is None:
+                                t = t.replace(tzinfo=timezone.utc)
+                            if t > recent:
+                                memory_active = True
+                                break
+                        except Exception:
+                            pass
+                result["memory_active"] = memory_active
+                return result
         except Exception:
             pass
         return {}
@@ -1912,11 +1941,12 @@ class SupervisorUIMixin:
         drive_available: bool,
         error_count: int = 0,
         in_execution_window: bool = True,
+        memory_active: bool = False,
     ) -> tuple[str, str, str]:
         """Redefined scenes driven by real activity rather than static heuristics."""
         error_note = f" · {error_count} recent error(s)" if error_count > 0 else ""
 
-        # ── Scene priority: running > drive > queued > idle ──
+        # ── Scene priority: running > memory_active > drive > queued > idle ──
 
         # 1. Active execution: body_switch
         running = [t for t in all_tasks if t.get("status") == "running"]
@@ -1950,6 +1980,14 @@ class SupervisorUIMixin:
                 "learning",
                 f"Xizi has approved learning{error_note}",
                 f"「{lp.get('title', 'Learning task')}」is ready. Agent pulls via /v1/tasks; learn-only research awaits execution.",
+            )
+
+        # 2.5 Memory model actively compressing (detected from memory_service rules_status)
+        if memory_active:
+            return (
+                "memory",
+                f"Xizi is organizing memory{error_note}",
+                "记忆模型正在执行压缩规则：衰减→桥接→升级→清退。",
             )
 
         # 3. Endogenous drive active

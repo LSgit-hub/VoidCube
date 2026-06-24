@@ -452,13 +452,15 @@ class PlanningRuntimeMixin:
             logger.debug(f"Unable to touch gateway activity kind={activity_kind}: {exc}")
 
     def _existing_endogenous_drive_keys(self) -> set[str]:
-        active_statuses = {"planned", "deferred", "paused"}
+        """Return drive keys for tasks that are still alive (not terminal).
+
+        Terminal = completed, failed, cancelled.  Everything else blocks
+        re-creation of the same drive key to prevent task pile-up.
+        """
+        terminal = {"completed", "failed", "cancelled"}
         keys: set[str] = set()
         for task in self._self_evolution_queue.list_tasks():
-            is_active = task.status in active_statuses
-            if task.status == "approved":
-                is_active = True
-            if not is_active:
+            if task.status in terminal:
                 continue
             key = task.metadata.get("endogenous_drive_key")
             if isinstance(key, str) and key:
@@ -1192,6 +1194,29 @@ class PlanningRuntimeMixin:
         return result
 
     async def _run_self_evolution_cycle(self) -> Dict[str, Any]:
+        # ── Cleanup: auto-fail tasks stuck in "running" > 30 min ──
+        stale_running = 0
+        now = datetime.now(timezone.utc)
+        for task in self._self_evolution_queue.list_tasks():
+            if task.status != "running":
+                continue
+            started = task.metadata.get("executed_at")
+            if started:
+                try:
+                    t = datetime.fromisoformat(str(started))
+                    if t.tzinfo is None:
+                        t = t.replace(tzinfo=timezone.utc)
+                    if (now - t).total_seconds() > 1800:
+                        self._self_evolution_queue.update_status(
+                            task.task_id, status="failed",
+                            reason="timeout: stuck >30min",
+                        )
+                        stale_running += 1
+                except Exception:
+                    pass
+        if stale_running:
+            logger.warning("Auto-failed %d stale running tasks", stale_running)
+
         review_result = await self.review_self_evolution_tasks({})
         dispatched = []
 

@@ -52,7 +52,15 @@ class MemGovernorBridge:
         self.storage_root.mkdir(parents=True, exist_ok=True)
         self.history_path = self.storage_root / "governor_history.jsonl"
         self.latest_path = self.storage_root / "governor_latest.json"
-        self._engine = engine or GovernorDecisionEngine()
+        if engine is not None:
+            self._engine = engine
+        else:
+            try:
+                from systems.governor import LLMGovernorReasoner
+                reasoner = LLMGovernorReasoner()
+            except Exception:
+                reasoner = None
+            self._engine = GovernorDecisionEngine(llm_reasoner=reasoner)
         self._lock = threading.Lock()
         # Auto-create a default GovernanceEventRepository when none provided.
         # Per M-03: the repository should not be an optional dependency that
