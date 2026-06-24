@@ -23,6 +23,87 @@ from typing import Any, Dict, List, Optional, Sequence
 logger = logging.getLogger(__name__)
 
 
+def _write_compressed_memories_to_db(conn, pipeline_result, now: str) -> int:
+    """Write Event/Scene/Arc/Epoch from PipelineResult into compressed_memories table.
+
+    Lifecycle: Event(L0,w=1.0) → Scene(L1,w=0.7) → Arc(L2,w=0.4) → Epoch(L3,w=0.2).
+    """
+    written = 0
+    for event in pipeline_result.events:
+        parent_id = event.parent_ids[0] if event.parent_ids else None
+        ek = event.event_kind.value if hasattr(event.event_kind, 'value') else str(event.event_kind)
+        conn.execute(
+            "INSERT OR REPLACE INTO compressed_memories "
+            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
+            "importance, confidence, topics, entities, source_turns, "
+            "parent_id, compressed_at, compression_level, status, weight, event_kind) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                event.id, "event", event.title, event.summary,
+                event.timespan_start.isoformat(), event.timespan_end.isoformat(),
+                event.importance, event.confidence,
+                json.dumps(event.topics), json.dumps(event.entities),
+                json.dumps(event.source_turns), parent_id, now,
+                0, "active", 1.0, ek,
+            ),
+        )
+        written += 1
+    for scene in pipeline_result.scenes:
+        parent_id = scene.parent_ids[0] if scene.parent_ids else None
+        conn.execute(
+            "INSERT OR REPLACE INTO compressed_memories "
+            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
+            "importance, confidence, topics, entities, source_turns, "
+            "parent_id, compressed_at, compression_level, status, weight, event_kind) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                scene.id, "scene", scene.title, scene.summary,
+                scene.timespan_start.isoformat(), scene.timespan_end.isoformat(),
+                scene.importance, scene.confidence,
+                json.dumps(scene.topics), json.dumps(scene.entities),
+                json.dumps(scene.evidence_refs), parent_id, now,
+                1, "active", 0.7, None,
+            ),
+        )
+        written += 1
+    for arc in pipeline_result.arcs:
+        parent_id = arc.parent_ids[0] if arc.parent_ids else None
+        conn.execute(
+            "INSERT OR REPLACE INTO compressed_memories "
+            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
+            "importance, confidence, topics, entities, source_turns, "
+            "parent_id, compressed_at, compression_level, status, weight, event_kind) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                arc.id, "arc", arc.title, arc.summary,
+                arc.timespan_start.isoformat(), arc.timespan_end.isoformat(),
+                arc.importance, arc.confidence,
+                json.dumps(arc.topics), json.dumps(arc.entities),
+                json.dumps(arc.evidence_refs), parent_id, now,
+                2, "active", 0.4, None,
+            ),
+        )
+        written += 1
+    for epoch in pipeline_result.epochs:
+        conn.execute(
+            "INSERT OR REPLACE INTO compressed_memories "
+            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
+            "importance, confidence, topics, entities, source_turns, "
+            "parent_id, compressed_at, compression_level, status, weight, event_kind) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                epoch.id, "epoch", epoch.title, epoch.summary,
+                epoch.timespan_start.isoformat(), epoch.timespan_end.isoformat(),
+                epoch.importance, epoch.confidence,
+                json.dumps(epoch.topics), json.dumps(epoch.entities),
+                json.dumps(epoch.evidence_refs), None, now,
+                3, "active", 0.2, None,
+            ),
+        )
+        written += 1
+    return written
+
+
 @dataclass
 class BridgeResult:
     """Result of a Tier 1 → Tier 2 compression cycle."""
@@ -132,9 +213,61 @@ class Tier1ToTier2Bridge:
 
     # ── Bridge to Tier 2 ──────────────────────────────────────────
 
+    def _build_pipeline(self):
+        """Build ChroniclePipeline — LLM-first with heuristic fallback."""
+        import os
+        from memai.pipeline import ChroniclePipeline
+
+        api_key = (
+            os.environ.get("DEEPSEEK_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+            or ""
+        ).strip()
+        if not api_key:
+            return ChroniclePipeline()
+
+        try:
+            from memai.llm_client import OpenAICompatibleLLMClient
+            from memai.extraction import EventExtractor, LLMEventExtractionBackend
+            from memai.scholar import LLMScholarBackend
+
+            model = os.environ.get("MEMAI_LLM_MODEL", "deepseek-chat")
+            base_url = os.environ.get("MEMAI_LLM_BASE_URL", "https://api.deepseek.com/v1")
+            llm_client = OpenAICompatibleLLMClient(model=model, api_key=api_key, base_url=base_url)
+
+            class _LLMExtractionAdapter:
+                def __init__(self, llm):
+                    self._llm = llm
+                def extract_events(self, turns):
+                    turn_texts = [f"[{t.turn_id}] {t.speaker}: {t.text}" for t in turns]
+                    prompt = (
+                        "Extract memory-worthy events from the conversation. "
+                        "Output JSON array with: title, summary, event_kind, "
+                        "importance, confidence, topics, entities, source_turns.\n\n"
+                        + "\n".join(turn_texts)
+                    )
+                    result = self._llm.complete_json(
+                        system_prompt="You are a precise memory extraction assistant.",
+                        user_payload={"conversation": prompt},
+                        task="extractor.events",
+                    )
+                    if isinstance(result, list):
+                        return result
+                    if isinstance(result, dict):
+                        return result.get("events") or result.get("result") or []
+                    return []
+
+            extraction_backend = LLMEventExtractionBackend(client=_LLMExtractionAdapter(llm_client))  # type: ignore[arg-type]
+            scholar_backend = LLMScholarBackend(client=llm_client)
+            return ChroniclePipeline(
+                event_extractor=EventExtractor(backend=extraction_backend),
+                scholar_backend=scholar_backend,
+            )
+        except Exception:
+            return ChroniclePipeline()
+
     def bridge_to_tier2(self, turns: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Convert turns to TranscriptTurn and feed into ChroniclePipeline."""
-        from memai.pipeline import ChroniclePipeline
         from memai.schema import TranscriptTurn
 
         transcript_turns = []
@@ -151,7 +284,7 @@ class Tier1ToTier2Bridge:
                 )
             )
 
-        pipeline = ChroniclePipeline()
+        pipeline = self._build_pipeline()
         result = pipeline.ingest(transcript_turns)
 
         return {
@@ -211,9 +344,13 @@ class Tier1ToTier2Bridge:
                 "UPDATE turns SET compressed_to_tier2 = 1 WHERE turn_id = ?",
                 (turn_id,),
             )
+
+        # ── Write compressed memories back to SQLite ─────────────
+        _write_compressed_memories_to_db(conn, result, now)
+
         conn.commit()
         conn.close()
-        logger.info("Archived %d turns with Tier 2 back-references", len(turns))
+        logger.info("Archived %d turns with Tier 2 back-references + compressed memories", len(turns))
 
     # ── Full cycle ────────────────────────────────────────────────
 

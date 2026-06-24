@@ -61,10 +61,15 @@ class EndogenousTaskCandidate:
 
 
 class EndogenousDriveEngine:
-    """Deterministic supervisor drive loop.
+    """Supervisor drive loop — deterministic core + optional LLM intelligence.
 
-    The drive engine does not execute work. It turns system facts and core values
-    into auditable queue candidates that still pass through supervisor review.
+    The drive engine does not execute work. It turns system facts, core values,
+    and (when available) LLM-analyzed memory context into auditable queue
+    candidates that still pass through supervisor review.
+
+    Without LLM: uses deterministic text extraction (first 80 chars).
+    With LLM: reads compressed memory context to generate intelligent,
+    context-aware learning topics.
     """
 
     def generate_candidates(
@@ -159,21 +164,29 @@ class EndogenousDriveEngine:
 
         active_sessions = int(activity.get("active_sessions") or 0)
         if active_sessions == 0 and self_learning_plan.get("eligible_for_planning"):
-            # Extract a real topic from recent gateway activity metadata
-            learning_topic = self._extract_learning_topic(activity)
-            title = (
-                f"Research: {learning_topic}"
-                if learning_topic
-                else "Explore one unresolved learning thread"
-            )
-            summary = (
-                f"Use idle capacity to research '{learning_topic}' — the most recent "
-                f"user-discussed topic that may benefit from deeper investigation."
-                if learning_topic
-                else "Use idle capacity to ask the agent for one evidence-producing "
-                     "learning pass over unresolved recent topics."
-            )
-            utility = 0.68 if learning_topic else 0.58
+            # Try LLM-generated topics first; fall back to mechanical extraction
+            llm_topics = self._llm_generate_learning_topics(activity, max_topics=1)
+            if llm_topics:
+                topic = llm_topics[0]
+                title = f"Research: {topic['title']}"
+                summary = topic['summary']
+                utility = 0.72  # LLM-generated topics get higher utility
+                learning_topic = topic['title']
+            else:
+                learning_topic = self._extract_learning_topic(activity)
+                title = (
+                    f"Research: {learning_topic}"
+                    if learning_topic
+                    else "Explore one unresolved learning thread"
+                )
+                summary = (
+                    f"Use idle capacity to research '{learning_topic}' — the most recent "
+                    f"user-discussed topic that may benefit from deeper investigation."
+                    if learning_topic
+                    else "Use idle capacity to ask the agent for one evidence-producing "
+                         "learning pass over unresolved recent topics."
+                )
+                utility = 0.68 if learning_topic else 0.58
             candidates.append(
                 EndogenousTaskCandidate(
                     stable_key="creativity:idle_learning_thread",
@@ -189,6 +202,7 @@ class EndogenousDriveEngine:
                         "active_sessions": active_sessions,
                         "trigger": "idle_capacity",
                         "learning_topic": learning_topic or "",
+                        "llm_generated": bool(llm_topics),
                     },
                     constraints={
                         "execution_policy": "learn_only",
@@ -256,6 +270,74 @@ class EndogenousDriveEngine:
                 return topic
 
         return ""
+
+    def _llm_generate_learning_topics(
+        self, activity: Dict[str, Any], max_topics: int = 3
+    ) -> List[Dict[str, str]]:
+        """Use LLM to generate intelligent learning topics from memory context.
+
+        Unlike _extract_learning_topic (mechanical string slicing), this reads
+        the compressed memory state and recent activity to produce genuinely
+        useful research directions grounded in the system's actual history.
+
+        Returns list of {"title": ..., "summary": ...} dicts.
+        Falls back to empty list if LLM is unavailable.
+        """
+        try:
+            import os
+            api_key = (
+                os.environ.get("DEEPSEEK_API_KEY")
+                or os.environ.get("OPENAI_API_KEY")
+                or ""
+            ).strip()
+            if not api_key:
+                return []
+
+            from memai.llm_client import OpenAICompatibleLLMClient
+            model = os.environ.get("MEMAI_LLM_MODEL", "deepseek-chat")
+            base_url = os.environ.get("MEMAI_LLM_BASE_URL", "https://api.deepseek.com/v1")
+            client = OpenAICompatibleLLMClient(model=model, api_key=api_key, base_url=base_url)
+
+            # Build context from recent activity
+            recent = dict(activity.get("recent_metadata") or {})
+            user_req = str(recent.get("user_request", {}).get("text", ""))[:500]
+            agent_resp = str(recent.get("agent_work", {}).get("summary", ""))[:500]
+            errors = int(activity.get("counts", {}).get("error_count", 0))
+            uncertainty = int(activity.get("counts", {}).get("uncertainty_high_count", 0))
+
+            prompt = (
+                f"基于以下 VoidCube 系统状态，生成 {max_topics} 个值得探索的学习方向。\n\n"
+                f"最近用户请求: {user_req if user_req else '无'}\n"
+                f"最近 Agent 响应摘要: {agent_resp if agent_resp else '无'}\n"
+                f"系统错误计数: {errors}\n"
+                f"高不确定性事件: {uncertainty}\n\n"
+                f"每个学习方向应该是具体的、可通过搜索和实验验证的。"
+                f"优先考虑: 代码改进方向、架构优化机会、未解决的技术问题、"
+                f"可从外部获取的新知识。\n"
+                f"输出JSON数组: [{{\"title\": \"...\", \"summary\": \"...\"}}]"
+            )
+            result = client.complete_json(
+                system_prompt=(
+                    "你是 VoidCube 的内生驱动器。基于系统当前状态和历史记忆，"
+                    "生成有实质价值的学习方向——不是泛泛的搜索建议，"
+                    "而是具体的、可操作的研究主题。"
+                ),
+                user_payload={"context": prompt},
+                task="extractor.events",
+            )
+            if isinstance(result, list) and len(result) > 0:
+                topics = []
+                for item in result[:max_topics]:
+                    if isinstance(item, dict):
+                        title = str(item.get("title", "")).strip()
+                        summary = str(item.get("summary", "")).strip()
+                        if title:
+                            topics.append({"title": title, "summary": summary or title})
+                if topics:
+                    return topics
+            return []
+        except Exception:
+            return []
 
     def _decision_for(
         self,

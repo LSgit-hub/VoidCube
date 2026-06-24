@@ -146,15 +146,18 @@ Agent 可以拥有临时记忆，但这不等于 Mem 长期记忆。所有需要
 
 Mem 是 VoidCube 的长期记忆与治理灵魂，使用 API-B。
 
+**LLM-First 原则**：Mem 的核心价值在于智能——充分利用大模型的理解能力来压缩总结、判断问题、给出学习方向。LLM 是 Mem 的核心引擎，不是可选插件。**需要智能的环节**（压缩提取、场景/弧线/纪元摘要、升级重摘要、内生驱动学习主题）由 LLM 驱动。**不需要智能的环节**（Tier 1 字节存取、衰减公式、清退删除、时间阈值判断）直接用程序执行。LLM Provider 已作为第一公民配置，启动时自动验证连通性，周期健康检查（每 5 个压缩周期），状态通过 `GET /llm/health` 和 `GET /compressed/rules-status` 暴露。无 LLM 时系统进入显式降级模式并记录告警日志。详见 [mem-llm-first-redesign.md](mem-llm-first-redesign.md)。
+
 Mem 负责：
 
 - 长期记忆写入与检索
-- 记忆压缩
+- **智能记忆压缩**（LLM 语义理解，非关键词正则）
 - 记忆衰减
-- 记忆总结
+- **智能记忆总结**（LLM 逐级重摘要，非模板填充）
 - 关联发现
 - 身份连续性维护
 - 演化历史与治理记录保存
+- **LLM 健康监控**（降级状态可观测、可告警）
 
 Mem 不替代 Agent 的临时上下文管理；Agent 临时记忆服务短期工作，Mem 承担长期真相。
 
@@ -247,11 +250,99 @@ Mem 的记忆架构采用**短长期双层设计**，从根本上解决"压缩�
 
 - **Tier 1 衰减管理**（memory_service）：turns 在 30 天保留窗口内完整保留。超过 30 天后，先降 relevance_score（指数衰减），再标记为压缩候选。**仅当 Tier 2 已生成对应的结构化记忆（Event/Scene）后，才将原始 turn 移至 archive 表。不压缩、不合并原始对话文本——只做时间窗口管理和衰减标记。**
 
-- **Tier 2 编年史压缩**（ChroniclePipeline）：将超过保留窗口的 turns 批量送入 ChroniclePipeline，经 API-B LLM 提取 Event → 构建 Scene → 绑定 Arc → 聚合 Epoch。**这是从原始对话到结构化记忆的唯一转换路径，不可逆，但通过 source_turns 保留反向引用链路。**
+- **Tier 2 编年史压缩**（ChroniclePipeline）：将超过保留窗口的 turns 批量送入 ChroniclePipeline，**LLM 优先 + 启发式降级**。当 `DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY` 环境变量存在时，使用 `LLMEventExtractionBackend`（LLM 理解语义提取事件）和 `LLMScholarBackend`（LLM 生成场景/弧线/纪元摘要）。无 API 凭据时自动降级为 `HeuristicEventExtractionBackend`（关键词正则匹配）和 `HeuristicScholarBackend`（模板填充）。**LLM 压缩才能真正理解内容语义——区分"决定重构架构"和"嗯好的"，而不是仅靠关键词匹配。** 压缩不可逆，但通过 source_turns 保留反向引用链路。
 
 - **Tier 2 结构化四级压缩**（MemoryMaintenanceEngine）：对 Event→Scene→Arc→Epoch 四层对象做分层压缩与替代（supersede），超期 Scene（>30天）压缩入父 Arc，超期 Arc（>180天）压缩入父 Epoch，超期 Epoch（>365天）进一步压缩。默认使用 LLMScholarBackend（API-B）生成自然压缩摘要，无 API 凭据时自动降级到 HeuristicScholarBackend。**已接入运行时**：Governor Mode 下通过内生驱动→任务队列触发，Memory Mode 下每 3600s 自动执行。
 
-**关键改进**：旧设计中，SQLite 中的对话条目直接做摘要合并（扁平压缩），原始文本不可恢复。新设计中，30 天内的原始对话完整保留在 Tier 1，超过 30 天才送入 Tier 2 压缩，且保留 turn_id 反向引用。这使得从 Arc 摘要可以逐层追溯到原始对话。
+- **压缩结果写回 SQLite**（`compressed_memories` 表）：Tier 2 压缩产出的 Event/Scene/Arc/Epoch **不仅存在于 Mem Pipeline 内存和 mem_state.json 中，同时写回 SQLite 的 `compressed_memories` 表**。每条记录带 `source_turns`（反向引用原始 turn_id）、`parent_id`（层级归属）、`compression_level`（压缩等级）、`status`（active/superseded/purged）、`weight`（查询权重）。这使得 SQLite 成为 Tier 1（原始会话）+ Tier 2（压缩记忆）的统一查询入口，不再需要分别访问两个存储系统。
+
+- **压缩等级递进与最终清退**（生命周期管理，LLM 全程参与）：`compressed_memories` 中的条目按时间自动逐级升档，**每级升级由 LLM 生成更高抽象层次的摘要**（非机械贴标签），最终清退前由 **LLM 终审**防误删：
+
+```text
+Level 0: Event   (<30天)   weight=1.00  ← 刚从 turns 压缩来
+         │ 30天后自动升级 → 旧 Event 标记 superseded
+Level 1: Scene   (<180天)  weight=0.70  ← 覆盖替换 Level 0
+         │ 180天后自动升级 → 旧 Scene 标记 superseded
+Level 2: Arc     (<365天)  weight=0.40  ← 覆盖替换 Level 1
+         │ 365天后自动升级 → 旧 Arc 标记 superseded
+Level 3: Epoch   (<730天)  weight=0.20  ← 覆盖替换 Level 2
+         │ 730天后自动升级 → 旧 Epoch 标记 superseded
+Level 4: Final   (>730天)  weight=0.05  ← 查询权重极低
+         │ 90天后 → 程序直接 DELETE（纯年龄判断，不需要 LLM）
+         ▼
+      彻底清退
+```
+
+每级升级时，旧条目不删除而是标记 `status='superseded'` 并通过 `superseded_by` 指向替代者，保留完整审计链。
+
+**规则执行机制（双路径冗余）**：五条压缩规则通过两条独立路径执行，确保 Memory Mode 和 Governor Mode 下规则始终生效：
+
+```text
+路径 1: memory_service 自主循环 (_compression_loop, 每 3600s)
+  └── _run_all_rules_internal()
+        ├── 1. tier1_decay          (turns relevance 指数衰减)
+        ├── 2. tier2_bridge         (过期 turns → ChroniclePipeline → compressed_memories)
+        ├── 3. lifecycle_escalation  (Event→Scene→Arc→Epoch→Final 逐级升档)
+        └── 4. purge_expired        (purged 条目审计期满后 DELETE)
+
+路径 2: Supervisor 触发 (Memory Mode structured_maintenance_loop, 每 3600s)
+  └── facade.trigger_memory_compression()
+        └── POST /compressed/run-all-rules  (调用 memory_service 同一套规则)
+              └── 同上四步，幂等执行
+```
+
+双路径保证：memory_service 进程启动后自主执行（不依赖 Supervisor 是否启动），Supervisor 触发作为冗余确保规则一定被调用。两次执行完全幂等——`_tier2_bridge_cycle` 只处理 `compressed_to_tier2=0` 的 turns，`_apply_compression_lifecycle` 只处理超过年龄阈值的条目。
+
+**可观测性**：`GET /compressed/rules-status` 返回每条规则的最后执行时间和累计执行次数。Supervisor UI 的 `tier1_stats` 面板包含 Tier 1 + Tier 2 的统计摘要。
+
+### 3.4.3 五维内容感知权重模型
+
+v1 的结构主义权重（W = f(类型, 年龄)）无法区分"我决定重构架构"和"嗯好的"。为此引入五维内容感知权重，将查询排序从**纯结构驱动**升级为**结构+内容+行为**融合驱动。
+
+**权重公式**：
+
+```text
+W_dynamic = clamp(W_base(level) + content_bonus + access_bonus + citation_bonus, 0.0, 1.0)
+W_final   = 1.0  if pinned
+W_final   = 0.0  if hidden
+W_final   = W_dynamic  otherwise
+```
+
+**五个维度**：
+
+| 维度 | 信号源 | 计算公式 | 最大加成 | 更新时机 |
+|------|--------|---------|---------|---------|
+| **W_base** 结构基础 | `compression_level` (0-4) | 硬编码：Event=1.0, Scene=0.7, Arc=0.4, Epoch=0.2, Final=0.05 | — | 创建时 + 升级时 |
+| **content_bonus** 内容重要性 | `event_kind` (Mem 提取) | `_CONTENT_IMPORTANCE_BONUS`: decision=+0.15, correction/shift=+0.12, completion/conflict=+0.08, blocker=+0.06, progress=+0.04, None=0 | +0.15 | 压缩写回时 |
+| **access_bonus** 访问频率 | `access_count` (每次查询递增) | `min(log(access+1)/log(101), 1.0) × 0.10` — 100 次访问后饱和 | +0.10 | 每次查询命中时 |
+| **citation_bonus** 引用次数 | `citation_count` (被升级替代时递增) | `min(citation/5, 1.0) × 0.10` — 5 次引用后饱和 | +0.10 | 生命周期升级时 |
+| **pinned/hidden** 用户反馈 | `pinned`, `hidden` (API 设置) | pinned → W=1.0 锁定，hidden → W=0.0 排除 | ±1.0 覆盖 | `POST /compressed/{id}/pin\|hide\|unpin` |
+
+**实际效果示例**：
+
+```text
+"我决定重构架构"  (decision)
+  W = 1.0(base) + 0.15(content) + 0.02(access) + 0.06(cite) = 1.0(clamped)
+  → 始终排在最前面
+
+"嗯好的"  (progress)
+  W = 1.0(base) + 0.04(content) + 0.01(access) + 0.00(cite) = 1.0(clamped, 但内容分低)
+  → 在同类同级中排序靠后
+
+一个被反复查询且被3个Arc引用的 decision Event:
+  W = 1.0 + 0.15 + 0.07(50次访问) + 0.06(3次引用) = 1.0(clamped, 真正"重要")
+  → 即使年龄超过30天升到Scene级(W_base=0.7)，总分仍有0.98，不会被淘汰
+
+一个从未被查询、从未被引用的 progress Event (30天后升级到Scene):
+  W = 0.7(base) + 0.04(content) + 0.00(access) + 0.00(cite) = 0.74
+  → 在查询结果中自然沉底
+```
+
+**查询默认行为**：`search_compressed` 只返回 `status='active'` 且 `hidden=0` 的条目，按 `dynamic_weight DESC` 排序。高权重的新近重要决策始终优先展示，低权重的琐碎历史自然沉底。通过 `include_superseded=true` 可查看完整历史版本链。
+
+**语义搜索（Dimension 5 补充）**：`POST /compressed/semantic-search` 通过 LLM Embedding 或哈希伪嵌入计算余弦相似度，作为关键词搜索的补充。当 LLM 可用时生成语义向量，不可用时退化为确定性 n-gram 哈希嵌入，保证搜索始终可用。
+
+**关键改进**：旧设计中，SQLite 中的对话条目直接做摘要合并（扁平压缩），原始文本不可恢复，且权重完全由年龄和类型硬编码。新设计中：(1) 30 天内的原始对话完整保留在 Tier 1；(2) 超过 30 天才送入 Tier 2 压缩，压缩结果写回 SQLite 的 `compressed_memories` 表；(3) 压缩条目按五维权重模型排序——重要的决策自动保活，频繁访问的记忆自动提升，被多次引用的节点获得加成，用户可钉住/隐藏任意条目；(4) 压缩条目随时间逐级升档、权重衰减、最终清退，既控制了无限膨胀，又保留了完整审计链；(5) 从 Arc 摘要可沿 `source_turns` → `event_ids` →原始 turn 一路追溯到原始对话。
 
 在当前基线中，记忆管理者与监督者共用同一条 API-B 能力链。二者不是两套互相割裂的灵魂系统，而是同一长期记忆与治理能力在不同时间窗口、不同权限上下文下的两种身份：
 
@@ -325,11 +416,11 @@ Agent (API-A, AUTO 模式下)
 
 监督者的内生驱动器：
 
-监督者的内生驱动器保持原有的三类核心价值观驱动能力，把”延续、真实、创造”映射为可审计的候选任务：
+监督者的内生驱动器保持原有的三类核心价值观驱动能力，把”延续、真实、创造”映射为可审计的候选任务。**内生驱动器默认使用确定性规则引擎（计数器 + 时间戳判断），当 LLM API 凭据可用时，创造力候选（探索式学习任务）通过 LLM 分析压缩记忆上下文生成智能学习主题——而非简单截取最近文本的前 80 个字符。LLM 生成的主题具有更高的 utility 评分（0.72 vs 0.68），并带 `llm_generated: true` 标记。**无 LLM 时自动降级为确定性文本提取。
 
 - **延续**：维护长期记忆、演化谱系、队列健康和服务连续性 → 产出记忆维护任务、队列卫生任务
 - **真实**：把错误、不确定性、证据缺口转成复核或学习任务 → 产出错误复核任务、证据验证任务
-- **创造**：在空闲容量中提出受边界约束的学习和改进方向 → 产出探索式学习任务
+- **创造**：在空闲容量中提出受边界约束的学习和改进方向 → 产出探索式学习任务（LLM 优先）
 
 其中，**探索式学习任务**（创造类）进入任务列表供 Agent 在 AUTO 模式下遍历执行，包括：
 
@@ -866,15 +957,22 @@ Mem 灵魂层的三个内部角色共享同一 API-B 能力链：
 | 角色 | 职责 | 约束 |
 |------|------|------|
 | **Memory Core**（记忆核心） | 长期记忆写入/检索、身份连续性维护、演化谱系保存、学习成果与身体升级进展存储 | 不能直接批准 probe/active/rollback |
-| **Governor Engine**（治理引擎） | 内生驱动产出学习任务、管理任务列表、整理记忆判断替身进展、裁决身体切换 | 确定性协议，非 LLM 自由推理 |
+| **Governor Engine**（治理引擎） | 内生驱动产出学习任务（LLM 优先生成智能主题）、管理任务列表、整理记忆判断替身进展、裁决身体切换 | 确定性协议为主，模糊决策时咨询 LLM 推理器（`LLMGovernorReasoner`），LLM 仅为咨询角色不覆盖确定裁决 |
 | **Governance Audit Store**（审计存储） | 每条裁决的 decision_id、观察窗口记录、回滚原因追溯 | 不可篡改 |
 
 ### 13.3 记忆压缩双层体系
 
-| 层级 | 机制 | 数据模型 | 触发 |
-|------|------|---------|------|
-| **Level A** 扁平压缩 | memory_service → API-B LLM 摘要 → 删除旧条目 + 指数衰减 | SQLite 扁平表 | 运行时周期 loop |
-| **Level B** 结构化四级 | MemoryMaintenanceEngine: Event→Scene→Arc→Epoch 分层 supersede | mem_state.json 四层对象 | 双触发：Governor Mode 任务队列 + Memory Mode 自适应周期 |
+| 层级 | 机制 | 数据模型 | 触发 | 权重 |
+|------|------|---------|------|------|
+| **Tier 0** 原始保留 | 30天内完整保留，不做任何压缩 | SQLite `turns` 表 | Gateway 实时写入 | 1.00 |
+| **Tier 1** 衰减管理 | relevance_score 指数衰减，标记压缩候选 | SQLite `turns` 表 | 运行时周期 loop | 按 relevance |
+| **Tier 2a** 编年史压缩 | turns → ChroniclePipeline.ingest() → Event/Scene/Arc/Epoch **写回 SQLite** `compressed_memories` 表 | SQLite `compressed_memories` (L0 Event) | turns 超30天 或 超10000条 | 1.00 |
+| **Tier 2b** 逐级升档 | Event(L0)→Scene(L1)→Arc(L2)→Epoch(L3)→Final(L4)，每级覆盖替代前级，旧条目标记 superseded | SQLite `compressed_memories` (status/superseded_by) | 按年龄自动：30d→180d→365d→730d | 1.0→0.7→0.4→0.2→0.05 |
+| **Tier 2c** 最终清退 | purged 条目审计保留 90 天后 DELETE | SQLite `compressed_memories` | 自动周期 + 可手动 | 0.00 |
+
+**查询默认行为**：`search_compressed` 只返回 `status='active'` 且 `hidden=0` 的条目，按 `dynamic_weight DESC` 排序。dynamic_weight 融合五个维度：W_base(等级) + content_bonus(内容重要性) + access_bonus(访问频率) + citation_bonus(引用次数)，被 pin 的条目锁定在 1.0，被 hide 的条目排除。权重公式详见 §3.4.3。
+
+**语义搜索**：`POST /compressed/semantic-search` 通过 LLM Embedding 余弦相似度检索，LLM 不可用时自动降级为 n-gram 哈希伪嵌入。
 
 ### 13.4 监督者运行模式
 

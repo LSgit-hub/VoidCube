@@ -1299,20 +1299,28 @@ class MemoryMaintenanceExecutionAdapter:
         }
 
     async def _run_flat_compression(self, request: dict) -> Dict[str, Any]:
-        """Existing flat SQLite compression via HTTP (backward-compatible)."""
+        """Run full five-rule compression via memory-service, with legacy fallback."""
         try:
             import aiohttp
 
             async with aiohttp.ClientSession() as session:
+                # Primary: five-rule compression (two-tier architecture)
+                url = f"{self.config.gateway_address}{self.config.memory_gateway_path}compressed/run-all-rules"
+                async with session.post(url, json={}, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        logger.info("Five-rule compression: %s",
+                                    {k: type(v).__name__ for k, v in result.get("rules", {}).items()})
+                        return result
+                # Fallback: legacy flat compression
                 url = f"{self.config.gateway_address}{self.config.memory_gateway_path}memories/compress"
-                payload = {
-                    "namespace": request.get("namespace", "default"),
-                    "max_entries": int(request.get("max_entries", 100)),
-                }
-                async with session.post(url, json=payload) as response:
+                payload = {"namespace": request.get("namespace", "default"),
+                           "max_entries": int(request.get("max_entries", 100))}
+                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as response:
                     if response.status == 200:
                         return await response.json()
-            return {"status": "flat_compression_error", "error": "Non-200 response"}
+            return {"status": "compression_error", "error": "All endpoints unreachable"}
         except Exception as exc:
-            return {"status": "flat_compression_error", "error": str(exc)}
+            logger.warning("Memory compression failed: %s", exc)
+            return {"status": "compression_error", "error": str(exc)}
 

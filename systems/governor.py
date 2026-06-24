@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any, Dict, Iterable, Literal, Optional
 
@@ -72,12 +73,18 @@ class GovernorResponse(BaseModel):
 
 
 class GovernorDecisionEngine:
-    """Minimal deterministic evaluator for Governor Mode requests.
+    """Deterministic evaluator for Governor Mode requests + optional LLM advisor.
 
-    This is intentionally conservative. It provides a stable contract for the
-    future Mem-backed soul layer without pretending to be the final reasoning
-    implementation.
+    This engine is intentionally conservative and protocol-safe.  It provides the
+    primary authority for switch, rollback, and execution-window decisions.
+
+    For ambiguous cases (low confidence, request_more_evidence, medium+ risk),
+    the optional ``LLMGovernorReasoner`` can provide additional analysis without
+    overriding the deterministic decision.
     """
+
+    def __init__(self, llm_reasoner: "LLMGovernorReasoner | None" = None) -> None:
+        self._llm_reasoner = llm_reasoner
 
     def evaluate(
         self,
@@ -85,22 +92,47 @@ class GovernorDecisionEngine:
         *,
         slot_meta: Optional[BodySlotMeta] = None,
     ) -> GovernorResponse:
+        response: GovernorResponse
         if request.event_type == "body_upgrade_request":
-            return self._evaluate_body_upgrade(request)
-        if request.event_type == "health_review_request":
-            return self._evaluate_health_review(request, slot_meta=slot_meta)
-        if request.event_type == "switch_request":
-            return self._evaluate_switch_request(request, slot_meta=slot_meta)
-        if request.event_type == "rollback_request":
-            return self._evaluate_rollback_request(request)
-        if request.event_type == "post_switch_review":
-            return self._evaluate_post_switch_review(request, slot_meta=slot_meta)
-        return GovernorResponse(
-            decision="request_more_evidence",
-            confidence=0.2,
-            risk_level="medium",
-            reasoning_summary=f"Unsupported governor event type: {request.event_type}",
-        )
+            response = self._evaluate_body_upgrade(request)
+        elif request.event_type == "health_review_request":
+            response = self._evaluate_health_review(request, slot_meta=slot_meta)
+        elif request.event_type == "switch_request":
+            response = self._evaluate_switch_request(request, slot_meta=slot_meta)
+        elif request.event_type == "rollback_request":
+            response = self._evaluate_rollback_request(request)
+        elif request.event_type == "post_switch_review":
+            response = self._evaluate_post_switch_review(request, slot_meta=slot_meta)
+        else:
+            response = GovernorResponse(
+                decision="request_more_evidence",
+                confidence=0.2,
+                risk_level="medium",
+                reasoning_summary=f"Unsupported governor event type: {request.event_type}",
+            )
+
+        # Consult LLM reasoner for ambiguous decisions (advisory only)
+        if (
+            self._llm_reasoner is not None
+            and self._llm_reasoner.available
+            and (
+                response.decision == "request_more_evidence"
+                or response.confidence < 0.6
+                or response.risk_level in ("medium", "high", "critical")
+            )
+        ):
+            llm_analysis = self._llm_reasoner.analyze(
+                request, response, slot_meta=slot_meta
+            )
+            if llm_analysis.get("llm_available"):
+                response.writeback_events.append(
+                    GovernorWritebackEvent(
+                        event_type="llm_governance_analysis",
+                        payload={"analysis": llm_analysis},
+                    )
+                )
+
+        return response
 
     def _evaluate_body_upgrade(self, request: GovernorRequest) -> GovernorResponse:
         return GovernorResponse(
@@ -429,3 +461,104 @@ class GovernorDecisionEngine:
             if value is not None:
                 enriched.setdefault(key, value)
         return enriched
+
+
+class LLMGovernorReasoner:
+    """Optional LLM reasoning layer for ambiguous governance decisions.
+
+    Architecture baseline §3.6 / soul-layer.md §8:
+      - Governor Engine: deterministic, protocol-safe, primary authority
+      - Governor Reasoner: optional model-assisted analysis for ambiguous cases
+
+    This reasoner is CONSULTATIVE only — it never overrides the deterministic
+    engine's decision.  It provides additional analysis that downstream systems
+    (or human operators) can use to make more informed choices.
+    """
+
+    def __init__(self) -> None:
+        self._available = False
+        try:
+            import os
+            api_key = (
+                os.environ.get("DEEPSEEK_API_KEY")
+                or os.environ.get("OPENAI_API_KEY")
+                or ""
+            ).strip()
+            if api_key:
+                from memai.llm_client import OpenAICompatibleLLMClient
+                model = os.environ.get("MEMAI_LLM_MODEL", "deepseek-chat")
+                base_url = os.environ.get("MEMAI_LLM_BASE_URL", "https://api.deepseek.com/v1")
+                self._client = OpenAICompatibleLLMClient(model=model, api_key=api_key, base_url=base_url)
+                self._available = True
+        except Exception:
+            self._available = False
+
+    @property
+    def available(self) -> bool:
+        return self._available
+
+    def analyze(
+        self,
+        request: GovernorRequest,
+        deterministic_decision: GovernorResponse,
+        *,
+        slot_meta: Any = None,
+    ) -> Dict[str, Any]:
+        """Provide LLM analysis of a governance decision.
+
+        Called when the deterministic engine returns ambiguous results
+        (request_more_evidence, low confidence, or medium+ risk).
+        Returns advisory analysis — does NOT change the decision.
+        """
+        if not self._available:
+            return {"llm_available": False}
+
+        try:
+            evidence = dict(request.evidence or {})
+            prompt = (
+                f"你正在审查 VoidCube 母体系统的一项治理决策。\n\n"
+                f"事件类型: {request.event_type}\n"
+                f"目标 Body: {request.body_id}\n"
+                f"来源: {request.source_actor}\n"
+                f"确定性引擎决策: {deterministic_decision.decision}\n"
+                f"置信度: {deterministic_decision.confidence}\n"
+                f"风险等级: {deterministic_decision.risk_level}\n"
+                f"推理摘要: {deterministic_decision.reasoning_summary}\n\n"
+                f"证据摘要:\n"
+                f"  - build_complete: {evidence.get('build_complete')}\n"
+                f"  - probe_passed: {evidence.get('probe_passed')}\n"
+                f"  - git_lineage: {json.dumps(dict(evidence.get('git_lineature') or {}), default=str)[:500] if evidence.get('git_lineature') else '无'}\n"
+                f"  - slot_state: {slot_meta.body_state if slot_meta else 'unknown'}\n\n"
+                f"请提供:\n"
+                f"1. 对当前证据质量的评估\n"
+                f"2. 决策中可能被忽略的风险因素\n"
+                f"3. 建议在做出最终决定前收集哪些额外证据\n"
+                f"输出JSON: {{\"evidence_quality\": \"...\", \"hidden_risks\": [\"...\"], \"suggested_evidence\": [\"...\"]}}"
+            )
+
+            result = self._client.complete_json(
+                system_prompt=(
+                    "你是 VoidCube 母体的治理推理顾问。你的分析是咨询性的——"
+                    "你不做最终决策，不覆盖确定性引擎的判断。你帮助发现盲点、"
+                    "评估证据质量、建议补充信息。保守、审慎、证据驱动。"
+                ),
+                user_payload={"review": prompt},
+                task="scholar.revision",
+            )
+
+            if isinstance(result, dict):
+                return {
+                    "llm_available": True,
+                    "evidence_quality": str(result.get("evidence_quality", ""))[:500],
+                    "hidden_risks": [
+                        str(r) for r in (result.get("hidden_risks") or []) if r
+                    ][:5],
+                    "suggested_evidence": [
+                        str(e) for e in (result.get("suggested_evidence") or []) if e
+                    ][:5],
+                }
+        except Exception:
+            pass
+
+        return {"llm_available": True, "error": "LLM analysis failed"}
+
