@@ -46,13 +46,14 @@ class PipelineResult:
             "arc_decisions": [decision.to_dict() for decision in self.arc_decisions],
         }
 
-    def create_query_engine(self) -> MemoryQueryEngine:
+    def create_query_engine(self, tier1_db_path: str | None = None) -> MemoryQueryEngine:
         return MemoryQueryEngine(
             events=self.events,
             scenes=self.scenes,
             arcs=self.arcs,
             epochs=self.epochs,
             profile_memories=self.profile_memories,
+            tier1_db_path=tier1_db_path,
         )
 
     def create_query_planner(self) -> QueryPlanner:

@@ -1753,6 +1753,13 @@ class SupervisorUIMixin:
         except Exception:
             pass
 
+        # ── Tier 1 short-term memory stats ──
+        tier1_stats: Dict[str, Any] = {}
+        try:
+            tier1_stats = await self._fetch_tier1_stats()
+        except Exception:
+            pass
+
         # ── Metrics panel (upgraded with per-path stats) ──
         metrics = self._build_ui_metrics(all_tasks, panels, drive_candidates, body_status, error_count)
 
@@ -1775,6 +1782,7 @@ class SupervisorUIMixin:
             "schedule": schedule,
             "metrics": metrics,
             "mem_usage": mem_usage,
+            "tier1_stats": tier1_stats,
             "body_status": body_status,
             "drive_candidates": drive_candidates,
             "drive_available": drive_available,
@@ -1809,6 +1817,35 @@ class SupervisorUIMixin:
             "maintenance": {"label": "Maintenance", "count": len(maintenance), "tasks": maintenance},
             "evolution": {"label": "Evolution", "count": len(evolution), "tasks": evolution},
         }
+
+    async def _fetch_tier1_stats(self) -> Dict[str, Any]:
+        """Fetch Tier 1 short-term memory statistics from memory-service."""
+        try:
+            import aiohttp
+            # Resolve memory-service URL from gateway registered services
+            gateway_url = "http://127.0.0.1:6000"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{gateway_url}/admin/services", timeout=aiohttp.ClientTimeout(total=3)
+                ) as resp:
+                    if resp.status != 200:
+                        return {}
+                    services = (await resp.json()).get("services", {})
+                memory_url = None
+                for svc in services.values():
+                    if svc.get("service_type") == "memory":
+                        memory_url = svc.get("address")
+                        break
+                if not memory_url:
+                    return {}
+                async with session.get(
+                    f"{memory_url}/tier1/stats", timeout=aiohttp.ClientTimeout(total=3)
+                ) as resp:
+                    if resp.status == 200:
+                        return await resp.json()
+        except Exception:
+            pass
+        return {}
 
     def _build_ui_metrics(
         self,

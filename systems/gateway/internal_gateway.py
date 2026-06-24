@@ -78,6 +78,8 @@ class InternalGateway:
         self._active_body_service_id: str = None
         self._governor_mode_active: bool = False
         self._request_counter = 0
+        # Tier 1 memory service URL (lazy-resolved from registered services)
+        self._memory_service_url: str | None = None
         # NOTE(SB-03): Session cache is body-runtime state, not gateway operations
         # state.  Long-term session ownership should belong to the agent body
         # instances.  The gateway should only hold routing metadata.  TTL eviction
@@ -954,6 +956,83 @@ class InternalGateway:
         for sid in stale:
             del self._agent_session_cache[sid]
 
+    # ── Tier 1 Conversation Recording ──────────────────────────────
+
+    def _resolve_memory_service_url(self) -> str | None:
+        """Resolve the memory-service URL from registered services."""
+        if self._memory_service_url:
+            return self._memory_service_url
+        for svc in self._services.values():
+            if svc.service_type == "memory" and svc.healthy:
+                self._memory_service_url = svc.address
+                return self._memory_service_url
+        return None
+
+    async def _record_turn_to_tier1(
+        self, session_id: str, speaker: str, text: str, metadata: Dict[str, Any] = None
+    ) -> None:
+        """Non-blocking best-effort recording of a conversation turn to Tier 1."""
+        memory_url = self._resolve_memory_service_url()
+        if not memory_url:
+            return
+        try:
+            async with aiohttp.ClientSession() as s:
+                # Ensure session exists (lazy-create)
+                await s.post(
+                    f"{memory_url}/sessions",
+                    json={"metadata": {"source": "gateway", "session_id": session_id}},
+                    timeout=aiohttp.ClientTimeout(total=2),
+                )
+                # Record the turn
+                await s.post(
+                    f"{memory_url}/sessions/{session_id}/turns",
+                    json={
+                        "speaker": speaker,
+                        "text": text,
+                        "metadata": metadata or {},
+                    },
+                    timeout=aiohttp.ClientTimeout(total=2),
+                )
+        except Exception:
+            pass  # Tier 1 recording failure must never block the user
+
+    async def _record_agent_interaction_to_tier1(
+        self, session_id: str, messages: List[Dict[str, Any]], response_text: str
+    ) -> None:
+        """Record a full user+agent interaction to Tier 1."""
+        # Record the last user message
+        user_text = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                user_text = str(msg.get("content", ""))
+                break
+        if user_text:
+            await self._record_turn_to_tier1(session_id, "user", user_text)
+        # Record the agent response
+        if response_text:
+            await self._record_turn_to_tier1(session_id, "agent", response_text)
+
+    @staticmethod
+    def _extract_response_text(response_data: Any) -> str:
+        """Extract text content from various LLM response formats."""
+        if isinstance(response_data, str):
+            return response_data
+        if not isinstance(response_data, dict):
+            return ""
+        # OpenAI-style: choices[0].message.content
+        choices = response_data.get("choices", [])
+        if choices:
+            msg = choices[0].get("message", {}) if isinstance(choices[0], dict) else {}
+            content = msg.get("content", "")
+            if content:
+                return str(content)
+        # Direct content field
+        for key in ("content", "text", "summary", "result"):
+            val = response_data.get(key)
+            if isinstance(val, str) and val:
+                return val
+        return ""
+
     async def get_approved_tasks(self, task_type: Optional[str] = None):
         supervisor_service = None
         for service in self._services.values():
@@ -1118,7 +1197,14 @@ class InternalGateway:
             
             self._agent_session_cache[session_id]["last_used_at"] = datetime.now()
             self._agent_session_cache[session_id]["message_count"] += 1
-            
+
+            # Fire-and-forget: record user turn to Tier 1
+            asyncio.create_task(
+                self._record_agent_interaction_to_tier1(
+                    session_id, data.get("messages", []), ""
+                )
+            )
+
             body = json.dumps(data).encode('utf-8')
             headers = {"Content-Type": "application/json"}
             
@@ -1126,7 +1212,14 @@ class InternalGateway:
                 async with aiohttp.ClientSession() as session:
                     async with session.post(url, data=body, headers=headers) as response:
                         response_data = await response.json()
-                        
+
+                        # Fire-and-forget: record agent response to Tier 1
+                        resp_text = self._extract_response_text(response_data)
+                        if resp_text:
+                            asyncio.create_task(
+                                self._record_turn_to_tier1(session_id, "agent", resp_text[:4000])
+                            )
+
                         return JSONResponse(
                             content={
                                 "session_id": session_id,

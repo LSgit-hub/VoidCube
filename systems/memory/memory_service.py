@@ -43,6 +43,53 @@ class CompressionRequest(BaseModel):
     target_size: int = 10000
 
 
+# ── Tier 1 Models (Short-term conversation store) ──────────────────
+
+class SessionCreate(BaseModel):
+    metadata: Dict[str, Any] = {}
+
+
+class TurnCreate(BaseModel):
+    speaker: str  # "user" | "agent" | "system"
+    text: str
+    metadata: Dict[str, Any] = {}
+
+
+class SessionResponse(BaseModel):
+    session_id: str
+    created_at: str
+    updated_at: Optional[str] = None
+    turn_count: int = 0
+    metadata: Dict[str, Any] = {}
+
+
+class TurnResponse(BaseModel):
+    turn_id: str
+    session_id: str
+    speaker: str
+    text: str
+    timestamp: str
+    relevance_score: float = 1.0
+    decay_factor: float = 0.01
+    compressed_to_tier2: bool = False
+    tags: List[str] = []
+    metadata: Dict[str, Any] = {}
+
+
+class TimelineQuery(BaseModel):
+    date: str  # ISO date e.g. "2026-06-24"
+    session_id: Optional[str] = None
+    speaker: Optional[str] = None
+    limit: int = 100
+
+
+class Tier2CompressRequest(BaseModel):
+    retention_days: int = 30
+    batch_size: int = 100
+    min_relevance: float = 0.1
+    dry_run: bool = False
+
+
 class MemoryServiceConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 6001
@@ -52,6 +99,28 @@ class MemoryServiceConfig(BaseModel):
     llm_base_url: str = "https://api.deepseek.com"
     decay_interval_hours: int = 24
     compression_interval: int = 3600  # seconds between auto-compression runs
+    # Tier 1 config
+    tier1_retention_days: int = 30
+    tier1_max_turns: int = 10000
+    tier1_decay_rate: float = 0.99
+    tier1_min_relevance: float = 0.1
+    tier1_archive_keep_original: bool = True
+
+
+def _turn_row_to_dict(row) -> Dict[str, Any]:
+    """Convert a turns table row to a dict (module-level helper)."""
+    return {
+        "turn_id": row[0],
+        "session_id": row[1],
+        "speaker": row[2],
+        "text": row[3],
+        "timestamp": row[4],
+        "relevance_score": row[5],
+        "decay_factor": row[6],
+        "tags": json.loads(row[7]) if row[7] else [],
+        "metadata": json.loads(row[8]) if row[8] else {},
+        "compressed_to_tier2": bool(row[9]),
+    }
 
 
 class MemoryService:
@@ -96,7 +165,58 @@ class MemoryService:
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_relevance ON memories(relevance_score)
         ''')
-        
+
+        # ── Tier 1 tables (short-term conversation store) ──────────
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                updated_at TEXT,
+                metadata TEXT
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS turns (
+                turn_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                speaker TEXT NOT NULL,
+                text TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                relevance_score REAL DEFAULT 1.0,
+                decay_factor REAL DEFAULT 0.01,
+                tags TEXT,
+                metadata TEXT,
+                compressed_to_tier2 INTEGER DEFAULT 0,
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS turns_archive (
+                turn_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                speaker TEXT NOT NULL,
+                text_summary TEXT,
+                original_text TEXT,
+                timestamp TEXT NOT NULL,
+                compressed_at TEXT NOT NULL,
+                event_ids TEXT,
+                scene_ids TEXT
+            )
+        ''')
+
+        # Tier 1 indexes
+        for idx_sql in [
+            "CREATE INDEX IF NOT EXISTS idx_turns_timestamp ON turns(timestamp)",
+            "CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id)",
+            "CREATE INDEX IF NOT EXISTS idx_turns_relevance ON turns(relevance_score)",
+            "CREATE INDEX IF NOT EXISTS idx_turns_compressed ON turns(compressed_to_tier2)",
+            "CREATE INDEX IF NOT EXISTS idx_archive_timestamp ON turns_archive(timestamp)",
+            "CREATE INDEX IF NOT EXISTS idx_archive_session ON turns_archive(session_id)",
+        ]:
+            cursor.execute(idx_sql)
+
         conn.commit()
         conn.close()
         logger.info(f"Memory database initialized at {self._db_path}")
@@ -113,6 +233,17 @@ class MemoryService:
         self.app.add_api_route("/memories/compress", self.compress_memories, methods=["POST"])
         self.app.add_api_route("/memories/decay", self.apply_decay, methods=["POST"])
         self.app.add_api_route("/memories/summarize/{memory_id}", self.summarize_memory, methods=["POST"])
+        # ── Tier 1 routes ──────────────────────────────────────────
+        self.app.add_api_route("/sessions", self.create_session, methods=["POST"])
+        self.app.add_api_route("/sessions", self.list_sessions, methods=["GET"])
+        self.app.add_api_route("/sessions/{session_id}", self.get_session, methods=["GET"])
+        self.app.add_api_route("/sessions/{session_id}/turns", self.add_turn, methods=["POST"])
+        self.app.add_api_route("/sessions/{session_id}/turns", self.get_session_turns, methods=["GET"])
+        self.app.add_api_route("/turns", self.query_turns, methods=["GET"])
+        self.app.add_api_route("/turns/{turn_id}", self.get_turn, methods=["GET"])
+        self.app.add_api_route("/turns/timeline", self.timeline_view, methods=["POST"])
+        self.app.add_api_route("/tier2/compress", self.tier2_compress, methods=["POST"])
+        self.app.add_api_route("/tier1/stats", self.tier1_stats, methods=["GET"])
 
     @asynccontextmanager
     async def _app_lifespan(self, app: FastAPI):
@@ -141,16 +272,75 @@ class MemoryService:
         Per architecture baseline §3.4, Mem is responsible for its own
         maintenance — the supervisor should not be running maintenance
         loops on Mem's behalf.
+
+        Now also runs Tier 1 decay + Tier 2 bridge (two-tier architecture).
         """
         while True:
             await asyncio.sleep(self.config.compression_interval)
             try:
                 for namespace in list(self._namespace_cache.keys()):
                     await self._compress_namespace(namespace)
+                # ── Tier 1 decay + Tier 2 bridge ─────────────────
+                await self._tier1_decay_cycle()
+                await self._tier2_bridge_cycle()
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.debug("Background compression skipped", exc_info=True)
+
+    async def _tier1_decay_cycle(self) -> None:
+        """Apply exponential decay to Tier 1 turn relevance scores."""
+        conn = sqlite3.connect(str(self._db_path))
+        rate = self.config.tier1_decay_rate
+        conn.execute(
+            "UPDATE turns SET relevance_score = relevance_score * ? "
+            "WHERE compressed_to_tier2 = 0",
+            (rate,),
+        )
+        updated = conn.rowcount
+        conn.commit()
+        conn.close()
+        if updated:
+            logger.debug("Tier 1 decay applied to %d turns (rate=%.3f)", updated, rate)
+
+    async def _tier2_bridge_cycle(self) -> None:
+        """Auto-trigger Tier 1→Tier 2 compression for expired turns."""
+        conn = sqlite3.connect(str(self._db_path))
+        cutoff = (
+            datetime.now() - timedelta(days=self.config.tier1_retention_days)
+        ).isoformat()
+        # Also check max_turns threshold
+        total_active = conn.execute(
+            "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0"
+        ).fetchone()[0]
+        if total_active < self.config.tier1_max_turns:
+            # Only compress by age
+            candidate = conn.execute(
+                "SELECT COUNT(*) FROM turns WHERE timestamp < ? AND compressed_to_tier2 = 0",
+                (cutoff,),
+            ).fetchone()[0]
+            conn.close()
+            if candidate == 0:
+                return
+        else:
+            conn.close()
+        # Run compression with small batch
+        req = Tier2CompressRequest(
+            retention_days=self.config.tier1_retention_days,
+            batch_size=50,
+            min_relevance=self.config.tier1_min_relevance,
+        )
+        try:
+            result = await self.tier2_compress(req)
+            if result.get("status") != "no_candidates":
+                logger.info(
+                    "Tier 2 bridge cycle: %s — %s turns → %s events",
+                    result.get("status"),
+                    result.get("turns_processed", 0),
+                    result.get("events_generated", 0),
+                )
+        except Exception:
+            logger.debug("Tier 2 bridge cycle skipped", exc_info=True)
 
     async def health_check(self):
         return {"status": "healthy", "service": "memory-service"}
@@ -591,6 +781,353 @@ class MemoryService:
         except Exception as e:
             logger.error(f"Error summarizing memory: {e}")
             raise HTTPException(status_code=500, detail=str(e))
+
+    # ── Tier 1: Short-term Conversation Store ──────────────────────
+
+    async def create_session(self, request: SessionCreate):
+        """Create a new conversation session."""
+        session_id = str(uuid.uuid4())
+        now = datetime.now().isoformat()
+        conn = sqlite3.connect(str(self._db_path))
+        conn.execute(
+            "INSERT INTO sessions (session_id, created_at, updated_at, metadata) VALUES (?, ?, ?, ?)",
+            (session_id, now, now, json.dumps(request.metadata)),
+        )
+        conn.commit()
+        conn.close()
+        logger.info("Session created: %s", session_id)
+        return {"session_id": session_id, "created_at": now, "status": "created"}
+
+    async def list_sessions(self, limit: int = 50, offset: int = 0):
+        """List all sessions ordered by creation time desc."""
+        conn = sqlite3.connect(str(self._db_path))
+        rows = conn.execute(
+            "SELECT s.session_id, s.created_at, s.updated_at, s.metadata, "
+            "COUNT(t.turn_id) as turn_count "
+            "FROM sessions s LEFT JOIN turns t ON s.session_id = t.session_id "
+            "GROUP BY s.session_id ORDER BY s.created_at DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        ).fetchall()
+        conn.close()
+        return {
+            "sessions": [
+                {
+                    "session_id": r[0],
+                    "created_at": r[1],
+                    "updated_at": r[2],
+                    "metadata": json.loads(r[3]) if r[3] else {},
+                    "turn_count": r[4],
+                }
+                for r in rows
+            ],
+            "count": len(rows),
+        }
+
+    async def get_session(self, session_id: str):
+        """Get a session with its turn count."""
+        conn = sqlite3.connect(str(self._db_path))
+        row = conn.execute(
+            "SELECT session_id, created_at, updated_at, metadata FROM sessions WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        if not row:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Session not found")
+        turn_count = conn.execute(
+            "SELECT COUNT(*) FROM turns WHERE session_id = ?", (session_id,)
+        ).fetchone()[0]
+        conn.close()
+        return {
+            "session_id": row[0],
+            "created_at": row[1],
+            "updated_at": row[2],
+            "metadata": json.loads(row[3]) if row[3] else {},
+            "turn_count": turn_count,
+        }
+
+    async def add_turn(self, session_id: str, request: TurnCreate):
+        """Add a conversation turn to a session."""
+        conn = sqlite3.connect(str(self._db_path))
+        # Verify session exists
+        ses = conn.execute(
+            "SELECT session_id FROM sessions WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        if not ses:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Session not found")
+        turn_id = str(uuid.uuid4())
+        now = datetime.now().isoformat()
+        conn.execute(
+            "INSERT INTO turns (turn_id, session_id, speaker, text, timestamp, "
+            "relevance_score, decay_factor, tags, metadata, compressed_to_tier2) "
+            "VALUES (?, ?, ?, ?, ?, 1.0, 0.01, ?, ?, 0)",
+            (
+                turn_id,
+                session_id,
+                request.speaker,
+                request.text,
+                now,
+                json.dumps([]),
+                json.dumps(request.metadata),
+            ),
+        )
+        conn.execute(
+            "UPDATE sessions SET updated_at = ? WHERE session_id = ?",
+            (now, session_id),
+        )
+        conn.commit()
+        conn.close()
+        logger.debug("Turn %s added to session %s", turn_id, session_id)
+        return {"turn_id": turn_id, "session_id": session_id, "timestamp": now, "status": "created"}
+
+    async def get_session_turns(self, session_id: str, limit: int = 200, offset: int = 0):
+        """Get all turns for a session, ordered by timestamp."""
+        conn = sqlite3.connect(str(self._db_path))
+        rows = conn.execute(
+            "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
+            "decay_factor, tags, metadata, compressed_to_tier2 "
+            "FROM turns WHERE session_id = ? ORDER BY timestamp ASC LIMIT ? OFFSET ?",
+            (session_id, limit, offset),
+        ).fetchall()
+        total = conn.execute(
+            "SELECT COUNT(*) FROM turns WHERE session_id = ?", (session_id,)
+        ).fetchone()[0]
+        conn.close()
+        return {
+            "session_id": session_id,
+            "turns": [_turn_row_to_dict(r) for r in rows],
+            "count": len(rows),
+            "total": total,
+        }
+
+    async def query_turns(
+        self, start: str = None, end: str = None, speaker: str = None,
+        session_id: str = None, limit: int = 100, offset: int = 0,
+    ):
+        """Query turns by time range, speaker, or session."""
+        conn = sqlite3.connect(str(self._db_path))
+        sql = "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, " \
+              "decay_factor, tags, metadata, compressed_to_tier2 FROM turns WHERE 1=1"
+        params: list = []
+        if start:
+            sql += " AND timestamp >= ?"
+            params.append(start)
+        if end:
+            sql += " AND timestamp <= ?"
+            params.append(end)
+        if speaker:
+            sql += " AND speaker = ?"
+            params.append(speaker)
+        if session_id:
+            sql += " AND session_id = ?"
+            params.append(session_id)
+        sql += " ORDER BY timestamp ASC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        rows = conn.execute(sql, params).fetchall()
+        conn.close()
+        return {
+            "turns": [_turn_row_to_dict(r) for r in rows],
+            "count": len(rows),
+        }
+
+    async def get_turn(self, turn_id: str):
+        """Get a single turn by ID."""
+        conn = sqlite3.connect(str(self._db_path))
+        row = conn.execute(
+            "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
+            "decay_factor, tags, metadata, compressed_to_tier2 "
+            "FROM turns WHERE turn_id = ?",
+            (turn_id,),
+        ).fetchone()
+        if not row:
+            # Check archive
+            row = conn.execute(
+                "SELECT turn_id, session_id, speaker, text_summary, timestamp, "
+                "compressed_at, event_ids, scene_ids, original_text "
+                "FROM turns_archive WHERE turn_id = ?",
+                (turn_id,),
+            ).fetchone()
+            if not row:
+                conn.close()
+                raise HTTPException(status_code=404, detail="Turn not found")
+            conn.close()
+            return {
+                "turn_id": row[0], "session_id": row[1], "speaker": row[2],
+                "text": row[8] or row[3], "timestamp": row[4],
+                "in_archive": True, "compressed_at": row[5],
+                "event_ids": json.loads(row[6]) if row[6] else [],
+                "scene_ids": json.loads(row[7]) if row[7] else [],
+            }
+        conn.close()
+        return _turn_row_to_dict(row)
+
+    async def timeline_view(self, request: TimelineQuery):
+        """Get timeline view for a specific date with turn summaries."""
+        conn = sqlite3.connect(str(self._db_path))
+        date_start = f"{request.date}T00:00:00"
+        date_end = f"{request.date}T23:59:59"
+        sql = "SELECT turn_id, session_id, speaker, text, timestamp FROM turns " \
+              "WHERE timestamp >= ? AND timestamp <= ?"
+        params: list = [date_start, date_end]
+        if request.session_id:
+            sql += " AND session_id = ?"
+            params.append(request.session_id)
+        if request.speaker:
+            sql += " AND speaker = ?"
+            params.append(request.speaker)
+        sql += " ORDER BY timestamp ASC LIMIT ?"
+        params.append(request.limit)
+        rows = conn.execute(sql, params).fetchall()
+        conn.close()
+        return {
+            "date": request.date,
+            "turns": [
+                {
+                    "turn_id": r[0], "session_id": r[1], "speaker": r[2],
+                    "text_preview": r[3][:200] + ("..." if len(r[3]) > 200 else ""),
+                    "timestamp": r[4],
+                }
+                for r in rows
+            ],
+            "count": len(rows),
+        }
+
+    async def tier2_compress(self, request: Tier2CompressRequest = None):
+        """Trigger Tier 1 → Tier 2 compression for turns older than retention window."""
+        req = request or Tier2CompressRequest()
+        conn = sqlite3.connect(str(self._db_path))
+        cutoff = (datetime.now() - timedelta(days=req.retention_days)).isoformat()
+        rows = conn.execute(
+            "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score "
+            "FROM turns WHERE timestamp < ? AND compressed_to_tier2 = 0 "
+            "AND relevance_score >= ? "
+            "ORDER BY timestamp ASC LIMIT ?",
+            (cutoff, req.min_relevance, req.batch_size),
+        ).fetchall()
+        conn.close()
+        if not rows:
+            return {"status": "no_candidates", "cutoff": cutoff}
+        if req.dry_run:
+            return {
+                "status": "dry_run",
+                "candidate_count": len(rows),
+                "cutoff": cutoff,
+                "sample_turn_ids": [r[0] for r in rows[:5]],
+            }
+        # Convert to TranscriptTurn and feed into ChroniclePipeline
+        result = await self._bridge_to_tier2(rows)
+        return {
+            "status": "compressed",
+            "turns_processed": len(rows),
+            "events_generated": len(result.get("events", [])),
+            "scenes_generated": len(result.get("scenes", [])),
+            "arcs_generated": len(result.get("arcs", [])),
+            "cutoff": cutoff,
+        }
+
+    async def _bridge_to_tier2(self, rows) -> Dict[str, Any]:
+        """Feed Tier 1 turns into the Mem ChroniclePipeline and archive them."""
+        from memai.pipeline import ChroniclePipeline
+        from memai.schema import TranscriptTurn
+        from datetime import datetime as dt, timezone
+
+        transcript_turns = []
+        for r in rows:
+            turn_id, session_id, speaker, text, timestamp_str, relevance = r
+            parsed_ts = dt.fromisoformat(timestamp_str)
+            if parsed_ts.tzinfo is None:
+                parsed_ts = parsed_ts.replace(tzinfo=timezone.utc)
+            transcript_turns.append(
+                TranscriptTurn(
+                    turn_id=turn_id,
+                    speaker=speaker,
+                    text=text,
+                    timestamp=parsed_ts,
+                )
+            )
+
+        pipeline = ChroniclePipeline()
+        result = pipeline.ingest(transcript_turns)
+
+        # Archive processed turns with back-references
+        turn_to_events: Dict[str, list] = {}
+        for event in result.events:
+            for src_turn_id in event.source_turns:
+                turn_to_events.setdefault(src_turn_id, []).append(event.id)
+
+        turn_to_scenes: Dict[str, list] = {}
+        for scene in result.scenes:
+            for ev_id in scene.child_ids:
+                for turn_id, ev_ids in turn_to_events.items():
+                    if ev_id in ev_ids and turn_id not in turn_to_scenes:
+                        turn_to_scenes.setdefault(turn_id, []).append(scene.id)
+
+        now = datetime.now().isoformat()
+        conn = sqlite3.connect(str(self._db_path))
+        for r in rows:
+            turn_id, session_id, speaker, text, timestamp_str, relevance = r
+            event_ids = turn_to_events.get(turn_id, [])
+            scene_ids = turn_to_scenes.get(turn_id, [])
+            original_text = text if self.config.tier1_archive_keep_original else None
+            text_summary = text[:500] if len(text) > 500 else text
+            conn.execute(
+                "INSERT OR REPLACE INTO turns_archive "
+                "(turn_id, session_id, speaker, text_summary, original_text, "
+                "timestamp, compressed_at, event_ids, scene_ids) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    turn_id, session_id, speaker, text_summary, original_text,
+                    timestamp_str, now,
+                    json.dumps(event_ids), json.dumps(scene_ids),
+                ),
+            )
+            conn.execute(
+                "UPDATE turns SET compressed_to_tier2 = 1 WHERE turn_id = ?",
+                (turn_id,),
+            )
+        conn.commit()
+        conn.close()
+
+        logger.info(
+            "Tier2 bridge: %d turns → %d events, %d scenes, %d arcs",
+            len(rows), len(result.events), len(result.scenes), len(result.arcs),
+        )
+        return {
+            "events": [e.to_dict() for e in result.events],
+            "scenes": [s.to_dict() for s in result.scenes],
+            "arcs": [a.to_dict() for a in result.arcs],
+            "epochs": [ep.to_dict() for ep in result.epochs],
+            "profile_memories": [p.to_dict() for p in result.profile_memories],
+        }
+
+    async def tier1_stats(self):
+        """Return Tier 1 storage statistics."""
+        conn = sqlite3.connect(str(self._db_path))
+        total_turns = conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0]
+        active_turns = conn.execute(
+            "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0"
+        ).fetchone()[0]
+        compressed_turns = conn.execute(
+            "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 1"
+        ).fetchone()[0]
+        archived_turns = conn.execute("SELECT COUNT(*) FROM turns_archive").fetchone()[0]
+        total_sessions = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        oldest = conn.execute(
+            "SELECT MIN(timestamp) FROM turns WHERE compressed_to_tier2 = 0"
+        ).fetchone()[0]
+        conn.close()
+        return {
+            "tier1": {
+                "total_turns": total_turns,
+                "active_turns": active_turns,
+                "compressed_turns": compressed_turns,
+                "archived_turns": archived_turns,
+                "total_sessions": total_sessions,
+                "oldest_active_turn": oldest,
+                "retention_days": self.config.tier1_retention_days,
+                "max_turns": self.config.tier1_max_turns,
+            }
+        }
 
     async def register_with_gateway(self):
         import asyncio as _asyncio

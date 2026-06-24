@@ -29,7 +29,9 @@ class MemoryQueryEngine:
         arcs: Sequence[Arc],
         epochs: Sequence[Epoch] | None = None,
         profile_memories: Sequence[ProfileMemory] | None = None,
+        tier1_db_path: str | None = None,
     ) -> None:
+        self.tier1_db_path = tier1_db_path
         self.all_events = sorted(events, key=lambda item: item.timespan_start)
         self.all_scenes = sorted(scenes, key=lambda item: item.timespan_start)
         self.all_arcs = sorted(arcs, key=lambda item: item.timespan_start)
@@ -489,7 +491,11 @@ class MemoryQueryEngine:
         }
 
     def evidence_trace(
-        self, target_id: str, *, include_superseded: bool = True
+        self,
+        target_id: str,
+        *,
+        include_superseded: bool = True,
+        resolve_turns: bool = False,
     ) -> dict[str, Any]:
         target = self._index[target_id]
         if target.status == Status.SUPERSEDED and not include_superseded:
@@ -505,12 +511,57 @@ class MemoryQueryEngine:
             if current is not None:
                 queue.extend(current.child_ids)
         chain.extend(ref for ref in target.evidence_refs if ref not in chain)
-        return {
+
+        result: dict[str, Any] = {
             "result_type": "evidence_trace",
             "target_id": target.id,
             "summary": target.summary,
             "support_chain": chain,
         }
+
+        # Resolve turn IDs to original text from Tier 1 SQLite store
+        if resolve_turns and self.tier1_db_path:
+            turn_texts = self._resolve_turn_texts(chain)
+            if turn_texts:
+                result["turn_texts"] = turn_texts
+
+        return result
+
+    def _resolve_turn_texts(self, refs: list[str]) -> dict[str, dict[str, Any]]:
+        """Look up turn texts from Tier 1 SQLite (turns + turns_archive tables)."""
+        import sqlite3
+        try:
+            conn = sqlite3.connect(self.tier1_db_path)
+        except Exception:
+            return {}
+        turn_texts: dict[str, dict[str, Any]] = {}
+        for ref in refs:
+            row = conn.execute(
+                "SELECT turn_id, speaker, text, timestamp FROM turns WHERE turn_id = ?",
+                (ref,),
+            ).fetchone()
+            if row:
+                turn_texts[ref] = {
+                    "speaker": row[1],
+                    "text": row[2],
+                    "timestamp": row[3],
+                    "source": "tier1_active",
+                }
+                continue
+            arch_row = conn.execute(
+                "SELECT turn_id, speaker, text_summary, original_text, timestamp "
+                "FROM turns_archive WHERE turn_id = ?",
+                (ref,),
+            ).fetchone()
+            if arch_row:
+                turn_texts[ref] = {
+                    "speaker": arch_row[1],
+                    "text": arch_row[3] or arch_row[2],
+                    "timestamp": arch_row[4],
+                    "source": "tier1_archive",
+                }
+        conn.close()
+        return turn_texts
 
     def _select_units(
         self,
