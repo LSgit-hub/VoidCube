@@ -197,7 +197,8 @@ class EndogenousDriveEngine:
             topics: list[dict] = []
             topic_source = "none"
 
-            llm_topics = self._llm_generate_learning_topics(activity, max_topics=3)
+            governor_active = idle_window.get("governor_mode_active", False)
+            llm_topics = self._llm_generate_learning_topics(activity, max_topics=3, governor_mode=governor_active)
             if llm_topics:
                 topics = llm_topics
                 topic_source = "llm"
@@ -397,7 +398,7 @@ class EndogenousDriveEngine:
         return ""
 
     def _llm_generate_learning_topics(
-        self, activity: Dict[str, Any], max_topics: int = 3
+        self, activity: Dict[str, Any], max_topics: int = 3, governor_mode: bool = False
     ) -> List[Dict[str, str]]:
         """Use LLM to generate intelligent learning topics from memory context.
 
@@ -422,7 +423,8 @@ class EndogenousDriveEngine:
                 return []
 
             # ── Fetch real memory context from memory_service ──
-            memory_context = self._fetch_memory_context()
+            # In governor mode, fetch deeper context (scenes + epochs too)
+            memory_context = self._fetch_memory_context(deep=governor_mode)
 
             recent = dict(activity.get("recent_metadata") or {})
             user_req = str(recent.get("user_request", {}).get("text", ""))[:500]
@@ -430,23 +432,48 @@ class EndogenousDriveEngine:
             errors = int(activity.get("counts", {}).get("error_count", 0))
             uncertainty = int(activity.get("counts", {}).get("uncertainty_high_count", 0))
 
-            prompt = (
-                f"基于以下 VoidCube 系统状态和长期记忆，生成 {max_topics} 个值得探索的学习方向。\n\n"
-                f"【最近用户请求】{user_req if user_req else '无'}\n"
-                f"【最近 Agent 响应】{agent_resp if agent_resp else '无'}\n"
-                f"【系统错误】{errors}  【高不确定性】{uncertainty}\n\n"
-                f"【压缩记忆上下文 — 最近的活跃弧线和场景】\n"
-                f"{memory_context if memory_context else '(暂无压缩记忆)'}\n\n"
-                f"基于以上所有信息生成学习方向。不要泛泛而谈——"
-                f"基于记忆中的实际问题、未解决的疑问、代码改进机会来生成。"
-                f"输出JSON数组: [{{\"title\": \"...\", \"summary\": \"...\"}}]"
-            )
-            result = client.complete_json(
-                system_prompt=(
+            if governor_mode:
+                # Auto/Governor mode: user requests are blocked — rely on
+                # compressed memory as the primary context for topic generation.
+                prompt = (
+                    f"系统处于全自动 Governor Mode。用户请求已被封锁，"
+                    f"你需要完全基于压缩长期记忆自主规划学习方向。\n\n"
+                    f"【系统状态】错误={errors}  高不确定性={uncertainty}\n\n"
+                    f"【压缩记忆上下文 — 历史弧线、场景和事件摘要】\n"
+                    f"{memory_context if memory_context else '(暂无压缩记忆，请基于系统错误和不确定性生成)'}\n\n"
+                    f"生成 {max_topics} 个有实质价值的学习方向。优先考虑：\n"
+                    f"1. 记忆中提到但未解决的架构问题或技术债务\n"
+                    f"2. 反复出现的错误模式或不确定性问题\n"
+                    f"3. 记忆显示的代码改进机会\n"
+                    f"4. 可执行的、可验证的具体研究主题\n"
+                    f"输出JSON数组: [{{\"title\": \"...\", \"summary\": \"...\"}}]"
+                )
+                system_prompt = (
+                    "你是 VoidCube 的内生驱动器。系统处于全自动模式，"
+                    "用户不在线。你需要完全基于压缩长期记忆中的历史讨论、"
+                    "未解决问题和架构决策来生成有意义的学习方向。"
+                    "你的输出将直接决定 Agent 的研究方向——请确保每个主题"
+                    "都是具体的、可操作的、基于记忆上下文而非凭空想象的。"
+                )
+            else:
+                prompt = (
+                    f"基于以下 VoidCube 系统状态和长期记忆，生成 {max_topics} 个值得探索的学习方向。\n\n"
+                    f"【最近用户请求】{user_req if user_req else '无'}\n"
+                    f"【最近 Agent 响应】{agent_resp if agent_resp else '无'}\n"
+                    f"【系统错误】{errors}  【高不确定性】{uncertainty}\n\n"
+                    f"【压缩记忆上下文 — 最近的活跃弧线和场景】\n"
+                    f"{memory_context if memory_context else '(暂无压缩记忆)'}\n\n"
+                    f"基于以上所有信息生成学习方向。不要泛泛而谈——"
+                    f"基于记忆中的实际问题、未解决的疑问、代码改进机会来生成。"
+                    f"输出JSON数组: [{{\"title\": \"...\", \"summary\": \"...\"}}]"
+                )
+                system_prompt = (
                     "你是 VoidCube 的内生驱动器。你有权访问系统的压缩长期记忆。"
                     "基于记忆中的实际问题、架构讨论、代码改进机会和未解决的疑问，"
                     "生成有实质价值的学习方向——具体的、可操作的、基于真实上下文。"
-                ),
+                )
+            result = client.complete_json(
+                system_prompt=system_prompt,
                 user_payload={"context": prompt},
                 task="extractor.events",
             )
@@ -464,34 +491,54 @@ class EndogenousDriveEngine:
         except Exception:
             return []
 
-    def _fetch_memory_context(self) -> str:
-        """Fetch recent compressed memory summaries from memory_service for LLM context."""
+    def _fetch_memory_context(self, deep: bool = False) -> str:
+        """Fetch recent compressed memory summaries from memory_service for LLM context.
+
+        In deep mode (governor/auto mode): fetches arcs + scenes + epochs with
+        larger limits to provide richer context when user interaction is absent.
+        """
         try:
             import urllib.request, json as _json
-            # Resolve memory service URL via gateway (same as ui_runtime does)
             memory_url = self._resolve_memory_url()
             if not memory_url:
                 return ""
-            req = _json.dumps({
-                "memory_type": "arc", "limit": 5, "include_superseded": False,
-            }).encode()
-            resp = urllib.request.urlopen(
-                urllib.request.Request(
-                    f"{memory_url}/compressed/search",
-                    data=req, headers={"Content-Type": "application/json"},
-                ), timeout=3,
-            )
-            data = _json.loads(resp.read())
-            results = data.get("results", [])
-            if not results:
-                return ""
             lines = []
-            for r in results[:5]:
-                lines.append(
-                    f"- [{r.get('memory_type', '?')}] {r.get('title', '')}: "
-                    f"{r.get('summary', '')[:200]}"
+            if deep:
+                # Governor mode: fetch arcs, scenes, and epochs for deep context
+                for mem_type, limit in [("arc", 8), ("scene", 5), ("epoch", 3)]:
+                    req = _json.dumps({
+                        "memory_type": mem_type, "limit": limit,
+                        "include_superseded": False,
+                    }).encode()
+                    resp = urllib.request.urlopen(
+                        urllib.request.Request(
+                            f"{memory_url}/compressed/search",
+                            data=req, headers={"Content-Type": "application/json"},
+                        ), timeout=3,
+                    )
+                    data = _json.loads(resp.read())
+                    for r in data.get("results", []):
+                        lines.append(
+                            f"- [{r.get('memory_type', '?')}] {r.get('title', '')}: "
+                            f"{r.get('summary', '')[:200]}"
+                        )
+            else:
+                req = _json.dumps({
+                    "memory_type": "arc", "limit": 5, "include_superseded": False,
+                }).encode()
+                resp = urllib.request.urlopen(
+                    urllib.request.Request(
+                        f"{memory_url}/compressed/search",
+                        data=req, headers={"Content-Type": "application/json"},
+                    ), timeout=3,
                 )
-            return "\n".join(lines)
+                data = _json.loads(resp.read())
+                for r in data.get("results", [])[:5]:
+                    lines.append(
+                        f"- [{r.get('memory_type', '?')}] {r.get('title', '')}: "
+                        f"{r.get('summary', '')[:200]}"
+                    )
+            return "\n".join(lines) if lines else ""
         except Exception:
             return ""
 
