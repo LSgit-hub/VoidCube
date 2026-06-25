@@ -218,11 +218,16 @@ def resolve_mem_llm_client(role: str = "default"):
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("Failed to load MemModelConfigSet: %s", exc)
 
-    if mem_cfg is not None and mem_cfg.api_key_env:
-        api_key = os.environ.get(mem_cfg.api_key_env, "").strip()
+    if mem_cfg is not None:
+        # Always use the config's model and base_url; only the API key
+        # may need a fallback when api_key_env is not set.
         model = mem_cfg.model or "deepseek-chat"
         base_url = (mem_cfg.base_url or "https://api.deepseek.com/v1").rstrip("/")
         config_source = f"memory.llm.{role or 'default'} (provider={mem_cfg.provider})"
+        if mem_cfg.api_key_env:
+            api_key = os.environ.get(mem_cfg.api_key_env, "").strip()
+        else:
+            api_key = ""
     else:
         # Legacy fallback — keep older env-var driven installs working
         # when the voidcube config has no memory.llm block at all.
@@ -237,8 +242,15 @@ def resolve_mem_llm_client(role: str = "default"):
         ).rstrip("/")
         config_source = "env fallback"
 
-    if not api_key:
+    # Allow empty API key when routing through local Gateway (127.0.0.1 / localhost)
+    # — the Gateway proxies to the Agent which handles its own auth.
+    is_local_gateway = base_url and (
+        "127.0.0.1" in base_url or "localhost" in base_url or "0.0.0.0" in base_url
+    )
+    if not api_key and not is_local_gateway:
         return None, model
+    if not api_key and is_local_gateway:
+        api_key = "voidcube-local"  # dummy key for Gateway passthrough
 
     try:
         # Imported lazily so callers that don't need the LLM don't have

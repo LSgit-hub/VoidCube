@@ -301,6 +301,12 @@ class ServiceRuntimeMixin:
         self._self_evolution_review_task = asyncio.create_task(self_evolution_review_loop())
         logger.info("Governor Mode: review loop started (interval=%ds)", runtime_config.self_evolution_review_interval)
 
+        # ── Immediate first review after drive has had time to produce candidates ──
+        async def _immediate_first_review():
+            await asyncio.sleep(5)  # wait for drive's immediate first-run
+            await self._run_self_evolution_cycle()
+        asyncio.create_task(_immediate_first_review())
+
         if self._endogenous_drive_task:
             self._endogenous_drive_task.cancel()
 
@@ -322,6 +328,12 @@ class ServiceRuntimeMixin:
 
             self._endogenous_drive_task = asyncio.create_task(endogenous_drive_loop())
             logger.info("Governor Mode: drive loop started (interval=%ds)", runtime_config.endogenous_drive_interval)
+
+            # ── Immediate first-run: don't wait 300s for the first cycle ──
+            async def _immediate_first_drive():
+                await asyncio.sleep(2)  # short grace for gateway notification
+                await self._run_endogenous_drive_cycle()
+            asyncio.create_task(_immediate_first_drive())
         else:
             self._endogenous_drive_task = None
             logger.info("Governor Mode: drive loop disabled (endogenous_drive_enabled=False)")

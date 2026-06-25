@@ -567,17 +567,10 @@ class LLMGovernorReasoner:
     def __init__(self) -> None:
         self._available = False
         try:
-            import os
-            api_key = (
-                os.environ.get("DEEPSEEK_API_KEY")
-                or os.environ.get("OPENAI_API_KEY")
-                or ""
-            ).strip()
-            if api_key:
-                from memai.llm_client import OpenAICompatibleLLMClient
-                model = os.environ.get("MEMAI_LLM_MODEL", "deepseek-chat")
-                base_url = os.environ.get("MEMAI_LLM_BASE_URL", "https://api.deepseek.com/v1")
-                self._client = OpenAICompatibleLLMClient(model=model, api_key=api_key, base_url=base_url)
+            from memai.model_config import resolve_mem_llm_client
+            client, _ = resolve_mem_llm_client(role="governance_reasoner")
+            if client is not None:
+                self._client = client
                 self._available = True
         except Exception:
             self._available = False

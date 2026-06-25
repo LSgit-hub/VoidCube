@@ -1686,7 +1686,11 @@ class PlanningRuntimeMixin:
         )
 
         try:
-            result = self._llm_client.complete_json(
+            from memai.model_config import resolve_mem_llm_client
+            llm_client, _ = resolve_mem_llm_client(role="governance_reasoner")
+            if llm_client is None:
+                return 10.0  # no LLM → default score
+            result = llm_client.complete_json(
                 system_prompt="你是代码审查专家。客观评估代码改进质量。",
                 user_payload={"task": prompt},
                 task="scholar.revision",
