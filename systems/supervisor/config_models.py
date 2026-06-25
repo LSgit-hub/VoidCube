@@ -22,6 +22,11 @@ class SupervisorServiceRuntimeConfig(BaseModel):
     endogenous_drive_enabled: bool = True
     endogenous_drive_interval: int = 300
     endogenous_drive_max_candidates: int = 3
+    # ── Body improvement config (baseline §7.4) ──
+    body_improvement_min_quality: float = 60.0  # learning quality threshold to trigger
+    body_improvement_editable_dirs: list[str] = ["skills/", "tools/", "agent/", "prompts/"]
+    body_improvement_forbidden_patterns: list[str] = ["**/credential*", "**/.env*", "systems/**"]
+    body_improvement_max_files: int = 5
     # Execution window: self_evolution / body_upgrade tasks only auto-execute
     # during [execution_window_start_hour, execution_window_end_hour).
     # Default 0–24 = always open (development).  Set to 0–6 for production.

@@ -53,6 +53,10 @@ class VoidCubeExecutionService:
         self.app.add_api_route(f"{prefix}/body/probe/run", self.run_body_probe, methods=["POST"])
         self.app.add_api_route(f"{prefix}/self-evolution/execute", self.execute_self_evolution_request, methods=["POST"])
         self.app.add_api_route(f"{prefix}/memory/compress", self.trigger_memory_compression, methods=["POST"])
+        self.app.add_api_route(f"{prefix}/body/improvement-report", self.submit_body_improvement_report, methods=["POST"])
+        self.app.add_api_route(f"{prefix}/body/slots/{{slot_id}}/health", self.get_slot_health, methods=["GET"])
+        self.app.add_api_route(f"{prefix}/body/slots/{{slot_id}}/health/history", self.get_slot_health_history, methods=["GET"])
+        self.app.add_api_route(f"{prefix}/body/slots/{{slot_id}}/health/reset", self.reset_slot_health, methods=["POST"])
         # ── Scene endpoints (baseline §8.1) ──
         self.app.add_api_route("/executor/scene", self.get_executor_scene, methods=["GET"])
         self.app.add_api_route("/executor/scene", self.set_executor_scene, methods=["POST"])
@@ -198,4 +202,28 @@ class VoidCubeExecutionService:
 
     async def trigger_memory_compression(self, request: Optional[dict] = Body(default=None)) -> Dict[str, Any]:
         return await self.facade.trigger_memory_compression(request)
+
+    async def submit_body_improvement_report(self, request: dict = Body(default_factory=dict)) -> Dict[str, Any]:
+        try:
+            return await self.facade.submit_body_improvement_report(request)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    async def get_slot_health(self, slot_id: str) -> Dict[str, Any]:
+        result = self.facade.get_slot_health(slot_id)
+        if "error" in result:
+            raise HTTPException(status_code=404, detail=result["error"])
+        return result
+
+    async def get_slot_health_history(self, slot_id: str) -> Dict[str, Any]:
+        result = self.facade.get_slot_health_history(slot_id)
+        if "error" in result:
+            raise HTTPException(status_code=404, detail=result["error"])
+        return result
+
+    async def reset_slot_health(self, slot_id: str) -> Dict[str, Any]:
+        result = self.facade.reset_slot_health(slot_id)
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
 

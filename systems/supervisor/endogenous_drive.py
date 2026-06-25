@@ -311,6 +311,55 @@ class EndogenousDriveEngine:
                 )
             )
 
+        if self_evolution_plan.get("eligible_for_planning"):
+            learning_quality = self._calculate_learning_quality_score(idle_window)
+            shell_slot_meta = self._get_shell_slot_meta(idle_window)
+            if (learning_quality >= 60
+                and shell_slot_meta
+                and "body_improvement" not in existing_keys):
+
+                improvement = self._generate_body_improvement_direction(
+                    idle_window,
+                    learning_quality,
+                    shell_slot_meta,
+                )
+                if improvement:
+                    task_key = f"body_improvement:{_stable_key_for_topic(improvement['title'])}"
+                    if task_key not in existing_keys:
+                        candidates.append(
+                            EndogenousTaskCandidate(
+                                stable_key=task_key,
+                                title=f"Improve shell body: {improvement['title']}",
+                                summary=improvement.get("summary", improvement["title"]),
+                                priority="high" if learning_quality >= 80 else "normal",
+                                governance_task_type="self_evolution",
+                                task_family="body_upgrade",
+                                execution_kind="body_improvement",
+                                value_tags=["creativity", "continuity"],
+                                utility=0.80 if learning_quality >= 80 else 0.70,
+                                constraints={
+                                    "execution_policy": "improve_shell_body",
+                                    "target_slot": "shell",
+                                    "target_slot_id": shell_slot_meta.slot_id,
+                                    "worktree_path": shell_slot_meta.worktree_path,
+                                    "must_commit": True,
+                                    "evolution_boundary_check": True,
+                                    "max_files_changed": 5,
+                                    "editable_dirs": ["skills/", "tools/", "agent/", "prompts/"],
+                                    "forbidden_patterns": [
+                                        "**/credential*", "**/.env*", "systems/**",
+                                    ],
+                                },
+                                evidence={
+                                    "learning_quality_score": learning_quality,
+                                    "shell_slot_id": shell_slot_meta.slot_id,
+                                    "worktree_path": shell_slot_meta.worktree_path,
+                                    "git_diff_summary": improvement.get("diff_summary", ""),
+                                    "source": improvement.get("source", "fallback"),
+                                },
+                            )
+                        )
+
         return candidates
 
     def _extract_learning_topic(self, activity: Dict[str, Any]) -> str:
@@ -535,6 +584,236 @@ class EndogenousDriveEngine:
         if family in {"memory_maintenance", "self_learning", "user"}:
             governance = family
         return dict(decisions_by_governance.get(governance) or {})
+
+    def _calculate_learning_quality_score(self, idle_window: Dict[str, Any]) -> float:
+        try:
+            learning_tasks = idle_window.get("completed_learning_tasks", [])
+            completed_count = len(learning_tasks)
+            if completed_count == 0:
+                return 0.0
+
+            quality_sum = 0.0
+            freshness_sum = 0.0
+            now = None
+            try:
+                from datetime import datetime, timezone
+                now = datetime.now(timezone.utc)
+            except Exception:
+                pass
+
+            for task in learning_tasks:
+                quality_sum += float(task.get("quality_score") or 0.5)
+                if now and task.get("completed_at"):
+                    try:
+                        t = datetime.fromisoformat(str(task["completed_at"]))
+                        if t.tzinfo is None:
+                            t = t.replace(tzinfo=timezone.utc)
+                        age_days = (now - t).days
+                        freshness = max(0.0, 1.0 - age_days / 90.0)
+                        freshness_sum += freshness
+                    except Exception:
+                        freshness_sum += 0.5
+                else:
+                    freshness_sum += 0.5
+
+            avg_quality = quality_sum / completed_count
+            avg_freshness = freshness_sum / completed_count
+            score = avg_quality * 60 + avg_freshness * 40
+            return max(0.0, min(100.0, score))
+        except Exception:
+            return 0.0
+
+    def _get_shell_slot_meta(self, idle_window: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        try:
+            shell_slot = idle_window.get("shell_slot")
+            if shell_slot and isinstance(shell_slot, dict):
+                return shell_slot
+        except Exception:
+            pass
+
+        try:
+            import urllib.request, json as _json
+            memory_url = self._resolve_memory_url()
+            if not memory_url:
+                return None
+            resp = urllib.request.urlopen(
+                f"{memory_url}/body/shell/slot",
+                timeout=3,
+            )
+            data = _json.loads(resp.read())
+            if data.get("slot_id"):
+                return data
+        except Exception:
+            pass
+
+        return None
+
+    def _generate_body_improvement_direction(
+        self,
+        idle_window: Dict[str, Any],
+        learning_quality: float,
+        shell_slot_meta: Dict[str, Any],
+    ) -> Optional[Dict[str, str]]:
+        activity = dict(idle_window.get("activity") or {})
+
+        llm_direction = self._llm_generate_improvement_direction(
+            activity,
+            learning_quality,
+            shell_slot_meta,
+        )
+        if llm_direction:
+            llm_direction["source"] = "llm"
+            return llm_direction
+
+        history_direction = self._generate_improvement_from_history(
+            idle_window,
+            shell_slot_meta,
+        )
+        if history_direction:
+            history_direction["source"] = "history"
+            return history_direction
+
+        git_direction = self._generate_improvement_from_git_diff(
+            shell_slot_meta,
+        )
+        if git_direction:
+            git_direction["source"] = "git_diff"
+            return git_direction
+
+        fallback_direction = {
+            "title": "General code quality improvement",
+            "summary": (
+                "Apply recent learning findings to improve the shell body's code quality. "
+                "Focus on fixing identified issues, improving documentation, and enhancing "
+                "code maintainability within the allowed evolution boundaries."
+            ),
+            "diff_summary": "",
+            "source": "fallback",
+        }
+        return fallback_direction
+
+    def _llm_generate_improvement_direction(
+        self,
+        activity: Dict[str, Any],
+        learning_quality: float,
+        shell_slot_meta: Dict[str, Any],
+    ) -> Optional[Dict[str, str]]:
+        try:
+            from memai.model_config import resolve_mem_llm_client
+            client, _ = resolve_mem_llm_client(role="default")
+            if client is None:
+                return None
+
+            memory_context = self._fetch_memory_context()
+            recent = dict(activity.get("recent_metadata") or {})
+            user_req = str(recent.get("user_request", {}).get("text", ""))[:500]
+            agent_resp = str(recent.get("agent_work", {}).get("summary", ""))[:500]
+
+            prompt = (
+                f"基于以下信息，为替身 Agent 的代码改进生成一个具体方向。\n\n"
+                f"【学习质量评分】{learning_quality:.1f}/100\n"
+                f"【替身槽位】{shell_slot_meta.get('slot_id', '?')}\n"
+                f"【替身工作树路径】{shell_slot_meta.get('worktree_path', '?')}\n"
+                f"【最近用户请求】{user_req if user_req else '无'}\n"
+                f"【最近 Agent 响应】{agent_resp if agent_resp else '无'}\n\n"
+                f"【压缩记忆上下文】\n{memory_context if memory_context else '(暂无)'}\n\n"
+                f"分析学习成果和记忆中的问题，提出一个具体的代码改进方向。"
+                f"改进方向应该是：\n"
+                f"- 基于实际学习成果\n"
+                f"- 在允许的演化边界内（agent/, skills/, tools/, presets/）\n"
+                f"- 可操作且有明确目标\n"
+                f"输出JSON: {{\"title\": \"...\", \"summary\": \"...\", \"diff_summary\": \"...\"}}"
+            )
+
+            result = client.complete_json(
+                system_prompt=(
+                    "你是代码改进专家。基于学习成果和系统状态，"
+                    "为替身 Agent 提出具体、可操作的代码改进方向。"
+                    "只关注 agent/、skills/、tools/、presets/ 目录内的改进。"
+                ),
+                user_payload={"task": prompt},
+                task="scholar.revision",
+            )
+
+            if isinstance(result, dict):
+                title = str(result.get("title", "")).strip()
+                summary = str(result.get("summary", "")).strip()
+                if title:
+                    return {
+                        "title": title,
+                        "summary": summary or title,
+                        "diff_summary": str(result.get("diff_summary", "")),
+                    }
+        except Exception:
+            pass
+        return None
+
+    def _generate_improvement_from_history(
+        self,
+        idle_window: Dict[str, Any],
+        shell_slot_meta: Dict[str, Any],
+    ) -> Optional[Dict[str, str]]:
+        try:
+            learning_tasks = idle_window.get("completed_learning_tasks", [])
+            if not learning_tasks:
+                return None
+
+            recent_tasks = sorted(
+                learning_tasks,
+                key=lambda t: t.get("completed_at", ""),
+                reverse=True,
+            )[:3]
+
+            topics = []
+            for task in recent_tasks:
+                title = str(task.get("title", "") or task.get("topic", ""))
+                if title:
+                    topics.append(title)
+
+            if topics:
+                return {
+                    "title": "Apply recent learning: " + ", ".join(topics[:2]),
+                    "summary": (
+                        f"Apply recent learning findings to improve the shell body. "
+                        f"Recent learning topics: {', '.join(topics)}. "
+                        f"Focus on implementing improvements based on these research results."
+                    ),
+                    "diff_summary": "",
+                }
+        except Exception:
+            pass
+        return None
+
+    def _generate_improvement_from_git_diff(
+        self,
+        shell_slot_meta: Dict[str, Any],
+    ) -> Optional[Dict[str, str]]:
+        try:
+            worktree_path = shell_slot_meta.get("worktree_path")
+            if not worktree_path:
+                return None
+
+            import subprocess
+            result = subprocess.run(
+                ["git", "status", "--short"],
+                cwd=worktree_path,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                changed_count = len(result.stdout.strip().splitlines())
+                return {
+                    "title": f"Review {changed_count} pending changes",
+                    "summary": (
+                        f"The shell body worktree has {changed_count} files with pending changes. "
+                        f"Review these changes and apply appropriate improvements based on learning findings."
+                    ),
+                    "diff_summary": result.stdout[:500],
+                }
+        except Exception:
+            pass
+        return None
 
 
 def _stable_key_for_topic(topic: str) -> str:

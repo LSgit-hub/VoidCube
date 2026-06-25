@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from systems.body_registry import BodyImprovementReport
 from systems.governor import GovernorRequest
 from systems.supervisor.config_models import (
     SupervisorBodyRuntimeConfig,
@@ -147,6 +148,8 @@ class Supervisor(
         self.app.add_api_route("/body/slots/{slot_id}", self.get_body_slot, methods=["GET"])
         self.app.add_api_route("/body/review", execute_governor_review_request, methods=["POST"])
         self.app.add_api_route("/body/governor/history", self.get_governor_history, methods=["GET"])
+        self.app.add_api_route("/body/improvement-report", self.receive_improvement_report, methods=["POST"])
+        self.app.add_api_route("/body/{slot_id}/health", self.get_slot_health, methods=["GET"])
         self.app.add_api_route("/self-evolution/auto-cycle", self.run_auto_cycle, methods=["POST"])
         self.app.add_api_route("/governor-mode/activate", self.activate_governor_mode, methods=["POST"])
         self.app.add_api_route("/governor-mode/deactivate", self.deactivate_governor_mode, methods=["POST"])
@@ -181,6 +184,27 @@ class Supervisor(
 
     async def get_active_body_target(self) -> Dict[str, Any]:
         return self._execution_facade.get_active_body_target()
+
+    async def receive_improvement_report(self, report: dict) -> Dict[str, Any]:
+        """Agent 提交替身改进报告 → 监督者审查评分"""
+        from systems.body_registry import BodyImprovementReport
+        parsed = BodyImprovementReport(**report)
+        result = await self._review_body_improvement(parsed)
+        return {"status": "reviewed", **result}
+
+    async def get_slot_health(self, slot_id: str) -> Dict[str, Any]:
+        """查询指定槽位的健康值"""
+        registry = self._execution_facade.body_registry.load_registry()
+        meta = registry.load_slot_meta(slot_id)
+        if meta is None:
+            raise HTTPException(status_code=404, detail=f"Slot {slot_id} not found")
+        return {
+            "slot_id": slot_id,
+            "health_score": getattr(meta, "health_score", 0.0),
+            "improvement_count": getattr(meta, "improvement_count", 0),
+            "last_improvement_at": getattr(meta, "last_improvement_at", None),
+            "health_history": getattr(meta, "health_history", []),
+        }
 
     def _ensure_watch_window_task(self) -> None:
         self._watch_window_executor.ensure_watch_window_task()

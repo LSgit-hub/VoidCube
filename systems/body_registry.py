@@ -78,6 +78,13 @@ class BodySlotMeta(BaseModel):
     last_materialized_at: Optional[datetime] = None
     runtime_bootstrapped_at: Optional[datetime] = None
 
+    health_score: float = 0.0
+    health_history: list[dict] = Field(default_factory=list)
+    improvement_count: int = 0
+    last_improvement_at: Optional[str] = None
+    previous_healthy_commit: Optional[str] = None
+    decay_applied_at: Optional[str] = None
+
 
 class BodyRegistry(BaseModel):
     slot_ids: list[str] = Field(default_factory=lambda: list(DEFAULT_SLOT_IDS))
@@ -107,6 +114,19 @@ class BodyLaunchTarget(BaseModel):
     candidate_branch: Optional[str] = None
     candidate_commit: Optional[str] = None
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class BodyImprovementReport(BaseModel):
+    """Agent 提交的替身改进报告（API 契约）"""
+    slot_id: str
+    task_id: str
+    commit_hash: str
+    branch_name: str = ""
+    diff_summary: str
+    changed_files: list[str] = Field(default_factory=list)
+    learning_refs: list[dict] = Field(default_factory=list)
+    improvement_description: str
+    executed_at: str = ""
 
 
 class BodyRegistryManager:
@@ -169,6 +189,20 @@ class BodyRegistryManager:
 
     def list_slots(self) -> dict[str, BodySlotMeta]:
         return {slot_id: self.load_slot_meta(slot_id) for slot_id in self.slot_ids}
+
+    def get_shell_slot(self) -> Optional[BodySlotMeta]:
+        """获取 shell 槽位的元数据"""
+        registry = self.load_registry()
+        if registry.shell_slot:
+            return self.load_slot_meta(registry.shell_slot)
+        return None
+
+    def get_active_slot(self) -> Optional[BodySlotMeta]:
+        """获取 active 槽位的元数据"""
+        registry = self.load_registry()
+        if registry.active_slot:
+            return self.load_slot_meta(registry.active_slot)
+        return None
 
     def load_registry(self) -> BodyRegistry:
         if not self.registry_path.exists():

@@ -1492,3 +1492,323 @@ class PlanningRuntimeMixin:
                 "focus": focus or None,
             },
         }
+
+    def _calculate_learning_quality_score(self) -> float:
+        completed_count = 0
+        quality_sum = 0.0
+        freshness_sum = 0.0
+        now = datetime.now(timezone.utc)
+
+        for task in self._self_evolution_queue.list_tasks(status="completed"):
+            if self._task_runtime_family(task) != "self_learning":
+                continue
+            completed_count += 1
+
+            task_quality = float(task.metadata.get("quality_score") or 0.5)
+            quality_sum += task_quality
+
+            completed_at = task.metadata.get("completed_at")
+            if completed_at:
+                try:
+                    t = datetime.fromisoformat(str(completed_at))
+                    if t.tzinfo is None:
+                        t = t.replace(tzinfo=timezone.utc)
+                    age_days = (now - t).days
+                    freshness = max(0.0, 1.0 - age_days / 90.0)
+                    freshness_sum += freshness
+                except Exception:
+                    freshness_sum += 0.5
+
+        if completed_count == 0:
+            return 0.0
+
+        avg_quality = quality_sum / completed_count
+        avg_freshness = freshness_sum / completed_count
+        score = avg_quality * 60 + avg_freshness * 40
+        return max(0.0, min(100.0, score))
+
+    def _update_task_status(
+        self,
+        task_id: str,
+        status: str,
+        *,
+        reason: Optional[str] = None,
+        actor: str = "supervisor",
+    ) -> None:
+        self._self_evolution_queue.update_status(
+            task_id,
+            status=status,
+            actor=actor,
+            reason=reason or f"Status updated to {status}",
+        )
+
+    def _calc_file_repeat_penalty(self, slot_id: str, changed_files: list[str]) -> float:
+        penalty = 0.0
+        registry = self._execution_facade.body_registry.load_registry()
+        try:
+            meta = registry.load_slot_meta(slot_id)
+        except Exception:
+            return penalty
+
+        file_change_counts: dict[str, int] = {}
+        for history in meta.health_history:
+            if history.get("reason") == "time_decay":
+                continue
+            report_files = history.get("changed_files", [])
+            for f in report_files:
+                file_change_counts[f] = file_change_counts.get(f, 0) + 1
+
+        for f in changed_files:
+            count = file_change_counts.get(f, 0)
+            if count > 0:
+                penalty += count * 5.0
+
+        return penalty
+
+    def _calc_learning_freshness(self, learning_refs: list[str]) -> float:
+        if not learning_refs:
+            return 0.0
+
+        now = datetime.now(timezone.utc)
+        total_freshness = 0.0
+
+        for ref in learning_refs:
+            try:
+                age_days = int(ref.split("_")[-1]) if "_" in ref else 0
+                freshness = max(0.0, 1.0 - age_days / 90.0)
+                total_freshness += freshness
+            except Exception:
+                total_freshness += 0.5
+
+        avg_freshness = total_freshness / len(learning_refs)
+        return avg_freshness * 20.0
+
+    def _matches_forbidden_pattern(self, file_path: str, patterns: list[str]) -> bool:
+        import fnmatch
+
+        path = str(file_path).strip().replace("\\", "/")
+        for pattern in patterns:
+            if fnmatch.fnmatch(path, pattern):
+                return True
+        return False
+
+    def _get_probe_score(self, slot_id: str, slot_meta) -> float:
+        if slot_meta.last_probe_result:
+            probe = slot_meta.last_probe_result
+            checks_total = len(probe.get("checks", []))
+            checks_passed = sum(1 for c in probe.get("checks", []) if c.get("passed"))
+            if checks_total > 0:
+                return (checks_passed / checks_total) * 20.0
+
+        if slot_meta.materialized_from:
+            try:
+                registry = self._execution_facade.body_registry.load_registry()
+                parent_meta = registry.load_slot_meta(slot_meta.materialized_from)
+                if parent_meta.last_probe_result:
+                    probe = parent_meta.last_probe_result
+                    checks_total = len(probe.get("checks", []))
+                    checks_passed = sum(1 for c in probe.get("checks", []) if c.get("passed"))
+                    if checks_total > 0:
+                        return (checks_passed / checks_total) * 15.0
+            except Exception:
+                pass
+
+        return 10.0
+
+    def _apply_cumulative_decay(self, slot_meta) -> None:
+        if slot_meta.decay_applied_at is None:
+            slot_meta.decay_applied_at = datetime.now(timezone.utc).isoformat()
+            return
+
+        try:
+            last_decay = datetime.fromisoformat(slot_meta.decay_applied_at)
+        except Exception:
+            slot_meta.decay_applied_at = datetime.now(timezone.utc).isoformat()
+            return
+
+        now = datetime.now(timezone.utc)
+        days_since_decay = (now - last_decay).days
+
+        if days_since_decay <= 0:
+            return
+
+        if slot_meta.last_improvement_at is None:
+            days_since_improvement = days_since_decay
+        else:
+            try:
+                last_improvement = datetime.fromisoformat(slot_meta.last_improvement_at)
+                days_since_improvement = (now - last_improvement).days
+            except Exception:
+                days_since_improvement = days_since_decay
+
+        if days_since_improvement <= 30:
+            total_decay = 0.0
+        elif days_since_improvement <= 90:
+            daily_decay = ((days_since_improvement - 30) / 60) * 2.0
+            total_decay = daily_decay * min(days_since_decay, days_since_improvement - 30)
+        else:
+            total_decay = 2.0 * days_since_decay
+
+        slot_meta.health_score = max(0.0, slot_meta.health_score - total_decay)
+        slot_meta.decay_applied_at = now.isoformat()
+
+        if total_decay > 0:
+            slot_meta.health_history.append({
+                "score_delta": -total_decay,
+                "reason": "time_decay",
+                "reviewed_at": now.isoformat(),
+            })
+
+    async def _llm_review_diff(
+        self,
+        diff_text: str,
+        description: str,
+        learning_refs: list[str],
+    ) -> float:
+        learning_context = ""
+        if learning_refs:
+            try:
+                learning_context = "学习成果引用: " + ", ".join(learning_refs)
+            except Exception:
+                learning_context = ""
+
+        prompt = (
+            f"评估以下替身 Agent 的代码改进质量（0-20分）。\n\n"
+            f"【Agent 自述】{description}\n"
+            f"【引用的学习成果】{learning_context}\n"
+            f"【代码 Diff】\n{diff_text[:3000]}\n\n"
+            f"评分维度：\n"
+            f"- 改动是否实质性（非格式化/非注释修改）\n"
+            f"- 改动是否有学习成果支撑\n"
+            f"- 改动是否在合理范围内（非破坏性变更）\n"
+            f"- 代码质量是否提升\n"
+            f"输出JSON: {{\"score\": 0-20, \"reason\": \"...\"}}"
+        )
+
+        try:
+            result = self._llm_client.complete_json(
+                system_prompt="你是代码审查专家。客观评估代码改进质量。",
+                user_payload={"task": prompt},
+                task="scholar.revision",
+            )
+            if isinstance(result, dict):
+                return float(result.get("score", 10))
+        except Exception:
+            pass
+
+        return 10.0
+
+    async def _review_body_improvement(self, report):
+        if hasattr(report, 'model_dump'):
+            report_dict = report.model_dump()
+        elif isinstance(report, dict):
+            report_dict = report
+        else:
+            return {"score_delta": 0, "reject_reason": "invalid_report_type"}
+
+        slot_id = report_dict.get("slot_id")
+        if not slot_id:
+            return {"score_delta": 0, "reject_reason": "missing_slot_id"}
+
+        changed_files = report_dict.get("changed_files", [])
+        commit_hash = report_dict.get("commit_hash")
+
+        if not changed_files or not commit_hash:
+            return {"score_delta": 0, "reject_reason": "empty_improvement"}
+
+        registry = self._execution_facade.body_registry.load_registry()
+        try:
+            slot_meta = registry.load_slot_meta(slot_id)
+        except Exception:
+            return {"score_delta": 0, "reject_reason": "slot_not_found"}
+
+        await self._apply_cumulative_decay(slot_meta)
+
+        from systems.evolution_boundary import classify_agent_evolution_changes
+        boundary = classify_agent_evolution_changes(changed_files)
+        boundary_score = boundary.score
+
+        file_penalty = self._calc_file_repeat_penalty(slot_id, changed_files)
+
+        learning_refs = report_dict.get("learning_refs", [])
+        learning_freshness = self._calc_learning_freshness(learning_refs)
+
+        probe_score = self._get_probe_score(slot_id, slot_meta)
+
+        diff_text = ""
+        try:
+            import subprocess
+            worktree_path = slot_meta.worktree_path
+            result = subprocess.run(
+                ["git", "show", commit_hash, "--stat"],
+                cwd=worktree_path,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                diff_text = result.stdout
+        except Exception:
+            pass
+
+        llm_score = await self._llm_review_diff(
+            diff_text,
+            report_dict.get("improvement_description", ""),
+            learning_refs,
+        )
+
+        score_delta = (
+            llm_score * 0.35
+            + boundary_score * 0.20
+            + learning_freshness * 0.15
+            + (20.0 if learning_refs else 0.0) * 0.15
+            + probe_score * 0.25
+            - file_penalty
+        )
+        score_delta = max(-20.0, min(30.0, score_delta))
+
+        if score_delta > 0 and slot_meta.health_score < 100:
+            slot_meta.health_score = min(100.0, slot_meta.health_score + score_delta)
+        elif score_delta < 0:
+            slot_meta.health_score = max(0.0, slot_meta.health_score + score_delta)
+
+        now = datetime.now(timezone.utc)
+        slot_meta.health_history.append({
+            "score_delta": score_delta,
+            "reason": "body_improvement",
+            "task_id": report_dict.get("task_id"),
+            "commit_hash": commit_hash,
+            "reviewed_at": now.isoformat(),
+            "changed_files": changed_files,
+        })
+        slot_meta.improvement_count += 1
+        slot_meta.last_improvement_at = now.isoformat()
+
+        if score_delta > 0:
+            slot_meta.previous_healthy_commit = commit_hash
+
+        self._execution_facade.body_registry.save_slot_meta(slot_meta)
+
+        active_slot = self._execution_facade.body_registry.get_active_slot()
+        active_health = active_slot.health_score if active_slot else 0.0
+
+        if slot_meta.health_score >= active_health + 15:
+            await self._emit_switch_suggestion_event(slot_id)
+        elif slot_meta.health_score > active_health:
+            await self._emit_switch_suggestion_event(slot_id)
+
+        return {
+            "score_delta": score_delta,
+            "health_score": slot_meta.health_score,
+            "improvement_count": slot_meta.improvement_count,
+        }
+
+    async def _emit_switch_suggestion_event(self, slot_id: str):
+        try:
+            await self._governor.evaluate({
+                "event_type": "switch_suggestion",
+                "slot_id": slot_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception:
+            logger.warning("Failed to emit switch_suggestion event for slot %s", slot_id)

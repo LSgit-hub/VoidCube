@@ -16,6 +16,7 @@ GovernorEventType = Literal[
     "switch_request",
     "rollback_request",
     "post_switch_review",
+    "switch_suggestion",
 ]
 GovernorDecisionType = Literal[
     "approve",
@@ -103,6 +104,8 @@ class GovernorDecisionEngine:
             response = self._evaluate_rollback_request(request)
         elif request.event_type == "post_switch_review":
             response = self._evaluate_post_switch_review(request, slot_meta=slot_meta)
+        elif request.event_type == "switch_suggestion":
+            response = self._evaluate_switch_suggestion(request, slot_meta=slot_meta)
         else:
             response = GovernorResponse(
                 decision="request_more_evidence",
@@ -397,6 +400,92 @@ class GovernorDecisionEngine:
                             "next_state": "shell",
                         },
                     ),
+                )
+            ],
+        )
+
+    def _evaluate_switch_suggestion(
+        self,
+        request: GovernorRequest,
+        *,
+        slot_meta: Optional[BodySlotMeta],
+    ) -> GovernorResponse:
+        slot_id = request.body_id
+        if not slot_id and slot_meta:
+            slot_id = slot_meta.slot_id
+
+        if slot_meta and slot_meta.body_state not in {"shell", "candidate"}:
+            return GovernorResponse(
+                decision="request_more_evidence",
+                confidence=0.5,
+                risk_level="medium",
+                reasoning_summary=(
+                    f"Switch suggestion received but slot {slot_id} is in state {slot_meta.body_state!r}. "
+                    f"Only shell or candidate slots can be promoted. "
+                    f"First mark as candidate and run probe."
+                ),
+                required_actions=[
+                    GovernorAction(
+                        action_type="record_evolution_event",
+                        slot_id=slot_id,
+                        notes="Switch suggestion recorded but slot not in valid state.",
+                    )
+                ],
+            )
+
+        health_score = float(request.evidence.get("health_score") or 0)
+        improvement_count = int(request.evidence.get("improvement_count") or 0)
+        active_health = float(request.evidence.get("active_health_score") or 0)
+
+        # Relative threshold: shell must exceed active by >= 15, OR simply surpass active
+        threshold_met = (
+            (active_health == 0 and health_score >= 60)  # first switch: lower bar
+            or health_score > active_health              # surpass active regardless
+            or (active_health > 0 and health_score >= active_health + 15)  # relative threshold
+        )
+
+        if threshold_met and improvement_count >= 1:
+            return GovernorResponse(
+                decision="approve",
+                confidence=0.8,
+                risk_level="low",
+                reasoning_summary=(
+                    f"Switch suggestion approved. Slot {slot_id} health score {health_score}/100 "
+                    f"(active: {active_health}/100, delta: +{health_score - active_health:.0f}) "
+                    f"with {improvement_count} improvements. Ready for probe and switch."
+                ),
+                required_actions=[
+                    GovernorAction(
+                        action_type="issue_probe_lease",
+                        slot_id=slot_id,
+                        notes=f"Health score {health_score} meets threshold for probe.",
+                    )
+                ],
+                writeback_events=[
+                    GovernorWritebackEvent(
+                        event_type="switch_suggestion_approved",
+                        payload={
+                            "slot_id": slot_id,
+                            "health_score": health_score,
+                            "improvement_count": improvement_count,
+                        },
+                    ),
+                ],
+            )
+
+        return GovernorResponse(
+            decision="request_more_evidence",
+            confidence=0.6,
+            risk_level="low",
+            reasoning_summary=(
+                f"Switch suggestion noted. Slot {slot_id} health score {health_score}/100 "
+                f"with {improvement_count} improvements. Continue accumulating improvements."
+            ),
+            required_actions=[
+                GovernorAction(
+                    action_type="record_evolution_event",
+                    slot_id=slot_id,
+                    notes=f"Switch suggestion recorded. Health score: {health_score}",
                 )
             ],
         )

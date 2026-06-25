@@ -22,8 +22,8 @@ def normalize_runtime_task_family(
     normalized = _normalized_optional(value)
     if normalized is None:
         return default
-    if normalized in {"body_upgrade", "body_switch"}:
-        return normalized
+    if normalized in {"body_upgrade", "body_switch", "body_improvement"}:
+        return "body_upgrade"
     if normalized in {"memory", "memory_task", "memory_maintenance"}:
         return "memory_maintenance"
     if normalized in {"self_learning", "self_learning_followup"}:

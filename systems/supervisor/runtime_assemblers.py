@@ -123,4 +123,5 @@ def assemble_supervisor_execution_runtime(supervisor: Any) -> None:
         body_lifecycle=supervisor._body_lifecycle_executor,
         body_upgrade=supervisor._body_upgrade_executor,
         memory_maintenance=supervisor._memory_maintenance_executor,
+        supervisor=supervisor,
     )

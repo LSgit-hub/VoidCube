@@ -51,6 +51,7 @@ class EvolutionBoundaryReport:
     allowed_files: List[str]
     forbidden_files: List[str]
     unknown_files: List[str]
+    score: float = 0.0
 
     @property
     def violations(self) -> List[str]:
@@ -68,6 +69,7 @@ class EvolutionBoundaryReport:
             "unknown_files": self.unknown_files,
             "violations": self.violations,
             "ok": self.ok,
+            "score": self.score,
         }
 
 
@@ -113,11 +115,22 @@ def classify_agent_evolution_changes(changed_files: Iterable[str]) -> EvolutionB
         else:
             unknown_files.append(path)
 
+    total_files = len(normalized_files)
+    if total_files == 0:
+        score = 0.0
+    else:
+        allowed_ratio = len(allowed_files) / total_files
+        forbidden_penalty = len(forbidden_files) / total_files * 0.5
+        unknown_penalty = len(unknown_files) / total_files * 0.3
+        raw_score = max(0.0, allowed_ratio - forbidden_penalty - unknown_penalty)
+        score = raw_score * 20.0
+
     return EvolutionBoundaryReport(
         changed_files=normalized_files,
         allowed_files=allowed_files,
         forbidden_files=forbidden_files,
         unknown_files=unknown_files,
+        score=score,
     )
 
 

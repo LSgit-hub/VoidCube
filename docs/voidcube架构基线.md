@@ -17,6 +17,7 @@
 详细协议、操作步骤和阶段计划已移至代码内文档和架构基线。本文件为单一真实源（single source of truth）。
 
 参考：
+
 - Mem 子系统文档：`Mem/docs/`
 - 技能文档：`skills/`
 - 系统代码即文档：`systems/`、`agent/`、`tools/`
@@ -45,7 +46,7 @@ VoidCube 的目标形态是：
 
 **Agent 的持续改进、验证、替换与回滚。**
 
-当前阶段主要需要持续升级的对象是子 Agent 本身，而不是优先要求 CLI、网关、Mem、监督者或执行器先自我升级。后者是支撑系统，目标是让 Agent 能稳定变好。
+当前阶段主要需要持续升级的对象是子Agent中的替身，而不是优先要求 CLI、网关、Mem、监督者或执行器先自我升级。后者是支撑系统，目标是让 Agent 能稳定变好。
 
 ## 3. 核心组件
 
@@ -149,6 +150,7 @@ Mem 是 VoidCube 的长期记忆与治理灵魂，使用 API-B。
 **LLM-First 原则**：Mem 的核心价值在于智能——充分利用已配置的记忆模型（API-B）来理解内容。LLM 参与和不参与有明确边界：
 
 **LLM 参与（需要内容理解）**：
+
 - 对话→事件提取（`LLMEventExtractionBackend` 语义理解 vs 关键词正则）
 - 场景/弧线/纪元摘要（`LLMScholarBackend` 自然语言生成 vs 模板填充）
 - 升级重摘要（`_llm_escalate_summary()` 逐级提升抽象层次）
@@ -158,6 +160,7 @@ Mem 是 VoidCube 的长期记忆与治理灵魂，使用 API-B。
 - 语义搜索（LLM Embedding 余弦相似度）
 
 **程序执行（不需要智能）**：
+
 - Tier 1 存取（SQLite CRUD）、衰减公式（`score *= 0.99`）、权重计算（`compute_dynamic_weight()` 数学公式）
 - Pin/Hide（布尔标记）、访问/引用计数（SQL UPDATE）、升级触发（年龄比较）
 - 最终 DELETE（`WHERE status='purged' AND age>90d` 纯 SQL）
@@ -217,15 +220,15 @@ Mem 的记忆架构采用**短长期双层设计**，从根本上解决"压缩�
 - **数据模型**：`sessions` 表 + `turns` 表 + `turns_archive` 表。session 为根节点，turns 为叶子节点，形成会话树形目录
 - **保留窗口**：默认 30 天。窗口内的所有会话内容完整保存，不做摘要、不合并、不删除
 - **时间轴索引**：`idx_turns_timestamp` + `idx_turns_session`，支持按时间点/时间段/会话快速检索原始对话
-- **衰减机制**：relevance_score 按指数衰减（默认每天 ×0.99），低于阈值（默认 0.1）的 turn 标记为可压缩候选，但内容不自动删除
-- **与现有 memory_service 的关系**：直接扩展 `systems/memory/memory_service.py` 的 SQLite schema，增加 sessions/turns/turns_archive 三张表，复用现有的 FastAPI 路由、decay loop、gateway 注册等基础设施
+- **衰减机制**：relevance\_score 按指数衰减（默认每天 ×0.99），低于阈值（默认 0.1）的 turn 标记为可压缩候选，但内容不自动删除
+- **与现有 memory\_service 的关系**：直接扩展 `systems/memory/memory_service.py` 的 SQLite schema，增加 sessions/turns/turns\_archive 三张表，复用现有的 FastAPI 路由、decay loop、gateway 注册等基础设施
 
 **Tier 2 — 长期编年史记忆（Mem Pipeline）**：
 
 - **触发时机**：turn 超过 30 天保留窗口 OR Tier 1 turns 表行数超过阈值（默认 10000 条）
 - **压缩流程**：选中的 turns → TranscriptTurn 序列 → ChroniclePipeline.ingest() → Event/Scene/Arc/Epoch + ProfileMemory
-- **反向引用**：每个 Event 的 `source_turns` 字段记录原始 turn_id 列表，Scene/Arc 通过 `evidence_refs` 可逐层追溯到原始对话
-- **压缩后处理**：压缩完成的 turns 从 `turns` 表移至 `turns_archive` 表（保留 turn_id + 时间锚点 + 摘要，原始内容可选删除）
+- **反向引用**：每个 Event 的 `source_turns` 字段记录原始 turn\_id 列表，Scene/Arc 通过 `evidence_refs` 可逐层追溯到原始对话
+- **压缩后处理**：压缩完成的 turns 从 `turns` 表移至 `turns_archive` 表（保留 turn\_id + 时间锚点 + 摘要，原始内容可选删除）
 - **与现有 Mem Pipeline 完全兼容**：Tier 2 就是现有的 ChroniclePipeline + MemoryMaintenanceEngine，不需要修改任何 Mem 内部逻辑
 
 **双层协作流程**：
@@ -250,29 +253,25 @@ Mem 的记忆架构采用**短长期双层设计**，从根本上解决"压缩�
 
 **与现有系统的复用关系**（避免重复造轮子）：
 
-| 现有组件 | 复用方式 |
-|---------|---------|
-| `systems/memory/memory_service.py` | 扩展 SQLite schema，增加 sessions/turns/turns_archive 三张表 |
-| `Mem/src/memai/pipeline.py` (ChroniclePipeline) | 直接作为 Tier 2 压缩引擎，无需修改 |
-| `Mem/src/memai/schema.py` (TranscriptTurn) | 作为 Tier 1 → Tier 2 的数据转换格式 |
-| `Mem/src/memai/query.py` (MemoryQueryEngine) | 扩展 source_turns 回查 Tier 1 的能力 |
-| `Mem/src/memai/repository.py` (MemoryStateRepository) | 增量更新机制不变 |
-| `Mem/src/memai/maintenance.py` (MemoryMaintenanceEngine) | 四级结构化压缩不变 |
-| `Mem/src/memai/governance.py` + `governance_repository.py` | 压缩事件记录为治理审计日志 |
-| `plugins/memory/mem/governor_bridge.py` | 治理桥接不变 |
+| 现有组件                                                       | 复用方式                                                  |
+| ---------------------------------------------------------- | ----------------------------------------------------- |
+| `systems/memory/memory_service.py`                         | 扩展 SQLite schema，增加 sessions/turns/turns\_archive 三张表 |
+| `Mem/src/memai/pipeline.py` (ChroniclePipeline)            | 直接作为 Tier 2 压缩引擎，无需修改                                 |
+| `Mem/src/memai/schema.py` (TranscriptTurn)                 | 作为 Tier 1 → Tier 2 的数据转换格式                            |
+| `Mem/src/memai/query.py` (MemoryQueryEngine)               | 扩展 source\_turns 回查 Tier 1 的能力                        |
+| `Mem/src/memai/repository.py` (MemoryStateRepository)      | 增量更新机制不变                                              |
+| `Mem/src/memai/maintenance.py` (MemoryMaintenanceEngine)   | 四级结构化压缩不变                                             |
+| `Mem/src/memai/governance.py` + `governance_repository.py` | 压缩事件记录为治理审计日志                                         |
+| `plugins/memory/mem/governor_bridge.py`                    | 治理桥接不变                                                |
 
 ### 3.4.2 记忆压缩双层体系（更新）
 
 在双层架构下，Mem 的压缩分两个阶段运作：
 
-- **Tier 1 衰减管理**（memory_service）：turns 在 30 天保留窗口内完整保留。超过 30 天后，先降 relevance_score（指数衰减），再标记为压缩候选。**仅当 Tier 2 已生成对应的结构化记忆（Event/Scene）后，才将原始 turn 移至 archive 表。不压缩、不合并原始对话文本——只做时间窗口管理和衰减标记。**
-
-- **Tier 2 编年史压缩**（ChroniclePipeline）：将超过保留窗口的 turns 批量送入 ChroniclePipeline，**LLM 优先 + 启发式降级**。当 `DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY` 环境变量存在时，使用 `LLMEventExtractionBackend`（LLM 理解语义提取事件）和 `LLMScholarBackend`（LLM 生成场景/弧线/纪元摘要）。无 API 凭据时自动降级为 `HeuristicEventExtractionBackend`（关键词正则匹配）和 `HeuristicScholarBackend`（模板填充）。**LLM 压缩才能真正理解内容语义——区分"决定重构架构"和"嗯好的"，而不是仅靠关键词匹配。** 压缩不可逆，但通过 source_turns 保留反向引用链路。
-
+- **Tier 1 衰减管理**（memory\_service）：turns 在 30 天保留窗口内完整保留。超过 30 天后，先降 relevance\_score（指数衰减），再标记为压缩候选。**仅当 Tier 2 已生成对应的结构化记忆（Event/Scene）后，才将原始 turn 移至 archive 表。不压缩、不合并原始对话文本——只做时间窗口管理和衰减标记。**
+- **Tier 2 编年史压缩**（ChroniclePipeline）：将超过保留窗口的 turns 批量送入 ChroniclePipeline，**LLM 优先 + 启发式降级**。当 `DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY` 环境变量存在时，使用 `LLMEventExtractionBackend`（LLM 理解语义提取事件）和 `LLMScholarBackend`（LLM 生成场景/弧线/纪元摘要）。无 API 凭据时自动降级为 `HeuristicEventExtractionBackend`（关键词正则匹配）和 `HeuristicScholarBackend`（模板填充）。**LLM 压缩才能真正理解内容语义——区分"决定重构架构"和"嗯好的"，而不是仅靠关键词匹配。** 压缩不可逆，但通过 source\_turns 保留反向引用链路。
 - **Tier 2 结构化四级压缩**（MemoryMaintenanceEngine）：对 Event→Scene→Arc→Epoch 四层对象做分层压缩与替代（supersede），超期 Scene（>30天）压缩入父 Arc，超期 Arc（>180天）压缩入父 Epoch，超期 Epoch（>365天）进一步压缩。默认使用 LLMScholarBackend（API-B）生成自然压缩摘要，无 API 凭据时自动降级到 HeuristicScholarBackend。**已接入运行时**：Governor Mode 下通过内生驱动→任务队列触发，Memory Mode 下每 3600s 自动执行。
-
-- **压缩结果写回 SQLite**（`compressed_memories` 表）：Tier 2 压缩产出的 Event/Scene/Arc/Epoch **不仅存在于 Mem Pipeline 内存和 mem_state.json 中，同时写回 SQLite 的 `compressed_memories` 表**。每条记录带 `source_turns`（反向引用原始 turn_id）、`parent_id`（层级归属）、`compression_level`（压缩等级）、`status`（active/superseded/purged）、`weight`（查询权重）。这使得 SQLite 成为 Tier 1（原始会话）+ Tier 2（压缩记忆）的统一查询入口，不再需要分别访问两个存储系统。
-
+- **压缩结果写回 SQLite**（`compressed_memories` 表）：Tier 2 压缩产出的 Event/Scene/Arc/Epoch **不仅存在于 Mem Pipeline 内存和 mem\_state.json 中，同时写回 SQLite 的** **`compressed_memories`** **表**。每条记录带 `source_turns`（反向引用原始 turn\_id）、`parent_id`（层级归属）、`compression_level`（压缩等级）、`status`（active/superseded/purged）、`weight`（查询权重）。这使得 SQLite 成为 Tier 1（原始会话）+ Tier 2（压缩记忆）的统一查询入口，不再需要分别访问两个存储系统。
 - **压缩等级递进与最终清退**（生命周期管理，LLM 全程参与）：`compressed_memories` 中的条目按时间自动逐级升档，**每级升级由 LLM 生成更高抽象层次的摘要**（非机械贴标签），最终清退前由 **LLM 终审**防误删：
 
 ```text
@@ -308,7 +307,7 @@ Level 4: Final   (>730天)  weight=0.05  ← 查询权重极低
               └── 同上四步，幂等执行
 ```
 
-双路径保证：memory_service 进程启动后自主执行（不依赖 Supervisor 是否启动），Supervisor 触发作为冗余确保规则一定被调用。两次执行完全幂等——`_tier2_bridge_cycle` 只处理 `compressed_to_tier2=0` 的 turns，`_apply_compression_lifecycle` 只处理超过年龄阈值的条目。
+双路径保证：memory\_service 进程启动后自主执行（不依赖 Supervisor 是否启动），Supervisor 触发作为冗余确保规则一定被调用。两次执行完全幂等——`_tier2_bridge_cycle` 只处理 `compressed_to_tier2=0` 的 turns，`_apply_compression_lifecycle` 只处理超过年龄阈值的条目。
 
 **可观测性**：`GET /compressed/rules-status` 返回每条规则的最后执行时间和累计执行次数。Supervisor UI 的 `tier1_stats` 面板包含 Tier 1 + Tier 2 的统计摘要。
 
@@ -327,13 +326,13 @@ W_final   = W_dynamic  otherwise
 
 **五个维度**：
 
-| 维度 | 信号源 | 计算公式 | 最大加成 | 更新时机 |
-|------|--------|---------|---------|---------|
-| **W_base** 结构基础 | `compression_level` (0-4) | 硬编码：Event=1.0, Scene=0.7, Arc=0.4, Epoch=0.2, Final=0.05 | — | 创建时 + 升级时 |
-| **content_bonus** 内容重要性 | `event_kind` (Mem 提取) | `_CONTENT_IMPORTANCE_BONUS`: decision=+0.15, correction/shift=+0.12, completion/conflict=+0.08, blocker=+0.06, progress=+0.04, None=0 | +0.15 | 压缩写回时 |
-| **access_bonus** 访问频率 | `access_count` (每次查询递增) | `min(log(access+1)/log(101), 1.0) × 0.10` — 100 次访问后饱和 | +0.10 | 每次查询命中时 |
-| **citation_bonus** 引用次数 | `citation_count` (被升级替代时递增) | `min(citation/5, 1.0) × 0.10` — 5 次引用后饱和 | +0.10 | 生命周期升级时 |
-| **pinned/hidden** 用户反馈 | `pinned`, `hidden` (API 设置) | pinned → W=1.0 锁定，hidden → W=0.0 排除 | ±1.0 覆盖 | `POST /compressed/{id}/pin\|hide\|unpin` |
+| 维度                       | 信号源                         | 计算公式                                                                                                                                  | 最大加成    | 更新时机                                     |
+| ------------------------ | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------- | ---------------------------------------- |
+| **W\_base** 结构基础         | `compression_level` (0-4)   | 硬编码：Event=1.0, Scene=0.7, Arc=0.4, Epoch=0.2, Final=0.05                                                                              | —       | 创建时 + 升级时                                |
+| **content\_bonus** 内容重要性 | `event_kind` (Mem 提取)       | `_CONTENT_IMPORTANCE_BONUS`: decision=+0.15, correction/shift=+0.12, completion/conflict=+0.08, blocker=+0.06, progress=+0.04, None=0 | +0.15   | 压缩写回时                                    |
+| **access\_bonus** 访问频率   | `access_count` (每次查询递增)     | `min(log(access+1)/log(101), 1.0) × 0.10` — 100 次访问后饱和                                                                                | +0.10   | 每次查询命中时                                  |
+| **citation\_bonus** 引用次数 | `citation_count` (被升级替代时递增) | `min(citation/5, 1.0) × 0.10` — 5 次引用后饱和                                                                                              | +0.10   | 生命周期升级时                                  |
+| **pinned/hidden** 用户反馈   | `pinned`, `hidden` (API 设置) | pinned → W=1.0 锁定，hidden → W=0.0 排除                                                                                                   | ±1.0 覆盖 | `POST /compressed/{id}/pin\|hide\|unpin` |
 
 **实际效果示例**：
 
@@ -378,10 +377,11 @@ API-B 必须独立配置的原因是：
 
 学习任务的类型（由监督者内生驱动产出）：
 
-- **技术情报采集**：搜索、阅读、整理外部技术资料
-- **实验验证**：设计并执行代码实验，验证改进方案的可行性
-- **代码分析**：分析当前代码库的结构、质量、缺陷
-- **差距评估**：对比当前能力与目标能力，识别改进方向
+- **技术情报采集**（`self_learning`）：搜索、阅读、整理外部技术资料
+- **实验验证**（`self_learning`）：设计并执行代码实验，验证改进方案的可行性
+- **代码分析**（`self_learning`）：分析当前代码库的结构、质量、缺陷
+- **差距评估**（`self_learning`）：对比当前能力与目标能力，识别改进方向
+- **替身改进**（`body_improvement`，新增）：学习成果累积质量 >= 阈值（默认 60 分）时产生。Agent 在 shell 槽位 worktree 中编辑代码（白名单目录内，≤5 文件），完成后提交改进报告供监督者审查评分。方向生成采用三层降级：LLM 智能分析 → 改进历史延伸 → Git diff 启发
 
 学习任务的完整链路：
 
@@ -415,10 +415,11 @@ Agent (API-A, AUTO 模式下)
 监督者负责：
 
 - 读取长期记忆、学习结论与系统状态
-- **内生驱动**：基于核心价值观、活动事实和空闲窗口派生探索式学习任务（身体改造进化的依据）
-- **管理任务列表**：将内生驱动产出的学习任务放入任务列表，由监督者统一管理
+- **内生驱动**：基于核心价值观、活动事实和空闲窗口派生探索式学习任务 + 替身改进任务（身体改造进化的依据）
+- **管理任务列表**：将内生驱动产出的学习/改进任务放入任务列表，由监督者统一管理
 - **整理记忆**：定期整理 Mem 中长期记忆，识别学习成果和替身进展
-- **判断身体切换**：在内生驱动下，根据替身进展情况和学习证据，判断是否允许执行身体切换
+- **健康值评估**（新增）：接收 Agent 提交的替身改进报告，LLM 审查代码 diff 质量 + evolution_boundary 合规检查 + probe 通过率 → 计算健康值 score_delta（范围 [-20, 30]），累加至 `BodySlotMeta.health_score`（0-100，含时间衰减）
+- **判断身体切换**：当 shell 健康值超过 active 健康值时产生"建议切换"事件，Governor 独立审查后批准或否决。健康值达标只是建议，Governor 保有最终否决权
 - 对 probe、切换、回滚、回收等关键动作输出治理裁决
 
 监督者不负责：
@@ -433,7 +434,7 @@ Agent (API-A, AUTO 模式下)
 
 监督者的内生驱动器：
 
-监督者的内生驱动器保持原有的三类核心价值观驱动能力，把”延续、真实、创造”映射为可审计的候选任务。**内生驱动器默认使用确定性规则引擎（计数器 + 时间戳判断），当 LLM API 凭据可用时，创造力候选（探索式学习任务）通过 LLM 分析压缩记忆上下文生成智能学习主题——而非简单截取最近文本的前 80 个字符。LLM 生成的主题具有更高的 utility 评分（0.72 vs 0.68），并带 `llm_generated: true` 标记。**无 LLM 时自动降级为确定性文本提取。
+监督者的内生驱动器保持原有的三类核心价值观驱动能力，把”延续、真实、创造”映射为可审计的候选任务。\*\*内生驱动器默认使用确定性规则引擎（计数器 + 时间戳判断），当 LLM API 凭据可用时，创造力候选（探索式学习任务）通过 LLM 分析压缩记忆上下文生成智能学习主题——而非简单截取最近文本的前 80 个字符。LLM 生成的主题具有更高的 utility 评分（0.72 vs 0.68），并带 `llm_generated: true` 标记。\*\*无 LLM 时自动降级为确定性文本提取。
 
 - **延续**：维护长期记忆、演化谱系、队列健康和服务连续性 → 产出记忆维护任务、队列卫生任务
 - **真实**：把错误、不确定性、证据缺口转成复核或学习任务 → 产出错误复核任务、证据验证任务
@@ -463,8 +464,8 @@ Agent (API-A, AUTO 模式下)
 
 监督者有两种运行模式，由 CLI 用户显式控制：
 
-- **Memory Mode（默认）**：仅运行 health_check 和结构化记忆维护循环。内生驱动器不启动。系统只做记忆管理，不派生任务。
-- **Governor Mode（`/auto` 激活）**：启动内生驱动器，按配置周期（默认 300s）产出全部四类候选任务。其中探索式学习任务放入任务列表，Agent 通过网关主动遍历执行。CLI `/auto-q` 退出回到 Memory Mode。
+- **Memory Mode（默认）**：仅运行 health\_check 和结构化记忆维护循环。内生驱动器不启动。系统只做记忆管理，不派生任务。
+- **Governor Mode（`/auto`** **激活）**：启动内生驱动器，按配置周期（默认 300s）产出全部四类候选任务。其中探索式学习任务放入任务列表，Agent 通过网关主动遍历执行。CLI `/auto-q` 退出回到 Memory Mode。
 
 正式身体切换不由任务队列驱动，而是由监督者在整理记忆后内生判断替身进展情况，直接裁决并交由执行器执行，不是用户日常手动操作。
 
@@ -511,9 +512,10 @@ Agent (API-A, AUTO 模式下)
 任务列表不是独立服务，不需要独立进程、独立端口或独立注册。它是监督者模块内部的数据结构，通过网关暴露给 Agent 访问。
 
 当前代码中 `systems/supervisor/task_queue.py` 的 `SelfEvolutionTaskQueue` 就是这个任务列表的雏形。需要修正的是：
-- 任务列表中不应包含 body_upgrade/body_switch 任务（身体切换不由任务队列驱动）
+
+- 任务列表中不应包含 body\_upgrade/body\_switch 任务（身体切换不由任务队列驱动）
 - Agent 应从任务列表主动拉取（pull），而不是监督者推送（push）
-- 当前的 push 路径（supervisor → gateway governance_task_proxy → agent）应废弃
+- 当前的 push 路径（supervisor → gateway governance\_task\_proxy → agent）应废弃
 
 ## 4. 总原则
 
@@ -549,6 +551,7 @@ Agent 可以持有短期工作态，但长期身份、长期记忆、治理历�
 学习任务由监督者内生驱动产出，由 Agent 在 AUTO 模式下执行。身体升级（代码编辑）由 Agent 根据学习成果在 shell 槽位执行。身体切换由执行器执行。
 
 三个动作分属三个角色：
+
 - **监督者**：产出学习任务，管理任务列表，判断身体切换时机
 - **Agent**：执行学习任务，编辑替身代码（身体升级），提交进展到 Mem
 - **执行器**：只执行身体切换机械流程
@@ -690,6 +693,7 @@ planned ──→ approved ──→ running ──→ completed
 ```
 
 合法转换：
+
 - `planned → approved`：监督者放行
 - `planned → paused`：监督者暂停
 - `planned → cancelled`：监督者取消
@@ -699,6 +703,7 @@ planned ──→ approved ──→ running ──→ completed
 - `running → paused`：用户请求到达
 
 禁止的转换：
+
 - `planned → completed`（未经过 approved 和 running）
 - `cancelled → *`（终态不可转换）
 
@@ -742,35 +747,96 @@ Agent (API-A, AUTO 模式下通过网关)
 
 Agent 主动拉取（pull），监督者不推送（push）。学习任务的执行者是 Agent，Agent 可自主决定使用子代理辅助复杂任务。不存在独立的"自学系统"服务。
 
-### 7.4 身体升级链路（Agent 在 Git 替身基础上改进代码）
+### 7.4 身体升级链路（内生驱动 → 学习 → 改进 → 健康值 → 切换）
+
+**阶段 1：学习**
 
 ```text
-Agent (API-A)
-  → 从 Mem 读取学习成果
-  → 通过 Git 了解 shell 槽位替身 Agent 的代码结构和自身短板
-  → 在 Git worktree 中基于替身现有代码进行改进（编辑、commit）
-  → 将 diff、commit 和进展描述提交到 Mem 长期记忆
+监督者 (API-B, 内生驱动)
+  → 产出 self_learning 任务（创造力候选，三层降级）
+  → 放入任务列表
+
+Agent (API-A, AUTO 模式下)
+  → 拉取并执行学习任务（只读研究，不修改代码）
+  → 学习成果写入 Mem 长期记忆
 ```
 
-身体升级不是凭空编写代码，而是在 Git 替身现有代码基础上的持续改进。Git 负责记录"改了什么、从哪来、如何回滚"，Mem 负责记录"为什么改、学到了什么"。
+**阶段 2：替身改进**（学习成果累积质量 >= 60 分时触发）
 
-### 7.5 身体切换链路（监督者判断 + 执行器执行）
+```text
+监督者 (API-B, 内生驱动)
+  → 产出 body_improvement 任务（替身改进候选，三层方向降级）
+  → payload 携带: worktree_path, editable_dirs, forbidden_patterns
+
+Agent (API-A)
+  → 拉取 body_improvement 任务 → 解析约束
+  → 读 Mem（学习成果）+ Git diff(active↔shell) + 读 shell worktree 代码
+  → 在 shell worktree 中编辑代码（白名单目录内，≤5 文件）
+  → Git commit → 提交改进报告(commit_hash + diff + 学习引用) → POST /body/improvement-report
+```
+
+**阶段 3：健康值评分**
 
 ```text
 监督者 (API-B)
-  → 整理 Mem 中长期记忆
-  → 内生驱动判断替身进展情况
-  → 裁决是否允许身体切换
+  → 接收改进报告 → 多重验证:
+      1. commit_hash 归属验证（属于 shell slot worktree）
+      2. 白名单目录检查
+      3. evolution_boundary 细粒度评分 (0-20)
+      4. LLM 审查 diff 质量 (0-20)
+      5. probe 通过率 (0-20，新替身用父 slot 历史平均)
+      6. 学习成果新鲜度 (0-20)
+      7. 同文件重复改进惩罚
+  → 计算 score_delta = Σ(子分 × 权重) - penalty（范围 [-20, 30]）
+  → 应用时间衰减（30天内不衰减，30-90天逐渐衰减）
+  → 累加至 BodySlotMeta.health_score (0-100)
+```
+
+**阶段 4：建议切换**
+
+```text
+监督者 (API-B)
+  → health_score >= active_health + 15 或 shell > active
+  → 产生"建议切换"事件 → Governor 独立审查
+
+Governor (API-B, 治理裁决)
+  → 接收建议切换事件
+  → 独立审查（可批准或否决，保有最终否决权）
+  → 批准后 → 执行器执行切换
+```
+
+**健康值公式**：
+
+```
+health_score = Σ(score_delta) - time_decay, [0, 100]
+
+单次 score_delta =
+    LLM_diff_quality   × 0.35  (0-20)
+  + probe_pass_score   × 0.25  (0-20)
+  + boundary_score     × 0.20  (0-20，细粒度非二元)
+  + learning_freshness × 0.15  (0-20，含时间衰减)
+  + stability_factor   × 0.05  (0-20)
+  - file_repeat_penalty         (同文件第N次改: (N-1)×5)
+```
+
+**关键原则**：健康值达标是"建议"而非"自动"。Governor 保有最终否决权。身体切换不由任务队列驱动。执行器只做切换的机械流程。
+
+### 7.5 身体切换链路（Governor 裁决 + 执行器执行）
+
+```text
+Governor (API-B)
+  → 接收"建议切换"事件（health_score 达标触发）
+  → 独立审查切换必要性（保有否决权）
+  → 批准后交由执行器
 
 执行器
   → 消费裁决
   → 执行身体切换机械流程：
-      shell → prepare → candidate → probe → active → retired
+      shell → candidate → probe → active → retired
   → 执行结果写回 Mem
 ```
 
-身体切换不由任务队列驱动。监督者在整理记忆后内生判断替身进展，直接裁决并交由执行器执行。执行器只做切换的机械流程，不做升级、不做学习、不做判断。
-
+身体切换不由任务队列驱动。Governor 在收到健康值达标的建议切换事件后，独立裁决并交由执行器执行。执行器只做切换的机械流程，不做升级、不做学习、不做判断。
 
 ## 8. 可观测性要求
 
@@ -817,50 +883,42 @@ Agent (API-A)
 **核心设计原则**：
 
 1. **所有任务统一展示**：监督者内生驱动四类候选、任务列表中的学习任务、身体切换任务——全部在同一任务面板中可见。当前 UI 仅展示前 5 条任务（`slice(0,5)`），远远不够。
-
 2. **执行路径一目了然**：每条任务必须标注其执行路径，让观察者能区分：
    - **学习任务**：内生驱动（创造类）→ 任务列表 → Agent pull 执行
    - **身体切换**：监督者裁决 → 执行器执行
    - **记忆维护**：内生驱动（延续类）→ 内部机制直接执行
    - **错误复核**：内生驱动（真实类）→ 内部机制直接执行
    - **队列卫生**：内生驱动（延续类）→ 内部机制直接执行
-
 3. **任务全生命周期可追踪**：每个任务从产生到终态的过程清晰展示，包括 `planned → approved → running → completed/failed` 的每个状态转变时刻。
-
 4. **分类视图，非混乱堆叠**：任务按执行路径分组展示，不是简单的时间线堆砌。推荐分为以下面板：
-
-   | 面板 | 内容 | 执行路径 |
-   |------|------|---------|
-   | **学习任务** | 任务列表中 Agent 待执行/执行中/已完成的学习任务 | 监督者 → 任务列表 → Agent |
-   | **身体切换** | 当前正在进行的身体切换状态（prepare/candidate/probe/active） | 监督者 → 执行器 |
-   | **内生驱动** | 四类候选任务的最近产出记录 | 监督者内生驱动 → 各处置路径 |
-   | **记忆维护** | 记忆压缩、队列卫生等内部维护任务 | 监督者 → 内部机制 |
-
+   | 面板       | 内容                                            | 执行路径               |
+   | -------- | --------------------------------------------- | ------------------ |
+   | **学习任务** | 任务列表中 Agent 待执行/执行中/已完成的学习任务                  | 监督者 → 任务列表 → Agent |
+   | **身体切换** | 当前正在进行的身体切换状态（prepare/candidate/probe/active） | 监督者 → 执行器          |
+   | **内生驱动** | 四类候选任务的最近产出记录                                 | 监督者内生驱动 → 各处置路径    |
+   | **记忆维护** | 记忆压缩、队列卫生等内部维护任务                              | 监督者 → 内部机制         |
 5. **场景（scene）按报告者分域**：场景不是全局单值。每个运行实体只声明自己的"当前在做什么"——
    谁执行、谁上报。这与 §3.6 监督者职责一致（监督者只管理，不执行学习/身体升级/身体切换机械流程），
    也与 §3.4 "记忆管理者与监督者共用 API-B 能力链，但执行者是另一域" 一致。
-
-   | 报告者 | 域 | 合法 scene 值 | 含义 |
-   |--------|----|--------------|------|
-   | **监督者 (Supervisor, API-B)** | 治理身份 | `idle` | 无活动 |
-   |  |  | `planning` | 决策/批准/拒绝任务（管理任务列表） |
-   |  |  | `drive` | 内生驱动：产出候选 |
-   |  |  | `memory` | 直接触摸长期记忆（Mem 内部操作） |
-   |  |  | `maintenance` | 记忆维护/队列卫生 |
-   |  |  | `dispatch` | 发送执行请求到身体执行器 |
-   | **Agent (API-A)** | 学习/升级执行体 | `idle` | 无活动 |
-   |  |  | `learning` | 正在执行学习任务（拉取任务列表后） |
-   |  |  | `code_editing` | 正在编辑替身代码（身体升级） |
-   |  |  | `executing` | 正在执行其他用户任务（直接对话响应） |
-   | **执行器 (Executor)** | 身体切换机械面 | `idle` | 无活动 |
-   |  |  | `body_switch` | 正在执行身体切换流程 |
-
+   | 报告者                         | 域        | 合法 scene 值     | 含义                 |
+   | --------------------------- | -------- | -------------- | ------------------ |
+   | **监督者 (Supervisor, API-B)** | 治理身份     | `idle`         | 无活动                |
+   | <br />                      | <br />   | `planning`     | 决策/批准/拒绝任务（管理任务列表） |
+   | <br />                      | <br />   | `drive`        | 内生驱动：产出候选          |
+   | <br />                      | <br />   | `memory`       | 直接触摸长期记忆（Mem 内部操作） |
+   | <br />                      | <br />   | `maintenance`  | 记忆维护/队列卫生          |
+   | <br />                      | <br />   | `dispatch`     | 发送执行请求到身体执行器       |
+   | **Agent (API-A)**           | 学习/升级执行体 | `idle`         | 无活动                |
+   | <br />                      | <br />   | `learning`     | 正在执行学习任务（拉取任务列表后）  |
+   | <br />                      | <br />   | `code_editing` | 正在编辑替身代码（身体升级）     |
+   | <br />                      | <br />   | `executing`    | 正在执行其他用户任务（直接对话响应） |
+   | **执行器 (Executor)**          | 身体切换机械面  | `idle`         | 无活动                |
+   | <br />                      | <br />   | `body_switch`  | 正在执行身体切换流程         |
    显式边界：
    - 监督者**永远不**上报 `learning` / `code_editing` / `executing` / `body_switch`（§3.6 边界）
    - Agent **永远不**上报 `body_switch`（§3.5 边界：身体切换由执行器执行）
    - 执行器**永远不**上报 `learning` / `code_editing`（§3.5 边界：学习由 Agent 执行）
    - 三个报告者的 scene 互不耦合——一个实体可以处于 `idle`，另一个处于 `learning`，互不影响
-
    旧"5 scene 全局"列表（`idle` / `drive` / `learning` / `body_switch` / `maintenance`）作废。
    任何代码、文档、UI 必须按上表的"报告者→scene"对应关系上报与展示。
 
@@ -870,13 +928,13 @@ Agent (API-A)
    - `🧠 API-B (Supervisor) — <scene> — <title>`
    - `🤖 API-A (Agent) — <scene> — <task_id|—>`
    - `⚙️ Executor — <scene> — <title>`
-   每段含 reachability 指示：✅ 节点可达 / ⚠️ 节点失联（默认 idle）。
-   三段独立呈现，**不允许**把监督者的 `idle` 渲染成"学习中"，
-   也不允许把 Agent 的 `learning` 错配到监督者段。
-
+     每段含 reachability 指示：✅ 节点可达 / ⚠️ 节点失联（默认 idle）。
+     三段独立呈现，**不允许**把监督者的 `idle` 渲染成"学习中"，
+     也不允许把 Agent 的 `learning` 错配到监督者段。
 6. **任务与事件分离**：任务面板展示的是"待完成、正在做、已完成"的任务状态；时间线展示的是"刚刚发生了什么"的事件流。两者不应混淆。
 
 **当前 UI 的问题**：
+
 - 任务面板只展示 5 条，不区分执行路径
 - `scene` 表达过于粗糙（5 个静态场景无法表达系统真实状态）
 - 指标面板只显示 Queued/Approved/Errors/Exec Win 四个数字，无法了解任务全貌
@@ -910,10 +968,10 @@ Agent (API-A)
 
 - **废弃 push 模式**：当前监督者通过 `governance_task_proxy` 直接 push 任务到 Agent，应改为 Agent 在 AUTO 模式下主动遍历监督者任务列表（pull 模式）
 - **子代理应收口为 Agent 自主能力**：当前学习任务的 `delegate_task` 是强制子代理路径。应收口为 Agent 根据任务复杂度自主决定是否使用子代理，而非学习任务的固定模式
-- **激活 CLI `_poll_auto_mode_workflow()`**：当前为显式 no-op，应改为在 AUTO 模式下遍历监督者任务列表并执行学习任务
-- **清理 `SelfEvolutionTaskQueue` 内容**：任务列表应仅包含学习任务，移除 body_upgrade/body_switch 任务类型（身体切换不由任务队列驱动）
-- **补齐 `running` 状态**：当前 `SelfEvolutionTaskStatus` 只有 `planned/deferred/approved/paused/cancelled/completed/failed`，缺少 `running`
-- **清理 `systems/self_learning/service.py` 等独立运行服务**：学习任务的生产归监督者，执行归 Agent，存储归 Mem，不存在独立的"自学系统"运行服务
+- **激活 CLI** **`_poll_auto_mode_workflow()`**：当前为显式 no-op，应改为在 AUTO 模式下遍历监督者任务列表并执行学习任务
+- **清理** **`SelfEvolutionTaskQueue`** **内容**：任务列表应仅包含学习任务，移除 body\_upgrade/body\_switch 任务类型（身体切换不由任务队列驱动）
+- **补齐** **`running`** **状态**：当前 `SelfEvolutionTaskStatus` 只有 `planned/deferred/approved/paused/cancelled/completed/failed`，缺少 `running`
+- **清理** **`systems/self_learning/service.py`** **等独立运行服务**：学习任务的生产归监督者，执行归 Agent，存储归 Mem，不存在独立的"自学系统"运行服务
 - **监督者监控 UI 重新设计**：当前 UI 任务面板只展示 5 条、不区分执行路径、身体切换不可见。按 §8.1 原则重新设计为按执行路径分组的全量任务视图
 
 已完成收口的方向：
@@ -1002,37 +1060,37 @@ VoidCube 的目标不是维护两套运行模式，而是建立一个单机多�
 
 Mem 灵魂层的三个内部角色共享同一 API-B 能力链：
 
-| 角色 | 职责 | 约束 |
-|------|------|------|
-| **Memory Core**（记忆核心） | 长期记忆写入/检索、身份连续性维护、演化谱系保存、学习成果与身体升级进展存储 | 不能直接批准 probe/active/rollback |
-| **Governor Engine**（治理引擎） | 内生驱动产出学习任务（LLM 优先生成智能主题）、管理任务列表、整理记忆判断替身进展、裁决身体切换 | 确定性协议为主，模糊决策时咨询 LLM 推理器（`LLMGovernorReasoner`），LLM 仅为咨询角色不覆盖确定裁决 |
-| **Governance Audit Store**（审计存储） | 每条裁决的 decision_id、观察窗口记录、回滚原因追溯 | 不可篡改 |
+| 角色                               | 职责                                                | 约束                                                               |
+| -------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------- |
+| **Memory Core**（记忆核心）            | 长期记忆写入/检索、身份连续性维护、演化谱系保存、学习成果与身体升级进展存储            | 不能直接批准 probe/active/rollback                                     |
+| **Governor Engine**（治理引擎）        | 内生驱动产出学习任务（LLM 优先生成智能主题）、管理任务列表、整理记忆判断替身进展、裁决身体切换 | 确定性协议为主，模糊决策时咨询 LLM 推理器（`LLMGovernorReasoner`），LLM 仅为咨询角色不覆盖确定裁决 |
+| **Governance Audit Store**（审计存储） | 每条裁决的 decision\_id、观察窗口记录、回滚原因追溯                  | 不可篡改                                                             |
 
 ### 13.3 记忆压缩双层体系
 
-| 层级 | 机制 | 数据模型 | 触发 | 权重 |
-|------|------|---------|------|------|
-| **Tier 0** 原始保留 | 30天内完整保留，不做任何压缩 | SQLite `turns` 表 | Gateway 实时写入 | 1.00 |
-| **Tier 1** 衰减管理 | relevance_score 指数衰减，标记压缩候选 | SQLite `turns` 表 | 运行时周期 loop | 按 relevance |
-| **Tier 2a** 编年史压缩 | turns → ChroniclePipeline.ingest() → Event/Scene/Arc/Epoch **写回 SQLite** `compressed_memories` 表 | SQLite `compressed_memories` (L0 Event) | turns 超30天 或 超10000条 | 1.00 |
-| **Tier 2b** 逐级升档 | Event(L0)→Scene(L1)→Arc(L2)→Epoch(L3)→Final(L4)，每级覆盖替代前级，旧条目标记 superseded | SQLite `compressed_memories` (status/superseded_by) | 按年龄自动：30d→180d→365d→730d | 1.0→0.7→0.4→0.2→0.05 |
-| **Tier 2c** 最终清退 | purged 条目审计保留 90 天后 DELETE | SQLite `compressed_memories` | 自动周期 + 可手动 | 0.00 |
+| 层级                | 机制                                                                                               | 数据模型                                                 | 触发                       | 权重                   |
+| ----------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------- | ------------------------ | -------------------- |
+| **Tier 0** 原始保留   | 30天内完整保留，不做任何压缩                                                                                  | SQLite `turns` 表                                     | Gateway 实时写入             | 1.00                 |
+| **Tier 1** 衰减管理   | relevance\_score 指数衰减，标记压缩候选                                                                     | SQLite `turns` 表                                     | 运行时周期 loop               | 按 relevance          |
+| **Tier 2a** 编年史压缩 | turns → ChroniclePipeline.ingest() → Event/Scene/Arc/Epoch **写回 SQLite** `compressed_memories` 表 | SQLite `compressed_memories` (L0 Event)              | turns 超30天 或 超10000条     | 1.00                 |
+| **Tier 2b** 逐级升档  | Event(L0)→Scene(L1)→Arc(L2)→Epoch(L3)→Final(L4)，每级覆盖替代前级，旧条目标记 superseded                        | SQLite `compressed_memories` (status/superseded\_by) | 按年龄自动：30d→180d→365d→730d | 1.0→0.7→0.4→0.2→0.05 |
+| **Tier 2c** 最终清退  | purged 条目审计保留 90 天后 DELETE                                                                       | SQLite `compressed_memories`                         | 自动周期 + 可手动               | 0.00                 |
 
-**查询默认行为**：`search_compressed` 只返回 `status='active'` 且 `hidden=0` 的条目，按 `dynamic_weight DESC` 排序。dynamic_weight 融合五个维度：W_base(等级) + content_bonus(内容重要性) + access_bonus(访问频率) + citation_bonus(引用次数)，被 pin 的条目锁定在 1.0，被 hide 的条目排除。权重公式详见 §3.4.3。
+**查询默认行为**：`search_compressed` 只返回 `status='active'` 且 `hidden=0` 的条目，按 `dynamic_weight DESC` 排序。dynamic\_weight 融合五个维度：W\_base(等级) + content\_bonus(内容重要性) + access\_bonus(访问频率) + citation\_bonus(引用次数)，被 pin 的条目锁定在 1.0，被 hide 的条目排除。权重公式详见 §3.4.3。
 
 **语义搜索**：`POST /compressed/semantic-search` 通过 LLM Embedding 余弦相似度检索，LLM 不可用时自动降级为 n-gram 哈希伪嵌入。
 
 ### 13.4 监督者运行模式
 
-| | Memory Mode（默认） | Governor Mode（/auto） |
-|---|---|---|
-| health_check loop | ✅ | ✅ |
-| 结构化记忆维护 | ✅ 自适应周期 | ✅ |
-| 内生驱动器（产出学习任务） | ❌ | ✅ 每 300s |
-| 任务列表（Agent 遍历执行） | ❌ | ✅ |
-| 整理记忆 + 判断身体切换 | ❌ | ✅ |
-| Gateway 用户请求 | ✅ 正常服务 | ❌ 返回 503 |
-| CLI 输入 | ✅ 正常 | ❌ 仅 /auto-q |
+| <br />             | Memory Mode（默认） | Governor Mode（/auto） |
+| ------------------ | --------------- | -------------------- |
+| health\_check loop | ✅               | ✅                    |
+| 结构化记忆维护            | ✅ 自适应周期         | ✅                    |
+| 内生驱动器（产出学习任务）      | ❌               | ✅ 每 300s             |
+| 任务列表（Agent 遍历执行）   | ❌               | ✅                    |
+| 整理记忆 + 判断身体切换      | ❌               | ✅                    |
+| Gateway 用户请求       | ✅ 正常服务          | ❌ 返回 503             |
+| CLI 输入             | ✅ 正常            | ❌ 仅 /auto-q          |
 
 ### 13.5 内生驱动器四类候选
 
@@ -1068,47 +1126,49 @@ Agent (API-A, AUTO 模式下通过网关)
   → 学习成果写入 Mem
 ```
 
-**身体升级完整链路**：
+**身体升级完整链路**（四阶段）：
 
 ```text
-Agent (API-A)
-  → 从 Mem 读取学习成果
-  → 通过 Git 了解 shell 槽位替身代码结构和自身短板
-  → 在 Git worktree 中基于替身现有代码进行改进（编辑、commit）
-  → 将 diff、commit 和进展描述提交到 Mem
+阶段 1 — 学习:
+  监督者内生驱动 → self_learning 任务 → Agent 执行 → 成果写入 Mem
 
-监督者 (API-B)
-  → 整理记忆
-  → 内生驱动判断替身进展
-  → 裁决是否允许身体切换
+阶段 2 — 替身改进 (学习质量 >= 60 分触发):
+  监督者内生驱动 → body_improvement 任务 → Agent 编辑 shell worktree
+    → Git commit → 提交改进报告(commit_hash + diff + 学习引用)
 
-执行器
-  → shell → prepare → candidate → probe
-  → 监督者最终确认
-  → activate → 旧 active retired
-  → 执行结果写回 Mem
+阶段 3 — 健康值评分:
+  监督者 LLM 审查 → 五维评分(diff_quality+probe+boundary+freshness+stability)
+    → score_delta → 累加至 BodySlotMeta.health_score (0-100)
+
+阶段 4 — 建议切换:
+  health_score >= active_health + 15 或 shell > active
+    → "建议切换"事件 → Governor 独立审查 → 批准/否决
+    → 批准后 → executor: shell→candidate→probe→active
 ```
 
 **关键边界**：
+
 - 学习任务由活跃 Agent 执行，Agent 可自主决定是否使用子代理辅助复杂任务
 - 身体升级（代码编辑）由 Agent 在 Git 替身基础上执行，不由执行器代劳
 - 身体切换只由执行器执行机械流程
+- 健康值达标是"建议"而非"自动"，Governor 保有最终否决权（边界铁律第 13 条）
 - 不存在独立的"自学系统"运行服务
 
 ### 13.7 不可妥协的边界铁律
 
-| # | 规则 | 含义 |
-|---|------|------|
-| 1 | **监督者只判断，执行器只切换** | 监督者不拉代码、不编辑代码、不启停进程；执行器只做身体切换机械流程 |
-| 2 | **Agent 无长期状态** | 长期记忆、身份真相、演化谱系只属于 Mem（API-B） |
-| 3 | **Agent 执行学习，监督者管理任务** | 学习任务由监督者内生驱动产出并放入任务列表，Agent 在 AUTO 模式下遍历执行 |
-| 4 | **不能跳过 probe** | 候选体未经 probe 不得成为 active |
-| 5 | **不能无记录切换** | 每次切换必须有完整 governance trail |
-| 6 | **不能切换后立即销毁旧体** | 观察窗口是回滚保护层 |
-| 7 | **API-A ≠ API-B** | Agent 工作模型心智用于"做事和学习"，Mem 模型心智用于"记住自己是谁" |
-| 8 | **子代理是 Agent 的自主能力** | 子代理不是被禁止的能力，也不是学习任务的强制模式。Agent 根据任务复杂度自主决定是否使用子代理辅助执行 |
-| 9 | **用户服务绝对优先** | 自进化行为不能抢占用户链路。Governor Mode 显式激活后才允许 |
-| 10 | **内生驱动器只派生候选，不直接执行** | 不直接执行，不编辑代码，不执行切换。四类候选各走各的处置路径 |
-| 11 | **Agent 编辑替身代码，执行器只切换** | 身体升级（代码编辑）由 Agent 执行，身体切换机械流程由执行器执行 |
-| 12 | **身体切换不由任务队列驱动** | 监督者整理记忆后内生判断替身进展，直接裁决交由执行器执行 |
+| #  | 规则                      | 含义                                                    |
+| -- | ----------------------- | ----------------------------------------------------- |
+| 1  | **监督者只判断，执行器只切换**       | 监督者不拉代码、不编辑代码、不启停进程；执行器只做身体切换机械流程                     |
+| 2  | **Agent 无长期状态**         | 长期记忆、身份真相、演化谱系只属于 Mem（API-B）                          |
+| 3  | **Agent 执行学习，监督者管理任务**  | 学习任务由监督者内生驱动产出并放入任务列表，Agent 在 AUTO 模式下遍历执行            |
+| 4  | **不能跳过 probe**          | 候选体未经 probe 不得成为 active                               |
+| 5  | **不能无记录切换**             | 每次切换必须有完整 governance trail                            |
+| 6  | **不能切换后立即销毁旧体**         | 观察窗口是回滚保护层                                            |
+| 7  | **API-A ≠ API-B**       | Agent 工作模型心智用于"做事和学习"，Mem 模型心智用于"记住自己是谁"              |
+| 8  | **子代理是 Agent 的自主能力**    | 子代理不是被禁止的能力，也不是学习任务的强制模式。Agent 根据任务复杂度自主决定是否使用子代理辅助执行 |
+| 9  | **用户服务绝对优先**            | 自进化行为不能抢占用户链路。Governor Mode 显式激活后才允许                  |
+| 10 | **内生驱动器只派生候选，不直接执行**    | 不直接执行，不编辑代码，不执行切换。四类候选各走各的处置路径                        |
+| 11 | **Agent 编辑替身代码，执行器只切换** | 身体升级（代码编辑）由 Agent 执行，身体切换机械流程由执行器执行                   |
+| 12 | **身体切换不由任务队列驱动**        | 监督者整理记忆后内生判断替身进展，直接裁决交由执行器执行                          |
+| 13 | **健康值达标是建议，Governor 保有否决权** | shell 健康值超过 active 后产生"建议切换"事件，Governor 独立审查后可批准或否决。健康值不是自动切换触发器 |
 

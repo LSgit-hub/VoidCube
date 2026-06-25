@@ -15,6 +15,7 @@ class VoidCubeExecutionFacade:
     body_lifecycle: Any
     body_upgrade: Any
     memory_maintenance: Any
+    supervisor: Any = None
 
     async def start_managed_agent(self, request: dict) -> Dict[str, Any]:
         return await self.agent_lifecycle.start_managed_agent(request)
@@ -111,4 +112,49 @@ class VoidCubeExecutionFacade:
 
     async def trigger_memory_compression(self, request: dict | None = None) -> Dict[str, Any]:
         return await self.memory_maintenance.trigger_memory_compression(request)
+
+    def get_slot_health(self, slot_id: str) -> Dict[str, Any]:
+        try:
+            slot_meta = self.body_lifecycle._body_registry.load_slot_meta(slot_id)
+            return {
+                "slot_id": slot_meta.slot_id,
+                "health_score": slot_meta.health_score,
+                "improvement_count": slot_meta.improvement_count,
+                "last_improvement_at": slot_meta.last_improvement_at,
+                "previous_healthy_commit": slot_meta.previous_healthy_commit,
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    def get_slot_health_history(self, slot_id: str) -> Dict[str, Any]:
+        try:
+            slot_meta = self.body_lifecycle._body_registry.load_slot_meta(slot_id)
+            return {
+                "slot_id": slot_meta.slot_id,
+                "health_history": slot_meta.health_history,
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    def reset_slot_health(self, slot_id: str) -> Dict[str, Any]:
+        try:
+            slot_meta = self.body_lifecycle._body_registry.load_slot_meta(slot_id)
+            slot_meta.health_score = 0.0
+            slot_meta.health_history = []
+            slot_meta.improvement_count = 0
+            slot_meta.last_improvement_at = None
+            slot_meta.previous_healthy_commit = None
+            slot_meta.decay_applied_at = None
+            self.body_lifecycle._body_registry.save_slot_meta(slot_meta)
+            return {"status": "ok", "slot_id": slot_id}
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def submit_body_improvement_report(self, request: dict) -> Dict[str, Any]:
+        if not self.supervisor:
+            return {"status": "error", "reason": "supervisor_not_available"}
+        try:
+            return await self.supervisor._planning_runtime._review_body_improvement(request)
+        except Exception as e:
+            return {"status": "error", "reason": str(e)}
 
