@@ -1,17 +1,17 @@
 {
-  "record_id": "43bdd0d3-10c5-4e38-bda2-e68ea13b9bba",
+  "record_id": "d3d4c6da-bb46-4a31-bb2e-fec010ce7db2",
   "kind": "supervisor_activity",
-  "created_at": "2026-06-26T09:15:58.011704",
+  "created_at": "2026-06-26T10:58:30.123637",
   "request": {
-    "event_id": "e6b8695c-4157-4acc-a97e-f22a734205d2",
-    "event_type": "task_decided",
+    "event_id": "9492d2c0-c217-4f8e-883a-db47b0529a1a",
+    "event_type": "endogenous_drive_evaluated",
     "scene": "planning",
-    "summary": "Task 'Stale AUTO task' was marked failed.",
-    "trace_id": "ac0dacce-0c26-44a7-8b8c-604ac65e3a7e",
-    "task_id": "88b31927-90c4-4a47-9cf1-958bad49ec5f",
-    "task_type": "self_learning",
-    "governance_task_type": "self_learning",
-    "task_family": "self_learning",
+    "summary": "Endogenous drive evaluated 2 candidate task(s).",
+    "trace_id": null,
+    "task_id": null,
+    "task_type": null,
+    "governance_task_type": null,
+    "task_family": null,
     "execution_kind": null,
     "decision_id": null,
     "source_actor": "supervisor"
@@ -24,13 +24,13 @@
   "execution_report": null,
   "registry": null,
   "evolution_lineage": {
-    "trace_id": "ac0dacce-0c26-44a7-8b8c-604ac65e3a7e",
-    "task_type": "self_learning",
-    "governance_task_type": "self_learning",
-    "task_family": "self_learning",
+    "trace_id": null,
+    "task_type": null,
+    "governance_task_type": null,
+    "task_family": null,
     "execution_kind": null,
     "decision_id": null,
-    "event_type": "task_decided",
+    "event_type": "endogenous_drive_evaluated",
     "source_actor": "supervisor"
   }
 }

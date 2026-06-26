@@ -108,13 +108,30 @@ class PlanningRuntimeMixin:
         return str(runtime_task_profile["task_family"] or "general_self_evolution")
 
     def _task_execution_kind(self, task: SelfEvolutionTask) -> Optional[str]:
+        execution = dict(task.metadata.get("execution_request") or {})
+        explicit_execution_kind = (
+            execution.get("execution_kind")
+            or task.metadata.get("execution_kind")
+            or task.execution_kind
+        )
+        normalized_explicit_kind = (
+            self._normalize_runtime_task_family(explicit_execution_kind)
+            if explicit_execution_kind
+            else None
+        )
+        if normalized_explicit_kind == "body_upgrade":
+            explicit_lower = str(explicit_execution_kind or "").strip().lower()
+            if explicit_lower in {"body_improvement", "body_switch", "body_upgrade"}:
+                return explicit_lower
+
         task_family = self._task_runtime_family(task)
         if task_family in {
             "memory_maintenance",
             "general_self_evolution",
+            "body_upgrade",
         }:
             return task_family
-        return None
+        return normalized_explicit_kind
 
     def _task_runtime_profile(self, task: SelfEvolutionTask) -> Dict[str, Any]:
         execution = dict(task.metadata.get("execution_request") or {})
@@ -145,6 +162,9 @@ class PlanningRuntimeMixin:
             value = payload.get(key)
             if value is not None:
                 metadata[key] = value
+        explicit_execution_kind = str(metadata.get("execution_kind") or "").strip().lower()
+        if explicit_execution_kind in {"body_switch", "body_improvement"} and not metadata.get("task_family"):
+            metadata["task_family"] = explicit_execution_kind
         return metadata
 
     def _request_task_type(
@@ -174,6 +194,9 @@ class PlanningRuntimeMixin:
         return str(self._task_runtime_profile(task)["governance_task_type"])
 
     def _task_requires_execution_request(self, task: SelfEvolutionTask) -> bool:
+        execution_kind = self._task_execution_kind(task)
+        if execution_kind == "body_improvement":
+            return False
         return self._task_governance_type(task) in {"self_evolution", "memory_maintenance"}
 
     def _task_activity_metadata(self, task: SelfEvolutionTask) -> Dict[str, Any]:
@@ -798,7 +821,30 @@ class PlanningRuntimeMixin:
 
     def _serialize_self_evolution_task(self, task: SelfEvolutionTask) -> Dict[str, Any]:
         payload = task.model_dump(mode="json")
-        payload.update(self._task_runtime_profile(task))
+        runtime_profile = self._task_runtime_profile(task)
+        execution = dict(task.metadata.get("execution_request") or {})
+        payload["governance_task_type"] = (
+            execution.get("governance_task_type")
+            or task.metadata.get("governance_task_type")
+            or task.governance_task_type
+            or task.metadata.get("governance_task_type")
+            or runtime_profile.get("governance_task_type")
+        )
+        payload["task_family"] = (
+            execution.get("task_family")
+            or task.metadata.get("task_family")
+            or task.task_family
+            or task.metadata.get("task_family")
+            or runtime_profile.get("task_family")
+        )
+        payload["execution_kind"] = (
+            execution.get("execution_kind")
+            or task.metadata.get("execution_kind")
+            or task.execution_kind
+            or task.metadata.get("execution_kind")
+            or runtime_profile.get("execution_kind")
+        )
+        requested_kind = str(execution.get("kind") or "").strip() or None
         decision_history = payload.get("decision_history") or []
         latest_context: Dict[str, Any] = {}
         if isinstance(decision_history, list) and decision_history:
@@ -817,6 +863,30 @@ class PlanningRuntimeMixin:
             governance_preview["lm_queue_priority"] = dict(lm_priority)
         if governance_preview:
             payload["governance_preview"] = governance_preview
+        display_kind = (
+            requested_kind
+            or payload.get("execution_kind")
+            or payload.get("task_family")
+            or payload.get("governance_task_type")
+            or payload.get("task_type")
+        )
+        payload["task_identity"] = {
+            "task_id": payload.get("task_id"),
+            "title": payload.get("title"),
+            "task_type": payload.get("task_type"),
+            "governance_task_type": payload.get("governance_task_type"),
+            "task_family": payload.get("task_family"),
+            "execution_kind": payload.get("execution_kind"),
+            "runtime_task_family": runtime_profile.get("task_family"),
+            "runtime_execution_kind": runtime_profile.get("execution_kind"),
+            "requested_kind": requested_kind,
+            "display_kind": display_kind,
+            "summary": (
+                f"{payload.get('title')} ({display_kind})"
+                if payload.get("title") and display_kind
+                else payload.get("title") or display_kind or payload.get("task_id")
+            ),
+        }
         return payload
 
     def _build_lm_queue_review_snapshot(
@@ -1007,7 +1077,22 @@ class PlanningRuntimeMixin:
             tasks = [t for t in tasks if self._task_governance_type(t) == str(task_type).strip()]
         if execution_kind:
             normalized_execution_kind = self._normalize_runtime_task_family(execution_kind)
-            tasks = [t for t in tasks if self._task_execution_kind(t) == normalized_execution_kind]
+            explicit_execution_kind = str(execution_kind).strip().lower()
+            filtered_tasks = []
+            for task in tasks:
+                task_execution_kind = str(self._task_execution_kind(task) or "").strip().lower()
+                serialized_execution_kind = str(
+                    self._serialize_self_evolution_task(task).get("execution_kind") or ""
+                ).strip().lower()
+                if task_execution_kind == explicit_execution_kind:
+                    filtered_tasks.append(task)
+                    continue
+                if serialized_execution_kind == explicit_execution_kind:
+                    filtered_tasks.append(task)
+                    continue
+                if task_execution_kind == normalized_execution_kind:
+                    filtered_tasks.append(task)
+            tasks = filtered_tasks
         return {
             "tasks": [self._serialize_self_evolution_task(task) for task in tasks],
             "count": len(tasks),

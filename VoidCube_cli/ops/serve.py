@@ -36,6 +36,32 @@ AGENT_BASE_PORT = 6080
 PID_DIR = Path.home() / ".VoidCube" / "run"
 
 
+def _safe_console_text(text: str) -> str:
+    """Normalize Unicode-rich status text for legacy Windows consoles."""
+    if sys.platform != "win32":
+        return text
+    encoding = (getattr(sys.stdout, "encoding", None) or "").lower()
+    if "utf" in encoding:
+        return text
+    replacements = {
+        "⚠": "!",
+        "✓": "OK",
+        "✗": "X",
+        "—": "-",
+        "▶": ">",
+        "⚡": "*",
+        "─": "-",
+    }
+    normalized = text
+    for src, dst in replacements.items():
+        normalized = normalized.replace(src, dst)
+    return normalized
+
+
+def _safe_print(text: str = "") -> None:
+    print(_safe_console_text(text))
+
+
 @dataclass
 class ServiceInfo:
     name: str
@@ -242,24 +268,24 @@ def start_service(name: str, foreground: bool = False) -> Optional[subprocess.Po
     """Start a named service. Returns the Popen object if background, None if foreground."""
     svc = SERVICES.get(name)
     if svc is None:
-        print(f"Unknown service: {name}")
+        _safe_print(f"Unknown service: {name}")
         return None
 
     # Check if already running (PID file)
     existing_pid = _read_pid(svc.pid_file)
     if existing_pid and _pid_alive(existing_pid):
-        print(f"  {svc.name:12s} already running (pid {existing_pid})")
+        _safe_print(f"  {svc.name:12s} already running (pid {existing_pid})")
         svc.pid = existing_pid
         return None
 
     # Check if port is occupied by an unknown/stale process
     if _port_listening(svc.port) and not (existing_pid and _pid_alive(existing_pid)):
-        print(f"  ⚠ {svc.name:12s} port {svc.port} is occupied by an unknown process")
-        print(f"     Use 'netstat -ano | findstr :{svc.port}' to find and kill it")
+        _safe_print(f"  ⚠ {svc.name:12s} port {svc.port} is occupied by an unknown process")
+        _safe_print(f"     Use 'netstat -ano | findstr :{svc.port}' to find and kill it")
         return None
 
     if foreground:
-        print(f"Starting {svc.name} on port {svc.port} (foreground)...")
+        _safe_print(f"Starting {svc.name} on port {svc.port} (foreground)...")
         import threading
 
         t = threading.Thread(
@@ -306,7 +332,7 @@ uvicorn.run(app, host='127.0.0.1', port={svc.port}, log_level='info')
     svc.process = proc
     svc.pid = proc.pid
     _write_pid(svc.pid_file, proc.pid)
-    print(f"  {svc.name:12s} started (pid {proc.pid}, port {svc.port})")
+    _safe_print(f"  {svc.name:12s} started (pid {proc.pid}, port {svc.port})")
     return proc
 
 
@@ -318,13 +344,13 @@ def stop_service(name: str, silent: bool = False) -> bool:
     svc = SERVICES.get(name)
     if svc is None:
         if not silent:
-            print(f"Unknown service: {name}")
+            _safe_print(f"Unknown service: {name}")
         return False
 
     pid = _read_pid(svc.pid_file)
     if pid is None or not _pid_alive(pid):
         if not silent:
-            print(f"  {svc.name:12s} not running")
+            _safe_print(f"  {svc.name:12s} not running")
         _delete_pid(svc.pid_file)
         return True
 
@@ -342,7 +368,7 @@ def stop_service(name: str, silent: bool = False) -> bool:
 
     _delete_pid(svc.pid_file)
     if not silent:
-        print(f"  {svc.name:12s} stopped (was pid {pid})")
+        _safe_print(f"  {svc.name:12s} stopped (was pid {pid})")
     return True
 
 
@@ -373,16 +399,16 @@ def print_status(full: bool = False) -> None:
     """
     # Always show daemon status
     status = status_all()
-    print("\n  VoidCube Services")
-    print("  " + "─" * 52)
-    print(f"  {'Service':12s} {'Port':>6s} {'PID':>8s} {'Status':>10s}")
-    print("  " + "─" * 52)
+    _safe_print("\n  VoidCube Services")
+    _safe_print("  " + "─" * 52)
+    _safe_print(f"  {'Service':12s} {'Port':>6s} {'PID':>8s} {'Status':>10s}")
+    _safe_print("  " + "─" * 52)
     for name, info in status.items():
         running = "✓ running" if info["healthy"] else ("✗ dead" if info["running"] else "— stopped")
         pid_str = str(info["pid"]) if info["pid"] else "—"
-        print(f"  {name:12s} {info['port']:>6d} {pid_str:>8s} {running:>10s}")
-    print("  " + "─" * 52)
-    print()
+        _safe_print(f"  {name:12s} {info['port']:>6d} {pid_str:>8s} {running:>10s}")
+    _safe_print("  " + "─" * 52)
+    _safe_print()
 
     # If full dashboard requested, fetch supervisor/gateway data
     if full:
@@ -390,9 +416,9 @@ def print_status(full: bool = False) -> None:
             from VoidCube_cli.ops.dashboard import print_dashboard
             print_dashboard()
         except Exception as exc:
-            print(f"  ⚠ Dashboard unavailable: {exc}")
-            print(f"    Is the supervisor running?  http://127.0.0.1:6002/ui")
-            print()
+            _safe_print(f"  ⚠ Dashboard unavailable: {exc}")
+            _safe_print(f"    Is the supervisor running?  http://127.0.0.1:6002/ui")
+            _safe_print()
 
 
 def start_all(foreground: bool = False) -> None:
@@ -404,7 +430,7 @@ def start_all(foreground: bool = False) -> None:
     4. Agent Instance (active body, API-A) — registers with Gateway
     """
     PID_DIR.mkdir(parents=True, exist_ok=True)
-    print("\n  Starting VoidCube services...\n")
+    _safe_print("\n  Starting VoidCube services...\n")
 
     # 1. Memory (soul layer — must be ready first)
     start_service("memory", foreground=foreground)
@@ -429,24 +455,24 @@ def start_all(foreground: bool = False) -> None:
     if foreground:
         # Foreground: both services are running in daemon threads.
         # Wait for them (join) — the main thread stays alive until interrupted.
-        print(f"\n  Both services started. Press Ctrl+C to stop.\n")
-        print(f"  Gateway:    http://127.0.0.1:{GATEWAY_PORT}")
-        print(f"  Supervisor: http://127.0.0.1:{SUPERVISOR_PORT}/ui")
-        print()
+        _safe_print(f"\n  Both services started. Press Ctrl+C to stop.\n")
+        _safe_print(f"  Gateway:    http://127.0.0.1:{GATEWAY_PORT}")
+        _safe_print(f"  Supervisor: http://127.0.0.1:{SUPERVISOR_PORT}/ui")
+        _safe_print()
         try:
             import threading
             for t in _foreground_threads:
                 t.join()
         except KeyboardInterrupt:
-            print("\n  Shutting down...")
+            _safe_print("\n  Shutting down...")
         return
 
-    print()
+    _safe_print()
     print_status()
-    print(f"  Gateway:    http://127.0.0.1:{GATEWAY_PORT}")
-    print(f"  Supervisor: http://127.0.0.1:{SUPERVISOR_PORT}/ui")
-    print(f"  PID files:  {PID_DIR}")
-    print()
+    _safe_print(f"  Gateway:    http://127.0.0.1:{GATEWAY_PORT}")
+    _safe_print(f"  Supervisor: http://127.0.0.1:{SUPERVISOR_PORT}/ui")
+    _safe_print(f"  PID files:  {PID_DIR}")
+    _safe_print()
 
 
 def stop_all(force: bool = False) -> None:
@@ -456,11 +482,11 @@ def stop_all(force: bool = False) -> None:
     without prompting (used by /quit and other automated shutdown paths).
     """
     if not force:
-        print("\n  Stopping VoidCube services...\n")
+        _safe_print("\n  Stopping VoidCube services...\n")
     for name in SERVICES:
         stop_service(name, silent=force)
     if not force:
-        print()
+        _safe_print()
 
 
 def _wait_for_health(name: str, port: int, timeout: float = 15.0) -> bool:
@@ -470,7 +496,7 @@ def _wait_for_health(name: str, port: int, timeout: float = 15.0) -> bool:
         if _health_check(port):
             return True
         time.sleep(0.3)
-    print(f"  ⚠ {name} did not respond within {timeout}s")
+    _safe_print(f"  ⚠ {name} did not respond within {timeout}s")
     return False
 
 
@@ -502,14 +528,14 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
             result[name] = {"running": True, "healthy": healthy, "pid": existing_pid, "started": False}
             if not silent:
                 tag = "✓" if healthy else "⚠"
-                print(f"  {tag} {svc.name:12s} already running (pid {existing_pid}, port {svc.port})")
+                _safe_print(f"  {tag} {svc.name:12s} already running (pid {existing_pid}, port {svc.port})")
                 if not healthy:
-                    print(f"     health check failed — will not restart (pid exists)")
+                    _safe_print(f"     health check failed — will not restart (pid exists)")
             svc.pid = existing_pid
             continue
 
         if not silent:
-            print(f"  ▶ {svc.name:12s} starting on port {svc.port}...")
+            _safe_print(f"  ▶ {svc.name:12s} starting on port {svc.port}...")
         proc = start_service(name, foreground=False)
 
         if proc is None:
@@ -520,8 +546,8 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
             result[name] = {"running": healthy, "healthy": healthy, "pid": pid, "started": False}
             if not silent:
                 tag = "✓" if healthy else "⚠"
-                print(f"     {tag} port {svc.port} reachable (reusing existing service)" if healthy
-                      else f"     {tag} could not start or reach {svc.name}")
+                _safe_print(f"     {tag} port {svc.port} reachable (reusing existing service)" if healthy
+                            else f"     {tag} could not start or reach {svc.name}")
             continue
 
         healthy = _wait_for_health(name, svc.port, timeout=30.0)
@@ -529,6 +555,6 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
         result[name] = {"running": new_pid is not None, "healthy": healthy, "pid": new_pid, "started": True}
         if not silent:
             tag = "✓" if healthy else "⚠"
-            print(f"     {tag} ready" if healthy else f"     {tag} not responding (may still be starting)")
+            _safe_print(f"     {tag} ready" if healthy else f"     {tag} not responding (may still be starting)")
 
     return result

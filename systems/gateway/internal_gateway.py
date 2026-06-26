@@ -557,11 +557,53 @@ class InternalGateway:
                 if value is not None and key not in payload
             }
         )
+        task_identity = self._build_task_identity_summary(payload)
+        if task_identity:
+            payload["task_identity"] = task_identity
         if source_service:
             payload.setdefault("source_service", source_service)
         if session_id:
             payload.setdefault("session_id", session_id)
         return payload or None
+
+    def _build_task_identity_summary(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not isinstance(payload, dict):
+            return None
+
+        title = str(payload.get("title") or payload.get("task_title") or "").strip() or None
+        task_id = str(payload.get("task_id") or "").strip() or None
+        task_type = str(payload.get("task_type") or "").strip() or None
+        governance_task_type = str(payload.get("governance_task_type") or "").strip() or None
+        task_family = str(payload.get("task_family") or "").strip() or None
+        execution_kind = str(payload.get("execution_kind") or "").strip() or None
+        requested_kind = str(payload.get("kind") or "").strip() or None
+
+        label_parts = [part for part in (execution_kind, task_family, governance_task_type, task_type) if part]
+        display_kind = requested_kind or execution_kind or task_family or governance_task_type or task_type
+        if title:
+            summary = f"{title} ({display_kind})" if display_kind else title
+        elif task_id:
+            summary = f"{task_id} ({display_kind})" if display_kind else task_id
+        elif display_kind:
+            summary = display_kind
+        else:
+            summary = None
+
+        if not any((title, task_id, task_type, governance_task_type, task_family, execution_kind, summary)):
+            return None
+
+        return {
+            "task_id": task_id,
+            "title": title,
+            "task_type": task_type,
+            "governance_task_type": governance_task_type,
+            "task_family": task_family,
+            "execution_kind": execution_kind,
+            "requested_kind": requested_kind,
+            "display_kind": display_kind,
+            "summary": summary,
+            "labels": label_parts,
+        }
 
     def _extract_activity_metadata_from_payload(self, payload: Any) -> Dict[str, Any]:
         if not isinstance(payload, dict):

@@ -130,23 +130,32 @@ class SelfEvolutionTask(BaseModel):
 
     @model_validator(mode="after")
     def _normalize_runtime_profile(self) -> "SelfEvolutionTask":
+        explicit_governance_task_type = (
+            self.metadata.get("governance_task_type")
+            or self.governance_task_type
+        )
+        explicit_task_family = self.metadata.get("task_family") or self.task_family
+        explicit_execution_kind = (
+            self.metadata.get("execution_kind")
+            or self.execution_kind
+            or self.metadata.get("task_family")
+        )
         runtime_task_profile = derive_runtime_task_profile(
             task_type=self.task_type,
-            governance_task_type=(
-                self.governance_task_type
-                or self.metadata.get("governance_task_type")
-            ),
-            task_family=self.task_family or self.metadata.get("task_family"),
-            execution_kind=(
-                self.execution_kind
-                or self.metadata.get("execution_kind")
-                or self.metadata.get("task_family")
-            ),
+            governance_task_type=explicit_governance_task_type,
+            task_family=explicit_task_family,
+            execution_kind=explicit_execution_kind,
             default_task_family="general_self_evolution",
         )
-        self.governance_task_type = runtime_task_profile["governance_task_type"]
-        self.task_family = runtime_task_profile["task_family"]
-        self.execution_kind = runtime_task_profile["execution_kind"]
+        self.governance_task_type = (
+            explicit_governance_task_type
+            or runtime_task_profile["governance_task_type"]
+        )
+        self.task_family = explicit_task_family or runtime_task_profile["task_family"]
+        self.execution_kind = (
+            explicit_execution_kind
+            or runtime_task_profile["execution_kind"]
+        )
         return self
 
 

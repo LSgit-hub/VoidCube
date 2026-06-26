@@ -26,6 +26,7 @@ class AgentConfig(BaseModel):
     body_runtime: str = ""
     body_logs: str = ""
     body_version: str = "unknown"
+    enable_task_polling: bool = False
 
 
 class MessageRequest(BaseModel):
@@ -54,9 +55,13 @@ class AgentInstance:
                 logger.info("Agent registered with gateway: %s", svc_id)
             else:
                 logger.warning("Agent failed to register with gateway")
-            
-            self._task_polling_task = asyncio.create_task(self._task_polling_loop())
-            logger.info("Task polling loop started")
+
+            if self.config.enable_task_polling:
+                self._task_polling_task = asyncio.create_task(self._task_polling_loop())
+                logger.info("Task polling loop started")
+            else:
+                self._task_polling_task = None
+                logger.info("Task polling loop disabled; agent is serving as the active API-A runtime only")
             
             try:
                 yield
@@ -134,6 +139,7 @@ class AgentInstance:
             "body_version": self.config.body_version,
             "body_worktree": self.config.body_worktree,
             "body_runtime": self.config.body_runtime,
+            "enable_task_polling": self.config.enable_task_polling,
             "runtime_paths": self._runtime_paths,
             "scene": self._scene,
             "scene_changed_at": self._scene_changed_at.isoformat(),
@@ -1147,6 +1153,12 @@ if __name__ == "__main__":
     parser.add_argument("--host", default="127.0.0.1", help="Agent host")
     parser.add_argument("--port", type=int, default=6080, help="Agent port")
     parser.add_argument("--gateway", default=os.getenv("GATEWAY_ADDRESS", "http://127.0.0.1:6000"), help="Gateway address")
+    parser.add_argument(
+        "--enable-task-polling",
+        action="store_true",
+        default=str(os.getenv("VOIDCUBE_AGENT_ENABLE_TASK_POLLING", "")).strip().lower() in {"1", "true", "yes", "on"},
+        help="Enable daemon-side task polling. Disabled by default so CLI /auto remains the canonical executor.",
+    )
     args = parser.parse_args()
     
     config = AgentConfig(
@@ -1158,6 +1170,7 @@ if __name__ == "__main__":
         body_runtime=os.getenv("VOIDCUBE_BODY_RUNTIME", ""),
         body_logs=os.getenv("VOIDCUBE_BODY_LOGS", ""),
         body_version=os.getenv("VOIDCUBE_BODY_VERSION", "unknown"),
+        enable_task_polling=bool(args.enable_task_polling),
     )
     agent = AgentInstance(config)
     

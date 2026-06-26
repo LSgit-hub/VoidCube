@@ -2231,16 +2231,17 @@ class VoidcubeCLI:
 
     _auto_mode_last_event_ts: str = ""
 
-    _current_learning_task: Dict[str, Any] | None = None
-    _current_learning_task_started_at: float = 0.0
+    _current_auto_task: Dict[str, Any] | None = None
+    _current_auto_task_started_at: float = 0.0
     _last_agent_turn_result: Dict[str, Any] | None = None
 
     def _poll_auto_mode_workflow(self) -> None:
-        """Pull approved learning tasks from Gateway and execute them.
+        """Pull approved Agent-executable tasks from Gateway and execute them.
 
-        In AUTO mode, the CLI Agent actively pulls approved self_learning
-        tasks from the Supervisor's task list via the Gateway and reports
-        task lifecycle updates back through the same Gateway surface.
+        In AUTO mode, the CLI Agent actively pulls approved Agent-executable
+        tasks (`self_learning` + `body_improvement`) from the Supervisor's
+        task list via the Gateway and reports task lifecycle updates back
+        through the same Gateway surface.
 
         Architecture baseline: §3.3, §3.5, §3.6, §7.3, §7.5.
         """
@@ -2249,12 +2250,14 @@ class VoidcubeCLI:
 
         gateway_base = "http://127.0.0.1:6000"
 
-        # ── If a learning task was just completed, report it ──
-        current = getattr(self, '_current_learning_task', None)
+        # ── If an AUTO task was just completed, report it ──
+        current = getattr(self, '_current_auto_task', None)
         if current is not None:
             task_id = current.get("task_id", "")
+            execution_kind = str(current.get("execution_kind") or current.get("task_type") or "").strip().lower()
+            task_label = "body improvement task" if execution_kind == "body_improvement" else "learning task"
             import time as _time
-            started_at = getattr(self, '_current_learning_task_started_at', 0)
+            started_at = getattr(self, '_current_auto_task_started_at', 0)
             elapsed = _time.time() - started_at if started_at else -1
             turn_result = getattr(self, "_last_agent_turn_result", None)
             # ── Timeout check: if task ran > 30 min, report as failed ──
@@ -2262,7 +2265,7 @@ class VoidcubeCLI:
                 try:
                     timeout_payload = _json.dumps({
                         "decision": "failed",
-                        "reason": "Learning task timed out (30 min).",
+                        "reason": f"AUTO {task_label} timed out (30 min).",
                         "context": {"source": "cli_agent_pull", "error": "timeout", "elapsed_s": int(elapsed)},
                     }).encode()
                     r = _req.Request(
@@ -2272,23 +2275,23 @@ class VoidcubeCLI:
                         method="POST",
                     )
                     _req.urlopen(r, timeout=15)
-                    _cprint(f"  ⏰  Learning task {task_id[:8]}... timed out ({int(elapsed)}s)")
+                    _cprint(f"  ⏰  AUTO {task_label} {task_id[:8]}... timed out ({int(elapsed)}s)")
                 except Exception:
                     pass
-                self._current_learning_task = None
-                self._current_learning_task_started_at = 0
+                self._current_auto_task = None
+                self._current_auto_task_started_at = 0
                 self._last_agent_turn_result = None
             elif not self._agent_running and turn_result is not None:
-                # Agent finished a queued AUTO learning turn — classify by the actual turn result.
+                # Agent finished a queued AUTO turn — classify by the actual turn result.
                 decision = "failed" if (
                     turn_result.get("failed")
                     or turn_result.get("partial")
                     or turn_result.get("interrupted")
                 ) else "completed"
                 reason = (
-                    f"Learning task failed in CLI AUTO mode: {turn_result.get('error', 'unknown error')}"
+                    f"AUTO {task_label} failed in CLI AUTO mode: {turn_result.get('error', 'unknown error')}"
                     if decision == "failed"
-                    else "Learning task completed by CLI Agent in AUTO mode."
+                    else f"AUTO {task_label} completed by CLI Agent in AUTO mode."
                 )
                 try:
                     payload = _json.dumps({
@@ -2312,15 +2315,27 @@ class VoidcubeCLI:
                     _req.urlopen(r, timeout=15)
                 except Exception:
                     pass  # Best-effort — supervisor will handle retry
-                self._current_learning_task = None
-                self._current_learning_task_started_at = 0
+                self._current_auto_task = None
+                self._current_auto_task_started_at = 0
                 self._last_agent_turn_result = None
 
-        # ── Pull next approved learning task from Gateway ──
+        # ── Pull next approved Agent-executable task from Gateway ──
         try:
-            url = f"{gateway_base}/v1/tasks?status=approved&task_type=self_learning"
-            resp = _json.loads(_req.urlopen(url, timeout=10).read())
-            tasks = resp.get("tasks", []) if isinstance(resp, dict) else []
+            tasks = []
+            urls = (
+                f"{gateway_base}/v1/tasks?status=approved&task_type=self_learning",
+                f"{gateway_base}/v1/tasks?status=approved&execution_kind=body_improvement",
+            )
+            seen = set()
+            for url in urls:
+                resp = _json.loads(_req.urlopen(url, timeout=10).read())
+                fetched = resp.get("tasks", []) if isinstance(resp, dict) else []
+                for task in fetched:
+                    task_id = str(task.get("task_id", "")).strip()
+                    if not task_id or task_id in seen:
+                        continue
+                    seen.add(task_id)
+                    tasks.append(task)
         except Exception:
             return
 
@@ -2329,7 +2344,8 @@ class VoidcubeCLI:
 
         task = tasks[0]
         task_id = task.get("task_id", "")
-        title = task.get("title", "Learning task")
+        execution_kind = str(task.get("execution_kind") or task.get("task_type") or "").strip().lower()
+        title = task.get("title", "Agent task")
         summary = task.get("summary", "")
 
         # ── Mark as running ──
@@ -2350,8 +2366,8 @@ class VoidcubeCLI:
             return  # Can't mark running — skip
 
         import time as _time
-        self._current_learning_task = task
-        self._current_learning_task_started_at = _time.time()
+        self._current_auto_task = task
+        self._current_auto_task_started_at = _time.time()
         self._last_agent_turn_result = None
 
         # ── Notify Gateway that agent is starting work ──
@@ -2359,7 +2375,12 @@ class VoidcubeCLI:
             touch_payload = _json.dumps({
                 "activity_kind": "agent_work",
                 "source_service": "cli_agent",
-                "metadata": {"task_id": task_id, "title": title, "source": "auto_mode_pull"},
+                "metadata": {
+                    "task_id": task_id,
+                    "title": title,
+                    "source": "auto_mode_pull",
+                    "execution_kind": execution_kind,
+                },
             }).encode()
             r = _req.Request(
                 f"{gateway_base}/admin/activity/touch",
@@ -2372,23 +2393,53 @@ class VoidcubeCLI:
             pass
 
         # ── Push task as Agent input ──
-        prompt = (
-            f"[AUTO Learning Task] {title}\n\n"
-            f"{summary}\n\n"
-            f"Execute this research task thoroughly. "
-            f"Produce structured findings and conclusions."
-        )
+        if execution_kind == "body_improvement":
+            constraints = dict(task.get("constraints") or {})
+            worktree_path = str(
+                constraints.get("worktree_path")
+                or constraints.get("target_worktree")
+                or ""
+            ).strip()
+            editable_dirs = constraints.get("editable_dirs") or []
+            forbidden_patterns = constraints.get("forbidden_patterns") or []
+            max_files = constraints.get("max_files_changed")
+            prompt_parts = [f"[AUTO Body Improvement Task] {title}"]
+            if summary:
+                prompt_parts.append(summary)
+            prompt_parts.append("Edit the shell body code directly and implement the approved improvement.")
+            if worktree_path:
+                prompt_parts.append(f"Worktree path: {worktree_path}")
+            if editable_dirs:
+                prompt_parts.append(f"Editable dirs: {', '.join(str(x) for x in editable_dirs)}")
+            if forbidden_patterns:
+                prompt_parts.append(f"Forbidden patterns: {', '.join(str(x) for x in forbidden_patterns)}")
+            if max_files:
+                prompt_parts.append(f"Max files changed: {max_files}")
+            prompt_parts.append("Produce a concise implementation summary with the concrete files changed and reasoning.")
+            prompt = "\n\n".join(prompt_parts)
+        else:
+            prompt = (
+                f"[AUTO Learning Task] {title}\n\n"
+                f"{summary}\n\n"
+                f"Execute this research task thoroughly. "
+                f"Produce structured findings and conclusions."
+            )
         try:
             self._pending_input.put(prompt)
         except Exception:
             # Queue failure — report task as failed so supervisor can retry
             import time as _time
-            _cprint(f"  ⚠️  Failed to enqueue learning task {task_id[:8]}...")
+            task_label = "body improvement task" if execution_kind == "body_improvement" else "learning task"
+            _cprint(f"  ⚠️  Failed to enqueue AUTO {task_label} {task_id[:8]}...")
             try:
                 fail_payload = _json.dumps({
                     "decision": "failed",
                     "reason": "CLI Agent failed to enqueue task for execution.",
-                    "context": {"source": "cli_agent_pull", "error": "queue_put_failed"},
+                    "context": {
+                        "source": "cli_agent_pull",
+                        "error": "queue_put_failed",
+                        "execution_kind": execution_kind,
+                    },
                 }).encode()
                 r = _req.Request(
                     f"{gateway_base}/v1/tasks/{task_id}/decision",
@@ -2399,8 +2450,8 @@ class VoidcubeCLI:
                 _req.urlopen(r, timeout=15)
             except Exception:
                 pass
-            self._current_learning_task = None
-            self._current_learning_task_started_at = 0
+            self._current_auto_task = None
+            self._current_auto_task_started_at = 0
             self._last_agent_turn_result = None
 
     @staticmethod
@@ -4336,7 +4387,129 @@ class VoidcubeCLI:
             f"Tokens: {total_tokens:,}",
             f"Agent Running: {'Yes' if is_running else 'No'}",
         ])
+
+        supervisor_status = self._fetch_supervisor_status_snapshot()
+        if supervisor_status:
+            lines.extend(["", "Supervisor Snapshot:"])
+            summary_lines = self._format_supervisor_status_snapshot(supervisor_status)
+            lines.extend(summary_lines)
+        agent_activity = self._fetch_gateway_agent_activity_snapshot()
+        if agent_activity:
+            lines.extend(["", "Gateway Agent Activity:"])
+            lines.extend(self._format_gateway_agent_activity_snapshot(agent_activity))
         self.console.print("\n".join(lines), highlight=False, markup=False)
+
+    def _fetch_supervisor_status_snapshot(self) -> Dict[str, Any]:
+        import json as _json
+        import urllib.request as _req
+
+        try:
+            from VoidCube_cli.config import load_config
+            cfg = load_config()
+            sv_cfg = cfg.get("supervisor", {})
+            host = sv_cfg.get("host", "127.0.0.1")
+            port = sv_cfg.get("port", 6002)
+            supervisor_url = f"http://{host}:{port}"
+        except Exception:
+            supervisor_url = "http://127.0.0.1:6002"
+
+        try:
+            return _json.loads(_req.urlopen(f"{supervisor_url}/ui/state", timeout=5).read())
+        except Exception:
+            return {}
+
+    def _fetch_gateway_agent_activity_snapshot(self) -> Dict[str, Any]:
+        import json as _json
+        import urllib.request as _req
+
+        gateway_base = "http://127.0.0.1:6000"
+        try:
+            from VoidCube_cli.config import load_config
+            cfg = load_config()
+            gateway_cfg = cfg.get("gateway", {})
+            host = gateway_cfg.get("host", "127.0.0.1")
+            port = gateway_cfg.get("port", 6000)
+            gateway_base = f"http://{host}:{port}"
+        except Exception:
+            pass
+
+        try:
+            activity = _json.loads(_req.urlopen(f"{gateway_base}/admin/activity", timeout=5).read())
+        except Exception:
+            return {}
+
+        recent = dict(activity.get("recent_metadata") or {})
+        agent_work = dict(recent.get("agent_work") or {})
+        if not agent_work:
+            return {}
+        return {
+            "last_agent_work_at": activity.get("last_agent_work_at"),
+            "agent_work_count": dict(activity.get("counts") or {}).get("agent_work_count", 0),
+            "agent_work": agent_work,
+        }
+
+    def _format_supervisor_status_snapshot(self, state: Dict[str, Any]) -> list[str]:
+        lines: list[str] = []
+        metrics = dict(state.get("metrics") or {})
+        by_path = dict(metrics.get("by_path") or {})
+        governance = dict(metrics.get("governance") or {})
+        active_executions = list(state.get("active_executions") or [])
+        timeline = list(state.get("timeline") or [])
+
+        lines.append(f"Scene: {state.get('scene', 'unknown')} — {state.get('title', '')}")
+        lines.append(
+            "Tasks: "
+            f"learning={by_path.get('learning', 0)}, "
+            f"maintenance={by_path.get('maintenance', 0)}, "
+            f"evolution={by_path.get('evolution', 0)}, "
+            f"running={metrics.get('running_count', 0)}"
+        )
+        lines.append(
+            "Governance: "
+            f"direct={governance.get('direct_lm_actions', 0)}, "
+            f"shadow={governance.get('shadow_recommendations', 0)}, "
+            f"priority_updates={governance.get('priority_updates', 0)}"
+        )
+
+        if active_executions:
+            task = active_executions[0]
+            lines.append(
+                f"Active Execution: {task.get('title', 'unknown')} "
+                f"({task.get('execution_kind') or task.get('task_family') or task.get('governance_task_type') or 'task'})"
+            )
+
+        if timeline:
+            latest = timeline[0]
+            lines.append(
+                f"Latest Review/Event: {latest.get('event_type', latest.get('source', 'event'))} — "
+                f"{str(latest.get('summary') or latest.get('title') or '')[:120]}"
+            )
+        return lines
+
+    def _format_gateway_agent_activity_snapshot(self, state: Dict[str, Any]) -> list[str]:
+        lines: list[str] = []
+        agent_work = dict(state.get("agent_work") or {})
+        task_identity = dict(agent_work.get("task_identity") or {})
+        summary = str(task_identity.get("summary") or "").strip()
+        task_id = str(task_identity.get("task_id") or agent_work.get("task_id") or "").strip()
+        source_service = str(agent_work.get("source_service") or "unknown").strip()
+        count = int(state.get("agent_work_count") or 0)
+        last_at = str(state.get("last_agent_work_at") or "").strip()
+
+        if summary:
+            lines.append(f"Recent Task: {summary}")
+        elif task_id:
+            lines.append(f"Recent Task: {task_id}")
+        else:
+            lines.append("Recent Task: agent activity recorded")
+
+        details: list[str] = [f"source={source_service}", f"count={count}"]
+        if task_id:
+            details.append(f"task_id={task_id}")
+        if last_at:
+            details.append(f"last_at={last_at}")
+        lines.append("Details: " + ", ".join(details))
+        return lines
     
     def _fast_command_available(self) -> bool:
         try:
@@ -6652,6 +6825,10 @@ class VoidcubeCLI:
                     _cprint(f"     Review loop: {'running' if resp.get('review_loop_running') else 'stopped'}")
                     if not resp.get("endogenous_drive_enabled", True):
                         _cprint(f"     ⚠️  endogenous_drive_enabled=False in config — drive loop disabled")
+                    snapshot = self._fetch_supervisor_status_snapshot()
+                    if snapshot:
+                        for line in self._format_supervisor_status_snapshot(snapshot)[:4]:
+                            _cprint(f"     {line}")
                     _cprint(f"     Use /auto-q to return to Memory Mode.")
                     _cprint(f"     Monitor: {supervisor_url}/ui")
                 else:
@@ -6769,7 +6946,7 @@ class VoidcubeCLI:
         Attempts every available path to exit cleanly:
         1. Interrupt the running agent (non-blocking)
         2. Synchronously deactivate Governor Mode (with short timeout)
-        3. Mark in-progress learning tasks as interrupted via Gateway
+        3. Mark any in-progress AUTO task as interrupted via Gateway
         4. Unregister from Gateway session
         Returns True if cleanup was attempted (best-effort).
         """
@@ -6807,16 +6984,18 @@ class VoidcubeCLI:
         except Exception as exc:
             _cprint(f"  ⚠️  Governor deactivation failed: {exc}")
 
-        # 3. Report in-progress learning task as interrupted via Gateway
-        current = getattr(self, '_current_learning_task', None)
+        # 3. Report any in-progress AUTO task as interrupted via Gateway
+        current = getattr(self, '_current_auto_task', None)
         if current is not None:
             task_id = current.get("task_id", "")
+            execution_kind = str(current.get("execution_kind") or current.get("task_type") or "").strip().lower()
+            task_label = "body improvement task" if execution_kind == "body_improvement" else "learning task"
             try:
                 gateway_base = "http://127.0.0.1:6000"
                 payload = _json.dumps({
                     "decision": "failed",
-                    "reason": "AUTO mode force-quit — task interrupted by user.",
-                    "context": {"source": "force_quit"},
+                    "reason": f"AUTO mode force-quit — {task_label} interrupted by user.",
+                    "context": {"source": "force_quit", "execution_kind": execution_kind},
                 }).encode()
                 r = _req.Request(
                     f"{gateway_base}/v1/tasks/{task_id}/decision",
@@ -6825,7 +7004,7 @@ class VoidcubeCLI:
                     method="POST",
                 )
                 _req.urlopen(r, timeout=5)
-                _cprint(f"  ✅ Learning task {task_id[:8]}... marked interrupted")
+                _cprint(f"  ✅ AUTO {task_label} {task_id[:8]}... marked interrupted")
             except Exception:
                 _cprint(f"  ⚠️  Could not report task completion to Gateway")
 
@@ -6844,7 +7023,7 @@ class VoidcubeCLI:
             pass
 
         self._auto_mode_active = False
-        self._current_learning_task = None
+        self._current_auto_task = None
         _cprint(f"  🛡️  Force quit complete — returned to Memory Mode.")
         return True
 

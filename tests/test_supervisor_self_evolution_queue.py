@@ -969,3 +969,43 @@ async def test_runtime_profile_prefers_canonical_task_fields_over_broad_task_typ
     assert listed["tasks"][0]["execution_kind"] == "body_switch"
     assert fetched["task_family"] == "body_switch"
     assert fetched["execution_kind"] == "body_switch"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_list_self_evolution_tasks_can_filter_body_improvement_agent_tasks(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    await supervisor.plan_self_evolution_task(
+        {
+            "title": "Improve shell body after learning",
+            "task_family": "body_upgrade",
+            "execution_kind": "body_improvement",
+            "metadata": {
+                "task_family": "body_upgrade",
+                "execution_kind": "body_improvement",
+            },
+        }
+    )
+
+    listed = await supervisor.list_self_evolution_tasks(
+        status="approved",
+        execution_kind="body_improvement",
+    )
+
+    assert listed["count"] == 0
+
+    task_id = supervisor._self_evolution_queue.list_tasks()[0].task_id
+    await supervisor.decide_self_evolution_task(
+        task_id,
+        {"decision": "approve", "actor": "supervisor", "reason": "ready for agent pull"},
+    )
+
+    listed = await supervisor.list_self_evolution_tasks(
+        status="approved",
+        execution_kind="body_improvement",
+    )
+
+    assert listed["count"] == 1
+    assert listed["tasks"][0]["execution_kind"] == "body_improvement"
+    assert listed["tasks"][0]["execution_request"] is None

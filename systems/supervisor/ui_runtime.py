@@ -1960,11 +1960,24 @@ const EVENT_ICONS = {
 const eventIcon = t => EVENT_ICONS[t] || '●';
 
 function taskDotClass(t) {
-  const f = String(t.task_family || t.governance_task_type || '');
+  const identity = t.task_identity || {};
+  const f = String(identity.display_kind || t.task_family || t.governance_task_type || '');
   if (f.includes('memory'))    return 'memory';
   if (f.includes('learning'))  return 'learning';
   if (f.includes('evolution') || f.includes('body')) return 'evolution';
   return 'planning';
+}
+
+function taskIdentityHint(t) {
+  const identity = t.task_identity || {};
+  const family = String(identity.task_family || t.task_family || '').trim();
+  const displayKind = String(identity.display_kind || identity.execution_kind || '').trim();
+  if (family && displayKind && family !== displayKind) {
+    return '任务家族: ' + family + ' · 执行动作: ' + displayKind;
+  }
+  if (displayKind) return '任务类型: ' + displayKind;
+  if (family) return '任务家族: ' + family;
+  return '';
 }
 
 function governanceHint(t) {
@@ -2051,6 +2064,13 @@ function renderPanels(panels) {
       title.className = 'task-title';
       title.textContent = (t.title || '未命名').substring(0, 48);
       text.append(title);
+      const identityHint = taskIdentityHint(t);
+      if (identityHint) {
+        const meta = document.createElement('span');
+        meta.className = 'task-gov';
+        meta.textContent = identityHint;
+        text.append(meta);
+      }
       const hint = governanceHint(t);
       if (hint) {
         const gov = document.createElement('span');
@@ -2142,15 +2162,26 @@ function renderExecutions(tasks) {
     ti.textContent = (t.title || '未命名').substring(0, 40);
     const ty = document.createElement('span');
     ty.className = 'exec-type';
+    const identity = t.task_identity || {};
     const typeMap = {
       'self_learning': '自我学习', 'learning': '学习',
       'memory_compression': '记忆压缩', 'memory': '记忆',
       'body_switch': '替身切换', 'evolution': '进化',
+      'body_improvement': '代码改进',
+      'body_upgrade': '身体升级',
       'planning': '规划', 'task_decision': '任务决策',
       'maintenance': '维护', 'drive': '驱动',
     };
-    const rawType = (t.governance_task_type || t.task_family || '').replace(/_/g, ' ');
-    ty.textContent = typeMap[t.governance_task_type || t.task_family || ''] || rawType;
+    const displayKind = String(identity.display_kind || '').trim();
+    const family = String(identity.task_family || t.task_family || '').trim();
+    const primaryType = displayKind || family || String(t.governance_task_type || '').trim();
+    const primaryLabel = typeMap[primaryType] || primaryType.replace(/_/g, ' ');
+    if (family && displayKind && family !== displayKind) {
+      const familyLabel = typeMap[family] || family.replace(/_/g, ' ');
+      ty.textContent = primaryLabel + ' · ' + familyLabel;
+    } else {
+      ty.textContent = primaryLabel;
+    }
     row.append(dot, ti, ty);
     els.execList.append(row);
   });

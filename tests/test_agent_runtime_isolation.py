@@ -68,6 +68,7 @@ async def test_agent_health_check_reports_body_runtime_identity(tmp_path):
     assert result["slot_id"] == "slot-A"
     assert result["body_version"] == "bootstrap"
     assert result["body_runtime"] == str(runtime_root)
+    assert result["enable_task_polling"] is False
     assert result["runtime_paths"]["sessions_root"].endswith("sessions")
 
 
@@ -220,6 +221,7 @@ async def test_agent_task_polling_updates_learning_task_lifecycle_via_gateway(tm
             body_runtime=str(runtime_root),
             body_logs=str(logs_root),
             body_version="v5",
+            enable_task_polling=True,
         )
     )
 
@@ -538,6 +540,7 @@ async def test_agent_task_polling_fetches_learning_and_body_improvement_tasks(tm
             body_runtime=str(runtime_root),
             body_logs=str(logs_root),
             body_version="v8",
+            enable_task_polling=True,
         )
     )
 
@@ -581,6 +584,42 @@ async def test_agent_task_polling_fetches_learning_and_body_improvement_tasks(tm
 
     assert calls == [{"task_type": "self_learning"}, {"execution_kind": "body_improvement"}]
     assert [task["task_id"] for task in tasks] == ["learn-1", "improve-1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_agent_lifespan_does_not_start_task_polling_by_default(tmp_path, monkeypatch):
+    runtime_root = tmp_path / "runtime"
+    logs_root = tmp_path / "logs"
+    worktree_root = tmp_path / "worktree"
+    worktree_root.mkdir()
+
+    agent = AgentInstance(
+        AgentConfig(
+            port=7011,
+            active_slot="slot-A",
+            body_worktree=str(worktree_root),
+            body_runtime=str(runtime_root),
+            body_logs=str(logs_root),
+            body_version="v11",
+        )
+    )
+
+    started = {"called": False}
+
+    async def fake_register():
+        return "svc-1"
+
+    async def fake_poll():
+        started["called"] = True
+
+    monkeypatch.setattr(agent, "register_with_gateway", fake_register)
+    monkeypatch.setattr(agent, "_task_polling_loop", fake_poll)
+
+    async with agent.app.router.lifespan_context(agent.app):
+        assert agent._task_polling_task is None
+
+    assert started["called"] is False
 
 
 @pytest.mark.asyncio

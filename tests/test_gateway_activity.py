@@ -88,9 +88,11 @@ def test_gateway_activity_touch_derives_runtime_task_profile_from_broad_metadata
     assert metadata["trace_id"] == "trace-plan-1"
     assert metadata["task_type"] == "self_evolution"
     assert metadata["governance_task_type"] == "self_evolution"
-    assert metadata["task_family"] == "body_switch"
-    assert metadata["execution_kind"] == "body_switch"
+    assert metadata["task_family"] == "body_upgrade"
+    assert metadata["execution_kind"] == "body_upgrade"
     assert metadata["decision_id"] == "decision-plan-1"
+    assert metadata["task_identity"]["display_kind"] == "body_switch"
+    assert metadata["task_identity"]["requested_kind"] == "body_switch"
 
 
 def test_gateway_activity_touch_derives_runtime_task_profile_from_nested_runtime_profile():
@@ -195,8 +197,9 @@ def test_gateway_activity_log_is_bounded_and_trace_filterable():
     assert filtered["count"] == 1
     assert filtered["events"][0]["activity_kind"] == "self_evolution_execute"
     assert filtered["events"][0]["metadata"]["trace_id"] == "trace-log-1"
-    assert filtered["events"][0]["metadata"]["task_family"] == "body_switch"
-    assert filtered["events"][0]["metadata"]["execution_kind"] == "body_switch"
+    assert filtered["events"][0]["metadata"]["task_family"] == "body_upgrade"
+    assert filtered["events"][0]["metadata"]["execution_kind"] == "body_upgrade"
+    assert filtered["events"][0]["metadata"]["task_identity"]["display_kind"] == "body_switch"
 
 
 def test_gateway_self_learning_route_updates_learning_activity_even_when_upstream_fails():
@@ -258,6 +261,36 @@ def test_gateway_agent_query_updates_user_and_agent_activity_even_when_upstream_
     assert activity["last_agent_work_at"] is not None
     assert activity["counts"]["user_request_count"] == 1
     assert activity["counts"]["agent_work_count"] == 1
+
+
+def test_gateway_activity_touch_adds_task_identity_summary():
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+
+    response = client.post(
+        "/admin/activity/touch",
+        json={
+            "activity_kind": "agent_work",
+            "source_service": "cli_agent",
+            "metadata": {
+                "task_id": "body-1",
+                "title": "Improve shell body",
+                "execution_kind": "body_improvement",
+                "task_family": "body_upgrade",
+                "governance_task_type": "self_evolution",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    activity = client.get("/admin/activity").json()
+    metadata = activity["recent_metadata"]["agent_work"]
+    identity = metadata["task_identity"]
+    assert identity["task_id"] == "body-1"
+    assert identity["title"] == "Improve shell body"
+    assert identity["execution_kind"] == "body_improvement"
+    assert identity["display_kind"] == "body_improvement"
+    assert "Improve shell body" in identity["summary"]
 
 
 def test_gateway_memory_route_updates_memory_activity_even_when_upstream_fails():
@@ -407,7 +440,9 @@ def test_gateway_executor_route_updates_execute_activity_even_when_upstream_fail
     assert activity["recent_metadata"]["self_evolution_execute"]["trace_id"] == "trace-exec-1"
     assert activity["recent_metadata"]["self_evolution_execute"]["task_type"] == "self_evolution"
     assert activity["recent_metadata"]["self_evolution_execute"]["governance_task_type"] == "self_evolution"
-    assert activity["recent_metadata"]["self_evolution_execute"]["task_family"] == "body_switch"
-    assert activity["recent_metadata"]["self_evolution_execute"]["execution_kind"] == "body_switch"
+    assert activity["recent_metadata"]["self_evolution_execute"]["task_family"] == "body_upgrade"
+    assert activity["recent_metadata"]["self_evolution_execute"]["execution_kind"] == "body_upgrade"
     assert activity["recent_metadata"]["self_evolution_execute"]["decision_id"] == "decision-exec-1"
     assert activity["recent_metadata"]["self_evolution_execute"]["task_id"] == "task-exec-1"
+    assert activity["recent_metadata"]["self_evolution_execute"]["task_identity"]["display_kind"] == "body_switch"
+    assert activity["recent_metadata"]["self_evolution_execute"]["task_identity"]["requested_kind"] == "body_switch"

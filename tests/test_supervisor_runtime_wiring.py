@@ -599,6 +599,37 @@ async def test_supervisor_room_state_exposes_applied_priority_updates(tmp_path, 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_supervisor_room_state_exposes_task_identity_for_body_improvement(tmp_path, monkeypatch):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
+
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Improve shell body from learning",
+            "task_family": "body_upgrade",
+            "execution_kind": "body_improvement",
+            "metadata": {
+                "task_family": "body_upgrade",
+                "execution_kind": "body_improvement",
+                "execution_request": {
+                    "kind": "body_improvement",
+                },
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+
+    state = await supervisor.get_supervisor_ui_state()
+    task = next(item for item in state["tasks"] if item["task_id"] == task_id)
+
+    assert task["task_identity"]["task_family"] == "body_upgrade"
+    assert task["task_identity"]["execution_kind"] == "body_improvement"
+    assert task["task_identity"]["requested_kind"] == "body_improvement"
+    assert task["task_identity"]["display_kind"] == "body_improvement"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_supervisor_delegates_memory_compression_to_maintenance_adapter(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     expected = {
