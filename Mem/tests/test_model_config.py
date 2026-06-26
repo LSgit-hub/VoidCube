@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from memai import MEM_MODEL_ROLES, MemModelConfig, MemModelConfigSet
+from memai.model_config import resolve_mem_llm_client
 
 
 def test_mem_model_config_reads_new_voidcube_cli_memory_llm_block() -> None:
@@ -134,3 +135,47 @@ def test_mem_model_roles_include_expected_governance_roles() -> None:
     assert "governance_summary" in MEM_MODEL_ROLES
     assert "governance_reasoner" in MEM_MODEL_ROLES
     assert "embedding" in MEM_MODEL_ROLES
+
+
+def test_mem_model_config_rewrites_local_gateway_loopback_base_url() -> None:
+    config = {
+        "memory": {
+            "provider": "mem",
+            "llm": {
+                "provider": "deepseek",
+                "model": "deepseek-v4-flash",
+                "base_url": "http://127.0.0.1:6000/v1",
+            },
+        }
+    }
+
+    model_config = MemModelConfig.from_voidcube_config(config)
+
+    assert model_config.base_url == "https://api.deepseek.com/v1"
+    assert model_config.api_key_env == "DEEPSEEK_API_KEY"
+
+
+def test_resolve_mem_llm_client_rejects_loopback_gateway_without_real_mem_key(monkeypatch) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(
+        "memai.model_config.load_voidcube_mem_model_config_set",
+        lambda: MemModelConfigSet.from_voidcube_config(
+            {
+                "memory": {
+                    "provider": "mem",
+                    "llm": {
+                        "provider": "deepseek",
+                        "model": "deepseek-v4-flash",
+                        "base_url": "http://127.0.0.1:6000/v1",
+                        "api_key_env": "",
+                    },
+                }
+            }
+        ),
+    )
+
+    client, model = resolve_mem_llm_client(role="default")
+
+    assert client is None
+    assert model == "deepseek-v4-flash"

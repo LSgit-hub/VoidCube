@@ -454,7 +454,7 @@ async def test_supervisor_room_state_maps_memory_task_to_memory_scene(tmp_path):
 
     assert state["scene"] == "maintenance"
     assert state["tasks"][0]["title"] == "Run memory continuity sweep"
-    assert "tending the memory" in state["title"]
+    assert "整理记忆" in state["title"]
     assert "tasks_planned" in [event["event_type"] for event in state["timeline"]]
     assert "supervisor_activity" in [event["source"] for event in state["timeline"]]
 
@@ -463,6 +463,7 @@ async def test_supervisor_room_state_maps_memory_task_to_memory_scene(tmp_path):
 @pytest.mark.unit
 async def test_supervisor_room_state_read_does_not_create_timeline_events(tmp_path):
     supervisor = _make_supervisor(tmp_path)
+    supervisor.get_runtime_timeline = AsyncMock(return_value={"timeline": []})  # type: ignore[method-assign]
     supervisor.evaluate_idle_window = AsyncMock(
         return_value={
             "checks": {},
@@ -485,6 +486,115 @@ async def test_supervisor_room_state_read_does_not_create_timeline_events(tmp_pa
 
     assert state["drive_candidates"]
     assert state["timeline"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_exposes_governance_preview_for_shadow_review(tmp_path, monkeypatch):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
+
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "items": [
+                {"title": "Duplicate learning branch"},
+                {"title": "Canonical learning branch"},
+            ]
+        }
+    )
+    tasks_by_title = {task["title"]: task["task_id"] for task in planned["tasks"]}
+
+    async def idle_snapshot():
+        return {
+            "last_user_request_at": "2026-05-25T00:00:00",
+            "last_agent_work_at": "2026-05-25T00:00:00",
+            "last_memory_task_at": "2026-05-25T00:00:00",
+            "last_self_learning_activity_at": "2026-05-25T00:00:00",
+            "last_self_evolution_activity_at": "2026-05-25T00:00:00",
+            "counts": {},
+            "active_sessions": 0,
+        }
+
+    supervisor._fetch_gateway_activity_snapshot = idle_snapshot  # type: ignore[method-assign]
+
+    async def fake_lm_review(tasks, *, idle_window):
+        return {
+            tasks_by_title["Duplicate learning branch"]: {
+                "action": "merge",
+                "reason": "Duplicate branch should merge into the canonical one.",
+                "shadow": {
+                    "action": "merge",
+                    "reason": "Duplicate branch should merge into the canonical one.",
+                    "merge_into": tasks_by_title["Canonical learning branch"],
+                },
+            }
+        }
+
+    monkeypatch.setattr(supervisor, "_lm_review_task_queue", fake_lm_review)
+
+    await supervisor.review_self_evolution_tasks(
+        {
+            "idle_window": {"now": "2026-05-25T01:00:00"},
+        }
+    )
+
+    state = await supervisor.get_supervisor_ui_state()
+    duplicate = next(task for task in state["tasks"] if task["title"] == "Duplicate learning branch")
+    preview = duplicate["governance_preview"]["lm_queue_shadow"]
+    assert preview["action"] == "merge"
+    assert preview["merge_into"] == tasks_by_title["Canonical learning branch"]
+    assert state["metrics"]["governance"]["shadow_recommendations"] >= 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_exposes_applied_priority_updates(tmp_path, monkeypatch):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
+
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Underweighted architecture follow-up",
+            "priority": "low",
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+
+    async def idle_snapshot():
+        return {
+            "last_user_request_at": "2026-05-25T00:00:00",
+            "last_agent_work_at": "2026-05-25T00:00:00",
+            "last_memory_task_at": "2026-05-25T00:00:00",
+            "last_self_learning_activity_at": "2026-05-25T00:00:00",
+            "last_self_evolution_activity_at": "2026-05-25T00:00:00",
+            "counts": {},
+            "active_sessions": 0,
+        }
+
+    supervisor._fetch_gateway_activity_snapshot = idle_snapshot  # type: ignore[method-assign]
+
+    async def fake_lm_review(tasks, *, idle_window):
+        return {
+            task_id: {
+                "action": "reprioritize",
+                "priority": "high",
+                "reason": "This follow-up now blocks higher-value evolution work.",
+            }
+        }
+
+    monkeypatch.setattr(supervisor, "_lm_review_task_queue", fake_lm_review)
+
+    await supervisor.review_self_evolution_tasks(
+        {
+            "idle_window": {"now": "2026-05-25T01:00:00"},
+        }
+    )
+
+    state = await supervisor.get_supervisor_ui_state()
+    task = next(item for item in state["tasks"] if item["task_id"] == task_id)
+    assert task["priority"] == "high"
+    assert task["governance_preview"]["lm_queue_priority"]["priority"] == "high"
+    assert state["metrics"]["governance"]["priority_updates"] >= 1
 
 
 @pytest.mark.asyncio

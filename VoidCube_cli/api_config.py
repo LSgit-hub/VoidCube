@@ -51,20 +51,13 @@ def save_provider_config(
     api_key_env: str = "",
     api_key: str = "",
     auth_mode: str = "",
-    also_apply_to_memory: bool = True,
 ) -> bool:
     """Persist a provider entry and set it active.
 
-    When ``also_apply_to_memory`` is True (the default), the same
-    provider / model / base_url / api_key_env are also mirrored into
-    ``memory.llm.*`` so Mem's LLM (which is read by
-    ``MemModelConfig.from_voidcube_config`` and the
-    ``_resolve_mem_llm_client`` helper) follows the main chat config
-    without the user having to re-run ``/api [3]``.
-
-    To opt out — e.g. when you want Mem on a cheaper model than the
-    main chat — call with ``also_apply_to_memory=False`` and then run
-    ``/api [3]`` separately.
+    This only updates the active API-A provider entry.  Mem / supervisor
+    LLM configuration lives under ``memory.llm.*`` and must be changed
+    explicitly through the dedicated memory-model flow so API-A and
+    API-B remain isolated.
     """
     try:
         from VoidCube_cli.config import (
@@ -91,32 +84,6 @@ def save_provider_config(
         )
         cfg = set_active_provider(cfg, provider_key)
         save_config(cfg)
-
-        if also_apply_to_memory:
-            # Mirror the same provider/model into memory.llm.* so the
-            # Mem side picks up the active provider without a separate
-            # step.  Resolve the api_key_env from the providers entry
-            # first (it may differ from what the caller passed if the
-            # user already had a key stored).
-            provider_cfg = (
-                (cfg.get("providers") or {}).get(provider_key) or {}
-            )
-            mem_api_key_env = (
-                api_key_env
-                or provider_cfg.get("api_key_env", "")
-                or "OPENAI_API_KEY"
-            )
-            # Save each memory.llm.* key — these writes are independent
-            # of the main save_config above so partial failures don't
-            # corrupt the main config.  Use the cli-level helper that
-            # already handles key-path routing and atomic write.
-            for sub_key, sub_value in (
-                ("memory.llm.provider", provider_type or provider_key),
-                ("memory.llm.model", selected_model),
-                ("memory.llm.base_url", base_url or ""),
-                ("memory.llm.api_key_env", mem_api_key_env),
-            ):
-                save_config_value(sub_key, sub_value)
         return True
     except Exception:
         return False

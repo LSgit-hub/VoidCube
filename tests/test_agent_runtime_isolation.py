@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -135,6 +136,44 @@ async def test_agent_exposes_gateway_query_and_chat_completion_surfaces(tmp_path
         return f"gateway-echo:{message}"
 
     monkeypatch.setattr(agent, "_generate_response", fake_generate_response)
+    monkeypatch.setattr(
+        agent,
+        "_resolve_active_runtime",
+        lambda: {
+            "api_key": "runtime-key",
+            "base_url": "https://runtime-base.example/v1",
+            "model": "agnes-2.0-flash",
+            "provider": "agnesai",
+            "api_mode": "chat_completions",
+        },
+    )
+
+    class _FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {
+                "id": "cmpl-1",
+                "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            }
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *_args, **_kwargs):
+            return _FakeResponse()
+
+    monkeypatch.setattr("aiohttp.ClientSession", lambda: _FakeSession())
 
     query = await agent.handle_agent_query(
         {
@@ -163,3 +202,442 @@ async def test_agent_exposes_gateway_query_and_chat_completion_surfaces(tmp_path
     assert isinstance(completion["choices"][0]["message"]["content"], str)
     assert len(completion["choices"][0]["message"]["content"]) > 0
     assert completion["slot_id"] == "slot-B"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_agent_task_polling_updates_learning_task_lifecycle_via_gateway(tmp_path, monkeypatch):
+    runtime_root = tmp_path / "runtime"
+    logs_root = tmp_path / "logs"
+    worktree_root = tmp_path / "worktree"
+    worktree_root.mkdir()
+
+    agent = AgentInstance(
+        AgentConfig(
+            port=7005,
+            active_slot="slot-A",
+            body_worktree=str(worktree_root),
+            body_runtime=str(runtime_root),
+            body_logs=str(logs_root),
+            body_version="v5",
+        )
+    )
+
+    updates = []
+
+    sleep_calls = 0
+
+    async def fake_sleep(_seconds: float) -> None:
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls >= 2:
+            raise asyncio.CancelledError()
+
+    async def fake_execute(task: dict) -> dict:
+        assert task["task_id"] == "learn-1"
+        return {"status": "completed", "reason": "ok", "api_calls": 2, "tool_events": []}
+
+    async def fake_update(task_id: str, *, decision: str, reason: str, actor: str, context=None) -> bool:
+        updates.append(
+            {
+                "task_id": task_id,
+                "decision": decision,
+                "reason": reason,
+                "actor": actor,
+                "context": dict(context or {}),
+            }
+        )
+        return True
+
+    class _FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {
+                "tasks": [
+                    {
+                        "task_id": "learn-1",
+                        "title": "Learn task",
+                        "summary": "Investigate",
+                        "governance_task_type": "self_learning",
+                    }
+                ]
+            }
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, *_args, **_kwargs):
+            return _FakeResponse()
+
+    monkeypatch.setattr("aiohttp.ClientSession", lambda: _FakeSession())
+    monkeypatch.setattr("systems.agent.run_agent_instance.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr(agent, "_execute_approved_task", fake_execute)
+    monkeypatch.setattr(agent, "_update_gateway_task_decision", fake_update)
+
+    await asyncio.wait_for(agent._task_polling_loop(), timeout=1)
+
+    assert [item["decision"] for item in updates] == ["running", "completed"]
+    assert updates[0]["task_id"] == "learn-1"
+    assert updates[0]["context"]["source"] == "agent_task_polling"
+    assert updates[1]["context"]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_agent_chat_completions_uses_canonical_runtime_provider_config(tmp_path, monkeypatch):
+    runtime_root = tmp_path / "runtime"
+    logs_root = tmp_path / "logs"
+    worktree_root = tmp_path / "worktree"
+    worktree_root.mkdir()
+
+    agent = AgentInstance(
+        AgentConfig(
+            port=7006,
+            active_slot="slot-A",
+            body_worktree=str(worktree_root),
+            body_runtime=str(runtime_root),
+            body_logs=str(logs_root),
+            body_version="v6",
+        )
+    )
+
+    captured = {}
+
+    class _FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {
+                "id": "cmpl-1",
+                "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            }
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["url"] = url
+            captured["headers"] = dict(headers or {})
+            captured["json"] = dict(json or {})
+            return _FakeResponse()
+
+    monkeypatch.setattr(
+        "VoidCube_cli.config.load_config",
+        lambda: {
+            "runtime": {"active_provider": "agnesai"},
+            "providers": {
+                "agnesai": {
+                    "selected_model": "agnes-2.0-flash",
+                    "base_url": "https://config-base.example/v1",
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "VoidCube_cli.runtime_provider.resolve_runtime_provider",
+        lambda requested=None, explicit_api_key=None, explicit_base_url=None: {
+            "provider": "agnesai",
+            "api_mode": "chat_completions",
+            "base_url": "https://runtime-base.example/v1",
+            "api_key": "runtime-key",
+        },
+    )
+    monkeypatch.setattr("aiohttp.ClientSession", lambda: _FakeSession())
+
+    result = await agent.handle_chat_completions(
+        {
+            "messages": [{"role": "user", "content": "hello runtime"}],
+        }
+    )
+
+    assert captured["url"] == "https://runtime-base.example/v1/chat/completions"
+    assert captured["headers"]["Authorization"] == "Bearer runtime-key"
+    assert captured["json"]["model"] == "agnes-2.0-flash"
+    assert result["slot_id"] == "slot-A"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_agent_chat_completions_ignores_request_model_override_when_runtime_model_exists(
+    tmp_path, monkeypatch
+):
+    runtime_root = tmp_path / "runtime"
+    logs_root = tmp_path / "logs"
+    worktree_root = tmp_path / "worktree"
+    worktree_root.mkdir()
+
+    agent = AgentInstance(
+        AgentConfig(
+            port=7010,
+            active_slot="slot-A",
+            body_worktree=str(worktree_root),
+            body_runtime=str(runtime_root),
+            body_logs=str(logs_root),
+            body_version="v10",
+        )
+    )
+
+    captured = {}
+
+    class _FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {
+                "id": "cmpl-2",
+                "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            }
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["url"] = url
+            captured["headers"] = dict(headers or {})
+            captured["json"] = dict(json or {})
+            return _FakeResponse()
+
+    monkeypatch.setattr(
+        agent,
+        "_resolve_active_runtime",
+        lambda: {
+            "provider": "agnesai",
+            "api_mode": "chat_completions",
+            "base_url": "https://runtime-base.example/v1",
+            "api_key": "runtime-key",
+            "model": "agnes-2.0-flash",
+        },
+    )
+    monkeypatch.setattr("aiohttp.ClientSession", lambda: _FakeSession())
+
+    await agent.handle_chat_completions(
+        {
+            "model": "deepseek-v4-flash",
+            "messages": [{"role": "user", "content": "hello runtime"}],
+        }
+    )
+
+    assert captured["json"]["model"] == "agnes-2.0-flash"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_agent_executes_learning_task_with_main_agent_not_delegate_child(tmp_path, monkeypatch):
+    runtime_root = tmp_path / "runtime"
+    logs_root = tmp_path / "logs"
+    worktree_root = tmp_path / "worktree"
+    worktree_root.mkdir()
+
+    agent = AgentInstance(
+        AgentConfig(
+            port=7007,
+            active_slot="slot-A",
+            body_worktree=str(worktree_root),
+            body_runtime=str(runtime_root),
+            body_logs=str(logs_root),
+            body_version="v7",
+        )
+    )
+
+    built = {}
+
+    class _FakeTaskAgent:
+        model = "agnes-2.0-flash"
+
+        def run_conversation(self, *, user_message, task_id):
+            built["user_message"] = user_message
+            built["task_id"] = task_id
+            return {
+                "final_response": '{"technology_evaluations": []}',
+                "messages": [
+                    {
+                        "role": "tool",
+                        "name": "web_search",
+                        "tool_args": '{"q":"agent execution"}',
+                        "content": "ok",
+                    }
+                ],
+                "api_calls": 1,
+                "failed": False,
+                "partial": False,
+            }
+
+    async def fake_set_scene(scene_payload):
+        built.setdefault("scenes", []).append(dict(scene_payload))
+        return dict(scene_payload)
+
+    monkeypatch.setattr(
+        agent,
+        "_build_task_agent",
+        lambda task_id, execution_kind, toolsets: _FakeTaskAgent(),
+    )
+    monkeypatch.setattr(agent, "set_agent_scene", fake_set_scene)
+
+    result = await agent._execute_approved_task(
+        {
+            "task_id": "learn-main-1",
+            "title": "Learn directly",
+            "summary": "Investigate direct execution path",
+            "governance_task_type": "self_learning",
+        }
+    )
+
+    assert result["status"] == "completed"
+    assert result["model"] == "agnes-2.0-flash"
+    assert result["tool_events"][0]["tool"] == "web_search"
+    assert result["parsed_output"] == {"technology_evaluations": []}
+    assert built["task_id"] == "agent-task-learn-main-1"
+    assert built["scenes"][0]["scene"] == "learning"
+    assert built["scenes"][-1]["scene"] == "idle"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_agent_task_polling_fetches_learning_and_body_improvement_tasks(tmp_path, monkeypatch):
+    runtime_root = tmp_path / "runtime"
+    logs_root = tmp_path / "logs"
+    worktree_root = tmp_path / "worktree"
+    worktree_root.mkdir()
+
+    agent = AgentInstance(
+        AgentConfig(
+            port=7008,
+            active_slot="slot-A",
+            body_worktree=str(worktree_root),
+            body_runtime=str(runtime_root),
+            body_logs=str(logs_root),
+            body_version="v8",
+        )
+    )
+
+    calls = []
+
+    class _FakeResponse:
+        def __init__(self, payload):
+            self.status = 200
+            self._payload = payload
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return self._payload
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, _url, params=None, timeout=None):
+            del timeout
+            calls.append(dict(params or {}))
+            if params == {"task_type": "self_learning"}:
+                return _FakeResponse(
+                    {"tasks": [{"task_id": "learn-1", "governance_task_type": "self_learning"}]}
+                )
+            return _FakeResponse(
+                {"tasks": [{"task_id": "improve-1", "execution_kind": "body_improvement"}]}
+            )
+
+    monkeypatch.setattr("aiohttp.ClientSession", lambda: _FakeSession())
+
+    tasks = await agent._fetch_agent_executable_tasks()
+
+    assert calls == [{"task_type": "self_learning"}, {"execution_kind": "body_improvement"}]
+    assert [task["task_id"] for task in tasks] == ["learn-1", "improve-1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_agent_executes_body_improvement_task_with_code_editing_scene(tmp_path, monkeypatch):
+    runtime_root = tmp_path / "runtime"
+    logs_root = tmp_path / "logs"
+    worktree_root = tmp_path / "worktree"
+    worktree_root.mkdir()
+
+    agent = AgentInstance(
+        AgentConfig(
+            port=7009,
+            active_slot="slot-A",
+            body_worktree=str(worktree_root),
+            body_runtime=str(runtime_root),
+            body_logs=str(logs_root),
+            body_version="v9",
+        )
+    )
+
+    built = {}
+
+    class _FakeTaskAgent:
+        model = "agnes-2.0-flash"
+
+        def run_conversation(self, *, user_message, task_id):
+            built["user_message"] = user_message
+            built["task_id"] = task_id
+            return {
+                "final_response": '{"changed_files": ["tools/example.py"], "implementation_summary": "updated"}',
+                "messages": [],
+                "api_calls": 1,
+                "failed": False,
+                "partial": False,
+            }
+
+    async def fake_set_scene(scene_payload):
+        built.setdefault("scenes", []).append(dict(scene_payload))
+        return dict(scene_payload)
+
+    monkeypatch.setattr(agent, "_build_task_agent", lambda task_id, execution_kind, toolsets: _FakeTaskAgent())
+    monkeypatch.setattr(agent, "set_agent_scene", fake_set_scene)
+
+    result = await agent._execute_approved_task(
+        {
+            "task_id": "improve-main-1",
+            "title": "Improve shell body",
+            "summary": "Refactor a tool implementation",
+            "governance_task_type": "self_evolution",
+            "execution_kind": "body_improvement",
+            "constraints": {"worktree_path": "F:/worktree", "editable_dirs": ["tools/"]},
+        }
+    )
+
+    assert result["status"] == "completed"
+    assert result["parsed_output"]["changed_files"] == ["tools/example.py"]
+    assert "[AUTO Body Improvement Task]" in built["user_message"]
+    assert built["scenes"][0]["scene"] == "code_editing"
+    assert built["scenes"][-1]["scene"] == "idle"

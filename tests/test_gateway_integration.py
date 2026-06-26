@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 import pytest_asyncio
 import aiohttp
+from fastapi.testclient import TestClient
 
 from systems.gateway import (
     InternalGateway,
@@ -178,6 +179,100 @@ class TestGatewayIntegration:
             status_data = await status_response.json()
             assert status_data["active_body"]["slot_id"] == "slot-A"
 
+    async def test_gateway_forwards_task_decision_to_supervisor(self, gateway, monkeypatch):
+        from systems.gateway.internal_gateway import ServiceInfo
+
+        gateway._services["supervisor-1"] = ServiceInfo(
+            service_id="supervisor-1",
+            service_name="supervisor",
+            service_type="supervisor",
+            address="http://supervisor.test",
+            health_endpoint="/",
+            healthy=True,
+        )
+
+        forwarded = {}
+
+        class _FakeResponse:
+            status = 200
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def json(self):
+                return {"status": "running"}
+
+        class _FakeSession:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def post(self, url, json=None, timeout=None):
+                forwarded["url"] = url
+                forwarded["json"] = dict(json or {})
+                forwarded["timeout"] = timeout
+                return _FakeResponse()
+
+        monkeypatch.setattr("systems.gateway.internal_gateway.aiohttp.ClientSession", lambda: _FakeSession())
+
+        with TestClient(gateway.app) as client:
+            response = client.post(
+                "/v1/tasks/task-1/decision",
+                json={
+                    "decision": "running",
+                    "reason": "claim",
+                    "actor": "agent",
+                    "context": {"source": "test"},
+                },
+            )
+            payload = response.json()
+
+        assert response.status_code == 200
+        assert payload["status"] == "running"
+        assert forwarded["url"] == "http://supervisor.test/self-evolution/tasks/task-1/decision"
+        assert forwarded["json"]["decision"] == "running"
+        assert forwarded["json"]["actor"] == "agent"
+        assert forwarded["json"]["context"]["source"] == "test"
+
+    async def test_supervisor_decision_endpoint_allows_failed_transition_from_running(self, gateway):
+        from systems.gateway.internal_gateway import ServiceInfo
+        from systems.supervisor.supervisor import Supervisor, SupervisorConfig
+
+        supervisor = Supervisor(SupervisorConfig(ui_enabled=False))
+        created = await supervisor.plan_self_evolution_task(
+            {
+                "title": "Stale AUTO task",
+                "summary": "historical cleanup",
+                "task_type": "self_learning",
+                "metadata": {
+                    "governance_task_type": "self_learning",
+                    "task_family": "self_learning",
+                },
+            }
+        )
+        task_id = created["tasks"][0]["task_id"]
+        await supervisor.decide_self_evolution_task(
+            task_id,
+            {"decision": "approved", "actor": "supervisor", "reason": "approved for execution"},
+        )
+        await supervisor.decide_self_evolution_task(
+            task_id,
+            {"decision": "running", "actor": "agent", "reason": "picked by agent"},
+        )
+
+        response = await supervisor.decide_self_evolution_task(
+            task_id,
+            {"decision": "failed", "actor": "supervisor", "reason": "cleanup stale running"},
+        )
+
+        assert response["status"] == "failed"
+        assert response["task"]["status"] == "failed"
+
     async def test_supervisor_agent_registration_syncs_gateway_active_body_and_trace_activity(
         self,
         gateway,
@@ -271,7 +366,7 @@ class TestGatewayIntegration:
         assert activity_log["count"] == 1
         assert activity_log["events"][0]["activity_kind"] == "self_evolution_execute"
         assert activity_log["events"][0]["metadata"]["trace_id"] == "trace-full-service-1"
-        assert activity_log["events"][0]["metadata"]["task_family"] == "body_switch"
+        assert activity_log["events"][0]["metadata"]["task_family"] == "body_upgrade"
 
     async def test_real_agent_process_serves_gateway_user_query_and_trace_activity(
         self,

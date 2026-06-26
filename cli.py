@@ -2233,14 +2233,14 @@ class VoidcubeCLI:
 
     _current_learning_task: Dict[str, Any] | None = None
     _current_learning_task_started_at: float = 0.0
+    _last_agent_turn_result: Dict[str, Any] | None = None
 
     def _poll_auto_mode_workflow(self) -> None:
         """Pull approved learning tasks from Gateway and execute them.
 
         In AUTO mode, the CLI Agent actively pulls approved self_learning
-        tasks from the Supervisor's task list (via Gateway GET /v1/tasks)
-        and executes them.  Results are reported back via Gateway
-        POST /v1/tasks/{task_id}/complete to close the task lifecycle.
+        tasks from the Supervisor's task list via the Gateway and reports
+        task lifecycle updates back through the same Gateway surface.
 
         Architecture baseline: §3.3, §3.5, §3.6, §7.3, §7.5.
         """
@@ -2256,15 +2256,17 @@ class VoidcubeCLI:
             import time as _time
             started_at = getattr(self, '_current_learning_task_started_at', 0)
             elapsed = _time.time() - started_at if started_at else -1
+            turn_result = getattr(self, "_last_agent_turn_result", None)
             # ── Timeout check: if task ran > 30 min, report as failed ──
             if elapsed > 1800:
                 try:
                     timeout_payload = _json.dumps({
+                        "decision": "failed",
                         "reason": "Learning task timed out (30 min).",
                         "context": {"source": "cli_agent_pull", "error": "timeout", "elapsed_s": int(elapsed)},
                     }).encode()
                     r = _req.Request(
-                        f"{gateway_base}/v1/tasks/{task_id}/complete",
+                        f"{gateway_base}/v1/tasks/{task_id}/decision",
                         data=timeout_payload,
                         headers={"Content-Type": "application/json"},
                         method="POST",
@@ -2275,15 +2277,34 @@ class VoidcubeCLI:
                     pass
                 self._current_learning_task = None
                 self._current_learning_task_started_at = 0
-            elif not self._agent_running:
-                # Agent is idle → task completed normally
+                self._last_agent_turn_result = None
+            elif not self._agent_running and turn_result is not None:
+                # Agent finished a queued AUTO learning turn — classify by the actual turn result.
+                decision = "failed" if (
+                    turn_result.get("failed")
+                    or turn_result.get("partial")
+                    or turn_result.get("interrupted")
+                ) else "completed"
+                reason = (
+                    f"Learning task failed in CLI AUTO mode: {turn_result.get('error', 'unknown error')}"
+                    if decision == "failed"
+                    else "Learning task completed by CLI Agent in AUTO mode."
+                )
                 try:
                     payload = _json.dumps({
-                        "reason": "Learning task completed by CLI Agent in AUTO mode.",
-                        "context": {"source": "cli_agent_pull", "elapsed_s": int(elapsed)},
+                        "decision": decision,
+                        "reason": reason,
+                        "context": {
+                            "source": "cli_agent_pull",
+                            "elapsed_s": int(elapsed),
+                            "failed": bool(turn_result.get("failed")),
+                            "partial": bool(turn_result.get("partial")),
+                            "interrupted": bool(turn_result.get("interrupted")),
+                            "error": str(turn_result.get("error", "") or "")[:200],
+                        },
                     }).encode()
                     r = _req.Request(
-                        f"{gateway_base}/v1/tasks/{task_id}/complete",
+                        f"{gateway_base}/v1/tasks/{task_id}/decision",
                         data=payload,
                         headers={"Content-Type": "application/json"},
                         method="POST",
@@ -2293,6 +2314,7 @@ class VoidcubeCLI:
                     pass  # Best-effort — supervisor will handle retry
                 self._current_learning_task = None
                 self._current_learning_task_started_at = 0
+                self._last_agent_turn_result = None
 
         # ── Pull next approved learning task from Gateway ──
         try:
@@ -2312,23 +2334,13 @@ class VoidcubeCLI:
 
         # ── Mark as running ──
         try:
-            from VoidCube_cli.config import load_config
-            cfg = load_config()
-            sv_cfg = cfg.get("supervisor", {}) if isinstance(cfg, dict) else {}
-            sv_host = sv_cfg.get("host", "127.0.0.1")
-            sv_port = sv_cfg.get("port", 6002)
-            supervisor_url = f"http://{sv_host}:{sv_port}"
-        except Exception:
-            supervisor_url = "http://127.0.0.1:6002"
-
-        try:
             run_payload = _json.dumps({
                 "decision": "running",
                 "actor": "cli_agent",
                 "reason": "Agent pulled task for execution in AUTO mode.",
             }).encode()
             r = _req.Request(
-                f"{supervisor_url}/self-evolution/tasks/{task_id}/decision",
+                f"{gateway_base}/v1/tasks/{task_id}/decision",
                 data=run_payload,
                 headers={"Content-Type": "application/json"},
                 method="POST",
@@ -2340,6 +2352,7 @@ class VoidcubeCLI:
         import time as _time
         self._current_learning_task = task
         self._current_learning_task_started_at = _time.time()
+        self._last_agent_turn_result = None
 
         # ── Notify Gateway that agent is starting work ──
         try:
@@ -2373,11 +2386,12 @@ class VoidcubeCLI:
             _cprint(f"  ⚠️  Failed to enqueue learning task {task_id[:8]}...")
             try:
                 fail_payload = _json.dumps({
+                    "decision": "failed",
                     "reason": "CLI Agent failed to enqueue task for execution.",
                     "context": {"source": "cli_agent_pull", "error": "queue_put_failed"},
                 }).encode()
                 r = _req.Request(
-                    f"{gateway_base}/v1/tasks/{task_id}/complete",
+                    f"{gateway_base}/v1/tasks/{task_id}/decision",
                     data=fail_payload,
                     headers={"Content-Type": "application/json"},
                     method="POST",
@@ -2386,6 +2400,8 @@ class VoidcubeCLI:
             except Exception:
                 pass
             self._current_learning_task = None
+            self._current_learning_task_started_at = 0
+            self._last_agent_turn_result = None
 
     @staticmethod
     def _use_ascii_fallback() -> bool:
@@ -6183,10 +6199,13 @@ class VoidcubeCLI:
         cmd_lower = command.lower().strip()
         cmd_original = command.strip()
 
-        # ── Auto mode guard: only /auto-q is accepted ──
+        # ── Auto mode guard: only /auto-q is accepted (user commands) ──
+        # Task prompts from _poll_auto_mode_workflow start with
+        # "[AUTO Learning Task]" — let them through for Agent execution.
         if self._auto_mode_active:
             _base = cmd_lower.split()[0].lstrip("/")
-            if _base not in ("auto-q", "auto-quit", "auto-stop"):
+            _is_auto_task = command.startswith("[AUTO Learning Task]")
+            if _base not in ("auto-q", "auto-quit", "auto-stop") and not _is_auto_task:
                 _cprint(
                     "  🔒 当前为全自动模式，agent 正在自主规划并探索学习。\n"
                     "     如需 agent 辅助请退出 auto 模式，仅接受 /auto-q。"
@@ -6795,11 +6814,12 @@ class VoidcubeCLI:
             try:
                 gateway_base = "http://127.0.0.1:6000"
                 payload = _json.dumps({
+                    "decision": "failed",
                     "reason": "AUTO mode force-quit — task interrupted by user.",
                     "context": {"source": "force_quit"},
                 }).encode()
                 r = _req.Request(
-                    f"{gateway_base}/v1/tasks/{task_id}/complete",
+                    f"{gateway_base}/v1/tasks/{task_id}/decision",
                     data=payload,
                     headers={"Content-Type": "application/json"},
                     method="POST",
@@ -8826,6 +8846,7 @@ class VoidcubeCLI:
         # Refresh provider credentials if needed (handles key rotation transparently)
         if not self._ensure_runtime_credentials():
             return None
+        self._last_agent_turn_result = None
 
         turn_route = self._resolve_turn_agent_config(message)
         if turn_route["signature"] != self._active_agent_route_signature:
@@ -9071,6 +9092,12 @@ class VoidcubeCLI:
 
             # Get the final response
             response = result.get("final_response", "") if result else ""
+            self._last_agent_turn_result = {
+                "failed": bool(result.get("failed")) if result else True,
+                "partial": bool(result.get("partial")) if result else False,
+                "interrupted": bool(result.get("interrupted")) if result else False,
+                "error": str(result.get("error", "") or "") if result else "No result returned",
+            }
 
             # Auto-generate session title after first exchange (non-blocking)
             if response and result and not result.get("failed") and not result.get("partial"):
@@ -9210,6 +9237,12 @@ class VoidcubeCLI:
             return response
             
         except Exception as e:
+            self._last_agent_turn_result = {
+                "failed": True,
+                "partial": False,
+                "interrupted": False,
+                "error": str(e),
+            }
             print(f"Error: {e}")
             return None
         finally:

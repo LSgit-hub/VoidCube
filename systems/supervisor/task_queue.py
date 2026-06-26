@@ -229,8 +229,8 @@ class SelfEvolutionTaskQueue:
             "planned": {"approved", "paused", "cancelled", "deferred"},
             "approved": {"running", "cancelled"},
             "running": {"completed", "failed", "paused"},
-            "paused": {"planned", "cancelled"},
-            "deferred": {"planned", "cancelled"},
+            "paused": {"planned", "approved", "cancelled", "deferred"},
+            "deferred": {"planned", "approved", "cancelled", "paused"},
             "completed": set(),   # terminal
             "failed": set(),      # terminal
             "cancelled": set(),   # terminal
@@ -290,6 +290,43 @@ class SelfEvolutionTaskQueue:
                 if execution_request is not None:
                     task.execution_request = execution_request
                 task.updated_at = datetime.utcnow()
+                snapshot.tasks[index] = task
+                self._write_snapshot(snapshot)
+                return task
+        raise KeyError(task_id)
+
+    def update_priority(
+        self,
+        task_id: str,
+        *,
+        priority: str,
+        actor: str = "supervisor",
+        reason: str = "",
+        context: Optional[Dict[str, Any]] = None,
+    ) -> SelfEvolutionTask:
+        normalized_priority = str(priority or "").strip().lower() or "normal"
+        with self._lock:
+            snapshot = self._load_snapshot()
+            for index, task in enumerate(snapshot.tasks):
+                if task.task_id != task_id:
+                    continue
+                task.priority = normalized_priority
+                task.updated_at = datetime.utcnow()
+                task.decision_reason = reason or f"Priority updated to {normalized_priority}"
+                task.decision_history.append(
+                    SelfEvolutionTaskDecision(
+                        decision_id=str(uuid.uuid4()),
+                        status=task.status,
+                        task_type=task.task_type,
+                        governance_task_type=task.governance_task_type,
+                        task_family=task.task_family,
+                        execution_kind=task.execution_kind,
+                        trace_id=task.trace_id,
+                        actor=actor,
+                        reason=task.decision_reason,
+                        context=dict(context or {}),
+                    )
+                )
                 snapshot.tasks[index] = task
                 self._write_snapshot(snapshot)
                 return task

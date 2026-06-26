@@ -193,6 +193,7 @@ class InternalGateway:
         self.app.add_api_route("/v1/sessions/{session_id}", self.get_session_info, methods=["GET"])
         self.app.add_api_route("/v1/sessions/{session_id}", self.delete_session, methods=["DELETE"])
         self.app.add_api_route("/v1/tasks", self.get_approved_tasks, methods=["GET"])
+        self.app.add_api_route("/v1/tasks/{task_id}/decision", self.decide_task, methods=["POST"])
         self.app.add_api_route("/v1/tasks/{task_id}/complete", self.complete_task, methods=["POST"])
         self.app.add_api_route("/admin/traces/{trace_id}", self.get_trace, methods=["GET"])
 
@@ -1247,19 +1248,33 @@ class InternalGateway:
                 return val
         return ""
 
-    async def get_approved_tasks(self, task_type: Optional[str] = None):
+    async def get_approved_tasks(
+        self,
+        task_type: Optional[str] = None,
+        execution_kind: Optional[str] = None,
+    ):
         supervisor_service = None
-        for service in self._services.values():
-            if service.service_type == "supervisor" and service.healthy:
+        all_supervisors = [s for s in self._services.values() if s.service_type == "supervisor"]
+        for service in all_supervisors:
+            if service.healthy:
                 supervisor_service = service
                 break
         if not supervisor_service:
-            raise HTTPException(status_code=503, detail="Supervisor unavailable")
+            detail = (
+                f"Supervisor unavailable. "
+                f"Found {len(all_supervisors)} supervisor(s), "
+                f"healthy={[s.healthy for s in all_supervisors]}, "
+                f"total services={len(self._services)}"
+            )
+            logger.warning(detail)
+            raise HTTPException(status_code=503, detail=detail)
 
         url = f"{supervisor_service.address}/self-evolution/tasks"
         params = {"status": "approved"}
         if task_type:
             params["task_type"] = task_type
+        if execution_kind:
+            params["execution_kind"] = execution_kind
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -1267,49 +1282,90 @@ class InternalGateway:
                     if resp.status != 200:
                         raise HTTPException(status_code=resp.status, detail=f"Supervisor returned {resp.status}")
                     result = await resp.json()
-            self._touch_activity("self_learning", source_service="gateway",
-                                metadata={"task_type": task_type})
+            self._touch_activity(
+                "self_learning",
+                source_service="gateway",
+                metadata={"task_type": task_type, "execution_kind": execution_kind},
+            )
             return result
         except Exception as e:
             logger.error(f"Failed to fetch approved tasks: {e}")
             raise HTTPException(status_code=502, detail=f"Failed to fetch tasks: {e}")
 
     async def complete_task(self, task_id: str, request: Request):
+        return await self._forward_task_decision(
+            task_id,
+            request,
+            default_decision="completed",
+            default_reason="Task completed by agent",
+            default_actor="agent",
+        )
+
+    async def decide_task(self, task_id: str, request: Request):
+        return await self._forward_task_decision(
+            task_id,
+            request,
+            default_decision="running",
+            default_reason="Task decision forwarded by gateway",
+            default_actor="agent",
+        )
+
+    async def _forward_task_decision(
+        self,
+        task_id: str,
+        request: Request,
+        *,
+        default_decision: str,
+        default_reason: str,
+        default_actor: str,
+    ):
         supervisor_service = None
-        for service in self._services.values():
-            if service.service_type == "supervisor" and service.healthy:
+        all_supervisors = [s for s in self._services.values() if s.service_type == "supervisor"]
+        for service in all_supervisors:
+            if service.healthy:
                 supervisor_service = service
                 break
         if not supervisor_service:
-            raise HTTPException(status_code=503, detail="Supervisor unavailable")
-        
+            detail = (
+                f"Supervisor unavailable. "
+                f"Found {len(all_supervisors)} supervisor(s), "
+                f"healthy={[s.healthy for s in all_supervisors]}, "
+                f"total services={len(self._services)}"
+            )
+            logger.warning(detail)
+            raise HTTPException(status_code=503, detail=detail)
+
         url = f"{supervisor_service.address}/self-evolution/tasks/{task_id}/decision"
-        
+
         try:
             body = await request.body()
             data = json.loads(body.decode("utf-8")) if body else {}
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="Invalid JSON")
-        
+
+        decision = str(data.get("decision") or default_decision).strip().lower()
         payload = {
-            "decision": "completed",
-            "reason": data.get("reason", "Task completed by agent"),
-            "actor": "agent",
+            "decision": decision,
+            "reason": data.get("reason", default_reason),
+            "actor": data.get("actor", default_actor),
             "context": data.get("context", {}),
         }
-        
+
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                     if resp.status != 200:
                         raise HTTPException(status_code=resp.status, detail=f"Supervisor returned {resp.status}")
                     result = await resp.json()
-            self._touch_activity("agent_work", source_service="gateway",
-                                metadata={"task_id": task_id, "decision": "completed"})
+            self._touch_activity(
+                "agent_work",
+                source_service="gateway",
+                metadata={"task_id": task_id, "decision": decision},
+            )
             return result
         except Exception as e:
-            logger.error(f"Failed to complete task: {e}")
-            raise HTTPException(status_code=502, detail=f"Failed to complete task: {e}")
+            logger.error(f"Failed to forward task decision: {e}")
+            raise HTTPException(status_code=502, detail=f"Failed to forward task decision: {e}")
 
     async def chat_completions_proxy(self, request: Request):
         self._evict_stale_sessions()

@@ -216,6 +216,233 @@ async def test_batch_review_defers_tasks_when_idle_window_is_not_ready(tmp_path)
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_batch_review_can_reapprove_deferred_tasks_on_later_cycle(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    await supervisor.plan_self_evolution_task(
+        {
+            "items": [
+                {"title": "Revisit idle learning thread"},
+                {"title": "Revisit stale improvement evidence"},
+            ]
+        }
+    )
+
+    async def busy_snapshot():
+        return {
+            "last_user_request_at": "2026-05-25T00:12:00",
+            "last_agent_work_at": "2026-05-25T00:12:00",
+            "last_memory_task_at": None,
+            "last_self_evolution_activity_at": None,
+            "counts": {},
+            "active_sessions": 1,
+        }
+
+    supervisor._fetch_gateway_activity_snapshot = busy_snapshot  # type: ignore[method-assign]
+
+    first = await supervisor.review_self_evolution_tasks(
+        {
+            "idle_window": {"now": "2026-05-25T00:15:00"},
+        }
+    )
+    assert all(task["status"] == "deferred" for task in first["tasks"])
+
+    async def idle_snapshot():
+        return {
+            "last_user_request_at": "2026-05-25T00:00:00",
+            "last_agent_work_at": "2026-05-25T00:00:00",
+            "last_memory_task_at": "2026-05-25T00:00:00",
+            "last_self_learning_activity_at": "2026-05-25T00:00:00",
+            "last_self_evolution_activity_at": "2026-05-25T00:00:00",
+            "counts": {},
+            "active_sessions": 0,
+        }
+
+    supervisor._fetch_gateway_activity_snapshot = idle_snapshot  # type: ignore[method-assign]
+
+    second = await supervisor.review_self_evolution_tasks(
+        {
+            "idle_window": {"now": "2026-05-25T01:00:00"},
+        }
+    )
+
+    assert second["status"] == "reviewed"
+    assert second["count"] == 2
+    assert all(task["status"] == "approved" for task in second["tasks"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_batch_review_accepts_lm_queue_governance_override(tmp_path, monkeypatch):
+    supervisor = _make_supervisor(tmp_path)
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "items": [
+                {"title": "Learn unresolved architecture issue"},
+                {"title": "Weak duplicate follow-up", "priority": "low"},
+            ]
+        }
+    )
+    tasks_by_title = {task["title"]: task["task_id"] for task in planned["tasks"]}
+
+    async def idle_snapshot():
+        return {
+            "last_user_request_at": "2026-05-25T00:00:00",
+            "last_agent_work_at": "2026-05-25T00:00:00",
+            "last_memory_task_at": "2026-05-25T00:00:00",
+            "last_self_learning_activity_at": "2026-05-25T00:00:00",
+            "last_self_evolution_activity_at": "2026-05-25T00:00:00",
+            "counts": {},
+            "active_sessions": 0,
+        }
+
+    supervisor._fetch_gateway_activity_snapshot = idle_snapshot  # type: ignore[method-assign]
+
+    async def fake_lm_review(tasks, *, idle_window):
+        assert len(tasks) == 2
+        assert idle_window["checks"]["has_user_idle"] is True
+        return {
+            tasks_by_title["Weak duplicate follow-up"]: {
+                "action": "cancel",
+                "reason": "Duplicate and low-evidence task should be cleared from the queue.",
+            }
+        }
+
+    monkeypatch.setattr(supervisor, "_lm_review_task_queue", fake_lm_review)
+
+    result = await supervisor.review_self_evolution_tasks(
+        {
+            "idle_window": {"now": "2026-05-25T01:00:00"},
+        }
+    )
+
+    tasks = {task["title"]: task for task in result["tasks"]}
+    assert tasks["Learn unresolved architecture issue"]["status"] == "approved"
+    assert tasks["Weak duplicate follow-up"]["status"] == "cancelled"
+    lm_context = tasks["Weak duplicate follow-up"]["decision_history"][-1]["context"]["lm_queue_review"]
+    assert lm_context["action"] == "cancelled"
+    assert "Duplicate and low-evidence task" in lm_context["reason"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_batch_review_records_shadow_governance_actions_without_mutating_state(tmp_path, monkeypatch):
+    supervisor = _make_supervisor(tmp_path)
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "items": [
+                {"title": "Duplicate learning branch", "priority": "normal"},
+                {"title": "Canonical learning branch", "priority": "high"},
+            ]
+        }
+    )
+    tasks_by_title = {task["title"]: task["task_id"] for task in planned["tasks"]}
+
+    async def idle_snapshot():
+        return {
+            "last_user_request_at": "2026-05-25T00:00:00",
+            "last_agent_work_at": "2026-05-25T00:00:00",
+            "last_memory_task_at": "2026-05-25T00:00:00",
+            "last_self_learning_activity_at": "2026-05-25T00:00:00",
+            "last_self_evolution_activity_at": "2026-05-25T00:00:00",
+            "counts": {},
+            "active_sessions": 0,
+        }
+
+    supervisor._fetch_gateway_activity_snapshot = idle_snapshot  # type: ignore[method-assign]
+
+    async def fake_lm_review(tasks, *, idle_window):
+        assert len(tasks) == 2
+        return {
+            tasks_by_title["Duplicate learning branch"]: {
+                "action": "merge",
+                "reason": "This task duplicates the stronger canonical branch.",
+                "shadow": {
+                    "action": "merge",
+                    "reason": "This task duplicates the stronger canonical branch.",
+                    "merge_into": tasks_by_title["Canonical learning branch"],
+                },
+            },
+            tasks_by_title["Canonical learning branch"]: {
+                "action": "reprioritize",
+                "reason": "Promote the canonical branch ahead of duplicates.",
+                "shadow": {
+                    "action": "reprioritize",
+                    "reason": "Promote the canonical branch ahead of duplicates.",
+                    "priority": "high",
+                },
+            },
+        }
+
+    monkeypatch.setattr(supervisor, "_lm_review_task_queue", fake_lm_review)
+
+    result = await supervisor.review_self_evolution_tasks(
+        {
+            "idle_window": {"now": "2026-05-25T01:00:00"},
+        }
+    )
+
+    tasks = {task["title"]: task for task in result["tasks"]}
+    assert tasks["Duplicate learning branch"]["status"] == "approved"
+    assert tasks["Canonical learning branch"]["status"] == "approved"
+    duplicate_shadow = tasks["Duplicate learning branch"]["decision_history"][-1]["context"]["lm_queue_shadow"]
+    canonical_shadow = tasks["Canonical learning branch"]["decision_history"][-1]["context"]["lm_queue_shadow"]
+    assert duplicate_shadow["action"] == "merge"
+    assert duplicate_shadow["merge_into"] == tasks_by_title["Canonical learning branch"]
+    assert canonical_shadow["action"] == "reprioritize"
+    assert canonical_shadow["priority"] == "high"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_batch_review_can_apply_lm_reprioritize_to_real_task_priority(tmp_path, monkeypatch):
+    supervisor = _make_supervisor(tmp_path)
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Underweighted architecture follow-up",
+            "priority": "low",
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+
+    async def idle_snapshot():
+        return {
+            "last_user_request_at": "2026-05-25T00:00:00",
+            "last_agent_work_at": "2026-05-25T00:00:00",
+            "last_memory_task_at": "2026-05-25T00:00:00",
+            "last_self_learning_activity_at": "2026-05-25T00:00:00",
+            "last_self_evolution_activity_at": "2026-05-25T00:00:00",
+            "counts": {},
+            "active_sessions": 0,
+        }
+
+    supervisor._fetch_gateway_activity_snapshot = idle_snapshot  # type: ignore[method-assign]
+
+    async def fake_lm_review(tasks, *, idle_window):
+        return {
+            task_id: {
+                "action": "reprioritize",
+                "priority": "high",
+                "reason": "This follow-up now blocks higher-value evolution work.",
+            }
+        }
+
+    monkeypatch.setattr(supervisor, "_lm_review_task_queue", fake_lm_review)
+
+    result = await supervisor.review_self_evolution_tasks(
+        {
+            "idle_window": {"now": "2026-05-25T01:00:00"},
+        }
+    )
+
+    task = result["tasks"][0]
+    assert task["priority"] == "high"
+    priority_context = task["decision_history"][-1]["context"]["lm_queue_priority"]
+    assert priority_context["priority"] == "high"
+    assert "blocks higher-value evolution work" in priority_context["reason"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 @pytest.mark.skip(reason="Boundary violation defer removed — body_upgrade/body_switch no longer driven by task queue")
 async def test_batch_review_defers_body_task_with_boundary_violations(tmp_path):
     supervisor = _make_supervisor(tmp_path)

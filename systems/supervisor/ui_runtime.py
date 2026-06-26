@@ -666,14 +666,15 @@ body[data-exec-window="false"] .floor {
 .dw-top {
   position: absolute;
   left: -10px; right: -10px; top: 0;
-  height: 20px;
+  height: 40px;
   background: linear-gradient(180deg, #b08858 0%, #7a5230 100%);
   border-radius: 4px;
   box-shadow: 0 4px 8px rgba(0,0,0,.3);
+  z-index: 8;
 }
 .dw-body {
   position: absolute;
-  left: 0; right: 0; top: 20px; bottom: 0;
+  left: 0; right: 0; top: 40px; bottom: 0;
   background: linear-gradient(180deg, #8a5a3a, #5a3320);
   border-radius: 0 0 4px 4px;
   box-shadow: 0 16px 24px var(--shadow-deep);
@@ -687,7 +688,7 @@ body[data-exec-window="false"] .floor {
   border-radius: 2px;
   box-shadow: 0 3px 6px rgba(0,0,0,.2);
   transform: rotate(-2deg);
-  z-index: 3;
+  z-index: 12;
 }
 .dw-paper::before {
   content: ""; position: absolute; left: 10px; right: 10px; top: 14px; height: 1px;
@@ -706,7 +707,7 @@ body[data-exec-window="false"] .floor {
   background: linear-gradient(180deg, #2d3e58, #1a2538);
   border-radius: 3px 3px 1px 1px;
   transform: rotate(18deg);
-  z-index: 4;
+  z-index: 13;
   box-shadow: 0 2px 4px rgba(0,0,0,.2);
 }
 .dw-pen::before {
@@ -1157,14 +1158,15 @@ body[data-action="work"] .xz-eye { animation: work-blink 4s ease-in-out infinite
 /* 在写字桌前书写 */
 body[data-action="write"] .xizi {
   left: 86%; margin-left: -65px;
-  bottom: 28%;
+  bottom: 20%;
   transform: scale(.92);
+  z-index: 2;
 }
 body[data-action="write"] .xz-dress {
   background: linear-gradient(140deg, #a78ad4 0%, #7a5ab0 100%);
 }
-body[data-action="write"] .xz-arm.r { transform: rotate(45deg) translate(0, 8px); animation: arm-write .8s ease-in-out infinite; }
-body[data-action="write"] .xz-arm.l { transform: rotate(8deg); }
+body[data-action="write"] .xz-arm.l { transform: rotate(45deg) translate(0, 8px); animation: arm-write .8s ease-in-out infinite; z-index: 9; }
+body[data-action="write"] .xz-arm.r { transform: rotate(8deg); z-index: 9; }
 body[data-action="write"] .xz-prop { opacity: 0; }
 body[data-action="write"] .xz-mouth { width: 10px; }
 
@@ -1349,8 +1351,8 @@ body:has(.status:not(.collapsed)) .status-toggle {
 }
 .panels { display: grid; gap: 10px; margin-bottom: 12px; }
 .panel-head {
-  font-size: 10.5px; font-weight: 600; text-transform: uppercase;
-  letter-spacing: .04em; color: var(--text-secondary);
+  font-size: 12px; font-weight: 600;
+  color: var(--text-secondary);
   padding: 4px 0; margin-bottom: 4px;
   border-bottom: 1px solid rgba(255,255,255,.08);
   cursor: pointer; user-select: none;
@@ -1366,7 +1368,7 @@ body:has(.status:not(.collapsed)) .status-toggle {
 
 .candidates { margin-bottom: 12px; display: grid; gap: 5px; }
 .candidates-label {
-  font-size: 10px; color: var(--text-muted); text-transform: uppercase;
+  font-size: 11px; color: var(--text-muted);
   letter-spacing: .04em; margin-bottom: 2px;
 }
 .candidate {
@@ -1388,7 +1390,7 @@ body:has(.status:not(.collapsed)) .status-toggle {
 
 .executions { margin-bottom: 12px; }
 .exec-label {
-  font-size: 10px; color: var(--text-muted); text-transform: uppercase;
+  font-size: 11px; color: var(--text-muted);
   letter-spacing: .04em; margin-bottom: 2px;
 }
 .exec-item {
@@ -1400,8 +1402,8 @@ body:has(.status:not(.collapsed)) .status-toggle {
   font-size: 11px;
 }
 .exec-type {
-  font-size: 9.5px; color: var(--text-muted);
-  text-transform: uppercase; letter-spacing: .04em;
+  font-size: 10px; color: var(--text-muted);
+  letter-spacing: .02em;
 }
 
 .queue { display: grid; gap: 7px; margin-bottom: 12px; }
@@ -1415,6 +1417,16 @@ body:has(.status:not(.collapsed)) .status-toggle {
   transition: opacity .5s, max-height .5s;
 }
 .task.completed { opacity: 0; max-height: 0; overflow: hidden; margin: 0; padding: 0; border: none; }
+.task-text { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.task-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-gov {
+  font-size: 10px;
+  color: rgba(244,228,188,.78);
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .task-dot {
   width: 10px; height: 10px; border-radius: 50%;
 }
@@ -1955,6 +1967,22 @@ function taskDotClass(t) {
   return 'planning';
 }
 
+function governanceHint(t) {
+  const preview = t.governance_preview || {};
+  const direct = preview.lm_queue_review || null;
+  const shadow = preview.lm_queue_shadow || null;
+  if (direct && direct.action) {
+    return '监督者已裁定: ' + String(direct.action) + ' · ' + String(direct.reason || '').slice(0, 80);
+  }
+  if (shadow && shadow.action) {
+    let extra = '';
+    if (shadow.merge_into) extra = ' -> ' + String(shadow.merge_into).slice(0, 16);
+    else if (shadow.priority) extra = ' -> ' + String(shadow.priority);
+    return '监督者建议: ' + String(shadow.action) + extra + ' · ' + String(shadow.reason || '').slice(0, 80);
+  }
+  return '';
+}
+
 /* ── 任务卡片渲染 ── */
 function renderCharCard(state) {
   const bs = state.body_status || {};
@@ -2017,12 +2045,23 @@ function renderPanels(panels) {
       if (t.status === 'completed' || t.status === 'failed') row.classList.add('completed');
       const dot = document.createElement('span');
       dot.className = 'task-dot ' + taskDotClass(t);
+      const text = document.createElement('div');
+      text.className = 'task-text';
       const title = document.createElement('span');
+      title.className = 'task-title';
       title.textContent = (t.title || '未命名').substring(0, 48);
+      text.append(title);
+      const hint = governanceHint(t);
+      if (hint) {
+        const gov = document.createElement('span');
+        gov.className = 'task-gov';
+        gov.textContent = hint;
+        text.append(gov);
+      }
       const badge = document.createElement('span');
       badge.className = 'task-badge ' + (t.status || 'queued');
       badge.textContent = labelMap[t.status] || t.status || 'queued';
-      row.append(dot, title, badge);
+      row.append(dot, text, badge);
       body.append(row);
     });
     sec.append(body);
@@ -2689,6 +2728,22 @@ class SupervisorUIMixin:
             1 for t in all_tasks
             if "learning" in str(t.get("task_family", "")) and t.get("status") == "failed"
         )
+        shadow_recommendations = 0
+        shadow_actions: Dict[str, int] = {}
+        direct_lm_actions = 0
+        priority_updates = 0
+        for task in all_tasks:
+            preview = dict(task.get("governance_preview") or {})
+            lm_shadow = preview.get("lm_queue_shadow")
+            if isinstance(lm_shadow, dict):
+                shadow_recommendations += 1
+                action = str(lm_shadow.get("action") or "unknown")
+                shadow_actions[action] = shadow_actions.get(action, 0) + 1
+            lm_review = preview.get("lm_queue_review")
+            if isinstance(lm_review, dict):
+                direct_lm_actions += 1
+            if isinstance(preview.get("lm_queue_priority"), dict):
+                priority_updates += 1
 
         return {
             "queue_total": queue_total,
@@ -2706,6 +2761,12 @@ class SupervisorUIMixin:
             "active_slot": body_status.get("active_slot"),
             "error_count": error_count,
             "running_count": sum(1 for t in all_tasks if t.get("status") == "running"),
+            "governance": {
+                "direct_lm_actions": direct_lm_actions,
+                "shadow_recommendations": shadow_recommendations,
+                "shadow_action_counts": shadow_actions,
+                "priority_updates": priority_updates,
+            },
         }
 
     async def _recent_supervisor_observation_timeline(self, limit: int = 10) -> List[Dict[str, Any]]:
@@ -2763,16 +2824,16 @@ class SupervisorUIMixin:
             if "memory" in rfamily:
                 return (
                     "maintenance",
-                    f"Xizi is tending memory{error_note}",
-                    f"「{rtitle}」Memory maintenance is executing now.",
+                    f"义子正在整理记忆{error_note}",
+                    f"「{rtitle}」记忆维护任务正在执行。",
                 )
             # For learning / body-upgrade running tasks, the supervisor
             # just dispatched them — show `dispatch` (NOT `learning` or
             # `body_switch`, which are Agent / Executor scenes).
             return (
                 "dispatch",
-                f"Xizi dispatched{error_note}",
-                f"「{rtitle}」Dispatched. The Agent (API-A) or Executor is now executing this; the supervisor is waiting for the result.",
+                f"义子已派发任务{error_note}",
+                f"「{rtitle}」已派发，代理或执行器正在运行，监督者等待结果。",
             )
 
         # 2. Learning / body-upgrade tasks awaiting Agent pull — supervisor
@@ -2782,8 +2843,8 @@ class SupervisorUIMixin:
             lp = learning_pending[0]
             return (
                 "planning",
-                f"Xizi has approved learning{error_note}",
-                f"「{lp.get('title', 'Learning task')}」is ready. Agent pulls via /v1/tasks; learn-only research awaits execution.",
+                f"义子已批准学习任务{error_note}",
+                f"「{lp.get('title', '学习任务')}」已就绪，等待代理拉取执行。",
             )
 
         # 2.5 Memory model actively compressing (detected from memory_service rules_status)
@@ -2801,8 +2862,8 @@ class SupervisorUIMixin:
             utility_pct = int((first.get("utility") or 0) * 100)
             return (
                 "drive",
-                f"Xizi senses something worth doing{error_note}",
-                f"「{first.get('title', 'A candidate task')}」emerged from core values [{value_tags}] with utility {utility_pct}%. Awaiting governance review.",
+                f"义子发现值得做的事{error_note}",
+                f"「{first.get('title', '候选任务')}」从核心价值中浮现 [{value_tags}]，价值度 {utility_pct}%，等待治理审查。",
             )
 
         # 4. Memory maintenance queued
@@ -2811,24 +2872,24 @@ class SupervisorUIMixin:
             mp = maintenance_pending[0]
             return (
                 "maintenance",
-                f"Xizi is tending the memory shelves{error_note}",
-                f"「{mp.get('title', 'Maintenance task')}」Long-term continuity is being guarded.",
+                f"义子正在整理记忆书架{error_note}",
+                f"「{mp.get('title', '维护任务')}」长期连续性正在被守护。",
             )
 
         # 5. Drive unavailable
         if not drive_available:
             return (
                 "idle",
-                "Xizi gazes out the window",
-                "Gateway activity is unreachable. The room shows local supervisor state — endogenous drive will resume when the signal returns.",
+                "义子望着窗外",
+                "网关无法访问，房间显示本地监督者状态——信号恢复后内生驱动将继续。",
             )
 
         # 6. Truly idle
-        window_mood = "The execution window is open and the system is quiet." if in_execution_window else "Outside the execution window, the system rests."
+        window_mood = "执行窗口已开启，系统处于安静状态。" if in_execution_window else "执行窗口外，系统正在休息。"
         return (
             "idle",
-            f"Xizi rests by the window{error_note}",
-            f"No queued work needs attention. {window_mood} Core values are watchful but still.",
+            f"义子在窗边休息{error_note}",
+            f"没有待处理的工作。{window_mood}核心价值保持警觉但平静。",
         )
 
     def _maybe_open_supervisor_ui(self) -> None:

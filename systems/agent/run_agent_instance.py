@@ -5,9 +5,10 @@ import json
 import logging
 import os
 import sys
+import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -310,34 +311,34 @@ class AgentInstance:
         if not messages:
             raise HTTPException(status_code=400, detail="messages is required")
 
-        model = request.get("model", "")
+        requested_model = str(request.get("model") or "").strip()
         is_stream = request.get("stream", False)
         tools = request.get("tools")
         tool_choice = request.get("tool_choice")
         temperature = request.get("temperature")
         max_tokens = request.get("max_tokens")
 
-        # Resolve provider credentials from config or env
+        # Resolve provider credentials from the canonical runtime/provider config.
         import aiohttp
         try:
-            from VoidCube_cli.config import load_config
-            cfg = load_config()
-            active_provider = cfg.get("runtime", {}).get("active_provider", "")
-            providers = cfg.get("providers", {})
-            provider_cfg = providers.get(active_provider, {})
-            api_key = provider_cfg.get("api_key", "") or os.getenv(
-                provider_cfg.get("api_key_env", ""), ""
-            )
-            base_url = (provider_cfg.get("base_url") or "").strip()
-            if not model:
-                model = provider_cfg.get("selected_model", "")
-            if not base_url:
-                base_url = os.getenv("AGENT_BASE_URL", "")
+            runtime = self._resolve_active_runtime()
+            api_key = runtime.get("api_key", "")
+            base_url = runtime.get("base_url", "")
+            runtime_model = str(runtime.get("model") or "").strip()
         except Exception:
             api_key = os.getenv("AGENT_API_KEY") or os.getenv("DEEPSEEK_API_KEY", "")
             base_url = os.getenv("AGENT_BASE_URL", "")
-            if not model:
-                model = os.getenv("AGENT_MODEL", "")
+            runtime_model = str(os.getenv("AGENT_MODEL", "")).strip()
+
+        model = runtime_model
+        if requested_model and runtime_model and requested_model != runtime_model:
+            logger.info(
+                "Ignoring chat completion request model override %r; using active runtime model %r",
+                requested_model,
+                runtime_model,
+            )
+        elif requested_model and not runtime_model:
+            model = requested_model
 
         if not api_key or not base_url:
             raise HTTPException(status_code=503, detail="Agent LLM provider not configured")
@@ -380,7 +381,15 @@ class AgentInstance:
             async with session.post(api_url, headers=headers, json=payload) as resp:
                 if resp.status != 200:
                     err = await resp.text()
-                    raise HTTPException(status_code=502, detail=f"LLM upstream error: {resp.status}")
+                    logger.warning(
+                        "Agent chat completions upstream error: status=%s detail=%s",
+                        resp.status,
+                        err[:200],
+                    )
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"LLM upstream error: {resp.status} {err[:160]}".strip(),
+                    )
                 result = await resp.json()
                 result["slot_id"] = self.config.active_slot
                 result["body_version"] = self.config.body_version
@@ -394,6 +403,38 @@ class AgentInstance:
             if message.get("role") == "user" and message.get("content"):
                 return str(message["content"])
         return ""
+
+    def _resolve_active_runtime(self) -> Dict[str, str]:
+        """Resolve the current API-A runtime from the canonical provider config."""
+        from VoidCube_cli.config import (
+            get_active_model_config,
+            get_active_provider_key,
+            load_config,
+        )
+        from VoidCube_cli.runtime_provider import resolve_runtime_provider
+
+        cfg = load_config()
+        active_provider = get_active_provider_key(cfg) or None
+        active_model = get_active_model_config(cfg)
+        runtime = resolve_runtime_provider(requested=active_provider)
+
+        base_url = str(runtime.get("base_url") or "").strip()
+        api_key = str(runtime.get("api_key") or "").strip()
+        if not api_key and base_url and "openrouter.ai" not in base_url:
+            api_key = "no-key-required"
+
+        return {
+            "provider": str(runtime.get("provider") or active_model.get("provider") or "").strip(),
+            "api_mode": str(runtime.get("api_mode") or active_model.get("api_mode") or "").strip(),
+            "base_url": base_url,
+            "api_key": api_key,
+            "model": str(
+                runtime.get("model")
+                or active_model.get("model")
+                or active_model.get("default")
+                or ""
+            ).strip(),
+        }
 
     async def _generate_response(self, message: str, context: Dict[str, Any]) -> str:
         """Simple LLM call for basic agent queries (used by /chat and /v1/agent/query).
@@ -617,13 +658,13 @@ class AgentInstance:
         return None
 
     async def _task_polling_loop(self):
-        """Periodically poll the gateway for approved self-learning tasks.
+        """Periodically poll the gateway for approved Agent-executable tasks.
         
         Agent pulls tasks from the shared task manager (via gateway) instead of
         being pushed tasks by the supervisor. This follows the principle that
         the supervisor only manages/decides, and the agent executes.
         """
-        import aiohttp, json
+        import aiohttp
         
         poll_interval = 30
         processing_tasks = set()
@@ -631,20 +672,8 @@ class AgentInstance:
         while True:
             try:
                 await asyncio.sleep(poll_interval)
-                
-                url = f"{self.config.gateway_address}/v1/tasks?task_type=self_learning"
-                try:
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                            if resp.status != 200:
-                                logger.debug("Failed to fetch tasks: %d", resp.status)
-                                continue
-                            result = await resp.json()
-                except Exception as e:
-                    logger.debug("Task polling failed: %s", e)
-                    continue
-                
-                tasks = result.get("tasks", [])
+
+                tasks = await self._fetch_agent_executable_tasks()
                 if not tasks:
                     continue
                 
@@ -654,29 +683,53 @@ class AgentInstance:
                         continue
                     
                     processing_tasks.add(task_id)
-                    logger.info("Found approved learning task: %s", task.get("title", task_id))
+                    logger.info(
+                        "Found approved agent task: %s (%s)",
+                        task.get("title", task_id),
+                        task.get("execution_kind") or task.get("governance_task_type") or task.get("task_family"),
+                    )
                     
                     try:
+                        claimed = await self._update_gateway_task_decision(
+                            task_id,
+                            decision="running",
+                            reason="Agent pulled task for execution in AUTO mode.",
+                            actor="agent",
+                            context={"source": "agent_task_polling"},
+                        )
+                        if not claimed:
+                            logger.warning("Skipping task %s because running claim failed", task_id)
+                            continue
+
                         result = await self._execute_approved_task(task)
-                        
-                        complete_url = f"{self.config.gateway_address}/v1/tasks/{task_id}/complete"
-                        complete_payload = {
-                            "reason": result.get("reason", "Task completed by agent"),
-                            "context": {
-                                "status": result.get("status", "completed"),
+                        decision = "completed" if result.get("status") == "completed" else "failed"
+                        updated = await self._update_gateway_task_decision(
+                            task_id,
+                            decision=decision,
+                            reason=result.get("reason", "Task finished by agent"),
+                            actor="agent",
+                            context={
+                                "status": result.get("status", decision),
                                 "parsed_output": result.get("parsed_output"),
                                 "tool_events": result.get("tool_events", []),
                                 "api_calls": result.get("api_calls", 0),
+                                "model": result.get("model", ""),
+                                "source": "agent_task_polling",
                             },
-                        }
-                        async with aiohttp.ClientSession() as session:
-                            async with session.post(complete_url, json=complete_payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                                if resp.status == 200:
-                                    logger.info("Task %s marked as completed", task_id)
-                                else:
-                                    logger.warning("Failed to complete task %s: %d", task_id, resp.status)
+                        )
+                        if updated:
+                            logger.info("Task %s marked as %s", task_id, decision)
+                        else:
+                            logger.warning("Failed to mark task %s as %s", task_id, decision)
                     except Exception as e:
                         logger.error("Failed to execute task %s: %s", task_id, e)
+                        await self._update_gateway_task_decision(
+                            task_id,
+                            decision="failed",
+                            reason=f"Agent task execution crashed: {e}",
+                            actor="agent",
+                            context={"source": "agent_task_polling", "error": str(e)},
+                        )
                     finally:
                         processing_tasks.discard(task_id)
             
@@ -686,82 +739,90 @@ class AgentInstance:
                 logger.error("Task polling loop error: %s", e)
                 await asyncio.sleep(poll_interval)
 
-    async def _execute_approved_task(self, task: dict) -> dict:
-        """Execute an approved self-learning task via sub-agent.
+    async def _fetch_agent_executable_tasks(self) -> List[Dict[str, Any]]:
+        import aiohttp
 
-        Reuses the existing governance task execution logic but adapts it for
-        agent-initiated task execution.
-        """
-        task_type = task.get("task_type") or task.get("governance_task_type", "")
-        if task_type != "self_learning":
-            return {"status": "rejected", "reason": f"Agent only executes self_learning tasks"}
+        requests = (
+            {"task_type": "self_learning"},
+            {"execution_kind": "body_improvement"},
+        )
+        tasks: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+
+        async with aiohttp.ClientSession() as session:
+            for params in requests:
+                url = f"{self.config.gateway_address}/v1/tasks"
+                query = dict(params)
+                try:
+                    async with session.get(
+                        url,
+                        params=query,
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    ) as resp:
+                        if resp.status != 200:
+                            logger.debug("Failed to fetch tasks for %s: %d", query, resp.status)
+                            continue
+                        result = await resp.json()
+                except Exception as exc:
+                    logger.debug("Task polling failed for %s: %s", query, exc)
+                    continue
+
+                for task in result.get("tasks", []):
+                    task_id = str(task.get("task_id") or "").strip()
+                    if not task_id or task_id in seen:
+                        continue
+                    seen.add(task_id)
+                    tasks.append(task)
+        return tasks
+
+    async def _execute_approved_task(self, task: dict) -> dict:
+        """Execute an approved Agent task via the active API-A agent."""
+        execution_kind = self._task_execution_kind(task)
+        if execution_kind not in {"self_learning", "body_improvement"}:
+            return {"status": "rejected", "reason": f"Agent does not execute task kind: {execution_kind or 'unknown'}"}
 
         title = task.get("title", "Learning task")
         summary = task.get("summary", "")
-        prompt = summary if summary else title
+        prompt = self._build_agent_task_prompt(task, execution_kind=execution_kind)
 
         if not prompt:
             return {"status": "rejected", "reason": "No prompt or summary provided"}
 
-        # ── Agent scene: learning (executing a self-learning task) ──
         task_id = task.get("task_id", "")
-        await self.set_agent_scene({"scene": "learning", "task_id": task_id})
+        scene = "learning" if execution_kind == "self_learning" else "code_editing"
+        await self.set_agent_scene({"scene": scene, "task_id": task_id})
 
         try:
-            from tools.delegate_tool import _build_child_agent, _resolve_delegation_credentials
-            from VoidCube_cli.config import load_config
-
-            cfg = load_config()
-            creds = _resolve_delegation_credentials(cfg, None) or {}
-            child = _build_child_agent(
-                task_index=0,
-                goal=prompt,
-                context=None,
-                toolsets=["learn"],
-                model=None,
-                max_iterations=30,
-                parent_agent=None,
+            agent = self._build_task_agent(
+                task_id=task_id,
+                execution_kind=execution_kind,
+                toolsets=self._task_toolsets(execution_kind),
             )
-            result = child.run_conversation(
+            result = await asyncio.to_thread(
+                agent.run_conversation,
                 user_message=prompt,
-                task_id=f"agent-task-{task.get('task_id', '')}",
+                task_id=f"agent-task-{task_id}",
             )
             final_response = result.get("final_response", "")
+            status = "completed"
+            if result.get("failed") or result.get("partial"):
+                status = "failed"
 
-            tool_events = []
-            messages = result.get("messages", [])
-            for msg in messages:
-                role = msg.get("role", "")
-                if role == "tool":
-                    tool_name = msg.get("name", "") or msg.get("tool_name", "")
-                    tool_args_preview = str(msg.get("tool_args", "") or "")[:120]
-                    result_preview = str(msg.get("content", "") or "")[:200]
-                    tool_events.append({
-                        "tool": tool_name,
-                        "kind": "tool",
-                        "args_preview": tool_args_preview,
-                        "result_preview": result_preview,
-                    })
-
-            import re, json
-            parsed = None
-            fence = re.findall(r"```(?:json)?\s*\n(.*?)\n```", final_response, re.DOTALL | re.IGNORECASE)
-            for c in reversed(fence):
-                try:
-                    p = json.loads(c.strip())
-                    if isinstance(p, dict) and "technology_evaluations" in p:
-                        parsed = p; break
-                except Exception:
-                    pass
+            tool_events = self._collect_tool_events(result.get("messages", []))
+            parsed = self._parse_task_report(final_response, execution_kind=execution_kind)
 
             return {
-                "status": "completed",
+                "status": status,
                 "final_response": final_response,
                 "parsed_output": parsed,
                 "tool_events": tool_events,
                 "api_calls": result.get("api_calls", 0),
-                "model": getattr(child, "model", ""),
-                "reason": f"Self-learning task '{title}' completed",
+                "model": getattr(agent, "model", ""),
+                "reason": (
+                    f"{execution_kind} task '{title}' completed"
+                    if status == "completed"
+                    else f"{execution_kind} task '{title}' failed: {result.get('error', 'unknown error')}"
+                ),
             }
         except Exception as e:
             logger.error(f"Approved task execution failed: {e}")
@@ -771,6 +832,174 @@ class AgentInstance:
                 await self.set_agent_scene({"scene": "idle"})
             except Exception:
                 pass
+
+    def _task_execution_kind(self, task: Dict[str, Any]) -> str:
+        execution_kind = str(task.get("execution_kind") or "").strip().lower()
+        if execution_kind == "body_improvement":
+            return "body_improvement"
+        task_type = str(task.get("governance_task_type") or task.get("task_type") or "").strip().lower()
+        if task_type == "self_learning":
+            return "self_learning"
+        task_family = str(task.get("task_family") or "").strip().lower()
+        if task_family == "self_learning":
+            return "self_learning"
+        return execution_kind or task_type or task_family
+
+    def _task_toolsets(self, execution_kind: str) -> List[str]:
+        if execution_kind == "body_improvement":
+            return ["file", "terminal", "code_execution"]
+        return ["learn"]
+
+    def _build_agent_task_prompt(self, task: Dict[str, Any], *, execution_kind: str) -> str:
+        title = str(task.get("title") or "Agent task").strip()
+        summary = str(task.get("summary") or "").strip()
+        constraints = dict(task.get("constraints") or {})
+
+        if execution_kind == "body_improvement":
+            worktree_path = str(
+                constraints.get("worktree_path")
+                or constraints.get("target_worktree")
+                or ""
+            ).strip()
+            editable_dirs = constraints.get("editable_dirs") or []
+            forbidden_patterns = constraints.get("forbidden_patterns") or []
+            max_files = constraints.get("max_files_changed")
+            details = [f"[AUTO Body Improvement Task] {title}"]
+            if summary:
+                details.append(summary)
+            details.append("Edit the shell body code directly and implement the approved improvement.")
+            if worktree_path:
+                details.append(f"Worktree path: {worktree_path}")
+            if editable_dirs:
+                details.append(f"Editable dirs: {', '.join(str(x) for x in editable_dirs)}")
+            if forbidden_patterns:
+                details.append(f"Forbidden patterns: {', '.join(str(x) for x in forbidden_patterns)}")
+            if max_files:
+                details.append(f"Max files changed: {max_files}")
+            details.append("Produce a concise implementation summary with the concrete files changed and reasoning.")
+            return "\n\n".join(details)
+
+        prompt = summary if summary else title
+        return (
+            f"[AUTO Learning Task] {title}\n\n"
+            f"{prompt}\n\n"
+            "Execute this research task thoroughly. Produce structured findings and conclusions."
+        )
+
+    def _build_task_agent(self, *, task_id: str, execution_kind: str, toolsets: List[str]):
+        from run_agent import AIAgent
+
+        runtime = self._resolve_active_runtime()
+        return AIAgent(
+            model=runtime.get("model") or "",
+            api_key=runtime.get("api_key") or "",
+            base_url=runtime.get("base_url") or "",
+            provider=runtime.get("provider") or "",
+            api_mode=runtime.get("api_mode") or "",
+            max_iterations=30,
+            enabled_toolsets=toolsets,
+            quiet_mode=True,
+            verbose_logging=False,
+            session_id=f"agent-runtime-{task_id}-{uuid.uuid4().hex[:8]}",
+            platform="agent",
+            skip_context_files=False,
+            skip_memory=True,
+            persist_session=False,
+        )
+
+    def _collect_tool_events(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        tool_events = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            role = msg.get("role", "")
+            if role != "tool":
+                continue
+            tool_name = msg.get("name", "") or msg.get("tool_name", "")
+            tool_args_preview = str(msg.get("tool_args", "") or "")[:120]
+            result_preview = str(msg.get("content", "") or "")[:200]
+            tool_events.append({
+                "tool": tool_name,
+                "kind": "tool",
+                "args_preview": tool_args_preview,
+                "result_preview": result_preview,
+            })
+        return tool_events
+
+    def _parse_task_report(self, final_response: str, *, execution_kind: str) -> Optional[Dict[str, Any]]:
+        import re
+
+        text = str(final_response or "").strip()
+        if not text:
+            return None
+
+        try:
+            direct = json.loads(text)
+            if isinstance(direct, dict) and self._is_expected_task_report(direct, execution_kind=execution_kind):
+                return direct
+        except Exception:
+            pass
+
+        parsed = None
+        fence = re.findall(r"```(?:json)?\s*\n(.*?)\n```", text, re.DOTALL | re.IGNORECASE)
+        for c in reversed(fence):
+            try:
+                p = json.loads(c.strip())
+                if isinstance(p, dict) and self._is_expected_task_report(p, execution_kind=execution_kind):
+                    parsed = p
+                    break
+            except Exception:
+                pass
+        return parsed
+
+    def _is_expected_task_report(self, payload: Dict[str, Any], *, execution_kind: str) -> bool:
+        if execution_kind == "body_improvement":
+            return any(key in payload for key in ("changed_files", "implementation_summary", "commit_message"))
+        return "technology_evaluations" in payload
+
+    async def _update_gateway_task_decision(
+        self,
+        task_id: str,
+        *,
+        decision: str,
+        reason: str,
+        actor: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        import aiohttp
+
+        url = f"{self.config.gateway_address}/v1/tasks/{task_id}/decision"
+        payload = {
+            "decision": decision,
+            "reason": reason,
+            "actor": actor,
+            "context": dict(context or {}),
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
+                    if resp.status == 200:
+                        return True
+                    detail = await resp.text()
+                    logger.warning(
+                        "Gateway task decision update failed for %s (%s): %d %s",
+                        task_id,
+                        decision,
+                        resp.status,
+                        detail[:200],
+                    )
+        except Exception as exc:
+            logger.warning(
+                "Gateway task decision update error for %s (%s): %s",
+                task_id,
+                decision,
+                exc,
+            )
+        return False
 
     async def start(self):
         import uvicorn

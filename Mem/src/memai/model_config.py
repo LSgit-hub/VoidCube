@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 
 MEMORY_PROVIDER_PLUGINS = frozenset(
@@ -110,11 +111,26 @@ class MemModelConfig:
         )
         defaults = PROVIDER_DEFAULTS.get(provider, PROVIDER_DEFAULTS["openai"])
         model = llm.get("model") or legacy_model or None
+        configured_base_url = str(llm.get("base_url") or "").strip()
+        configured_api_key_env = str(llm.get("api_key_env") or "").strip()
+        base_url = configured_base_url or str(defaults["base_url"])
+        api_key_env = configured_api_key_env or str(defaults["api_key_env"])
+
+        # Legacy configs sometimes mirrored memory.llm.* from the main
+        # agent provider and pointed Mem back into the local Gateway.
+        # That causes API-B (Mem/supervisor) calls to re-enter API-A's
+        # /v1/chat/completions surface and leak the wrong model string
+        # into active-agent execution.  Normalize such loopback URLs back
+        # to the provider's direct endpoint.
+        if _is_local_gateway_loop_base_url(base_url):
+            base_url = str(defaults["base_url"])
+            if not configured_api_key_env:
+                api_key_env = str(defaults["api_key_env"])
         return cls(
             provider=provider,
             model=str(model) if model else None,
-            api_key_env=str(llm.get("api_key_env") or defaults["api_key_env"]),
-            base_url=str(llm.get("base_url") or defaults["base_url"]),
+            api_key_env=api_key_env,
+            base_url=base_url,
             provider_profile=str(
                 llm.get("provider_profile") or defaults["provider_profile"]
             ),
@@ -242,15 +258,10 @@ def resolve_mem_llm_client(role: str = "default"):
         ).rstrip("/")
         config_source = "env fallback"
 
-    # Allow empty API key when routing through local Gateway (127.0.0.1 / localhost)
-    # — the Gateway proxies to the Agent which handles its own auth.
-    is_local_gateway = base_url and (
-        "127.0.0.1" in base_url or "localhost" in base_url or "0.0.0.0" in base_url
-    )
-    if not api_key and not is_local_gateway:
+    if not api_key and mem_cfg is not None and mem_cfg.provider == "ollama":
+        api_key = "no-key-required"
+    if not api_key:
         return None, model
-    if not api_key and is_local_gateway:
-        api_key = "voidcube-local"  # dummy key for Gateway passthrough
 
     try:
         # Imported lazily so callers that don't need the LLM don't have
@@ -283,3 +294,15 @@ def _optional_str(value: object) -> str | None:
     if value is None or value == "":
         return None
     return str(value)
+
+
+def _is_local_gateway_loop_base_url(base_url: str) -> bool:
+    try:
+        parsed = urlparse(str(base_url).strip())
+    except Exception:
+        return False
+    host = (parsed.hostname or "").strip().lower()
+    port = parsed.port
+    if host not in {"127.0.0.1", "localhost", "0.0.0.0"}:
+        return False
+    return port == 6000

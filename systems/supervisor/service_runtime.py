@@ -200,10 +200,21 @@ class ServiceRuntimeMixin:
                 try:
                     await self.run_health_checks()
                     # Re-register with gateway if the connection was lost
-                    # (e.g., gateway restarted).  Idempotent — gateway
-                    # deduplicates by service_name.
+                    # (e.g., gateway restarted).  Verify registration is still
+                    # valid by checking if our service_id is still known.
                     gid = getattr(self, '_gateway_service_id', None)
-                    if not gid:
+                    needs_reregister = not gid
+                    if gid:
+                        # Verify: Gateway may have restarted and lost our registration
+                        try:
+                            import aiohttp
+                            gw = self.config.execution.gateway_address
+                            async with aiohttp.ClientSession() as s:
+                                async with s.get(f"{gw}/admin/services/{gid}", timeout=5) as r:
+                                    needs_reregister = r.status != 200
+                        except Exception:
+                            needs_reregister = True
+                    if needs_reregister:
                         svc_id = await self.register_with_gateway()
                         if svc_id:
                             self._gateway_service_id = svc_id

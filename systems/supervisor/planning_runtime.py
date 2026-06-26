@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Optional
@@ -53,6 +54,20 @@ SUPERVISOR_LEGAL_SCENES: frozenset[str] = frozenset(
 
 class PlanningRuntimeMixin:
     """Supervisor planning, idle-window, and self-evolution orchestration."""
+
+    _LM_QUEUE_ACTION_TO_STATUS: Dict[str, str] = {
+        "approve": "approved",
+        "approved": "approved",
+        "defer": "deferred",
+        "deferred": "deferred",
+        "cancel": "cancelled",
+        "cancelled": "cancelled",
+        "pause": "paused",
+        "paused": "paused",
+    }
+    _LM_QUEUE_SHADOW_ACTIONS: frozenset[str] = frozenset(
+        {"retire", "merge"}
+    )
 
     async def get_governor_history(self, limit: int = 20):
         return {
@@ -648,6 +663,8 @@ class PlanningRuntimeMixin:
             "approved": "approved",
             "defer": "deferred",
             "deferred": "deferred",
+            "fail": "failed",
+            "failed": "failed",
             "pause": "paused",
             "paused": "paused",
             "cancel": "cancelled",
@@ -782,7 +799,190 @@ class PlanningRuntimeMixin:
     def _serialize_self_evolution_task(self, task: SelfEvolutionTask) -> Dict[str, Any]:
         payload = task.model_dump(mode="json")
         payload.update(self._task_runtime_profile(task))
+        decision_history = payload.get("decision_history") or []
+        latest_context: Dict[str, Any] = {}
+        if isinstance(decision_history, list) and decision_history:
+            latest = decision_history[-1]
+            if isinstance(latest, dict):
+                latest_context = dict(latest.get("context") or {})
+        governance_preview: Dict[str, Any] = {}
+        lm_review = latest_context.get("lm_queue_review")
+        if isinstance(lm_review, dict):
+            governance_preview["lm_queue_review"] = dict(lm_review)
+        lm_shadow = latest_context.get("lm_queue_shadow")
+        if isinstance(lm_shadow, dict):
+            governance_preview["lm_queue_shadow"] = dict(lm_shadow)
+        lm_priority = latest_context.get("lm_queue_priority")
+        if isinstance(lm_priority, dict):
+            governance_preview["lm_queue_priority"] = dict(lm_priority)
+        if governance_preview:
+            payload["governance_preview"] = governance_preview
         return payload
+
+    def _build_lm_queue_review_snapshot(
+        self,
+        tasks: list[SelfEvolutionTask],
+        *,
+        idle_window: Dict[str, Any],
+    ) -> list[Dict[str, Any]]:
+        snapshot: list[Dict[str, Any]] = []
+        for task in tasks:
+            metadata = dict(task.metadata or {})
+            evidence = dict(task.evidence or {})
+            constraints = dict(task.constraints or {})
+            snapshot.append(
+                {
+                    "task_id": task.task_id,
+                    "title": task.title,
+                    "summary": task.summary,
+                    "status": task.status,
+                    "priority": task.priority,
+                    "source": task.source,
+                    "governance_task_type": self._task_governance_type(task),
+                    "task_family": self._task_runtime_family(task),
+                    "execution_kind": self._task_execution_kind(task),
+                    "metadata": {
+                        "endogenous_drive_key": metadata.get("endogenous_drive_key"),
+                        "utility": metadata.get("utility"),
+                        "quality_score": metadata.get("quality_score"),
+                    },
+                    "evidence": {
+                        "recent_errors": evidence.get("recent_errors"),
+                        "uncertainty_high_count": evidence.get("uncertainty_high_count"),
+                        "learning_quality_score": evidence.get("learning_quality_score"),
+                        "topic_source": (
+                            (evidence.get("endogenous_drive") or {}).get("topic_source")
+                            or evidence.get("topic_source")
+                        ),
+                    },
+                    "constraints": {
+                        "execution_policy": constraints.get("execution_policy"),
+                        "target_slot": constraints.get("target_slot"),
+                        "must_commit": constraints.get("must_commit"),
+                    },
+                    "decision_history_count": len(task.decision_history or []),
+                }
+            )
+        return snapshot
+
+    def _coerce_lm_queue_action(
+        self,
+        action: Any,
+        *,
+        current_status: str,
+    ) -> Optional[str]:
+        if not isinstance(action, str):
+            return None
+        normalized = self._LM_QUEUE_ACTION_TO_STATUS.get(action.strip().lower())
+        if normalized is None:
+            return None
+        if current_status in {"completed", "failed", "cancelled"}:
+            return None
+        return normalized
+
+    def _extract_lm_shadow_recommendation(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        action = str(item.get("action") or "").strip().lower()
+        if action not in self._LM_QUEUE_SHADOW_ACTIONS:
+            return None
+
+        recommendation: Dict[str, Any] = {
+            "action": action,
+            "reason": str(item.get("reason") or "").strip()[:500],
+        }
+        if action == "merge":
+            recommendation["merge_into"] = str(item.get("merge_into") or "").strip()[:200]
+        return recommendation
+
+    def _extract_lm_priority_recommendation(self, item: Dict[str, Any]) -> Optional[str]:
+        action = str(item.get("action") or "").strip().lower()
+        if action not in {"reprioritize", "reprioritise"}:
+            return None
+        priority = str(item.get("priority") or "").strip().lower()
+        if priority not in {"low", "normal", "high"}:
+            return None
+        return priority
+
+    async def _lm_review_task_queue(
+        self,
+        tasks: list[SelfEvolutionTask],
+        *,
+        idle_window: Dict[str, Any],
+    ) -> Dict[str, Dict[str, Any]]:
+        if not tasks:
+            return {}
+
+        try:
+            from memai.model_config import resolve_mem_llm_client
+
+            llm_client, _ = resolve_mem_llm_client(role="governance_reasoner")
+            if llm_client is None:
+                return {}
+        except Exception:
+            return {}
+
+        queue_snapshot = self._build_lm_queue_review_snapshot(tasks, idle_window=idle_window)
+        prompt = (
+            "你是 VoidCube 的监督者队列治理层。你的职责不是产出新任务，"
+            "而是治理当前任务列表。\n\n"
+            "请基于当前 idle_window、任务列表快照和用户优先级，"
+            "为每个任务给出一个结构化动作建议。你可以使用以下动作：\n"
+            "- approve: 建议当前任务本轮放行\n"
+            "- defer: 建议当前任务继续等待\n"
+            "- cancel: 建议当前任务清退/取消\n"
+            "- pause: 建议当前任务暂停\n"
+            "- retire: 建议该任务退休，但先仅记录建议，不直接落状态\n"
+            "- merge: 建议该任务与另一任务合并，但先仅记录建议，不直接合并\n"
+            "- reprioritize: 建议调整优先级，但先仅记录建议，不直接改优先级\n\n"
+            "注意：\n"
+            "1. 不要新增任务\n"
+            "2. 不要改写 task_id\n"
+            "3. 不要为同一任务返回多个动作\n"
+            "4. 优先考虑避免重复、无证据、陈旧或与当前系统状态冲突的任务\n"
+            "5. body_improvement 只有在学习证据足够时才建议 approve\n\n"
+            "输出 JSON 对象，格式为：\n"
+            "{\n"
+            '  "actions": [\n'
+            '    {"task_id": "...", "action": "approve|defer|cancel|pause|retire|merge|reprioritize", "reason": "...", "merge_into": "...", "priority": "..."}\n'
+            "  ]\n"
+            "}\n\n"
+            f"【idle_window】\n{json.dumps(idle_window, ensure_ascii=False, default=str)[:3000]}\n\n"
+            f"【tasks】\n{json.dumps(queue_snapshot, ensure_ascii=False, default=str)[:5000]}"
+        )
+
+        try:
+            result = llm_client.complete_json(
+                system_prompt=(
+                    "你是 VoidCube 的监督者身份。你管理任务列表生命周期，"
+                    "但不能绕过确定性状态机。你的回答必须保守、结构化、可审计。"
+                ),
+                user_payload={"queue_review": prompt},
+                task="scholar.revision",
+            )
+        except Exception:
+            return {}
+
+        if not isinstance(result, dict):
+            return {}
+
+        actions = result.get("actions")
+        if not isinstance(actions, list):
+            return {}
+
+        reviewed: Dict[str, Dict[str, Any]] = {}
+        for item in actions:
+            if not isinstance(item, dict):
+                continue
+            task_id = str(item.get("task_id") or "").strip()
+            if not task_id:
+                continue
+            reviewed[task_id] = {
+                "action": item.get("action"),
+                "reason": str(item.get("reason") or "").strip()[:500],
+            }
+            shadow = self._extract_lm_shadow_recommendation(item)
+            if shadow is not None:
+                reviewed[task_id]["shadow"] = shadow
+        return reviewed
 
     def _self_evolution_task_git_lineage(self, task: SelfEvolutionTask) -> Dict[str, Any]:
         execution = dict(task.metadata.get("execution_request") or {})
@@ -791,7 +991,12 @@ class PlanningRuntimeMixin:
             **dict(execution.get("git_lineage") or {}),
         }
 
-    async def list_self_evolution_tasks(self, status: Optional[str] = None, task_type: Optional[str] = None):
+    async def list_self_evolution_tasks(
+        self,
+        status: Optional[str] = None,
+        task_type: Optional[str] = None,
+        execution_kind: Optional[str] = None,
+    ):
         normalized_status = None
         if status is not None:
             normalized_status = self._normalize_self_evolution_decision(status)
@@ -800,6 +1005,9 @@ class PlanningRuntimeMixin:
         tasks = self._self_evolution_queue.list_tasks(status=normalized_status)
         if task_type:
             tasks = [t for t in tasks if self._task_governance_type(t) == str(task_type).strip()]
+        if execution_kind:
+            normalized_execution_kind = self._normalize_runtime_task_family(execution_kind)
+            tasks = [t for t in tasks if self._task_execution_kind(t) == normalized_execution_kind]
         return {
             "tasks": [self._serialize_self_evolution_task(task) for task in tasks],
             "count": len(tasks),
@@ -987,11 +1195,20 @@ class PlanningRuntimeMixin:
             "approved" if review_decision["eligible_for_execution"] else "deferred"
         )
 
-        reviewed = []
-        reviewed_statuses = []
+        candidate_tasks: list[SelfEvolutionTask] = []
         for task in self._self_evolution_queue.list_tasks():
             if task.status not in normalized_statuses or task.status == "cancelled":
                 continue
+            candidate_tasks.append(task)
+
+        lm_queue_actions = await self._lm_review_task_queue(
+            candidate_tasks,
+            idle_window=idle_window,
+        )
+
+        reviewed = []
+        reviewed_statuses = []
+        for task in candidate_tasks:
             task_idle_window = idle_window
             task_family = self._task_runtime_family(task)
             if idle_window.get("task_family") != task_family:
@@ -1009,6 +1226,59 @@ class PlanningRuntimeMixin:
                     getattr(self, "_service_runtime", None), "governor_mode_active", False
                 ),
             )
+            decision_context: Dict[str, Any] = {"idle_window": task_idle_window}
+            lm_action = lm_queue_actions.get(task.task_id)
+            reprioritized = False
+            if lm_action:
+                shadow_recommendation = lm_action.get("shadow")
+                if isinstance(shadow_recommendation, dict):
+                    decision_context["lm_queue_shadow"] = shadow_recommendation
+                priority_recommendation = self._extract_lm_priority_recommendation(lm_action)
+                if priority_recommendation is not None and priority_recommendation != str(task.priority):
+                    task = self._self_evolution_queue.update_priority(
+                        task.task_id,
+                        priority=priority_recommendation,
+                        actor=str(request.get("actor", "supervisor")),
+                        reason=(
+                            f"LM queue governance reprioritized task to {priority_recommendation}."
+                        ),
+                        context={
+                            **decision_context,
+                            "lm_queue_priority": {
+                                "priority": priority_recommendation,
+                                "reason": str(lm_action.get("reason") or "").strip(),
+                            },
+                        },
+                    )
+                    decision_context["lm_queue_priority"] = {
+                        "priority": priority_recommendation,
+                        "reason": str(lm_action.get("reason") or "").strip(),
+                    }
+                    reprioritized = True
+                suggested_status = self._coerce_lm_queue_action(
+                    lm_action.get("action"),
+                    current_status=str(task.status),
+                )
+                if suggested_status is not None:
+                    target_status = suggested_status
+                    lm_reason = str(lm_action.get("reason") or "").strip()
+                    if lm_reason:
+                        default_reason = f"LM queue governance: {lm_reason}"
+                    decision_context["lm_queue_review"] = {
+                        "action": suggested_status,
+                        "reason": lm_reason,
+                    }
+                elif isinstance(shadow_recommendation, dict):
+                    default_reason = (
+                        str(request.get("reason"))
+                        or f"LM queue governance shadow recommendation recorded: "
+                        f"{shadow_recommendation.get('action', 'review')}."
+                    )
+                elif reprioritized and not str(request.get("reason") or "").strip():
+                    default_reason = (
+                        f"LM queue governance reprioritized task to "
+                        f"{decision_context['lm_queue_priority']['priority']}."
+                    )
             execution_request = None
             if target_status == "approved":
                 if self._task_requires_execution_request(task):
@@ -1031,7 +1301,7 @@ class PlanningRuntimeMixin:
                                 "Task deferred because approved execution handoff lacks required "
                                 "lineage, target, or rollback evidence."
                             ),
-                            context={"idle_window": task_idle_window},
+                            context=decision_context,
                         )
                         reviewed.append(updated)
                         reviewed_statuses.append(updated.status)
@@ -1046,7 +1316,7 @@ class PlanningRuntimeMixin:
                 decision_id=decision_id,
                 actor=str(request.get("actor", "supervisor")),
                 reason=str(request.get("reason") or default_reason),
-                context={"idle_window": task_idle_window},
+                context=decision_context,
                 execution_request=execution_request,
             )
             reviewed.append(updated)
@@ -1054,15 +1324,46 @@ class PlanningRuntimeMixin:
 
         if reviewed:
             unique_statuses = sorted(set(reviewed_statuses))
+            shadow_recommendation_count = 0
+            shadow_action_counts: Dict[str, int] = {}
+            priority_update_count = 0
+            for task in reviewed:
+                if not task.decision_history:
+                    continue
+                latest_context = dict(task.decision_history[-1].context or {})
+                shadow = latest_context.get("lm_queue_shadow")
+                if not isinstance(shadow, dict):
+                    pass
+                else:
+                    shadow_recommendation_count += 1
+                    action = str(shadow.get("action") or "unknown")
+                    shadow_action_counts[action] = shadow_action_counts.get(action, 0) + 1
+                if isinstance(latest_context.get("lm_queue_priority"), dict):
+                    priority_update_count += 1
             self._record_supervisor_ui_activity(
                 "tasks_reviewed",
                 scene="planning",
-                summary=f"Supervisor reviewed {len(reviewed)} task(s): {', '.join(unique_statuses)}.",
+                summary=(
+                    f"Supervisor reviewed {len(reviewed)} task(s): {', '.join(unique_statuses)}."
+                    + (
+                        f" Shadow governance suggestions: {shadow_recommendation_count}."
+                        if shadow_recommendation_count > 0
+                        else ""
+                    )
+                    + (
+                        f" Priority updates: {priority_update_count}."
+                        if priority_update_count > 0
+                        else ""
+                    )
+                ),
                 metadata=self._build_self_evolution_activity_metadata(
                     reviewed,
                     action="review",
                     extra={
                         "status": unique_statuses[0] if len(unique_statuses) == 1 else "mixed",
+                        "lm_shadow_recommendations": shadow_recommendation_count,
+                        "lm_shadow_action_counts": shadow_action_counts,
+                        "lm_priority_updates": priority_update_count,
                     },
                 ),
             )
@@ -1073,6 +1374,9 @@ class PlanningRuntimeMixin:
                     action="review",
                     extra={
                         "status": unique_statuses[0] if len(unique_statuses) == 1 else "mixed",
+                        "lm_shadow_recommendations": shadow_recommendation_count,
+                        "lm_shadow_action_counts": shadow_action_counts,
+                        "lm_priority_updates": priority_update_count,
                     },
                 ),
             )
@@ -1202,11 +1506,11 @@ class PlanningRuntimeMixin:
             failure_count = int(task_metadata.get("execution_failure_count") or 0) + 1
             task_governance_type = self._task_governance_type(task)
             # memory_maintenance tasks are handled by the supervisor's internal
-            # memory service (baseline §3.4).  Agent pull paths only ever see
-            # self_learning tasks, so on failure we route these tasks back to
-            # deferred/failed rather than approved, keeping the queue free of
-            # memory_maintenance entries that would otherwise be invisible to
-            # the Agent poll filter.
+            # memory service (baseline §3.4). Agent pull paths only see
+            # Agent-executable autonomous tasks, so on failure we route these
+            # tasks back to deferred/failed rather than approved, keeping the
+            # queue free of internal-only entries that would otherwise be
+            # invisible to the Agent poll filter.
             if task_governance_type == "memory_maintenance":
                 if failure_count < max_retries:
                     self._self_evolution_queue.update_status(
@@ -1272,17 +1576,17 @@ class PlanningRuntimeMixin:
         # path so the audit trail is honest about WHO closed the task.  The
         # architectural baseline §3.4 says memory_maintenance is handled
         # internally by the memory service (not by Agent pull), so its
-        # reason reflects the supervisor's internal completion.  Body
-        # upgrade / switch go through the executor body_lifecycle.  Agent
-        # pull (cli_agent or run_agent_instance) only ever sees self_learning
-        # tasks, so this success path is the supervisor's own.
+        # reason reflects the supervisor's internal completion. Body
+        # upgrade / switch go through the executor body_lifecycle. Agent
+        # pull handles Agent-executable autonomous tasks separately, so this
+        # success path is the supervisor's own.
         task_governance_type = self._task_governance_type(task)
         if task_governance_type == "memory_maintenance":
             actor = "supervisor_memory_service"
             completion_reason = (
                 "Memory-maintenance task completed by the supervisor's "
                 "internal memory service (baseline §3.4 — Agent pull only "
-                "sees self_learning tasks). "
+                "sees Agent-executable autonomous tasks). "
                 f"executor_status={str(result_status)[:60] if result_status else 'ok'}"
             )
         elif task_governance_type == "self_evolution":
@@ -1363,9 +1667,19 @@ class PlanningRuntimeMixin:
             if task is None:
                 continue
 
-            if self._task_governance_type(task) == "self_learning":
-                # Self-learning tasks are pulled by Agent via Gateway /v1/tasks API.
-                # The supervisor only approves them; execution is Agent-initiated.
+            gov_type = self._task_governance_type(task)
+            execution_kind = self._task_execution_kind(task)
+            if gov_type == "self_learning" or execution_kind == "body_improvement":
+                # Agent-executable autonomous tasks are pulled by Agent via Gateway /v1/tasks API.
+                continue
+
+            if gov_type in ("memory_maintenance", "general_self_evolution"):
+                # Supervisor-internal tasks — no external executor. Complete directly.
+                self._self_evolution_queue.update_status(
+                    task.task_id, status="completed",
+                    actor="supervisor", reason="Internal task completed by supervisor.",
+                )
+                dispatched.append({"task_id": task.task_id, "status": "completed"})
                 continue
 
             if task.execution_request is None:
@@ -1392,8 +1706,9 @@ class PlanningRuntimeMixin:
             if task.status == "running":
                 continue  # already running or permanently failed
 
-            if self._task_governance_type(task) == "self_learning":
-                # Self-learning tasks are pulled by Agent via Gateway /v1/tasks API.
+            execution_kind = self._task_execution_kind(task)
+            if self._task_governance_type(task) == "self_learning" or execution_kind == "body_improvement":
+                # Agent-executable autonomous tasks are pulled by Agent via Gateway /v1/tasks API.
                 # The supervisor only approves them; execution is Agent-initiated.
                 continue
 
