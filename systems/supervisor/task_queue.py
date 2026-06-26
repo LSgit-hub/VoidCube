@@ -237,7 +237,7 @@ class SelfEvolutionTaskQueue:
         _LEGAL_TRANSITIONS: dict[str, set[str]] = {
             "planned": {"approved", "paused", "cancelled", "deferred"},
             "approved": {"running", "cancelled"},
-            "running": {"completed", "failed", "paused"},
+            "running": {"approved", "completed", "failed", "paused"},
             "paused": {"planned", "approved", "cancelled", "deferred"},
             "deferred": {"planned", "approved", "cancelled", "paused"},
             "completed": set(),   # terminal

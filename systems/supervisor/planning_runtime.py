@@ -772,6 +772,78 @@ class PlanningRuntimeMixin:
             "Task deferred because the execution window or idle requirements are not yet satisfied. The task remains queued for future review.",
         )
 
+    def _is_agent_pull_task(self, task: SelfEvolutionTask) -> bool:
+        execution_kind = self._task_execution_kind(task)
+        return (
+            self._task_governance_type(task) == "self_learning"
+            or execution_kind == "body_improvement"
+        )
+
+    async def _fetch_gateway_active_cli_executor(self) -> Dict[str, Any]:
+        import aiohttp
+
+        execution_config = getattr(self.config, "execution", None)
+        gateway_address = getattr(execution_config, "gateway_address", "http://127.0.0.1:6000")
+        url = f"{gateway_address}/admin/body/status"
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as response:
+                if response.status >= 400:
+                    raise HTTPException(
+                        status_code=503,
+                        detail=f"Gateway active executor query failed with status {response.status}",
+                    )
+                payload = await response.json()
+        if not isinstance(payload, dict):
+            return {}
+        active = payload.get("active_cli_executor")
+        return dict(active or {}) if isinstance(active, dict) else {}
+
+    async def _recover_orphaned_agent_pull_tasks(self) -> int:
+        active_executor = {}
+        active_session_id = ""
+        try:
+            active_executor = await self._fetch_gateway_active_cli_executor()
+            active_session_id = str(active_executor.get("session_id") or "").strip()
+        except Exception:
+            active_executor = {}
+            active_session_id = ""
+
+        recovered = 0
+        for task in self._self_evolution_queue.list_tasks(status="running"):
+            if not self._is_agent_pull_task(task):
+                continue
+            metadata = dict(task.metadata or {})
+            owner_session_id = str(metadata.get("owner_session_id") or "").strip()
+            execution_source = str(metadata.get("execution_source") or "").strip().lower()
+            if execution_source and execution_source != "cli_agent_pull":
+                continue
+            if owner_session_id and owner_session_id == active_session_id:
+                continue
+            self._self_evolution_queue.update_status(
+                task.task_id,
+                status="approved",
+                actor="supervisor",
+                reason=(
+                    "Recovered orphaned AUTO agent-pull task because its owning CLI session "
+                    "is no longer the active executor."
+                ),
+                context={
+                    "recovered": True,
+                    "previous_owner_session_id": owner_session_id or None,
+                    "active_cli_session_id": active_session_id or None,
+                },
+            )
+            self._self_evolution_queue.update_metadata(
+                task.task_id,
+                metadata={
+                    "recovered_from_orphaned_running": True,
+                    "last_recovered_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            recovered += 1
+        return recovered
+
     def _build_self_evolution_execution_request(
         self,
         task: SelfEvolutionTask,
@@ -1201,6 +1273,9 @@ class PlanningRuntimeMixin:
             reason = str(request.get("reason") or auto_reason)
         else:
             reason = str(request.get("reason") or f"Task marked as {normalized} by supervisor decision.")
+            request_context = request.get("context")
+            if isinstance(request_context, dict) and request_context:
+                decision_context.update(dict(request_context))
 
         if task.status == "cancelled":
             return {
@@ -1355,7 +1430,20 @@ class PlanningRuntimeMixin:
                     current_status=str(task.status),
                 )
                 if suggested_status is not None:
-                    target_status = suggested_status
+                    preserve_agent_pull_approval = (
+                        getattr(getattr(self, "_service_runtime", None), "governor_mode_active", False)
+                        and target_status == "approved"
+                        and suggested_status == "deferred"
+                        and self._is_agent_pull_task(task)
+                    )
+                    if preserve_agent_pull_approval:
+                        decision_context["lm_queue_shadow"] = {
+                            "action": suggested_status,
+                            "reason": str(lm_action.get("reason") or "").strip(),
+                            "preserved_status": target_status,
+                        }
+                    else:
+                        target_status = suggested_status
                     lm_reason = str(lm_action.get("reason") or "").strip()
                     if lm_reason:
                         default_reason = f"LM queue governance: {lm_reason}"
@@ -1727,6 +1815,8 @@ class PlanningRuntimeMixin:
         return result
 
     async def _run_self_evolution_cycle(self) -> Dict[str, Any]:
+        recovered_orphaned = await self._recover_orphaned_agent_pull_tasks()
+
         # ── Cleanup: auto-fail tasks stuck in "running" > 30 min ──
         stale_running = 0
         now = datetime.now(timezone.utc)
@@ -1819,6 +1909,7 @@ class PlanningRuntimeMixin:
         return {
             "reviewed": review_result.get("count", 0),
             "dispatched": dispatched,
+            "recovered_orphaned": recovered_orphaned,
         }
 
     async def run_auto_cycle(self, request: dict | None = None) -> Dict[str, Any]:

@@ -2004,6 +2004,8 @@ class VoidcubeCLI:
         # Background task tracking: {task_id: threading.Thread}
         self._background_tasks: Dict[str, threading.Thread] = {}
         self._background_task_counter = 0
+        self._last_gateway_presence_refresh_at: float = 0.0
+        self._gateway_presence_refresh_interval_seconds: float = 30.0
 
     def _invalidate(self, min_interval: float = 0.25) -> None:
         """Throttled UI repaint — prevents terminal blinking on slow/SSH connections."""
@@ -2393,6 +2395,16 @@ class VoidcubeCLI:
                 "decision": "running",
                 "actor": "cli_agent",
                 "reason": "Agent pulled task for execution in AUTO mode.",
+                "context": {
+                    "session_id": getattr(self, "session_id", None),
+                    "source": "cli_agent_pull",
+                    "execution_kind": execution_kind,
+                },
+                "metadata": {
+                    "owner_session_id": getattr(self, "session_id", None),
+                    "execution_started_at": datetime.now().astimezone().isoformat(),
+                    "execution_source": "cli_agent_pull",
+                },
             }).encode()
             r = _req.Request(
                 f"{gateway_base}/v1/tasks/{task_id}/decision",
@@ -2499,6 +2511,215 @@ class VoidcubeCLI:
             self._current_auto_task = None
             self._current_auto_task_started_at = 0
             self._last_agent_turn_result = None
+
+    def _trigger_auto_mode_cycle(self, *, focus: str = "") -> Dict[str, Any] | None:
+        """Run one synchronous supervisor auto-cycle for immediate AUTO responsiveness."""
+        import json as _json
+        import urllib.request as _req
+
+        try:
+            from VoidCube_cli.config import load_config
+            cfg = load_config()
+            sv_cfg = cfg.get("supervisor", {})
+            host = sv_cfg.get("host", "127.0.0.1")
+            port = sv_cfg.get("port", 6002)
+            supervisor_url = f"http://{host}:{port}"
+        except Exception:
+            supervisor_url = "http://127.0.0.1:6002"
+
+        payload = _json.dumps({"focus": focus}).encode()
+        request = _req.Request(
+            f"{supervisor_url}/self-evolution/auto-cycle",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        return _json.loads(_req.urlopen(request, timeout=30).read())
+
+    def _current_gateway_presence_snapshot(self) -> tuple[str, str | None, str | None]:
+        """Return the CLI scene the gateway should treat as the active executor."""
+        if getattr(self, "_auto_mode_active", False):
+            current = getattr(self, "_current_auto_task", None) or {}
+            task_id = str(current.get("task_id") or "").strip() or None
+            execution_kind = str(
+                current.get("execution_kind") or current.get("task_type") or ""
+            ).strip().lower() or None
+            if execution_kind == "body_improvement":
+                return "code_editing", task_id, execution_kind
+            if task_id:
+                return "learning", task_id, execution_kind
+            return "executing", None, None
+        return "idle", None, None
+
+    def _refresh_gateway_cli_presence(self, *, force: bool = False) -> None:
+        """Keep the gateway's active CLI executor view aligned with the live session."""
+        session_id = str(getattr(self, "session_id", "") or "").strip()
+        if not session_id or not _is_gateway_running():
+            return
+
+        import time as _time
+
+        now = _time.monotonic()
+        refresh_interval = float(getattr(self, "_gateway_presence_refresh_interval_seconds", 30.0) or 30.0)
+        last_refresh = float(getattr(self, "_last_gateway_presence_refresh_at", 0.0) or 0.0)
+        if not force and now - last_refresh < refresh_interval:
+            return
+
+        model = str(getattr(self, "model", "") or "")
+        provider = str(getattr(self, "provider", "") or "")
+        _register_with_gateway(session_id, model, provider)
+
+        scene, task_id, execution_kind = self._current_gateway_presence_snapshot()
+        _push_cli_agent_scene(
+            scene,
+            session_id=session_id,
+            task_id=task_id,
+            execution_kind=execution_kind,
+        )
+        self._last_gateway_presence_refresh_at = now
+
+    def _execute_pending_input(self, user_input: Any, *, app=None) -> bool:
+        """Execute one queued prompt/command using the same path as the interactive loop."""
+        if not user_input:
+            return False
+
+        submit_images = []
+        if isinstance(user_input, tuple):
+            user_input, submit_images = user_input
+
+        _file_drop = _detect_file_drop(user_input) if isinstance(user_input, str) else None
+        if _file_drop:
+            _drop_path = _file_drop["path"]
+            _remainder = _file_drop["remainder"]
+            if _file_drop["is_image"]:
+                submit_images.append(_drop_path)
+                user_input = _remainder or f"[User attached image: {_drop_path.name}]"
+                _cprint(f"  📎 Auto-attached image: {_drop_path.name}")
+            else:
+                _cprint(f"  📄 Detected file: {_drop_path.name}")
+                user_input = f"[User attached file: {_drop_path}]"
+                if _remainder:
+                    user_input += f"\n{_remainder}"
+
+        if not _file_drop and isinstance(user_input, str) and _looks_like_slash_command(user_input):
+            _cprint(f"\n>️  {user_input}")
+            logger.info("CLI command executed: %s", user_input)
+            if not self.process_command(user_input):
+                self._should_exit = True
+                try:
+                    if app and getattr(app, "is_running", False):
+                        app.exit()
+                except Exception:
+                    pass
+            return False
+
+        import re as _re
+
+        _paste_ref_re = _re.compile(r'\[Pasted text #\d+: \d+ lines \u2192 (.+?)\]')
+        paste_refs = list(_paste_ref_re.finditer(user_input)) if isinstance(user_input, str) else []
+        if paste_refs:
+            def _expand_ref(match):
+                path = Path(match.group(1))
+                return path.read_text(encoding="utf-8") if path.exists() else match.group(0)
+
+            expanded = _paste_ref_re.sub(_expand_ref, user_input)
+            total_lines = expanded.count('\n') + 1
+            n_pastes = len(paste_refs)
+            _user_bar = f"[#34D399]{'~' * 40}[/]"
+            print()
+            ChatConsole().print(_user_bar)
+            split_parts = _paste_ref_re.split(user_input)
+            visible_user_text = " ".join(
+                split_parts[i].strip() for i in range(0, len(split_parts), 2) if split_parts[i].strip()
+            )
+            if visible_user_text:
+                ChatConsole().print(
+                    f"[bold {_accent_hex()}]\u25cf[/] [bold]{_escape(visible_user_text)}[/] "
+                    f"[dim]({n_pastes} pasted block{'s' if n_pastes > 1 else ''}, {total_lines} lines total)[/]"
+                )
+            else:
+                ChatConsole().print(
+                    f"[bold {_accent_hex()}]\u25cf[/] [bold]{_escape(f'[Pasted text: {total_lines} lines]')}[/]"
+                )
+            user_input = expanded
+        else:
+            _user_bar = f"[#34D399]{'~' * 40}[/]"
+            if isinstance(user_input, str) and '\n' in user_input:
+                first_line = user_input.split('\n')[0]
+                line_count = user_input.count('\n') + 1
+                print()
+                ChatConsole().print(_user_bar)
+                ChatConsole().print(
+                    f"[bold {_accent_hex()}]●[/] [bold]{_escape(first_line)}[/] "
+                    f"[dim](+{line_count - 1} lines)[/]"
+                )
+            else:
+                print()
+                ChatConsole().print(_user_bar)
+                ChatConsole().print(f"[bold {_accent_hex()}]●[/] [bold]{_escape(str(user_input))}[/]")
+
+        if submit_images:
+            n = len(submit_images)
+            _cprint(f"  {_DIM}📎 {n} image{'s' if n > 1 else ''} attached{_RST}")
+
+        self._agent_running = True
+        if app is not None:
+            try:
+                app.invalidate()
+            except Exception:
+                pass
+
+        _sanitized = str(user_input).encode('ascii', errors='replace').decode('ascii')
+        logger.info(
+            "User input received: %s (images: %d)",
+            _sanitized[:100] + "..." if len(_sanitized) > 100 else _sanitized,
+            len(submit_images) if submit_images else 0,
+        )
+
+        try:
+            self.chat(user_input, images=submit_images or None)
+        finally:
+            self._agent_running = False
+            self._spinner_text = ""
+            self._tool_start_time = 0.0
+            self._current_tool_name = ""
+            self._pending_tool_info.clear()
+            self._last_scrollback_tool = ""
+
+            if app is not None:
+                try:
+                    app.invalidate()
+                except Exception:
+                    pass
+
+            if self._voice_mode and self._voice_continuous and not self._voice_recording:
+                def _restart_recording():
+                    try:
+                        if self._voice_tts:
+                            self._voice_tts_done.wait(timeout=60)
+                            time.sleep(0.3)
+                        self._voice_start_recording()
+                        if app is not None:
+                            app.invalidate()
+                    except Exception as exc:
+                        _cprint(f"{_DIM}Voice auto-restart failed: {exc}{_RST}")
+
+                threading.Thread(target=_restart_recording, daemon=True).start()
+
+            try:
+                from tools.process_registry import process_registry
+                while not process_registry.completion_queue.empty():
+                    evt = process_registry.completion_queue.get_nowait()
+                    _evt_sid = evt.get("session_id", "")
+                    if evt.get("type") == "completion" and process_registry.is_completion_consumed(_evt_sid):
+                        continue
+                    _synth = _format_process_notification(evt)
+                    if _synth:
+                        self._pending_input.put(_synth)
+            except Exception:
+                pass
+
+        return True
 
     @staticmethod
     def _use_ascii_fallback() -> bool:
@@ -6867,11 +7088,25 @@ class VoidcubeCLI:
                 if active:
                     self._auto_mode_active = True
                     _push_cli_agent_scene("executing", session_id=getattr(self, "session_id", None))
+                    cycle_result = None
+                    try:
+                        cycle_result = self._trigger_auto_mode_cycle(focus=focus)
+                    except Exception as exc:
+                        _cprint(f"     ⚠️  Initial AUTO cycle failed: {exc}")
+                    try:
+                        self._poll_auto_mode_workflow()
+                    except Exception:
+                        pass
                     _cprint(f"  ✅ Governor Mode [bold green]ACTIVE[/]")
                     _cprint(f"     Drive loop:  {'running' if resp.get('drive_loop_running') else 'stopped'}")
                     _cprint(f"     Review loop: {'running' if resp.get('review_loop_running') else 'stopped'}")
                     if not resp.get("endogenous_drive_enabled", True):
                         _cprint(f"     ⚠️  endogenous_drive_enabled=False in config — drive loop disabled")
+                    if isinstance(cycle_result, dict):
+                        summary = cycle_result.get("summary", {}) if isinstance(cycle_result, dict) else {}
+                        planned = summary.get("planned", 0)
+                        dispatched = summary.get("dispatched", 0)
+                        _cprint(f"     Initial cycle: planned={planned}, dispatched={dispatched}")
                     snapshot = self._fetch_supervisor_status_snapshot()
                     if snapshot:
                         for line in self._format_supervisor_status_snapshot(snapshot)[:4]:
@@ -11225,6 +11460,7 @@ class VoidcubeCLI:
                         if not self._agent_running:
                             self._check_config_mcp_changes()
                             self._refresh_supervisor_status()
+                            self._refresh_gateway_cli_presence()
                             if self._auto_mode_active:
                                 self._poll_auto_mode_workflow()
                             # Check for background process notifications (completions
@@ -11245,144 +11481,7 @@ class VoidcubeCLI:
                                 pass
                         continue
                     
-                    if not user_input:
-                        continue
-
-                    # Unpack image payload: (text, [Path, ...]) or plain str
-                    submit_images = []
-                    if isinstance(user_input, tuple):
-                        user_input, submit_images = user_input
-                    
-                    # Check for commands — but detect dragged/pasted file paths first.
-                    # See _detect_file_drop() for details.
-                    _file_drop = _detect_file_drop(user_input) if isinstance(user_input, str) else None
-                    if _file_drop:
-                        _drop_path = _file_drop["path"]
-                        _remainder = _file_drop["remainder"]
-                        if _file_drop["is_image"]:
-                            submit_images.append(_drop_path)
-                            user_input = _remainder or f"[User attached image: {_drop_path.name}]"
-                            _cprint(f"  📎 Auto-attached image: {_drop_path.name}")
-                        else:
-                            _cprint(f"  📄 Detected file: {_drop_path.name}")
-                            user_input = (
-                                f"[User attached file: {_drop_path}]"
-                                + (f"\n{_remainder}" if _remainder else "")
-                            )
-
-                    if not _file_drop and isinstance(user_input, str) and _looks_like_slash_command(user_input):
-                        _cprint(f"\n>️  {user_input}")
-                        logger.info("CLI command executed: %s", user_input)
-                        if not self.process_command(user_input):
-                            self._should_exit = True
-                            # Force exit immediately using self._app
-                            try:
-                                if self._app and self._app.is_running:
-                                    self._app.exit()
-                            except Exception:
-                                pass
-                        continue
-                    
-                    # Expand paste references back to full content
-                    import re as _re
-                    _paste_ref_re = _re.compile(r'\[Pasted text #\d+: \d+ lines \u2192 (.+?)\]')
-                    paste_refs = list(_paste_ref_re.finditer(user_input)) if isinstance(user_input, str) else []
-                    if paste_refs:
-                        def _expand_ref(m):
-                            p = Path(m.group(1))
-                            return p.read_text(encoding="utf-8") if p.exists() else m.group(0)
-                        expanded = _paste_ref_re.sub(_expand_ref, user_input)
-                        total_lines = expanded.count('\n') + 1
-                        n_pastes = len(paste_refs)
-                        _user_bar = f"[#34D399]{'~' * 40}[/]"
-                        print()
-                        ChatConsole().print(_user_bar)
-                        # Show any surrounding user text alongside the paste summary
-                        split_parts = _paste_ref_re.split(user_input)
-                        visible_user_text = " ".join(
-                            split_parts[i].strip() for i in range(0, len(split_parts), 2) if split_parts[i].strip()
-                        )
-                        if visible_user_text:
-                            ChatConsole().print(
-                                f"[bold {_accent_hex()}]\u25cf[/] [bold]{_escape(visible_user_text)}[/] "
-                                f"[dim]({n_pastes} pasted block{'s' if n_pastes > 1 else ''}, {total_lines} lines total)[/]"
-                            )
-                        else:
-                            ChatConsole().print(
-                                f"[bold {_accent_hex()}]\u25cf[/] [bold]{_escape(f'[Pasted text: {total_lines} lines]')}[/]"
-                            )
-                        user_input = expanded
-                    else:
-                        _user_bar = f"[#34D399]{'~' * 40}[/]"
-                        if '\n' in user_input:
-                            first_line = user_input.split('\n')[0]
-                            line_count = user_input.count('\n') + 1
-                            print()
-                            ChatConsole().print(_user_bar)
-                            ChatConsole().print(
-                                f"[bold {_accent_hex()}]●[/] [bold]{_escape(first_line)}[/] "
-                                f"[dim](+{line_count - 1} lines)[/]"
-                            )
-                        else:
-                            print()
-                            ChatConsole().print(_user_bar)
-                            ChatConsole().print(f"[bold {_accent_hex()}]●[/] [bold]{_escape(user_input)}[/]")
-                    
-                    # Show image attachment count
-                    if submit_images:
-                        n = len(submit_images)
-                        _cprint(f"  {_DIM}📎 {n} image{'s' if n > 1 else ''} attached{_RST}")
-
-                    # Regular chat - run agent
-                    self._agent_running = True
-                    app.invalidate()  # Refresh status line
-
-                    _sanitized = str(user_input).encode('ascii', errors='replace').decode('ascii')
-                    logger.info("User input received: %s (images: %d)", _sanitized[:100] + "..." if len(_sanitized) > 100 else _sanitized, len(submit_images) if submit_images else 0)
-
-                    try:
-                        self.chat(user_input, images=submit_images or None)
-                    finally:
-                        self._agent_running = False
-                        self._spinner_text = ""
-                        self._tool_start_time = 0.0
-                        self._current_tool_name = ""
-                        self._pending_tool_info.clear()
-                        self._last_scrollback_tool = ""
-
-                        app.invalidate()  # Refresh status line
-
-                        # Continuous voice: auto-restart recording after agent responds.
-                        # Dispatch to a daemon thread so play_beep (sd.wait) and
-                        # AudioRecorder.start (lock acquire) never block process_loop —
-                        # otherwise queued user input would stall silently.
-                        if self._voice_mode and self._voice_continuous and not self._voice_recording:
-                            def _restart_recording():
-                                try:
-                                    if self._voice_tts:
-                                        self._voice_tts_done.wait(timeout=60)
-                                        time.sleep(0.3)
-                                    self._voice_start_recording()
-                                    app.invalidate()
-                                except Exception as e:
-                                    _cprint(f"{_DIM}Voice auto-restart failed: {e}{_RST}")
-                            threading.Thread(target=_restart_recording, daemon=True).start()
-
-                        # Drain process notifications (completions + watch matches)
-                        # that arrived while the agent was running.
-                        try:
-                            from tools.process_registry import process_registry
-                            while not process_registry.completion_queue.empty():
-                                evt = process_registry.completion_queue.get_nowait()
-                                # Skip if the agent already consumed this via wait/poll/log
-                                _evt_sid = evt.get("session_id", "")
-                                if evt.get("type") == "completion" and process_registry.is_completion_consumed(_evt_sid):
-                                    continue  # already delivered via tool result
-                                _synth = _format_process_notification(evt)
-                                if _synth:
-                                    self._pending_input.put(_synth)
-                        except Exception:
-                            pass  # Non-fatal — don't break the main loop
+                    self._execute_pending_input(user_input, app=app)
 
                 except Exception as e:
                     print(f"Error: {e}")

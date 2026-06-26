@@ -173,6 +173,153 @@ def test_cli_auto_mode_pulls_body_improvement_tasks(monkeypatch):
     assert prompts[0].startswith("[AUTO Body Improvement Task]")
 
 
+def test_cli_auto_mode_running_decision_records_owner_session(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._current_auto_task = None
+    cli._current_auto_task_started_at = 0.0
+    cli._last_agent_turn_result = None
+    cli._agent_running = False
+    cli.session_id = "cli-owner-1"
+    prompts = []
+    cli._pending_input = type("_Queue", (), {"put": lambda self, prompt: prompts.append(prompt)})()
+
+    requests = []
+
+    def fake_urlopen(request, timeout=0):
+        del timeout
+        if isinstance(request, Request):
+            requests.append(
+                {
+                    "url": request.full_url,
+                    "data": json.loads((request.data or b"{}").decode("utf-8")) if request.data else None,
+                }
+            )
+            return _FakeUrlopenResponse({})
+        url = str(request)
+        if "task_type=self_learning" in url:
+            return _FakeUrlopenResponse(
+                {
+                    "tasks": [
+                        {
+                            "task_id": "learn-7",
+                            "title": "Study one unresolved thread",
+                            "summary": "Produce evidence-backed learning notes",
+                            "task_type": "self_learning",
+                        }
+                    ]
+                }
+            )
+        if "execution_kind=body_improvement" in url:
+            return _FakeUrlopenResponse({"tasks": []})
+        return _FakeUrlopenResponse({"tasks": []})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    cli._poll_auto_mode_workflow()
+
+    run_request = next(item for item in requests if item["url"].endswith("/v1/tasks/learn-7/decision"))
+    assert run_request["data"]["decision"] == "running"
+    assert run_request["data"]["context"]["session_id"] == "cli-owner-1"
+    assert run_request["data"]["metadata"]["owner_session_id"] == "cli-owner-1"
+
+
+def test_execute_pending_input_runs_agent_turn_and_cleans_runtime(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._agent_running = False
+    cli._spinner_text = "working"
+    cli._tool_start_time = 12.0
+    cli._current_tool_name = "shell"
+    cli._pending_tool_info = {"tool": "shell"}
+    cli._last_scrollback_tool = "shell"
+    cli._voice_mode = False
+    cli._voice_continuous = False
+    cli._voice_recording = False
+    cli._pending_input = type("_Queue", (), {"put": lambda self, payload: None})()
+
+    calls = []
+
+    class _FakeApp:
+        def __init__(self):
+            self.invalidate_calls = 0
+
+        def invalidate(self):
+            self.invalidate_calls += 1
+
+    def fake_chat(user_input, images=None):
+        calls.append({"user_input": user_input, "images": images})
+        cli._last_agent_turn_result = {"failed": False}
+
+    monkeypatch.setattr("cli._cprint", lambda *args, **kwargs: None)
+
+    app = _FakeApp()
+    cli.chat = fake_chat
+
+    handled = cli._execute_pending_input("[AUTO Learning Task] Learn queue recovery", app=app)
+
+    assert handled is True
+    assert calls == [{"user_input": "[AUTO Learning Task] Learn queue recovery", "images": None}]
+    assert cli._agent_running is False
+    assert cli._spinner_text == ""
+    assert cli._tool_start_time == 0.0
+    assert cli._current_tool_name == ""
+    assert cli._pending_tool_info == {}
+    assert cli._last_scrollback_tool == ""
+    assert app.invalidate_calls >= 2
+
+
+def test_refresh_gateway_cli_presence_registers_session_and_scene(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli.session_id = "cli-session-keepalive"
+    cli.model = "api-a-model"
+    cli.provider = "agnesai"
+    cli._auto_mode_active = True
+    cli._current_auto_task = {
+        "task_id": "learn-11",
+        "task_type": "self_learning",
+    }
+    cli._gateway_presence_refresh_interval_seconds = 30.0
+    cli._last_gateway_presence_refresh_at = 0.0
+
+    registrations = []
+    scenes = []
+
+    monkeypatch.setattr("cli._is_gateway_running", lambda timeout=0.3: True)
+    monkeypatch.setattr("cli._register_with_gateway", lambda session_id, model, provider: registrations.append((session_id, model, provider)))
+    monkeypatch.setattr(
+        "cli._push_cli_agent_scene",
+        lambda scene, *, session_id=None, task_id=None, execution_kind=None: scenes.append(
+            (scene, session_id, task_id, execution_kind)
+        ),
+    )
+    monkeypatch.setattr("time.monotonic", lambda: 100.0)
+
+    cli._refresh_gateway_cli_presence(force=True)
+
+    assert registrations == [("cli-session-keepalive", "api-a-model", "agnesai")]
+    assert scenes == [("learning", "cli-session-keepalive", "learn-11", "self_learning")]
+    assert cli._last_gateway_presence_refresh_at == 100.0
+
+
+def test_refresh_gateway_cli_presence_respects_refresh_interval(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli.session_id = "cli-session-keepalive"
+    cli.model = "api-a-model"
+    cli.provider = "agnesai"
+    cli._auto_mode_active = False
+    cli._current_auto_task = None
+    cli._gateway_presence_refresh_interval_seconds = 30.0
+    cli._last_gateway_presence_refresh_at = 90.0
+
+    monkeypatch.setattr("cli._is_gateway_running", lambda timeout=0.3: True)
+    monkeypatch.setattr("cli._register_with_gateway", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not register")))
+    monkeypatch.setattr("cli._push_cli_agent_scene", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not push scene")))
+    monkeypatch.setattr("time.monotonic", lambda: 100.0)
+
+    cli._refresh_gateway_cli_presence()
+
+    assert cli._last_gateway_presence_refresh_at == 90.0
+
+
 def test_cli_force_quit_marks_body_improvement_task_interrupted(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._agent_running = False
@@ -218,6 +365,8 @@ def test_auto_command_marks_cli_agent_surface_active(monkeypatch):
     cli._auto_mode_active = False
 
     pushed = []
+    polled = []
+    cycle_calls = []
 
     def fake_cprint(*args, **kwargs):
         del args, kwargs
@@ -252,10 +401,19 @@ def test_auto_command_marks_cli_agent_surface_active(monkeypatch):
             }
         )
 
+    def fake_cycle(*, focus=""):
+        cycle_calls.append(focus)
+        return {"summary": {"planned": 1, "dispatched": 0}}
+
+    def fake_poll():
+        polled.append(True)
+
     monkeypatch.setattr("cli._cprint", fake_cprint)
     monkeypatch.setattr("cli._push_cli_agent_scene", fake_push)
     monkeypatch.setattr("threading.Thread", _ImmediateThread)
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(cli, "_trigger_auto_mode_cycle", fake_cycle)
+    monkeypatch.setattr(cli, "_poll_auto_mode_workflow", fake_poll)
     monkeypatch.setattr(
         "VoidCube_cli.config.load_config",
         lambda: {"supervisor": {"host": "127.0.0.1", "port": 6002}},
@@ -265,6 +423,8 @@ def test_auto_command_marks_cli_agent_surface_active(monkeypatch):
 
     assert cli._auto_mode_active is True
     assert pushed[0]["scene"] == "executing"
+    assert cycle_calls == [""]
+    assert polled == [True]
 
 
 def test_push_cli_agent_scene_includes_session_id(monkeypatch):

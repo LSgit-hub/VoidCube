@@ -320,6 +320,57 @@ async def test_batch_review_accepts_lm_queue_governance_override(tmp_path, monke
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_governor_mode_preserves_agent_pull_task_approval_when_lm_suggests_defer(tmp_path, monkeypatch):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._service_runtime.governor_mode_active = True
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Explore one unresolved learning thread",
+            "task_family": "self_learning",
+            "source": "self_learning",
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+
+    async def idle_snapshot():
+        return {
+            "last_user_request_at": "2026-05-25T00:00:00",
+            "last_agent_work_at": "2026-05-25T00:00:00",
+            "last_memory_task_at": "2026-05-25T00:00:00",
+            "last_self_learning_activity_at": "2026-05-25T00:00:00",
+            "last_self_evolution_activity_at": "2026-05-25T00:00:00",
+            "counts": {},
+            "active_sessions": 0,
+        }
+
+    supervisor._fetch_gateway_activity_snapshot = idle_snapshot  # type: ignore[method-assign]
+
+    async def fake_lm_review(tasks, *, idle_window):
+        del idle_window
+        assert len(tasks) == 1
+        return {
+            task_id: {
+                "action": "defer",
+                "reason": "Conservative queue governance would wait for more evidence.",
+            }
+        }
+
+    monkeypatch.setattr(supervisor, "_lm_review_task_queue", fake_lm_review)
+
+    result = await supervisor.review_self_evolution_tasks(
+        {
+            "idle_window": {"now": "2026-05-25T01:00:00"},
+        }
+    )
+
+    assert result["tasks"][0]["status"] == "approved"
+    latest_context = result["tasks"][0]["decision_history"][-1]["context"]
+    assert latest_context["lm_queue_review"]["action"] == "deferred"
+    assert latest_context["lm_queue_shadow"]["preserved_status"] == "approved"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_gateway_activity_snapshot_retries_after_transient_failure(tmp_path, monkeypatch):
     supervisor = _make_supervisor(tmp_path)
 
@@ -1048,3 +1099,63 @@ async def test_list_self_evolution_tasks_can_filter_body_improvement_agent_tasks
     assert listed["count"] == 1
     assert listed["tasks"][0]["execution_kind"] == "body_improvement"
     assert listed["tasks"][0]["execution_request"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_run_self_evolution_cycle_recovers_orphaned_agent_pull_running_task(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Recover abandoned learning task",
+            "summary": "Ensure orphaned AUTO tasks return to approved",
+            "task_type": "self_learning",
+            "source": "endogenous_drive",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+
+    supervisor._self_evolution_queue.update_status(
+        task_id,
+        status="approved",
+        actor="test",
+        reason="ready",
+    )
+    supervisor._self_evolution_queue.update_status(
+        task_id,
+        status="running",
+        actor="cli_agent",
+        reason="Agent pulled task for execution in AUTO mode.",
+        context={"session_id": "stale-cli-session"},
+    )
+    supervisor._self_evolution_queue.update_metadata(
+        task_id,
+        metadata={
+            "owner_session_id": "stale-cli-session",
+            "execution_source": "cli_agent_pull",
+            "execution_started_at": "2026-06-26T14:00:00+00:00",
+        },
+    )
+
+    async def fake_active_executor():
+        return {"session_id": "fresh-cli-session", "scene": "idle"}
+
+    async def fake_review(request=None):
+        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "idle_window": {}}
+
+    supervisor._fetch_gateway_active_cli_executor = fake_active_executor  # type: ignore[method-assign]
+    supervisor.review_self_evolution_tasks = fake_review  # type: ignore[method-assign]
+
+    result = await supervisor._run_self_evolution_cycle()
+    updated = await supervisor.get_self_evolution_task(task_id)
+
+    assert result["recovered_orphaned"] == 1
+    assert updated["status"] == "approved"
+    assert updated["metadata"]["recovered_from_orphaned_running"] is True
+    assert updated["decision_history"][-1]["context"]["previous_owner_session_id"] == "stale-cli-session"
+    assert updated["decision_history"][-1]["context"]["active_cli_session_id"] == "fresh-cli-session"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 import sys
 
@@ -7,7 +8,7 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from systems.gateway.internal_gateway import GatewayConfig, InternalGateway
+from systems.gateway.internal_gateway import GatewayConfig, InternalGateway, ServiceInfo
 
 
 def test_gateway_activity_touch_endpoint_updates_snapshot():
@@ -368,6 +369,69 @@ def test_gateway_agent_scene_touch_updates_scene_cache_and_prefers_cli_agent():
     assert active_cli["session_id"] == "cli-session-1"
     assert active_cli["is_active_cli_executor"] is True
     assert active_cli["scene"] == "learning"
+
+
+def test_gateway_task_decision_forwards_metadata_to_supervisor(monkeypatch):
+    gateway = InternalGateway(GatewayConfig())
+    gateway._services["supervisor-1"] = ServiceInfo(
+        service_id="supervisor-1",
+        service_name="supervisor",
+        service_type="supervisor",
+        address="http://127.0.0.1:6002",
+        health_endpoint="http://127.0.0.1:6002/health",
+        registered_at=datetime.now(),
+        last_health_check=datetime.now(),
+        healthy=True,
+    )
+    client = TestClient(gateway.app)
+
+    captured = {}
+
+    class _FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {"status": "running"}
+
+    class _FakeSession:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, json=None, timeout=None):
+            captured["url"] = url
+            captured["json"] = json
+            captured["timeout"] = timeout
+            return _FakeResponse()
+
+    monkeypatch.setattr("systems.gateway.internal_gateway.aiohttp.ClientSession", _FakeSession)
+
+    response = client.post(
+        "/v1/tasks/learn-9/decision",
+        json={
+            "decision": "running",
+            "actor": "cli_agent",
+            "reason": "Agent pulled task",
+            "context": {"session_id": "cli-session-1"},
+            "metadata": {"owner_session_id": "cli-session-1", "execution_source": "cli_agent_pull"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["url"].endswith("/self-evolution/tasks/learn-9/decision")
+    assert captured["json"]["metadata"]["owner_session_id"] == "cli-session-1"
+    assert captured["json"]["metadata"]["execution_source"] == "cli_agent_pull"
 
 
 def test_gateway_memory_route_updates_memory_activity_even_when_upstream_fails():

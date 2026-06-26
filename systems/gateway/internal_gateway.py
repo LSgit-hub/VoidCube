@@ -205,6 +205,7 @@ class InternalGateway:
         self.app.add_api_route("/admin/traces/{trace_id}", self.get_trace, methods=["GET"])
 
     async def health_check(self):
+        self._evict_stale_sessions()
         active_cli_executor = self._build_active_cli_executor_snapshot()
         registered_services = {
             "total": len(self._services),
@@ -350,6 +351,20 @@ class InternalGateway:
         session["is_active_cli_executor"] = session_id == self._active_cli_session_id
         return session
 
+    def _touch_session(self, session_id: Optional[str], *, source: str = "cli") -> None:
+        normalized_session_id = str(session_id or "").strip()
+        if not normalized_session_id:
+            return
+        now = datetime.now()
+        existing = dict(self._agent_session_cache.get(normalized_session_id) or {})
+        self._agent_session_cache[normalized_session_id] = {
+            **existing,
+            "created_at": existing.get("created_at") or now,
+            "last_used_at": now,
+            "message_count": int(existing.get("message_count") or 0),
+            "source": existing.get("source") or source,
+        }
+
     def _touch_activity(
         self,
         activity_kind: str,
@@ -365,6 +380,7 @@ class InternalGateway:
             session_id=session_id,
             metadata=metadata,
         )
+        self._touch_session(session_id, source=str(source_service or "cli"))
         supported = True
 
         if normalized == "user_request":
@@ -707,13 +723,10 @@ class InternalGateway:
     async def register_session(self, request: Request):
         try:
             payload = SessionRegisterRequest.model_validate(await request.json())
-            now = datetime.now()
+            self._touch_session(payload.session_id, source=payload.source)
             existing = dict(self._agent_session_cache.get(payload.session_id) or {})
             self._agent_session_cache[payload.session_id] = {
                 **existing,
-                "created_at": existing.get("created_at") or now,
-                "last_used_at": now,
-                "message_count": int(existing.get("message_count") or 0),
                 "model": payload.model,
                 "provider": payload.provider,
                 "source": payload.source,
@@ -776,6 +789,7 @@ class InternalGateway:
             raise HTTPException(status_code=500, detail=str(e))
 
     async def get_body_status(self):
+        self._evict_stale_sessions()
         return {
             "active_cli_executor": self._build_active_cli_executor_snapshot(),
             "body_slots": self._list_body_slots(),
@@ -1223,6 +1237,7 @@ class InternalGateway:
         task_type: Optional[str] = None,
         execution_kind: Optional[str] = None,
     ):
+        self._evict_stale_sessions()
         supervisor_service = None
         all_supervisors = [s for s in self._services.values() if s.service_type == "supervisor"]
         for service in all_supervisors:
@@ -1289,6 +1304,7 @@ class InternalGateway:
         default_reason: str,
         default_actor: str,
     ):
+        self._evict_stale_sessions()
         supervisor_service = None
         all_supervisors = [s for s in self._services.values() if s.service_type == "supervisor"]
         for service in all_supervisors:
@@ -1319,6 +1335,7 @@ class InternalGateway:
             "reason": data.get("reason", default_reason),
             "actor": data.get("actor", default_actor),
             "context": data.get("context", {}),
+            "metadata": data.get("metadata", {}),
         }
 
         try:
@@ -1436,6 +1453,7 @@ class InternalGateway:
             raise HTTPException(status_code=500, detail=str(e))
 
     async def get_session_info(self, session_id: str):
+        self._evict_stale_sessions()
         session_data = self._agent_session_cache.get(session_id)
         if not session_data:
             raise HTTPException(status_code=404, detail="Session not found")

@@ -1,14 +1,14 @@
 {
-  "record_id": "94f6c87d-c657-451d-85e9-2a189f31cc65",
+  "record_id": "0326b600-055e-4527-b513-7661830a7912",
   "kind": "supervisor_activity",
-  "created_at": "2026-06-26T14:26:27.135143",
+  "created_at": "2026-06-26T15:16:30.738077",
   "request": {
-    "event_id": "f49d775b-6584-40fb-8d5e-ee0180ca5934",
-    "event_type": "endogenous_drive_evaluated",
-    "scene": "planning",
-    "summary": "Endogenous drive evaluated 1 candidate task(s).",
+    "event_id": "b4145981-b70d-4454-ada4-83f90b5a49a6",
+    "event_type": "auto_dispatched",
+    "scene": "dispatch",
+    "summary": "Auto-dispatched: 'Maintain long-term memory continuity' (idle=9999s)",
     "trace_id": null,
-    "task_id": null,
+    "task_id": "518f3096-9223-493a-954a-49385a82ca85",
     "task_type": null,
     "governance_task_type": null,
     "task_family": null,
@@ -30,7 +30,7 @@
     "task_family": null,
     "execution_kind": null,
     "decision_id": null,
-    "event_type": "endogenous_drive_evaluated",
+    "event_type": "auto_dispatched",
     "source_actor": "supervisor"
   }
 }
