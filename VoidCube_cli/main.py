@@ -1125,7 +1125,6 @@ def cmd_body(args):
             payload = {
                 "body_version": getattr(args, "body_version", None),
                 "watch_window_seconds": getattr(args, "watch_window_seconds", None),
-                "start_agent": getattr(args, "start_agent", False),
             }
             payload = {key: value for key, value in payload.items() if value is not None}
             result = client.execute_body_upgrade(payload)
@@ -1149,32 +1148,6 @@ def cmd_serve(args):
         stop_all()
     else:
         print_status()
-
-
-def cmd_agent(args):
-    """Agent process operations routed through gateway executor."""
-    import requests
-
-    client = _executor_ops_client(args)
-    action = getattr(args, "agent_action", None)
-
-    try:
-        if action == "start":
-            result = client.start_agent({})
-            _print_ops_json(result)
-            return
-    except requests.RequestException as exc:
-        _exit_executor_ops_error("Agent command", exc)
-
-    print("Unknown agent command. Use: VoidCube agent --help")
-
-
-
-
-
-
-
-
 
 
 def cmd_debug(args):
@@ -1659,40 +1632,7 @@ For more help on a command:
         default=None,
         help="Watch-window duration after switch",
     )
-    body_upgrade.add_argument(
-        "--start-agent",
-        action="store_true",
-        help="Start an agent from the new active body after switching",
-    )
     body_parser.set_defaults(func=cmd_body)
-
-    # =========================================================================
-    # agent command
-    # =========================================================================
-    agent_parser = subparsers.add_parser(
-        "agent",
-        help="Operate agent processes through gateway executor",
-        description=(
-            "Start or manage child agent processes through gateway /api/executor."
-        ),
-    )
-    agent_parser.add_argument(
-        "--gateway-url",
-        default="http://127.0.0.1:8000",
-        help="Gateway base URL (default: http://127.0.0.1:8000)",
-    )
-    agent_parser.add_argument(
-        "--timeout",
-        type=float,
-        default=30.0,
-        help="HTTP timeout in seconds (default: 30)",
-    )
-    agent_subparsers = agent_parser.add_subparsers(dest="agent_action")
-    agent_start = agent_subparsers.add_parser(
-        "start",
-        help="Start an agent from the active body pointer via the preferred gateway executor path",
-    )
-    agent_parser.set_defaults(func=cmd_agent)
 
     # =========================================================================
     # serve command — integrated system launcher (Phase 1 multi-process)

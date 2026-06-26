@@ -5,36 +5,6 @@ from typing import Any, Dict
 
 EXECUTION_ROUTE_HINTS: tuple[dict[str, Any], ...] = (
     {
-        "interface_id": "agents.stop",
-        "method": "DELETE",
-        "path": "/agents/{instance_id}",
-        "implemented_by": "AgentLifecycleExecutionAdapter",
-        "preferred_entrypoint": {
-            "gateway_path": "/api/executor/agents/{instance_id}",
-            "executor_path": "/executor/agents/{instance_id}",
-        },
-    },
-    {
-        "interface_id": "agents.start",
-        "method": "POST",
-        "path": "/agents/start",
-        "implemented_by": "AgentLifecycleExecutionAdapter",
-        "preferred_entrypoint": {
-            "gateway_path": "/api/executor/agents/start",
-            "executor_path": "/executor/agents/start",
-        },
-    },
-    {
-        "interface_id": "body.activate",
-        "method": "POST",
-        "path": "/body/activate",
-        "implemented_by": "AgentLifecycleExecutionAdapter",
-        "preferred_entrypoint": {
-            "gateway_path": "/api/executor/body/activate",
-            "executor_path": "/executor/body/activate",
-        },
-    },
-    {
         "interface_id": "memory.compress",
         "method": "POST",
         "path": "/memory/compress",

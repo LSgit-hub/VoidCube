@@ -48,25 +48,6 @@ def test_executor_ops_client_routes_body_status_queries_through_gateway_executor
 
 
 @pytest.mark.unit
-def test_executor_ops_client_routes_body_activation_through_gateway_executor():
-    response = Mock()
-    response.json.return_value = {"status": "activated", "active_body": {"slot_id": "slot-B"}}
-    response.raise_for_status.return_value = None
-
-    with patch("VoidCube_cli.ops.executor.requests.post", return_value=response) as post:
-        client = ExecutorOpsClient(gateway_url="http://gateway.local/")
-        result = client.activate_body({"slot_id": "slot-B"})
-
-    assert result["status"] == "activated"
-    assert result["active_body"]["slot_id"] == "slot-B"
-    post.assert_called_once_with(
-        "http://gateway.local/api/executor/body/activate",
-        json={"slot_id": "slot-B"},
-        timeout=30.0,
-    )
-
-
-@pytest.mark.unit
 def test_executor_ops_client_does_not_fallback_on_executor_validation_error():
     validation_error = requests.HTTPError("bad request")
     validation_error.response = Mock(status_code=400)
@@ -77,10 +58,10 @@ def test_executor_ops_client_does_not_fallback_on_executor_validation_error():
     ) as post:
         client = ExecutorOpsClient(gateway_url="http://gateway.local")
         with pytest.raises(requests.HTTPError):
-            client.start_agent({})
+            client.execute_body_upgrade({})
 
     assert post.call_count == 1
-    assert post.call_args_list[0].args[0] == "http://gateway.local/api/executor/agents/start"
+    assert post.call_args_list[0].args[0] == "http://gateway.local/api/executor/body/upgrade/execute"
 
 
 @pytest.mark.unit
@@ -91,7 +72,7 @@ def test_executor_ops_client_fails_closed_when_executor_route_is_unavailable():
     ) as post:
         client = ExecutorOpsClient(gateway_url="http://gateway.local")
         with pytest.raises(requests.ConnectionError):
-            client.start_agent({})
+            client.execute_body_upgrade({})
 
     assert post.call_count == 1
-    assert post.call_args_list[0].args[0] == "http://gateway.local/api/executor/agents/start"
+    assert post.call_args_list[0].args[0] == "http://gateway.local/api/executor/body/upgrade/execute"

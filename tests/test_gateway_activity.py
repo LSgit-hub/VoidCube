@@ -235,7 +235,7 @@ def test_gateway_self_learning_route_updates_learning_activity_even_when_upstrea
     assert activity["counts"]["self_learning_activity_count"] == 1
 
 
-def test_gateway_agent_query_updates_user_and_agent_activity_even_when_upstream_fails():
+def test_gateway_agent_query_rejects_legacy_proxy_but_still_records_user_activity():
     gateway = InternalGateway(GatewayConfig())
     client = TestClient(gateway.app)
 
@@ -254,13 +254,48 @@ def test_gateway_agent_query_updates_user_and_agent_activity_even_when_upstream_
         "/v1/agent/query",
         json={"messages": [{"role": "user", "content": "hello"}]},
     )
-    assert response.status_code in {500, 504}
+    assert response.status_code == 410
+    assert "Gateway agent proxy has been removed" in response.json()["detail"]
 
     activity = client.get("/admin/activity").json()
     assert activity["last_user_request_at"] is not None
-    assert activity["last_agent_work_at"] is not None
     assert activity["counts"]["user_request_count"] == 1
     assert activity["counts"]["agent_work_count"] == 1
+
+
+def test_gateway_body_status_exposes_cli_executor_and_passive_body_slots_only():
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+
+    client.post(
+        "/register",
+        json={
+            "service_id": "agent-slot-a",
+            "service_name": "agent-slot-A",
+            "service_type": "agent",
+            "address": "http://127.0.0.1:65530",
+            "metadata": {"slot_id": "slot-A", "body_version": "bootstrap"},
+        },
+    )
+    client.post(
+        "/v1/sessions/register",
+        json={
+            "session_id": "cli-session-1",
+            "model": "agnes-2.0-flash",
+            "provider": "agnesai",
+            "source": "cli",
+        },
+    )
+
+    status = client.get("/admin/body/status")
+    assert status.status_code == 200
+    payload = status.json()
+    assert "active_body" not in payload
+    assert "body_routing" not in payload
+    assert payload["active_cli_executor"]["session_id"] == "cli-session-1"
+    assert payload["body_slots"][0]["slot_id"] == "slot-A"
+    assert "lifecycle_state" not in payload["body_slots"][0]
+    assert "is_active_body" not in payload["body_slots"][0]
 
 
 def test_gateway_activity_touch_adds_task_identity_summary():
@@ -291,6 +326,48 @@ def test_gateway_activity_touch_adds_task_identity_summary():
     assert identity["execution_kind"] == "body_improvement"
     assert identity["display_kind"] == "body_improvement"
     assert "Improve shell body" in identity["summary"]
+
+
+def test_gateway_agent_scene_touch_updates_scene_cache_and_prefers_cli_agent():
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+
+    session_response = client.post(
+        "/v1/sessions/register",
+        json={
+            "session_id": "cli-session-1",
+            "model": "agnes-2.0-flash",
+            "provider": "agnesai",
+            "source": "cli",
+        },
+    )
+    assert session_response.status_code == 200
+
+    response = client.post(
+        "/admin/activity/touch",
+        json={
+            "activity_kind": "agent_scene",
+            "source_service": "cli_agent",
+            "session_id": "cli-session-1",
+            "metadata": {
+                "scene": "learning",
+                "task_id": "learn-1",
+                "execution_kind": "self_learning",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    scenes = client.get("/admin/scenes").json()["scenes"]
+    assert scenes["agent"]["scene"] == "learning"
+    assert scenes["agent"]["scene_task_id"] == "learn-1"
+    assert scenes["agent"]["source_service"] == "cli_agent"
+
+    health = client.get("/").json()
+    active_cli = health["active_cli_executor"]
+    assert active_cli["session_id"] == "cli-session-1"
+    assert active_cli["is_active_cli_executor"] is True
+    assert active_cli["scene"] == "learning"
 
 
 def test_gateway_memory_route_updates_memory_activity_even_when_upstream_fails():

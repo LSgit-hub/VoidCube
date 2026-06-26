@@ -8,12 +8,6 @@ from systems.supervisor.supervisor import Supervisor, SupervisorConfig, Supervis
 
 
 def _make_supervisor(tmp_path: Path) -> Supervisor:
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
     return Supervisor(
         SupervisorConfig(
             execution=SupervisorExecutionConfig(git_repo_path=str(tmp_path))

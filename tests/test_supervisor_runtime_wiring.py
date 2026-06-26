@@ -29,12 +29,6 @@ def _make_supervisor_config(tmp_path: Path) -> SupervisorConfig:
 
 
 def _make_supervisor(tmp_path: Path) -> Supervisor:
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
     return Supervisor(_make_supervisor_config(tmp_path))
 
 
@@ -63,7 +57,6 @@ async def test_supervisor_health_exposes_runtime_state_without_deprecated_runtim
 def test_supervisor_wires_execution_facade_to_canonical_executors(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    assert supervisor._execution_facade.agent_lifecycle is supervisor._agent_lifecycle_executor
     assert supervisor._execution_facade.body_lifecycle is supervisor._body_lifecycle_executor
     assert supervisor._execution_facade.body_upgrade is supervisor._body_upgrade_executor
     assert supervisor._execution_facade.memory_maintenance is supervisor._memory_maintenance_executor
@@ -114,8 +107,6 @@ def test_supervisor_exposes_segmented_runtime_config_views_and_uses_them_for_exe
     assert config.body_runtime.registry_file_name == ".registry-segmented.json"
     assert config.body_runtime.slot_a_name == "slot-blue"
     assert config.body_runtime.slot_b_name == "slot-green"
-    assert supervisor._agent_lifecycle_executor.config.agent_base_port == 9100
-    assert supervisor._agent_lifecycle_executor.config.gateway_address == "http://gateway.segmented.local"
     assert supervisor._body_upgrade_executor.config.probe_watch_window_seconds == 180
     assert supervisor._memory_maintenance_executor.config.memory_gateway_path == "/memory-api/"
     registry = supervisor._body_registry.load_registry()

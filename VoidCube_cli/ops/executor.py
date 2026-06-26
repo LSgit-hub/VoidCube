@@ -46,12 +46,6 @@ class ExecutorOpsClient:
     def get_body_slot(self, slot_id: str) -> Dict[str, Any]:
         return self.get_executor(f"/body/slots/{slot_id}")
 
-    def start_agent(self, payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
-        return self.post_executor("/agents/start", payload or {})
-
-    def activate_body(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self.post_executor("/body/activate", payload)
-
     def prepare_body_slot(self, slot_id: str, payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
         return self.post_executor(f"/body/slots/{slot_id}/prepare", payload or {})
 

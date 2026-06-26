@@ -9,7 +9,6 @@ from systems.body_registry import (
     WatchWindowState,
 )
 from systems.execution import (
-    AgentLifecycleExecutionAdapter,
     BodyLifecycleExecutionAdapter,
     BodyUpgradeExecutionAdapter,
     MemoryMaintenanceExecutionAdapter,
@@ -59,7 +58,6 @@ __all__ = [
     "BodyLifecycleExecutionAdapter",
     "BodyUpgradeExecutionAdapter",
     "DEFAULT_REQUIRED_PROBE_CHECKS",
-    "AgentLifecycleExecutionAdapter",
     "MemoryMaintenanceExecutionAdapter",
     "VoidCubeExecutionFacade",
     "VoidCubeExecutionService",

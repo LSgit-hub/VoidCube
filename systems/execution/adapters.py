@@ -31,150 +31,6 @@ class WatchWindowRuntimeSyncProtocol(Protocol):
     def sync_runtime_after_governor_response(self, governor_response: Any) -> Dict[str, Any]: ...
 
 
-class AgentLifecycleExecutionAdapter:
-    """Execution boundary for starting, stopping, and switching agent processes."""
-
-    def __init__(
-        self,
-        *,
-        config: Any,
-        agents: MutableMapping[str, Any],
-        agent_model: type,
-        spawn_agent_process: Callable[[Any], Awaitable[None]],
-        terminate_agent_process: Callable[[Any], Awaitable[None]],
-        register_agent_with_gateway: Callable[[Any], Awaitable[Any]],
-        unregister_agent_from_gateway: Callable[[str], Awaitable[None]],
-        attach_execution_route_hint: Callable[[Dict[str, Any], str], Dict[str, Any]],
-    ) -> None:
-        self.config = config
-        self.agents = agents
-        self.agent_model = agent_model
-        self.spawn_agent_process = spawn_agent_process
-        self.terminate_agent_process = terminate_agent_process
-        self.register_agent_with_gateway = register_agent_with_gateway
-        self.unregister_agent_from_gateway = unregister_agent_from_gateway
-        self.attach_execution_route_hint = attach_execution_route_hint
-        self._agent_counter = 0
-
-    def get_body_registry(self) -> Dict[str, Any]:
-        registry = self.body_registry.load_registry()
-        slots = self.body_registry.list_slots()
-        return {
-            "registry": registry.model_dump(mode="json"),
-            "slots": {
-                slot_id: meta.model_dump(mode="json")
-                for slot_id, meta in slots.items()
-            },
-        }
-
-    def get_active_body_target(self) -> Dict[str, Any]:
-        return self.body_registry.load_active_body_pointer().model_dump(mode="json")
-
-    def list_body_slots(self) -> Dict[str, Any]:
-        slots = self.body_registry.list_slots()
-        return {
-            "slots": {
-                slot_id: meta.model_dump(mode="json")
-                for slot_id, meta in slots.items()
-            }
-        }
-
-    def get_body_slot(self, slot_id: str) -> Dict[str, Any]:
-        try:
-            return self.body_registry.load_slot_meta(slot_id).model_dump(mode="json")
-        except FileNotFoundError:
-            raise HTTPException(status_code=404, detail=f"Slot not found: {slot_id}")
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-
-    async def start_agent(self, request: dict, *, agent_counter: int) -> tuple[Dict[str, Any], int]:
-        if "color" in request:
-            raise HTTPException(
-                status_code=400,
-                detail="Legacy color-based agent selection has been removed. Start from the active body pointer.",
-            )
-        next_counter = agent_counter + 1
-        port = self.config.agent_base_port + next_counter
-
-        instance_id = str(uuid.uuid4())
-        agent = self.agent_model(
-            instance_id=instance_id,
-            name=f"managed-agent-{next_counter}",
-            port=port,
-            status="starting",
-        )
-
-        await self.spawn_agent_process(agent)
-        self.agents[instance_id] = agent
-        await asyncio.sleep(2)
-        await self.register_agent_with_gateway(agent)
-
-        return (
-            self.attach_execution_route_hint(
-                {
-                    "instance_id": instance_id,
-                    "status": "started",
-                    "port": port,
-                    "slot_id": agent.slot_id,
-                    "body_version": agent.version,
-                },
-                "agents.start",
-            ),
-            next_counter,
-        )
-
-    async def start_managed_agent(self, request: dict) -> Dict[str, Any]:
-        result, next_counter = await self.start_agent(
-            request,
-            agent_counter=self._agent_counter,
-        )
-        self._agent_counter = next_counter
-        return result
-
-    async def stop_agent(self, instance_id: str) -> Dict[str, Any]:
-        agent = self.agents.get(instance_id)
-        if not agent:
-            raise HTTPException(status_code=404, detail="Agent not found")
-
-        await self.terminate_agent_process(agent)
-        agent.status = "stopped"
-        agent.pid = None
-        agent.healthy = False
-
-        if agent.gateway_service_id:
-            await self.unregister_agent_from_gateway(agent.gateway_service_id)
-
-        return self.attach_execution_route_hint({"status": "stopped"}, "agents.stop")
-
-    async def activate_body(self, request: dict) -> Dict[str, Any]:
-        slot_id = request.get("slot_id")
-        service_id = request.get("service_id")
-        if not slot_id and not service_id:
-            raise HTTPException(status_code=400, detail="slot_id or service_id is required")
-
-        try:
-            import aiohttp
-
-            async with aiohttp.ClientSession() as session:
-                url = f"{self.config.gateway_address}/admin/body/activate"
-                payload = {}
-                if slot_id:
-                    payload["slot_id"] = slot_id
-                if service_id:
-                    payload["service_id"] = service_id
-
-                async with session.post(url, json=payload) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        return self.attach_execution_route_hint(result, "body.activate")
-
-            raise HTTPException(status_code=500, detail="Body activation failed")
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
-
-
 class GovernorReviewExecutionAdapter:
     """Coordinator for governor-reviewed body lifecycle transitions."""
 
@@ -262,12 +118,9 @@ class WatchWindowExecutionAdapter:
         *,
         body_registry: Any,
         agents: MutableMapping[str, Any],
-        stop_agent: Callable[[str], Awaitable[Dict[str, Any]]],
+        stop_agent: Optional[Callable[[str], Awaitable[Dict[str, Any]]]],
         run_health_checks: Callable[[], Awaitable[Dict[str, Any]]],
         runtime_state: Any = None,  # deprecated; state is now self-owned (S-02/03)
-        sync_gateway_body_activation: Optional[
-            Callable[[str], Awaitable[Dict[str, Any] | None]]
-        ] = None,
         governor_request_executor: Optional[GovernorRequestExecutorProtocol] = None,
         poll_interval_seconds: float = 1.0,
     ) -> None:
@@ -276,7 +129,6 @@ class WatchWindowExecutionAdapter:
         self.stop_agent = stop_agent
         self.run_health_checks = run_health_checks
         self._state = WatchWindowState()
-        self.sync_gateway_body_activation = sync_gateway_body_activation
         self.governor_request_executor = governor_request_executor
         self.poll_interval_seconds = poll_interval_seconds
 
@@ -538,6 +390,8 @@ class WatchWindowExecutionAdapter:
         *,
         exclude_instance_ids: Optional[set[str]] = None,
     ) -> list[str]:
+        if self.stop_agent is None:
+            return []
         exclude_instance_ids = exclude_instance_ids or set()
         stopped: list[str] = []
         for agent in list(self._running_agents_for_slot(slot_id)):
@@ -567,11 +421,6 @@ class WatchWindowExecutionAdapter:
             failed_slot = result.get("request", {}).get("body_id")
             restored_slot = self._restored_slot_after_rollback(result, failed_slot)
             restored_agent = self._latest_running_agent_for_slot(restored_slot)
-            gateway_activation = None
-            if restored_agent is not None and self.sync_gateway_body_activation is not None:
-                gateway_activation = await self.sync_gateway_body_activation(
-                    restored_agent.instance_id
-                )
             stopped_instances = await self.stop_agents_for_slot(failed_slot)
             return {
                 "action": "failed_slot_drained",
@@ -580,7 +429,6 @@ class WatchWindowExecutionAdapter:
                 "restored_instance_id": (
                     restored_agent.instance_id if restored_agent is not None else None
                 ),
-                "gateway_activation": gateway_activation,
                 "stopped_instance_ids": stopped_instances,
             }
 
@@ -633,9 +481,6 @@ class BodyUpgradeExecutionAdapter:
         config: Any,
         body_registry: Any,
         run_body_probe: Callable[[dict], Awaitable[Dict[str, Any]]],
-        start_agent: Callable[[dict], Awaitable[Dict[str, Any]]],
-        wait_for_health: Callable[..., Awaitable[None]],
-        sync_gateway_body_activation: Callable[[str], Awaitable[Dict[str, Any] | None]],
         attach_execution_route_hint: Callable[[Dict[str, Any], str], Dict[str, Any]],
         agents: MutableMapping[str, Any],
         governor_request_executor: Optional[GovernorRequestExecutorProtocol] = None,
@@ -644,9 +489,6 @@ class BodyUpgradeExecutionAdapter:
         self.config = config
         self.body_registry = body_registry
         self.run_body_probe = run_body_probe
-        self.start_agent = start_agent
-        self.wait_for_health = wait_for_health
-        self.sync_gateway_body_activation = sync_gateway_body_activation
         self.attach_execution_route_hint = attach_execution_route_hint
         self.agents = agents
         self.governor_request_executor = governor_request_executor
@@ -726,10 +568,6 @@ class BodyUpgradeExecutionAdapter:
         watch_window_seconds = int(request.get("watch_window_seconds", self.config.probe_watch_window_seconds))
         stable_window_days = int(request.get("stable_window_days", 3))
         stable_health_checks = int(request.get("stable_health_checks", 3))
-        start_new_agent = bool(request.get("start_agent", False))
-        wait_for_new_agent_healthy = bool(request.get("wait_for_new_agent_healthy", start_new_agent))
-        new_agent_health_timeout = int(request.get("new_agent_health_timeout", 30))
-        start_agent_request = dict(request.get("start_agent_request") or {})
         pre_switch_registry = registry.model_copy(deep=True)
 
         try:
@@ -856,17 +694,6 @@ class BodyUpgradeExecutionAdapter:
                 )
             )
 
-            started_agent = None
-            gateway_activation = None
-            if start_new_agent:
-                started_agent = await self.start_agent(start_agent_request)
-                if wait_for_new_agent_healthy and started_agent.get("instance_id"):
-                    await self.wait_for_health(
-                        started_agent["instance_id"],
-                        timeout=new_agent_health_timeout,
-                    )
-                gateway_activation = await self.sync_gateway_body_activation(started_agent["instance_id"])
-
             outcome = {
                 "status": "upgrade_executed",
                 "slot_id": slot_id,
@@ -882,8 +709,6 @@ class BodyUpgradeExecutionAdapter:
                 "probe_review": probe_approval,
                 "probe_execution": probe_execution,
                 "switch_review": switch_review,
-                "started_agent": started_agent,
-                "gateway_activation": gateway_activation,
                 "running_agents": self._serialize_running_agents(),
                 "active_target": self.body_registry.load_active_body_pointer().model_dump(mode="json"),
             }

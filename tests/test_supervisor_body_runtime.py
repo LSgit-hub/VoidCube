@@ -42,10 +42,6 @@ async def _run_body_probe(supervisor: Supervisor, request: dict):
     return await supervisor._execution_facade.run_body_probe(request)
 
 
-async def _start_managed_agent(supervisor: Supervisor, request: dict):
-    return await supervisor._execution_facade.start_managed_agent(request)
-
-
 async def _evaluate_watch_window(supervisor: Supervisor, request: dict | None = None):
     return await supervisor._execution_facade.evaluate_watch_window(request)
 
@@ -67,12 +63,6 @@ async def _execute_governor_review_request(supervisor: Supervisor, request: dict
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_exposes_initialized_body_registry(tmp_path):
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
     supervisor = Supervisor(_make_supervisor_config(tmp_path))
 
     result = await supervisor.get_body_registry()
@@ -89,12 +79,6 @@ async def test_supervisor_exposes_initialized_body_registry(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_mark_body_candidate_preserves_execution_result_from_executor(tmp_path):
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
     supervisor = Supervisor(_make_supervisor_config(tmp_path))
     request = {"body_version": "v2"}
     expected = {
@@ -122,12 +106,6 @@ async def test_supervisor_mark_body_candidate_preserves_execution_result_from_ex
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_prepare_body_slot_preserves_execution_result_from_executor(tmp_path):
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
     supervisor = Supervisor(_make_supervisor_config(tmp_path))
     expected = {
         "status": "slot_prepared",
@@ -154,12 +132,6 @@ async def test_supervisor_prepare_body_slot_preserves_execution_result_from_exec
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_record_body_probe_report_preserves_execution_result_from_executor(tmp_path):
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
     supervisor = Supervisor(_make_supervisor_config(tmp_path))
     request = {
         "slot_id": "slot-B",
@@ -190,12 +162,6 @@ async def test_supervisor_record_body_probe_report_preserves_execution_result_fr
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_list_body_slots_preserves_facade_slots_and_count(tmp_path):
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
     supervisor = Supervisor(_make_supervisor_config(tmp_path))
     expected = {
         "slots": {
@@ -227,12 +193,6 @@ async def test_supervisor_list_body_slots_preserves_facade_slots_and_count(tmp_p
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_run_body_probe_preserves_execution_result_from_executor(tmp_path):
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
     supervisor = Supervisor(_make_supervisor_config(tmp_path))
     request = {"slot_id": "slot-B"}
     expected = {
@@ -260,12 +220,6 @@ async def test_supervisor_run_body_probe_preserves_execution_result_from_executo
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_can_record_probe_report_and_review_probe_transition(tmp_path):
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
     supervisor = Supervisor(
         _make_supervisor_config(tmp_path)
     )
@@ -294,12 +248,6 @@ async def test_supervisor_can_record_probe_report_and_review_probe_transition(tm
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_can_activate_candidate_after_probe_report(tmp_path):
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
     supervisor = Supervisor(
         _make_supervisor_config(tmp_path)
     )
@@ -357,12 +305,6 @@ async def test_supervisor_can_activate_candidate_after_probe_report(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_records_governor_history_via_mem_bridge(tmp_path):
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
     supervisor = Supervisor(
         _make_supervisor_config(tmp_path)
     )
@@ -389,98 +331,7 @@ async def test_supervisor_records_governor_history_via_mem_bridge(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-@pytest.mark.skip(reason="_monitor_agent method removed — agent monitoring path has been refactored")
-async def test_supervisor_spawns_agent_from_active_body_pointer(tmp_path):
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
-    supervisor = Supervisor(
-        _make_supervisor_config(tmp_path)
-    )
-    await _mark_body_candidate(supervisor, "slot-B", {"body_version": "v2"})
-    await _execute_governor_review_request(
-        supervisor,
-        {
-            "request_id": "health-3",
-            "event_type": "health_review_request",
-            "body_id": "slot-B",
-            "source_actor": "active_body",
-            "summary": "Candidate build complete",
-            "evidence": {"build_complete": True},
-            "constraints": {"target_transition": "candidate_to_probe"},
-        }
-    )
-    slot_b = await supervisor.get_body_slot("slot-B")
-    worktree = Path(slot_b["worktree_path"])
-    (worktree / "run_agent.py").write_text("print('agent entrypoint')\n", encoding="utf-8")
-    (worktree / "config.yaml").write_text("model: test\n", encoding="utf-8")
-    (worktree / "tools").mkdir(exist_ok=True)
-    (worktree / "tools" / "__init__.py").write_text("", encoding="utf-8")
-    (worktree / "model_tools.py").write_text("# probe smoke\n", encoding="utf-8")
-    await _run_body_probe(supervisor, {"slot_id": "slot-B"})
-    await _execute_governor_review_request(
-        supervisor,
-        {
-            "request_id": "switch-3",
-            "event_type": "switch_request",
-            "body_id": "slot-B",
-            "source_actor": "gateway",
-            "summary": "Promote body after probe pass",
-            "evidence": {},
-            "constraints": {"watch_window_seconds": 120},
-        }
-    )
-
-    captured_calls = []
-
-    class DummyProcess:
-        pid = 4242
-
-        def poll(self):
-            return 0
-
-    def fake_popen(cmd, **kwargs):
-        captured_calls.append({"cmd": cmd, "kwargs": kwargs})
-        return DummyProcess()
-
-    async def fake_monitor(process, agent):
-        return None
-
-    async def fake_register(agent):
-        return "service-1"
-
-    with patch("systems.supervisor.supervisor.subprocess.Popen", side_effect=fake_popen):
-        with patch.object(supervisor, "_monitor_agent", side_effect=fake_monitor):
-            with patch.object(supervisor, "_register_agent_with_gateway", side_effect=fake_register):
-                result = await _start_managed_agent(supervisor, {})
-
-    assert result["status"] == "started"
-    launch_call = next(
-        call
-        for call in captured_calls
-        if len(call["cmd"]) >= 2 and str(call["cmd"][1]).endswith("run_agent_instance.py")
-    )
-    assert "slot-B" == launch_call["kwargs"]["env"]["VOIDCUBE_ACTIVE_SLOT"]
-    assert launch_call["kwargs"]["cwd"] == str(worktree)
-    assert launch_call["cmd"][1].endswith("run_agent_instance.py")
-    agent_id = result["instance_id"]
-    assert supervisor._agents[agent_id].slot_id == "slot-B"
-    assert supervisor._agents[agent_id].body_runtime == slot_b["runtime_path"]
-    assert result["execution_route_hint"]["preferred_entrypoint"]["gateway_path"] == "/api/executor/agents/start"
-
-
-@pytest.mark.asyncio
-@pytest.mark.unit
 async def test_supervisor_watch_window_pass_recycles_retired_slot(tmp_path):
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
     supervisor = Supervisor(
         _make_supervisor_config(tmp_path)
     )
@@ -531,12 +382,6 @@ async def test_supervisor_watch_window_pass_recycles_retired_slot(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_watch_window_path_uses_governor_review_executor_directly(tmp_path):
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
     supervisor = Supervisor(
         _make_supervisor_config(tmp_path)
     )
@@ -588,12 +433,6 @@ async def test_supervisor_watch_window_path_uses_governor_review_executor_direct
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_watch_window_failure_triggers_rollback(tmp_path):
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
     supervisor = Supervisor(
         _make_supervisor_config(tmp_path)
     )
@@ -652,12 +491,6 @@ async def test_supervisor_watch_window_failure_triggers_rollback(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_starts_watch_window_task_after_switch(tmp_path):
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
     supervisor = Supervisor(
         _make_supervisor_config(tmp_path)
     )
@@ -712,12 +545,6 @@ async def test_supervisor_starts_watch_window_task_after_switch(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_delegates_watch_window_runtime_followup_to_execution_facade(tmp_path):
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
     supervisor = Supervisor(
         _make_supervisor_config(tmp_path)
     )
@@ -778,12 +605,6 @@ async def test_supervisor_delegates_watch_window_runtime_followup_to_execution_f
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_watch_window_loop_auto_recycles_when_window_expires_cleanly(tmp_path):
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
     supervisor = Supervisor(
         _make_supervisor_config(tmp_path)
     )
@@ -848,12 +669,6 @@ async def test_watch_window_loop_auto_recycles_when_window_expires_cleanly(tmp_p
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_watch_window_success_syncs_retired_slot_back_to_shell_from_active_slot(tmp_path):
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
     supervisor = Supervisor(
         _make_supervisor_config(tmp_path)
     )
@@ -906,12 +721,6 @@ async def test_watch_window_success_syncs_retired_slot_back_to_shell_from_active
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_execute_body_upgrade_runs_pipeline_to_switch(tmp_path):
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
     supervisor = Supervisor(
         _make_supervisor_config(tmp_path)
     )
@@ -947,12 +756,6 @@ async def test_supervisor_execute_body_upgrade_runs_pipeline_to_switch(tmp_path)
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_execute_body_upgrade_delegates_to_execution_facade(tmp_path):
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
     supervisor = Supervisor(_make_supervisor_config(tmp_path))
     request = {
         "body_version": "v2",
@@ -1007,12 +810,6 @@ async def test_supervisor_execute_body_upgrade_delegates_to_execution_facade(tmp
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_evaluate_watch_window_delegates_to_execution_facade(tmp_path):
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
     supervisor = Supervisor(_make_supervisor_config(tmp_path))
     request = {
         "healthy_override": False,

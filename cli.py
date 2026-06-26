@@ -793,15 +793,9 @@ _prompt_for_secret_fn = None
 def _get_AIAgent():
     """Lazy-import AIAgent class (defers ~251ms of import chain).
 
-    Always returns the local AIAgent class.  When the Gateway daemon is
-    running, ``_init_agent`` sets the agent's ``base_url`` to the Gateway
-    (port 6000) so all API calls route through Gateway → Agent Instance
-    for activity tracking and observability.
-
-    The canonical Gateway-routed AgentProxy (``systems.gateway.agent_adapter``)
-    is not yet used in production — it lacks the full AIAgent interface
-    surface (tools, model switching, session management).  Once it reaches
-    parity, ``_get_AIAgent`` should switch to AgentProxy.
+    Always returns the local AIAgent class. The current CLI/API-A session
+    is the canonical executor; the gateway is used for observability and
+    governance coordination, not as an agent conversation proxy.
     """
     global _AIAgent_class
     if _AIAgent_class is None:
@@ -850,6 +844,49 @@ def _register_with_gateway(session_id: str, model: str, provider: str) -> None:
         except Exception:
             pass  # Best-effort — Gateway may not be started or doesn't support this endpoint
     threading.Thread(target=_register, daemon=True, name="gw-register").start()
+
+
+def _push_cli_agent_scene(
+    scene: str,
+    *,
+    session_id: str | None = None,
+    task_id: str | None = None,
+    execution_kind: str | None = None,
+) -> None:
+    """Best-effort: report the current CLI AUTO executor scene to Gateway."""
+    import threading, json as _json
+
+    normalized_scene = str(scene or "").strip().lower()
+    if not normalized_scene:
+        return
+
+    def _push():
+        try:
+            import urllib.request as _req
+            metadata = {"scene": normalized_scene}
+            if task_id:
+                metadata["task_id"] = task_id
+            if execution_kind:
+                metadata["execution_kind"] = execution_kind
+            payload = _json.dumps(
+                {
+                    "activity_kind": "agent_scene",
+                    "source_service": "cli_agent",
+                    "session_id": session_id,
+                    "metadata": metadata,
+                }
+            ).encode()
+            req = _req.Request(
+                "http://127.0.0.1:6000/admin/activity/touch",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            _req.urlopen(req, timeout=3)
+        except Exception:
+            pass
+
+    threading.Thread(target=_push, daemon=True, name="gw-cli-scene").start()
 
 
 def _get_tool_definitions(*args, **kwargs):
@@ -2278,6 +2315,7 @@ class VoidcubeCLI:
                     _cprint(f"  ⏰  AUTO {task_label} {task_id[:8]}... timed out ({int(elapsed)}s)")
                 except Exception:
                     pass
+                _push_cli_agent_scene("idle", session_id=getattr(self, "session_id", None))
                 self._current_auto_task = None
                 self._current_auto_task_started_at = 0
                 self._last_agent_turn_result = None
@@ -2315,6 +2353,7 @@ class VoidcubeCLI:
                     _req.urlopen(r, timeout=15)
                 except Exception:
                     pass  # Best-effort — supervisor will handle retry
+                _push_cli_agent_scene("idle", session_id=getattr(self, "session_id", None))
                 self._current_auto_task = None
                 self._current_auto_task_started_at = 0
                 self._last_agent_turn_result = None
@@ -2369,6 +2408,12 @@ class VoidcubeCLI:
         self._current_auto_task = task
         self._current_auto_task_started_at = _time.time()
         self._last_agent_turn_result = None
+        _push_cli_agent_scene(
+            "code_editing" if execution_kind == "body_improvement" else "learning",
+            session_id=getattr(self, "session_id", None),
+            task_id=task_id,
+            execution_kind=execution_kind,
+        )
 
         # ── Notify Gateway that agent is starting work ──
         try:
@@ -2450,6 +2495,7 @@ class VoidcubeCLI:
                 _req.urlopen(r, timeout=15)
             except Exception:
                 pass
+            _push_cli_agent_scene("idle", session_id=getattr(self, "session_id", None))
             self._current_auto_task = None
             self._current_auto_task_started_at = 0
             self._last_agent_turn_result = None
@@ -3643,17 +3689,15 @@ class VoidcubeCLI:
                     _cprint(f"  Could not apply pending title: {e}")
                     self._pending_title = None
 
-            # ── Gateway routing ──────────────────────────────────────────
-            # Per architecture baseline §3.1/§4.2: when the Gateway daemon is
-            # running, ALL agent API traffic MUST route through Gateway so
-            # activity is tracked and observable end-to-end.
-            #
-            # The Gateway proxies /v1/chat/completions to the registered
-            # Agent Instance (port 6080), which runs a local AIAgent that
-            # forwards to the actual LLM provider.
+            # ── Gateway observability ───────────────────────────────────
+            # The interactive CLI remains the canonical API-A executor for
+            # direct user turns and AUTO-mode task execution.  We still
+            # register the session with Gateway for observability, but we do
+            # NOT rewrite the CLI agent's base_url to Gateway here; doing so
+            # would proxy the live CLI session through the daemon-side 6080
+            # body service and reintroduce the split execution path we are
+            # actively removing.
             if _is_gateway_running():
-                gateway_base = "http://127.0.0.1:6000/v1"
-                self.agent.base_url = gateway_base
                 _register_with_gateway(
                     self.session_id,
                     effective_model,
@@ -6372,12 +6416,14 @@ class VoidcubeCLI:
         cmd_lower = command.lower().strip()
         cmd_original = command.strip()
 
-        # ── Auto mode guard: only /auto-q is accepted (user commands) ──
-        # Task prompts from _poll_auto_mode_workflow start with
-        # "[AUTO Learning Task]" — let them through for Agent execution.
+        # ── Auto mode guard: only /auto-q is accepted for user commands ──
+        # AUTO-execution prompts are synthetic queue items injected by the
+        # CLI workflow and must bypass slash-command gating.
         if self._auto_mode_active:
             _base = cmd_lower.split()[0].lstrip("/")
-            _is_auto_task = command.startswith("[AUTO Learning Task]")
+            _is_auto_task = command.startswith("[AUTO Learning Task]") or command.startswith(
+                "[AUTO Body Improvement Task]"
+            )
             if _base not in ("auto-q", "auto-quit", "auto-stop") and not _is_auto_task:
                 _cprint(
                     "  🔒 当前为全自动模式，agent 正在自主规划并探索学习。\n"
@@ -6663,6 +6709,7 @@ class VoidcubeCLI:
         else:
             # Check for user-defined quick commands (bypass agent loop, no LLM call)
             base_cmd = cmd_lower.split()[0]
+            _skcmds = _get_skill_commands()
             quick_commands = self.config.get("quick_commands", {})
             if base_cmd.lstrip("/") in quick_commands:
                 qcmd = quick_commands[base_cmd.lstrip("/")]
@@ -6712,7 +6759,6 @@ class VoidcubeCLI:
                         _cprint(f"\033[1;31mPlugin command error: {e}{_RST}")
             # Check for skill slash commands (/gif-search, /axolotl, etc.)
             elif base_cmd in _get_skill_commands():
-                _skcmds = _get_skill_commands()
                 user_instruction = cmd_original[len(base_cmd):].strip()
                 msg = _get_skill_invocation_message(
                     base_cmd, user_instruction, task_id=self.session_id
@@ -6820,6 +6866,7 @@ class VoidcubeCLI:
                 active = resp.get("governor_mode_active", False)
                 if active:
                     self._auto_mode_active = True
+                    _push_cli_agent_scene("executing", session_id=getattr(self, "session_id", None))
                     _cprint(f"  ✅ Governor Mode [bold green]ACTIVE[/]")
                     _cprint(f"     Drive loop:  {'running' if resp.get('drive_loop_running') else 'stopped'}")
                     _cprint(f"     Review loop: {'running' if resp.get('review_loop_running') else 'stopped'}")
@@ -6873,6 +6920,7 @@ class VoidcubeCLI:
             active = resp.get("governor_mode_active", True)
             if not active:
                 self._auto_mode_active = False
+                _push_cli_agent_scene("idle", session_id=getattr(self, "session_id", None))
                 _cprint(f"  💤 Governor Mode [bold]DEACTIVATED[/] — returned to Memory Mode.")
                 _cprint(f"     Only health-check loop is running.")
                 _cprint(f"     Use /auto to re-enter Governor Mode.")
@@ -6923,6 +6971,7 @@ class VoidcubeCLI:
             resp = _json.loads(_req.urlopen(r, timeout=10).read())
             if not resp.get("governor_mode_active", True):
                 self._auto_mode_active = False
+                _push_cli_agent_scene("idle", session_id=getattr(self, "session_id", None))
                 _cprint(f"  💤 Governor Mode [bold]DEACTIVATED[/] — returned to Memory Mode.")
                 _cprint(f"     Only health-check loop is running.")
                 _cprint(f"     Use /auto to re-enter Governor Mode.")
@@ -6935,6 +6984,7 @@ class VoidcubeCLI:
         except Exception as exc:
             # Supervisor unreachable — still exit local auto mode to unblock the user
             self._auto_mode_active = False
+            _push_cli_agent_scene("idle", session_id=getattr(self, "session_id", None))
             _cprint(f"  ⚠️  Supervisor unreachable: {exc}")
             _cprint(f"     Local AUTO mode deactivated (supervisor state may be stale).")
             _cprint(f"     Run /auto to re-enter when supervisor is available.")
@@ -7024,6 +7074,7 @@ class VoidcubeCLI:
 
         self._auto_mode_active = False
         self._current_auto_task = None
+        _push_cli_agent_scene("idle", session_id=getattr(self, "session_id", None))
         _cprint(f"  🛡️  Force quit complete — returned to Memory Mode.")
         return True
 

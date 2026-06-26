@@ -43,9 +43,6 @@ class VoidCubeExecutionService:
         self.app.add_api_route(f"{prefix}/body/slots/{{slot_id}}", self.get_body_slot, methods=["GET"])
         self.app.add_api_route(f"{prefix}/body/watch-window/status", self.get_watch_window_status, methods=["GET"])
         self.app.add_api_route(f"{prefix}/body/watch-window/evaluate", self.evaluate_watch_window, methods=["POST"])
-        self.app.add_api_route(f"{prefix}/agents/start", self.start_agent, methods=["POST"])
-        self.app.add_api_route(f"{prefix}/agents/{{instance_id}}", self.stop_agent, methods=["DELETE"])
-        self.app.add_api_route(f"{prefix}/body/activate", self.activate_body, methods=["POST"])
         self.app.add_api_route(f"{prefix}/body/slots/{{slot_id}}/prepare", self.prepare_body_slot, methods=["POST"])
         self.app.add_api_route(f"{prefix}/body/slots/{{slot_id}}/candidate", self.mark_body_candidate, methods=["POST"])
         self.app.add_api_route(f"{prefix}/body/upgrade/execute", self.execute_body_upgrade, methods=["POST"])
@@ -77,9 +74,7 @@ class VoidCubeExecutionService:
                 "failure_mode": "executor_required",
             },
             "routes": {
-                "agent_lifecycle": ["/agents/start", "/agents/{instance_id}"],
                 "body_lifecycle": [
-                    "/body/activate",
                     "/body/slots/{slot_id}/prepare",
                     "/body/slots/{slot_id}/candidate",
                     "/body/probe/report",
@@ -144,9 +139,6 @@ class VoidCubeExecutionService:
             self._scene = "idle"
             self._scene_changed_at = datetime.utcnow()
 
-    async def start_agent(self, request: Optional[dict] = Body(default=None)) -> Dict[str, Any]:
-        return await self.facade.start_managed_agent(request or {})
-
     async def get_body_registry(self) -> Dict[str, Any]:
         return self.facade.get_body_registry()
 
@@ -164,12 +156,6 @@ class VoidCubeExecutionService:
 
     async def evaluate_watch_window(self, request: Optional[dict] = Body(default=None)) -> Dict[str, Any]:
         return await self.facade.evaluate_watch_window(request)
-
-    async def stop_agent(self, instance_id: str) -> Dict[str, Any]:
-        return await self.facade.stop_agent(instance_id)
-
-    async def activate_body(self, request: dict = Body(default_factory=dict)) -> Dict[str, Any]:
-        return await self.facade.activate_body(request)
 
     async def prepare_body_slot(
         self,
@@ -226,4 +212,3 @@ class VoidCubeExecutionService:
         if "error" in result:
             raise HTTPException(status_code=400, detail=result["error"])
         return result
-

@@ -97,15 +97,13 @@ class BodyRegistry(BaseModel):
 
 
 class BodyLaunchTarget(BaseModel):
-    """Resolved launch contract for the currently selected child agent body."""
+    """Resolved metadata pointer for the currently selected body slot."""
 
     slot_id: str
     body_state: BodyState
     worktree_path: str
     runtime_path: str
     logs_path: str
-    launch_script_path: str
-    launch_cwd: str
     body_version: str
     generation: int
     materialized_from: Optional[str] = None
@@ -339,7 +337,6 @@ class BodyRegistryManager:
             or self._git_head_for_path(self.repo_root)
         )
         self.save_slot_meta(target)
-        self._write_launch_manifest(target)
 
         registry.current_generation += 1
         registry.active_slot = slot_id
@@ -547,7 +544,6 @@ class BodyRegistryManager:
                 meta.candidate_commit,
             )
         self.save_slot_meta(meta)
-        self._write_launch_manifest(meta)
         self._write_worktree_manifest(
             slot_id,
             worktree_root,
@@ -570,24 +566,18 @@ class BodyRegistryManager:
     def slot_worktree_manifest_path(self, slot_id: str) -> Path:
         return self.slot_root(slot_id) / "worktree" / ".body-origin.json"
 
-    def slot_launch_manifest_path(self, slot_id: str) -> Path:
-        return self.slot_root(slot_id) / "runtime" / "slot-launch.json"
-
     def active_body_pointer_path(self) -> Path:
         return self.repo_root / ".body-active.json"
 
     def build_launch_target(self, slot_id: str) -> BodyLaunchTarget:
         meta = self.load_slot_meta(slot_id)
         worktree_root = Path(meta.worktree_path).resolve()
-        launch_script = (worktree_root / "systems" / "agent" / "run_agent_instance.py").resolve()
         return BodyLaunchTarget(
             slot_id=meta.slot_id,
             body_state=meta.body_state,
             worktree_path=str(worktree_root),
             runtime_path=str(Path(meta.runtime_path).resolve()),
             logs_path=str(Path(meta.logs_path).resolve()),
-            launch_script_path=str(launch_script),
-            launch_cwd=str(worktree_root),
             body_version=meta.body_version,
             generation=meta.generation,
             materialized_from=meta.materialized_from,
@@ -716,13 +706,6 @@ class BodyRegistryManager:
                 "logs_path": str(logs_root.resolve()),
                 "bootstrapped_at": datetime.utcnow().isoformat(),
             },
-        )
-
-    def _write_launch_manifest(self, meta: BodySlotMeta) -> None:
-        target = self.build_launch_target(meta.slot_id)
-        atomic_json_write(
-            self.slot_launch_manifest_path(meta.slot_id),
-            target.model_dump(mode="json"),
         )
 
     def _write_worktree_manifest(

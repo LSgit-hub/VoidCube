@@ -1,7 +1,6 @@
 """Execution adapters for canonical executor orchestration."""
 
 from .adapters import (
-    AgentLifecycleExecutionAdapter,
     BodyLifecycleExecutionAdapter,
     BodyUpgradeExecutionAdapter,
     GovernorReviewExecutionAdapter,
@@ -16,7 +15,6 @@ from .route_hints import (
 from .service import VoidCubeExecutionService
 
 __all__ = [
-    "AgentLifecycleExecutionAdapter",
     "BodyLifecycleExecutionAdapter",
     "BodyUpgradeExecutionAdapter",
     "GovernorReviewExecutionAdapter",

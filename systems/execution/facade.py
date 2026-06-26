@@ -10,21 +10,11 @@ from systems.supervisor.task_queue import SelfEvolutionExecutionRequest
 class VoidCubeExecutionFacade:
     """Stable execution-facing facade over the canonical execution adapters."""
 
-    agent_lifecycle: Any
     watch_window: Any
     body_lifecycle: Any
     body_upgrade: Any
     memory_maintenance: Any
     supervisor: Any = None
-
-    async def start_managed_agent(self, request: dict) -> Dict[str, Any]:
-        return await self.agent_lifecycle.start_managed_agent(request)
-
-    async def stop_agent(self, instance_id: str) -> Dict[str, Any]:
-        return await self.agent_lifecycle.stop_agent(instance_id)
-
-    async def activate_body(self, request: dict) -> Dict[str, Any]:
-        return await self.agent_lifecycle.activate_body(request)
 
     def get_watch_window_status(self) -> Dict[str, Any]:
         return self.watch_window.get_watch_window_status()
@@ -157,4 +147,3 @@ class VoidCubeExecutionFacade:
             return await self.supervisor._planning_runtime._review_body_improvement(request)
         except Exception as e:
             return {"status": "error", "reason": str(e)}
-

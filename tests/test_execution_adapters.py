@@ -14,7 +14,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from systems.body_registry import BodyRegistryManager
 from systems.execution.adapters import (
-    AgentLifecycleExecutionAdapter,
     BodyUpgradeExecutionAdapter,
     BodyLifecycleExecutionAdapter,
     GovernorReviewExecutionAdapter,
@@ -104,16 +103,10 @@ def _make_body_upgrade_runtime(tmp_path: Path) -> SimpleNamespace:
         )
     )
 
-    start_agent = AsyncMock(return_value={"status": "started", "instance_id": "agent-1"})
-    wait_for_health = AsyncMock()
-    sync_gateway_body_activation = AsyncMock(return_value={"status": "synced"})
     adapter = BodyUpgradeExecutionAdapter(
         config=SimpleNamespace(probe_watch_window_seconds=300),
         body_registry=manager,
         run_body_probe=body_lifecycle.run_body_probe,
-        start_agent=start_agent,
-        wait_for_health=wait_for_health,
-        sync_gateway_body_activation=sync_gateway_body_activation,
         attach_execution_route_hint=_attach_route_hint,
         agents={},
         governor_request_executor=governor_request_executor,
@@ -125,9 +118,6 @@ def _make_body_upgrade_runtime(tmp_path: Path) -> SimpleNamespace:
         governor_review=governor_review,
         governor_request_executor=governor_request_executor,
         recorded_requests=recorded_requests,
-        start_agent=start_agent,
-        wait_for_health=wait_for_health,
-        sync_gateway_body_activation=sync_gateway_body_activation,
     )
 
 
@@ -154,11 +144,6 @@ def _make_body_lifecycle_runtime(tmp_path: Path) -> SimpleNamespace:
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_execution_facade_delegates_to_current_adapters():
-    agent_lifecycle = SimpleNamespace(
-        start_managed_agent=AsyncMock(return_value={"status": "started"}),
-        stop_agent=AsyncMock(return_value={"status": "stopped"}),
-        activate_body=AsyncMock(return_value={"status": "activated"}),
-    )
     body_lifecycle = SimpleNamespace(
         get_body_registry=Mock(return_value={"registry": {"active_slot": "slot-A"}}),
         get_active_body_target=Mock(return_value={"slot_id": "slot-A"}),
@@ -186,16 +171,12 @@ async def test_execution_facade_delegates_to_current_adapters():
         trigger_memory_compression=AsyncMock(return_value={"status": "compressed"}),
     )
     facade = VoidCubeExecutionFacade(
-        agent_lifecycle=agent_lifecycle,
         watch_window=watch_window,
         body_lifecycle=body_lifecycle,
         body_upgrade=body_upgrade,
         memory_maintenance=memory_maintenance,
     )
 
-    assert await facade.start_managed_agent({}) == {"status": "started"}
-    assert await facade.stop_agent("agent-1") == {"status": "stopped"}
-    assert await facade.activate_body({"slot_id": "slot-B"}) == {"status": "activated"}
     assert facade.get_watch_window_status() == {"status": "watch_status"}
     assert await facade.evaluate_watch_window({"healthy_override": True}) == {"status": "watch_window_evaluated"}
     assert facade.get_body_registry() == {"registry": {"active_slot": "slot-A"}}
@@ -222,7 +203,6 @@ async def test_execution_facade_delegates_to_current_adapters():
     assert await facade.run_body_probe({"slot_id": "slot-B"}) == {"status": "probe_executed"}
     assert await facade.trigger_memory_compression({}) == {"status": "compressed"}
 
-    agent_lifecycle.start_managed_agent.assert_awaited_once_with({})
     watch_window.get_watch_window_status.assert_called_once_with()
     watch_window.evaluate_watch_window.assert_awaited_once_with({"healthy_override": True})
     body_lifecycle.get_body_slot.assert_called_once_with("slot-A")
@@ -294,97 +274,6 @@ def test_governor_review_execution_adapter_coordinates_review_and_runtime_follow
     assert reviewed_request.evidence["probe_passed"] is True
     sync_runtime_after_governor_response.assert_called_once_with(governor_response)
     governor.record_execution_outcome.assert_called_once()
-
-
-@pytest.mark.asyncio
-@pytest.mark.unit
-async def test_agent_lifecycle_adapter_starts_agent_and_registers_gateway(monkeypatch):
-    agents = {}
-    spawn = AsyncMock()
-    register = AsyncMock(return_value="service-1")
-    unregister = AsyncMock()
-    monkeypatch.setattr("systems.execution.adapters.asyncio.sleep", AsyncMock())
-
-    adapter = AgentLifecycleExecutionAdapter(
-        config=SimpleNamespace(agent_base_port=9000),
-        agents=agents,
-        agent_model=AgentInstance,
-        spawn_agent_process=spawn,
-        terminate_agent_process=AsyncMock(),
-        register_agent_with_gateway=register,
-        unregister_agent_from_gateway=unregister,
-        attach_execution_route_hint=_attach_route_hint,
-    )
-
-    result, next_counter = await adapter.start_agent({}, agent_counter=0)
-
-    assert result["status"] == "started"
-    assert result["port"] == 9001
-    assert result["execution_route_hint"]["interface_id"] == "agents.start"
-    assert next_counter == 1
-    assert len(agents) == 1
-    agent = next(iter(agents.values()))
-    assert agent.name == "managed-agent-1"
-    spawn.assert_awaited_once_with(agent)
-    register.assert_awaited_once_with(agent)
-
-
-@pytest.mark.asyncio
-@pytest.mark.unit
-async def test_agent_lifecycle_adapter_rejects_legacy_color_selection(monkeypatch):
-    monkeypatch.setattr("systems.execution.adapters.asyncio.sleep", AsyncMock())
-    adapter = AgentLifecycleExecutionAdapter(
-        config=SimpleNamespace(agent_base_port=9000),
-        agents={},
-        agent_model=AgentInstance,
-        spawn_agent_process=AsyncMock(),
-        terminate_agent_process=AsyncMock(),
-        register_agent_with_gateway=AsyncMock(),
-        unregister_agent_from_gateway=AsyncMock(),
-        attach_execution_route_hint=_attach_route_hint,
-    )
-
-    with pytest.raises(HTTPException) as exc_info:
-        await adapter.start_agent({"color": "green"}, agent_counter=0)
-
-    assert exc_info.value.status_code == 400
-    assert "Legacy color-based agent selection" in str(exc_info.value.detail)
-
-
-@pytest.mark.asyncio
-@pytest.mark.unit
-async def test_agent_lifecycle_adapter_stops_agent_and_unregisters_gateway():
-    agent = AgentInstance(
-        instance_id="agent-1",
-        name="agent-slot-A-1",
-        pid=1234,
-        port=9001,
-        status="running",
-        healthy=True,
-        gateway_service_id="svc-1",
-    )
-    terminate = AsyncMock()
-    unregister = AsyncMock()
-    adapter = AgentLifecycleExecutionAdapter(
-        config=SimpleNamespace(agent_base_port=9000),
-        agents={"agent-1": agent},
-        agent_model=AgentInstance,
-        spawn_agent_process=AsyncMock(),
-        terminate_agent_process=terminate,
-        register_agent_with_gateway=AsyncMock(),
-        unregister_agent_from_gateway=unregister,
-        attach_execution_route_hint=_attach_route_hint,
-    )
-
-    result = await adapter.stop_agent("agent-1")
-
-    assert result["status"] == "stopped"
-    assert result["execution_route_hint"]["interface_id"] == "agents.stop"
-    assert agent.status == "stopped"
-    assert agent.pid is None
-    assert agent.healthy is False
-    terminate.assert_awaited_once_with(agent)
-    unregister.assert_awaited_once_with("svc-1")
 
 
 @pytest.mark.asyncio
@@ -544,7 +433,6 @@ async def test_body_upgrade_execution_adapter_halts_when_probe_fails(tmp_path: P
     assert registry.active_slot == "slot-A"
     assert slot_b.body_state == "probe"
     assert len(runtime.recorded_requests) == 1
-    runtime.start_agent.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -815,7 +703,6 @@ async def test_body_upgrade_then_watch_window_failure_rolls_back_to_retired_slot
         "slot_id": "slot-B",
         "restored_slot_id": "slot-A",
         "restored_instance_id": "restored-old",
-        "gateway_activation": None,
         "stopped_instance_ids": ["failed-new"],
     }
     assert registry.active_slot == "slot-A"
@@ -905,16 +792,12 @@ async def test_watch_window_execution_adapter_stops_failed_slot_agents_after_rol
     body_registry = SimpleNamespace(
         load_registry=Mock(return_value=SimpleNamespace(active_slot="slot-A"))
     )
-    sync_gateway_body_activation = AsyncMock(
-        return_value={"status": "activated", "active_body": {"slot_id": "slot-A"}}
-    )
     adapter = WatchWindowExecutionAdapter(
         body_registry=body_registry,
         agents={"restored-old": restored_agent, "failed-new": failed_agent},
         stop_agent=stop_agent,
         run_health_checks=AsyncMock(),
         runtime_state=_make_watch_window_state(),
-        sync_gateway_body_activation=sync_gateway_body_activation,
         governor_request_executor=_make_governor_request_executor(),
     )
 
@@ -931,10 +814,8 @@ async def test_watch_window_execution_adapter_stops_failed_slot_agents_after_rol
         "slot_id": "slot-B",
         "restored_slot_id": "slot-A",
         "restored_instance_id": "restored-old",
-        "gateway_activation": {"status": "activated", "active_body": {"slot_id": "slot-A"}},
         "stopped_instance_ids": ["failed-new"],
     }
-    sync_gateway_body_activation.assert_awaited_once_with("restored-old")
     stop_agent.assert_awaited_once_with("failed-new")
 
 
@@ -1208,7 +1089,6 @@ async def test_watch_window_execution_adapter_evaluate_rollback_reuses_reconcile
         "slot_id": "slot-B",
         "restored_slot_id": "slot-A",
         "restored_instance_id": "restored-old",
-        "gateway_activation": None,
         "stopped_instance_ids": ["failed-new"],
     }
     assert stopped_instances == ["failed-new"]

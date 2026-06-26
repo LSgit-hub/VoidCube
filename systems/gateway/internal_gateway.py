@@ -26,7 +26,6 @@ class ServiceInfo(BaseModel):
     registered_at: datetime = None
     last_health_check: datetime = None
     healthy: bool = True
-    lifecycle_state: str = "active"
 
 
 class RouteEntry(BaseModel):
@@ -69,13 +68,20 @@ class ActivityTouchRequest(BaseModel):
     metadata: Dict[str, Any] = {}
 
 
+class SessionRegisterRequest(BaseModel):
+    session_id: str
+    model: Optional[str] = None
+    provider: Optional[str] = None
+    source: str = "cli"
+
+
 class InternalGateway:
     def __init__(self, config: GatewayConfig = None):
         self.config = config or GatewayConfig()
         self.app = FastAPI(title="VoidCube Internal Gateway", version="1.0")
         self._services: Dict[str, ServiceInfo] = {}
         self._routes: Dict[str, RouteEntry] = {}
-        self._active_body_service_id: str = None
+        self._active_cli_session_id: str | None = None
         self._governor_mode_active: bool = False
         self._request_counter = 0
         # Tier 1 memory service URL (lazy-resolved from registered services)
@@ -136,6 +142,7 @@ class InternalGateway:
                 "service_id": None,
                 "address": None,
                 "slot_id": None,
+                "source_service": None,
                 "reachable": False,
                 "last_fetched_at": None,
             },
@@ -171,7 +178,6 @@ class InternalGateway:
         self.app.add_api_route("/admin/routes/{path_prefix}", self.update_route, methods=["PUT"])
         self.app.add_api_route("/admin/routes/{path_prefix}", self.delete_route, methods=["DELETE"])
         
-        self.app.add_api_route("/admin/body/activate", self.activate_body, methods=["POST"])
         self.app.add_api_route("/admin/body/status", self.get_body_status, methods=["GET"])
         self.app.add_api_route("/admin/activity", self.get_activity_status, methods=["GET"])
         self.app.add_api_route("/admin/activity/log", self.get_activity_log, methods=["GET"])
@@ -190,6 +196,7 @@ class InternalGateway:
         
         self.app.add_api_route("/v1/chat/completions", self.chat_completions_proxy, methods=["POST"])
         self.app.add_api_route("/v1/agent/query", self.agent_query_proxy, methods=["POST"])
+        self.app.add_api_route("/v1/sessions/register", self.register_session, methods=["POST"])
         self.app.add_api_route("/v1/sessions/{session_id}", self.get_session_info, methods=["GET"])
         self.app.add_api_route("/v1/sessions/{session_id}", self.delete_session, methods=["DELETE"])
         self.app.add_api_route("/v1/tasks", self.get_approved_tasks, methods=["GET"])
@@ -198,7 +205,7 @@ class InternalGateway:
         self.app.add_api_route("/admin/traces/{trace_id}", self.get_trace, methods=["GET"])
 
     async def health_check(self):
-        active_body = self._build_active_body_snapshot()
+        active_cli_executor = self._build_active_cli_executor_snapshot()
         registered_services = {
             "total": len(self._services),
             "agents": len([s for s in self._services.values() if s.service_type == "agent"]),
@@ -213,19 +220,13 @@ class InternalGateway:
             "gateway_id": "voidcube-internal-gateway",
             "timestamp": datetime.now().isoformat(),
             "request_count": self._request_counter,
-            "active_body": active_body,
+            "active_cli_executor": active_cli_executor,
             "body_slots": self._list_body_slots(),
-            "body_routing": self._build_body_routing_snapshot(active_body=active_body),
             "registered_services": registered_services,
             "executor_access_policy": self._build_executor_access_policy(),
             "activity": self._build_activity_snapshot(),
             "routes": [self._serialize_route(route) for route in self._routes.values()]
         }
-
-    def _get_active_body_service(self) -> Optional[ServiceInfo]:
-        if not self._active_body_service_id:
-            return None
-        return self._services.get(self._active_body_service_id)
 
     def _serialize_body_service(self, service: ServiceInfo) -> Dict[str, Any]:
         return {
@@ -235,8 +236,6 @@ class InternalGateway:
             "service_name": service.service_name,
             "address": service.address,
             "healthy": service.healthy,
-            "lifecycle_state": service.lifecycle_state,
-            "is_active_body": service.service_id == self._active_body_service_id,
             "registered_at": service.registered_at.isoformat() if service.registered_at else None,
         }
 
@@ -247,48 +246,19 @@ class InternalGateway:
             if service.service_type == "agent"
         ]
 
-    def _build_active_body_snapshot(self) -> Optional[Dict[str, Any]]:
-        active_service = self._get_active_body_service()
-        if active_service is None:
+    def _build_active_cli_executor_snapshot(self) -> Optional[Dict[str, Any]]:
+        session_id = self._active_cli_session_id
+        if not session_id:
             return None
-        return self._serialize_body_service(active_service)
-
-    def _build_body_routing_snapshot(
-        self,
-        *,
-        active_body: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        active_body = active_body if active_body is not None else self._build_active_body_snapshot()
-        api_route = self._routes.get("/api/")
-        return {
-            "api_route_target_instance": api_route.target_instance if api_route else None,
-            "active_service_id": active_body["service_id"] if active_body else None,
-            "active_slot_id": active_body["slot_id"] if active_body else None,
-        }
-
-    def _activate_body_service(self, target_service: ServiceInfo) -> Dict[str, Any]:
-        self._active_body_service_id = target_service.service_id
-        for service in self._services.values():
-            if service.service_type == "agent":
-                service.lifecycle_state = (
-                    "active" if service.service_id == target_service.service_id else "draining"
-                )
-
-        route = self._routes.get("/api/")
-        if route:
-            route.target_instance = target_service.service_id
-        else:
-            self._routes["/api/"] = RouteEntry(
-                path_prefix="/api/",
-                target_service="agent",
-                target_instance=target_service.service_id,
-                weight=100,
-                enabled=True,
-            )
-
-        return self._build_body_routing_snapshot(
-            active_body=self._serialize_body_service(target_service)
-        )
+        if session_id not in self._agent_session_cache:
+            return None
+        snapshot = self._serialize_agent_session_metadata(session_id)
+        agent_scene = self._scenes_cache.get("agent") or {}
+        if agent_scene.get("source_service") == "cli_agent":
+            snapshot["scene"] = agent_scene.get("scene")
+            snapshot["scene_task_id"] = agent_scene.get("scene_task_id")
+            snapshot["scene_changed_at"] = agent_scene.get("scene_changed_at")
+        return snapshot
 
     def _build_executor_access_policy(self) -> Dict[str, Any]:
         return {
@@ -376,6 +346,8 @@ class InternalGateway:
             value = session.get(key)
             if isinstance(value, datetime):
                 session[key] = value.isoformat()
+        session["session_id"] = session_id
+        session["is_active_cli_executor"] = session_id == self._active_cli_session_id
         return session
 
     def _touch_activity(
@@ -402,6 +374,19 @@ class InternalGateway:
             self._activity_state["agent_work_count"] += 1
             self._activity_state["recent_metadata"]["user_request"] = activity_metadata
             self._activity_state["recent_metadata"]["agent_work"] = activity_metadata
+        elif normalized == "agent_scene":
+            cache = self._scenes_cache["agent"]
+            cache["scene"] = self._validate_scene(
+                (activity_metadata or {}).get("scene"),
+                self.AGENT_LEGAL_SCENES,
+            )
+            cache["scene_task_id"] = (activity_metadata or {}).get("task_id")
+            cache["scene_changed_at"] = now.isoformat()
+            cache["source_service"] = source_service or (activity_metadata or {}).get("source_service")
+            cache["reachable"] = True
+            cache["last_fetched_at"] = now.isoformat()
+            if session_id:
+                self._active_cli_session_id = session_id
         elif normalized == "agent_work":
             self._activity_state["last_agent_work_at"] = now
             self._activity_state["agent_work_count"] += 1
@@ -719,6 +704,31 @@ class InternalGateway:
             logger.error(f"Error updating activity state: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
+    async def register_session(self, request: Request):
+        try:
+            payload = SessionRegisterRequest.model_validate(await request.json())
+            now = datetime.now()
+            existing = dict(self._agent_session_cache.get(payload.session_id) or {})
+            self._agent_session_cache[payload.session_id] = {
+                **existing,
+                "created_at": existing.get("created_at") or now,
+                "last_used_at": now,
+                "message_count": int(existing.get("message_count") or 0),
+                "model": payload.model,
+                "provider": payload.provider,
+                "source": payload.source,
+            }
+            if payload.source == "cli":
+                self._active_cli_session_id = payload.session_id
+            return {
+                "status": "registered",
+                "session_id": payload.session_id,
+                "active_cli_session_id": self._active_cli_session_id,
+            }
+        except Exception as e:
+            logger.error(f"Error registering session: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
     async def set_governor_mode(self, request: Request):
         """Receive governor mode state from supervisor."""
         try:
@@ -756,11 +766,6 @@ class InternalGateway:
             )
             
             self._services[service_id] = service_info
-            
-            if service_type == "agent":
-                if not self._active_body_service_id:
-                    self._activate_body_service(service_info)
-            
             await self._auto_configure_route(service_type, service_id, address)
             
             logger.info(f"Service registered: {service_name} ({service_id}) at {address}")
@@ -770,64 +775,15 @@ class InternalGateway:
             logger.error(f"Error registering service: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
-    async def activate_body(self, request: Request):
-        try:
-            data = await request.json()
-            service_id = data.get("service_id")
-            slot_id = data.get("slot_id")
-
-            target_service = None
-            if service_id:
-                target_service = self._services.get(service_id)
-            elif slot_id:
-                for service in self._services.values():
-                    if service.service_type == "agent" and service.metadata.get("slot_id") == slot_id:
-                        target_service = service
-                        break
-
-            if not target_service:
-                raise HTTPException(status_code=404, detail="No matching body service found")
-            if target_service.service_type != "agent":
-                raise HTTPException(status_code=400, detail="Only agent services can be activated as a body")
-            if not target_service.healthy:
-                raise HTTPException(status_code=503, detail="Target body service unhealthy")
-
-            body_routing = self._activate_body_service(target_service)
-            active_body = self._serialize_body_service(target_service)
-
-            self._touch_activity("self_evolution", metadata={
-                "action": "body_activation",
-                "slot_id": target_service.metadata.get("slot_id"),
-                "service_id": target_service.service_id,
-            })
-            logger.info(
-                "Body activation synced: slot=%s service=%s",
-                target_service.metadata.get("slot_id"),
-                target_service.service_id,
-            )
-            return {
-                "status": "activated",
-                "active_body": active_body,
-                "body_routing": body_routing,
-            }
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Error activating body: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
-
     async def get_body_status(self):
-        active = self._build_active_body_snapshot()
         return {
-            "active_body": active,
-            "body_routing": self._build_body_routing_snapshot(active_body=active),
+            "active_cli_executor": self._build_active_cli_executor_snapshot(),
             "body_slots": self._list_body_slots(),
         }
 
     async def _auto_configure_route(self, service_type: str, service_id: str, address: str):
         route_map = {
             "memory": "/mem/",
-            "agent": "/agent/",
             "self_learning": "/self-learning/",
             "supervisor": "/supervisor/",
             "executor": "/executor/",
@@ -879,13 +835,6 @@ class InternalGateway:
             # Invalidate cached memory service URL
             if service.service_type == "memory":
                 self._memory_service_url = None
-
-            if self._active_body_service_id == service_id:
-                self._active_body_service_id = None
-                for sid, s in self._services.items():
-                    if s.service_type == "agent" and s.healthy:
-                        self._activate_body_service(s)
-                        break
             
             for prefix, route in list(self._routes.items()):
                 if route.target_instance == service_id:
@@ -1062,45 +1011,18 @@ class InternalGateway:
             pass
 
     async def _refresh_agent_scene(self) -> None:
-        """Pull the *active* agent's scene.
+        """Refresh the CLI-reported agent scene only.
 
-        We only surface the active body's scene in the three-segment
-        view — shell bodies are not user-visible.  If the active body
-        is not an agent (which is the normal case), we look up the
-        currently registered agent instance.
+        The gateway no longer elects or probes background agent services
+        as default executors. Agent scene is sourced from the active CLI
+        executor's activity touch stream.
         """
         cache = self._scenes_cache["agent"]
-        cache["reachable"] = False
-        target: Optional[ServiceInfo] = None
-        if self._active_body_service_id:
-            target = self._services.get(self._active_body_service_id)
-            if target and target.service_type != "agent":
-                target = None
-        if target is None:
-            agents = [s for s in self._find_services("agent") if s.healthy]
-            if not agents:
-                cache["last_fetched_at"] = datetime.now().isoformat()
-                return
-            target = agents[0]
-        address = (target.address or "").rstrip("/")
-        url = f"{address}/v1/agent/scene" if address else None
-        if not url:
+        if cache.get("source_service") == "cli_agent" and cache.get("reachable"):
             cache["last_fetched_at"] = datetime.now().isoformat()
             return
-        payload = await self._http_get_json(url, timeout=2.0)
-        cache["service_id"] = target.service_id
-        cache["address"] = address
-        cache["slot_id"] = target.metadata.get("slot_id") if target.metadata else None
+        cache["reachable"] = False
         cache["last_fetched_at"] = datetime.now().isoformat()
-        if not isinstance(payload, dict):
-            return
-        cache["reachable"] = True
-        cache["scene"] = self._validate_scene(
-            payload.get("scene"),
-            self.AGENT_LEGAL_SCENES,
-        )
-        cache["scene_task_id"] = payload.get("scene_task_id")
-        cache["scene_changed_at"] = payload.get("scene_changed_at")
 
     async def _refresh_executor_scene(self) -> None:
         cache = self._scenes_cache["executor"]
@@ -1204,13 +1126,19 @@ class InternalGateway:
 
     def _evict_stale_sessions(self) -> None:
         """Remove sessions idle longer than TTL (SB-04)."""
-        import time
-        cutoff = time.time() - self._session_ttl_seconds
-        stale = [
-            sid for sid, s in self._agent_session_cache.items()
-            if s.get('last_access', 0) < cutoff
-        ]
+        cutoff = datetime.now().timestamp() - self._session_ttl_seconds
+        stale = []
+        for sid, session in self._agent_session_cache.items():
+            last_used_at = session.get("last_used_at")
+            if isinstance(last_used_at, datetime):
+                last_seen = last_used_at.timestamp()
+            else:
+                last_seen = 0.0
+            if last_seen < cutoff:
+                stale.append(sid)
         for sid in stale:
+            if sid == self._active_cli_session_id:
+                self._active_cli_session_id = None
             del self._agent_session_cache[sid]
 
     # ── Tier 1 Conversation Recording ──────────────────────────────
@@ -1415,16 +1343,6 @@ class InternalGateway:
         request_id = str(uuid.uuid4())
         
         try:
-            if not self._active_body_service_id:
-                raise HTTPException(status_code=503, detail="No active body service available")
-            
-            target_service = self._services.get(self._active_body_service_id)
-            if not target_service:
-                raise HTTPException(status_code=503, detail="Active body service not found")
-            
-            if not target_service.healthy:
-                raise HTTPException(status_code=503, detail="Active body service unhealthy")
-
             body = await request.body()
             activity_metadata: Dict[str, Any] = {}
             if body:
@@ -1436,23 +1354,13 @@ class InternalGateway:
                     activity_metadata = {}
 
             self._touch_activity("user_request", metadata=activity_metadata)
-
-            url = f"{target_service.address}/v1/chat/completions"
-            logger.debug(f"Proxying chat completion {request_id} -> {url}")
-
-            headers = dict(request.headers)
-            
-            async with asyncio.timeout(60):
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(url, data=body, headers=headers) as response:
-                        response_body = await response.read()
-                        response_headers = dict(response.headers)
-                        
-                        return Response(
-                            content=response_body,
-                            status_code=response.status,
-                            headers=response_headers
-                        )
+            raise HTTPException(
+                status_code=410,
+                detail=(
+                    "Gateway agent proxy has been removed. "
+                    "Use the current CLI/API-A executor directly for chat completions."
+                ),
+            )
         
         except asyncio.TimeoutError:
             logger.error(f"Chat completion {request_id} timed out")
@@ -1482,19 +1390,6 @@ class InternalGateway:
                     status_code=503,
                     detail="系统处于全自动模式，agent 正在自主规划并探索学习。请稍后再试。",
                 )
-
-            if not self._active_body_service_id:
-                raise HTTPException(status_code=503, detail="No active body service available")
-
-            target_service = self._services.get(self._active_body_service_id)
-            if not target_service:
-                raise HTTPException(status_code=503, detail="Active body service not found")
-            
-            if not target_service.healthy:
-                raise HTTPException(status_code=503, detail="Active body service unhealthy")
-            
-            url = f"{target_service.address}/v1/agent/query"
-            logger.debug(f"Proxying agent query {request_id} -> {url}")
             
             session_id = data.get("session_id") or str(uuid.uuid4())
             activity_metadata = self._extract_activity_metadata_from_payload(data)
@@ -1504,7 +1399,8 @@ class InternalGateway:
                 self._agent_session_cache[session_id] = {
                     "created_at": datetime.now(),
                     "last_used_at": datetime.now(),
-                    "message_count": 0
+                    "message_count": 0,
+                    "source": "gateway_proxy",
                 }
             
             self._agent_session_cache[session_id]["last_used_at"] = datetime.now()
@@ -1516,30 +1412,13 @@ class InternalGateway:
                     session_id, data.get("messages", []), ""
                 )
             )
-
-            body = json.dumps(data).encode('utf-8')
-            headers = {"Content-Type": "application/json"}
-            
-            async with asyncio.timeout(120):
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(url, data=body, headers=headers) as response:
-                        response_data = await response.json()
-
-                        # Fire-and-forget: record agent response to Tier 1
-                        resp_text = self._extract_response_text(response_data)
-                        if resp_text:
-                            asyncio.create_task(
-                                self._record_turn_to_tier1(session_id, "agent", resp_text[:4000])
-                            )
-
-                        return JSONResponse(
-                            content={
-                                "session_id": session_id,
-                                "response": response_data,
-                                "metadata": self._serialize_agent_session_metadata(session_id),
-                            },
-                            status_code=response.status
-                        )
+            raise HTTPException(
+                status_code=410,
+                detail=(
+                    "Gateway agent proxy has been removed. "
+                    "AUTO and task execution must run on the current CLI/API-A executor."
+                ),
+            )
         
         except asyncio.TimeoutError:
             logger.error(f"Agent query {request_id} timed out")
@@ -1564,23 +1443,15 @@ class InternalGateway:
         return {
             "session_id": session_id,
             **session_data,
-            "active_body_service_id": self._active_body_service_id,
-            "active_body_address": (
-                self._services[self._active_body_service_id].address
-                if self._active_body_service_id and self._active_body_service_id in self._services
-                else None
-            ),
-            "active_slot_id": (
-                self._services[self._active_body_service_id].metadata.get("slot_id")
-                if self._active_body_service_id and self._active_body_service_id in self._services
-                else None
-            ),
+            "active_cli_session_id": self._active_cli_session_id,
+            "active_cli_executor": self._build_active_cli_executor_snapshot(),
         }
 
     async def delete_session(self, session_id: str):
         if session_id not in self._agent_session_cache:
             raise HTTPException(status_code=404, detail="Session not found")
-        
+        if session_id == self._active_cli_session_id:
+            self._active_cli_session_id = None
         del self._agent_session_cache[session_id]
         logger.info(f"Session deleted: {session_id}")
         return {"status": "deleted"}

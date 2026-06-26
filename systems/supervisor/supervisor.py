@@ -17,7 +17,6 @@ from systems.supervisor.config_models import (
     SupervisorServiceRuntimeConfig,
 )
 from systems.supervisor.planning_runtime import PlanningRuntimeMixin
-from systems.supervisor.process_gateway_runtime import ProcessGatewayRuntimeMixin
 from systems.supervisor.runtime_assemblers import (
     assemble_supervisor_execution_runtime,
     assemble_supervisor_runtime_state,
@@ -57,7 +56,6 @@ class HealthCheckResult(BaseModel):
 
 class Supervisor(
     PlanningRuntimeMixin,
-    ProcessGatewayRuntimeMixin,
     ServiceRuntimeMixin,
     TraceRuntimeMixin,
     SupervisorUIMixin,
@@ -139,8 +137,6 @@ class Supervisor(
             self.decide_self_evolution_task,
             methods=["POST"],
         )
-        self.app.add_api_route("/agents", self.list_agents, methods=["GET"])
-        self.app.add_api_route("/agents/{instance_id}", self.get_agent, methods=["GET"])
         self.app.add_api_route("/health/check", self.run_health_checks, methods=["POST"])
         self.app.add_api_route("/body/registry", self.get_body_registry, methods=["GET"])
         self.app.add_api_route("/body/active-target", self.get_active_body_target, methods=["GET"])

@@ -16,11 +16,6 @@ from systems.execution.service import VoidCubeExecutionService
 
 def _make_service() -> tuple[VoidCubeExecutionService, SimpleNamespace]:
     adapters = SimpleNamespace(
-        agent_lifecycle=SimpleNamespace(
-            start_managed_agent=AsyncMock(return_value={"status": "started", "instance_id": "agent-1"}),
-            stop_agent=AsyncMock(return_value={"status": "stopped"}),
-            activate_body=AsyncMock(return_value={"status": "activated"}),
-        ),
         watch_window=SimpleNamespace(
             reconcile_watch_window_outcome=AsyncMock(return_value={"action": "noop"}),
             get_watch_window_status=Mock(
@@ -50,7 +45,6 @@ def _make_service() -> tuple[VoidCubeExecutionService, SimpleNamespace]:
         ),
     )
     facade = VoidCubeExecutionFacade(
-        agent_lifecycle=adapters.agent_lifecycle,
         watch_window=adapters.watch_window,
         body_lifecycle=adapters.body_lifecycle,
         body_upgrade=adapters.body_upgrade,
@@ -83,36 +77,14 @@ def test_execution_service_health_describes_execution_only_boundary():
 
 
 @pytest.mark.unit
-def test_execution_service_delegates_agent_lifecycle_routes():
-    service, adapters = _make_service()
-    client = TestClient(service.app)
-
-    start = client.post("/executor/agents/start", json={})
-    stop = client.delete("/executor/agents/agent-1")
-    activate = client.post("/executor/body/activate", json={"slot_id": "slot-B"})
-
-    assert start.status_code == 200
-    assert start.json()["status"] == "started"
-    assert stop.json()["status"] == "stopped"
-    assert activate.json()["status"] == "activated"
-    adapters.agent_lifecycle.start_managed_agent.assert_awaited_once_with({})
-    adapters.agent_lifecycle.stop_agent.assert_awaited_once_with("agent-1")
-    adapters.agent_lifecycle.activate_body.assert_awaited_once_with({"slot_id": "slot-B"})
-
-
-@pytest.mark.unit
 def test_execution_service_accepts_gateway_executor_prefix_routes():
     service, adapters = _make_service()
     client = TestClient(service.app)
 
-    start = client.post("/executor/agents/start", json={})
     upgrade = client.post("/executor/body/upgrade/execute", json={"slot_id": "slot-B"})
 
-    assert start.status_code == 200
-    assert start.json()["status"] == "started"
     assert upgrade.status_code == 200
     assert upgrade.json()["status"] == "upgrade_executed"
-    adapters.agent_lifecycle.start_managed_agent.assert_awaited_once_with({})
     adapters.body_upgrade.execute_body_upgrade.assert_awaited_once_with({"slot_id": "slot-B"})
 
 
@@ -211,5 +183,4 @@ def test_execution_service_delegates_maintenance_route():
     adapters.memory_maintenance.trigger_memory_compression.assert_awaited_once_with({"namespace": "default"})
     missing_legacy = client.post("/upgrade/legacy", json={"branch": "main"})
     assert missing_legacy.status_code == 404
-
 

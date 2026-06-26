@@ -1,10 +1,9 @@
 """VoidCube integrated service launcher.
 
-Implements the Phase 1 multi-process startup sequence:
-  1. Internal Gateway  (port 6000)
-  2. Supervisor        (port 6002)
-  (+ optional Agent subprocess managed by supervisor)
-
+Implements the default stable startup sequence:
+  1. Memory            (port 6001)
+  2. Internal Gateway  (port 6000)
+  3. Supervisor        (port 6002)
 Usage:
   VoidCube serve                 # start all services in background
   VoidCube serve --foreground    # start all services in foreground
@@ -30,8 +29,6 @@ logger = logging.getLogger(__name__)
 # ── Default ports ──────────────────────────────────────────────────────
 GATEWAY_PORT = 6000
 SUPERVISOR_PORT = 6002
-AGENT_BASE_PORT = 6080
-
 # PID file directory
 PID_DIR = Path.home() / ".VoidCube" / "run"
 
@@ -105,17 +102,9 @@ SERVICES: Dict[str, ServiceInfo] = {
         pid_file=str(PID_DIR / "memory.pid"),
         log_file=str(PID_DIR / "memory.log"),
     ),
-    "agent": ServiceInfo(
-        name="agent",
-        port=AGENT_BASE_PORT,
-        module="systems.agent.run_agent_instance:AgentInstance",
-        pid_file=str(PID_DIR / "agent.pid"),
-        log_file=str(PID_DIR / "agent.log"),
-    ),
     # ── Embedded services (run inside supervisor, not as separate processes) ──
     # Per architecture baseline §5, self-learning and executor are conceptual
-    # services.  They run embedded in the Supervisor via mixin composition
-    # (ServiceRuntimeMixin, ProcessGatewayRuntimeMixin) rather than as
+    # services.  They run embedded in the Supervisor rather than as
     # standalone daemon processes.
 }
 
@@ -239,9 +228,6 @@ def _build_service_app(name: str, port: int):
         return Supervisor(config=SupervisorConfig(port=port)).app
     elif name == "memory":
         return MemoryService(config=MemoryServiceConfig(port=port)).app
-    elif name == "agent":
-        from systems.agent.run_agent_instance import AgentInstance, AgentConfig
-        return AgentInstance(config=AgentConfig(port=port, active_slot="slot-A")).app
     raise ValueError(f"Unknown service: {name}")
 
 
@@ -422,12 +408,14 @@ def print_status(full: bool = False) -> None:
 
 
 def start_all(foreground: bool = False) -> None:
-    """Start all services per architecture baseline §5:
+    """Start default stable services.
 
     1. Mem (soul layer, API-B) — must be ready first
     2. Gateway (nerve centre) — routes all traffic, accepts registrations
     3. Supervisor (Mem's governance identity, API-B) — registers with Gateway
-    4. Agent Instance (active body, API-A) — registers with Gateway
+
+    Body/agent subprocesses are not part of the default startup path.
+    They should only be started by an explicit body-runtime operation.
     """
     PID_DIR.mkdir(parents=True, exist_ok=True)
     _safe_print("\n  Starting VoidCube services...\n")
@@ -447,15 +435,10 @@ def start_all(foreground: bool = False) -> None:
     if not foreground:
         _wait_for_health("supervisor", SUPERVISOR_PORT)
 
-    # 4. Agent Instance (registers with gateway as active body)
-    start_service("agent", foreground=foreground)
-    if not foreground:
-        _wait_for_health("agent", AGENT_BASE_PORT)
-
     if foreground:
-        # Foreground: both services are running in daemon threads.
+        # Foreground: default stable services are running in daemon threads.
         # Wait for them (join) — the main thread stays alive until interrupted.
-        _safe_print(f"\n  Both services started. Press Ctrl+C to stop.\n")
+        _safe_print(f"\n  Core services started. Press Ctrl+C to stop.\n")
         _safe_print(f"  Gateway:    http://127.0.0.1:{GATEWAY_PORT}")
         _safe_print(f"  Supervisor: http://127.0.0.1:{SUPERVISOR_PORT}/ui")
         _safe_print()
@@ -512,11 +495,10 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
     PID_DIR.mkdir(parents=True, exist_ok=True)
     result: Dict[str, Any] = {}
 
-    # Per architecture baseline §5: Mem → Gateway → Supervisor → Agent.
-    # Mem is the soul layer (API-B); Gateway is the nerve centre;
-    # Supervisor is Mem's governance identity (registers with Gateway);
-    # Agent is the active body (API-A).
-    startup_order = ["memory", "gateway", "supervisor", "agent"]
+    # Default stable path: Mem → Gateway → Supervisor.
+    # The live CLI session is the canonical API-A executor; body/agent
+    # subprocesses are only started explicitly for body-runtime workflows.
+    startup_order = ["memory", "gateway", "supervisor"]
     for name in startup_order:
         svc = SERVICES.get(name)
         if svc is None:
@@ -525,14 +507,16 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
         existing_pid = _read_pid(svc.pid_file)
         if existing_pid and _pid_alive(existing_pid):
             healthy = _health_check(svc.port)
-            result[name] = {"running": True, "healthy": healthy, "pid": existing_pid, "started": False}
+            if healthy:
+                result[name] = {"running": True, "healthy": True, "pid": existing_pid, "started": False}
+                if not silent:
+                    _safe_print(f"  ✓ {svc.name:12s} already running (pid {existing_pid}, port {svc.port})")
+                svc.pid = existing_pid
+                continue
+
             if not silent:
-                tag = "✓" if healthy else "⚠"
-                _safe_print(f"  {tag} {svc.name:12s} already running (pid {existing_pid}, port {svc.port})")
-                if not healthy:
-                    _safe_print(f"     health check failed — will not restart (pid exists)")
-            svc.pid = existing_pid
-            continue
+                _safe_print(f"  ⚠ {svc.name:12s} unhealthy (pid {existing_pid}, port {svc.port}) — restarting...")
+            stop_service(name, silent=True)
 
         if not silent:
             _safe_print(f"  ▶ {svc.name:12s} starting on port {svc.port}...")

@@ -18,6 +18,66 @@ class _FakeUrlopenResponse:
         return json.dumps(self._payload).encode("utf-8")
 
 
+def test_cli_does_not_rewrite_live_agent_base_url_to_gateway(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli.api_key = "runtime-key"
+    cli.base_url = "https://runtime-base.example/v1"
+    cli.provider = "agnesai"
+    cli.api_mode = "chat_completions"
+    cli.acp_command = None
+    cli.acp_args = []
+    cli.max_turns = 8
+    cli.enabled_toolsets = []
+    cli.verbose = False
+    cli.system_prompt = None
+    cli.prefill_messages = []
+    cli.reasoning_config = None
+    cli.service_tier = None
+    cli._providers_only = None
+    cli._providers_ignore = None
+    cli._providers_order = None
+    cli._provider_sort = None
+    cli._provider_require_params = None
+    cli._provider_data_collection = None
+    cli._fallback_model = None
+    cli._pending_title = None
+    cli._session_db = None
+    cli._current_reasoning_callback = lambda: None
+    cli._on_thinking = None
+    cli.checkpoints_enabled = False
+    cli.checkpoint_max_snapshots = 0
+    cli.pass_session_id = False
+    cli._on_tool_progress = None
+    cli._inline_diffs_enabled = False
+    cli.streaming_enabled = False
+    cli._stream_delta = None
+    cli._on_tool_gen_start = None
+    cli._config_mtime = 0.0
+    cli.session_id = "session-cli-direct"
+    cli.model = "agnes-2.0-flash"
+
+    class _FakeAgent:
+        def __init__(self, **kwargs):
+            self.base_url = kwargs["base_url"]
+            self._print_fn = None
+
+    monkeypatch.setattr("cli._get_AIAgent", lambda: _FakeAgent)
+    monkeypatch.setattr("cli._is_gateway_running", lambda timeout=0.3: True)
+    monkeypatch.setattr("cli._register_with_gateway", lambda session_id, model, provider: None)
+
+    cli.agent = None
+    cli._ensure_runtime_credentials = lambda: True
+    cli._resumed = False
+    cli.conversation_history = []
+    cli._clarify_callback = None
+    cli._pending_title = None
+
+    ok = cli._init_agent()
+
+    assert ok is True
+    assert cli.agent.base_url == "https://runtime-base.example/v1"
+
+
 def test_cli_auto_mode_marks_learning_task_failed_after_agent_error(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._current_auto_task = {"task_id": "learn-1"}
@@ -106,6 +166,7 @@ def test_cli_auto_mode_pulls_body_improvement_tasks(monkeypatch):
 
     assert any("task_type=self_learning" in url for url in requested_urls)
     assert any("execution_kind=body_improvement" in url for url in requested_urls)
+    assert any(url.endswith("/admin/activity/touch") for url in requested_urls)
     assert cli._current_auto_task is not None
     assert cli._current_auto_task["task_id"] == "body-1"
     assert prompts
@@ -150,6 +211,94 @@ def test_cli_force_quit_marks_body_improvement_task_interrupted(monkeypatch):
     assert task_request["data"]["context"]["execution_kind"] == "body_improvement"
     assert "body improvement task" in task_request["data"]["reason"]
     assert cli._current_auto_task is None
+
+
+def test_auto_command_marks_cli_agent_surface_active(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._auto_mode_active = False
+
+    pushed = []
+
+    def fake_cprint(*args, **kwargs):
+        del args, kwargs
+
+    def fake_push(scene, *, session_id=None, task_id=None, execution_kind=None):
+        pushed.append(
+            {
+                "scene": scene,
+                "session_id": session_id,
+                "task_id": task_id,
+                "execution_kind": execution_kind,
+            }
+        )
+
+    class _ImmediateThread:
+        def __init__(self, target=None, **kwargs):
+            del kwargs
+            self._target = target
+
+        def start(self):
+            if self._target:
+                self._target()
+
+    def fake_urlopen(request, timeout=0):
+        del request, timeout
+        return _FakeUrlopenResponse(
+            {
+                "governor_mode_active": True,
+                "drive_loop_running": True,
+                "review_loop_running": True,
+                "endogenous_drive_enabled": True,
+            }
+        )
+
+    monkeypatch.setattr("cli._cprint", fake_cprint)
+    monkeypatch.setattr("cli._push_cli_agent_scene", fake_push)
+    monkeypatch.setattr("threading.Thread", _ImmediateThread)
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        "VoidCube_cli.config.load_config",
+        lambda: {"supervisor": {"host": "127.0.0.1", "port": 6002}},
+    )
+
+    cli._handle_auto_command("/auto")
+
+    assert cli._auto_mode_active is True
+    assert pushed[0]["scene"] == "executing"
+
+
+def test_push_cli_agent_scene_includes_session_id(monkeypatch):
+    requests = []
+
+    def fake_urlopen(request, timeout=0):
+        del timeout
+        requests.append(
+            {
+                "url": request.full_url,
+                "data": json.loads((request.data or b"{}").decode("utf-8")),
+            }
+        )
+        return _FakeUrlopenResponse({})
+
+    class _ImmediateThread:
+        def __init__(self, target=None, **kwargs):
+            del kwargs
+            self._target = target
+
+        def start(self):
+            if self._target:
+                self._target()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("threading.Thread", _ImmediateThread)
+
+    from cli import _push_cli_agent_scene
+
+    _push_cli_agent_scene("learning", session_id="cli-session-2", task_id="learn-2")
+
+    assert requests[0]["url"].endswith("/admin/activity/touch")
+    assert requests[0]["data"]["session_id"] == "cli-session-2"
+    assert requests[0]["data"]["metadata"]["scene"] == "learning"
 
 
 def test_cli_formats_supervisor_status_snapshot():

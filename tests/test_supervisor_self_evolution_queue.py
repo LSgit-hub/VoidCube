@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 from unittest.mock import AsyncMock
+from fastapi import HTTPException
 
 import pytest
 
@@ -18,12 +19,6 @@ def _make_supervisor_config(tmp_path: Path) -> SupervisorConfig:
 
 
 def _make_supervisor(tmp_path: Path) -> Supervisor:
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
     return Supervisor(_make_supervisor_config(tmp_path))
 
 
@@ -321,6 +316,50 @@ async def test_batch_review_accepts_lm_queue_governance_override(tmp_path, monke
     lm_context = tasks["Weak duplicate follow-up"]["decision_history"][-1]["context"]["lm_queue_review"]
     assert lm_context["action"] == "cancelled"
     assert "Duplicate and low-evidence task" in lm_context["reason"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_gateway_activity_snapshot_retries_after_transient_failure(tmp_path, monkeypatch):
+    supervisor = _make_supervisor(tmp_path)
+
+    calls = {"count": 0}
+
+    class _FakeResponse:
+        status = 200
+
+        async def json(self):
+            return {"last_user_request_at": None, "counts": {}, "active_sessions": 0}
+
+        async def __aenter__(self):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise TimeoutError("transient gateway timeout")
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeSession:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url):
+            del url
+            return _FakeResponse()
+
+    monkeypatch.setattr("aiohttp.ClientSession", _FakeSession)
+
+    snapshot = await supervisor._fetch_gateway_activity_snapshot()
+
+    assert snapshot["active_sessions"] == 0
+    assert calls["count"] == 2
 
 
 @pytest.mark.asyncio

@@ -253,24 +253,34 @@ class PlanningRuntimeMixin:
         return "self_evolution_plan"
 
     async def _fetch_gateway_activity_snapshot(self) -> Dict[str, Any]:
-        try:
-            import aiohttp
+        import asyncio
+        import aiohttp
 
-            execution_config = self.config.execution
-            async with aiohttp.ClientSession() as session:
-                url = f"{execution_config.gateway_address}/admin/activity"
-                async with session.get(url, timeout=10) as response:
-                    if response.status != 200:
-                        raise HTTPException(
-                            status_code=503,
-                            detail=f"Gateway activity endpoint returned status {response.status}",
-                        )
-                    return await response.json()
-        except HTTPException:
-            raise
-        except Exception as exc:
-            logger.warning(f"Failed to fetch gateway activity snapshot: {exc}")
-            raise HTTPException(status_code=503, detail="Gateway activity snapshot unavailable")
+        execution_config = self.config.execution
+        url = f"{execution_config.gateway_address}/admin/activity"
+        last_error: Exception | None = None
+
+        for attempt in range(1, 4):
+            try:
+                timeout = aiohttp.ClientTimeout(total=10)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(url) as response:
+                        if response.status != 200:
+                            raise HTTPException(
+                                status_code=503,
+                                detail=f"Gateway activity endpoint returned status {response.status}",
+                            )
+                        return await response.json()
+            except HTTPException:
+                raise
+            except Exception as exc:
+                last_error = exc
+                if attempt < 3:
+                    await asyncio.sleep(0.5 * attempt)
+                    continue
+
+        logger.warning(f"Failed to fetch gateway activity snapshot: {last_error}")
+        raise HTTPException(status_code=503, detail="Gateway activity snapshot unavailable")
 
     def _parse_activity_timestamp(self, value: Any) -> Optional[datetime]:
         if not value or not isinstance(value, str):

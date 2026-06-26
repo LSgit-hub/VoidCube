@@ -297,13 +297,6 @@ def test_prepare_slot_workspace_can_clone_from_active_slot_worktree(tmp_path):
 
 @pytest.mark.unit
 def test_active_body_pointer_tracks_current_active_slot(tmp_path):
-    (tmp_path / "systems").mkdir()
-    (tmp_path / "systems" / "agent").mkdir()
-    (tmp_path / "systems" / "agent" / "run_agent_instance.py").write_text(
-        "print('slot launch')\n",
-        encoding="utf-8",
-    )
-
     manager = BodyRegistryManager(tmp_path)
     manager.initialize_layout()
     manager.prepare_slot_workspace("slot-A", source_path=tmp_path)
@@ -311,7 +304,7 @@ def test_active_body_pointer_tracks_current_active_slot(tmp_path):
 
     assert pointer.slot_id == "slot-A"
     assert pointer.body_state == "active"
-    assert pointer.launch_script_path.endswith("run_agent_instance.py")
+    assert Path(pointer.worktree_path).name == "worktree"
 
     manager.prepare_slot_workspace("slot-B", source_slot_id="slot-A")
     manager.mark_candidate("slot-B", body_version="v2")
