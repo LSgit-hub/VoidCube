@@ -156277,9 +156277,9 @@
       "execution_kind": "self_learning",
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "completed",
       "created_at": "2026-06-26T14:14:53.757535",
-      "updated_at": "2026-06-26T15:00:20.910424",
+      "updated_at": "2026-06-26T15:26:08.869315",
       "metadata": {
         "source": "endogenous_drive",
         "endogenous_drive_key": "creativity:idle_learning:fallback",
@@ -156290,7 +156290,10 @@
         "governance_task_type": "self_learning",
         "task_family": "self_learning",
         "recovered_from_orphaned_running": true,
-        "last_recovered_at": "2026-06-26T15:00:20.831910+00:00"
+        "last_recovered_at": "2026-06-26T15:00:20.831910+00:00",
+        "owner_session_id": "20260626_232039_03e64f",
+        "execution_started_at": "2026-06-26T23:20:50.793920+08:00",
+        "execution_source": "cli_agent_pull"
       },
       "evidence": {
         "endogenous_drive": {
@@ -156313,7 +156316,7 @@
         "execution_policy": "learn_only",
         "must_not_modify_active_body": true
       },
-      "decision_reason": "Recovered orphaned AUTO agent-pull task because its owning CLI session is no longer the active executor.",
+      "decision_reason": "AUTO learning task completed by CLI Agent in AUTO mode.",
       "decision_history": [
         {
           "decision_id": "5a12f414-53cc-4701-a211-ac62253a43f0",
@@ -156838,6 +156841,43 @@
             "recovered": true,
             "previous_owner_session_id": null,
             "active_cli_session_id": null
+          }
+        },
+        {
+          "decision_id": "50544642-8a15-421f-8f76-b8102ac6e5ac",
+          "status": "running",
+          "task_type": "self_learning",
+          "governance_task_type": "self_learning",
+          "task_family": "self_learning",
+          "execution_kind": null,
+          "trace_id": "ec34a988-e184-46b2-9ab6-bf01b18fc023",
+          "decided_at": "2026-06-26T15:20:51.120326",
+          "actor": "cli_agent",
+          "reason": "Agent pulled task for execution in AUTO mode.",
+          "context": {
+            "session_id": "20260626_232039_03e64f",
+            "source": "cli_agent_pull",
+            "execution_kind": "self_learning"
+          }
+        },
+        {
+          "decision_id": "16c5acfa-a9cf-4ada-a7ef-8e49529ef9e2",
+          "status": "completed",
+          "task_type": "self_learning",
+          "governance_task_type": "self_learning",
+          "task_family": "self_learning",
+          "execution_kind": null,
+          "trace_id": "ec34a988-e184-46b2-9ab6-bf01b18fc023",
+          "decided_at": "2026-06-26T15:26:08.869315",
+          "actor": "agent",
+          "reason": "AUTO learning task completed by CLI Agent in AUTO mode.",
+          "context": {
+            "source": "cli_agent_pull",
+            "elapsed_s": 315,
+            "failed": false,
+            "partial": false,
+            "interrupted": false,
+            "error": ""
           }
         }
       ],
@@ -161117,18 +161157,21 @@
       "execution_kind": "self_learning",
       "source": "endogenous_drive",
       "priority": "normal",
-      "status": "approved",
+      "status": "running",
       "created_at": "2026-06-26T14:48:04.378237",
-      "updated_at": "2026-06-26T15:00:22.164653",
+      "updated_at": "2026-06-26T15:48:59.447683",
       "metadata": {
         "governance_task_type": "self_learning",
         "task_family": "self_learning",
         "recovered_from_orphaned_running": true,
-        "last_recovered_at": "2026-06-26T15:00:22.091147+00:00"
+        "last_recovered_at": "2026-06-26T15:48:50.677984+00:00",
+        "owner_session_id": "20260626_234726_c4a792",
+        "execution_started_at": "2026-06-26T23:48:58.734054+08:00",
+        "execution_source": "cli_agent_pull"
       },
       "evidence": {},
       "constraints": {},
-      "decision_reason": "Recovered orphaned AUTO agent-pull task because its owning CLI session is no longer the active executor.",
+      "decision_reason": "Agent pulled task for execution in AUTO mode.",
       "decision_history": [
         {
           "decision_id": "ea6dac99-00da-4c64-b799-4d3720a9deec",
@@ -161197,6 +161240,57 @@
             "recovered": true,
             "previous_owner_session_id": null,
             "active_cli_session_id": null
+          }
+        },
+        {
+          "decision_id": "923706d4-a663-41fd-b3fd-37f53d9265b1",
+          "status": "running",
+          "task_type": "self_learning",
+          "governance_task_type": "self_learning",
+          "task_family": "self_learning",
+          "execution_kind": null,
+          "trace_id": "bf954fb1-dd9b-4f1c-bb9a-268e868b80e9",
+          "decided_at": "2026-06-26T15:26:10.224987",
+          "actor": "cli_agent",
+          "reason": "Agent pulled task for execution in AUTO mode.",
+          "context": {
+            "session_id": "20260626_232039_03e64f",
+            "source": "cli_agent_pull",
+            "execution_kind": "self_learning"
+          }
+        },
+        {
+          "decision_id": "52652a27-722a-4eb6-8ef5-56a39e2b8c3d",
+          "status": "approved",
+          "task_type": "self_learning",
+          "governance_task_type": "self_learning",
+          "task_family": "self_learning",
+          "execution_kind": null,
+          "trace_id": "bf954fb1-dd9b-4f1c-bb9a-268e868b80e9",
+          "decided_at": "2026-06-26T15:48:50.194382",
+          "actor": "supervisor",
+          "reason": "Recovered orphaned AUTO agent-pull task because its owning CLI session is no longer the active executor.",
+          "context": {
+            "recovered": true,
+            "previous_owner_session_id": "20260626_232039_03e64f",
+            "active_cli_session_id": "20260626_234726_c4a792"
+          }
+        },
+        {
+          "decision_id": "8c781f9d-a6a8-4f10-a484-141101ca0085",
+          "status": "running",
+          "task_type": "self_learning",
+          "governance_task_type": "self_learning",
+          "task_family": "self_learning",
+          "execution_kind": null,
+          "trace_id": "bf954fb1-dd9b-4f1c-bb9a-268e868b80e9",
+          "decided_at": "2026-06-26T15:48:58.950544",
+          "actor": "cli_agent",
+          "reason": "Agent pulled task for execution in AUTO mode.",
+          "context": {
+            "session_id": "20260626_234726_c4a792",
+            "source": "cli_agent_pull",
+            "execution_kind": "self_learning"
           }
         }
       ],
@@ -168191,6 +168285,67 @@
           }
         }
       ],
+      "execution_request": null
+    },
+    {
+      "task_id": "9f702c3b-dfd1-4c22-9b2e-745a5fe9a28b",
+      "trace_id": "f41bde39-8aa2-4069-aa3b-f71986188fd7",
+      "title": "Maintain long-term memory continuity",
+      "summary": "Inspect memory-maintenance needs during an idle window so long-term identity, summaries, and governance traces stay usable.",
+      "task_type": "memory_maintenance",
+      "governance_task_type": "memory_maintenance",
+      "task_family": "memory_maintenance",
+      "execution_kind": "memory_maintenance",
+      "source": "endogenous_drive",
+      "priority": "high",
+      "status": "planned",
+      "created_at": "2026-06-26T15:20:44.632844",
+      "updated_at": "2026-06-26T15:20:44.632844",
+      "metadata": {
+        "source": "endogenous_drive",
+        "endogenous_drive_key": "continuity:memory_maintenance_sweep",
+        "core_values": [
+          "continuity"
+        ],
+        "utility": 0.92,
+        "governance_task_type": "memory_maintenance",
+        "task_family": "memory_maintenance",
+        "execution_kind": "memory_maintenance"
+      },
+      "evidence": {
+        "endogenous_drive": {
+          "stable_key": "continuity:memory_maintenance_sweep",
+          "core_values": [
+            "continuity"
+          ],
+          "core_value_definitions": {
+            "continuity": "Preserve VoidCube's long-term memory, lineage, and service continuity."
+          },
+          "utility": 0.92
+        },
+        "idle_window_checks": {
+          "has_user_idle": true,
+          "has_memory_idle": true,
+          "has_agent_idle": true,
+          "has_self_learning_idle": true,
+          "has_self_evolution_plan_idle": true,
+          "has_self_evolution_execute_idle": true,
+          "has_self_evolution_idle": true,
+          "in_execution_window": true
+        },
+        "idle_seconds": {
+          "user": 54585.983396,
+          "agent": 30211.712947,
+          "memory": null,
+          "self_learning": 28800.466605,
+          "self_evolution_plan": 29065.445755,
+          "self_evolution_execute": 29053.924853,
+          "self_evolution": 29053.924853
+        }
+      },
+      "constraints": {},
+      "decision_reason": "",
+      "decision_history": [],
       "execution_request": null
     }
   ]

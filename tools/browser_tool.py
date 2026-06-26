@@ -1184,7 +1184,8 @@ def _run_browser_command(
 
 def _extract_relevant_content(
     snapshot_text: str,
-    user_task: Optional[str] = None
+    user_task: Optional[str] = None,
+    main_runtime: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Use LLM to extract relevant content from a snapshot based on the user's task.
 
@@ -1230,6 +1231,8 @@ def _extract_relevant_content(
         model = _get_extraction_model()
         if model:
             call_kwargs["model"] = model
+        if main_runtime:
+            call_kwargs["main_runtime"] = main_runtime
         response = call_llm(**call_kwargs)
         extracted = (response.choices[0].message.content or "").strip() or _truncate_snapshot(snapshot_text)
         # Redact any secrets the auxiliary LLM may have echoed back.
@@ -1415,7 +1418,8 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
 def browser_snapshot(
     full: bool = False,
     task_id: Optional[str] = None,
-    user_task: Optional[str] = None
+    user_task: Optional[str] = None,
+    main_runtime: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Get a text-based snapshot of the current page's accessibility tree.
@@ -1448,7 +1452,11 @@ def browser_snapshot(
         
         # Check if snapshot needs summarization
         if len(snapshot_text) > SNAPSHOT_SUMMARIZE_THRESHOLD and user_task:
-            snapshot_text = _extract_relevant_content(snapshot_text, user_task)
+            snapshot_text = _extract_relevant_content(
+                snapshot_text,
+                user_task,
+                main_runtime=main_runtime,
+            )
         elif len(snapshot_text) > SNAPSHOT_SUMMARIZE_THRESHOLD:
             snapshot_text = _truncate_snapshot(snapshot_text)
         
@@ -1889,7 +1897,12 @@ def browser_get_images(task_id: Optional[str] = None) -> str:
         }, ensure_ascii=False)
 
 
-def browser_vision(question: str, annotate: bool = False, task_id: Optional[str] = None) -> str:
+def browser_vision(
+    question: str,
+    annotate: bool = False,
+    task_id: Optional[str] = None,
+    main_runtime: Optional[Dict[str, Any]] = None,
+) -> str:
     """
     Take a screenshot of the current page and analyze it with vision AI.
     
@@ -2018,6 +2031,8 @@ def browser_vision(question: str, annotate: bool = False, task_id: Optional[str]
         }
         if vision_model:
             call_kwargs["model"] = vision_model
+        if main_runtime:
+            call_kwargs["main_runtime"] = main_runtime
         # Try full-size screenshot; on size-related rejection, downscale and retry.
         try:
             response = call_llm(**call_kwargs)
@@ -2322,7 +2337,11 @@ registry.register(
     toolset="browser",
     schema=_BROWSER_SCHEMA_MAP["browser_snapshot"],
     handler=lambda args, **kw: browser_snapshot(
-        full=args.get("full", False), task_id=kw.get("task_id"), user_task=kw.get("user_task")),
+        full=args.get("full", False),
+        task_id=kw.get("task_id"),
+        user_task=kw.get("user_task"),
+        main_runtime=kw.get("main_runtime"),
+    ),
     check_fn=check_browser_requirements,
     emoji="📸",
 )
@@ -2379,7 +2398,12 @@ registry.register(
     name="browser_vision",
     toolset="browser",
     schema=_BROWSER_SCHEMA_MAP["browser_vision"],
-    handler=lambda args, **kw: browser_vision(question=args.get("question", ""), annotate=args.get("annotate", False), task_id=kw.get("task_id")),
+    handler=lambda args, **kw: browser_vision(
+        question=args.get("question", ""),
+        annotate=args.get("annotate", False),
+        task_id=kw.get("task_id"),
+        main_runtime=kw.get("main_runtime"),
+    ),
     check_fn=check_browser_requirements,
     emoji="👁️",
 )

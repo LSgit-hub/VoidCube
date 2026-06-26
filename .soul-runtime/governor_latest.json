@@ -1,17 +1,17 @@
 {
-  "record_id": "0326b600-055e-4527-b513-7661830a7912",
+  "record_id": "fae84a27-84b6-49b3-99fd-64853eca0782",
   "kind": "supervisor_activity",
-  "created_at": "2026-06-26T15:16:30.738077",
+  "created_at": "2026-06-26T15:49:00.515860",
   "request": {
-    "event_id": "b4145981-b70d-4454-ada4-83f90b5a49a6",
-    "event_type": "auto_dispatched",
-    "scene": "dispatch",
-    "summary": "Auto-dispatched: 'Maintain long-term memory continuity' (idle=9999s)",
-    "trace_id": null,
-    "task_id": "518f3096-9223-493a-954a-49385a82ca85",
-    "task_type": null,
-    "governance_task_type": null,
-    "task_family": null,
+    "event_id": "e53852a5-a952-4afe-8d05-f611dec2b383",
+    "event_type": "task_decided",
+    "scene": "planning",
+    "summary": "Task 'Synthetic orphan recovery task' was marked running.",
+    "trace_id": "bf954fb1-dd9b-4f1c-bb9a-268e868b80e9",
+    "task_id": "b5a6e83a-bcd6-4113-bee7-9cee0c1f0c17",
+    "task_type": "self_learning",
+    "governance_task_type": "self_learning",
+    "task_family": "self_learning",
     "execution_kind": null,
     "decision_id": null,
     "source_actor": "supervisor"
@@ -24,13 +24,13 @@
   "execution_report": null,
   "registry": null,
   "evolution_lineage": {
-    "trace_id": null,
-    "task_type": null,
-    "governance_task_type": null,
-    "task_family": null,
+    "trace_id": "bf954fb1-dd9b-4f1c-bb9a-268e868b80e9",
+    "task_type": "self_learning",
+    "governance_task_type": "self_learning",
+    "task_family": "self_learning",
     "execution_kind": null,
     "decision_id": null,
-    "event_type": "auto_dispatched",
+    "event_type": "task_decided",
     "source_actor": "supervisor"
   }
 }

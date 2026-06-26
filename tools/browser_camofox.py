@@ -290,7 +290,8 @@ def camofox_navigate(url: str, task_id: Optional[str] = None) -> str:
 
 
 def camofox_snapshot(full: bool = False, task_id: Optional[str] = None,
-                     user_task: Optional[str] = None) -> str:
+                     user_task: Optional[str] = None,
+                     main_runtime: Optional[Dict[str, Any]] = None) -> str:
     """Get accessibility tree snapshot from Camofox."""
     try:
         session = _get_session(task_id)
@@ -314,7 +315,11 @@ def camofox_snapshot(full: bool = False, task_id: Optional[str] = None,
 
         if len(snapshot) > SNAPSHOT_SUMMARIZE_THRESHOLD:
             if user_task:
-                snapshot = _extract_relevant_content(snapshot, user_task)
+                snapshot = _extract_relevant_content(
+                    snapshot,
+                    user_task,
+                    main_runtime=main_runtime,
+                )
             else:
                 snapshot = _truncate_snapshot(snapshot)
 
@@ -483,7 +488,8 @@ def camofox_get_images(task_id: Optional[str] = None) -> str:
 
 
 def camofox_vision(question: str, annotate: bool = False,
-                   task_id: Optional[str] = None) -> str:
+                   task_id: Optional[str] = None,
+                   main_runtime: Optional[Dict[str, Any]] = None) -> str:
     """Take a screenshot and analyze it with vision AI via Camofox."""
     try:
         session = _get_session(task_id)
@@ -556,6 +562,7 @@ def camofox_vision(question: str, annotate: bool = False,
             }],
             task="vision",
             timeout=_vision_timeout,
+            main_runtime=main_runtime,
         )
         analysis = (response.choices[0].message.content or "").strip() if response.choices else ""
 
@@ -587,6 +594,5 @@ def camofox_console(clear: bool = False, task_id: Optional[str] = None) -> str:
         "note": "Console log capture is not available with the Camofox backend. "
                 "Use browser_snapshot or browser_vision to inspect page state.",
     })
-
 
 

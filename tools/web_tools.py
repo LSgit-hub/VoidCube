@@ -461,9 +461,16 @@ def _is_nous_auxiliary_client(client: Any) -> bool:
     return host == "nousresearch.com" or host.endswith(".nousresearch.com")
 
 
-def _resolve_web_extract_auxiliary(model: Optional[str] = None) -> tuple[Optional[Any], Optional[str], Dict[str, Any]]:
+def _resolve_web_extract_auxiliary(
+    model: Optional[str] = None,
+    *,
+    main_runtime: Optional[Dict[str, Any]] = None,
+) -> tuple[Optional[Any], Optional[str], Dict[str, Any]]:
     """Resolve the current web-extract auxiliary client, model, and extra body."""
-    client, default_model = get_async_text_auxiliary_client("web_extract")
+    client, default_model = get_async_text_auxiliary_client(
+        "web_extract",
+        main_runtime=main_runtime,
+    )
     configured_model = os.getenv("AUXILIARY_WEB_EXTRACT_MODEL", "").strip()
     effective_model = model or configured_model or default_model
 
@@ -475,9 +482,9 @@ def _resolve_web_extract_auxiliary(model: Optional[str] = None) -> tuple[Optiona
     return client, effective_model, extra_body
 
 
-def _get_default_summarizer_model() -> Optional[str]:
+def _get_default_summarizer_model(*, main_runtime: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """Return the current default model for web extraction summarization."""
-    _, model, _ = _resolve_web_extract_auxiliary()
+    _, model, _ = _resolve_web_extract_auxiliary(main_runtime=main_runtime)
     return model
 
 _debug = DebugSession("web_tools", env_var="WEB_TOOLS_DEBUG")
@@ -488,7 +495,8 @@ async def process_content_with_llm(
     url: str = "", 
     title: str = "",
     model: Optional[str] = None,
-    min_length: int = DEFAULT_MIN_LENGTH_FOR_SUMMARIZATION
+    min_length: int = DEFAULT_MIN_LENGTH_FOR_SUMMARIZATION,
+    main_runtime: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """
     Process web content using LLM to create intelligent summaries with key excerpts.
@@ -542,13 +550,23 @@ async def process_content_with_llm(
         if content_len > CHUNK_THRESHOLD:
             logger.info("Content large (%d chars). Using chunked processing...", content_len)
             return await _process_large_content_chunked(
-                content, context_str, model, CHUNK_SIZE, MAX_OUTPUT_SIZE
+                content,
+                context_str,
+                model,
+                CHUNK_SIZE,
+                MAX_OUTPUT_SIZE,
+                main_runtime=main_runtime,
             )
         
         # Standard single-pass processing for normal content
         logger.info("Processing content with LLM (%d characters)", content_len)
         
-        processed_content = await _call_summarizer_llm(content, context_str, model)
+        processed_content = await _call_summarizer_llm(
+            content,
+            context_str,
+            model,
+            main_runtime=main_runtime,
+        )
         
         if processed_content:
             # Enforce output cap
@@ -589,7 +607,8 @@ async def _call_summarizer_llm(
     model: Optional[str], 
     max_tokens: int = 20000,
     is_chunk: bool = False,
-    chunk_info: str = ""
+    chunk_info: str = "",
+    main_runtime: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """
     Make a single LLM call to summarize content.
@@ -653,7 +672,10 @@ Create a markdown summary that captures all key information in a well-organized,
 
     for attempt in range(max_retries):
         try:
-            aux_client, effective_model, extra_body = _resolve_web_extract_auxiliary(model)
+            aux_client, effective_model, extra_body = _resolve_web_extract_auxiliary(
+                model,
+                main_runtime=main_runtime,
+            )
             if aux_client is None or not effective_model:
                 logger.warning("No auxiliary model available for web content processing")
                 return None
@@ -672,6 +694,8 @@ Create a markdown summary that captures all key information in a well-organized,
             }
             if extra_body:
                 call_kwargs["extra_body"] = extra_body
+            if main_runtime:
+                call_kwargs["main_runtime"] = main_runtime
             response = await async_call_llm(**call_kwargs)
             content = extract_content_or_reasoning(response)
             if content:
@@ -704,7 +728,9 @@ async def _process_large_content_chunked(
     context_str: str, 
     model: Optional[str], 
     chunk_size: int,
-    max_output_size: int
+    max_output_size: int,
+    *,
+    main_runtime: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """
     Process large content by chunking, summarizing each chunk in parallel,
@@ -739,7 +765,8 @@ async def _process_large_content_chunked(
                 model, 
                 max_tokens=10000,
                 is_chunk=True,
-                chunk_info=chunk_info
+                chunk_info=chunk_info,
+                main_runtime=main_runtime,
             )
             if summary:
                 logger.info("Chunk %d/%d summarized: %d -> %d chars", chunk_idx + 1, len(chunks), len(chunk_content), len(summary))
@@ -789,7 +816,10 @@ Synthesize these into ONE cohesive, comprehensive summary that:
 Create a single, unified markdown summary."""
 
     try:
-        aux_client, effective_model, extra_body = _resolve_web_extract_auxiliary(model)
+        aux_client, effective_model, extra_body = _resolve_web_extract_auxiliary(
+            model,
+            main_runtime=main_runtime,
+        )
         if aux_client is None or not effective_model:
             logger.warning("No auxiliary model for synthesis, concatenating summaries")
             fallback = "\n\n".join(summaries)
@@ -809,6 +839,8 @@ Create a single, unified markdown summary."""
         }
         if extra_body:
             call_kwargs["extra_body"] = extra_body
+        if main_runtime:
+            call_kwargs["main_runtime"] = main_runtime
         response = await async_call_llm(**call_kwargs)
         final_summary = extract_content_or_reasoning(response)
 
@@ -1201,7 +1233,8 @@ async def web_extract_tool(
     format: str = None,
     use_llm_processing: bool = True,
     model: Optional[str] = None,
-    min_length: int = DEFAULT_MIN_LENGTH_FOR_SUMMARIZATION
+    min_length: int = DEFAULT_MIN_LENGTH_FOR_SUMMARIZATION,
+    main_runtime: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Extract content from specific web pages using available extraction API backend.
@@ -1464,8 +1497,8 @@ async def web_extract_tool(
         
         debug_call_data["pages_extracted"] = pages_extracted
         debug_call_data["original_response_size"] = len(json.dumps(response))
-        effective_model = model or _get_default_summarizer_model()
-        auxiliary_available = check_auxiliary_model()
+        effective_model = model or _get_default_summarizer_model(main_runtime=main_runtime)
+        auxiliary_available = check_auxiliary_model(main_runtime=main_runtime)
         
         # Process each result with LLM if enabled
         if use_llm_processing and auxiliary_available:
@@ -1486,7 +1519,12 @@ async def web_extract_tool(
                 
                 # Process content with LLM
                 processed = await process_content_with_llm(
-                    raw_content, url, title, effective_model, min_length
+                    raw_content,
+                    url,
+                    title,
+                    effective_model,
+                    min_length,
+                    main_runtime=main_runtime,
                 )
                 
                 if processed:
@@ -1594,7 +1632,8 @@ async def web_crawl_tool(
     depth: str = "basic", 
     use_llm_processing: bool = True,
     model: Optional[str] = None,
-    min_length: int = DEFAULT_MIN_LENGTH_FOR_SUMMARIZATION
+    min_length: int = DEFAULT_MIN_LENGTH_FOR_SUMMARIZATION,
+    main_runtime: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Crawl a website with specific instructions using available crawling API backend.
@@ -1637,8 +1676,8 @@ async def web_crawl_tool(
     }
     
     try:
-        effective_model = model or _get_default_summarizer_model()
-        auxiliary_available = check_auxiliary_model()
+        effective_model = model or _get_default_summarizer_model(main_runtime=main_runtime)
+        auxiliary_available = check_auxiliary_model(main_runtime=main_runtime)
         backend = _get_backend()
 
         # Tavily supports crawl via its /crawl endpoint
@@ -1694,7 +1733,14 @@ async def web_crawl_tool(
                     if not content:
                         return result, None, "no_content"
                     original_size = len(content)
-                    processed = await process_content_with_llm(content, page_url, title, effective_model, min_length)
+                    processed = await process_content_with_llm(
+                        content,
+                        page_url,
+                        title,
+                        effective_model,
+                        min_length,
+                        main_runtime=main_runtime,
+                    )
                     if processed:
                         result['raw_content'] = content
                         result['content'] = processed
@@ -1907,7 +1953,12 @@ async def web_crawl_tool(
                 
                 # Process content with LLM
                 processed = await process_content_with_llm(
-                    content, page_url, title, effective_model, min_length
+                    content,
+                    page_url,
+                    title,
+                    effective_model,
+                    min_length,
+                    main_runtime=main_runtime,
                 )
                 
                 if processed:
@@ -2025,9 +2076,9 @@ def check_web_api_key() -> bool:
     return any(_is_backend_available(backend) for backend in ("exa", "parallel", "firecrawl", "tavily"))
 
 
-def check_auxiliary_model() -> bool:
+def check_auxiliary_model(*, main_runtime: Optional[Dict[str, Any]] = None) -> bool:
     """Check if an auxiliary text model is available for LLM content processing."""
-    client, _, _ = _resolve_web_extract_auxiliary()
+    client, _, _ = _resolve_web_extract_auxiliary(main_runtime=main_runtime)
     return client is not None
 
 
@@ -2193,7 +2244,10 @@ registry.register(
     toolset="web",
     schema=WEB_EXTRACT_SCHEMA,
     handler=lambda args, **kw: web_extract_tool(
-        args.get("urls", [])[:5] if isinstance(args.get("urls"), list) else [], "markdown"),
+        args.get("urls", [])[:5] if isinstance(args.get("urls"), list) else [],
+        "markdown",
+        main_runtime=kw.get("main_runtime"),
+    ),
     check_fn=check_web_api_key,
     requires_env=_web_requires_env(),
     is_async=True,
