@@ -2,7 +2,7 @@
 
 ## 1. 当前内生驱动产生的任务
 
-内生驱动器 `EndogenousDriveEngine._candidate_stream()` 每次循环产生最多 3 个候选任务（`max_candidates=3`），按 utility 降序排列：
+内生驱动器 `EndogenousDriveEngine._candidate_stream()` 当前围绕四类核心候选生成任务，并按 utility 降序参与后续治理：
 
 | # | stable_key | 标题 | utility | 类型 | 约束 |
 |---|-----------|------|---------|------|------|
