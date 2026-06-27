@@ -66,6 +66,7 @@ build/
 *.egg
 *.egg-info/
 *.whl
+.deps_installed
 
 # ==========================================
 # 📝 日志文件
@@ -166,7 +167,10 @@ compile_commands.json
 .mypy_cache/
 .pytest_tmp/
 .tmp-pytest*/
+tmp-pytest-*/
 .pytest_cache/
+.tmp_voidcube*/
+.tmp-supervisor-debug/
 .trae/
 *.tmp
 *.temp
