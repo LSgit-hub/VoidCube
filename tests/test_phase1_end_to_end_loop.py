@@ -138,7 +138,7 @@ class TestPhase1EndogenousDriveToQueue:
         }
         assert "continuity:memory_maintenance_sweep" in keys
         assert "truthfulness:review_correction_signals" in keys
-        assert "creativity:idle_learning_thread" in keys
+        assert any(t["governance_task_type"] == "self_learning" for t in tasks["tasks"])
         assert "continuity:queue_hygiene_review" in keys
 
         # Verify canonical gateway field names are read correctly

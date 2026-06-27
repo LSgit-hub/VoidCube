@@ -122,6 +122,11 @@ class Supervisor(
         self.app.add_api_route("/self-evolution/tasks", self.list_self_evolution_tasks, methods=["GET"])
         self.app.add_api_route("/self-evolution/tasks", self.plan_self_evolution_task, methods=["POST"])
         self.app.add_api_route(
+            "/self-evolution/tasks/clear",
+            self.clear_self_evolution_runtime,
+            methods=["POST"],
+        )
+        self.app.add_api_route(
             "/self-evolution/tasks/review",
             self.review_self_evolution_tasks,
             methods=["POST"],

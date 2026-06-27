@@ -123,7 +123,7 @@ async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_dupli
     }
     assert "continuity:memory_maintenance_sweep" in tasks_by_key
     assert "truthfulness:review_correction_signals" in tasks_by_key
-    assert "creativity:idle_learning_thread" in tasks_by_key
+    assert any(task["governance_task_type"] == "self_learning" for task in queued["tasks"])
     memory_task = tasks_by_key["continuity:memory_maintenance_sweep"]
     assert memory_task["source"] == "endogenous_drive"
     assert memory_task["governance_task_type"] == "memory_maintenance"
@@ -134,6 +134,83 @@ async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_dupli
     assert "endogenous_drive_evaluated" in event_types
     assert "endogenous_drive_planned" in event_types
     assert "endogenous_drive_idle" in event_types
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_fallback_learning_targets_shell_codebase_without_history(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {
+                "user": 900,
+                "agent": 900,
+                "memory": 900,
+            },
+            "activity": {
+                "active_sessions": 0,
+                "counts": {},
+                "recent_metadata": {},
+            },
+            "shell_slot": {
+                "slot_id": "slot-B",
+                "worktree_path": str((tmp_path / ".body-slots" / "slot-B" / "worktree").resolve()),
+            },
+            "completed_learning_tasks": [],
+            "task_family_decisions": {
+                "memory_maintenance": {
+                    "eligible_for_planning": False,
+                    "eligible_for_execution": False,
+                },
+                "self_learning": {
+                    "eligible_for_planning": True,
+                    "eligible_for_execution": True,
+                },
+                "general_self_evolution": {
+                    "eligible_for_planning": False,
+                    "eligible_for_execution": False,
+                },
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {
+                    "eligible_for_planning": False,
+                    "eligible_for_execution": False,
+                },
+                "self_learning": {
+                    "eligible_for_planning": True,
+                    "eligible_for_execution": True,
+                },
+                "self_evolution": {
+                    "eligible_for_planning": False,
+                    "eligible_for_execution": False,
+                },
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+
+    result = await supervisor._run_endogenous_drive_cycle()
+
+    assert result["status"] == "planned"
+    learning_task = next(
+        task for task in result["tasks"]
+        if task["governance_task_type"] == "self_learning"
+    )
+    assert learning_task["title"] == "Understand the current shell body codebase"
+    assert learning_task["constraints"]["execution_policy"] == "learn_shell_baseline"
+    assert learning_task["constraints"]["baseline_slot_id"] == "slot-B"
+    assert learning_task["metadata"]["learning_branch"] == "codebase_baseline"
+    assert learning_task["metadata"]["self_learning_mode"] == "shell_codebase_baseline"
+    assert learning_task["evidence"]["learning_branch"] == "codebase_baseline"
+    assert "slot-B" in learning_task["summary"]
 
 
 @pytest.mark.asyncio
@@ -267,6 +344,65 @@ async def test_batch_review_can_reapprove_deferred_tasks_on_later_cycle(tmp_path
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_endogenous_drive_still_plans_learning_candidates_with_active_sessions(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    async def fake_idle_window(request: dict | None = None):
+        del request
+        return {
+            "checks": {"in_execution_window": True},
+            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "activity": {
+                "counts": {},
+                "active_sessions": 2,
+                "recent_metadata": {
+                    "user_request": {"topic": "AUTO foreground execution diagnostics"}
+                },
+            },
+            "task_family_decisions": {
+                "memory_maintenance": {
+                    "eligible_for_planning": True,
+                    "eligible_for_execution": True,
+                },
+                "self_learning": {
+                    "eligible_for_planning": True,
+                    "eligible_for_execution": True,
+                },
+                "general_self_evolution": {
+                    "eligible_for_planning": True,
+                    "eligible_for_execution": False,
+                },
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {
+                    "eligible_for_planning": True,
+                    "eligible_for_execution": True,
+                },
+                "self_learning": {
+                    "eligible_for_planning": True,
+                    "eligible_for_execution": True,
+                },
+                "self_evolution": {
+                    "eligible_for_planning": True,
+                    "eligible_for_execution": False,
+                },
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+
+    result = await supervisor._run_endogenous_drive_cycle()
+    queued = await supervisor.list_self_evolution_tasks()
+    keys = {
+        task["metadata"]["endogenous_drive_key"]: task for task in queued["tasks"]
+    }
+
+    assert result["status"] == "planned"
+    assert any(task["governance_task_type"] == "self_learning" for task in queued["tasks"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_batch_review_accepts_lm_queue_governance_override(tmp_path, monkeypatch):
     supervisor = _make_supervisor(tmp_path)
     planned = await supervisor.plan_self_evolution_task(
@@ -367,6 +503,146 @@ async def test_governor_mode_preserves_agent_pull_task_approval_when_lm_suggests
     latest_context = result["tasks"][0]["decision_history"][-1]["context"]
     assert latest_context["lm_queue_review"]["action"] == "deferred"
     assert latest_context["lm_queue_shadow"]["preserved_status"] == "approved"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_batch_review_preserves_agent_pull_task_approval_without_governor_mode(tmp_path, monkeypatch):
+    supervisor = _make_supervisor(tmp_path)
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Explore one unresolved learning thread",
+            "task_family": "self_learning",
+            "source": "self_learning",
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+
+    async def busy_snapshot():
+        return {
+            "last_user_request_at": "2026-05-25T00:12:00",
+            "last_agent_work_at": "2026-05-25T00:12:00",
+            "last_memory_task_at": None,
+            "last_self_evolution_activity_at": None,
+            "counts": {},
+            "active_sessions": 1,
+        }
+
+    supervisor._fetch_gateway_activity_snapshot = busy_snapshot  # type: ignore[method-assign]
+
+    async def fake_lm_review(tasks, *, idle_window):
+        del idle_window
+        assert len(tasks) == 1
+        return {
+            task_id: {
+                "action": "defer",
+                "reason": "Conservative queue governance would wait for more evidence.",
+            }
+        }
+
+    monkeypatch.setattr(supervisor, "_lm_review_task_queue", fake_lm_review)
+
+    result = await supervisor.review_self_evolution_tasks(
+        {
+            "idle_window": {"now": "2026-05-25T00:15:00"},
+        }
+    )
+
+    assert result["tasks"][0]["status"] == "approved"
+    latest_context = result["tasks"][0]["decision_history"][-1]["context"]
+    assert latest_context["lm_queue_review"]["action"] == "deferred"
+    assert latest_context["lm_queue_shadow"]["preserved_status"] == "approved"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_batch_review_auto_approves_body_improvement_agent_pull_task(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Improve shell body after learning",
+            "task_family": "body_upgrade",
+            "execution_kind": "body_improvement",
+            "metadata": {
+                "task_family": "body_upgrade",
+                "execution_kind": "body_improvement",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+
+    async def busy_snapshot():
+        return {
+            "last_user_request_at": "2026-05-25T00:12:00",
+            "last_agent_work_at": "2026-05-25T00:12:00",
+            "last_memory_task_at": None,
+            "last_self_evolution_activity_at": None,
+            "counts": {},
+            "active_sessions": 1,
+        }
+
+    supervisor._fetch_gateway_activity_snapshot = busy_snapshot  # type: ignore[method-assign]
+
+    result = await supervisor.review_self_evolution_tasks(
+        {
+            "idle_window": {"now": "2026-05-25T00:15:00"},
+        }
+    )
+
+    task = result["tasks"][0]
+    assert task["task_id"] == task_id
+    assert task["status"] == "approved"
+    assert task["execution_kind"] == "body_improvement"
+    assert task["execution_request"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_batch_review_defers_body_improvement_until_self_learning_finishes(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    await supervisor.plan_self_evolution_task(
+        {
+            "title": "Understand current shell body baseline",
+            "task_family": "self_learning",
+            "source": "self_learning",
+        }
+    )
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Improve shell body after learning",
+            "task_family": "body_upgrade",
+            "execution_kind": "body_improvement",
+            "metadata": {
+                "task_family": "body_upgrade",
+                "execution_kind": "body_improvement",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+
+    async def busy_snapshot():
+        return {
+            "last_user_request_at": "2026-05-25T00:12:00",
+            "last_agent_work_at": "2026-05-25T00:12:00",
+            "last_memory_task_at": None,
+            "last_self_evolution_activity_at": None,
+            "counts": {},
+            "active_sessions": 1,
+        }
+
+    supervisor._fetch_gateway_activity_snapshot = busy_snapshot  # type: ignore[method-assign]
+
+    result = await supervisor.review_self_evolution_tasks(
+        {
+            "idle_window": {"now": "2026-05-25T00:15:00"},
+        }
+    )
+
+    task = next(item for item in result["tasks"] if item["task_id"] == task_id)
+    assert task["status"] == "deferred"
+    assert task["execution_kind"] == "body_improvement"
+    assert "self-learning tasks awaiting completion" in task["decision_reason"]
+    assert task["execution_request"] is None
 
 
 @pytest.mark.asyncio

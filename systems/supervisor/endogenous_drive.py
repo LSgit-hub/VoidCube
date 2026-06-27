@@ -22,6 +22,7 @@ class EndogenousTaskCandidate:
     execution_kind: Optional[str]
     value_tags: List[str]
     utility: float
+    metadata: Dict[str, Any] = field(default_factory=dict)
     evidence: Dict[str, Any] = field(default_factory=dict)
     constraints: Dict[str, Any] = field(default_factory=dict)
 
@@ -34,6 +35,7 @@ class EndogenousTaskCandidate:
             "governance_task_type": self.governance_task_type,
             "task_family": self.task_family,
         }
+        metadata.update(dict(self.metadata))
         if self.execution_kind is not None:
             metadata["execution_kind"] = self.execution_kind
         return {
@@ -188,7 +190,14 @@ class EndogenousDriveEngine:
             )
 
         active_sessions = int(activity.get("active_sessions") or 0)
-        if active_sessions == 0 and self_learning_plan.get("eligible_for_planning"):
+        if self_learning_plan.get("eligible_for_planning"):
+            shell_slot_meta = self._get_shell_slot_meta(idle_window) or {}
+            shell_slot_id = str(shell_slot_meta.get("slot_id") or "shell").strip()
+            shell_worktree = str(shell_slot_meta.get("worktree_path") or "").strip()
+            baseline_key = f"creativity:self_learning:shell_baseline:{shell_slot_id or 'shell'}"
+            baseline_added = False
+            has_learning_history = bool(idle_window.get("completed_learning_tasks") or [])
+
             # Three-tier fallback chain for learning topics, matching the
             # architectural baseline §3.4 "LLM 优先 + 启发式降级" pattern:
             #   Tier 1: LLM-generated topics from compressed memory context
@@ -218,6 +227,24 @@ class EndogenousDriveEngine:
                     )}]
                     topic_source = "activity_metadata"
 
+            if (
+                shell_worktree
+                and not has_learning_history
+                and baseline_key not in existing_keys
+            ):
+                candidates.append(
+                    self._build_shell_baseline_learning_candidate(
+                        stable_key=baseline_key,
+                        active_sessions=active_sessions,
+                        shell_slot_id=shell_slot_id,
+                        shell_worktree=shell_worktree,
+                        utility=0.74,
+                        trigger="bootstrap_shell_baseline",
+                    )
+                )
+                existing_keys.add(baseline_key)
+                baseline_added = True
+
             generated_count = 0
             for topic in topics:
                 topic_key = _stable_key_for_topic(topic["title"])
@@ -236,11 +263,16 @@ class EndogenousDriveEngine:
                         execution_kind=None,
                         value_tags=["creativity"],
                         utility=0.72 if topic_source == "llm" else 0.65,
+                        metadata={
+                            "learning_branch": "exploratory",
+                            "self_learning_mode": "no_dependency_exploration",
+                        },
                         evidence={
                             "active_sessions": active_sessions,
                             "trigger": "idle_capacity",
                             "learning_topic": topic["title"],
                             "topic_source": topic_source,
+                            "learning_branch": "exploratory",
                             "llm_generated": topic_source == "llm",
                         },
                         constraints={
@@ -258,35 +290,53 @@ class EndogenousDriveEngine:
             # nothing.  This is the only path that yields a generic task and
             # exists so the creativity candidate is never silently dropped.
             if generated_count == 0:
-                topic_key = "creativity:idle_learning:fallback"
+                topic_key = baseline_key if shell_worktree else "creativity:idle_learning:fallback"
                 if topic_key not in existing_keys:
-                    candidates.append(
-                        EndogenousTaskCandidate(
-                            stable_key=topic_key,
-                            title="Explore one unresolved learning thread",
-                            summary=(
-                                "Use idle capacity to ask the agent for one evidence-producing "
-                                "learning pass over unresolved recent topics."
-                            ),
-                            priority="normal",
-                            governance_task_type="self_learning",
-                            task_family="self_learning",
-                            execution_kind=None,
-                            value_tags=["creativity"],
-                            utility=0.58,
-                            evidence={
-                                "active_sessions": active_sessions,
-                                "trigger": "idle_capacity",
-                                "learning_topic": "",
-                                "topic_source": "static_fallback",
-                                "llm_generated": False,
-                            },
-                            constraints={
-                                "execution_policy": "learn_only",
-                                "must_not_modify_active_body": True,
-                            },
+                    if shell_worktree:
+                        candidates.append(
+                            self._build_shell_baseline_learning_candidate(
+                                stable_key=topic_key,
+                                active_sessions=active_sessions,
+                                shell_slot_id=shell_slot_id,
+                                shell_worktree=shell_worktree,
+                                utility=0.58 if not baseline_added else 0.5,
+                                trigger="idle_capacity",
+                            )
                         )
-                    )
+                    else:
+                        candidates.append(
+                            EndogenousTaskCandidate(
+                                stable_key=topic_key,
+                                title="Explore one unresolved learning thread",
+                                summary=(
+                                    "Use idle capacity to identify one evidence-backed learning direction, "
+                                    "gather external references, and record why that thread matters for "
+                                    "future self-improvement."
+                                ),
+                                priority="normal",
+                                governance_task_type="self_learning",
+                                task_family="self_learning",
+                                execution_kind=None,
+                                value_tags=["creativity"],
+                                utility=0.55,
+                                metadata={
+                                    "learning_branch": "exploratory",
+                                    "self_learning_mode": "no_dependency_exploration",
+                                },
+                                evidence={
+                                    "active_sessions": active_sessions,
+                                    "trigger": "idle_capacity",
+                                    "learning_topic": "",
+                                    "topic_source": "generic_exploration_fallback",
+                                    "learning_branch": "exploratory",
+                                    "llm_generated": False,
+                                },
+                                constraints={
+                                    "execution_policy": "learn_only",
+                                    "must_not_modify_active_body": True,
+                                },
+                            )
+                        )
 
         if self_evolution_plan.get("eligible_for_planning") and "continuity:queue_hygiene_review" not in existing_keys:
             candidates.append(
@@ -341,8 +391,8 @@ class EndogenousDriveEngine:
                                 constraints={
                                     "execution_policy": "improve_shell_body",
                                     "target_slot": "shell",
-                                    "target_slot_id": shell_slot_meta.slot_id,
-                                    "worktree_path": shell_slot_meta.worktree_path,
+                                    "target_slot_id": shell_slot_meta.get("slot_id"),
+                                    "worktree_path": shell_slot_meta.get("worktree_path"),
                                     "must_commit": True,
                                     "evolution_boundary_check": True,
                                     "max_files_changed": 5,
@@ -353,8 +403,8 @@ class EndogenousDriveEngine:
                                 },
                                 evidence={
                                     "learning_quality_score": learning_quality,
-                                    "shell_slot_id": shell_slot_meta.slot_id,
-                                    "worktree_path": shell_slot_meta.worktree_path,
+                                    "shell_slot_id": shell_slot_meta.get("slot_id"),
+                                    "worktree_path": shell_slot_meta.get("worktree_path"),
                                     "git_diff_summary": improvement.get("diff_summary", ""),
                                     "source": improvement.get("source", "fallback"),
                                 },
@@ -618,6 +668,55 @@ class EndogenousDriveEngine:
         except Exception:
             pass
         return None
+
+    def _build_shell_baseline_learning_candidate(
+        self,
+        *,
+        stable_key: str,
+        active_sessions: int,
+        shell_slot_id: str,
+        shell_worktree: str,
+        utility: float,
+        trigger: str,
+    ) -> EndogenousTaskCandidate:
+        summary = (
+            "Use idle capacity to inspect the current shell-body codebase, "
+            "map its structure, identify current weaknesses, and record evidence-backed "
+            "learning notes that can guide future self-improvement."
+        )
+        if shell_worktree:
+            summary += f" Start from shell slot {shell_slot_id} at {shell_worktree}."
+        return EndogenousTaskCandidate(
+            stable_key=stable_key,
+            title="Understand the current shell body codebase",
+            summary=summary,
+            priority="normal",
+            governance_task_type="self_learning",
+            task_family="self_learning",
+            execution_kind=None,
+            value_tags=["creativity"],
+            utility=utility,
+            metadata={
+                "learning_branch": "codebase_baseline",
+                "self_learning_mode": "shell_codebase_baseline",
+            },
+            evidence={
+                "active_sessions": active_sessions,
+                "trigger": trigger,
+                "learning_topic": "",
+                "topic_source": "shell_codebase_baseline",
+                "learning_branch": "codebase_baseline",
+                "llm_generated": False,
+                "baseline_worktree_path": shell_worktree,
+                "baseline_slot_id": shell_slot_id,
+            },
+            constraints={
+                "execution_policy": "learn_shell_baseline",
+                "must_not_modify_active_body": True,
+                "baseline_worktree_path": shell_worktree,
+                "baseline_slot_id": shell_slot_id,
+            },
+        )
 
     def _decision_for(
         self,

@@ -7,6 +7,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
+import aiohttp
 
 from systems.runtime_task_profile import (
     derive_runtime_task_profile,
@@ -244,6 +245,74 @@ class PlanningRuntimeMixin:
             metadata.update(self._task_activity_metadata(tasks[0]))
         return metadata
 
+    def _current_shell_slot_context(self) -> Optional[Dict[str, Any]]:
+        registry = getattr(self, "_body_registry", None)
+        if registry is None:
+            return None
+        try:
+            shell_meta = registry.get_shell_slot()
+        except Exception:
+            return None
+        if shell_meta is None:
+            return None
+
+        payload = shell_meta.model_dump(mode="json")
+        slot_id = str(payload.get("slot_id") or "").strip()
+        if not slot_id:
+            return payload
+
+        from pathlib import Path
+
+        repaired = False
+        expected_root = registry.slot_root(slot_id)
+        for field_name, leaf in (
+            ("worktree_path", "worktree"),
+            ("runtime_path", "runtime"),
+            ("logs_path", "logs"),
+        ):
+            current = str(payload.get(field_name) or "").strip()
+            expected = (expected_root / leaf).resolve()
+            if current and Path(current).exists():
+                continue
+            if expected.exists():
+                payload[field_name] = str(expected)
+                setattr(shell_meta, field_name, str(expected))
+                repaired = True
+
+        if repaired:
+            try:
+                registry.save_slot_meta(shell_meta)
+            except Exception:
+                pass
+        return payload
+
+    def _completed_learning_task_summaries(self, limit: int = 8) -> list[Dict[str, Any]]:
+        rows: list[tuple[str, Dict[str, Any]]] = []
+        for task in self._self_evolution_queue.list_tasks(status="completed"):
+            if self._task_runtime_family(task) != "self_learning":
+                continue
+            metadata = dict(task.metadata or {})
+            completed_at = (
+                metadata.get("completed_at")
+                or getattr(task, "updated_at", None)
+                or getattr(task, "created_at", None)
+            )
+            rows.append(
+                (
+                    str(completed_at or ""),
+                    {
+                        "task_id": task.task_id,
+                        "title": task.title,
+                        "summary": task.summary,
+                        "completed_at": completed_at,
+                        "quality_score": metadata.get("quality_score"),
+                        "endogenous_drive_key": metadata.get("endogenous_drive_key"),
+                    },
+                )
+            )
+        rows.sort(key=lambda item: item[0], reverse=True)
+        return [payload for _, payload in rows[: max(0, limit)]]
+
     def _planning_activity_kind_for_task(self, task_type: str) -> str:
         normalized = self._normalize_runtime_task_type(task_type)
         if normalized == "self_learning":
@@ -376,8 +445,13 @@ class PlanningRuntimeMixin:
         # — gateway is the activity fact source).  Counts are best-effort —
         # a missing field defaults to 0 so the candidate simply does not fire
         # when no error/uncertainty has been reported in the current session.
+        counts = dict(snapshot.get("counts") or {})
         raw_error_count = snapshot.get("error_count")
+        if raw_error_count is None:
+            raw_error_count = counts.get("error_count") or counts.get("recent_errors")
         raw_uncertainty_count = snapshot.get("uncertainty_high_count")
+        if raw_uncertainty_count is None:
+            raw_uncertainty_count = counts.get("uncertainty_high_count") or counts.get("high_uncertainty")
         try:
             error_count = int(raw_error_count) if raw_error_count is not None else 0
         except (TypeError, ValueError):
@@ -495,6 +569,8 @@ class PlanningRuntimeMixin:
             "execution_kind": requested_task_profile.get("execution_kind"),
             "task_profile": requested_task_profile,
             "activity": snapshot,
+            "shell_slot": self._current_shell_slot_context(),
+            "completed_learning_tasks": self._completed_learning_task_summaries(),
             "correction_signals": correction_signals,
             "error_count": error_count,
             "uncertainty_high_count": uncertainty_count,
@@ -610,6 +686,15 @@ class PlanningRuntimeMixin:
                 metadata={
                     "count": len(candidates),
                     "candidate_keys": [candidate.stable_key for candidate in candidates],
+                    "candidates": [
+                        {
+                            **candidate.to_queue_item(),
+                            "stable_key": candidate.stable_key,
+                            "value_tags": list(candidate.value_tags),
+                            "utility": candidate.utility,
+                        }
+                        for candidate in candidates
+                    ],
                 },
             )
         return {
@@ -661,6 +746,7 @@ class PlanningRuntimeMixin:
                 summary=f"Endogenous drive queued {len(created_tasks)} candidate task(s).",
                 metadata={
                     "task_ids": [task.get("task_id") for task in created_tasks],
+                    "tasks": [dict(task) for task in created_tasks if isinstance(task, dict)],
                     "endogenous_drive_keys": [
                         task.get("metadata", {}).get("endogenous_drive_key")
                         for task in created_tasks
@@ -719,6 +805,22 @@ class PlanningRuntimeMixin:
     ) -> tuple[str, str]:
         task_type = self._task_governance_type(task)
         task_family = self._task_runtime_family(task)
+        if self._is_agent_pull_task(task):
+            execution_kind = self._task_execution_kind(task)
+            if execution_kind == "body_improvement":
+                if self._has_pending_self_learning_prerequisite():
+                    return (
+                        "deferred",
+                        "Body-improvement task deferred because there are still planned/approved/running self-learning tasks awaiting completion. Supervisor must let learning evidence settle before code-improvement execution is released.",
+                    )
+                return (
+                    "approved",
+                    "Agent-pull body-improvement task approved for API-A execution. AUTO baseline keeps this path directly pull -> execute -> write back.",
+                )
+            return (
+                "approved",
+                "Agent-pull self-learning task approved for API-A execution. AUTO baseline keeps this path directly pull -> execute -> write back.",
+            )
 
         # In Governor Mode, self_learning and memory_maintenance are
         # approved without idle-window gating — the user has explicitly
@@ -771,6 +873,15 @@ class PlanningRuntimeMixin:
             "deferred",
             "Task deferred because the execution window or idle requirements are not yet satisfied. The task remains queued for future review.",
         )
+
+    def _has_pending_self_learning_prerequisite(self) -> bool:
+        for task in self._self_evolution_queue.list_tasks():
+            if self._task_governance_type(task) != "self_learning":
+                continue
+            if task.status not in {"planned", "approved", "running"}:
+                continue
+            return True
+        return False
 
     def _is_agent_pull_task(self, task: SelfEvolutionTask) -> bool:
         execution_kind = self._task_execution_kind(task)
@@ -854,7 +965,8 @@ class PlanningRuntimeMixin:
         decision_context: Dict[str, Any],
     ) -> Optional[SelfEvolutionExecutionRequest]:
         execution = dict(task.metadata.get("execution_request") or {})
-        kind = self._task_execution_kind(task) or "general_self_evolution"
+        raw_kind = self._task_execution_kind(task) or "general_self_evolution"
+        kind = "memory_maintenance" if raw_kind == "memory_maintenance" else "general_self_evolution"
         task_family = self._task_runtime_family(task)
         governance_task_type = self._task_governance_type(task)
 
@@ -881,7 +993,7 @@ class PlanningRuntimeMixin:
             task_type=task.task_type,
             governance_task_type=governance_task_type,
             task_family=task_family,
-            execution_kind=kind,
+            execution_kind=raw_kind,
             decision_id=decision_id,
             kind=kind,  # type: ignore[arg-type]
             source_actor=str(execution.get("source_actor") or actor or "mem_supervisor"),
@@ -997,6 +1109,8 @@ class PlanningRuntimeMixin:
                         "endogenous_drive_key": metadata.get("endogenous_drive_key"),
                         "utility": metadata.get("utility"),
                         "quality_score": metadata.get("quality_score"),
+                        "learning_branch": metadata.get("learning_branch"),
+                        "self_learning_mode": metadata.get("self_learning_mode"),
                     },
                     "evidence": {
                         "recent_errors": evidence.get("recent_errors"),
@@ -1005,6 +1119,10 @@ class PlanningRuntimeMixin:
                         "topic_source": (
                             (evidence.get("endogenous_drive") or {}).get("topic_source")
                             or evidence.get("topic_source")
+                        ),
+                        "learning_branch": (
+                            (evidence.get("endogenous_drive") or {}).get("learning_branch")
+                            or evidence.get("learning_branch")
                         ),
                     },
                     "constraints": {
@@ -1102,13 +1220,17 @@ class PlanningRuntimeMixin:
         )
 
         try:
-            result = llm_client.complete_json(
-                system_prompt=(
-                    "你是 VoidCube 的监督者身份。你管理任务列表生命周期，"
-                    "但不能绕过确定性状态机。你的回答必须保守、结构化、可审计。"
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    llm_client.complete_json,
+                    system_prompt=(
+                        "你是 VoidCube 的监督者身份。你管理任务列表生命周期，"
+                        "但不能绕过确定性状态机。你的回答必须保守、结构化、可审计。"
+                    ),
+                    user_payload={"queue_review": prompt},
+                    task="scholar.revision",
                 ),
-                user_payload={"queue_review": prompt},
-                task="scholar.revision",
+                timeout=8.0,
             )
         except Exception:
             return {}
@@ -1185,6 +1307,50 @@ class PlanningRuntimeMixin:
         if task is None:
             raise HTTPException(status_code=404, detail=f"Self-evolution task not found: {task_id}")
         return self._serialize_self_evolution_task(task)
+
+    async def clear_self_evolution_runtime(self, request: dict | None = None):
+        del request
+        tasks = list(self._self_evolution_queue.list_tasks())
+        cleared_counts: Dict[str, int] = {}
+        for task in tasks:
+            status = str(task.status)
+            cleared_counts[status] = cleared_counts.get(status, 0) + 1
+
+        self._self_evolution_queue.clear_tasks()
+
+        if hasattr(self, "_clear_supervisor_ui_activity"):
+            self._clear_supervisor_ui_activity()
+
+        governor = getattr(self, "_governor", None)
+        if governor is not None and hasattr(governor, "clear_history"):
+            governor.clear_history()
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                await session.post(
+                    f"{self.config.execution.gateway_address}/admin/activity/clear",
+                    timeout=aiohttp.ClientTimeout(total=5),
+                )
+        except Exception:
+            pass
+
+        service_runtime = getattr(self, "_service_runtime", None)
+        if service_runtime is not None:
+            service_runtime.last_review_at = None
+            service_runtime.next_review_at = None
+            service_runtime.last_drive_at = None
+            service_runtime.next_drive_at = None
+            setattr(service_runtime, "suppress_candidate_refresh", True)
+
+        if hasattr(self, "_watch_window_last_outcome"):
+            self._watch_window_last_outcome = None
+
+        return {
+            "status": "cleared",
+            "cleared_task_count": len(tasks),
+            "cleared_status_counts": cleared_counts,
+            "tasks_remaining": 0,
+        }
 
     async def plan_self_evolution_task(self, request: dict | None = None):
         request = request or {}
@@ -1431,9 +1597,8 @@ class PlanningRuntimeMixin:
                 )
                 if suggested_status is not None:
                     preserve_agent_pull_approval = (
-                        getattr(getattr(self, "_service_runtime", None), "governor_mode_active", False)
-                        and target_status == "approved"
-                        and suggested_status == "deferred"
+                        target_status == "approved"
+                        and suggested_status in {"deferred", "paused"}
                         and self._is_agent_pull_task(task)
                     )
                     if preserve_agent_pull_approval:

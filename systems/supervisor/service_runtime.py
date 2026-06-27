@@ -17,12 +17,12 @@ class ServiceRuntimeState:
     started: bool = False
     governor_mode_active: bool = False
     structured_maintenance_task: Optional[asyncio.Task[Any]] = None
-    auto_dispatch_task: Optional[asyncio.Task[Any]] = None
     # Scheduling visibility for the web UI countdown
     last_review_at: Optional[datetime] = None
     next_review_at: Optional[datetime] = None
     last_drive_at: Optional[datetime] = None
     next_drive_at: Optional[datetime] = None
+    suppress_candidate_refresh: bool = False
 
 
 class ServiceRuntimeMixin:
@@ -70,14 +70,6 @@ class ServiceRuntimeMixin:
     @_structured_maintenance_task.setter
     def _structured_maintenance_task(self, task: Optional[asyncio.Task[Any]]) -> None:
         self._service_runtime.structured_maintenance_task = task
-
-    @property
-    def _auto_dispatch_task(self) -> Optional[asyncio.Task[Any]]:
-        return self._service_runtime.auto_dispatch_task
-
-    @_auto_dispatch_task.setter
-    def _auto_dispatch_task(self, task: Optional[asyncio.Task[Any]]) -> None:
-        self._service_runtime.auto_dispatch_task = task
 
     async def health_check(self) -> Dict[str, Any]:
         registry = self._body_registry.load_registry()
@@ -349,69 +341,6 @@ class ServiceRuntimeMixin:
             self._endogenous_drive_task = None
             logger.info("Governor Mode: drive loop disabled (endogenous_drive_enabled=False)")
 
-        # ── Auto-dispatch loop: submit approved tasks to agent when idle ──
-        if self._auto_dispatch_task:
-            self._auto_dispatch_task.cancel()
-
-        async def auto_dispatch_loop() -> None:
-            await asyncio.sleep(30)  # initial grace period
-            while True:
-                try:
-                    await self._try_auto_dispatch()
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    logger.warning("Auto-dispatch iteration failed: %s", exc)
-                await asyncio.sleep(60)  # check every 60s
-
-        self._auto_dispatch_task = asyncio.create_task(auto_dispatch_loop())
-        logger.info("Governor Mode: auto-dispatch loop started (idle threshold=180s)")
-
-    async def _try_auto_dispatch(self) -> None:
-        """If agent is idle > 3min, submit one approved task for execution."""
-        try:
-            snapshot = await self._fetch_gateway_activity_snapshot()
-        except Exception:
-            return
-
-        last_work = snapshot.get("last_agent_work_at")
-        now = datetime.now(timezone.utc)
-        if last_work:
-            try:
-                last_dt = datetime.fromisoformat(str(last_work))
-                idle_seconds = (now - last_dt.replace(tzinfo=None)).total_seconds()
-            except (ValueError, TypeError):
-                idle_seconds = 9999
-        else:
-            idle_seconds = 9999  # never worked, treat as idle
-
-        if idle_seconds < 180:
-            return  # agent is still working or was recently active
-
-        # Find an approved, undispatched task
-        # Self-learning tasks are pulled by Agent via gateway /v1/tasks API
-        # Body evolution tasks (upgrade/switch) are dispatched by executor
-        for task in self._self_evolution_queue.list_tasks(status="approved"):
-            if task.status == "running":
-                continue
-            governance_type = self._task_governance_type(task) if hasattr(self, '_task_governance_type') else task.governance_task_type
-            
-            if governance_type == "self_learning":
-                logger.debug("Self-learning task '%s' waiting for agent to pull (via /v1/tasks)", task.title)
-                continue
-            
-            if task.execution_request is not None:
-                logger.info("Auto-dispatching approved task '%s' (idle=%.0fs)", task.title, idle_seconds)
-                result = await self._dispatch_self_evolution_execution_request(task)
-                status = result.get("status") if isinstance(result, dict) else "dispatched"
-                self._record_supervisor_ui_activity(
-                    "auto_dispatched",
-                    scene="dispatch",
-                    summary=f"Auto-dispatched: '{task.title}' (idle={idle_seconds:.0f}s)",
-                    metadata={"task_id": task.task_id, "status": status},
-                )
-                return  # one at a time
-
     async def _stop_governor_mode(self) -> None:
         """Exit Governor Mode: stop review and drive loops immediately.
 
@@ -440,9 +369,6 @@ class ServiceRuntimeMixin:
 
         await cancel_task(self._endogenous_drive_task)
         self._endogenous_drive_task = None
-
-        await cancel_task(self._auto_dispatch_task)
-        self._auto_dispatch_task = None
 
         logger.info("Governor Mode deactivated — returned to Memory Mode")
 
@@ -506,8 +432,5 @@ class ServiceRuntimeMixin:
 
         await cancel_task(self._structured_maintenance_task)
         self._structured_maintenance_task = None
-
-        await cancel_task(self._auto_dispatch_task)
-        self._auto_dispatch_task = None
 
         self._service_runtime_started = False

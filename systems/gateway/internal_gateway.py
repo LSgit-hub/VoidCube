@@ -182,6 +182,7 @@ class InternalGateway:
         self.app.add_api_route("/admin/body/status", self.get_body_status, methods=["GET"])
         self.app.add_api_route("/admin/activity", self.get_activity_status, methods=["GET"])
         self.app.add_api_route("/admin/activity/log", self.get_activity_log, methods=["GET"])
+        self.app.add_api_route("/admin/activity/clear", self.clear_activity_state, methods=["POST"])
         self.app.add_api_route("/admin/activity/touch", self.touch_activity, methods=["POST"])
         self.app.add_api_route("/admin/governor-mode", self.set_governor_mode, methods=["POST"])
         # ── Scene aggregation (baseline §8.1) ──
@@ -518,7 +519,7 @@ class InternalGateway:
             if key.endswith("_count"):
                 self._activity_state[key] = 0
 
-    def _persist_activity_state(self) -> None:
+    def _persist_activity_state(self, *, force: bool = False) -> None:
         """Write activity state + log to disk (debounced, fire-and-forget)."""
         path = self.config.activity_log_path
         if not path:
@@ -528,7 +529,7 @@ class InternalGateway:
         import time as _time
         now = _time.monotonic()
         last = getattr(self, '_last_persist_ts', 0.0)
-        if now - last < 2.0:
+        if not force and now - last < 2.0:
             return
         self._last_persist_ts = now
         try:
@@ -705,6 +706,43 @@ class InternalGateway:
             "limit": bounded_limit,
             "activity_log_limit": self._activity_log.maxlen,
             "events": events,
+        }
+
+    def _reset_activity_state(self) -> None:
+        self._activity_state["last_user_request_at"] = None
+        self._activity_state["last_agent_work_at"] = None
+        self._activity_state["last_memory_task_at"] = None
+        self._activity_state["last_self_learning_activity_at"] = None
+        self._activity_state["last_self_evolution_activity_at"] = None
+        self._activity_state["last_self_evolution_plan_at"] = None
+        self._activity_state["last_self_evolution_execute_at"] = None
+        self._activity_state["user_request_count"] = 0
+        self._activity_state["agent_work_count"] = 0
+        self._activity_state["memory_task_count"] = 0
+        self._activity_state["self_learning_activity_count"] = 0
+        self._activity_state["self_evolution_activity_count"] = 0
+        self._activity_state["self_evolution_plan_count"] = 0
+        self._activity_state["self_evolution_execute_count"] = 0
+        self._activity_state["error_count"] = 0
+        self._activity_state["uncertainty_high_count"] = 0
+        self._activity_state["recent_metadata"] = {
+            "user_request": None,
+            "agent_work": None,
+            "memory_task": None,
+            "self_learning": None,
+            "self_evolution": None,
+            "self_evolution_plan": None,
+            "self_evolution_execute": None,
+        }
+        self._activity_log.clear()
+        self._persist_activity_state(force=True)
+
+    async def clear_activity_state(self):
+        self._reset_activity_state()
+        return {
+            "status": "cleared",
+            "activity": self._build_activity_snapshot(),
+            "log_count": 0,
         }
 
     async def get_trace(self, trace_id: str) -> Dict[str, Any]:

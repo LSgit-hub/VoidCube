@@ -2131,6 +2131,15 @@ class VoidcubeCLI:
             width += ch_width
         return "".join(out).rstrip() + ellipsis
 
+    @classmethod
+    def _pad_status_bar_text(cls, text: str, width: int) -> str:
+        """Pad text to an exact display width using terminal cell width."""
+        text = cls._trim_status_bar_text(text, width)
+        pad = max(0, width - cls._status_bar_display_width(text))
+        if pad <= 0:
+            return text
+        return text + (" " * pad)
+
     @staticmethod
     def _get_tui_terminal_width(default: tuple[int, int] = (80, 24)) -> int:
         """Return the live prompt_toolkit width, falling back to ``shutil``.
@@ -2350,6 +2359,8 @@ class VoidcubeCLI:
                 )
         else:
             rows.append(("class:auto-panel-dim", "任务: 当前没有被接管的 AUTO 任务"))
+            reason_style, reason_text = self._resolve_auto_no_task_reason(supervisor_state)
+            rows.append((reason_style, self._trim_status_bar_text(reason_text, inner_width)))
 
         spinner_text = str(getattr(self, "_spinner_text", "") or "").strip()
         if spinner_text:
@@ -2405,7 +2416,7 @@ class VoidcubeCLI:
 
         lines.append((border_style, "╭" + ("─" * (inner_width + 2)) + "╮\n"))
         for style, text in rows:
-            padded = text.ljust(inner_width)
+            padded = self._pad_status_bar_text(text, inner_width)
             lines.append((border_style, "│ "))
             lines.append((style, padded))
             lines.append((border_style, " │\n"))
@@ -2623,6 +2634,36 @@ class VoidcubeCLI:
         return (
             "class:auto-panel-dim",
             f"近因: {str(latest.get('message') or '暂无可用诊断').strip()}",
+        )
+
+    def _resolve_auto_no_task_reason(self, supervisor_state: Dict[str, Any]) -> tuple[str, str]:
+        panels = dict(supervisor_state.get("panels") or {})
+        learning_panel = dict(panels.get("learning") or {})
+        learning_tasks = list(learning_panel.get("tasks") or [])
+        if learning_tasks:
+            completed = [task for task in learning_tasks if str(task.get("status") or "").strip().lower() == "completed"]
+            deferred = [task for task in learning_tasks if str(task.get("status") or "").strip().lower() == "deferred"]
+            if deferred and not completed:
+                return (
+                    "class:auto-panel-warn",
+                    "队列: 当前学习任务大多被监督者延后，暂时没有已批准的 API-A 可执行任务",
+                )
+            if deferred:
+                return (
+                    "class:auto-panel-dim",
+                    "队列: 当前没有已批准的 API-A 可执行任务；最近学习任务多处于 deferred/completed",
+                )
+
+        active_executions = list(supervisor_state.get("active_executions") or [])
+        if active_executions:
+            return (
+                "class:auto-panel-info",
+                "队列: 当前没有新的 API-A 可执行任务；监督者正在处理其他执行路径",
+            )
+
+        return (
+            "class:auto-panel-dim",
+            "队列: 当前没有已批准的 API-A 可执行任务",
         )
 
     def _find_owned_running_auto_task(self) -> Dict[str, Any] | None:
@@ -2900,11 +2941,39 @@ class VoidcubeCLI:
             prompt_parts.append("Produce a concise implementation summary with the concrete files changed and reasoning.")
             prompt = "\n\n".join(prompt_parts)
         else:
+            constraints = dict(task.get("constraints") or {})
+            metadata = dict(task.get("metadata") or {})
+            baseline_worktree = str(
+                constraints.get("baseline_worktree_path")
+                or constraints.get("worktree_path")
+                or ""
+            ).strip()
+            baseline_slot_id = str(
+                constraints.get("baseline_slot_id")
+                or constraints.get("target_slot_id")
+                or ""
+            ).strip()
+            learning_branch = str(
+                metadata.get("learning_branch")
+                or ((task.get("evidence") or {}).get("learning_branch"))
+                or ""
+            ).strip()
+            prompt_parts = [f"[AUTO Learning Task] {title}"]
+            if summary:
+                prompt_parts.append(summary)
+            if learning_branch == "codebase_baseline":
+                prompt_parts.append("Learning branch: shell codebase baseline")
+            elif learning_branch == "exploratory":
+                prompt_parts.append("Learning branch: exploratory")
+            if baseline_slot_id:
+                prompt_parts.append(f"Shell slot baseline: {baseline_slot_id}")
+            if baseline_worktree:
+                prompt_parts.append(f"Shell worktree baseline: {baseline_worktree}")
+            prompt_parts.append(
+                "Execute this research task thoroughly. Produce structured findings and conclusions."
+            )
             prompt = (
-                f"[AUTO Learning Task] {title}\n\n"
-                f"{summary}\n\n"
-                f"Execute this research task thoroughly. "
-                f"Produce structured findings and conclusions."
+                "\n\n".join(part for part in prompt_parts if part)
             )
         try:
             self._pending_input.put(prompt)
@@ -7495,6 +7564,23 @@ class VoidcubeCLI:
 
         import threading, json as _json
 
+        def _ensure_supervisor_runtime() -> bool:
+            try:
+                from VoidCube_cli.ops.serve import ensure_running
+            except ImportError:
+                return False
+
+            try:
+                result = ensure_running(silent=False)
+            except Exception:
+                return False
+
+            supervisor_state = dict(result.get("supervisor") or {})
+            return bool(
+                supervisor_state.get("healthy")
+                or supervisor_state.get("running")
+            )
+
         def _call_activate_governor():
             try:
                 from VoidCube_cli.config import load_config
@@ -7509,13 +7595,24 @@ class VoidcubeCLI:
             try:
                 import urllib.request as _req
                 payload = _json.dumps({"focus": focus}).encode()
-                r = _req.Request(
-                    f"{supervisor_url}/governor-mode/activate",
-                    data=payload,
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                resp = _json.loads(_req.urlopen(r, timeout=30).read())
+
+                def _activate_once():
+                    request = _req.Request(
+                        f"{supervisor_url}/governor-mode/activate",
+                        data=payload,
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    return _json.loads(_req.urlopen(request, timeout=30).read())
+
+                try:
+                    resp = _activate_once()
+                except Exception as first_exc:
+                    _cprint(f"     Supervisor unavailable, attempting daemon recovery...")
+                    if _ensure_supervisor_runtime():
+                        resp = _activate_once()
+                    else:
+                        raise first_exc
             except Exception as exc:
                 self._auto_mode_active = False
                 _cprint(f"  ⚠️  Supervisor unreachable: {exc}")

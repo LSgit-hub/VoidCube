@@ -244,6 +244,22 @@ class MemGovernorBridge:
             return None
         return json.loads(self.latest_path.read_text(encoding="utf-8"))
 
+    def clear_history(self) -> None:
+        with self._lock:
+            if self.history_path.exists():
+                self.history_path.write_text("", encoding="utf-8")
+            if self.latest_path.exists():
+                self.latest_path.unlink()
+        repo = getattr(self, "_governance_repo", None)
+        repo_path = self.storage_root / "mem_governance.jsonl"
+        if repo is not None and hasattr(repo, "path"):
+            try:
+                repo_path = Path(getattr(repo, "path"))
+            except Exception:
+                repo_path = self.storage_root / "mem_governance.jsonl"
+        if repo_path.exists():
+            repo_path.write_text("", encoding="utf-8")
+
     def _extract_evolution_lineage(
         self,
         *,

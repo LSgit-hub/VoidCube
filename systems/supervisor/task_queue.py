@@ -138,7 +138,6 @@ class SelfEvolutionTask(BaseModel):
         explicit_execution_kind = (
             self.metadata.get("execution_kind")
             or self.execution_kind
-            or self.metadata.get("task_family")
         )
         runtime_task_profile = derive_runtime_task_profile(
             task_type=self.task_type,
@@ -191,6 +190,10 @@ class SelfEvolutionTaskQueue:
             if task.task_id == task_id:
                 return task
         return None
+
+    def clear_tasks(self) -> None:
+        with self._lock:
+            self._write_snapshot(SelfEvolutionTaskQueueSnapshot())
 
     def create_task(
         self,

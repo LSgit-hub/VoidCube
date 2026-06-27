@@ -221,6 +221,100 @@ def test_cli_auto_mode_running_decision_records_owner_session(monkeypatch):
     assert run_request["data"]["decision"] == "running"
     assert run_request["data"]["context"]["session_id"] == "cli-owner-1"
     assert run_request["data"]["metadata"]["owner_session_id"] == "cli-owner-1"
+    assert prompts
+    assert "Shell slot baseline:" not in prompts[0]
+
+
+def test_cli_auto_mode_learning_prompt_includes_shell_baseline_when_present(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._current_auto_task = None
+    cli._current_auto_task_started_at = 0.0
+    cli._last_agent_turn_result = None
+    cli._agent_running = False
+    cli.session_id = "cli-owner-2"
+    prompts = []
+    cli._pending_input = type("_Queue", (), {"put": lambda self, prompt: prompts.append(prompt)})()
+
+    def fake_urlopen(request, timeout=0):
+        del timeout
+        if isinstance(request, Request):
+            return _FakeUrlopenResponse({})
+        url = str(request)
+        if "task_type=self_learning" in url:
+            return _FakeUrlopenResponse(
+                {
+                    "tasks": [
+                        {
+                            "task_id": "learn-shell-1",
+                            "title": "Understand the current shell body codebase",
+                            "summary": "Inspect the shell body codebase and record its baseline.",
+                            "task_type": "self_learning",
+                            "metadata": {
+                                "learning_branch": "codebase_baseline",
+                            },
+                            "constraints": {
+                                "baseline_slot_id": "slot-B",
+                                "baseline_worktree_path": "F:/tmp/shell-worktree",
+                            },
+                        }
+                    ]
+                }
+            )
+        if "execution_kind=body_improvement" in url:
+            return _FakeUrlopenResponse({"tasks": []})
+        return _FakeUrlopenResponse({"tasks": []})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    cli._poll_auto_mode_workflow()
+
+    assert prompts
+    assert "Learning branch: shell codebase baseline" in prompts[0]
+    assert "Shell slot baseline: slot-B" in prompts[0]
+    assert "Shell worktree baseline: F:/tmp/shell-worktree" in prompts[0]
+
+
+def test_cli_auto_mode_learning_prompt_shows_exploratory_branch(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._current_auto_task = None
+    cli._current_auto_task_started_at = 0.0
+    cli._last_agent_turn_result = None
+    cli._agent_running = False
+    cli.session_id = "cli-owner-3"
+    prompts = []
+    cli._pending_input = type("_Queue", (), {"put": lambda self, prompt: prompts.append(prompt)})()
+
+    def fake_urlopen(request, timeout=0):
+        del timeout
+        if isinstance(request, Request):
+            return _FakeUrlopenResponse({})
+        url = str(request)
+        if "task_type=self_learning" in url:
+            return _FakeUrlopenResponse(
+                {
+                    "tasks": [
+                        {
+                            "task_id": "learn-explore-1",
+                            "title": "Research: current open-source memory compaction strategies",
+                            "summary": "Survey external references and identify promising directions.",
+                            "task_type": "self_learning",
+                            "metadata": {
+                                "learning_branch": "exploratory",
+                            },
+                        }
+                    ]
+                }
+            )
+        if "execution_kind=body_improvement" in url:
+            return _FakeUrlopenResponse({"tasks": []})
+        return _FakeUrlopenResponse({"tasks": []})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    cli._poll_auto_mode_workflow()
+
+    assert prompts
+    assert "Learning branch: exploratory" in prompts[0]
 
 
 def test_cli_auto_mode_recovers_owned_running_task_before_completion_writeback(monkeypatch):
@@ -488,6 +582,50 @@ def test_auto_panel_shows_stale_foreign_executor(monkeypatch):
 
     assert "Executor: CLI " in rendered
     assert "stale (120s idle, scene=executing)" in rendered
+
+
+def test_auto_panel_shows_no_api_a_executable_task_reason(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._auto_mode_active = True
+    cli._agent_running = False
+    cli._spinner_text = ""
+    cli.session_id = "cli-session-local"
+    cli._current_auto_task = None
+    cli._current_auto_task_started_at = 0.0
+    cli._last_agent_turn_result = None
+    cli._auto_execution_events = []
+    cli._auto_last_supervisor_event_key = ""
+
+    monkeypatch.setattr(VoidcubeCLI, "_get_tui_terminal_width", staticmethod(lambda default=(80, 24): 80))
+    cli._fetch_supervisor_status = lambda: {
+        "timeline": [],
+        "tasks": [],
+        "active_executions": [],
+        "panels": {
+            "learning": {
+                "count": 2,
+                "tasks": [
+                    {"task_id": "done-1", "title": "Done task", "status": "completed"},
+                    {"task_id": "deferred-1", "title": "Deferred task", "status": "deferred"},
+                ],
+            }
+        },
+    }
+    cli._fetch_auto_gateway_status = lambda: {
+        "active_cli_executor": {
+            "session_id": "cli-session-local",
+            "lease_status": "healthy",
+            "is_stale": False,
+            "idle_seconds": 2,
+            "scene": "executing",
+        }
+    }
+
+    fragments = cli._get_auto_execution_panel_fragments()
+    rendered = "".join(text for _, text in fragments)
+
+    assert "任务: 当前没有被接管的 AUTO 任务" in rendered
+    assert "当前没有已批准的 API-A 可执行任务" in rendered
 
 
 def test_auto_panel_shows_approved_task_waiting_for_claim(monkeypatch):
@@ -867,6 +1005,97 @@ def test_push_cli_agent_scene_includes_session_id(monkeypatch):
     assert requests[0]["url"].endswith("/admin/activity/touch")
     assert requests[0]["data"]["session_id"] == "cli-session-2"
     assert requests[0]["data"]["metadata"]["scene"] == "learning"
+
+
+def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._auto_mode_active = False
+    cli.session_id = "cli-session-auto-recover"
+    cli._append_auto_execution_event = lambda *args, **kwargs: None
+
+    printed = []
+    cycle_calls = []
+    polled = []
+    presence_refreshes = []
+    pushed = []
+    attempts = {"count": 0}
+
+    def fake_cprint(*args, **kwargs):
+        del kwargs
+        printed.append(" ".join(str(arg) for arg in args))
+
+    def fake_push(scene, *, session_id=None, task_id=None, execution_kind=None):
+        pushed.append(
+            {
+                "scene": scene,
+                "session_id": session_id,
+                "task_id": task_id,
+                "execution_kind": execution_kind,
+            }
+        )
+        return True
+
+    class _ImmediateThread:
+        def __init__(self, target=None, **kwargs):
+            del kwargs
+            self._target = target
+
+        def start(self):
+            if self._target:
+                self._target()
+
+    def fake_urlopen(request, timeout=0):
+        del timeout
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise OSError("connection refused")
+        return _FakeUrlopenResponse(
+            {
+                "governor_mode_active": True,
+                "drive_loop_running": True,
+                "review_loop_running": True,
+                "endogenous_drive_enabled": True,
+            }
+        )
+
+    def fake_cycle(*, focus=""):
+        cycle_calls.append(focus)
+        return {"summary": {"planned": 1, "dispatched": 0}}
+
+    def fake_poll():
+        polled.append(True)
+
+    def fake_refresh_gateway_cli_presence(*, force=False):
+        presence_refreshes.append(force)
+        fake_push("executing", session_id=cli.session_id)
+
+    monkeypatch.setattr("cli._cprint", fake_cprint)
+    monkeypatch.setattr("cli._push_cli_agent_scene", fake_push)
+    monkeypatch.setattr("threading.Thread", _ImmediateThread)
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(cli, "_trigger_auto_mode_cycle", fake_cycle)
+    monkeypatch.setattr(cli, "_poll_auto_mode_workflow", fake_poll)
+    monkeypatch.setattr(cli, "_refresh_gateway_cli_presence", fake_refresh_gateway_cli_presence)
+    monkeypatch.setattr(
+        "VoidCube_cli.config.load_config",
+        lambda: {"supervisor": {"host": "127.0.0.1", "port": 6002}},
+    )
+    monkeypatch.setattr(
+        "VoidCube_cli.ops.serve.ensure_running",
+        lambda silent=False: {
+            "supervisor": {"running": True, "healthy": True, "started": True}
+        },
+    )
+
+    cli._handle_auto_command("/auto")
+
+    assert cli._auto_mode_active is True
+    assert attempts["count"] >= 2
+    assert any("attempting daemon recovery" in line for line in printed)
+    assert presence_refreshes == [True]
+    assert pushed[0]["scene"] == "executing"
+    assert cycle_calls == [""]
+    assert polled == [True]
 
 
 def test_cli_formats_supervisor_status_snapshot():

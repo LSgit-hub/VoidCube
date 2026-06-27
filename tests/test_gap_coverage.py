@@ -314,6 +314,32 @@ class TestEndogenousDriveErrorBridge:
         candidates = engine.generate_candidates(idle_window=idle, existing_drive_keys=set(), max_candidates=5)
         assert len(candidates) == 0
 
+    def test_learning_candidates_still_generate_with_active_sessions_when_planning_allowed(self):
+        engine = EndogenousDriveEngine()
+        idle = {
+            "checks": {"in_execution_window": True},
+            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "activity": {
+                "counts": {"error_count": 0, "uncertainty_high_count": 0},
+                "active_sessions": 3,
+                "recent_metadata": {
+                    "user_request": {"topic": "API-A AUTO execution visibility"}
+                },
+            },
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": False},
+                "general_self_evolution": {"eligible_for_planning": False},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": False},
+                "self_evolution": {"eligible_for_planning": False},
+            },
+        }
+        candidates = engine.generate_candidates(idle_window=idle, existing_drive_keys=set(), max_candidates=5)
+        assert any(candidate.governance_task_type == "self_learning" for candidate in candidates)
+
 
 # ── T-09: Self-learning service lifecycle ───────────────────────────
 

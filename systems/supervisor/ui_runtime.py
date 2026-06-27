@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import threading
 import webbrowser
@@ -16,12 +17,16 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 
 from VoidCube_core.utils import atomic_json_write
 
+logger = logging.getLogger("supervisor")
+
 UI_HTML = r"""<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>VoidCube · 义子的小屋</title>
+<!-- VoidCube Supervisor Room -->
+<!-- EventSource("/ui/events") -->
 <style>
 /*━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   VoidCube 监督者小屋  v4  ——  完整自由重设计
@@ -1155,7 +1160,7 @@ body[data-action="work"] .xz-prop { opacity: 0; }
 body[data-action="work"] .xz-eye { animation: work-blink 4s ease-in-out infinite; }
 @keyframes work-blink { 95% { height: 14px; } 97% { height: 2px; } 100% { height: 14px; } }
 
-/* 在写字桌前书写 */
+/* 在写字桌前进行任务审核 */
 body[data-action="write"] .xizi {
   left: 86%; margin-left: -65px;
   bottom: 20%;
@@ -1340,73 +1345,193 @@ body:has(.status:not(.collapsed)) .status-toggle {
 .metric.ok .metric-value   { color: var(--accent-green); }
 .metric.warn .metric-value { color: var(--accent-yellow); }
 .schedule {
-  text-align: center; margin-bottom: 12px; padding: 6px 10px;
-  border-radius: 8px;
-  background: rgba(255,255,255,.04);
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.06);
+  background: rgba(255,255,255,.035);
 }
-.schedule-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 2px; }
+.schedule-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  margin-bottom: 3px;
+}
 .schedule-countdown {
-  font-size: 16px; font-weight: 700; color: var(--accent-blue);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--accent-blue);
   font-variant-numeric: tabular-nums;
 }
-.panels { display: grid; gap: 10px; margin-bottom: 12px; }
-.panel-head {
-  font-size: 12px; font-weight: 600;
-  color: var(--text-secondary);
-  padding: 4px 0; margin-bottom: 4px;
-  border-bottom: 1px solid rgba(255,255,255,.08);
-  cursor: pointer; user-select: none;
-  display: flex; align-items: center; gap: 6px;
+.queue-stack {
+  display: grid;
+  gap: 12px;
 }
-.panel-head::before { content: "\25B8"; font-size: 10px; transition: transform .2s; display: inline-block; }
-.panel.open .panel-head::before { transform: rotate(90deg); }
-.panel .panel-body { display: none; }
-.panel.open .panel-body { display: block; }
-.panel.learning .panel-head  { color: var(--mint); }
-.panel.maintenance .panel-head { color: var(--gold); }
-.panel.evolution .panel-head { color: var(--coral); }
-
-.candidates { margin-bottom: 12px; display: grid; gap: 5px; }
-.candidates-label {
-  font-size: 11px; color: var(--text-muted);
-  letter-spacing: .04em; margin-bottom: 2px;
+.queue-section {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,.06);
+  background: rgba(255,255,255,.035);
 }
-.candidate {
-  display: grid; grid-template-columns: 1fr auto auto; gap: 8px;
-  align-items: center; min-height: 28px; padding: 4px 8px;
-  border-radius: 6px;
-  background: rgba(226,176,74,.08);
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.section-label {
   font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: .04em;
 }
-.candidate-tags { font-size: 10px; color: var(--text-muted); }
-.candidate-utility { font-size: 10px; font-weight: 600; color: var(--gold); }
-
-.body-status { margin-bottom: 10px; }
-.body-info {
-  font-size: 11px; padding: 4px 8px; border-radius: 6px;
-  background: rgba(255,255,255,.05);
+.window-pill {
+  min-width: 76px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  text-align: center;
+  font-size: 10px;
   color: var(--text-secondary);
+  background: rgba(255,255,255,.06);
 }
-
-.executions { margin-bottom: 12px; }
-.exec-label {
-  font-size: 11px; color: var(--text-muted);
-  letter-spacing: .04em; margin-bottom: 2px;
+.window-pill.open {
+  color: var(--accent-green);
+  background: rgba(111,198,160,.14);
 }
-.exec-item {
-  display: grid; grid-template-columns: 10px 1fr auto;
-  align-items: center; gap: 8px;
-  min-height: 26px; padding: 4px 8px;
-  border-radius: 6px;
+.window-pill.closed {
+  color: var(--accent-yellow);
+  background: rgba(226,176,74,.14);
+}
+.queue-slot {
+  display: grid;
+  gap: 8px;
+}
+.queue-card {
+  display: grid;
+  gap: 6px;
+  min-height: 56px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.06);
   background: rgba(255,255,255,.04);
-  font-size: 11px;
 }
-.exec-type {
-  font-size: 10px; color: var(--text-muted);
-  letter-spacing: .02em;
+.queue-card.supervisor {
+  box-shadow: inset 3px 0 0 rgba(111,198,160,.5);
+}
+.queue-card.agent {
+  box-shadow: inset 3px 0 0 rgba(167,138,212,.6);
+}
+.queue-card.empty {
+  min-height: 44px;
+  color: var(--text-muted);
+  background: rgba(255,255,255,.025);
+}
+.queue-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.queue-card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.35;
+}
+.queue-card-subtitle {
+  font-size: 10px;
+  color: rgba(244,228,188,.75);
+  line-height: 1.35;
+}
+.queue-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.queue-tag {
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+.queue-empty-text {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.timed-list {
+  display: grid;
+  gap: 7px;
+  max-height: 230px;
+  overflow-y: auto;
+}
+.timed-item {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  border: 1px solid rgba(255,255,255,.06);
+  background: rgba(255,255,255,.035);
+}
+.timed-item.supervisor {
+  background: rgba(111,198,160,.08);
+}
+.timed-item.agent {
+  background: rgba(167,138,212,.08);
+}
+.timed-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.timed-item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+}
+.timed-item-subtitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  color: rgba(244,228,188,.72);
+}
+.candidate-card {
+  display: grid;
+  gap: 6px;
+  min-height: 56px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(226,176,74,.18);
+  background: rgba(226,176,74,.08);
+}
+.candidate-card.empty {
+  border-color: rgba(255,255,255,.06);
+  background: rgba(255,255,255,.025);
+}
+.candidate-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.candidate-utility {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--gold);
+}
+.candidate-tags {
+  font-size: 10px;
+  color: rgba(244,228,188,.72);
 }
 
-.queue { display: grid; gap: 7px; margin-bottom: 12px; }
 .task {
   display: grid; grid-template-columns: 10px 1fr auto; align-items: center;
   gap: 8px; min-height: 32px; padding: 6px 10px;
@@ -1447,25 +1572,6 @@ body:has(.status:not(.collapsed)) .status-toggle {
 .task-badge.planned    { background: rgba(226,176,74,.12); color: var(--gold); }
 .task-badge.queued     { background: rgba(226,176,74,.12); color: var(--gold); }
 .task-badge.deferred   { background: rgba(226,176,74,.12); color: var(--gold); }
-
-.timeline { display: grid; gap: 5px; max-height: 120px; overflow-y: auto; }
-.event {
-  display: grid; grid-template-columns: 18px 58px 1fr;
-  gap: 7px; align-items: start;
-  min-height: 26px; padding: 5px 8px;
-  border-left: 3px solid rgba(106,158,232,.4);
-  background: rgba(255,255,255,.03);
-  border-radius: 5px;
-  font-size: 10.5px;
-  animation: event-in .35s ease;
-}
-@keyframes event-in {
-  from { opacity: 0; transform: translateX(6px); }
-  to   { opacity: 1; transform: translateX(0); }
-}
-.event-icon { font-size: 12px; text-align: center; line-height: 1.4; }
-.event-time { color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; font-size: 10px; }
-.event-text { color: var(--text-primary); line-height: 1.4; }
 
 /* ── 任务卡片(浮动, 左上) ── */
 .char-card {
@@ -1865,21 +1971,37 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
       <h1 id="sceneTitle">义子的小屋</h1>
       <p class="status-summary" id="sceneSummary">正在连接监督者…</p>
       <div class="metrics" id="metrics"></div>
-      <div class="schedule" id="schedule" style="display:none;">
-        <div class="schedule-label">⏳ 下次自动循环</div>
-        <div class="schedule-countdown" id="countdown">—</div>
+      <div class="queue-stack" id="queueStack">
+        <section class="queue-section">
+          <div class="section-head">
+            <div class="section-label">监督者执行</div>
+          </div>
+          <div class="queue-slot" id="supervisorActive"></div>
+        </section>
+        <section class="queue-section">
+          <div class="section-head">
+            <div class="section-label">Agent 执行</div>
+          </div>
+          <div class="queue-slot" id="agentActive"></div>
+        </section>
+        <section class="queue-section">
+          <div class="section-head">
+            <div class="section-label">定时队列</div>
+            <div class="window-pill" id="windowPill">00:00-06:00</div>
+          </div>
+          <div class="schedule" id="schedule" style="display:none;">
+            <div class="schedule-label">⏳ 下次自动循环</div>
+            <div class="schedule-countdown" id="countdown">—</div>
+          </div>
+          <div class="timed-list" id="timedQueue"></div>
+        </section>
+        <section class="queue-section">
+          <div class="section-head">
+            <div class="section-label">内生驱动候选</div>
+          </div>
+          <div class="queue-slot" id="candidateSlot"></div>
+        </section>
       </div>
-      <div class="panels" id="panels"></div>
-      <div class="candidates" id="candidates" style="display:none;">
-        <div class="candidates-label">💡 内生驱动候选</div>
-        <div id="candidateList"></div>
-      </div>
-      <div class="executions" id="executions" style="display:none;">
-        <div class="exec-label">⚡ 执行中</div>
-        <div id="execList"></div>
-      </div>
-      <div class="body-status" id="bodyStatus"></div>
-      <div class="timeline" id="timeline"></div>
     </aside>
 
     <!-- 动作切换器(底部) -->
@@ -1887,7 +2009,7 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
       <button class="action-btn" data-action="organize"><span class="ico">📚</span>整理</button>
       <button class="action-btn" data-action="rest"><span class="ico">🛋</span>休息</button>
       <button class="action-btn" data-action="work"><span class="ico">💻</span>工作</button>
-      <button class="action-btn" data-action="write"><span class="ico">✍️</span>书写</button>
+      <button class="action-btn" data-action="write"><span class="ico">✍️</span>任务审核</button>
     </div>
 
   </main>
@@ -1917,14 +2039,13 @@ const els = {
   title: $('#sceneTitle'),
   summary: $('#sceneSummary'),
   glyph: $('#glyph'),
-  panels: $('#panels'),
-  candidates: $('#candidates'),
-  candidateList: $('#candidateList'),
-  executions: $('#executions'),
-  execList: $('#execList'),
-  bodyStatus: $('#bodyStatus'),
-  timeline: $('#timeline'),
   metrics: $('#metrics'),
+  queueStack: $('#queueStack'),
+  supervisorActive: $('#supervisorActive'),
+  agentActive: $('#agentActive'),
+  timedQueue: $('#timedQueue'),
+  candidateSlot: $('#candidateSlot'),
+  windowPill: $('#windowPill'),
   particles: $('#particles'),
   actionBar: $('#actionBar'),
   wcHour: $('#wcHour'),
@@ -1966,6 +2087,15 @@ function taskDotClass(t) {
   if (f.includes('learning'))  return 'learning';
   if (f.includes('evolution') || f.includes('body')) return 'evolution';
   return 'planning';
+}
+
+function taskLane(t) {
+  return String(t.lane || '').trim() || (
+    String(t.governance_task_type || '').trim() === 'self_learning' ||
+    String(t.execution_kind || '').trim() === 'body_improvement'
+      ? 'agent'
+      : 'supervisor'
+  );
 }
 
 function taskIdentityHint(t) {
@@ -2026,172 +2156,150 @@ function renderCharCard(state) {
   $('#chMood').textContent = mood.emoji + ' ' + mood.label;
 }
 
-/* ── 任务面板渲染 ── */
-function renderPanels(panels) {
-  els.panels.replaceChildren();
-  if (!panels) return;
-  const labelMap = {
-    planned: '待执行', deferred: '等待中', paused: '暂停',
-    approved: '待执行', running: '执行中', completed: '完成',
-    failed: '失败', cancelled: '取消',
+function typeLabel(t) {
+  const identity = t.task_identity || {};
+  const displayKind = String(identity.display_kind || t.execution_kind || '').trim();
+  const governance = String(t.governance_task_type || '').trim();
+  const primary = displayKind || governance || String(t.task_family || '').trim();
+  const typeMap = {
+    self_learning: '自主学习',
+    body_improvement: '替身改进',
+    memory_maintenance: '记忆维护',
+    self_evolution: '通用演化',
+    general_self_evolution: '通用演化',
   };
-  ['learning', 'maintenance', 'evolution'].forEach(key => {
-    const panel = panels[key];
-    if (!panel) return;
-    const active = (panel.tasks || []).filter(t =>
-      t.status !== 'completed' && t.status !== 'failed' && t.status !== 'cancelled');
-    if (!active.length && !panel.count) return;
-    const total = panel.count || (panel.tasks || []).length;
-    const sec = document.createElement('div');
-    sec.className = 'panel ' + key + ' open';
-    const head = document.createElement('div');
-    head.className = 'panel-head';
-    head.textContent = panel.label + ' (' + active.length +
-      (active.length !== total ? '/' + total : '') + ')';
-    head.onclick = () => sec.classList.toggle('open');
-    sec.append(head);
-    const body = document.createElement('div');
-    body.className = 'panel-body';
-    active.slice(0, 8).forEach(t => {
-      const row = document.createElement('div');
-      row.className = 'task';
-      if (t.status === 'completed' || t.status === 'failed') row.classList.add('completed');
-      const dot = document.createElement('span');
-      dot.className = 'task-dot ' + taskDotClass(t);
-      const text = document.createElement('div');
-      text.className = 'task-text';
-      const title = document.createElement('span');
-      title.className = 'task-title';
-      title.textContent = (t.title || '未命名').substring(0, 48);
-      text.append(title);
-      const identityHint = taskIdentityHint(t);
-      if (identityHint) {
-        const meta = document.createElement('span');
-        meta.className = 'task-gov';
-        meta.textContent = identityHint;
-        text.append(meta);
-      }
-      const hint = governanceHint(t);
-      if (hint) {
-        const gov = document.createElement('span');
-        gov.className = 'task-gov';
-        gov.textContent = hint;
-        text.append(gov);
-      }
-      const badge = document.createElement('span');
-      badge.className = 'task-badge ' + (t.status || 'queued');
-      badge.textContent = labelMap[t.status] || t.status || 'queued';
-      row.append(dot, text, badge);
-      body.append(row);
-    });
-    sec.append(body);
-    els.panels.append(sec);
-  });
+  return typeMap[primary] || primary.replace(/_/g, ' ') || '任务';
 }
 
-/* ── 候选 ── */
-function renderCandidates(c) {
-  if (!c || !c.length) { els.candidates.style.display = 'none'; return; }
-  els.candidates.style.display = 'block';
-  els.candidateList.replaceChildren();
-  c.slice(0, 4).forEach(x => {
-    const row = document.createElement('div');
-    row.className = 'candidate';
-    const t = document.createElement('span');
-    t.textContent = (x.title || '候选').substring(0, 40);
-    const tags = document.createElement('span');
-    tags.className = 'candidate-tags';
-    tags.textContent = (x.value_tags || []).join(', ');
-    const u = document.createElement('span');
-    u.className = 'candidate-utility';
-    u.textContent = Math.round((x.utility || 0) * 100) + '%';
-    row.append(t, tags, u);
-    els.candidateList.append(row);
-  });
-}
-
-/* ── 身体状态 ── */
-function renderBodyStatus(s) {
-  els.bodyStatus.replaceChildren();
-  if (!s || !s.active_slot) return;
-  const row = document.createElement('div');
-  row.className = 'body-info';
-  const label = document.createElement('span');
-  label.textContent = '🖥 替身: ' + s.active_slot;
-  if (s.candidate_slot) {
-    label.textContent += ' → 候选 ' + s.candidate_slot;
-    row.style.color = 'var(--coral)';
+function buildQueueCard(task, emptyText) {
+  const card = document.createElement('div');
+  if (!task) {
+    card.className = 'queue-card empty';
+    const text = document.createElement('div');
+    text.className = 'queue-empty-text';
+    text.textContent = emptyText;
+    card.append(text);
+    return card;
   }
-  els.bodyStatus.append(row);
+
+  const lane = taskLane(task);
+  card.className = 'queue-card ' + lane;
+  const head = document.createElement('div');
+  head.className = 'queue-card-head';
+  const title = document.createElement('div');
+  title.className = 'queue-card-title';
+  title.textContent = (task.title || '未命名任务').substring(0, 60);
+  const badge = document.createElement('span');
+  badge.className = 'task-badge ' + (task.status || 'queued');
+  badge.textContent = task.display_status || task.status || '待定';
+  head.append(title, badge);
+
+  const sub = document.createElement('div');
+  sub.className = 'queue-card-subtitle';
+  const hints = [];
+  const identityHint = taskIdentityHint(task);
+  if (identityHint) hints.push(identityHint);
+  const hint = governanceHint(task);
+  if (hint) hints.push(hint);
+  if (!hints.length) hints.push(typeLabel(task));
+  sub.textContent = hints.join(' · ').substring(0, 140);
+
+  const meta = document.createElement('div');
+  meta.className = 'queue-card-meta';
+  const tag = document.createElement('span');
+  tag.className = 'queue-tag';
+  tag.textContent = lane === 'agent' ? 'API-A 执行通道' : '监督者治理通道';
+  meta.append(tag);
+
+  card.append(head, sub, meta);
+  return card;
 }
 
-/* ── 时间线 ── */
-function renderTimeline(events) {
-  els.timeline.replaceChildren();
-  (events || []).slice(0, 6).forEach(ev => {
-    const row = document.createElement('div');
-    row.className = 'event';
-    const ic = document.createElement('span');
-    ic.className = 'event-icon';
-    ic.textContent = eventIcon(ev.event_type || '');
-    const tm = document.createElement('span');
-    tm.className = 'event-time';
-    const d = ev.recorded_at ? new Date(ev.recorded_at) : null;
-    tm.textContent = (d && !isNaN(d.getTime()))
-      ? d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'})
-      : '--:--:--';
-    const tx = document.createElement('span');
-    tx.className = 'event-text';
-    tx.textContent = ev.summary || ev.event_type || '活动';
-    row.append(ic, tm, tx);
-    els.timeline.append(row);
-  });
-}
+function renderQueueLayout(layout, schedule) {
+  const q = layout || {};
+  const windowInfo = q.window || {};
+  els.supervisorActive.replaceChildren(
+    buildQueueCard(q.supervisor_active || null, '当前没有监督者任务')
+  );
+  els.agentActive.replaceChildren(
+    buildQueueCard(q.agent_active || null, '当前没有创造类任务')
+  );
 
-/* ── 执行中 ── */
-function renderExecutions(tasks) {
-  els.execList.replaceChildren();
-  if (!tasks || !tasks.length) { els.executions.style.display = 'none'; return; }
-  els.executions.style.display = 'block';
-  tasks.slice(0, 3).forEach(t => {
-    const row = document.createElement('div');
-    row.className = 'exec-item';
-    const dot = document.createElement('span');
-    dot.className = 'task-dot ' + taskDotClass(t);
-    const ti = document.createElement('span');
-    ti.textContent = (t.title || '未命名').substring(0, 40);
-    const ty = document.createElement('span');
-    ty.className = 'exec-type';
-    const identity = t.task_identity || {};
-    const typeMap = {
-      'self_learning': '自我学习', 'learning': '学习',
-      'memory_compression': '记忆压缩', 'memory': '记忆',
-      'body_switch': '替身切换', 'evolution': '进化',
-      'body_improvement': '代码改进',
-      'body_upgrade': '身体升级',
-      'planning': '规划', 'task_decision': '任务决策',
-      'maintenance': '维护', 'drive': '驱动',
-    };
-    const displayKind = String(identity.display_kind || '').trim();
-    const family = String(identity.task_family || t.task_family || '').trim();
-    const primaryType = displayKind || family || String(t.governance_task_type || '').trim();
-    const primaryLabel = typeMap[primaryType] || primaryType.replace(/_/g, ' ');
-    if (family && displayKind && family !== displayKind) {
-      const familyLabel = typeMap[family] || family.replace(/_/g, ' ');
-      ty.textContent = primaryLabel + ' · ' + familyLabel;
-    } else {
-      ty.textContent = primaryLabel;
-    }
-    row.append(dot, ti, ty);
-    els.execList.append(row);
-  });
+  els.timedQueue.replaceChildren();
+  const timed = Array.isArray(q.timed_queue) ? q.timed_queue : [];
+  if (!timed.length) {
+    const empty = document.createElement('div');
+    empty.className = 'queue-card empty';
+    const text = document.createElement('div');
+    text.className = 'queue-empty-text';
+    text.textContent = '定时队列为空';
+    empty.append(text);
+    els.timedQueue.append(empty);
+  } else {
+    timed.forEach(task => {
+      const row = document.createElement('div');
+      row.className = 'timed-item ' + taskLane(task);
+      const dot = document.createElement('span');
+      dot.className = 'task-dot ' + taskDotClass(task);
+      const text = document.createElement('div');
+      text.className = 'timed-item-text';
+      const title = document.createElement('span');
+      title.className = 'timed-item-title';
+      title.textContent = (task.title || '未命名任务').substring(0, 54);
+      const subtitle = document.createElement('span');
+      subtitle.className = 'timed-item-subtitle';
+      subtitle.textContent = (task.display_status || task.status || '待定') + ' · ' + typeLabel(task);
+      text.append(title, subtitle);
+      const badge = document.createElement('span');
+      badge.className = 'task-badge ' + (task.status || 'queued');
+      badge.textContent = task.display_status || task.status || '待定';
+      row.append(dot, text, badge);
+      els.timedQueue.append(row);
+    });
+  }
+
+  els.candidateSlot.replaceChildren();
+  const candidate = q.candidate_slot || null;
+  if (!candidate) {
+    const empty = document.createElement('div');
+    empty.className = 'candidate-card empty';
+    const text = document.createElement('div');
+    text.className = 'queue-empty-text';
+    text.textContent = '当前没有待裁定候选';
+    empty.append(text);
+    els.candidateSlot.append(empty);
+  } else {
+    const card = document.createElement('div');
+    card.className = 'candidate-card';
+    const head = document.createElement('div');
+    head.className = 'candidate-card-head';
+    const title = document.createElement('div');
+    title.className = 'queue-card-title';
+    title.textContent = (candidate.title || '候选任务').substring(0, 60);
+    const utility = document.createElement('div');
+    utility.className = 'candidate-utility';
+    utility.textContent = Math.round((candidate.utility || 0) * 100) + '%';
+    head.append(title, utility);
+    const tags = document.createElement('div');
+    tags.className = 'candidate-tags';
+    tags.textContent = (candidate.value_tags || []).join(' · ') || '等待监督者裁定';
+    card.append(head, tags);
+    els.candidateSlot.append(card);
+  }
+
+  if (els.windowPill) {
+    const open = !!windowInfo.open;
+    els.windowPill.className = 'window-pill ' + (open ? 'open' : 'closed');
+    els.windowPill.textContent = (windowInfo.range || '00:00-06:00') + ' ' + (windowInfo.status_text || '');
+  }
+
+  renderSchedule(schedule);
 }
 
 /* ── 指标 ── */
 function renderMetrics(state) {
   els.metrics.replaceChildren();
   const m = state.metrics || {};
-  const by = m.by_path || {};
   const lr = m.learning_results || {};
   function add(cls, v, l) {
     const d = document.createElement('div');
@@ -2206,12 +2314,12 @@ function renderMetrics(state) {
     els.metrics.append(d);
   }
   add('ok',   m.queue_total || 0,     '总数');
-  add('ok',   by.learning || 0,       '学习');
-  add('ok',   by.maintenance || 0,    '维护');
+  add('ok',   m.learning_total || 0,  '学习');
+  add('ok',   m.maintenance_total || 0, '维护');
   add((m.error_count || 0) > 0 ? 'error' : 'ok', m.error_count || 0, '错误');
-  if (lr.completed || lr.failed) add('ok', (lr.completed || 0) + '/' + (lr.failed || 0), '完成/失败');
-  add(m.body_switch_active ? 'warn' : 'ok', m.active_slot || '—', '替身');
-  add(state.in_execution_window !== false ? 'ok' : '', state.in_execution_window !== false ? '开放' : '关闭', '窗口');
+  add('ok', (lr.completed || 0) + '/' + (lr.failed || 0), '完成/失败');
+  add(m.active_slot ? 'ok' : '', m.active_slot || '—', '替身');
+  add((state.queue_layout || {}).window?.open ? 'ok' : 'warn', ((state.queue_layout || {}).window?.status_text) || '关闭', '窗口');
 }
 
 /* ── 倒计时 ── */
@@ -2263,13 +2371,8 @@ function applyState(state) {
   updateActionButtons();
 
   renderCharCard(state);
-  renderPanels(state.panels || {});
-  renderCandidates(state.drive_candidates || []);
-  renderExecutions(state.active_executions || []);
-  renderBodyStatus(state.body_status || {});
-  renderTimeline(state.timeline || []);
   renderMetrics(state);
-  if (state.schedule) renderSchedule(state.schedule);
+  renderQueueLayout(state.queue_layout || {}, state.schedule || {});
 
   if (scene !== prevScene) spawnParticles(scene, 12);
 }
@@ -2360,11 +2463,10 @@ async function refresh() {
     els.summary.textContent = '尚未连接到监督者。';
     els.glyph.textContent = '·';
     els.metrics.replaceChildren();
-    els.panels.replaceChildren();
-    els.candidates.style.display = 'none';
-    els.executions.style.display = 'none';
-    els.bodyStatus.replaceChildren();
-    els.timeline.replaceChildren();
+    els.supervisorActive.replaceChildren();
+    els.agentActive.replaceChildren();
+    els.timedQueue.replaceChildren();
+    els.candidateSlot.replaceChildren();
   }
 }
 
@@ -2472,6 +2574,22 @@ class SupervisorUIMixin:
             return []
         return list(events)[: max(limit, 0)]
 
+    def _latest_drive_candidate_snapshot(self) -> List[Dict[str, Any]]:
+        for event in self._recent_supervisor_ui_activity(limit=20):
+            if not isinstance(event, dict):
+                continue
+            event_type = str(event.get("event_type") or "").strip().lower()
+            metadata = dict(event.get("metadata") or {})
+            if event_type == "endogenous_drive_evaluated":
+                candidates = metadata.get("candidates")
+                if isinstance(candidates, list):
+                    return [dict(item) for item in candidates if isinstance(item, dict)]
+            if event_type == "endogenous_drive_planned":
+                tasks = metadata.get("tasks")
+                if isinstance(tasks, list):
+                    return [dict(item) for item in tasks if isinstance(item, dict)]
+        return []
+
     def _load_supervisor_ui_activity(self) -> List[Dict[str, Any]]:
         path = getattr(self, "_supervisor_ui_activity_path", None)
         if path is None or not path.exists():
@@ -2504,6 +2622,22 @@ class SupervisorUIMixin:
             atomic_json_write(path, payload)
         except Exception:
             return
+
+    def _clear_supervisor_ui_activity(self) -> None:
+        events = getattr(self, "_supervisor_ui_events", None)
+        if events is not None:
+            events.clear()
+        path = getattr(self, "_supervisor_ui_activity_path", None)
+        if path is not None:
+            payload = {
+                "version": 1,
+                "updated_at": datetime.utcnow().isoformat(),
+                "events": [],
+            }
+            try:
+                atomic_json_write(path, payload)
+            except Exception:
+                return
 
     def _record_supervisor_ui_activity_history(self, event: Dict[str, Any]) -> None:
         governor = getattr(self, "_governor", None)
@@ -2540,27 +2674,48 @@ class SupervisorUIMixin:
         return f"event: {event_name}\ndata: {data}\n\n"
 
     async def get_supervisor_ui_state(self) -> Dict[str, Any]:
-        all_tasks = [
+        all_serialized_tasks = [
             self._serialize_self_evolution_task(task)
             for task in self._self_evolution_queue.list_tasks()
-            if task.status in {"planned", "deferred", "paused", "approved", "running", "completed", "failed"}
         ]
-        all_tasks.sort(key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
+        all_serialized_tasks.sort(
+            key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""),
+            reverse=True,
+        )
+
+        visible_tasks = [
+            self._serialize_self_evolution_task(task)
+            for task in self._self_evolution_queue.list_tasks()
+            if task.status in {"planned", "deferred", "paused", "approved", "running"}
+        ]
+        visible_tasks.sort(key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
 
         # ── Grouped task panels by execution path ──
-        panels = self._build_task_panels(all_tasks)
+        panels = self._build_task_panels(visible_tasks)
 
-        drive_candidates: List[Dict[str, Any]] = []
+        drive_candidates: List[Dict[str, Any]] = self._latest_drive_candidate_snapshot()
         drive_available = True
         idle_snapshot: Dict[str, Any] = {}
         try:
-            drive = await self.evaluate_endogenous_drive(
-                {"max_candidates": 6, "record_activity": False}
-            )
-            drive_candidates = list(drive.get("candidates") or [])
-            idle_snapshot = dict(drive.get("idle_window") or {})
+            idle_snapshot = await self.evaluate_idle_window({})
         except Exception:
             drive_available = False
+        if (
+            drive_available
+            and not drive_candidates
+            and not bool(getattr(getattr(self, "_service_runtime", None), "suppress_candidate_refresh", False))
+        ):
+            try:
+                evaluation = await self.evaluate_endogenous_drive(
+                    {"record_activity": False}
+                )
+                fallback_candidates = evaluation.get("candidates") if isinstance(evaluation, dict) else None
+                if isinstance(fallback_candidates, list):
+                    drive_candidates = [
+                        dict(item) for item in fallback_candidates if isinstance(item, dict)
+                    ]
+            except Exception:
+                pass
 
         # Extract metrics from gateway activity for richer UI expression
         activity = dict(idle_snapshot.get("activity") or {})
@@ -2569,15 +2724,15 @@ class SupervisorUIMixin:
         error_count = int(counts.get("error_count") or 0)
         in_execution_window = bool(checks.get("in_execution_window", True))
 
-        # ── Body status (direct from registry, not task queue) ──
+        # ── Body status (direct from registry snapshot, not task queue) ──
         body_status: Dict[str, Any] = {}
         try:
-            registry = self._body_registry
+            registry = self._body_registry.load_registry()
             body_status = {
                 "active_slot": getattr(registry, "active_slot", None),
-                "candidate_slot": getattr(registry, "candidate_slot", None),
+                "candidate_slot": None,
                 "retired_slot": getattr(registry, "retired_slot", None),
-                "shell_agents": getattr(registry, "shell_agent_count", 0),
+                "shell_slot": getattr(registry, "shell_slot", None),
                 "last_switch_result": dict(getattr(registry, "last_switch_result", {}) or {}),
             }
         except Exception:
@@ -2621,11 +2776,22 @@ class SupervisorUIMixin:
             pass
 
         # ── Metrics panel (upgraded with per-path stats) ──
-        metrics = self._build_ui_metrics(all_tasks, panels, drive_candidates, body_status, error_count)
+        queue_layout = self._build_governance_queue_layout(
+            visible_tasks,
+            drive_candidates=drive_candidates,
+            in_execution_window=in_execution_window,
+        )
+        metrics = self._build_ui_metrics(
+            all_serialized_tasks,
+            visible_tasks=visible_tasks,
+            queue_layout=queue_layout,
+            body_status=body_status,
+            error_count=error_count,
+        )
 
         scene, title, summary = self._map_supervisor_scene(
             panels=panels,
-            all_tasks=all_tasks,
+            all_tasks=visible_tasks,
             drive_candidates=drive_candidates,
             drive_available=drive_available,
             error_count=error_count,
@@ -2639,7 +2805,8 @@ class SupervisorUIMixin:
             "summary": summary,
             "generated_at": datetime.utcnow().isoformat(),
             "panels": panels,
-            "tasks": all_tasks[:12],
+            "tasks": visible_tasks[:12],
+            "queue_layout": queue_layout,
             "schedule": schedule,
             "metrics": metrics,
             "mem_usage": mem_usage,
@@ -2658,6 +2825,131 @@ class SupervisorUIMixin:
                 if task.status == "running"
                 and not task.metadata.get("execution_failed")
             ],
+        }
+
+    def _is_creativity_ui_task(self, task: Dict[str, Any]) -> bool:
+        governance = str(task.get("governance_task_type") or "").strip().lower()
+        execution_kind = str(task.get("execution_kind") or "").strip().lower()
+        return governance == "self_learning" or execution_kind == "body_improvement"
+
+    def _ui_task_sort_key(self, task: Dict[str, Any]) -> tuple[int, str]:
+        status = str(task.get("status") or "").strip().lower()
+        order = {
+            "running": 0,
+            "approved": 1,
+            "planned": 2,
+            "deferred": 3,
+            "paused": 4,
+        }
+        updated = str(task.get("updated_at") or task.get("created_at") or "")
+        return (order.get(status, 9), updated)
+
+    def _queue_display_status(self, task: Dict[str, Any]) -> str:
+        status = str(task.get("status") or "").strip().lower()
+        mapping = {
+            "planned": "待审核",
+            "approved": "待执行",
+            "running": "执行中",
+            "deferred": "已推迟",
+            "paused": "已暂停",
+        }
+        return mapping.get(status, status or "待定")
+
+    def _queue_role_tag(self, task: Dict[str, Any]) -> str:
+        return "agent" if self._is_creativity_ui_task(task) else "supervisor"
+
+    def _build_governance_queue_layout(
+        self,
+        all_tasks: List[Dict[str, Any]],
+        *,
+        drive_candidates: List[Dict[str, Any]],
+        in_execution_window: bool,
+    ) -> Dict[str, Any]:
+        creativity_tasks = [task for task in all_tasks if self._is_creativity_ui_task(task)]
+        supervisor_tasks = [task for task in all_tasks if not self._is_creativity_ui_task(task)]
+
+        creativity_sorted = sorted(creativity_tasks, key=self._ui_task_sort_key)
+        supervisor_sorted = sorted(supervisor_tasks, key=self._ui_task_sort_key)
+
+        def pick_active(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+            for preferred in ("running", "approved"):
+                for row in rows:
+                    if str(row.get("status") or "").strip().lower() == preferred:
+                        return row
+            return None
+
+        supervisor_active = pick_active(supervisor_sorted)
+        agent_active = pick_active(creativity_sorted)
+
+        active_ids = {
+            task.get("task_id")
+            for task in (supervisor_active, agent_active)
+            if isinstance(task, dict) and task.get("task_id")
+        }
+        timed_queue = [
+            {
+                **task,
+                "lane": self._queue_role_tag(task),
+                "display_status": self._queue_display_status(task),
+            }
+            for task in sorted(all_tasks, key=self._ui_task_sort_key)
+            if task.get("task_id") not in active_ids
+        ]
+
+        seen_keys = {
+            str(task.get("metadata", {}).get("endogenous_drive_key") or "").strip()
+            for task in timed_queue
+            if isinstance(task, dict)
+        }
+        seen_titles = {
+            str(task.get("title") or "").strip()
+            for task in timed_queue
+            if isinstance(task, dict)
+        }
+        candidate_slot = None
+        for candidate in drive_candidates:
+            if not isinstance(candidate, dict):
+                continue
+            candidate_key = str(
+                candidate.get("metadata", {}).get("endogenous_drive_key")
+                or candidate.get("stable_key")
+                or ""
+            ).strip()
+            candidate_title = str(candidate.get("title") or "").strip()
+            if candidate_key and candidate_key in seen_keys:
+                continue
+            if candidate_title and candidate_title in seen_titles:
+                continue
+            candidate_slot = candidate
+            break
+
+        return {
+            "window": {
+                "label": "自动执行窗口",
+                "range": "00:00-06:00",
+                "open": bool(in_execution_window),
+                "status_text": "开放" if in_execution_window else "关闭",
+            },
+            "supervisor_active": (
+                {
+                    **supervisor_active,
+                    "lane": "supervisor",
+                    "display_status": self._queue_display_status(supervisor_active),
+                }
+                if supervisor_active
+                else None
+            ),
+            "agent_active": (
+                {
+                    **agent_active,
+                    "lane": "agent",
+                    "display_status": self._queue_display_status(agent_active),
+                }
+                if agent_active
+                else None
+            ),
+            "timed_queue": timed_queue,
+            "candidate_slot": candidate_slot,
         }
 
     def _build_task_panels(self, all_tasks: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -2739,25 +3031,26 @@ class SupervisorUIMixin:
     def _build_ui_metrics(
         self,
         all_tasks: List[Dict[str, Any]],
-        panels: Dict[str, Any],
-        drive_candidates: List[Dict[str, Any]],
+        *,
+        visible_tasks: List[Dict[str, Any]],
+        queue_layout: Dict[str, Any],
         body_status: Dict[str, Any],
         error_count: int,
     ) -> Dict[str, Any]:
-        """Build upgraded metrics with per-path grouping stats."""
+        """Build top-card metrics for the 5-section governance layout."""
         queue_total = len(all_tasks)
-        learning_count = panels.get("learning", {}).get("count", 0)
-        maintenance_count = panels.get("maintenance", {}).get("count", 0)
-        evolution_count = panels.get("evolution", {}).get("count", 0)
-
-        # Recent learning results (completed/failed in last 20 tasks)
+        learning_total = sum(1 for t in all_tasks if self._is_creativity_ui_task(t))
+        maintenance_total = sum(1 for t in all_tasks if not self._is_creativity_ui_task(t))
+        evolution_total = sum(
+            1
+            for t in all_tasks
+            if str(t.get("execution_kind") or "").strip().lower() == "body_improvement"
+        )
         learning_completed = sum(
-            1 for t in all_tasks
-            if "learning" in str(t.get("task_family", "")) and t.get("status") == "completed"
+            1 for t in all_tasks if self._is_creativity_ui_task(t) and t.get("status") == "completed"
         )
         learning_failed = sum(
-            1 for t in all_tasks
-            if "learning" in str(t.get("task_family", "")) and t.get("status") == "failed"
+            1 for t in all_tasks if self._is_creativity_ui_task(t) and t.get("status") == "failed"
         )
         shadow_recommendations = 0
         shadow_actions: Dict[str, int] = {}
@@ -2778,20 +3071,23 @@ class SupervisorUIMixin:
 
         return {
             "queue_total": queue_total,
+            "learning_total": learning_total,
+            "maintenance_total": maintenance_total,
+            "evolution_total": evolution_total,
             "by_path": {
-                "learning": learning_count,
-                "maintenance": maintenance_count,
-                "evolution": evolution_count,
+                "learning": learning_total,
+                "maintenance": maintenance_total,
+                "evolution": evolution_total,
             },
             "learning_results": {
                 "completed": learning_completed,
                 "failed": learning_failed,
             },
-            "drive_candidates": len(drive_candidates),
+            "drive_candidates": 1 if queue_layout.get("candidate_slot") else 0,
             "body_switch_active": bool(body_status.get("candidate_slot")),
             "active_slot": body_status.get("active_slot"),
             "error_count": error_count,
-            "running_count": sum(1 for t in all_tasks if t.get("status") == "running"),
+            "running_count": sum(1 for t in visible_tasks if t.get("status") == "running"),
             "governance": {
                 "direct_lm_actions": direct_lm_actions,
                 "shadow_recommendations": shadow_recommendations,
@@ -2882,7 +3178,7 @@ class SupervisorUIMixin:
         if memory_active:
             return (
                 "memory",
-                f"Xizi is organizing memory{error_note}",
+                f"义子正在整理记忆{error_note}",
                 "记忆模型正在执行压缩规则：衰减→桥接→升级→清退。",
             )
 
