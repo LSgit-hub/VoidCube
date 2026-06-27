@@ -621,6 +621,197 @@ async def test_supervisor_room_state_exposes_task_identity_for_body_improvement(
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_supervisor_room_state_uses_single_slot_governance_layout(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
+    supervisor.evaluate_idle_window = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "checks": {"in_execution_window": True},
+            "idle_seconds": {},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "body_upgrade": {"eligible_for_planning": True, "eligible_for_execution": True},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": True},
+            },
+        }
+    )
+
+    supervisor_task_1 = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Supervisor first task",
+            "task_family": "memory_maintenance",
+            "metadata": {"task_family": "memory_maintenance"},
+        }
+    )
+    supervisor_task_2 = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Supervisor second task",
+            "task_family": "general_self_evolution",
+            "metadata": {"task_family": "general_self_evolution"},
+        }
+    )
+    agent_task_1 = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Agent first creative task",
+            "task_type": "self_learning",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        }
+    )
+    agent_task_2 = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Agent second creative task",
+            "task_family": "body_upgrade",
+            "execution_kind": "body_improvement",
+            "metadata": {
+                "task_family": "body_upgrade",
+                "execution_kind": "body_improvement",
+            },
+        }
+    )
+
+    await supervisor.decide_self_evolution_task(
+        supervisor_task_1["tasks"][0]["task_id"],
+        {"decision": "approve", "reason": "first supervisor task"},
+    )
+    await supervisor.decide_self_evolution_task(
+        agent_task_1["tasks"][0]["task_id"],
+        {"decision": "approve", "reason": "first agent task"},
+    )
+
+    state = await supervisor.get_supervisor_ui_state()
+    layout = state["queue_layout"]
+    timed_titles = [item["title"] for item in layout["timed_queue"]]
+
+    assert layout["supervisor_active"]["title"] == "Supervisor first task"
+    assert layout["supervisor_active"]["display_status"] == "待执行"
+    assert layout["agent_active"]["title"] == "Agent first creative task"
+    assert layout["agent_active"]["display_status"] == "待执行"
+    assert timed_titles == ["Supervisor second task", "Agent second creative task"]
+    assert [item["display_status"] for item in layout["timed_queue"]] == ["预设时间", "预设时间"]
+    assert [item["lane"] for item in layout["timed_queue"]] == ["supervisor", "agent"]
+    assert layout["window"]["label"] == "预设时间"
+    assert layout["window"]["status_text"] == "限时自动执行中"
+    assert state["metrics"]["slot_overview"] == "slot-A / slot-B"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_candidate_list_deduplicates_timed_queue_by_schedule(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_idle_window = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "checks": {"in_execution_window": False},
+            "idle_seconds": {},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": False},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": False},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+    )
+    supervisor.evaluate_endogenous_drive = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "candidates": [
+                {
+                    "title": "Duplicate scheduled candidate",
+                    "stable_key": "candidate-dup",
+                    "value_tags": ["continuity"],
+                    "utility": 0.91,
+                    "metadata": {
+                        "endogenous_drive_key": "candidate-dup",
+                        "scheduled_for": "2026-06-28T01:00:00",
+                    },
+                },
+                {
+                    "title": "Unique scheduled candidate",
+                    "stable_key": "candidate-unique",
+                    "value_tags": ["creativity"],
+                    "utility": 0.88,
+                    "metadata": {
+                        "endogenous_drive_key": "candidate-unique",
+                        "scheduled_for": "2026-06-28T02:00:00",
+                    },
+                },
+            ]
+        }
+    )
+
+    await supervisor.plan_self_evolution_task(
+        {
+            "title": "Existing timed queue task",
+            "metadata": {
+                "scheduled_for": "2026-06-28T01:00:00",
+            },
+        }
+    )
+
+    state = await supervisor.get_supervisor_ui_state()
+    layout = state["queue_layout"]
+
+    assert layout["timed_queue"][0]["title"] == "Existing timed queue task"
+    assert [item["title"] for item in layout["candidate_list"]] == ["Unique scheduled candidate"]
+    assert layout["candidate_list"][0]["display_status"] == "等待监督者 LM 裁定"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_keeps_supervisor_idle_when_only_agent_task_is_waiting(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_endogenous_drive = AsyncMock(  # type: ignore[method-assign]
+        return_value={"candidates": []}
+    )
+    supervisor.evaluate_idle_window = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "checks": {"in_execution_window": True},
+            "idle_seconds": {},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+            },
+        }
+    )
+
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Agent waiting creative task",
+            "task_family": "self_learning",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        }
+    )
+    await supervisor.decide_self_evolution_task(
+        planned["tasks"][0]["task_id"],
+        {"decision": "approve", "reason": "creative task ready"},
+    )
+
+    state = await supervisor.get_supervisor_ui_state()
+
+    assert state["scene"] == "idle"
+    assert state["queue_layout"]["supervisor_active"] is None
+    assert state["queue_layout"]["agent_active"]["title"] == "Agent waiting creative task"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_supervisor_delegates_memory_compression_to_maintenance_adapter(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     expected = {

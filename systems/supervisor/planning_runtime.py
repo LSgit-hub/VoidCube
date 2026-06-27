@@ -163,6 +163,19 @@ class PlanningRuntimeMixin:
             value = payload.get(key)
             if value is not None:
                 metadata[key] = value
+        for key in (
+            "scheduled_for",
+            "preset_time",
+            "scheduled_at",
+            "run_at",
+            "execute_after",
+            "time_slot",
+            "window",
+        ):
+            value = payload.get(key)
+            if value is not None and key not in metadata:
+                metadata[key] = value
+        metadata = self._normalize_task_schedule_metadata(metadata)
         explicit_execution_kind = str(metadata.get("execution_kind") or "").strip().lower()
         if explicit_execution_kind in {"body_switch", "body_improvement"} and not metadata.get("task_family"):
             metadata["task_family"] = explicit_execution_kind
@@ -200,6 +213,242 @@ class PlanningRuntimeMixin:
             return False
         return self._task_governance_type(task) in {"self_evolution", "memory_maintenance"}
 
+    def _normalize_scheduled_for_value(self, value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.isoformat()
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            return datetime.fromisoformat(text).isoformat()
+        except ValueError:
+            return text
+
+    def _normalize_task_schedule_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(metadata or {})
+        scheduled_for = None
+        for key in (
+            "scheduled_for",
+            "preset_time",
+            "scheduled_at",
+            "run_at",
+            "execute_after",
+            "time_slot",
+            "window",
+        ):
+            scheduled_for = self._normalize_scheduled_for_value(normalized.get(key))
+            if scheduled_for:
+                break
+        if scheduled_for:
+            normalized["scheduled_for"] = scheduled_for
+        return normalized
+
+    def _task_schedule_token_from_sources(self, *sources: Any) -> Optional[str]:
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            for key in (
+                "scheduled_for",
+                "preset_time",
+                "scheduled_at",
+                "run_at",
+                "execute_after",
+                "time_slot",
+                "window",
+            ):
+                scheduled_for = self._normalize_scheduled_for_value(source.get(key))
+                if scheduled_for:
+                    return scheduled_for
+        return None
+
+    def _task_schedule_token(self, task: SelfEvolutionTask) -> Optional[str]:
+        execution = dict(task.metadata.get("execution_request") or {})
+        evidence = dict(task.evidence or {})
+        endogenous_drive = dict(evidence.get("endogenous_drive") or {})
+        return self._task_schedule_token_from_sources(
+            task.metadata,
+            task.constraints,
+            evidence,
+            endogenous_drive,
+            execution,
+        )
+
+    def _schedule_slot_interval_seconds(self) -> int:
+        review_interval = int(
+            getattr(self.config.service_runtime, "self_evolution_review_interval", 300) or 300
+        )
+        return max(300, review_interval)
+
+    def _next_execution_window_start(self, now: datetime) -> datetime:
+        service_cfg = self.config.service_runtime
+        start_hour = int(getattr(service_cfg, "execution_window_start_hour", 0) or 0)
+        end_hour = int(getattr(service_cfg, "execution_window_end_hour", 24) or 24)
+
+        candidate = now.replace(
+            hour=start_hour,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        if start_hour <= now.hour < end_hour:
+            return now
+        if now < candidate:
+            return candidate
+        return candidate + timedelta(days=1)
+
+    def _align_scheduled_for(self, when: datetime) -> datetime:
+        slot_seconds = self._schedule_slot_interval_seconds()
+        base = when.replace(second=0, microsecond=0)
+        since_midnight = (
+            base.hour * 3600
+            + base.minute * 60
+            + base.second
+        )
+        remainder = since_midnight % slot_seconds
+        if remainder == 0:
+            return base
+        return base + timedelta(seconds=(slot_seconds - remainder))
+
+    def _scheduled_for_within_window(self, when: datetime) -> datetime:
+        service_cfg = self.config.service_runtime
+        start_hour = int(getattr(service_cfg, "execution_window_start_hour", 0) or 0)
+        end_hour = int(getattr(service_cfg, "execution_window_end_hour", 24) or 24)
+
+        if start_hour <= when.hour < end_hour:
+            return when
+        normalized = self._next_execution_window_start(when)
+        if normalized == when:
+            return when
+        return normalized.replace(
+            hour=start_hour,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+
+    def _occupied_scheduled_for_tokens(self) -> set[str]:
+        terminal = {"completed", "failed", "cancelled"}
+        occupied: set[str] = set()
+        for task in self._self_evolution_queue.list_tasks():
+            if str(task.status or "").strip().lower() in terminal:
+                continue
+            token = self._task_schedule_token(task)
+            if token:
+                occupied.add(token)
+        return occupied
+
+    def _allocate_scheduled_for_tokens(
+        self,
+        *,
+        count: int,
+        now: Optional[datetime] = None,
+        occupied_tokens: Optional[set[str]] = None,
+    ) -> list[str]:
+        if count <= 0:
+            return []
+
+        current = now or datetime.now()
+        occupied = set(occupied_tokens or set())
+        scheduled: list[str] = []
+        slot_seconds = self._schedule_slot_interval_seconds()
+
+        cursor = self._scheduled_for_within_window(
+            self._align_scheduled_for(self._next_execution_window_start(current))
+        )
+        while len(scheduled) < count:
+            cursor = self._scheduled_for_within_window(self._align_scheduled_for(cursor))
+            token = cursor.isoformat()
+            if token not in occupied:
+                occupied.add(token)
+                scheduled.append(token)
+            cursor = cursor + timedelta(seconds=slot_seconds)
+        return scheduled
+
+    def _apply_scheduled_for_to_candidate_items(
+        self,
+        candidate_items: list[Dict[str, Any]],
+        *,
+        now: Optional[datetime] = None,
+    ) -> list[Dict[str, Any]]:
+        if not candidate_items:
+            return []
+
+        occupied = self._occupied_scheduled_for_tokens()
+        prepared: list[Dict[str, Any]] = []
+        missing_indexes: list[int] = []
+
+        for index, item in enumerate(candidate_items):
+            if not isinstance(item, dict):
+                continue
+            row = dict(item)
+            row_metadata = self._normalize_task_schedule_metadata(dict(row.get("metadata") or {}))
+            row["metadata"] = row_metadata
+            existing_token = self._task_schedule_token_from_sources(
+                row,
+                row_metadata,
+                row.get("constraints"),
+                row.get("evidence"),
+            )
+            if existing_token:
+                row["scheduled_for"] = existing_token
+                row_metadata["scheduled_for"] = existing_token
+                occupied.add(existing_token)
+            else:
+                missing_indexes.append(index)
+            prepared.append(row)
+
+        allocated = self._allocate_scheduled_for_tokens(
+            count=len(missing_indexes),
+            now=now,
+            occupied_tokens=occupied,
+        )
+        for row_index, token in zip(missing_indexes, allocated):
+            if row_index >= len(prepared):
+                continue
+            prepared[row_index]["scheduled_for"] = token
+            prepared[row_index].setdefault("metadata", {})
+            prepared[row_index]["metadata"]["scheduled_for"] = token
+        return prepared
+
+    def _task_sort_key(self, task: SelfEvolutionTask) -> tuple[int, str, str]:
+        status = str(task.status or "").strip().lower()
+        order = {
+            "running": 0,
+            "approved": 1,
+            "planned": 2,
+            "deferred": 3,
+            "paused": 4,
+            "completed": 5,
+            "failed": 6,
+            "cancelled": 7,
+        }
+        created_at = getattr(task, "created_at", None)
+        updated_at = getattr(task, "updated_at", None)
+        created_text = created_at.isoformat() if isinstance(created_at, datetime) else str(created_at or "")
+        updated_text = updated_at.isoformat() if isinstance(updated_at, datetime) else str(updated_at or "")
+        return (order.get(status, 99), created_text, updated_text)
+
+    def _build_schedule_conflict_index(
+        self,
+        *,
+        exclude_task_ids: Optional[set[str]] = None,
+    ) -> Dict[str, SelfEvolutionTask]:
+        terminal = {"completed", "failed", "cancelled"}
+        excluded = exclude_task_ids or set()
+        conflicts: Dict[str, SelfEvolutionTask] = {}
+        for task in sorted(self._self_evolution_queue.list_tasks(), key=self._task_sort_key):
+            if task.task_id in excluded:
+                continue
+            if str(task.status or "").strip().lower() in terminal:
+                continue
+            schedule_token = self._task_schedule_token(task)
+            if not schedule_token:
+                continue
+            conflicts.setdefault(schedule_token, task)
+        return conflicts
+
     def _task_activity_metadata(self, task: SelfEvolutionTask) -> Dict[str, Any]:
         profile = self._task_runtime_profile(task)
         metadata: Dict[str, Any] = {
@@ -212,6 +461,9 @@ class PlanningRuntimeMixin:
         execution_kind = profile.get("execution_kind")
         if execution_kind is not None:
             metadata["execution_kind"] = execution_kind
+        scheduled_for = self._task_schedule_token(task)
+        if scheduled_for is not None:
+            metadata["scheduled_for"] = scheduled_for
         return metadata
 
     def _build_self_evolution_activity_metadata(
@@ -678,31 +930,8 @@ class PlanningRuntimeMixin:
             existing_drive_keys=self._existing_endogenous_drive_keys(),
             max_candidates=max_candidates,
         )
-        if record_activity:
-            self._record_supervisor_ui_activity(
-                "endogenous_drive_evaluated",
-                scene="planning",
-                summary=f"Endogenous drive evaluated {len(candidates)} candidate task(s).",
-                metadata={
-                    "count": len(candidates),
-                    "candidate_keys": [candidate.stable_key for candidate in candidates],
-                    "candidates": [
-                        {
-                            **candidate.to_queue_item(),
-                            "stable_key": candidate.stable_key,
-                            "value_tags": list(candidate.value_tags),
-                            "utility": candidate.utility,
-                        }
-                        for candidate in candidates
-                    ],
-                },
-            )
-        return {
-            "status": "evaluated",
-            "enabled": self.config.service_runtime.endogenous_drive_enabled,
-            "core_values": CORE_VALUES,
-            "idle_window": idle_window,
-            "candidates": [
+        queue_items = self._apply_scheduled_for_to_candidate_items(
+            [
                 {
                     **candidate.to_queue_item(),
                     "stable_key": candidate.stable_key,
@@ -711,6 +940,24 @@ class PlanningRuntimeMixin:
                 }
                 for candidate in candidates
             ],
+        )
+        if record_activity:
+            self._record_supervisor_ui_activity(
+                "endogenous_drive_evaluated",
+                scene="planning",
+                summary=f"Endogenous drive evaluated {len(candidates)} candidate task(s).",
+                metadata={
+                    "count": len(candidates),
+                    "candidate_keys": [candidate.stable_key for candidate in candidates],
+                    "candidates": [dict(item) for item in queue_items],
+                },
+            )
+        return {
+            "status": "evaluated",
+            "enabled": self.config.service_runtime.endogenous_drive_enabled,
+            "core_values": CORE_VALUES,
+            "idle_window": idle_window,
+            "candidates": queue_items,
             "count": len(candidates),
         }
 
@@ -1038,6 +1285,9 @@ class PlanningRuntimeMixin:
             or task.metadata.get("execution_kind")
             or runtime_profile.get("execution_kind")
         )
+        scheduled_for = self._task_schedule_token(task)
+        if scheduled_for is not None:
+            payload["scheduled_for"] = scheduled_for
         requested_kind = str(execution.get("kind") or "").strip() or None
         decision_history = payload.get("decision_history") or []
         latest_context: Dict[str, Any] = {}
@@ -1105,6 +1355,7 @@ class PlanningRuntimeMixin:
                     "governance_task_type": self._task_governance_type(task),
                     "task_family": self._task_runtime_family(task),
                     "execution_kind": self._task_execution_kind(task),
+                    "scheduled_for": self._task_schedule_token(task),
                     "metadata": {
                         "endogenous_drive_key": metadata.get("endogenous_drive_key"),
                         "utility": metadata.get("utility"),
@@ -1209,6 +1460,9 @@ class PlanningRuntimeMixin:
             "3. 不要为同一任务返回多个动作\n"
             "4. 优先考虑避免重复、无证据、陈旧或与当前系统状态冲突的任务\n"
             "5. body_improvement 只有在学习证据足够时才建议 approve\n\n"
+            "6. 同一个 scheduled_for / preset_time 只能保留一个活跃任务；"
+            "如果时间重叠，按先后顺序只保留一个，不能与定时队列内任务重复，其余建议 defer 或 cancel；"
+            "该保留/顺延建议由监督者 LM 裁定\n\n"
             "输出 JSON 对象，格式为：\n"
             "{\n"
             '  "actions": [\n'
@@ -1536,10 +1790,14 @@ class PlanningRuntimeMixin:
             if task.status not in normalized_statuses or task.status == "cancelled":
                 continue
             candidate_tasks.append(task)
+        candidate_tasks.sort(key=self._task_sort_key)
 
         lm_queue_actions = await self._lm_review_task_queue(
             candidate_tasks,
             idle_window=idle_window,
+        )
+        reserved_schedule_tokens = self._build_schedule_conflict_index(
+            exclude_task_ids={task.task_id for task in candidate_tasks}
         )
 
         reviewed = []
@@ -1627,6 +1885,21 @@ class PlanningRuntimeMixin:
                         f"LM queue governance reprioritized task to "
                         f"{decision_context['lm_queue_priority']['priority']}."
                     )
+            schedule_token = self._task_schedule_token(task)
+            if target_status == "approved" and schedule_token:
+                occupied = reserved_schedule_tokens.get(schedule_token)
+                if occupied is not None:
+                    target_status = "deferred"
+                    decision_context["schedule_conflict"] = {
+                        "scheduled_for": schedule_token,
+                        "occupied_by_task_id": occupied.task_id,
+                        "occupied_by_title": occupied.title,
+                        "occupied_by_status": str(occupied.status),
+                    }
+                    default_reason = (
+                        "Task deferred because this preset time is already occupied by "
+                        f"'{occupied.title}'. Only one live task may keep the same scheduled_for."
+                    )
             execution_request = None
             if target_status == "approved":
                 if self._task_requires_execution_request(task):
@@ -1669,6 +1942,9 @@ class PlanningRuntimeMixin:
             )
             reviewed.append(updated)
             reviewed_statuses.append(updated.status)
+            updated_schedule_token = self._task_schedule_token(updated)
+            if target_status == "approved" and updated_schedule_token:
+                reserved_schedule_tokens.setdefault(updated_schedule_token, updated)
 
         if reviewed:
             unique_statuses = sorted(set(reviewed_statuses))

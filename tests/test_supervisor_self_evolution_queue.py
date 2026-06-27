@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 import sys
 from unittest.mock import AsyncMock
@@ -124,6 +125,9 @@ async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_dupli
     assert "continuity:memory_maintenance_sweep" in tasks_by_key
     assert "truthfulness:review_correction_signals" in tasks_by_key
     assert any(task["governance_task_type"] == "self_learning" for task in queued["tasks"])
+    scheduled_tokens = [task.get("scheduled_for") for task in queued["tasks"]]
+    assert all(isinstance(token, str) and token for token in scheduled_tokens)
+    assert len(set(scheduled_tokens)) == len(scheduled_tokens)
     memory_task = tasks_by_key["continuity:memory_maintenance_sweep"]
     assert memory_task["source"] == "endogenous_drive"
     assert memory_task["governance_task_type"] == "memory_maintenance"
@@ -211,6 +215,36 @@ async def test_endogenous_drive_fallback_learning_targets_shell_codebase_without
     assert learning_task["metadata"]["self_learning_mode"] == "shell_codebase_baseline"
     assert learning_task["evidence"]["learning_branch"] == "codebase_baseline"
     assert "slot-B" in learning_task["summary"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_schedule_allocator_skips_occupied_slots(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    await supervisor.plan_self_evolution_task(
+        {
+            "title": "Occupied slot task",
+            "scheduled_for": "2026-06-28T00:00:00",
+        }
+    )
+
+    prepared = supervisor._apply_scheduled_for_to_candidate_items(
+        [
+            {
+                "title": "Generated candidate A",
+                "metadata": {"endogenous_drive_key": "candidate-a"},
+            },
+            {
+                "title": "Generated candidate B",
+                "metadata": {"endogenous_drive_key": "candidate-b"},
+            },
+        ],
+        now=datetime.fromisoformat("2026-06-28T00:00:00"),
+    )
+
+    tokens = [item["scheduled_for"] for item in prepared]
+    assert tokens == ["2026-06-28T00:05:00", "2026-06-28T00:10:00"]
 
 
 @pytest.mark.asyncio
@@ -805,6 +839,69 @@ async def test_batch_review_can_apply_lm_reprioritize_to_real_task_priority(tmp_
     priority_context = task["decision_history"][-1]["context"]["lm_queue_priority"]
     assert priority_context["priority"] == "high"
     assert "blocks higher-value evolution work" in priority_context["reason"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_plan_task_normalizes_scheduled_for_into_runtime_payload(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Scheduled queue task",
+            "scheduled_for": "2026-06-28T01:00:00",
+        }
+    )
+
+    task = planned["tasks"][0]
+    assert task["scheduled_for"] == "2026-06-28T01:00:00"
+    assert task["metadata"]["scheduled_for"] == "2026-06-28T01:00:00"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_batch_review_defers_second_task_when_scheduled_for_conflicts(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    await supervisor.plan_self_evolution_task(
+        {
+            "title": "First scheduled task",
+            "scheduled_for": "2026-06-28T01:00:00",
+        }
+    )
+    await supervisor.plan_self_evolution_task(
+        {
+            "title": "Second scheduled task",
+            "scheduled_for": "2026-06-28T01:00:00",
+        }
+    )
+
+    async def idle_snapshot():
+        return {
+            "last_user_request_at": "2026-05-25T00:00:00",
+            "last_agent_work_at": "2026-05-25T00:00:00",
+            "last_memory_task_at": "2026-05-25T00:00:00",
+            "last_self_learning_activity_at": "2026-05-25T00:00:00",
+            "last_self_evolution_activity_at": "2026-05-25T00:00:00",
+            "counts": {},
+            "active_sessions": 0,
+        }
+
+    supervisor._fetch_gateway_activity_snapshot = idle_snapshot  # type: ignore[method-assign]
+
+    result = await supervisor.review_self_evolution_tasks(
+        {
+            "idle_window": {"now": "2026-05-25T01:00:00"},
+        }
+    )
+
+    tasks = {task["title"]: task for task in result["tasks"]}
+    assert tasks["First scheduled task"]["status"] == "approved"
+    assert tasks["Second scheduled task"]["status"] == "deferred"
+    conflict = tasks["Second scheduled task"]["decision_history"][-1]["context"]["schedule_conflict"]
+    assert conflict["scheduled_for"] == "2026-06-28T01:00:00"
+    assert conflict["occupied_by_title"] == "First scheduled task"
+    assert "Only one live task may keep the same scheduled_for" in tasks["Second scheduled task"]["decision_reason"]
 
 
 @pytest.mark.asyncio

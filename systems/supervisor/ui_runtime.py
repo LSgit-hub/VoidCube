@@ -1559,6 +1559,8 @@ body:has(.status:not(.collapsed)) .status-toggle {
 .task-dot.learning  { background: var(--mint); box-shadow: 0 0 6px var(--mint-g); }
 .task-dot.evolution { background: var(--coral); box-shadow: 0 0 6px var(--coral-g); }
 .task-dot.planning  { background: var(--accent-blue); box-shadow: 0 0 6px var(--indigo-g); }
+.task-dot.supervisor { background: var(--accent-green); box-shadow: 0 0 6px var(--mint-g); }
+.task-dot.agent { background: var(--accent-purple); box-shadow: 0 0 6px var(--plum-g); }
 .task-badge {
   min-width: 56px; text-align: center; padding: 3px 8px;
   border-radius: 99px; font-size: 10.5px;
@@ -1970,34 +1972,39 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
     <aside class="status" id="statusPanel" aria-live="polite">
       <h1 id="sceneTitle">义子的小屋</h1>
       <p class="status-summary" id="sceneSummary">正在连接监督者…</p>
-      <div class="metrics" id="metrics"></div>
       <div class="queue-stack" id="queueStack">
         <section class="queue-section">
           <div class="section-head">
-            <div class="section-label">监督者执行</div>
+            <div class="section-label">统计卡</div>
+          </div>
+          <div class="metrics" id="metrics"></div>
+        </section>
+        <section class="queue-section">
+          <div class="section-head">
+            <div class="section-label">监督者执行卡</div>
           </div>
           <div class="queue-slot" id="supervisorActive"></div>
         </section>
         <section class="queue-section">
           <div class="section-head">
-            <div class="section-label">Agent 执行</div>
+            <div class="section-label">Agent 执行卡</div>
           </div>
           <div class="queue-slot" id="agentActive"></div>
         </section>
         <section class="queue-section">
           <div class="section-head">
-            <div class="section-label">定时队列</div>
-            <div class="window-pill" id="windowPill">00:00-06:00</div>
+            <div class="section-label">定时队列卡</div>
+            <div class="window-pill" id="windowPill">预设时间 00:00-06:00</div>
           </div>
           <div class="schedule" id="schedule" style="display:none;">
-            <div class="schedule-label">⏳ 下次自动循环</div>
+            <div class="schedule-label">⏳ 下次定时审核</div>
             <div class="schedule-countdown" id="countdown">—</div>
           </div>
           <div class="timed-list" id="timedQueue"></div>
         </section>
         <section class="queue-section">
           <div class="section-head">
-            <div class="section-label">内生驱动候选</div>
+            <div class="section-label">内生驱动候选列表</div>
           </div>
           <div class="queue-slot" id="candidateSlot"></div>
         </section>
@@ -2087,6 +2094,10 @@ function taskDotClass(t) {
   if (f.includes('learning'))  return 'learning';
   if (f.includes('evolution') || f.includes('body')) return 'evolution';
   return 'planning';
+}
+
+function timedQueueDotClass(t) {
+  return taskLane(t) === 'agent' ? 'agent' : 'supervisor';
 }
 
 function taskLane(t) {
@@ -2208,7 +2219,7 @@ function buildQueueCard(task, emptyText) {
   meta.className = 'queue-card-meta';
   const tag = document.createElement('span');
   tag.className = 'queue-tag';
-  tag.textContent = lane === 'agent' ? 'API-A 执行通道' : '监督者治理通道';
+  tag.textContent = lane === 'agent' ? 'API-A 创造通道' : '监督者治理通道';
   meta.append(tag);
 
   card.append(head, sub, meta);
@@ -2240,7 +2251,7 @@ function renderQueueLayout(layout, schedule) {
       const row = document.createElement('div');
       row.className = 'timed-item ' + taskLane(task);
       const dot = document.createElement('span');
-      dot.className = 'task-dot ' + taskDotClass(task);
+      dot.className = 'task-dot ' + timedQueueDotClass(task);
       const text = document.createElement('div');
       text.className = 'timed-item-text';
       const title = document.createElement('span');
@@ -2248,7 +2259,8 @@ function renderQueueLayout(layout, schedule) {
       title.textContent = (task.title || '未命名任务').substring(0, 54);
       const subtitle = document.createElement('span');
       subtitle.className = 'timed-item-subtitle';
-      subtitle.textContent = (task.display_status || task.status || '待定') + ' · ' + typeLabel(task);
+      const laneLabel = taskLane(task) === 'agent' ? 'API-A 创造类任务' : '监督者任务';
+      subtitle.textContent = (task.display_status || task.status || '待定') + ' · ' + laneLabel + ' · ' + typeLabel(task);
       text.append(title, subtitle);
       const badge = document.createElement('span');
       badge.className = 'task-badge ' + (task.status || 'queued');
@@ -2259,38 +2271,47 @@ function renderQueueLayout(layout, schedule) {
   }
 
   els.candidateSlot.replaceChildren();
-  const candidate = q.candidate_slot || null;
-  if (!candidate) {
+  const candidates = Array.isArray(q.candidate_list) ? q.candidate_list : [];
+  if (!candidates.length) {
     const empty = document.createElement('div');
     empty.className = 'candidate-card empty';
     const text = document.createElement('div');
     text.className = 'queue-empty-text';
-    text.textContent = '当前没有待裁定候选';
+    text.textContent = '当前没有待裁定任务';
     empty.append(text);
     els.candidateSlot.append(empty);
   } else {
-    const card = document.createElement('div');
-    card.className = 'candidate-card';
-    const head = document.createElement('div');
-    head.className = 'candidate-card-head';
-    const title = document.createElement('div');
-    title.className = 'queue-card-title';
-    title.textContent = (candidate.title || '候选任务').substring(0, 60);
-    const utility = document.createElement('div');
-    utility.className = 'candidate-utility';
-    utility.textContent = Math.round((candidate.utility || 0) * 100) + '%';
-    head.append(title, utility);
-    const tags = document.createElement('div');
-    tags.className = 'candidate-tags';
-    tags.textContent = (candidate.value_tags || []).join(' · ') || '等待监督者裁定';
-    card.append(head, tags);
-    els.candidateSlot.append(card);
+    candidates.forEach(candidate => {
+      const card = document.createElement('div');
+      card.className = 'candidate-card';
+      const head = document.createElement('div');
+      head.className = 'candidate-card-head';
+      const title = document.createElement('div');
+      title.className = 'queue-card-title';
+      title.textContent = (candidate.title || '候选任务').substring(0, 60);
+      const utility = document.createElement('div');
+      utility.className = 'candidate-utility';
+      utility.textContent = Math.round((candidate.utility || 0) * 100) + '%';
+      head.append(title, utility);
+      const tags = document.createElement('div');
+      tags.className = 'candidate-tags';
+      const parts = [];
+      if (Array.isArray(candidate.value_tags) && candidate.value_tags.length) {
+        parts.push(candidate.value_tags.join(' · '));
+      }
+      if (candidate.display_status) {
+        parts.push(candidate.display_status);
+      }
+      tags.textContent = parts.join(' · ') || '等待监督者 LM 裁定';
+      card.append(head, tags);
+      els.candidateSlot.append(card);
+    });
   }
 
   if (els.windowPill) {
     const open = !!windowInfo.open;
     els.windowPill.className = 'window-pill ' + (open ? 'open' : 'closed');
-    els.windowPill.textContent = (windowInfo.range || '00:00-06:00') + ' ' + (windowInfo.status_text || '');
+    els.windowPill.textContent = '预设时间 ' + (windowInfo.range || '00:00-06:00') + ' · ' + (windowInfo.status_text || '');
   }
 
   renderSchedule(schedule);
@@ -2318,7 +2339,7 @@ function renderMetrics(state) {
   add('ok',   m.maintenance_total || 0, '维护');
   add((m.error_count || 0) > 0 ? 'error' : 'ok', m.error_count || 0, '错误');
   add('ok', (lr.completed || 0) + '/' + (lr.failed || 0), '完成/失败');
-  add(m.active_slot ? 'ok' : '', m.active_slot || '—', '替身');
+  add(m.slot_overview ? 'ok' : '', m.slot_overview || '—', '运行/编辑');
   add((state.queue_layout || {}).window?.open ? 'ok' : 'warn', ((state.queue_layout || {}).window?.status_text) || '关闭', '窗口');
 }
 
@@ -2730,7 +2751,6 @@ class SupervisorUIMixin:
             registry = self._body_registry.load_registry()
             body_status = {
                 "active_slot": getattr(registry, "active_slot", None),
-                "candidate_slot": None,
                 "retired_slot": getattr(registry, "retired_slot", None),
                 "shell_slot": getattr(registry, "shell_slot", None),
                 "last_switch_result": dict(getattr(registry, "last_switch_result", {}) or {}),
@@ -2844,6 +2864,12 @@ class SupervisorUIMixin:
         updated = str(task.get("updated_at") or task.get("created_at") or "")
         return (order.get(status, 9), updated)
 
+    def _queue_fifo_sort_key(self, task: Dict[str, Any]) -> tuple[str, str, str]:
+        scheduled_for = self._queue_schedule_token(task) or "9999-12-31T23:59:59"
+        created = str(task.get("created_at") or "")
+        updated = str(task.get("updated_at") or "")
+        return (scheduled_for, created or updated, updated or created)
+
     def _queue_display_status(self, task: Dict[str, Any]) -> str:
         status = str(task.get("status") or "").strip().lower()
         mapping = {
@@ -2855,8 +2881,43 @@ class SupervisorUIMixin:
         }
         return mapping.get(status, status or "待定")
 
+    def _timed_queue_display_status(self, task: Dict[str, Any]) -> str:
+        status = str(task.get("status") or "").strip().lower()
+        if status == "paused":
+            return "已挂起"
+        if status == "deferred":
+            return "已顺延"
+        return "预设时间"
+
     def _queue_role_tag(self, task: Dict[str, Any]) -> str:
         return "agent" if self._is_creativity_ui_task(task) else "supervisor"
+
+    def _queue_schedule_token(self, payload: Dict[str, Any]) -> str:
+        if not isinstance(payload, dict):
+            return ""
+        nested_sources = [
+            payload,
+            payload.get("metadata"),
+            payload.get("constraints"),
+            payload.get("evidence"),
+            (payload.get("evidence") or {}).get("endogenous_drive"),
+        ]
+        for source in nested_sources:
+            if not isinstance(source, dict):
+                continue
+            for key in (
+                "scheduled_for",
+                "preset_time",
+                "scheduled_at",
+                "run_at",
+                "execute_after",
+                "time_slot",
+                "window",
+            ):
+                value = str(source.get(key) or "").strip()
+                if value:
+                    return value
+        return ""
 
     def _build_governance_queue_layout(
         self,
@@ -2868,14 +2929,22 @@ class SupervisorUIMixin:
         creativity_tasks = [task for task in all_tasks if self._is_creativity_ui_task(task)]
         supervisor_tasks = [task for task in all_tasks if not self._is_creativity_ui_task(task)]
 
-        creativity_sorted = sorted(creativity_tasks, key=self._ui_task_sort_key)
-        supervisor_sorted = sorted(supervisor_tasks, key=self._ui_task_sort_key)
+        creativity_sorted = sorted(creativity_tasks, key=self._queue_fifo_sort_key)
+        supervisor_sorted = sorted(supervisor_tasks, key=self._queue_fifo_sort_key)
 
         def pick_active(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-            for preferred in ("running", "approved"):
-                for row in rows:
-                    if str(row.get("status") or "").strip().lower() == preferred:
-                        return row
+            running = [
+                row for row in rows
+                if str(row.get("status") or "").strip().lower() == "running"
+            ]
+            if running:
+                return sorted(running, key=self._queue_fifo_sort_key)[0]
+            approved = [
+                row for row in rows
+                if str(row.get("status") or "").strip().lower() == "approved"
+            ]
+            if approved:
+                return sorted(approved, key=self._queue_fifo_sort_key)[0]
             return None
 
         supervisor_active = pick_active(supervisor_sorted)
@@ -2890,9 +2959,9 @@ class SupervisorUIMixin:
             {
                 **task,
                 "lane": self._queue_role_tag(task),
-                "display_status": self._queue_display_status(task),
+                "display_status": self._timed_queue_display_status(task),
             }
-            for task in sorted(all_tasks, key=self._ui_task_sort_key)
+            for task in sorted(all_tasks, key=self._queue_fifo_sort_key)
             if task.get("task_id") not in active_ids
         ]
 
@@ -2906,7 +2975,13 @@ class SupervisorUIMixin:
             for task in timed_queue
             if isinstance(task, dict)
         }
-        candidate_slot = None
+        seen_schedule_tokens = {
+            self._queue_schedule_token(task)
+            for task in timed_queue
+            if isinstance(task, dict)
+        }
+        seen_schedule_tokens.discard("")
+        candidate_list: List[Dict[str, Any]] = []
         for candidate in drive_candidates:
             if not isinstance(candidate, dict):
                 continue
@@ -2916,19 +2991,36 @@ class SupervisorUIMixin:
                 or ""
             ).strip()
             candidate_title = str(candidate.get("title") or "").strip()
+            candidate_schedule = self._queue_schedule_token(candidate)
             if candidate_key and candidate_key in seen_keys:
                 continue
             if candidate_title and candidate_title in seen_titles:
                 continue
-            candidate_slot = candidate
-            break
+            if candidate_schedule and candidate_schedule in seen_schedule_tokens:
+                continue
+            candidate_list.append(
+                {
+                    **candidate,
+                    "display_status": "等待监督者 LM 裁定",
+                }
+            )
+            if candidate_key:
+                seen_keys.add(candidate_key)
+            if candidate_title:
+                seen_titles.add(candidate_title)
+            if candidate_schedule:
+                seen_schedule_tokens.add(candidate_schedule)
 
         return {
             "window": {
-                "label": "自动执行窗口",
+                "label": "预设时间",
                 "range": "00:00-06:00",
                 "open": bool(in_execution_window),
-                "status_text": "开放" if in_execution_window else "关闭",
+                "status_text": (
+                    "限时自动执行中"
+                    if in_execution_window
+                    else "等待窗口或手动触发"
+                ),
             },
             "supervisor_active": (
                 {
@@ -2949,7 +3041,7 @@ class SupervisorUIMixin:
                 else None
             ),
             "timed_queue": timed_queue,
-            "candidate_slot": candidate_slot,
+            "candidate_list": candidate_list,
         }
 
     def _build_task_panels(self, all_tasks: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -3083,9 +3175,8 @@ class SupervisorUIMixin:
                 "completed": learning_completed,
                 "failed": learning_failed,
             },
-            "drive_candidates": 1 if queue_layout.get("candidate_slot") else 0,
-            "body_switch_active": bool(body_status.get("candidate_slot")),
-            "active_slot": body_status.get("active_slot"),
+            "drive_candidates": len(queue_layout.get("candidate_list") or []),
+            "slot_overview": self._format_slot_overview(body_status),
             "error_count": error_count,
             "running_count": sum(1 for t in visible_tasks if t.get("status") == "running"),
             "governance": {
@@ -3163,15 +3254,25 @@ class SupervisorUIMixin:
                 f"「{rtitle}」已派发，代理或执行器正在运行，监督者等待结果。",
             )
 
-        # 2. Learning / body-upgrade tasks awaiting Agent pull — supervisor
-        #    is managing the list, not learning.
-        learning_pending = [t for t in all_tasks if "learning" in str(t.get("task_family", "")) and t.get("status") == "approved"]
-        if learning_pending:
-            lp = learning_pending[0]
+        # 2. Supervisor-governed tasks that are ready now.
+        supervisor_pending = [
+            t
+            for t in all_tasks
+            if not self._is_creativity_ui_task(t)
+            and str(t.get("status") or "").strip().lower() == "approved"
+        ]
+        if supervisor_pending:
+            lp = sorted(supervisor_pending, key=self._queue_fifo_sort_key)[0]
+            if "memory" in str(lp.get("task_family") or ""):
+                return (
+                    "maintenance",
+                    f"义子正在整理记忆书架{error_note}",
+                    f"「{lp.get('title', '维护任务')}」已进入监督者执行位，等待处理。",
+                )
             return (
                 "planning",
-                f"义子已批准学习任务{error_note}",
-                f"「{lp.get('title', '学习任务')}」已就绪，等待代理拉取执行。",
+                f"义子正在安排监督任务{error_note}",
+                f"「{lp.get('title', '监督者任务')}」已进入监督者执行位，等待处理。",
             )
 
         # 2.5 Memory model actively compressing (detected from memory_service rules_status)
@@ -3218,6 +3319,13 @@ class SupervisorUIMixin:
             f"义子在窗边休息{error_note}",
             f"没有待处理的工作。{window_mood}核心价值保持警觉但平静。",
         )
+
+    def _format_slot_overview(self, body_status: Dict[str, Any]) -> str:
+        active_slot = str(body_status.get("active_slot") or "").strip()
+        shell_slot = str(body_status.get("shell_slot") or "").strip()
+        if active_slot and shell_slot and active_slot != shell_slot:
+            return f"{active_slot} / {shell_slot}"
+        return active_slot or shell_slot or ""
 
     def _maybe_open_supervisor_ui(self) -> None:
         if not self.config.ui_enabled or not self.config.ui_auto_open:
