@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import sys
 
@@ -369,6 +369,118 @@ def test_gateway_agent_scene_touch_updates_scene_cache_and_prefers_cli_agent():
     assert active_cli["session_id"] == "cli-session-1"
     assert active_cli["is_active_cli_executor"] is True
     assert active_cli["scene"] == "learning"
+    assert active_cli["lease_status"] == "healthy"
+    assert active_cli["is_stale"] is False
+
+
+def test_gateway_active_cli_executor_marks_stale_lease():
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+
+    register = client.post(
+        "/v1/sessions/register",
+        json={
+            "session_id": "cli-session-stale",
+            "model": "agnes-2.0-flash",
+            "provider": "agnesai",
+            "source": "cli",
+        },
+    )
+    assert register.status_code == 200
+
+    gateway._agent_session_cache["cli-session-stale"]["last_used_at"] = (
+        datetime.now() - timedelta(seconds=gateway._active_cli_stale_after_seconds + 5)
+    )
+
+    status = client.get("/admin/body/status").json()
+    active_cli = status["active_cli_executor"]
+    assert active_cli["session_id"] == "cli-session-stale"
+    assert active_cli["lease_status"] == "stale"
+    assert active_cli["is_stale"] is True
+    assert active_cli["idle_seconds"] >= gateway._active_cli_stale_after_seconds
+
+
+def test_gateway_register_session_does_not_override_existing_active_cli_executor():
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+
+    first = client.post(
+        "/v1/sessions/register",
+        json={
+            "session_id": "cli-session-1",
+            "model": "agnes-2.0-flash",
+            "provider": "agnesai",
+            "source": "cli",
+        },
+    )
+    second = client.post(
+        "/v1/sessions/register",
+        json={
+            "session_id": "cli-session-2",
+            "model": "agnes-2.0-flash",
+            "provider": "agnesai",
+            "source": "cli",
+        },
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    status = client.get("/admin/body/status").json()
+    assert status["active_cli_executor"]["session_id"] == "cli-session-1"
+
+
+def test_gateway_idle_scene_does_not_steal_active_cli_executor():
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+
+    client.post(
+        "/v1/sessions/register",
+        json={
+            "session_id": "cli-session-1",
+            "model": "agnes-2.0-flash",
+            "provider": "agnesai",
+            "source": "cli",
+        },
+    )
+    client.post(
+        "/admin/activity/touch",
+        json={
+            "activity_kind": "agent_scene",
+            "source_service": "cli_agent",
+            "session_id": "cli-session-1",
+            "metadata": {
+                "scene": "learning",
+                "task_id": "learn-1",
+                "execution_kind": "self_learning",
+            },
+        },
+    )
+    client.post(
+        "/v1/sessions/register",
+        json={
+            "session_id": "cli-session-2",
+            "model": "agnes-2.0-flash",
+            "provider": "agnesai",
+            "source": "cli",
+        },
+    )
+
+    idle_touch = client.post(
+        "/admin/activity/touch",
+        json={
+            "activity_kind": "agent_scene",
+            "source_service": "cli_agent",
+            "session_id": "cli-session-2",
+            "metadata": {
+                "scene": "idle",
+            },
+        },
+    )
+
+    assert idle_touch.status_code == 200
+    status = client.get("/admin/body/status").json()
+    assert status["active_cli_executor"]["session_id"] == "cli-session-1"
+    assert status["active_cli_executor"]["scene"] == "learning"
 
 
 def test_gateway_task_decision_forwards_metadata_to_supervisor(monkeypatch):

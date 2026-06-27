@@ -252,6 +252,17 @@ class SelfEvolutionTaskQueue:
                 if task.task_id != task_id:
                     continue
                 current = task.status.value if hasattr(task.status, 'value') else str(task.status)
+                if target == current:
+                    if execution_request is not None:
+                        task.execution_request = execution_request
+                    if context:
+                        # Preserve fresh review/dispatch context without creating
+                        # an illegal no-op transition entry.
+                        task.metadata.update({"last_decision_context": dict(context)})
+                    task.updated_at = datetime.utcnow()
+                    snapshot.tasks[index] = task
+                    self._write_snapshot(snapshot)
+                    return task
                 legal = _LEGAL_TRANSITIONS.get(current, set())
                 if target not in legal and legal:  # empty legal = terminal
                     raise ValueError(

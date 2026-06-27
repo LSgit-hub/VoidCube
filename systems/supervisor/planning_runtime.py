@@ -1858,15 +1858,6 @@ class PlanningRuntimeMixin:
                 # Agent-executable autonomous tasks are pulled by Agent via Gateway /v1/tasks API.
                 continue
 
-            if gov_type in ("memory_maintenance", "general_self_evolution"):
-                # Supervisor-internal tasks — no external executor. Complete directly.
-                self._self_evolution_queue.update_status(
-                    task.task_id, status="completed",
-                    actor="supervisor", reason="Internal task completed by supervisor.",
-                )
-                dispatched.append({"task_id": task.task_id, "status": "completed"})
-                continue
-
             if task.execution_request is None:
                 continue
 

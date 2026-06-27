@@ -818,32 +818,31 @@ def _is_gateway_running(timeout: float = 0.3) -> bool:
         return False
 
 
-def _register_with_gateway(session_id: str, model: str, provider: str) -> None:
+def _register_with_gateway(session_id: str, model: str, provider: str) -> bool:
     """Register the current CLI session with the Gateway for activity tracking.
 
     Called once per session so the Gateway can correlate gateway-level
-    activity with the CLI's conversation.  Best-effort — failure is silent.
+    activity with the CLI's conversation.
     """
-    import threading, json as _json
-    def _register():
-        try:
-            import urllib.request as _req
-            payload = _json.dumps({
-                "session_id": session_id,
-                "model": model,
-                "provider": provider,
-                "source": "cli",
-            }).encode()
-            req = _req.Request(
-                "http://127.0.0.1:6000/v1/sessions/register",
-                data=payload,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            _req.urlopen(req, timeout=3)
-        except Exception:
-            pass  # Best-effort — Gateway may not be started or doesn't support this endpoint
-    threading.Thread(target=_register, daemon=True, name="gw-register").start()
+    import json as _json
+    try:
+        import urllib.request as _req
+        payload = _json.dumps({
+            "session_id": session_id,
+            "model": model,
+            "provider": provider,
+            "source": "cli",
+        }).encode()
+        req = _req.Request(
+            "http://127.0.0.1:6000/v1/sessions/register",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        _req.urlopen(req, timeout=3)
+        return True
+    except Exception:
+        return False  # Best-effort — Gateway may not be started or doesn't support this endpoint
 
 
 def _push_cli_agent_scene(
@@ -854,39 +853,37 @@ def _push_cli_agent_scene(
     execution_kind: str | None = None,
 ) -> None:
     """Best-effort: report the current CLI AUTO executor scene to Gateway."""
-    import threading, json as _json
+    import json as _json
 
     normalized_scene = str(scene or "").strip().lower()
     if not normalized_scene:
-        return
+        return False
 
-    def _push():
-        try:
-            import urllib.request as _req
-            metadata = {"scene": normalized_scene}
-            if task_id:
-                metadata["task_id"] = task_id
-            if execution_kind:
-                metadata["execution_kind"] = execution_kind
-            payload = _json.dumps(
-                {
-                    "activity_kind": "agent_scene",
-                    "source_service": "cli_agent",
-                    "session_id": session_id,
-                    "metadata": metadata,
-                }
-            ).encode()
-            req = _req.Request(
-                "http://127.0.0.1:6000/admin/activity/touch",
-                data=payload,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            _req.urlopen(req, timeout=3)
-        except Exception:
-            pass
-
-    threading.Thread(target=_push, daemon=True, name="gw-cli-scene").start()
+    try:
+        import urllib.request as _req
+        metadata = {"scene": normalized_scene}
+        if task_id:
+            metadata["task_id"] = task_id
+        if execution_kind:
+            metadata["execution_kind"] = execution_kind
+        payload = _json.dumps(
+            {
+                "activity_kind": "agent_scene",
+                "source_service": "cli_agent",
+                "session_id": session_id,
+                "metadata": metadata,
+            }
+        ).encode()
+        req = _req.Request(
+            "http://127.0.0.1:6000/admin/activity/touch",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        _req.urlopen(req, timeout=3)
+        return True
+    except Exception:
+        return False
 
 
 def _get_tool_definitions(*args, **kwargs):
@@ -2006,6 +2003,11 @@ class VoidcubeCLI:
         self._background_task_counter = 0
         self._last_gateway_presence_refresh_at: float = 0.0
         self._gateway_presence_refresh_interval_seconds: float = 30.0
+        self._auto_execution_events: List[Dict[str, str]] = []
+        self._auto_last_supervisor_event_key: str = ""
+        self._auto_gateway_status_cache: Dict[str, Any] = {}
+        self._auto_gateway_status_ts: float = 0.0
+        self._auto_gateway_status_refreshing: bool = False
 
     def _invalidate(self, min_interval: float = 0.25) -> None:
         """Throttled UI repaint — prevents terminal blinking on slow/SSH connections."""
@@ -2163,6 +2165,253 @@ class VoidcubeCLI:
             return 0
         return 0 if self._use_minimal_tui_chrome(width=width) else 1
 
+    def _append_auto_execution_event(
+        self,
+        message: str,
+        *,
+        tone: str = "info",
+        stage: str = "",
+    ) -> None:
+        """Record a short AUTO execution event for the foreground panel."""
+        compact = " ".join(str(message or "").split()).strip()
+        if not compact:
+            return
+        events = list(getattr(self, "_auto_execution_events", []) or [])
+        events.append(
+            {
+                "at": datetime.now().strftime("%H:%M:%S"),
+                "message": self._trim_status_bar_text(compact, 96),
+                "tone": str(tone or "info"),
+                "stage": str(stage or "").strip().lower(),
+            }
+        )
+        self._auto_execution_events = events[-6:]
+
+    def _sync_auto_supervisor_event(self, state: Dict[str, Any]) -> None:
+        """Mirror the supervisor's latest visible decision into the AUTO panel."""
+        if not getattr(self, "_auto_mode_active", False):
+            return
+        timeline = list(state.get("timeline") or [])
+        if not timeline:
+            return
+        latest = dict(timeline[0] or {})
+        event_key = "|".join(
+            [
+                str(latest.get("created_at") or latest.get("timestamp") or ""),
+                str(latest.get("event_type") or latest.get("source") or ""),
+                str(latest.get("summary") or latest.get("title") or ""),
+            ]
+        )
+        if not event_key or event_key == getattr(self, "_auto_last_supervisor_event_key", ""):
+            return
+        self._auto_last_supervisor_event_key = event_key
+        label = str(latest.get("event_type") or latest.get("source") or "supervisor").strip()
+        summary = str(latest.get("summary") or latest.get("title") or "").strip()
+        if summary:
+            self._append_auto_execution_event(
+                f"监督者 {label}: {summary}",
+                tone="info",
+                stage="supervisor",
+            )
+
+    def _auto_execution_panel_height(self) -> int:
+        if not getattr(self, "_auto_mode_active", False):
+            return 0
+        return len(self._build_auto_execution_panel_rows())
+
+    def _resolve_auto_panel_focus_task(self, supervisor_state: Dict[str, Any]) -> Dict[str, Any]:
+        current = getattr(self, "_current_auto_task", None) or {}
+        if current.get("task_id"):
+            return current
+        for task in list(supervisor_state.get("tasks") or []):
+            if str(task.get("status") or "").strip().lower() not in {"approved", "running"}:
+                continue
+            task_family = str(
+                task.get("execution_kind")
+                or task.get("task_family")
+                or task.get("governance_task_type")
+                or task.get("task_type")
+                or ""
+            ).strip().lower()
+            if task_family in {"self_learning", "body_improvement"}:
+                return dict(task)
+        return {}
+
+    def _resolve_auto_panel_focus_stage(self, focus_task: Dict[str, Any]) -> str:
+        current_task = getattr(self, "_current_auto_task", None) or {}
+        current_task_id = str(current_task.get("task_id") or "").strip()
+        focus_task_id = str(focus_task.get("task_id") or "").strip()
+        if current_task_id and focus_task_id and current_task_id == focus_task_id:
+            if getattr(self, "_agent_running", False):
+                return "claimed_running"
+            if getattr(self, "_last_agent_turn_result", None) is not None:
+                return "claimed_waiting_writeback"
+            return "claimed_waiting_start"
+        task_status = str(focus_task.get("status") or "").strip().lower()
+        if task_status == "approved":
+            return "approved_waiting_claim"
+        if task_status == "running":
+            return "running_elsewhere"
+        return "idle"
+
+    def _build_auto_execution_panel_rows(self) -> list[tuple[str, str]]:
+        width = self._get_tui_terminal_width()
+        inner_width = max(34, min(width - 4, 92))
+        session_short = str(getattr(self, "session_id", "") or "")[-8:] or "unknown"
+        rows: list[tuple[str, str]] = []
+        supervisor_state = self._fetch_supervisor_status()
+        gateway_state = self._fetch_auto_gateway_status()
+        focus_task = self._resolve_auto_panel_focus_task(supervisor_state)
+        focus_stage = self._resolve_auto_panel_focus_stage(focus_task)
+
+        if focus_stage == "claimed_running":
+            status_label = "执行中"
+            status_style = "class:auto-panel-good"
+        elif focus_stage == "claimed_waiting_writeback":
+            status_label = "等待回写"
+            status_style = "class:auto-panel-good"
+        elif focus_stage == "claimed_waiting_start":
+            status_label = "已认领待起跑"
+            status_style = "class:auto-panel-warn"
+        elif getattr(self, "_agent_running", False):
+            status_label = "模型处理中"
+            status_style = "class:auto-panel-good"
+        elif focus_stage == "approved_waiting_claim":
+            status_label = "已放行待认领"
+            status_style = "class:auto-panel-warn"
+        elif focus_stage == "running_elsewhere":
+            status_label = "他处执行中"
+            status_style = "class:auto-panel-info"
+        else:
+            status_label = "待命拉单"
+            status_style = "class:auto-panel-warn"
+
+        rows.append(("class:auto-panel-title", f"AUTO Execution Panel · 会话 {session_short}"))
+        rows.append((status_style, f"状态: {status_label}"))
+        rows.append(self._build_auto_executor_lease_row(gateway_state, inner_width))
+        task_id = str(focus_task.get("task_id") or "").strip()
+        task_title = str(focus_task.get("title") or "").strip()
+        execution_kind = str(
+            focus_task.get("execution_kind")
+            or focus_task.get("task_family")
+            or focus_task.get("task_type")
+            or ""
+        ).strip().lower()
+        if task_id:
+            label = "改进" if execution_kind == "body_improvement" else "学习"
+            task_text = f"任务: {label} · {task_id[:8]} · {task_title or '(untitled)'}"
+            if focus_task is getattr(self, "_current_auto_task", None):
+                started_at = float(getattr(self, "_current_auto_task_started_at", 0.0) or 0.0)
+                if started_at > 0:
+                    elapsed = max(0, int(time.time() - started_at))
+                    task_text += f" · {elapsed}s"
+            rows.append(("class:auto-panel-text", self._trim_status_bar_text(task_text, inner_width)))
+            if focus_stage == "claimed_waiting_start":
+                rows.append(
+                    (
+                        "class:auto-panel-warn",
+                        self._trim_status_bar_text(
+                            "队列: 当前 CLI 已认领该任务，等待进入首个模型或工具回合",
+                            inner_width,
+                        ),
+                    )
+                )
+                cause_style, cause_text = self._resolve_auto_waiting_start_cause()
+                rows.append((cause_style, self._trim_status_bar_text(cause_text, inner_width)))
+            elif focus_stage == "claimed_waiting_writeback":
+                rows.append(
+                    (
+                        "class:auto-panel-info",
+                        self._trim_status_bar_text(
+                            "队列: 当前 CLI 已完成执行，等待结果回写到任务链",
+                            inner_width,
+                        ),
+                    )
+                )
+            elif focus_stage == "approved_waiting_claim":
+                rows.append(
+                    (
+                        "class:auto-panel-warn",
+                        self._trim_status_bar_text(
+                            "队列: 监督者已放行该任务，等待活跃 AUTO CLI 认领",
+                            inner_width,
+                        ),
+                    )
+                )
+            elif focus_stage == "running_elsewhere":
+                rows.append(
+                    (
+                        "class:auto-panel-info",
+                        self._trim_status_bar_text(
+                            "队列: 该任务已被其他 AUTO 执行体认领",
+                            inner_width,
+                        ),
+                    )
+                )
+        else:
+            rows.append(("class:auto-panel-dim", "任务: 当前没有被接管的 AUTO 任务"))
+
+        spinner_text = str(getattr(self, "_spinner_text", "") or "").strip()
+        if spinner_text:
+            activity_text = f"执行流: {spinner_text}"
+        elif focus_stage == "claimed_running" or getattr(self, "_agent_running", False):
+            activity_text = "执行流: 模型正在当前前台 CLI 中工作"
+        elif focus_stage == "claimed_waiting_start":
+            activity_text = "执行流: 当前 CLI 已认领任务，等待进入首个模型或工具回合"
+        elif focus_stage == "claimed_waiting_writeback":
+            activity_text = "执行流: 当前 CLI 已结束本轮执行，等待写回任务状态"
+        elif focus_stage == "approved_waiting_claim":
+            activity_text = "执行流: 监督者已放行任务，等待活跃 AUTO CLI 认领"
+        elif focus_stage == "running_elsewhere":
+            activity_text = "执行流: 任务正在其他 AUTO 执行体中运行"
+        else:
+            activity_text = "执行流: 等待监督者放行任务或等待下一轮拉单"
+        rows.append(("class:auto-panel-text", self._trim_status_bar_text(activity_text, inner_width)))
+
+        latest_supervisor = ""
+        timeline = list(supervisor_state.get("timeline") or [])
+        if timeline:
+            latest = dict(timeline[0] or {})
+            latest_supervisor = str(latest.get("summary") or latest.get("title") or "").strip()
+        if latest_supervisor:
+            rows.append(
+                (
+                    "class:auto-panel-info",
+                    self._trim_status_bar_text(f"监督: {latest_supervisor}", inner_width),
+                )
+            )
+
+        for event in list(getattr(self, "_auto_execution_events", []) or [])[-3:]:
+            tone = str(event.get("tone") or "info").strip().lower()
+            style = {
+                "success": "class:auto-panel-good",
+                "warn": "class:auto-panel-warn",
+                "error": "class:auto-panel-bad",
+            }.get(tone, "class:auto-panel-dim")
+            msg = f"{event.get('at', '--:--:--')} · {event.get('message', '')}"
+            rows.append((style, self._trim_status_bar_text(msg, inner_width)))
+
+        rows.append(("class:auto-panel-dim", "控制: /auto-q 退出"))
+        return rows
+
+    def _get_auto_execution_panel_fragments(self):
+        rows = self._build_auto_execution_panel_rows()
+        if not rows:
+            return []
+        width = self._get_tui_terminal_width()
+        inner_width = max(34, min(width - 4, 92))
+        lines = []
+        border_style = "class:auto-panel-border"
+
+        lines.append((border_style, "╭" + ("─" * (inner_width + 2)) + "╮\n"))
+        for style, text in rows:
+            padded = text.ljust(inner_width)
+            lines.append((border_style, "│ "))
+            lines.append((style, padded))
+            lines.append((border_style, " │\n"))
+        lines.append((border_style, "╰" + ("─" * (inner_width + 2)) + "╯"))
+        return lines
+
     def _spinner_widget_height(self, width: Optional[int] = None) -> int:
         """Return the visible height for the spinner/status text line above the status bar."""
         if not getattr(self, "_spinner_text", ""):
@@ -2234,6 +2483,10 @@ class VoidcubeCLI:
         """
         return getattr(self, "_supervisor_state_cache", None) or {}
 
+    def _fetch_auto_gateway_status(self) -> Dict[str, Any]:
+        """Return cached gateway body status for AUTO executor visibility."""
+        return getattr(self, "_auto_gateway_status_cache", None) or {}
+
     def _refresh_supervisor_status(self) -> None:
         """Fetch supervisor state in a background thread.  Called from process_loop.
 
@@ -2259,6 +2512,7 @@ class VoidcubeCLI:
                 with urllib.request.urlopen(req, timeout=2) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
                     self._supervisor_state_cache = data
+                    self._sync_auto_supervisor_event(data)
             except Exception:
                 # Keep previous cache on failure — don't overwrite with {}
                 pass
@@ -2268,11 +2522,149 @@ class VoidcubeCLI:
 
         threading.Thread(target=_do_fetch, daemon=True, name="supervisor-status").start()
 
+    def _refresh_auto_gateway_status(self) -> None:
+        """Fetch gateway body status in a background thread for AUTO panel diagnostics."""
+        import time
+        import threading
+
+        now = time.time()
+        if (now - getattr(self, "_auto_gateway_status_ts", 0.0)) < 5.0:
+            return
+        if getattr(self, "_auto_gateway_status_refreshing", False):
+            return
+        self._auto_gateway_status_refreshing = True
+
+        def _do_fetch():
+            try:
+                import json as _json
+                import urllib.request
+
+                req = urllib.request.Request("http://127.0.0.1:6000/admin/body/status")
+                with urllib.request.urlopen(req, timeout=2) as resp:
+                    self._auto_gateway_status_cache = _json.loads(resp.read().decode("utf-8"))
+            except Exception:
+                pass
+            finally:
+                self._auto_gateway_status_ts = time.time()
+                self._auto_gateway_status_refreshing = False
+
+        threading.Thread(target=_do_fetch, daemon=True, name="auto-gateway-status").start()
+
     _auto_mode_last_event_ts: str = ""
 
     _current_auto_task: Dict[str, Any] | None = None
     _current_auto_task_started_at: float = 0.0
     _last_agent_turn_result: Dict[str, Any] | None = None
+
+    def _build_auto_executor_lease_row(
+        self,
+        gateway_state: Dict[str, Any],
+        inner_width: int,
+    ) -> tuple[str, str]:
+        active = dict(gateway_state.get("active_cli_executor") or {})
+        current_session_id = str(getattr(self, "session_id", "") or "").strip()
+        active_session_id = str(active.get("session_id") or "").strip()
+        if not active_session_id:
+            text = "Executor: no live AUTO CLI registered yet"
+            return "class:auto-panel-warn", self._trim_status_bar_text(text, inner_width)
+
+        lease_status = str(active.get("lease_status") or "").strip().lower()
+        idle_seconds = int(active.get("idle_seconds") or 0)
+        scene = str(active.get("scene") or "idle").strip() or "idle"
+        owner_label = "this CLI" if active_session_id == current_session_id else f"CLI {active_session_id[-8:]}"
+        if lease_status == "stale" or bool(active.get("is_stale")):
+            text = f"Executor: {owner_label} stale ({idle_seconds}s idle, scene={scene})"
+            return "class:auto-panel-bad", self._trim_status_bar_text(text, inner_width)
+
+        text = f"Executor: {owner_label} healthy ({idle_seconds}s idle, scene={scene})"
+        if active_session_id != current_session_id:
+            return "class:auto-panel-warn", self._trim_status_bar_text(text, inner_width)
+        return "class:auto-panel-info", self._trim_status_bar_text(text, inner_width)
+
+    def _resolve_auto_waiting_start_cause(self) -> tuple[str, str]:
+        events = list(getattr(self, "_auto_execution_events", []) or [])
+        if not events:
+            return (
+                "class:auto-panel-warn",
+                "近因: 已认领任务，但还没有收到后续执行事件",
+            )
+        latest = dict(events[-1] or {})
+        stage = str(latest.get("stage") or "").strip().lower()
+        if stage == "prompt_enqueue_failed":
+            return (
+                "class:auto-panel-bad",
+                "近因: 执行提示注入前台 CLI 失败，任务未真正起跑",
+            )
+        if stage == "prompt_enqueued":
+            return (
+                "class:auto-panel-info",
+                "近因: 执行提示已入队，正在等待首个模型响应",
+            )
+        if stage == "claim":
+            return (
+                "class:auto-panel-warn",
+                "近因: 任务刚被认领，执行提示尚未注入前台 CLI",
+            )
+        if stage == "tool_started":
+            return (
+                "class:auto-panel-info",
+                "近因: 已进入工具回合，等待工具返回结果",
+            )
+        if stage == "tool_completed":
+            return (
+                "class:auto-panel-info",
+                "近因: 工具已返回，等待模型继续后续回合",
+            )
+        if stage == "model_turn_finished":
+            return (
+                "class:auto-panel-info",
+                "近因: 模型回合已结束，等待任务写回阶段接管",
+            )
+        return (
+            "class:auto-panel-dim",
+            f"近因: {str(latest.get('message') or '暂无可用诊断').strip()}",
+        )
+
+    def _find_owned_running_auto_task(self) -> Dict[str, Any] | None:
+        """Recover the running AUTO task owned by this CLI session, if any."""
+        session_id = str(getattr(self, "session_id", "") or "").strip()
+        if not session_id:
+            return None
+
+        try:
+            from VoidCube_cli.config import load_config
+            cfg = load_config()
+            sv_cfg = cfg.get("supervisor", {}) if isinstance(cfg, dict) else {}
+            host = sv_cfg.get("host", "127.0.0.1")
+            port = sv_cfg.get("port", 6002)
+            supervisor_url = f"http://{host}:{port}"
+        except Exception:
+            supervisor_url = "http://127.0.0.1:6002"
+
+        import json as _json
+        import urllib.request as _req
+
+        try:
+            resp = _json.loads(
+                _req.urlopen(
+                    f"{supervisor_url}/self-evolution/tasks?status=running",
+                    timeout=10,
+                ).read()
+            )
+        except Exception:
+            return None
+
+        tasks = resp.get("tasks", []) if isinstance(resp, dict) else []
+        for task in tasks:
+            metadata = dict(task.get("metadata") or {})
+            owner_session_id = str(metadata.get("owner_session_id") or "").strip()
+            execution_source = str(metadata.get("execution_source") or "").strip().lower()
+            if owner_session_id != session_id:
+                continue
+            if execution_source and execution_source != "cli_agent_pull":
+                continue
+            return task
+        return None
 
     def _poll_auto_mode_workflow(self) -> None:
         """Pull approved Agent-executable tasks from Gateway and execute them.
@@ -2289,6 +2681,24 @@ class VoidcubeCLI:
 
         gateway_base = "http://127.0.0.1:6000"
 
+        if getattr(self, "_current_auto_task", None) is None:
+            recovered_task = self._find_owned_running_auto_task()
+            if recovered_task is not None:
+                self._current_auto_task = recovered_task
+                self._append_auto_execution_event(
+                    f"认回运行中任务 {str(recovered_task.get('task_id') or '')[:8]}",
+                    tone="warn",
+                    stage="claim",
+                )
+                metadata = dict(recovered_task.get("metadata") or {})
+                started_at_raw = str(metadata.get("execution_started_at") or "").strip()
+                if started_at_raw:
+                    try:
+                        started_dt = datetime.fromisoformat(started_at_raw)
+                        self._current_auto_task_started_at = started_dt.timestamp()
+                    except ValueError:
+                        self._current_auto_task_started_at = 0.0
+
         # ── If an AUTO task was just completed, report it ──
         current = getattr(self, '_current_auto_task', None)
         if current is not None:
@@ -2299,29 +2709,7 @@ class VoidcubeCLI:
             started_at = getattr(self, '_current_auto_task_started_at', 0)
             elapsed = _time.time() - started_at if started_at else -1
             turn_result = getattr(self, "_last_agent_turn_result", None)
-            # ── Timeout check: if task ran > 30 min, report as failed ──
-            if elapsed > 1800:
-                try:
-                    timeout_payload = _json.dumps({
-                        "decision": "failed",
-                        "reason": f"AUTO {task_label} timed out (30 min).",
-                        "context": {"source": "cli_agent_pull", "error": "timeout", "elapsed_s": int(elapsed)},
-                    }).encode()
-                    r = _req.Request(
-                        f"{gateway_base}/v1/tasks/{task_id}/decision",
-                        data=timeout_payload,
-                        headers={"Content-Type": "application/json"},
-                        method="POST",
-                    )
-                    _req.urlopen(r, timeout=15)
-                    _cprint(f"  ⏰  AUTO {task_label} {task_id[:8]}... timed out ({int(elapsed)}s)")
-                except Exception:
-                    pass
-                _push_cli_agent_scene("idle", session_id=getattr(self, "session_id", None))
-                self._current_auto_task = None
-                self._current_auto_task_started_at = 0
-                self._last_agent_turn_result = None
-            elif not self._agent_running and turn_result is not None:
+            if not self._agent_running and turn_result is not None:
                 # Agent finished a queued AUTO turn — classify by the actual turn result.
                 decision = "failed" if (
                     turn_result.get("failed")
@@ -2353,8 +2741,40 @@ class VoidcubeCLI:
                         method="POST",
                     )
                     _req.urlopen(r, timeout=15)
+                    self._append_auto_execution_event(
+                        f"任务 {task_id[:8]} 已回写 {decision}",
+                        tone="error" if decision == "failed" else "success",
+                        stage="writeback",
+                    )
                 except Exception:
                     pass  # Best-effort — supervisor will handle retry
+                _push_cli_agent_scene("idle", session_id=getattr(self, "session_id", None))
+                self._current_auto_task = None
+                self._current_auto_task_started_at = 0
+                self._last_agent_turn_result = None
+            # ── Timeout check: if task ran > 30 min, report as failed ──
+            elif elapsed > 1800:
+                try:
+                    timeout_payload = _json.dumps({
+                        "decision": "failed",
+                        "reason": f"AUTO {task_label} timed out (30 min).",
+                        "context": {"source": "cli_agent_pull", "error": "timeout", "elapsed_s": int(elapsed)},
+                    }).encode()
+                    r = _req.Request(
+                        f"{gateway_base}/v1/tasks/{task_id}/decision",
+                        data=timeout_payload,
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    _req.urlopen(r, timeout=15)
+                    _cprint(f"  ⏰  AUTO {task_label} {task_id[:8]}... timed out ({int(elapsed)}s)")
+                    self._append_auto_execution_event(
+                        f"任务 {task_id[:8]} 超时，已回写 failed",
+                        tone="error",
+                        stage="writeback",
+                    )
+                except Exception:
+                    pass
                 _push_cli_agent_scene("idle", session_id=getattr(self, "session_id", None))
                 self._current_auto_task = None
                 self._current_auto_task_started_at = 0
@@ -2420,6 +2840,11 @@ class VoidcubeCLI:
         self._current_auto_task = task
         self._current_auto_task_started_at = _time.time()
         self._last_agent_turn_result = None
+        self._append_auto_execution_event(
+            f"已接管任务 {task_id[:8]} · {title}",
+            tone="success",
+            stage="claim",
+        )
         _push_cli_agent_scene(
             "code_editing" if execution_kind == "body_improvement" else "learning",
             session_id=getattr(self, "session_id", None),
@@ -2483,11 +2908,21 @@ class VoidcubeCLI:
             )
         try:
             self._pending_input.put(prompt)
+            self._append_auto_execution_event(
+                "执行提示已注入前台 CLI，等待模型响应",
+                tone="info",
+                stage="prompt_enqueued",
+            )
         except Exception:
             # Queue failure — report task as failed so supervisor can retry
             import time as _time
             task_label = "body improvement task" if execution_kind == "body_improvement" else "learning task"
             _cprint(f"  ⚠️  Failed to enqueue AUTO {task_label} {task_id[:8]}...")
+            self._append_auto_execution_event(
+                f"任务 {task_id[:8]} 入队失败",
+                tone="error",
+                stage="prompt_enqueue_failed",
+            )
             try:
                 fail_payload = _json.dumps({
                     "decision": "failed",
@@ -2567,16 +3002,21 @@ class VoidcubeCLI:
 
         model = str(getattr(self, "model", "") or "")
         provider = str(getattr(self, "provider", "") or "")
-        _register_with_gateway(session_id, model, provider)
+        registered = _register_with_gateway(session_id, model, provider)
 
         scene, task_id, execution_kind = self._current_gateway_presence_snapshot()
-        _push_cli_agent_scene(
+        scene_pushed = _push_cli_agent_scene(
             scene,
             session_id=session_id,
             task_id=task_id,
             execution_kind=execution_kind,
         )
-        self._last_gateway_presence_refresh_at = now
+        if registered and scene_pushed:
+            self._last_gateway_presence_refresh_at = now
+            return
+
+        # Retry quickly on best-effort failures instead of suppressing presence for a full interval.
+        self._last_gateway_presence_refresh_at = max(0.0, now - refresh_interval + 2.0)
 
     def _execute_pending_input(self, user_input: Any, *, app=None) -> bool:
         """Execute one queued prompt/command using the same path as the interactive loop."""
@@ -7087,7 +7527,12 @@ class VoidcubeCLI:
                 active = resp.get("governor_mode_active", False)
                 if active:
                     self._auto_mode_active = True
-                    _push_cli_agent_scene("executing", session_id=getattr(self, "session_id", None))
+                    self._append_auto_execution_event(
+                        "AUTO 已激活，当前活跃 CLI 将承担默认执行",
+                        tone="success",
+                        stage="auto_mode",
+                    )
+                    self._refresh_gateway_cli_presence(force=True)
                     cycle_result = None
                     try:
                         cycle_result = self._trigger_auto_mode_cycle(focus=focus)
@@ -7156,6 +7601,7 @@ class VoidcubeCLI:
             if not active:
                 self._auto_mode_active = False
                 _push_cli_agent_scene("idle", session_id=getattr(self, "session_id", None))
+                self._append_auto_execution_event("AUTO 已退出", tone="warn")
                 _cprint(f"  💤 Governor Mode [bold]DEACTIVATED[/] — returned to Memory Mode.")
                 _cprint(f"     Only health-check loop is running.")
                 _cprint(f"     Use /auto to re-enter Governor Mode.")
@@ -7207,6 +7653,7 @@ class VoidcubeCLI:
             if not resp.get("governor_mode_active", True):
                 self._auto_mode_active = False
                 _push_cli_agent_scene("idle", session_id=getattr(self, "session_id", None))
+                self._append_auto_execution_event("AUTO 已退出", tone="warn")
                 _cprint(f"  💤 Governor Mode [bold]DEACTIVATED[/] — returned to Memory Mode.")
                 _cprint(f"     Only health-check loop is running.")
                 _cprint(f"     Use /auto to re-enter Governor Mode.")
@@ -7220,6 +7667,7 @@ class VoidcubeCLI:
             # Supervisor unreachable — still exit local auto mode to unblock the user
             self._auto_mode_active = False
             _push_cli_agent_scene("idle", session_id=getattr(self, "session_id", None))
+            self._append_auto_execution_event("AUTO 本地已退出，但 supervisor 可能仍保持激活", tone="warn")
             _cprint(f"  ⚠️  Supervisor unreachable: {exc}")
             _cprint(f"     Local AUTO mode deactivated (supervisor state may be stale).")
             _cprint(f"     Run /auto to re-enter when supervisor is available.")
@@ -8355,6 +8803,18 @@ class VoidcubeCLI:
             import time as _time
             self._tool_start_time = 0.0
             self._current_tool_name = ""
+            if (
+                getattr(self, "_auto_mode_active", False)
+                and getattr(self, "_current_auto_task", None)
+                and function_name
+            ):
+                duration = kwargs.get("duration", 0.0)
+                suffix = f" ({duration:.1f}s)" if duration else ""
+                self._append_auto_execution_event(
+                    f"工具完成: {function_name}{suffix}",
+                    tone="success" if not kwargs.get("is_error", False) else "error",
+                    stage="tool_completed",
+                )
             # Print stacked scrollback line for "all" / "new" modes
             if function_name and self.tool_progress_mode in ("all", "new"):
                 duration = kwargs.get("duration", 0.0)
@@ -8397,6 +8857,12 @@ class VoidcubeCLI:
             self._pending_tool_info.setdefault(function_name, []).append(
                 function_args if function_args is not None else {}
             )
+            if getattr(self, "_auto_mode_active", False) and getattr(self, "_current_auto_task", None):
+                self._append_auto_execution_event(
+                    f"工具启动: {function_name}",
+                    tone="info",
+                    stage="tool_started",
+                )
             self._invalidate()
 
         if not self._voice_mode:
@@ -9563,6 +10029,25 @@ class VoidcubeCLI:
                 "interrupted": bool(result.get("interrupted")) if result else False,
                 "error": str(result.get("error", "") or "") if result else "No result returned",
             }
+            if getattr(self, "_auto_mode_active", False) and getattr(self, "_current_auto_task", None):
+                if self._last_agent_turn_result["failed"] or self._last_agent_turn_result["partial"]:
+                    self._append_auto_execution_event(
+                        f"模型回合结束，但结果异常: {self._last_agent_turn_result['error'] or 'unknown error'}",
+                        tone="error",
+                        stage="model_turn_finished",
+                    )
+                elif self._last_agent_turn_result["interrupted"]:
+                    self._append_auto_execution_event(
+                        "模型回合被中断，等待下一条指令",
+                        tone="warn",
+                        stage="model_turn_finished",
+                    )
+                else:
+                    self._append_auto_execution_event(
+                        "模型回合完成，等待任务回写",
+                        tone="success",
+                        stage="model_turn_finished",
+                    )
 
             # Auto-generate session title after first exchange (non-blocking)
             if response and result and not result.get("failed") and not result.get("partial"):
@@ -9917,6 +10402,7 @@ class VoidcubeCLI:
         spinner_widget=None,
         spacer,
         status_bar,
+        auto_execution_panel=None,
         input_rule_top,
         image_bar,
         input_area,
@@ -9943,6 +10429,7 @@ class VoidcubeCLI:
                 spacer,
                 *self._get_extra_tui_widgets(),
                 status_bar,
+                auto_execution_panel,
                 input_rule_top,
                 image_bar,
                 input_area,
@@ -11266,6 +11753,15 @@ class VoidcubeCLI:
                 ("class:auto-mode", " 🤖 AUTO 模式 | /auto-q 退出"),
             ]
 
+        auto_execution_panel = ConditionalContainer(
+            Window(
+                FormattedTextControl(lambda: cli_ref._get_auto_execution_panel_fragments()),
+                height=lambda: cli_ref._auto_execution_panel_height(),
+                wrap_lines=False,
+            ),
+            filter=Condition(lambda: cli_ref._auto_mode_active),
+        )
+
         auto_mode_bar = ConditionalContainer(
             Window(
                 FormattedTextControl(_get_auto_mode_text),
@@ -11310,6 +11806,7 @@ class VoidcubeCLI:
                     spinner_widget=spinner_widget,
                     spacer=spacer,
                     status_bar=status_bar,
+                    auto_execution_panel=auto_execution_panel,
                     input_rule_top=input_rule_top,
                     image_bar=image_bar,
                     input_area=input_area,
@@ -11344,6 +11841,14 @@ class VoidcubeCLI:
             'completion-menu.completion.current': 'bg:#1E40AF #E8E8E8',
             'completion-menu.meta.completion': 'bg:#1a1a2e #6B7280',
             'completion-menu.meta.completion.current': 'bg:#1E40AF #58A6FF',
+            'auto-panel-border': '#30363D',
+            'auto-panel-title': '#58A6FF bold',
+            'auto-panel-text': '#E8E8E8',
+            'auto-panel-dim': '#9CA3AF',
+            'auto-panel-info': '#58A6FF',
+            'auto-panel-good': '#34D399 bold',
+            'auto-panel-warn': '#FBBF24 bold',
+            'auto-panel-bad': '#F87171 bold',
             # Clarify question panel
             'clarify-border': '#30363D',
             'clarify-title': '#58A6FF bold',
@@ -11460,6 +11965,7 @@ class VoidcubeCLI:
                         if not self._agent_running:
                             self._check_config_mcp_changes()
                             self._refresh_supervisor_status()
+                            self._refresh_auto_gateway_status()
                             self._refresh_gateway_cli_presence()
                             if self._auto_mode_active:
                                 self._poll_auto_mode_workflow()

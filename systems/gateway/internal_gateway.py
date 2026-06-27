@@ -92,6 +92,7 @@ class InternalGateway:
         # (SB-04) mitigates unbounded growth for now.
         self._agent_session_cache: Dict[str, Dict[str, Any]] = {}
         self._session_ttl_seconds: int = 3600  # evict sessions idle >1 hour
+        self._active_cli_stale_after_seconds: int = 90
         self._activity_log: Deque[Dict[str, Any]] = deque(
             maxlen=max(int(self.config.activity_log_limit), 1)
         )
@@ -259,7 +260,23 @@ class InternalGateway:
             snapshot["scene"] = agent_scene.get("scene")
             snapshot["scene_task_id"] = agent_scene.get("scene_task_id")
             snapshot["scene_changed_at"] = agent_scene.get("scene_changed_at")
+        snapshot.update(self._build_session_lease_snapshot(session_id))
         return snapshot
+
+    def _build_session_lease_snapshot(self, session_id: str) -> Dict[str, Any]:
+        session = dict(self._agent_session_cache.get(session_id) or {})
+        last_used_at = session.get("last_used_at")
+        if isinstance(last_used_at, datetime):
+            idle_seconds = max(0, int((datetime.now() - last_used_at).total_seconds()))
+        else:
+            idle_seconds = self._session_ttl_seconds
+        is_stale = idle_seconds >= self._active_cli_stale_after_seconds
+        return {
+            "idle_seconds": idle_seconds,
+            "stale_after_seconds": self._active_cli_stale_after_seconds,
+            "is_stale": is_stale,
+            "lease_status": "stale" if is_stale else "healthy",
+        }
 
     def _build_executor_access_policy(self) -> Dict[str, Any]:
         return {
@@ -349,6 +366,7 @@ class InternalGateway:
                 session[key] = value.isoformat()
         session["session_id"] = session_id
         session["is_active_cli_executor"] = session_id == self._active_cli_session_id
+        session.update(self._build_session_lease_snapshot(session_id))
         return session
 
     def _touch_session(self, session_id: Optional[str], *, source: str = "cli") -> None:
@@ -391,18 +409,23 @@ class InternalGateway:
             self._activity_state["recent_metadata"]["user_request"] = activity_metadata
             self._activity_state["recent_metadata"]["agent_work"] = activity_metadata
         elif normalized == "agent_scene":
-            cache = self._scenes_cache["agent"]
-            cache["scene"] = self._validate_scene(
+            scene = self._validate_scene(
                 (activity_metadata or {}).get("scene"),
                 self.AGENT_LEGAL_SCENES,
             )
-            cache["scene_task_id"] = (activity_metadata or {}).get("task_id")
-            cache["scene_changed_at"] = now.isoformat()
-            cache["source_service"] = source_service or (activity_metadata or {}).get("source_service")
-            cache["reachable"] = True
-            cache["last_fetched_at"] = now.isoformat()
-            if session_id:
+            if session_id and scene != "idle":
                 self._active_cli_session_id = session_id
+            active_session_id = str(self._active_cli_session_id or "").strip()
+            if session_id and active_session_id and session_id != active_session_id and scene == "idle":
+                pass
+            else:
+                cache = self._scenes_cache["agent"]
+                cache["scene"] = scene
+                cache["scene_task_id"] = (activity_metadata or {}).get("task_id")
+                cache["scene_changed_at"] = now.isoformat()
+                cache["source_service"] = source_service or (activity_metadata or {}).get("source_service")
+                cache["reachable"] = True
+                cache["last_fetched_at"] = now.isoformat()
         elif normalized == "agent_work":
             self._activity_state["last_agent_work_at"] = now
             self._activity_state["agent_work_count"] += 1
@@ -731,7 +754,7 @@ class InternalGateway:
                 "provider": payload.provider,
                 "source": payload.source,
             }
-            if payload.source == "cli":
+            if payload.source == "cli" and not self._active_cli_session_id:
                 self._active_cli_session_id = payload.session_id
             return {
                 "status": "registered",
