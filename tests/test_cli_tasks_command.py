@@ -1,0 +1,227 @@
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import cli
+from VoidCube_cli.commands import COMMANDS_BY_CATEGORY, resolve_command
+from agent.subagent_display import SubagentStatus
+
+
+class _FakeConsole:
+    def __init__(self, sink: list[str]):
+        self._sink = sink
+
+    def print(self, value, *args, **kwargs):
+        del args, kwargs
+        self._sink.append(str(value))
+
+
+class _FakeThread:
+    def __init__(self, name: str, alive: bool = True):
+        self.name = name
+        self._alive = alive
+
+    def is_alive(self) -> bool:
+        return self._alive
+
+
+def test_tasks_command_is_registered():
+    cmd = resolve_command("tasks")
+    assert cmd is not None
+    assert cmd.name == "tasks"
+    assert cmd.args_hint == ""
+    assert cmd.defer_subcommands_until_prefix is True
+
+
+def test_tasks_command_help_entry_hides_manual_debug_usage():
+    session_commands = COMMANDS_BY_CATEGORY.get("会话管理", {})
+    description = session_commands.get("/tasks", "")
+
+    assert "高级调试" in description
+    assert "/tasks bg" not in description
+    assert "/tasks fg" not in description
+
+
+def test_handle_tasks_command_prefers_active_subagent_display(monkeypatch):
+    rendered: list[str] = []
+    monkeypatch.setattr(cli, "ChatConsole", lambda: _FakeConsole(rendered))
+
+    app = cli.VoidcubeCLI.__new__(cli.VoidcubeCLI)
+    app.agent = SimpleNamespace(
+        _subagent_display_manager=SimpleNamespace(
+            render_tasks_command=lambda: "Subagent Panel\n  task-1"
+        )
+    )
+    app._background_tasks = {}
+    app._background_task_info = {}
+
+    app._handle_tasks_command()
+
+    assert any("Subagent Panel" in line for line in rendered)
+
+
+def test_handle_tasks_command_falls_back_to_background_summary(monkeypatch):
+    rendered: list[str] = []
+    monkeypatch.setattr(cli, "ChatConsole", lambda: _FakeConsole(rendered))
+    monkeypatch.setattr(cli.time, "time", lambda: 200.0)
+
+    app = cli.VoidcubeCLI.__new__(cli.VoidcubeCLI)
+    app.agent = None
+    app._background_tasks = {
+        "bg_task_1": _FakeThread(name="bg-task-bg_task_1", alive=True),
+    }
+    app._background_task_info = {
+        "bg_task_1": {
+            "task_num": 3,
+            "prompt_preview": "Summarize the repo",
+            "started_at": 180.0,
+        }
+    }
+
+    app._handle_tasks_command()
+
+    assert any("CLI Background Tasks" in line for line in rendered)
+    assert any("Summarize the repo" in line for line in rendered)
+
+
+def test_process_command_routes_tasks(monkeypatch):
+    app = cli.VoidcubeCLI.__new__(cli.VoidcubeCLI)
+    app._auto_mode_active = False
+
+    called = {"tasks": 0}
+    app._handle_tasks_command = lambda cmd="/tasks": called.__setitem__("tasks", called["tasks"] + 1)
+
+    keep_running = app.process_command("/tasks")
+
+    assert keep_running is True
+    assert called["tasks"] == 1
+
+
+def test_handle_tasks_command_can_send_subagent_to_background(monkeypatch):
+    printed: list[str] = []
+    monkeypatch.setattr(cli, "_cprint", lambda text: printed.append(str(text)))
+
+    manager = SimpleNamespace(
+        resolve_task_ref=lambda ref: SimpleNamespace(task_id="delegate-1"),
+        send_to_background=lambda task_id: task_id == "delegate-1",
+    )
+
+    app = cli.VoidcubeCLI.__new__(cli.VoidcubeCLI)
+    app.agent = SimpleNamespace(_subagent_display_manager=manager)
+    app._app = None
+
+    app._handle_tasks_command("/tasks bg 1")
+
+    assert printed == []
+
+
+def test_handle_tasks_command_can_bring_subagent_to_foreground(monkeypatch):
+    printed: list[str] = []
+    monkeypatch.setattr(cli, "_cprint", lambda text: printed.append(str(text)))
+
+    manager = SimpleNamespace(
+        resolve_task_ref=lambda ref: SimpleNamespace(task_id="delegate-2"),
+        bring_to_foreground=lambda task_id: task_id == "delegate-2",
+    )
+
+    app = cli.VoidcubeCLI.__new__(cli.VoidcubeCLI)
+    app.agent = SimpleNamespace(_subagent_display_manager=manager)
+    app._app = None
+
+    app._handle_tasks_command("/tasks fg 2")
+
+    assert printed == []
+
+
+def test_get_subagent_observability_snapshot_summarizes_active_tasks():
+    app = cli.VoidcubeCLI.__new__(cli.VoidcubeCLI)
+    app.agent = SimpleNamespace(
+        _subagent_display_manager=SimpleNamespace(
+            list_tasks=lambda include_background=False: [
+                SimpleNamespace(
+                    task_id="delegate-1",
+                    task_index=0,
+                    status=SubagentStatus.TOOL_CALL,
+                    current_tool="read_file",
+                    current_tool_preview="README.md",
+                    current_thinking="",
+                    goal_preview="Inspect docs",
+                    goal="Inspect docs",
+                ),
+            ],
+            list_background_tasks=lambda: [
+                SimpleNamespace(
+                    task_id="delegate-2",
+                    task_index=1,
+                    status=SubagentStatus.RUNNING,
+                    current_tool="",
+                    current_tool_preview="",
+                    current_thinking="Searching code paths",
+                    goal_preview="Trace command routing",
+                    goal="Trace command routing",
+                ),
+            ],
+        )
+    )
+
+    snapshot = app._get_subagent_observability_snapshot()
+
+    assert snapshot["active"] is True
+    assert snapshot["foreground_count"] == 1
+    assert snapshot["background_count"] == 1
+    assert snapshot["counts_label"] == "1+1"
+    assert snapshot["focus_task_id"] == "delegate-1"
+    assert snapshot["focus_tool"] == "read_file"
+    assert snapshot["focus_preview"] == "read_file"
+
+
+def test_middle_status_fragments_include_subagent_summary():
+    app = cli.VoidcubeCLI.__new__(cli.VoidcubeCLI)
+    app._use_ascii_fallback_cached = lambda: True
+    app._fetch_supervisor_status = lambda: {"scene": "idle", "mem_usage": {}, "error_count": 0}
+    app._cached_load_config = lambda: {"memory": {"provider": "mem"}}
+    app._get_subagent_observability_snapshot = lambda: {
+        "active": True,
+        "counts_label": "2+1",
+        "compact_preview": "read_file",
+    }
+
+    frags = app._get_middle_status_fragments()
+    rendered = "".join(text for _, text in frags)
+
+    assert "[SA]" in rendered
+    assert "2+1" in rendered
+    assert "read_file" in rendered
+
+
+def test_show_session_status_includes_subagent_summary(monkeypatch):
+    rendered: list[str] = []
+    app = cli.VoidcubeCLI.__new__(cli.VoidcubeCLI)
+    app._session_db = None
+    app.session_id = "cli-session-1"
+    app.session_start = cli.datetime(2026, 6, 28, 12, 0, 0)
+    app.provider = "agnesai"
+    app.model = "api-a-model"
+    app._agent_running = True
+    app.agent = SimpleNamespace(session_total_tokens=1234)
+    app.console = _FakeConsole(rendered)
+    app._fetch_supervisor_status_snapshot = lambda: {}
+    app._fetch_gateway_agent_activity_snapshot = lambda: {}
+    app._get_subagent_observability_snapshot = lambda: {
+        "active": True,
+        "foreground_count": 2,
+        "background_count": 1,
+        "focus_preview": "read_file",
+    }
+
+    monkeypatch.setattr(cli, "display_VoidCube_home", lambda: "F:/My_code/Traecode/VoidCube")
+
+    app._show_session_status()
+
+    output = "\n".join(rendered)
+    assert "Subagents: 2 foreground, 1 background" in output
+    assert "Subagent Focus: read_file" in output

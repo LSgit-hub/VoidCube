@@ -156,6 +156,18 @@ def _print_three_segment_scene_bar() -> None:
             task_id = info.get("scene_task_id")
             if task_id:
                 suffix = f" · {str(task_id)[:8]}"
+            fg_count = max(0, int(info.get("subagent_foreground_count") or 0))
+            bg_count = max(0, int(info.get("subagent_background_count") or 0))
+            if fg_count or bg_count:
+                counts = f"{fg_count}+{bg_count}" if bg_count else str(fg_count)
+                suffix += f" · SA {counts}"
+                focus = str(
+                    info.get("subagent_focus_tool")
+                    or info.get("subagent_focus_preview")
+                    or ""
+                ).strip()
+                if focus:
+                    suffix += f" · {focus[:20]}"
         elif key == "supervisor":
             title = info.get("title")
             if title:

@@ -445,8 +445,8 @@ def test_refresh_gateway_cli_presence_registers_session_and_scene(monkeypatch):
     )
     monkeypatch.setattr(
         "cli._push_cli_agent_scene",
-        lambda scene, *, session_id=None, task_id=None, execution_kind=None: scenes.append(
-            (scene, session_id, task_id, execution_kind)
+        lambda scene, *, session_id=None, task_id=None, execution_kind=None, subagent_summary=None: scenes.append(
+            (scene, session_id, task_id, execution_kind, subagent_summary)
         ) or True,
     )
     monkeypatch.setattr("time.monotonic", lambda: 100.0)
@@ -454,7 +454,7 @@ def test_refresh_gateway_cli_presence_registers_session_and_scene(monkeypatch):
     cli._refresh_gateway_cli_presence(force=True)
 
     assert registrations == [("cli-session-keepalive", "api-a-model", "agnesai")]
-    assert scenes == [("learning", "cli-session-keepalive", "learn-11", "self_learning")]
+    assert scenes == [("learning", "cli-session-keepalive", "learn-11", "self_learning", {"active": False, "foreground_count": 0, "background_count": 0, "total_count": 0, "counts_label": "0", "focus_task_id": "", "focus_tool": "", "focus_preview": "", "compact_preview": ""})]
     assert cli._last_gateway_presence_refresh_at == 100.0
 
 
@@ -494,15 +494,15 @@ def test_refresh_gateway_cli_presence_retries_quickly_after_register_failure(mon
     monkeypatch.setattr("cli._register_with_gateway", lambda *args, **kwargs: False)
     monkeypatch.setattr(
         "cli._push_cli_agent_scene",
-        lambda scene, *, session_id=None, task_id=None, execution_kind=None: scenes.append(
-            (scene, session_id, task_id, execution_kind)
+        lambda scene, *, session_id=None, task_id=None, execution_kind=None, subagent_summary=None: scenes.append(
+            (scene, session_id, task_id, execution_kind, subagent_summary)
         ) or True,
     )
     monkeypatch.setattr("time.monotonic", lambda: 100.0)
 
     cli._refresh_gateway_cli_presence(force=True)
 
-    assert scenes == [("idle", "cli-session-keepalive", None, None)]
+    assert scenes == [("idle", "cli-session-keepalive", None, None, {"active": False, "foreground_count": 0, "background_count": 0, "total_count": 0, "counts_label": "0", "focus_task_id": "", "focus_tool": "", "focus_preview": "", "compact_preview": ""})]
     assert cli._last_gateway_presence_refresh_at == 72.0
 
 
@@ -910,13 +910,14 @@ def test_auto_command_marks_cli_agent_surface_active(monkeypatch):
     def fake_cprint(*args, **kwargs):
         del args, kwargs
 
-    def fake_push(scene, *, session_id=None, task_id=None, execution_kind=None):
+    def fake_push(scene, *, session_id=None, task_id=None, execution_kind=None, subagent_summary=None):
         pushed.append(
             {
                 "scene": scene,
                 "session_id": session_id,
                 "task_id": task_id,
                 "execution_kind": execution_kind,
+                "subagent_summary": subagent_summary,
             }
         )
 
@@ -1007,6 +1008,44 @@ def test_push_cli_agent_scene_includes_session_id(monkeypatch):
     assert requests[0]["data"]["metadata"]["scene"] == "learning"
 
 
+def test_push_cli_agent_scene_includes_subagent_summary(monkeypatch):
+    requests = []
+
+    def fake_urlopen(request, timeout=0):
+        del timeout
+        requests.append(
+            {
+                "url": request.full_url,
+                "data": json.loads((request.data or b"{}").decode("utf-8")),
+            }
+        )
+        return _FakeUrlopenResponse({})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    from cli import _push_cli_agent_scene
+
+    _push_cli_agent_scene(
+        "executing",
+        session_id="cli-session-3",
+        subagent_summary={
+            "foreground_count": 2,
+            "background_count": 1,
+            "total_count": 3,
+            "focus_task_id": "delegate-1",
+            "focus_tool": "read_file",
+            "focus_preview": "read_file",
+        },
+    )
+
+    metadata = requests[0]["data"]["metadata"]
+    assert metadata["subagent_foreground_count"] == 2
+    assert metadata["subagent_background_count"] == 1
+    assert metadata["subagent_total_count"] == 3
+    assert metadata["subagent_focus_task_id"] == "delegate-1"
+    assert metadata["subagent_focus_tool"] == "read_file"
+
+
 def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._auto_mode_active = False
@@ -1024,13 +1063,14 @@ def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
         del kwargs
         printed.append(" ".join(str(arg) for arg in args))
 
-    def fake_push(scene, *, session_id=None, task_id=None, execution_kind=None):
+    def fake_push(scene, *, session_id=None, task_id=None, execution_kind=None, subagent_summary=None):
         pushed.append(
             {
                 "scene": scene,
                 "session_id": session_id,
                 "task_id": task_id,
                 "execution_kind": execution_kind,
+                "subagent_summary": subagent_summary,
             }
         )
         return True

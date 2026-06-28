@@ -360,6 +360,18 @@ def _format_segment_line(seg: Dict[str, str], state: Dict[str, Any]) -> str:
         if task_id:
             short = str(task_id)[:8]
             task_hint = f" · task {short}"
+        fg_count = max(0, int(info.get("subagent_foreground_count") or 0))
+        bg_count = max(0, int(info.get("subagent_background_count") or 0))
+        if fg_count or bg_count:
+            counts = f"{fg_count}+{bg_count}" if bg_count else str(fg_count)
+            task_hint += f" · SA {counts}"
+            focus = str(
+                info.get("subagent_focus_tool")
+                or info.get("subagent_focus_preview")
+                or ""
+            ).strip()
+            if focus:
+                task_hint += f" · {focus[:20]}"
     elif seg["key"] == "supervisor":
         title = info.get("title")
         if title:

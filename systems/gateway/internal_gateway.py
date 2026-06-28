@@ -140,6 +140,12 @@ class InternalGateway:
             "agent": {
                 "scene": "idle",
                 "scene_task_id": None,
+                "subagent_foreground_count": 0,
+                "subagent_background_count": 0,
+                "subagent_total_count": 0,
+                "subagent_focus_task_id": None,
+                "subagent_focus_tool": None,
+                "subagent_focus_preview": None,
                 "service_id": None,
                 "address": None,
                 "slot_id": None,
@@ -261,6 +267,12 @@ class InternalGateway:
             snapshot["scene"] = agent_scene.get("scene")
             snapshot["scene_task_id"] = agent_scene.get("scene_task_id")
             snapshot["scene_changed_at"] = agent_scene.get("scene_changed_at")
+            snapshot["subagent_foreground_count"] = agent_scene.get("subagent_foreground_count", 0)
+            snapshot["subagent_background_count"] = agent_scene.get("subagent_background_count", 0)
+            snapshot["subagent_total_count"] = agent_scene.get("subagent_total_count", 0)
+            snapshot["subagent_focus_task_id"] = agent_scene.get("subagent_focus_task_id")
+            snapshot["subagent_focus_tool"] = agent_scene.get("subagent_focus_tool")
+            snapshot["subagent_focus_preview"] = agent_scene.get("subagent_focus_preview")
         snapshot.update(self._build_session_lease_snapshot(session_id))
         return snapshot
 
@@ -423,6 +435,21 @@ class InternalGateway:
                 cache = self._scenes_cache["agent"]
                 cache["scene"] = scene
                 cache["scene_task_id"] = (activity_metadata or {}).get("task_id")
+                cache["subagent_foreground_count"] = max(
+                    0,
+                    int((activity_metadata or {}).get("subagent_foreground_count") or 0),
+                )
+                cache["subagent_background_count"] = max(
+                    0,
+                    int((activity_metadata or {}).get("subagent_background_count") or 0),
+                )
+                cache["subagent_total_count"] = max(
+                    cache["subagent_foreground_count"] + cache["subagent_background_count"],
+                    int((activity_metadata or {}).get("subagent_total_count") or 0),
+                )
+                cache["subagent_focus_task_id"] = (activity_metadata or {}).get("subagent_focus_task_id")
+                cache["subagent_focus_tool"] = (activity_metadata or {}).get("subagent_focus_tool")
+                cache["subagent_focus_preview"] = (activity_metadata or {}).get("subagent_focus_preview")
                 cache["scene_changed_at"] = now.isoformat()
                 cache["source_service"] = source_service or (activity_metadata or {}).get("source_service")
                 cache["reachable"] = True

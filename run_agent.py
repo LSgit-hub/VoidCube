@@ -530,6 +530,7 @@ class AIAgent:
         self._delegate_depth = 0        # 0 = top-level agent, incremented for children
         self._active_children: list = []      # Running child AIAgents (for interrupt propagation)
         self._active_children_lock = threading.Lock()
+        self._subagent_display_manager = None
         
         # Store OpenRouter provider preferences
         self.providers_allowed = providers_allowed
@@ -6897,10 +6898,15 @@ class AIAgent:
                 else:
                     goal_preview = (function_args.get("goal") or "")[:30]
                     spinner_label = f"🔀 {goal_preview}" if goal_preview else "🔀 委派中"
+                use_rich_delegate_display = self._print_fn is not None
                 spinner = None
-                # Skip traditional spinner when SubagentDisplayManager handles display
-                # delegate_task now manages its own rich display
-                if self._should_emit_quiet_tool_messages() and self._should_start_quiet_spinner():
+                # Rich subagent display is the default for CLI/TUI sessions with
+                # a safe print sink. Fall back to the legacy spinner elsewhere.
+                if (
+                    not use_rich_delegate_display
+                    and self._should_emit_quiet_tool_messages()
+                    and self._should_start_quiet_spinner()
+                ):
                     face = random.choice(KawaiiSpinner.KAWAII_WAITING)
                     spinner = KawaiiSpinner(f"{face} {spinner_label}", spinner_type='dots', print_fn=self._print_fn)
                     spinner.start()
@@ -6914,7 +6920,7 @@ class AIAgent:
                         tasks=tasks_arg,
                         max_iterations=function_args.get("max_iterations"),
                         parent_agent=self,
-                        enable_display=False,  # Use traditional spinner for CLI
+                        enable_display=use_rich_delegate_display,
                     )
                     _delegate_result = function_result
                 finally:
@@ -6923,7 +6929,7 @@ class AIAgent:
                     cute_msg = _get_cute_tool_message_impl('delegate_task', function_args, tool_duration, result=_delegate_result)
                     if spinner:
                         spinner.stop(cute_msg)
-                    elif self._should_emit_quiet_tool_messages():
+                    elif (not use_rich_delegate_display) and self._should_emit_quiet_tool_messages():
                         self._vprint(f"  {cute_msg}")
             elif self._context_engine_tool_names and function_name in self._context_engine_tool_names:
                 # Context engine tools (lcm_grep, lcm_describe, lcm_expand, etc.)

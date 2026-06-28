@@ -804,10 +804,13 @@ def delegate_task(
                 show_tool_args=False,
                 max_tool_args_len=50,
             )
+            display_manager.print_fn = getattr(parent_agent, "_print_fn", None) or print
             display_manager.start()
         except ImportError:
             logger.debug("SubagentDisplayManager not available, using legacy display")
             display_manager = None
+    if parent_agent is not None:
+        parent_agent._subagent_display_manager = display_manager
 
     # Save parent tool names BEFORE any child construction mutates the global.
     # _build_child_agent() calls AIAgent() which calls get_tool_definitions(),
@@ -926,24 +929,26 @@ def delegate_task(
                                 exit_reason=entry.get("exit_reason", "completed"),
                             )
 
-                    # Print per-task completion line above the spinner
-                    idx = entry["task_index"]
-                    label = task_labels[idx] if idx < len(task_labels) else f"Task {idx}"
-                    dur = entry.get("duration_seconds", 0)
-                    status = entry.get("status", "?")
-                    icon = "✓" if status == "completed" else "✗"
+                    # Legacy spinner fallback: print/update batch progress only
+                    # when rich subagent display is not active.
                     remaining = n_tasks - completed_count
-                    completion_line = f"{icon} [{idx+1}/{n_tasks}] {label}  ({dur}s)"
-                    if spinner_ref:
-                        try:
-                            spinner_ref.print_above(completion_line)
-                        except Exception:
+                    if display_manager is None:
+                        idx = entry["task_index"]
+                        label = task_labels[idx] if idx < len(task_labels) else f"Task {idx}"
+                        dur = entry.get("duration_seconds", 0)
+                        status = entry.get("status", "?")
+                        icon = "✓" if status == "completed" else "✗"
+                        completion_line = f"{icon} [{idx+1}/{n_tasks}] {label}  ({dur}s)"
+                        if spinner_ref:
+                            try:
+                                spinner_ref.print_above(completion_line)
+                            except Exception:
+                                print(f"  {completion_line}")
+                        else:
                             print(f"  {completion_line}")
-                    else:
-                        print(f"  {completion_line}")
 
                     # Update spinner text to show remaining count
-                    if spinner_ref and remaining > 0:
+                    if display_manager is None and spinner_ref and remaining > 0:
                         try:
                             spinner_ref.update_text(f"🔀 {remaining} task{'s' if remaining != 1 else ''} remaining")
                         except Exception as e:
@@ -959,6 +964,8 @@ def delegate_task(
                 display_manager.render(clear=False)
             except Exception as e:
                 logger.debug("Display manager cleanup failed: %s", e)
+        if parent_agent is not None and getattr(parent_agent, "_subagent_display_manager", None) is display_manager:
+            parent_agent._subagent_display_manager = None
 
     # Notify parent's memory provider of delegation outcomes
     if parent_agent and hasattr(parent_agent, '_memory_manager') and parent_agent._memory_manager:

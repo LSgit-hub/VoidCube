@@ -1,0 +1,76 @@
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from VoidCube_cli.ops import dashboard
+from VoidCube_cli import status as cli_status
+
+
+class _FakeUrlopenResponse:
+    def __init__(self, payload):
+        self._payload = payload
+        self.status = 200
+
+    def read(self):
+        return json.dumps(self._payload).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        del exc_type, exc, tb
+        return False
+
+
+def test_dashboard_agent_segment_includes_subagent_summary():
+    rendered = dashboard._format_segment_line(
+        {"key": "agent", "icon": "🤖", "name": "API-A"},
+        {
+            "agent": {
+                "scene": "executing",
+                "reachable": True,
+                "scene_task_id": "learn-12345678",
+                "subagent_foreground_count": 2,
+                "subagent_background_count": 1,
+                "subagent_focus_tool": "read_file",
+            }
+        },
+    )
+
+    assert "API-A: executing" in rendered
+    assert "task learn-12" in rendered
+    assert "SA 2+1" in rendered
+    assert "read_file" in rendered
+
+
+def test_status_scene_bar_includes_subagent_summary(monkeypatch, capsys):
+    payload = {
+        "scenes": {
+            "supervisor": {"scene": "idle", "reachable": True},
+            "agent": {
+                "scene": "executing",
+                "reachable": True,
+                "scene_task_id": "learn-12345678",
+                "subagent_foreground_count": 2,
+                "subagent_background_count": 1,
+                "subagent_focus_preview": "scan workspace",
+            },
+            "executor": {"scene": "idle", "reachable": True},
+        }
+    }
+
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda request, timeout=0: _FakeUrlopenResponse(payload),
+    )
+
+    cli_status._print_three_segment_scene_bar()
+
+    output = capsys.readouterr().out
+    assert "🤖 API-A: executing" in output
+    assert "SA 2+1" in output
+    assert "scan workspace" in output

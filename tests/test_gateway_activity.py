@@ -354,6 +354,12 @@ def test_gateway_agent_scene_touch_updates_scene_cache_and_prefers_cli_agent():
                 "scene": "learning",
                 "task_id": "learn-1",
                 "execution_kind": "self_learning",
+                "subagent_foreground_count": 2,
+                "subagent_background_count": 1,
+                "subagent_total_count": 3,
+                "subagent_focus_task_id": "delegate-1",
+                "subagent_focus_tool": "read_file",
+                "subagent_focus_preview": "read_file",
             },
         },
     )
@@ -363,12 +369,18 @@ def test_gateway_agent_scene_touch_updates_scene_cache_and_prefers_cli_agent():
     assert scenes["agent"]["scene"] == "learning"
     assert scenes["agent"]["scene_task_id"] == "learn-1"
     assert scenes["agent"]["source_service"] == "cli_agent"
+    assert scenes["agent"]["subagent_foreground_count"] == 2
+    assert scenes["agent"]["subagent_background_count"] == 1
+    assert scenes["agent"]["subagent_focus_tool"] == "read_file"
 
     health = client.get("/").json()
     active_cli = health["active_cli_executor"]
     assert active_cli["session_id"] == "cli-session-1"
     assert active_cli["is_active_cli_executor"] is True
     assert active_cli["scene"] == "learning"
+    assert active_cli["subagent_foreground_count"] == 2
+    assert active_cli["subagent_background_count"] == 1
+    assert active_cli["subagent_focus_preview"] == "read_file"
     assert active_cli["lease_status"] == "healthy"
     assert active_cli["is_stale"] is False
 

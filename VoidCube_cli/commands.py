@@ -47,6 +47,7 @@ class CommandDef:
     cli_only: bool = False             # only available in CLI
     gateway_only: bool = False         # only available in gateway/messaging
     gateway_config_gate: str | None = None  # config dotpath; when truthy, overrides cli_only for gateway
+    defer_subcommands_until_prefix: bool = False  # hide default subcommand suggestions until user starts typing one
     
     def get_description(self) -> str:
         """Get translated description."""
@@ -84,6 +85,10 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("retry", "重试上一条消息", "会话管理"),
     CommandDef("undo", "撤销上一轮对话", "会话管理"),
     CommandDef("status", "显示会话状态", "会话管理"),
+    CommandDef("tasks", "显示当前子代理观测状态（高级调试）", "会话管理",
+               cli_only=True,
+               subcommands=("bg", "fg"),
+               defer_subcommands_until_prefix=True),
     CommandDef("resume", "恢复之前的会话", "会话管理",
                args_hint="[name]", aliases=("r",)),
 
@@ -663,6 +668,11 @@ class SlashCommandCompleter(Completer):
         except Exception:
             return True
 
+    @staticmethod
+    def _defer_subcommands(base_cmd: str) -> bool:
+        cmd = resolve_command(base_cmd)
+        return bool(cmd and cmd.defer_subcommands_until_prefix)
+
     def _iter_skill_commands(self) -> Mapping[str, dict[str, Any]]:
         if self._skill_commands_provider is None:
             return {}
@@ -940,6 +950,8 @@ class SlashCommandCompleter(Completer):
 
             # Static subcommand completions
             if " " not in sub_text and base_cmd in SUBCOMMANDS and self._command_allowed(base_cmd):
+                if not sub_text and self._defer_subcommands(base_cmd):
+                    return
                 for sub in SUBCOMMANDS[base_cmd]:
                     if sub.startswith(sub_lower) and sub != sub_lower:
                         yield Completion(
@@ -1033,6 +1045,8 @@ class SlashCommandAutoSuggest(AutoSuggest):
             return None
         if base_cmd in SUBCOMMANDS and SUBCOMMANDS[base_cmd]:
             if " " not in sub_text:
+                if not sub_text and self._completer is not None and self._completer._defer_subcommands(base_cmd):
+                    return None
                 for sub in SUBCOMMANDS[base_cmd]:
                     if sub.startswith(sub_lower) and sub != sub_lower:
                         return Suggestion(sub[len(sub_text):])

@@ -851,6 +851,7 @@ def _push_cli_agent_scene(
     session_id: str | None = None,
     task_id: str | None = None,
     execution_kind: str | None = None,
+    subagent_summary: Dict[str, Any] | None = None,
 ) -> None:
     """Best-effort: report the current CLI AUTO executor scene to Gateway."""
     import json as _json
@@ -866,6 +867,26 @@ def _push_cli_agent_scene(
             metadata["task_id"] = task_id
         if execution_kind:
             metadata["execution_kind"] = execution_kind
+        if isinstance(subagent_summary, dict):
+            foreground_count = max(0, int(subagent_summary.get("foreground_count") or 0))
+            background_count = max(0, int(subagent_summary.get("background_count") or 0))
+            total_count = max(
+                foreground_count + background_count,
+                int(subagent_summary.get("total_count") or 0),
+            )
+            metadata["subagent_foreground_count"] = foreground_count
+            metadata["subagent_background_count"] = background_count
+            metadata["subagent_total_count"] = total_count
+
+            focus_task_id = str(subagent_summary.get("focus_task_id") or "").strip()
+            focus_tool = str(subagent_summary.get("focus_tool") or "").strip()
+            focus_preview = str(subagent_summary.get("focus_preview") or "").strip()
+            if focus_task_id:
+                metadata["subagent_focus_task_id"] = focus_task_id
+            if focus_tool:
+                metadata["subagent_focus_tool"] = focus_tool
+            if focus_preview:
+                metadata["subagent_focus_preview"] = focus_preview
         payload = _json.dumps(
             {
                 "activity_kind": "agent_scene",
@@ -2000,6 +2021,7 @@ class VoidcubeCLI:
 
         # Background task tracking: {task_id: threading.Thread}
         self._background_tasks: Dict[str, threading.Thread] = {}
+        self._background_task_info: Dict[str, Dict[str, Any]] = {}
         self._background_task_counter = 0
         self._last_gateway_presence_refresh_at: float = 0.0
         self._gateway_presence_refresh_interval_seconds: float = 30.0
@@ -2062,6 +2084,7 @@ class VoidcubeCLI:
             "session_total_tokens": 0,
             "session_api_calls": 0,
             "compressions": 0,
+            "subagent": self._get_subagent_observability_snapshot(),
         }
 
         if not agent:
@@ -2086,6 +2109,93 @@ class VoidcubeCLI:
             if context_length:
                 snapshot["context_percent"] = max(0, min(100, round((context_tokens / context_length) * 100)))
 
+        return snapshot
+
+    @staticmethod
+    def _normalize_subagent_status(task: Any) -> str:
+        status = getattr(task, "status", "")
+        value = getattr(status, "value", status)
+        return str(value or "").strip().lower()
+
+    @classmethod
+    def _truncate_subagent_preview(cls, text: str, limit: int) -> str:
+        value = " ".join(str(text or "").strip().split())
+        if len(value) <= limit:
+            return value
+        if limit <= 3:
+            return value[:limit]
+        return value[: limit - 3] + "..."
+
+    def _get_subagent_observability_snapshot(self) -> Dict[str, Any]:
+        snapshot = {
+            "active": False,
+            "foreground_count": 0,
+            "background_count": 0,
+            "total_count": 0,
+            "counts_label": "0",
+            "focus_task_id": "",
+            "focus_tool": "",
+            "focus_preview": "",
+            "compact_preview": "",
+        }
+        agent = getattr(self, "agent", None)
+        manager = getattr(agent, "_subagent_display_manager", None) if agent else None
+        if manager is None:
+            return snapshot
+
+        try:
+            foreground_tasks = list(manager.list_tasks(include_background=False) or [])
+            background_tasks = list(manager.list_background_tasks() or [])
+        except Exception:
+            return snapshot
+
+        terminal_statuses = {"completed", "failed", "interrupted", "cancelled"}
+
+        def _is_active(task: Any) -> bool:
+            return self._normalize_subagent_status(task) not in terminal_statuses
+
+        active_foreground = [task for task in foreground_tasks if _is_active(task)]
+        active_background = [task for task in background_tasks if _is_active(task)]
+        if not active_foreground and not active_background:
+            return snapshot
+
+        active_foreground.sort(key=lambda task: getattr(task, "task_index", 0))
+        active_background.sort(key=lambda task: getattr(task, "task_index", 0))
+        focus_task = active_foreground[0] if active_foreground else active_background[0]
+
+        focus_task_id = str(getattr(focus_task, "task_id", "") or "").strip()
+        focus_tool = str(getattr(focus_task, "current_tool", "") or "").strip()
+        focus_preview_source = (
+            focus_tool
+            or str(getattr(focus_task, "current_tool_preview", "") or "").strip()
+            or str(getattr(focus_task, "current_thinking", "") or "").strip()
+            or str(getattr(focus_task, "goal_preview", "") or "").strip()
+            or str(getattr(focus_task, "goal", "") or "").strip()
+        )
+        focus_preview = self._truncate_subagent_preview(focus_preview_source, 32)
+        compact_preview = self._truncate_subagent_preview(focus_preview_source, 18)
+        foreground_count = len(active_foreground)
+        background_count = len(active_background)
+        total_count = foreground_count + background_count
+        counts_label = (
+            f"{foreground_count}+{background_count}"
+            if background_count > 0
+            else str(foreground_count)
+        )
+
+        snapshot.update(
+            {
+                "active": True,
+                "foreground_count": foreground_count,
+                "background_count": background_count,
+                "total_count": total_count,
+                "counts_label": counts_label,
+                "focus_task_id": focus_task_id,
+                "focus_tool": focus_tool,
+                "focus_preview": focus_preview,
+                "compact_preview": compact_preview,
+            }
+        )
         return snapshot
 
     @staticmethod
@@ -3053,6 +3163,13 @@ class VoidcubeCLI:
             if task_id:
                 return "learning", task_id, execution_kind
             return "executing", None, None
+        if (
+            getattr(self, "_agent_running", False)
+            or getattr(self, "_command_running", False)
+            or getattr(self, "_stream_started", False)
+            or self._get_subagent_observability_snapshot().get("active")
+        ):
+            return "executing", None, None
         return "idle", None, None
 
     def _refresh_gateway_cli_presence(self, *, force: bool = False) -> None:
@@ -3074,11 +3191,13 @@ class VoidcubeCLI:
         registered = _register_with_gateway(session_id, model, provider)
 
         scene, task_id, execution_kind = self._current_gateway_presence_snapshot()
+        subagent_summary = self._get_subagent_observability_snapshot()
         scene_pushed = _push_cli_agent_scene(
             scene,
             session_id=session_id,
             task_id=task_id,
             execution_kind=execution_kind,
+            subagent_summary=subagent_summary,
         )
         if registered and scene_pushed:
             self._last_gateway_presence_refresh_at = now
@@ -3400,6 +3519,20 @@ class VoidcubeCLI:
                 icon = "[x]" if ascii_mode else "⚙️"
                 frags.append(("bg:#1a1a2e #6B7280", icon))
                 frags.append(("bg:#1a1a2e #6B7280", "离线"))
+        except Exception:
+            pass
+
+        try:
+            subagent = self._get_subagent_observability_snapshot()
+            if subagent.get("active"):
+                if frags:
+                    frags.append(("bg:#1a1a2e #4B5563", " · "))
+                icon = "[SA]" if ascii_mode else "🧩"
+                frags.append(("bg:#1a1a2e #F59E0B", icon))
+                frags.append(("bg:#1a1a2e #F59E0B bold", f" {subagent.get('counts_label', '0')}"))
+                compact_preview = str(subagent.get("compact_preview") or "").strip()
+                if compact_preview:
+                    frags.append(("bg:#1a1a2e #94A3B8", f" {compact_preview}"))
         except Exception:
             pass
 
@@ -5145,6 +5278,7 @@ class VoidcubeCLI:
         provider = getattr(self, "provider", None) or "unknown"
         model = getattr(self, "model", None) or "(unknown)"
         is_running = bool(getattr(self, "_agent_running", False))
+        subagent = self._get_subagent_observability_snapshot()
 
         lines = [
             "Voidcube CLI Status",
@@ -5161,6 +5295,17 @@ class VoidcubeCLI:
             f"Tokens: {total_tokens:,}",
             f"Agent Running: {'Yes' if is_running else 'No'}",
         ])
+        if subagent.get("active"):
+            lines.append(
+                "Subagents: "
+                f"{subagent.get('foreground_count', 0)} foreground"
+                f", {subagent.get('background_count', 0)} background"
+            )
+            focus_preview = str(subagent.get("focus_preview") or "").strip()
+            if focus_preview:
+                lines.append(f"Subagent Focus: {focus_preview}")
+        else:
+            lines.append("Subagents: idle")
 
         supervisor_status = self._fetch_supervisor_status_snapshot()
         if supervisor_status:
@@ -7354,6 +7499,8 @@ class VoidcubeCLI:
             self._handle_mcp_command(cmd_original)
         elif canonical == "status":
             self._show_session_status()
+        elif canonical == "tasks":
+            self._handle_tasks_command(cmd_original)
         elif canonical == "statusbar":
             self._status_bar_visible = not self._status_bar_visible
             state = "visible" if self._status_bar_visible else "hidden"
@@ -7918,6 +8065,11 @@ class VoidcubeCLI:
         _cprint(f"  🔄 Background task #{task_num} started: \"{prompt[:60]}{'...' if len(prompt) > 60 else ''}\"")
         _cprint(f"  Task ID: {task_id}")
         _cprint("  You can continue chatting — results will appear when done.\n")
+        self._background_task_info[task_id] = {
+            "task_num": task_num,
+            "prompt_preview": prompt[:60] + ("..." if len(prompt) > 60 else ""),
+            "started_at": time.time(),
+        }
 
         turn_route = self._resolve_turn_agent_config(prompt)
 
@@ -8022,6 +8174,7 @@ class VoidcubeCLI:
                 _cprint(f"  ❌ Background task #{task_num} failed: {e}")
             finally:
                 self._background_tasks.pop(task_id, None)
+                self._background_task_info.pop(task_id, None)
                 # Clear spinner only if no foreground agent owns it
                 if not self._agent_running:
                     self._spinner_text = ""
@@ -8031,6 +8184,97 @@ class VoidcubeCLI:
         thread = threading.Thread(target=run_background, daemon=True, name=f"bg-task-{task_id}")
         self._background_tasks[task_id] = thread
         thread.start()
+
+    def _render_background_tasks_summary(self) -> str:
+        """Return a compact summary of CLI background threads."""
+        lines: list[str] = []
+        running: list[tuple[str, threading.Thread, Dict[str, Any]]] = []
+        for task_id, thread in self._background_tasks.items():
+            if not thread.is_alive():
+                continue
+            info = self._background_task_info.get(task_id, {})
+            running.append((task_id, thread, info))
+
+        if not running:
+            return "No active subagent or background tasks."
+
+        lines.append("CLI Background Tasks")
+        lines.append("")
+        for task_id, thread, info in running:
+            preview = str(info.get("prompt_preview") or task_id)
+            task_num = info.get("task_num")
+            started_at = float(info.get("started_at") or 0.0)
+            elapsed = max(0.0, time.time() - started_at) if started_at else 0.0
+            label = f"#{task_num}" if task_num else task_id
+            lines.append(f"  ● {label} {preview}")
+            lines.append(f"    id={task_id} thread={thread.name} elapsed={elapsed:.1f}s")
+        return "\n".join(lines)
+
+    def _handle_tasks_command(self, cmd: str = "/tasks") -> None:
+        """Show or manage active subagent tasks."""
+        parts = cmd.strip().split()
+        action = parts[1].lower() if len(parts) >= 2 else "show"
+        task_ref = parts[2].strip() if len(parts) >= 3 else ""
+        agent = getattr(self, "agent", None)
+        display_manager = getattr(agent, "_subagent_display_manager", None) if agent else None
+        if action in ("show", "list"):
+            if display_manager is not None:
+                try:
+                    panel = display_manager.render_tasks_command()
+                except Exception as exc:
+                    _cprint(f"  Failed to render subagent tasks: {exc}")
+                    return
+                ChatConsole().print(_rich_text_from_ansi(panel))
+                return
+
+            summary = self._render_background_tasks_summary()
+            ChatConsole().print(_rich_text_from_ansi(summary))
+            return
+
+        if action not in ("bg", "background", "fg", "foreground"):
+            _cprint("  Usage: /tasks")
+            _cprint("  API-A manages subagents automatically; bg/fg are advanced debug actions.")
+            _cprint("         /tasks bg <task-id|index>")
+            _cprint("         /tasks fg <task-id|index>")
+            return
+
+        if display_manager is None:
+            _cprint("  No active subagent display is available right now.")
+            return
+
+        if not task_ref:
+            _cprint("  API-A manages subagents automatically; specify a task only for advanced debug actions.")
+            _cprint("         /tasks bg <task-id|index>")
+            _cprint("         /tasks fg <task-id|index>")
+            return
+
+        task = display_manager.resolve_task_ref(task_ref)
+        if task is None:
+            _cprint(f"  Unknown subagent task: {task_ref}")
+            return
+
+        if action in ("bg", "background"):
+            try:
+                moved = display_manager.send_to_background(task.task_id)
+            except Exception as exc:
+                _cprint(f"  Failed to send subagent task to background: {exc}")
+                return
+            if not moved:
+                _cprint(f"  Could not background subagent task: {task_ref}")
+                return
+        else:
+            try:
+                moved = display_manager.bring_to_foreground(task.task_id)
+            except Exception as exc:
+                _cprint(f"  Failed to bring subagent task to foreground: {exc}")
+                return
+            if not moved:
+                _cprint(f"  Could not foreground subagent task: {task_ref}")
+                return
+
+        if self._app:
+            self._invalidate(min_interval=0)
+            return
 
     def _handle_btw_command(self, cmd: str):
         """Handle /btw <question> — ephemeral side question using session context.
@@ -12033,15 +12277,27 @@ class VoidcubeCLI:
             import time as _time
 
             last_idle_refresh = 0.0
+            last_presence_refresh = 0.0
             while not self._should_exit:
                 if not self._app:
                     _time.sleep(0.1)
                     continue
+                now = _time.monotonic()
+                if (
+                    now - last_presence_refresh >= 5.0
+                    and (
+                        self._agent_running
+                        or getattr(self, "_command_running", False)
+                        or getattr(self, "_stream_started", False)
+                        or self._get_subagent_observability_snapshot().get("active")
+                    )
+                ):
+                    self._refresh_gateway_cli_presence(force=True)
+                    last_presence_refresh = now
                 if self._command_running:
                     self._invalidate(min_interval=0.1)
                     _time.sleep(0.1)
                 else:
-                    now = _time.monotonic()
                     if now - last_idle_refresh >= 1.0:
                         last_idle_refresh = now
                         self._invalidate(min_interval=1.0)

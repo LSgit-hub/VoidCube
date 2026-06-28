@@ -1,0 +1,58 @@
+from __future__ import annotations
+
+from agent.subagent_display import SubagentDisplayManager, SubagentStatus
+
+
+def test_resolve_task_ref_accepts_task_id_and_one_based_index():
+    manager = SubagentDisplayManager(auto_refresh=False)
+    task = manager.create_task("delegate-100", "Inspect the parser", task_index=0)
+
+    assert manager.resolve_task_ref("delegate-100") is task
+    assert manager.resolve_task_ref("1") is task
+    assert manager.resolve_task_ref("99") is None
+
+
+def test_render_tasks_command_separates_foreground_and_background_sections():
+    manager = SubagentDisplayManager(auto_refresh=False)
+    fg = manager.create_task("delegate-fg", "Foreground task", task_index=0)
+    bg = manager.create_task("delegate-bg", "Background task", task_index=1)
+    fg.status = SubagentStatus.THINKING
+    bg.status = SubagentStatus.TOOL_CALL
+    manager.send_to_background("delegate-bg")
+
+    panel = manager.render_tasks_command()
+
+    assert "Foreground" in panel
+    assert "Background" in panel
+    assert "delegate-fg" in panel
+    assert "delegate-bg" in panel
+    assert "API-A will manage subagents automatically" in panel
+    assert "Advanced debug" in panel
+
+
+def test_get_active_count_excludes_background_tasks():
+    manager = SubagentDisplayManager(auto_refresh=False)
+    fg = manager.create_task("delegate-fg", "Foreground task", task_index=0)
+    bg = manager.create_task("delegate-bg", "Background task", task_index=1)
+    fg.status = SubagentStatus.THINKING
+    bg.status = SubagentStatus.TOOL_CALL
+    manager.send_to_background("delegate-bg")
+
+    assert manager.get_active_count() == 1
+
+
+def test_background_foreground_notifications_use_advanced_debug_wording():
+    rendered: list[str] = []
+    manager = SubagentDisplayManager(auto_refresh=False)
+    manager.print_fn = lambda *args, **kwargs: rendered.append(str(args[0] if args else ""))
+
+    task = manager.create_task("delegate-fg", "Foreground task", task_index=0)
+    task.status = SubagentStatus.THINKING
+
+    assert manager.send_to_background("delegate-fg") is True
+    assert any("Advanced debug action applied" in line for line in rendered)
+    assert any("use /tasks to observe it" in line for line in rendered)
+
+    rendered.clear()
+    assert manager.bring_to_foreground("delegate-fg") is True
+    assert any("Advanced debug action applied" in line for line in rendered)

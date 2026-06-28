@@ -244,11 +244,11 @@ class SubagentDisplayManager:
     
     def _move_cursor_up(self, lines: int) -> None:
         """Move cursor up n lines."""
-        self._safe_print(f"\033[{lines}A")
+        self.print_fn(f"\033[{lines}A")
     
     def _clear_line(self) -> None:
         """Clear current line."""
-        self._safe_print("\033[2K\r", end="")
+        self.print_fn("\033[2K\r", end="")
     
     def _get_terminal_width(self) -> int:
         """Get terminal width."""
@@ -303,12 +303,32 @@ class SubagentDisplayManager:
     def list_background_tasks(self) -> List[SubagentTask]:
         """List all background tasks."""
         return list(self._background_tasks.values())
+
+    def resolve_task_ref(self, task_ref: str) -> Optional[SubagentTask]:
+        """Resolve a task by task_id or 1-based task index."""
+        ref = str(task_ref or "").strip()
+        if not ref:
+            return None
+
+        task = self._tasks.get(ref)
+        if task is not None:
+            return task
+
+        try:
+            idx = int(ref)
+        except ValueError:
+            return None
+
+        for task in self._tasks.values():
+            if task.task_index + 1 == idx:
+                return task
+        return None
     
     def get_active_count(self) -> int:
         """Get count of currently running tasks."""
         return sum(
             1 for t in self._tasks.values()
-            if t.status in (SubagentStatus.RUNNING, SubagentStatus.THINKING, 
+            if not t.is_background and t.status in (SubagentStatus.RUNNING, SubagentStatus.THINKING,
                           SubagentStatus.TOOL_CALL, SubagentStatus.STARTING)
         )
     
@@ -490,12 +510,14 @@ class SubagentDisplayManager:
         """Render the current state of all tasks."""
         with self._render_lock:
             with self._lock:
-                tasks = list(self._tasks.values())
+                tasks = self.list_tasks(include_background=False)
                 active_tasks = [t for t in tasks if t.status not in 
                               (SubagentStatus.COMPLETED, SubagentStatus.FAILED, 
                                SubagentStatus.INTERRUPTED, SubagentStatus.CANCELLED)]
             
             if not tasks:
+                if clear and self._last_render_lines > 0:
+                    self.clear()
                 return
             
             # Clear previous output
@@ -720,22 +742,33 @@ class SubagentDisplayManager:
         """
         lines = []
         lines.append(f"\n{Colors.BOLD}{'=' * 60}{Colors.RESET}")
-        lines.append(f"{Colors.BOLD}Background Tasks{Colors.RESET}\n")
-        
-        tasks = self.list_tasks(include_background=True)
-        
-        if not tasks:
-            lines.append(f"{Colors.DIM}  No background tasks{Colors.RESET}")
+        lines.append(f"{Colors.BOLD}Subagent Tasks{Colors.RESET}\n")
+
+        foreground_tasks = self.list_tasks(include_background=False)
+        background_tasks = self.list_background_tasks()
+
+        if not foreground_tasks and not background_tasks:
+            lines.append(f"{Colors.DIM}  No active subagent tasks{Colors.RESET}")
         else:
-            for task in tasks:
-                lines.append(self._render_task_summary_line(task))
+            if foreground_tasks:
+                lines.append(f"{Colors.INFO}Foreground{Colors.RESET}")
+                for task in foreground_tasks:
+                    lines.append(self._render_task_summary_line(task))
+            if background_tasks:
+                if foreground_tasks:
+                    lines.append("")
+                lines.append(f"{Colors.INFO}Background{Colors.RESET}")
+                for task in sorted(background_tasks, key=lambda t: t.task_index):
+                    lines.append(self._render_task_summary_line(task))
         
         lines.append(f"\n{Colors.BOLD}{'=' * 60}{Colors.RESET}\n")
         
         # Tips
-        lines.append(f"{Colors.DIM}Tips:{Colors.RESET}")
-        lines.append(f"  {Colors.INFO}Ctrl+B{Colors.RESET} - Send current task to background")
-        lines.append(f"  {Colors.INFO}/tasks{Colors.RESET}   - Show this panel")
+        lines.append(f"{Colors.DIM}Notes:{Colors.RESET}")
+        lines.append(f"  API-A will manage subagents automatically during multi-step work.")
+        lines.append(f"  {Colors.INFO}/tasks{Colors.RESET}        - Observe current subagent state")
+        lines.append(f"  {Colors.DIM}/tasks bg <task>{Colors.RESET} - Advanced debug: move a foreground task to background")
+        lines.append(f"  {Colors.DIM}/tasks fg <task>{Colors.RESET} - Advanced debug: bring a background task back")
         
         return "\n".join(lines)
     
@@ -755,8 +788,10 @@ class SubagentDisplayManager:
         
         # Status line
         prefix = f"[{task.task_index + 1}]" if task.task_index >= 0 else ""
+        lane = "BG" if task.is_background else "FG"
         line = f"  {status_color}{status_icon}{Colors.RESET} {prefix} {task.goal_preview}"
         line += f"{Colors.DIM}{duration_str}{Colors.RESET}"
+        line += f" {Colors.DIM}({lane} id={task.task_id}){Colors.RESET}"
         
         # Additional info for running tasks
         if task.status == SubagentStatus.TOOL_CALL and task.current_tool:
@@ -772,15 +807,25 @@ class SubagentDisplayManager:
     def send_to_background(self, task_id: str) -> bool:
         """Move a running task to background."""
         task = self._tasks.get(task_id)
-        if not task or task.is_background:
+        if (
+            not task
+            or task.is_background
+            or task.status in (
+                SubagentStatus.COMPLETED,
+                SubagentStatus.FAILED,
+                SubagentStatus.INTERRUPTED,
+                SubagentStatus.CANCELLED,
+            )
+        ):
             return False
         
         with self._lock:
             task.is_background = True
             self._background_tasks[task_id] = task
+        self.clear()
         
-        self.print_fn(f"\n{Colors.INFO}→ Sent to background: {task.goal_preview}{Colors.RESET}")
-        self.print_fn(f"{Colors.DIM}  Use /tasks to view background tasks{Colors.RESET}")
+        self.print_fn(f"\n{Colors.INFO}→ Advanced debug action applied: {task.goal_preview}{Colors.RESET}")
+        self.print_fn(f"{Colors.DIM}  Task is now running in the background; use /tasks to observe it{Colors.RESET}")
         
         return True
     
@@ -794,8 +839,9 @@ class SubagentDisplayManager:
             task.is_background = False
             if task_id in self._background_tasks:
                 del self._background_tasks[task_id]
+        self.render(clear=False)
         
-        self.print_fn(f"\n{Colors.INFO}← Brought to foreground: {task.goal_preview}{Colors.RESET}")
+        self.print_fn(f"\n{Colors.INFO}← Advanced debug action applied: {task.goal_preview}{Colors.RESET}")
         
         return True
     
