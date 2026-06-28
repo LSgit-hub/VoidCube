@@ -1,16 +1,10 @@
 # VoidCube CLI
 
-<br />
-
-> **大模型是智力，记忆是灵魂，Agent是躯体** —— VoidCube 三元架构理论
-
-VoidCube CLI 是一款基于**三元架构**设计的 AI 智能体系统，实现了论文《[大模型是智力，记忆是灵魂，Agent是躯体 —— 论 AI 个体化的三元架构与自进化闭环](papers/the_tripartite_model_of_ai_individuation.md)》中的核心理论。
+ **大模型是智力，记忆是灵魂，Agent是躯体** —— VoidCube 三元架构理论
 
 ***
 
 ## 项目简介
-
-VoidCube Agent 是一款专为服务器运维和部署场景设计的 AI 智能体，采用**三元架构**设计：
 
 ### 三元架构模型
 
@@ -476,61 +470,30 @@ VoidCube 支持多种命令执行后端，通过 `TERMINAL_ENV` 环境变量切�
 
 ## 项目结构
 
+详细版请查看 [`docs/项目文件架构说明.md`](docs/项目文件架构说明.md)。
+
 ```
-voidcub-CLI/
-├── cli.py                  # CLI 入口（voidcube / vc 命令）
-├── run_agent.py            # AIAgent 核心编排器
-├── model_tools.py          # 工具注册编排
-├── toolsets.py             # 工具集定义
-├── VoidCube_constants.py   # 全局常量
-├── VoidCube_state.py       # SQLite 状态存储（FTS5 全文搜索）
-├── utils.py                # 共享工具函数
-├── .env.example            # 配置文件示例（安全，可提交）
-├── pyproject.toml          # 项目配置
-├── papers/                 # 理论论文
-│   └── the_tripartite_model_of_ai_individuation.md  # 三元架构理论
-├── agent/                  # Agent 内部模块
-│   ├── anthropic_adapter.py    # Anthropic API 适配
-│   ├── context_compressor.py   # 上下文自动压缩
-│   ├── smart_model_routing.py  # 智能模型路由
-│   ├── memory_manager.py       # 记忆管理
-│   ├── prompt_builder.py       # 系统提示构建
-│   ├── memai/                  # MemAI 记忆系统（三元架构-灵魂）
-│   │   ├── pipeline.py           # 记忆处理管线
-│   │   ├── repository.py         # 记忆仓库
-│   │   ├── query.py              # 记忆查询引擎
-│   │   └── schema.py             # 记忆数据模型
-│   └── ...
-├── tools/                  # 工具实现
-│   ├── terminal_tool.py        # 多环境终端执行
-│   ├── file_tools.py           # 文件读写操作
-│   ├── web_tools.py            # Web 搜索/提取
-│   ├── browser_tool.py         # 浏览器自动化
-│   ├── ops_register.py         # 运维工具注册
-│   └── ...
-├── VoidCube_cli/           # CLI 子包
-│   ├── config.py               # 配置管理
-│   ├── models.py               # 模型定义与元数据
-│   ├── providers.py            # Provider 定义（100+）
-│   ├── plugins.py              # 插件系统
-│   └── locales/                # 国际化（zh_CN / en_US）
-├── presets/                # 部署预设模板
-│   ├── lnmp.yaml
-│   ├── docker-web.yaml
-│   ├── security-baseline.yaml
-│   ├── k8s-node.yaml
-│   ├── monitoring-stack.yaml
-│   └── ...
-├── plugins/                # 插件（记忆提供者等）
-│   └── memory/             
-│       ├── mem/                # MemAI 插件
-│       └── hindsight/          # Hindsight 插件
-└── skills/                 # 技能包（DevOps/GitHub/MLOps）
-    ├── devops/
-    ├── github/
-    ├── mlops/
-    └── mem/
-        └── healer/              # (已废弃 - 请使用 systems/ 三元网关架构)
+VoidCube/
+├── voidcube.py             # 统一入口；自动拉起守护服务后委托完整 CLI
+├── cli.py                  # 交互式终端会话入口
+├── run_agent.py            # AIAgent 主编排器
+├── pyproject.toml          # 打包配置，暴露 voidcube / vc 命令
+├── config.yaml             # 项目默认配置
+├── docs/                   # 架构与改造文档
+│   ├── voidcube架构基线.md
+│   └── 项目文件架构说明.md
+├── VoidCube_core/          # 底层共享能力：常量、日志、状态、i18n
+├── VoidCube_cli/           # CLI 子系统：命令分发、配置、Provider、UI、ops
+├── agent/                  # Agent 内部能力：prompt、压缩、记忆、调度、展示
+├── tools/                  # 工具层：注册、终端、文件、Web、浏览器、MCP、delegate
+├── systems/                # 服务化母体：gateway、memory、supervisor、execution
+├── Mem/                    # 独立长期记忆子项目（src/tests/docs/benchmarks）
+├── plugins/                # 插件入口，当前以 memory 插件为主
+├── presets/                # 运维预设模板
+├── skills/                 # 技能包与引用资料
+├── tests/                  # 主仓测试
+├── containers/             # 容器相关文件
+└── cache/logs/sessions/... # 运行态目录
 ```
 
 ***
@@ -543,4 +506,4 @@ MIT License
 
 欢迎提交 Issue 和 Pull Request！
 
-项目地址：https://gitee.com/LSgit-hub/voidcub-CLI
+项目地址：https://gitee.com/LSgit-hub/VoidCub

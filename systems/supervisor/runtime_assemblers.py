@@ -41,7 +41,8 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         supervisor.config.self_evolution_queue_path
         or (runtime_root / "self_evolution_queue.json")
     )
-    supervisor._endogenous_drive_engine = EndogenousDriveEngine()
+    supervisor._endogenous_drive_history_path = runtime_root / "endogenous_drive_history.json"
+    supervisor._endogenous_drive_engine = EndogenousDriveEngine(config=supervisor.config)
     supervisor._body_lifecycle_state_executor = BodyLifecycleExecutor(supervisor._body_registry)
     supervisor._probe_runner = ProbeRunner()
     supervisor._probe_executor = ProbeExecutor()

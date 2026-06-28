@@ -2004,7 +2004,7 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
         </section>
         <section class="queue-section">
           <div class="section-head">
-            <div class="section-label">内生驱动候选列表</div>
+            <div class="section-label">内生驱动治理投影列表</div>
           </div>
           <div class="queue-slot" id="candidateSlot"></div>
         </section>
@@ -2277,7 +2277,7 @@ function renderQueueLayout(layout, schedule) {
     empty.className = 'candidate-card empty';
     const text = document.createElement('div');
     text.className = 'queue-empty-text';
-    text.textContent = '当前没有待裁定任务';
+    text.textContent = '当前没有待治理投影';
     empty.append(text);
     els.candidateSlot.append(empty);
   } else {
@@ -2288,7 +2288,7 @@ function renderQueueLayout(layout, schedule) {
       head.className = 'candidate-card-head';
       const title = document.createElement('div');
       title.className = 'queue-card-title';
-      title.textContent = (candidate.title || '候选任务').substring(0, 60);
+      title.textContent = (candidate.title || '治理投影').substring(0, 60);
       const utility = document.createElement('div');
       utility.className = 'candidate-utility';
       utility.textContent = Math.round((candidate.utility || 0) * 100) + '%';
@@ -2302,7 +2302,7 @@ function renderQueueLayout(layout, schedule) {
       if (candidate.display_status) {
         parts.push(candidate.display_status);
       }
-      tags.textContent = parts.join(' · ') || '等待监督者 LM 裁定';
+      tags.textContent = parts.join(' · ') || '等待监督者治理';
       card.append(head, tags);
       els.candidateSlot.append(card);
     });
@@ -3001,7 +3001,7 @@ class SupervisorUIMixin:
             candidate_list.append(
                 {
                     **candidate,
-                    "display_status": "等待监督者 LM 裁定",
+                    "display_status": "等待监督者治理",
                 }
             )
             if candidate_key:
@@ -3271,7 +3271,7 @@ class SupervisorUIMixin:
                 )
             return (
                 "planning",
-                f"义子正在安排监督任务{error_note}",
+                f"义子正在安排治理事务{error_note}",
                 f"「{lp.get('title', '监督者任务')}」已进入监督者执行位，等待处理。",
             )
 
@@ -3290,8 +3290,8 @@ class SupervisorUIMixin:
             utility_pct = int((first.get("utility") or 0) * 100)
             return (
                 "drive",
-                f"义子发现值得做的事{error_note}",
-                f"「{first.get('title', '候选任务')}」从核心价值中浮现 [{value_tags}]，价值度 {utility_pct}%，等待治理审查。",
+                f"义子发现值得优先处理的事{error_note}",
+                f"「{first.get('title', '治理投影')}」从核心价值中浮现 [{value_tags}]，价值度 {utility_pct}%，等待治理审查。",
             )
 
         # 4. Memory maintenance queued

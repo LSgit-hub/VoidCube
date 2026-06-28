@@ -119,6 +119,10 @@ class Supervisor(
         self.app.add_api_route("/runtime/traces/{trace_id}", self.get_runtime_trace, methods=["GET"])
         self.app.add_api_route("/runtime/idle-window/evaluate", self.evaluate_idle_window, methods=["POST"])
         self.app.add_api_route("/runtime/endogenous-drive/evaluate", self.evaluate_endogenous_drive, methods=["POST"])
+        self.app.add_api_route("/runtime/endogenous-drive/events", self.get_endogenous_governance_events, methods=["GET"])
+        self.app.add_api_route("/runtime/endogenous-drive/self-regulation", self.get_endogenous_self_regulation, methods=["GET"])
+        self.app.add_api_route("/runtime/endogenous-drive/cognition", self.get_endogenous_cognition_state, methods=["GET"])
+        self.app.add_api_route("/runtime/endogenous-drive/state", self.get_endogenous_governance_state, methods=["GET"])
         self.app.add_api_route("/self-evolution/tasks", self.list_self_evolution_tasks, methods=["GET"])
         self.app.add_api_route("/self-evolution/tasks", self.plan_self_evolution_task, methods=["POST"])
         self.app.add_api_route(

@@ -1,8 +1,50 @@
 import os
+import json
 from typing import Optional
 from pydantic import BaseModel, Field
 
 from systems.supervisor.config_models import SupervisorConfig
+
+
+def _parse_string_list_env(raw: str) -> list[str]:
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+    except Exception:
+        pass
+    if "||" in text:
+        return [part.strip() for part in text.split("||") if part.strip()]
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def _apply_string_list_override(target: BaseModel, env_name: str, field_name: str) -> None:
+    values = _parse_string_list_env(os.getenv(env_name, ""))
+    if values:
+        setattr(target, field_name, values)
+
+
+def _apply_float_override(target: BaseModel, env_name: str, field_name: str) -> None:
+    raw = os.getenv(env_name, "").strip()
+    if not raw:
+        return
+    try:
+        setattr(target, field_name, float(raw))
+    except ValueError:
+        return
+
+
+def _apply_int_override(target: BaseModel, env_name: str, field_name: str) -> None:
+    raw = os.getenv(env_name, "").strip()
+    if not raw:
+        return
+    try:
+        setattr(target, field_name, int(raw))
+    except ValueError:
+        return
 
 
 class GatewayConfig(BaseModel):
@@ -120,6 +162,195 @@ def load_config_from_env() -> SystemConfig:
             config.supervisor.service_runtime.endogenous_drive_max_candidates,
         )
     )
+    config.supervisor.service_runtime.endogenous_drive_lm_task_generation_enabled = (
+        os.getenv(
+            "SUPERVISOR_ENDOGENOUS_DRIVE_LM_TASK_GENERATION_ENABLED",
+            str(config.supervisor.service_runtime.endogenous_drive_lm_task_generation_enabled),
+        ).strip().lower()
+        not in {"0", "false", "no", "off"}
+    )
+    config.supervisor.service_runtime.endogenous_drive_lm_task_max_candidates = int(
+        os.getenv(
+            "SUPERVISOR_ENDOGENOUS_DRIVE_LM_TASK_MAX_CANDIDATES",
+            config.supervisor.service_runtime.endogenous_drive_lm_task_max_candidates,
+        )
+    )
+    config.supervisor.service_runtime.endogenous_drive_lm_task_model_role = os.getenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_LM_TASK_MODEL_ROLE",
+        config.supervisor.service_runtime.endogenous_drive_lm_task_model_role,
+    )
+    cognition_charter = config.supervisor.service_runtime.endogenous_drive_cognition_charter
+    charter_core_mission = os.getenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CHARTER_CORE_MISSION",
+        "",
+    ).strip()
+    if charter_core_mission:
+        cognition_charter.core_mission = charter_core_mission
+    _apply_string_list_override(
+        cognition_charter,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CHARTER_SELF_MODEL_PRINCIPLES",
+        "self_model_principles",
+    )
+    _apply_string_list_override(
+        cognition_charter,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CHARTER_EVIDENCE_POLICY",
+        "evidence_policy",
+    )
+    _apply_string_list_override(
+        cognition_charter,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CHARTER_TASK_GENERATION_POLICY",
+        "task_generation_policy",
+    )
+    _apply_string_list_override(
+        cognition_charter,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CHARTER_SELF_ITERATION_GUARDRAILS",
+        "self_iteration_guardrails",
+    )
+    cognitive_control_policy = cognition_charter.cognitive_control_policy
+    posture_selection_mode = os.getenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_POSTURE_SELECTION_MODE",
+        "",
+    ).strip()
+    if posture_selection_mode:
+        cognitive_control_policy.posture_selection_mode = posture_selection_mode
+    active_posture_profile = os.getenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_ACTIVE_POSTURE_PROFILE",
+        "",
+    ).strip()
+    if active_posture_profile:
+        cognitive_control_policy.active_posture_profile = active_posture_profile
+    _apply_int_override(
+        cognitive_control_policy,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_AUTO_TRUTHFULNESS_CORRECTION_SIGNAL_THRESHOLD",
+        "auto_truthfulness_correction_signal_threshold",
+    )
+    _apply_int_override(
+        cognitive_control_policy,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_AUTO_EVIDENCE_REPAIR_SIGNAL_THRESHOLD",
+        "auto_evidence_repair_signal_threshold",
+    )
+    _apply_int_override(
+        cognitive_control_policy,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_AUTO_SERVICE_ACTIVE_SESSIONS_THRESHOLD",
+        "auto_service_active_sessions_threshold",
+    )
+    _apply_int_override(
+        cognitive_control_policy,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_AUTO_EXPLANATION_REPAIR_MISSING_THRESHOLD",
+        "auto_explanation_repair_missing_threshold",
+    )
+    _apply_int_override(
+        cognitive_control_policy,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_AUTO_EXPLANATION_REPAIR_INCONSISTENT_THRESHOLD",
+        "auto_explanation_repair_inconsistent_threshold",
+    )
+    _apply_float_override(
+        cognitive_control_policy,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_DRIFT_OBSERVE_TRIGGER_SCORE",
+        "drift_observe_trigger_score",
+    )
+    _apply_float_override(
+        cognitive_control_policy,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_DRIFT_STRONG_TRIGGER_SCORE",
+        "drift_strong_trigger_score",
+    )
+    _apply_float_override(
+        cognitive_control_policy,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_REFERENCE_ALIGNMENT_MIN_SCORE",
+        "reference_alignment_min_score",
+    )
+    _apply_float_override(
+        cognitive_control_policy,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_READINESS_MIN_SCORE",
+        "readiness_min_score",
+    )
+    _apply_int_override(
+        cognitive_control_policy,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_WEAK_ALIGNMENT_COUNT_TRIGGER",
+        "weak_alignment_count_trigger",
+    )
+    _apply_int_override(
+        cognitive_control_policy,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_WEAK_REFERENCE_COUNT_TRIGGER",
+        "weak_reference_count_trigger",
+    )
+    _apply_int_override(
+        cognitive_control_policy,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_WEAK_CHANNEL_COUNT_OBSERVE_CAP",
+        "weak_channel_count_observe_cap",
+    )
+    _apply_int_override(
+        cognitive_control_policy,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_SELF_GAP_OBSERVE_CAP",
+        "self_gap_observe_cap",
+    )
+    for env_name, field_name in (
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_DRIFT_OBSERVATION_BOOST", "drift_observation_boost"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_DRIFT_THROTTLE_BOOST", "drift_throttle_boost"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_DRIFT_LEARNING_SUPPRESSION_BOOST", "drift_learning_suppression_boost"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_CORRECTING_OBSERVATION_BOOST", "correcting_observation_boost"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_CORRECTING_THROTTLE_BOOST", "correcting_throttle_boost"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_CORRECTING_LEARNING_SUPPRESSION_BOOST", "correcting_learning_suppression_boost"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_LOW_ALIGNMENT_OBSERVATION_BOOST", "low_alignment_observation_boost"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_LOW_ALIGNMENT_THROTTLE_BOOST", "low_alignment_throttle_boost"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_WEAK_ALIGNMENT_OBSERVATION_BOOST", "weak_alignment_observation_boost"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_WEAK_ALIGNMENT_THROTTLE_BOOST", "weak_alignment_throttle_boost"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_WEAK_ALIGNMENT_LEARNING_SUPPRESSION_BOOST", "weak_alignment_learning_suppression_boost"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_PARTIAL_ALIGNMENT_OBSERVATION_BOOST", "partial_alignment_observation_boost"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_WEAK_REFERENCE_OBSERVATION_BOOST", "weak_reference_observation_boost"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_WEAK_REFERENCE_TRUTHFULNESS_BOOST", "weak_reference_truthfulness_boost"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_REPEATED_WEAK_REFERENCE_THROTTLE_BOOST", "repeated_weak_reference_throttle_boost"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_REPEATED_WEAK_REFERENCE_TRUTHFULNESS_BOOST", "repeated_weak_reference_truthfulness_boost"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_LOW_READINESS_OBSERVATION_BOOST", "low_readiness_observation_boost"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_LOW_READINESS_THROTTLE_BOOST", "low_readiness_throttle_boost"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_LOW_READINESS_LEARNING_SUPPRESSION_BOOST", "low_readiness_learning_suppression_boost"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_WEAK_CHANNEL_OBSERVATION_STEP", "weak_channel_observation_step"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_WEAK_CHANNEL_TRUTHFULNESS_STEP", "weak_channel_truthfulness_step"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_SELF_GAP_OBSERVATION_STEP", "self_gap_observation_step"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_SELF_GAP_THROTTLE_STEP", "self_gap_throttle_step"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_EXPLANATION_MISSING_OBSERVATION_BOOST", "explanation_missing_observation_boost"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_EXPLANATION_MISSING_THROTTLE_BOOST", "explanation_missing_throttle_boost"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_EXPLANATION_INCONSISTENT_OBSERVATION_BOOST", "explanation_inconsistent_observation_boost"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_EXPLANATION_INCONSISTENT_TRUTHFULNESS_BOOST", "explanation_inconsistent_truthfulness_boost"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTROL_EXPLANATION_INCONSISTENT_LEARNING_SUPPRESSION_BOOST", "explanation_inconsistent_learning_suppression_boost"),
+    ):
+        _apply_float_override(cognitive_control_policy, env_name, field_name)
+    core_mission_prompt = os.getenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_CORE_MISSION_PROMPT",
+        "",
+    ).strip()
+    if core_mission_prompt:
+        config.supervisor.service_runtime.endogenous_drive_core_mission_prompt = core_mission_prompt
+        cognition_charter.core_mission = core_mission_prompt
+    task_generation_principles = _parse_string_list_env(
+        os.getenv("SUPERVISOR_ENDOGENOUS_DRIVE_TASK_GENERATION_PRINCIPLES", "")
+    )
+    if task_generation_principles:
+        config.supervisor.service_runtime.endogenous_drive_task_generation_principles = (
+            task_generation_principles
+        )
+        cognition_charter.task_generation_policy = task_generation_principles
+    config.supervisor.service_runtime.endogenous_drive_external_research_enabled = (
+        os.getenv(
+            "SUPERVISOR_ENDOGENOUS_DRIVE_EXTERNAL_RESEARCH_ENABLED",
+            str(config.supervisor.service_runtime.endogenous_drive_external_research_enabled),
+        ).strip().lower()
+        not in {"0", "false", "no", "off"}
+    )
+    external_research_entries = _parse_string_list_env(
+        os.getenv("SUPERVISOR_ENDOGENOUS_DRIVE_EXTERNAL_RESEARCH_ENTRIES", "")
+    )
+    if external_research_entries:
+        config.supervisor.service_runtime.endogenous_drive_external_research_entries = (
+            external_research_entries
+        )
+    external_research_files = _parse_string_list_env(
+        os.getenv("SUPERVISOR_ENDOGENOUS_DRIVE_EXTERNAL_RESEARCH_FILES", "")
+    )
+    if external_research_files:
+        config.supervisor.service_runtime.endogenous_drive_external_research_files = (
+            external_research_files
+        )
     config.supervisor.execution.git_repo_path = os.getenv(
         "SUPERVISOR_GIT_REPO",
         config.supervisor.execution.git_repo_path,

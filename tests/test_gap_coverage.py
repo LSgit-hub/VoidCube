@@ -294,6 +294,737 @@ class TestEndogenousDriveErrorBridge:
         assert truth[0].priority == "high"
         assert truth[0].utility >= 0.90
 
+    def test_truthfulness_outranks_exploratory_learning_when_correction_signals_are_high(self):
+        engine = EndogenousDriveEngine()
+        idle = {
+            "checks": {"in_execution_window": True},
+            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "activity": {
+                "counts": {"error_count": 4, "uncertainty_high_count": 2},
+                "active_sessions": 0,
+                "recent_metadata": {
+                    "user_request": {
+                        "text": "Investigate AUTO queue scheduling fairness across body improvement and learning tasks"
+                    }
+                },
+            },
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": False},
+                "general_self_evolution": {"eligible_for_planning": False},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": False},
+                "self_evolution": {"eligible_for_planning": False},
+            },
+        }
+        candidates = engine.generate_candidates(idle_window=idle, existing_drive_keys=set(), max_candidates=5)
+        truth = next(c for c in candidates if c.stable_key == "truthfulness:review_correction_signals")
+        exploratory = next(
+            c for c in candidates
+            if c.governance_task_type == "self_learning"
+            and c.stable_key != "truthfulness:review_correction_signals"
+        )
+        assert truth.utility > exploratory.utility
+        assert truth.metadata["score_breakdown"]["candidate_kind"] == "truthfulness_review"
+        assert exploratory.metadata["score_breakdown"]["candidate_kind"] in {
+            "exploratory_learning",
+            "generic_learning_fallback",
+        }
+
+    def test_candidates_include_score_breakdown_for_auditable_ranking(self):
+        engine = EndogenousDriveEngine()
+        idle = {
+            "checks": {"in_execution_window": True},
+            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "activity": {"counts": {}, "active_sessions": 0},
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True},
+                "self_learning": {"eligible_for_planning": False},
+                "general_self_evolution": {"eligible_for_planning": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True},
+                "self_learning": {"eligible_for_planning": False},
+                "self_evolution": {"eligible_for_planning": False},
+            },
+        }
+        candidates = engine.generate_candidates(idle_window=idle, existing_drive_keys=set(), max_candidates=3)
+        memory_candidate = next(c for c in candidates if c.stable_key == "continuity:memory_maintenance_sweep")
+        breakdown = memory_candidate.metadata.get("score_breakdown") or {}
+        queue_item = memory_candidate.to_queue_item()
+        endogenous_evidence = queue_item["evidence"]["endogenous_drive"]
+
+        assert breakdown["score_model"] == "endogenous_drive_v2"
+        assert breakdown["candidate_kind"] == "memory_maintenance"
+        assert "dimensions" in breakdown
+        assert "penalties" in breakdown
+        assert endogenous_evidence["score_breakdown"]["utility"] == memory_candidate.utility
+
+    def test_candidates_include_drive_judgement_layers(self):
+        engine = EndogenousDriveEngine()
+        idle = {
+            "checks": {"in_execution_window": True, "has_user_idle": True},
+            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "activity": {"counts": {"error_count": 3, "uncertainty_high_count": 1}, "active_sessions": 0},
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "general_self_evolution": {"eligible_for_planning": True},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "self_evolution": {"eligible_for_planning": True},
+            },
+        }
+        candidates = engine.generate_candidates(idle_window=idle, existing_drive_keys=set(), max_candidates=5)
+        truth = next(c for c in candidates if c.stable_key == "truthfulness:review_correction_signals")
+        judgement = truth.metadata.get("drive_judgement") or {}
+
+        assert judgement["perception"]["correction_signals"] == 4
+        assert judgement["world_model"]["truthfulness_pressure"] > 0
+        assert "reflection" in judgement
+        assert judgement["reflection"]["autonomy_readiness"] >= 0
+        assert judgement["intent"]["intent_type"] == "review_truthfulness_signals"
+        assert any(need["need_type"] == "repair_truthfulness" for need in judgement["needs"])
+
+    def test_shell_baseline_candidate_includes_drive_judgement(self):
+        engine = EndogenousDriveEngine()
+        idle = {
+            "checks": {"in_execution_window": True, "has_user_idle": True},
+            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "activity": {"counts": {}, "active_sessions": 0, "recent_metadata": {}},
+            "shell_slot": {
+                "slot_id": "slot-B",
+                "worktree_path": "F:/tmp/slot-B/worktree",
+            },
+            "completed_learning_tasks": [],
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": False},
+                "general_self_evolution": {"eligible_for_planning": False},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": False},
+                "self_evolution": {"eligible_for_planning": False},
+            },
+        }
+        candidates = engine.generate_candidates(idle_window=idle, existing_drive_keys=set(), max_candidates=5)
+        baseline = next(
+            c for c in candidates
+            if c.metadata.get("self_learning_mode") == "shell_codebase_baseline"
+        )
+        judgement = baseline.metadata.get("drive_judgement") or {}
+
+        assert judgement["intent"]["candidate_kind"] == "shell_baseline_learning"
+        assert judgement["perception"]["learning_quality"] == 0.0
+        assert any(need["need_type"] == "expand_learning_frontier" for need in judgement["needs"])
+
+    def test_deliberation_report_exposes_perception_needs_and_intents(self):
+        engine = EndogenousDriveEngine()
+        idle = {
+            "checks": {"in_execution_window": True, "has_user_idle": True},
+            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "activity": {"counts": {"error_count": 2, "uncertainty_high_count": 1}, "active_sessions": 0},
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "general_self_evolution": {"eligible_for_planning": True},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "self_evolution": {"eligible_for_planning": True},
+            },
+        }
+        report = engine.build_deliberation_report(idle_window=idle).to_dict()
+
+        assert report["perception"]["correction_signals"] == 3
+        assert report["world_model"]["truthfulness_pressure"] > 0
+        assert report["reflection"]["learning_yield_state"] in {"cold", "mixed", "strong"}
+        assert "adaptive_policy" in report
+        assert report["adaptive_policy"]["preferred_focus"]
+        assert any(need["need_type"] == "repair_truthfulness" for need in report["needs"])
+        assert any(intent["candidate_kind"] == "truthfulness_review" for intent in report["intents"])
+        assert any(signal["signal_type"] == "observation_signal" for signal in report["signals"])
+
+    def test_deliberation_report_reflection_detects_blockage_and_alignment_need(self):
+        engine = EndogenousDriveEngine()
+        idle = {
+            "checks": {"in_execution_window": True, "has_user_idle": True},
+            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "activity": {"counts": {}, "active_sessions": 0},
+            "queued_tasks": [
+                {
+                    "title": "Deferred endogenous review A",
+                    "status": "deferred",
+                    "governance_task_type": "self_evolution",
+                    "task_family": "general_self_evolution",
+                    "execution_kind": "general_self_evolution",
+                    "updated_at": "2026-06-20T00:00:00+00:00",
+                    "metadata": {"endogenous_drive_key": "continuity:queue_hygiene_review"},
+                },
+                {
+                    "title": "Paused endogenous review B",
+                    "status": "awaiting_review",
+                    "governance_task_type": "self_learning",
+                    "task_family": "self_learning",
+                    "execution_kind": None,
+                    "updated_at": "2026-06-20T00:00:00+00:00",
+                    "metadata": {"endogenous_drive_key": "truthfulness:review_correction_signals"},
+                },
+            ],
+            "completed_learning_tasks": [
+                {
+                    "title": "Weak learning result",
+                    "completed_at": "2026-06-27T00:00:00+00:00",
+                    "quality_score": 0.2,
+                }
+            ],
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "general_self_evolution": {"eligible_for_planning": True},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "self_evolution": {"eligible_for_planning": True},
+            },
+        }
+        report = engine.build_deliberation_report(idle_window=idle).to_dict()
+
+        assert report["reflection"]["queue_blockage_state"] in {"dragging", "blocked"}
+        assert report["reflection"]["dominant_constraint"] in {
+            "queue_blockage",
+            "weak_learning_yield",
+        }
+        assert any(need["need_type"] == "observe_before_acting" for need in report["needs"])
+        signal_types = {signal["signal_type"] for signal in report["signals"]}
+        assert "observation_signal" in signal_types
+        assert "autonomy_alignment_signal" in signal_types
+
+    def test_deliberation_report_reflection_uses_historical_outcomes(self):
+        engine = EndogenousDriveEngine()
+        idle = {
+            "checks": {"in_execution_window": True, "has_user_idle": True},
+            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "activity": {"counts": {}, "active_sessions": 0},
+            "drive_history": {
+                "outcomes": [
+                    {"status": "failed", "task_family": "self_learning"},
+                    {"status": "deferred", "task_family": "self_learning"},
+                    {"status": "paused", "task_family": "general_self_evolution"},
+                ]
+            },
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "general_self_evolution": {"eligible_for_planning": True},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "self_evolution": {"eligible_for_planning": True},
+            },
+        }
+        report = engine.build_deliberation_report(idle_window=idle).to_dict()
+
+        assert report["reflection"]["dominant_constraint"] == "historical_underdelivery"
+        assert any(
+            evidence.startswith("historical_outcomes=")
+            for evidence in report["reflection"]["source_evidence"]
+        )
+        assert report["adaptive_policy"]["observation_bias"] > 0.5
+        assert any(need["need_type"] == "observe_before_acting" for need in report["needs"])
+
+    def test_adaptive_policy_throttles_exploratory_learning_after_historical_underdelivery(self):
+        engine = EndogenousDriveEngine()
+        base_idle = {
+            "checks": {"in_execution_window": True, "has_user_idle": True},
+            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "activity": {
+                "counts": {},
+                "active_sessions": 0,
+                "recent_metadata": {
+                    "user_request": {
+                        "text": "Investigate supervisor queue scheduling fairness and duplicate learning output"
+                    }
+                },
+            },
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": False},
+                "general_self_evolution": {"eligible_for_planning": False},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": False},
+                "self_evolution": {"eligible_for_planning": False},
+            },
+        }
+        healthy_candidates = engine.generate_candidates(
+            idle_window=base_idle,
+            existing_drive_keys=set(),
+            max_candidates=5,
+        )
+        healthy_learning = next(
+            c for c in healthy_candidates if c.metadata.get("learning_branch") == "exploratory"
+        )
+
+        throttled_idle = {
+            **base_idle,
+            "drive_history": {
+                "outcomes": [
+                    {"status": "failed", "task_family": "self_learning"},
+                    {"status": "deferred", "task_family": "self_learning"},
+                    {"status": "paused", "task_family": "self_learning"},
+                ]
+            },
+        }
+        throttled_candidates = engine.generate_candidates(
+            idle_window=throttled_idle,
+            existing_drive_keys=set(),
+            max_candidates=5,
+        )
+        throttled_learning = next(
+            c for c in throttled_candidates if c.metadata.get("learning_branch") == "exploratory"
+        )
+
+        assert throttled_learning.utility < healthy_learning.utility
+        assert throttled_learning.metadata["score_breakdown"]["adaptive_factor"] < 1.0
+
+    def test_adaptive_policy_budget_reduces_total_candidates_under_high_throttle(self):
+        engine = EndogenousDriveEngine()
+        idle = {
+            "checks": {"in_execution_window": True, "has_user_idle": True},
+            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "activity": {
+                "counts": {"error_count": 2, "uncertainty_high_count": 1},
+                "active_sessions": 0,
+                "recent_metadata": {
+                    "user_request": {
+                        "text": "Investigate queue scheduling fairness and unresolved learning duplication"
+                    }
+                },
+            },
+            "drive_history": {
+                "outcomes": [
+                    {"status": "failed", "task_family": "self_learning"},
+                    {"status": "deferred", "task_family": "self_learning"},
+                    {"status": "paused", "task_family": "self_learning"},
+                    {"status": "deferred", "task_family": "general_self_evolution"},
+                ]
+            },
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "general_self_evolution": {"eligible_for_planning": True},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "self_evolution": {"eligible_for_planning": True},
+            },
+        }
+        report = engine.build_deliberation_report(idle_window=idle).to_dict()
+        candidates = engine.generate_candidates(
+            idle_window=idle,
+            existing_drive_keys=set(),
+            max_candidates=5,
+        )
+
+        assert report["adaptive_policy"]["candidate_budget"] == 1
+        assert len(candidates) == 1
+
+    def test_strategy_memory_can_shift_preferred_focus_toward_truthfulness(self):
+        engine = EndogenousDriveEngine()
+        idle = {
+            "checks": {"in_execution_window": True, "has_user_idle": True},
+            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "activity": {
+                "counts": {"error_count": 3, "uncertainty_high_count": 1},
+                "active_sessions": 0,
+            },
+            "drive_history": {
+                "strategy_memory": {
+                    "focus_stats": {
+                        "truthfulness": {
+                            "judged": 6,
+                            "completed": 5,
+                            "failed": 0,
+                            "dragging": 1,
+                        },
+                        "learning_expansion": {
+                            "judged": 6,
+                            "completed": 0,
+                            "failed": 2,
+                            "dragging": 4,
+                        },
+                    }
+                }
+            },
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "general_self_evolution": {"eligible_for_planning": False},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "self_evolution": {"eligible_for_planning": False},
+            },
+        }
+
+        report = engine.build_deliberation_report(idle_window=idle).to_dict()
+
+        assert report["adaptive_policy"]["preferred_focus"] == "truthfulness"
+        assert any(
+            evidence.startswith("focus_effectiveness[truthfulness]=")
+            for evidence in report["adaptive_policy"]["source_evidence"]
+        )
+
+    def test_contextual_strategy_memory_can_shift_preferred_focus_toward_observation(self):
+        engine = EndogenousDriveEngine()
+        idle = {
+            "checks": {"in_execution_window": True, "has_user_idle": True},
+            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "activity": {"counts": {}, "active_sessions": 0},
+            "completed_learning_tasks": [
+                {
+                    "title": "Weak learning result",
+                    "completed_at": "2026-06-27T00:00:00+00:00",
+                    "quality_score": 0.2,
+                }
+            ],
+            "drive_history": {
+                "strategy_memory": {
+                    "focus_stats": {
+                        "learning_expansion": {
+                            "judged": 8,
+                            "completed": 5,
+                            "failed": 1,
+                            "dragging": 2,
+                        },
+                        "observation": {
+                            "judged": 8,
+                            "completed": 1,
+                            "failed": 1,
+                            "dragging": 6,
+                        },
+                    },
+                    "contextual_focus_stats": {
+                        "idle_window|stable|weak_learning_yield": {
+                            "observation": {
+                                "judged": 6,
+                                "completed": 5,
+                                "failed": 0,
+                                "dragging": 1,
+                            },
+                            "learning_expansion": {
+                                "judged": 6,
+                                "completed": 0,
+                                "failed": 2,
+                                "dragging": 4,
+                            },
+                        }
+                    },
+                }
+            },
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "general_self_evolution": {"eligible_for_planning": True},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "self_evolution": {"eligible_for_planning": True},
+            },
+        }
+
+        report = engine.build_deliberation_report(idle_window=idle).to_dict()
+
+        assert report["adaptive_policy"]["preferred_focus"] == "observation"
+        assert any(
+            evidence == "context_key=idle_window|stable|weak_learning_yield"
+            for evidence in report["adaptive_policy"]["source_evidence"]
+        )
+
+    def test_deliberation_report_emits_drive_posture_signal(self):
+        engine = EndogenousDriveEngine()
+        idle = {
+            "checks": {"in_execution_window": True, "has_user_idle": True},
+            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "activity": {"counts": {}, "active_sessions": 0},
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "general_self_evolution": {"eligible_for_planning": True},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "self_evolution": {"eligible_for_planning": True},
+            },
+        }
+        report = engine.build_deliberation_report(idle_window=idle).to_dict()
+
+        posture = next(signal for signal in report["signals"] if signal["signal_type"] == "drive_posture_signal")
+        assert posture["payload"]["preferred_focus"] == report["adaptive_policy"]["preferred_focus"]
+        assert posture["payload"]["candidate_budget"] == report["adaptive_policy"]["candidate_budget"]
+        assert posture["payload"]["source_evidence"] == report["adaptive_policy"]["source_evidence"]
+
+    def test_adaptive_policy_raises_observation_bias_when_observation_targets_stall(self):
+        engine = EndogenousDriveEngine()
+        idle = {
+            "checks": {"in_execution_window": True, "has_user_idle": True},
+            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "activity": {
+                "counts": {"error_count": 1, "uncertainty_high_count": 1},
+                "active_sessions": 0,
+            },
+            "completed_learning_tasks": [
+                {
+                    "title": "Weak learning",
+                    "completed_at": "2026-06-27T00:00:00+00:00",
+                    "quality_score": 0.25,
+                }
+            ],
+            "drive_history": {
+                "judgements": [],
+                "outcomes": [],
+                "strategy_memory": {
+                    "focus_stats": {},
+                    "contextual_focus_stats": {},
+                    "agenda_topic_stats": {},
+                    "observation_target_stats": {
+                        "learning_yield": {
+                            "seen": 4,
+                            "recommended": 4,
+                            "resolved": 0,
+                            "stalled": 2,
+                            "last_priority": 0.82,
+                            "last_risk": 0.76,
+                            "last_status": "recommended",
+                        }
+                    },
+                },
+            },
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "general_self_evolution": {"eligible_for_planning": True},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "self_evolution": {"eligible_for_planning": True},
+            },
+        }
+
+        report = engine.build_deliberation_report(idle_window=idle).to_dict()
+        policy = report["adaptive_policy"]
+
+        assert policy["observation_bias"] >= 0.6
+        assert policy["candidate_throttle"] >= 0.35
+        assert any("unresolved_observation_pressure" in item for item in policy["source_evidence"])
+
+    def test_adaptive_policy_recovers_learning_bias_when_observation_targets_resolve(self):
+        engine = EndogenousDriveEngine()
+        idle = {
+            "checks": {"in_execution_window": True, "has_user_idle": True},
+            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "activity": {
+                "counts": {"error_count": 0, "uncertainty_high_count": 0},
+                "active_sessions": 0,
+            },
+            "completed_learning_tasks": [
+                {
+                    "title": "Recovered learning",
+                    "completed_at": "2026-06-27T00:00:00+00:00",
+                    "quality_score": 0.82,
+                }
+            ],
+            "drive_history": {
+                "judgements": [],
+                "outcomes": [],
+                "strategy_memory": {
+                    "focus_stats": {},
+                    "contextual_focus_stats": {},
+                    "agenda_topic_stats": {
+                        "expand_learning_frontier": {
+                            "seen": 4,
+                            "active_cycles": 2,
+                            "resolved": 3,
+                            "dragging": 0,
+                            "last_priority": 0.7,
+                            "last_confidence": 0.8,
+                            "last_status": "resolved",
+                        }
+                    },
+                    "observation_target_stats": {
+                        "learning_yield": {
+                            "seen": 4,
+                            "recommended": 4,
+                            "resolved": 3,
+                            "stalled": 0,
+                            "last_priority": 0.42,
+                            "last_risk": 0.18,
+                            "last_status": "resolved",
+                        }
+                    },
+                },
+            },
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "general_self_evolution": {"eligible_for_planning": True},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "self_evolution": {"eligible_for_planning": True},
+            },
+        }
+
+        report = engine.build_deliberation_report(idle_window=idle).to_dict()
+        policy = report["adaptive_policy"]
+
+        assert policy["learning_expansion_bias"] >= 0.5
+        assert policy["candidate_throttle"] <= 0.45
+        assert any("observation_recovery_signal" in item for item in policy["source_evidence"])
+
+    def test_observation_posture_filters_out_exploratory_candidates(self):
+        engine = EndogenousDriveEngine()
+        idle = {
+            "checks": {"in_execution_window": True, "has_user_idle": True},
+            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "activity": {
+                "counts": {"error_count": 2, "uncertainty_high_count": 1},
+                "active_sessions": 0,
+                "recent_metadata": {
+                    "user_request": {
+                        "text": "Investigate queue scheduling fairness and duplicate learning output"
+                    }
+                },
+            },
+            "queued_tasks": [
+                {
+                    "title": "Deferred endogenous review A",
+                    "status": "deferred",
+                    "governance_task_type": "self_evolution",
+                    "task_family": "general_self_evolution",
+                    "execution_kind": "general_self_evolution",
+                    "updated_at": "2026-06-20T00:00:00+00:00",
+                    "metadata": {"endogenous_drive_key": "continuity:queue_hygiene_review"},
+                },
+                {
+                    "title": "Paused endogenous review B",
+                    "status": "awaiting_review",
+                    "governance_task_type": "self_learning",
+                    "task_family": "self_learning",
+                    "execution_kind": None,
+                    "updated_at": "2026-06-20T00:00:00+00:00",
+                    "metadata": {"endogenous_drive_key": "truthfulness:review_correction_signals"},
+                },
+            ],
+            "completed_learning_tasks": [
+                {
+                    "title": "Weak learning result",
+                    "completed_at": "2026-06-27T00:00:00+00:00",
+                    "quality_score": 0.2,
+                }
+            ],
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "general_self_evolution": {"eligible_for_planning": True},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "self_evolution": {"eligible_for_planning": True},
+            },
+        }
+
+        report = engine.build_deliberation_report(idle_window=idle).to_dict()
+        candidates = engine.generate_candidates(
+            idle_window=idle,
+            existing_drive_keys=set(),
+            max_candidates=5,
+        )
+
+        assert report["adaptive_policy"]["preferred_focus"] in {"observation", "queue_hygiene"}
+        assert report["adaptive_policy"]["observation_bias"] >= 0.58
+        assert candidates
+        candidate_kinds = {
+            c.metadata["score_breakdown"]["candidate_kind"]
+            for c in candidates
+        }
+        assert "exploratory_learning" not in candidate_kinds
+
+    def test_deliberation_report_emits_non_task_signals(self):
+        engine = EndogenousDriveEngine()
+        idle = {
+            "checks": {"in_execution_window": True, "has_user_idle": True},
+            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "activity": {"counts": {"error_count": 4, "uncertainty_high_count": 1}, "active_sessions": 0},
+            "queued_tasks": [
+                {
+                    "title": "Revisit weak queue evidence",
+                    "status": "deferred",
+                    "governance_task_type": "self_evolution",
+                    "task_family": "general_self_evolution",
+                    "execution_kind": "general_self_evolution",
+                    "updated_at": "2099-01-01T00:00:00+00:00",
+                }
+            ],
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "general_self_evolution": {"eligible_for_planning": True},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "self_evolution": {"eligible_for_planning": True},
+            },
+        }
+        report = engine.build_deliberation_report(idle_window=idle).to_dict()
+
+        signal_types = {signal["signal_type"] for signal in report["signals"]}
+        assert "observation_signal" in signal_types
+        assert "governance_review_suggestion" in signal_types
+
+    def test_truthfulness_pressure_can_support_alert_channel_inputs(self):
+        engine = EndogenousDriveEngine()
+        idle = {
+            "checks": {"in_execution_window": True, "has_user_idle": True},
+            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "activity": {"counts": {"error_count": 4, "uncertainty_high_count": 1}, "active_sessions": 0},
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "general_self_evolution": {"eligible_for_planning": True},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": True},
+                "self_evolution": {"eligible_for_planning": True},
+            },
+        }
+        report = engine.build_deliberation_report(idle_window=idle).to_dict()
+
+        assert report["adaptive_policy"]["preferred_focus"] == "truthfulness"
+        assert any(
+            need["need_type"] == "repair_truthfulness"
+            for need in report["needs"]
+        )
+
     def test_no_candidates_when_fully_blocked(self):
         engine = EndogenousDriveEngine()
         idle = {
@@ -339,6 +1070,102 @@ class TestEndogenousDriveErrorBridge:
         }
         candidates = engine.generate_candidates(idle_window=idle, existing_drive_keys=set(), max_candidates=5)
         assert any(candidate.governance_task_type == "self_learning" for candidate in candidates)
+
+    def test_learning_topics_respect_recent_completion_cooldown(self):
+        engine = EndogenousDriveEngine()
+        idle = {
+            "checks": {"in_execution_window": True},
+            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "activity": {
+                "counts": {},
+                "active_sessions": 0,
+                "recent_metadata": {
+                    "user_request": {
+                        "text": "Investigate agent task queue deduplication strategy for AUTO mode"
+                    }
+                },
+            },
+            "completed_learning_tasks": [
+                {
+                    "title": "Investigate agent task queue deduplication strategy for AUTO mode",
+                    "completed_at": "2099-01-01T00:00:00+00:00",
+                    "quality_score": 0.9,
+                }
+            ],
+            "queued_tasks": [],
+            "endogenous_drive_policy": {
+                "learning_topic_cooldown_hours": 72,
+                "topic_overlap_threshold": 0.5,
+            },
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": False},
+                "general_self_evolution": {"eligible_for_planning": False},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True},
+                "memory_maintenance": {"eligible_for_planning": False},
+                "self_evolution": {"eligible_for_planning": False},
+            },
+        }
+        candidates = engine.generate_candidates(
+            idle_window=idle,
+            existing_drive_keys=set(),
+            max_candidates=5,
+        )
+        exploratory = [c for c in candidates if c.governance_task_type == "self_learning"]
+        assert exploratory == [], "recently completed topic should be cooled down instead of re-generated"
+
+    def test_body_improvement_candidate_respects_recent_queue_cooldown(self):
+        engine = EndogenousDriveEngine()
+        idle = {
+            "checks": {"in_execution_window": True},
+            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "activity": {"counts": {}, "active_sessions": 0, "recent_metadata": {}},
+            "shell_slot": {
+                "slot_id": "slot-B",
+                "worktree_path": "F:/tmp/slot-B/worktree",
+            },
+            "completed_learning_tasks": [
+                {
+                    "title": "Study agent display pipeline",
+                    "completed_at": "2099-01-01T00:00:00+00:00",
+                    "quality_score": 1.0,
+                }
+            ],
+            "queued_tasks": [
+                {
+                    "title": "Improve shell body: tighten queue review",
+                    "status": "approved",
+                    "execution_kind": "body_improvement",
+                    "constraints": {"target_slot_id": "slot-B"},
+                    "updated_at": "2099-01-01T01:00:00+00:00",
+                }
+            ],
+            "endogenous_drive_policy": {
+                "body_improvement_min_quality": 60.0,
+                "body_improvement_cooldown_hours": 24,
+                "body_improvement_editable_dirs": ["agent/"],
+                "body_improvement_forbidden_patterns": ["systems/**"],
+                "body_improvement_max_files": 5,
+            },
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": False},
+                "memory_maintenance": {"eligible_for_planning": False},
+                "general_self_evolution": {"eligible_for_planning": True},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": False},
+                "memory_maintenance": {"eligible_for_planning": False},
+                "self_evolution": {"eligible_for_planning": True},
+            },
+        }
+        candidates = engine.generate_candidates(
+            idle_window=idle,
+            existing_drive_keys=set(),
+            max_candidates=5,
+        )
+        assert not any(c.execution_kind == "body_improvement" for c in candidates)
 
 
 # ── T-09: Self-learning service lifecycle ───────────────────────────

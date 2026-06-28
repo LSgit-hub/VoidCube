@@ -1,7 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+import json
+import re
 from typing import Any, Dict, Iterable, List, Optional
+
+from systems.supervisor.endogenous_drive_prompts import (
+    build_endogenous_core_mission_prompt,
+    build_endogenous_task_generation_payload,
+)
+from systems.supervisor.config_models import (
+    EndogenousDriveCognitionCharterConfig,
+    EndogenousDriveCognitiveControlPolicyConfig,
+)
 
 
 CORE_VALUES: Dict[str, str] = {
@@ -9,6 +22,29 @@ CORE_VALUES: Dict[str, str] = {
     "truthfulness": "Surface uncertainty, correction signals, and evidence gaps before they harden.",
     "creativity": "Turn idle capacity into bounded learning and improvement proposals.",
 }
+
+_TOPIC_WORD_RE = re.compile(r"[a-zA-Z0-9_]{3,}")
+_TOPIC_STOPWORDS = {
+    "voidcube", "agent", "system", "task", "tasks", "work", "review", "recent",
+    "learning", "learn", "research", "improve", "improvement", "current", "shell",
+    "body", "code", "codebase", "baseline", "follow", "followup", "thread",
+    "general", "quality", "issue", "issues", "notes", "evidence", "future",
+}
+_SCORE_WEIGHTS: Dict[str, float] = {
+    "core_value_strength": 0.38,
+    "urgency": 0.24,
+    "novelty": 0.14,
+    "specificity": 0.10,
+    "execution_readiness": 0.14,
+    "queue_pressure_penalty": 0.12,
+    "repetition_penalty": 0.10,
+}
+_TERMINAL_QUEUE_STATUSES = {"completed", "failed", "cancelled"}
+_REVIEW_BACKLOG_STATUSES = {"deferred", "paused", "awaiting_review", "retry"}
+_LM_TASK_TYPES = {"observation", "review", "learning", "maintenance", "improvement"}
+_LM_RISK_LEVELS = {"low", "medium", "high"}
+_LM_EVIDENCE_LEVELS = {"weak", "moderate", "strong"}
+_LM_EXECUTION_MODES = {"observe_only", "review_then_queue", "guarded_execution"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,10 +91,221 @@ class EndogenousTaskCandidate:
                         key: CORE_VALUES[key] for key in self.value_tags if key in CORE_VALUES
                     },
                     "utility": self.utility,
+                    "score_breakdown": dict(self.metadata.get("score_breakdown") or {}),
                 },
                 **dict(self.evidence),
             },
             "constraints": dict(self.constraints),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class DrivePerceptionSnapshot:
+    user_mode: str
+    governor_mode_active: bool
+    in_execution_window: bool
+    system_posture: str
+    active_sessions: int
+    recent_errors: int
+    uncertainty_count: int
+    correction_signals: int
+    learning_quality: float
+    has_learning_history: bool
+    shell_slot_present: bool
+    shell_slot_id: str
+    active_queue_count: int
+    queued_learning_count: int
+    queued_body_improvement_count: int
+    stale_queue_count: int
+    pending_review_count: int
+    checks: Dict[str, Any] = field(default_factory=dict)
+    idle_seconds: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class DriveWorldModel:
+    user_mode: str
+    system_posture: str
+    truthfulness_pressure: float
+    learning_momentum: float
+    body_upgrade_readiness: float
+    queue_health: str
+    memory_pressure: float
+    self_confidence: float
+
+
+@dataclass(frozen=True, slots=True)
+class DriveNeed:
+    need_type: str
+    severity: float
+    urgency: float
+    confidence: float
+    rationale: str
+    source_evidence: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class DriveIntent:
+    intent_type: str
+    priority: float
+    rationale: str
+    target_horizon: str
+    output_channel: str
+    source_needs: List[str] = field(default_factory=list)
+    candidate_family: Optional[str] = None
+    candidate_kind: Optional[str] = None
+
+
+@dataclass(frozen=True, slots=True)
+class DriveSignal:
+    signal_type: str
+    priority: float
+    message: str
+    rationale: str
+    source_needs: List[str] = field(default_factory=list)
+    related_intent: Optional[str] = None
+    payload: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class DriveReflection:
+    recent_learning_count: int
+    recent_learning_quality: float
+    learning_yield_state: str
+    queue_blockage_pressure: float
+    queue_blockage_state: str
+    body_growth_blocked: bool
+    repeated_drive_pressure: float
+    autonomy_readiness: float
+    dominant_constraint: str
+    rationale: str
+    source_evidence: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class DriveAdaptivePolicy:
+    learning_expansion_bias: float
+    truthfulness_bias: float
+    memory_continuity_bias: float
+    queue_hygiene_bias: float
+    body_growth_bias: float
+    observation_bias: float
+    candidate_throttle: float
+    candidate_budget: int
+    exploratory_learning_quota: int
+    body_growth_quota: int
+    preferred_focus: str
+    rationale: str
+    source_evidence: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class DriveDeliberationReport:
+    perception: DrivePerceptionSnapshot
+    world_model: DriveWorldModel
+    reflection: DriveReflection
+    adaptive_policy: DriveAdaptivePolicy
+    needs: List[DriveNeed] = field(default_factory=list)
+    intents: List[DriveIntent] = field(default_factory=list)
+    signals: List[DriveSignal] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "perception": {
+                "user_mode": self.perception.user_mode,
+                "governor_mode_active": self.perception.governor_mode_active,
+                "in_execution_window": self.perception.in_execution_window,
+                "system_posture": self.perception.system_posture,
+                "active_sessions": self.perception.active_sessions,
+                "recent_errors": self.perception.recent_errors,
+                "uncertainty_count": self.perception.uncertainty_count,
+                "correction_signals": self.perception.correction_signals,
+                "learning_quality": round(self.perception.learning_quality, 4),
+                "has_learning_history": self.perception.has_learning_history,
+                "shell_slot_present": self.perception.shell_slot_present,
+                "shell_slot_id": self.perception.shell_slot_id,
+                "active_queue_count": self.perception.active_queue_count,
+                "queued_learning_count": self.perception.queued_learning_count,
+                "queued_body_improvement_count": self.perception.queued_body_improvement_count,
+                "stale_queue_count": self.perception.stale_queue_count,
+                "pending_review_count": self.perception.pending_review_count,
+                "checks": dict(self.perception.checks),
+                "idle_seconds": dict(self.perception.idle_seconds),
+            },
+            "world_model": {
+                "user_mode": self.world_model.user_mode,
+                "system_posture": self.world_model.system_posture,
+                "truthfulness_pressure": round(self.world_model.truthfulness_pressure, 4),
+                "learning_momentum": round(self.world_model.learning_momentum, 4),
+                "body_upgrade_readiness": round(self.world_model.body_upgrade_readiness, 4),
+                "queue_health": self.world_model.queue_health,
+                "memory_pressure": round(self.world_model.memory_pressure, 4),
+                "self_confidence": round(self.world_model.self_confidence, 4),
+            },
+            "reflection": {
+                "recent_learning_count": self.reflection.recent_learning_count,
+                "recent_learning_quality": round(self.reflection.recent_learning_quality, 4),
+                "learning_yield_state": self.reflection.learning_yield_state,
+                "queue_blockage_pressure": round(self.reflection.queue_blockage_pressure, 4),
+                "queue_blockage_state": self.reflection.queue_blockage_state,
+                "body_growth_blocked": self.reflection.body_growth_blocked,
+                "repeated_drive_pressure": round(self.reflection.repeated_drive_pressure, 4),
+                "autonomy_readiness": round(self.reflection.autonomy_readiness, 4),
+                "dominant_constraint": self.reflection.dominant_constraint,
+                "rationale": self.reflection.rationale,
+                "source_evidence": list(self.reflection.source_evidence),
+            },
+            "adaptive_policy": {
+                "learning_expansion_bias": round(self.adaptive_policy.learning_expansion_bias, 4),
+                "truthfulness_bias": round(self.adaptive_policy.truthfulness_bias, 4),
+                "memory_continuity_bias": round(self.adaptive_policy.memory_continuity_bias, 4),
+                "queue_hygiene_bias": round(self.adaptive_policy.queue_hygiene_bias, 4),
+                "body_growth_bias": round(self.adaptive_policy.body_growth_bias, 4),
+                "observation_bias": round(self.adaptive_policy.observation_bias, 4),
+                "candidate_throttle": round(self.adaptive_policy.candidate_throttle, 4),
+                "candidate_budget": self.adaptive_policy.candidate_budget,
+                "exploratory_learning_quota": self.adaptive_policy.exploratory_learning_quota,
+                "body_growth_quota": self.adaptive_policy.body_growth_quota,
+                "preferred_focus": self.adaptive_policy.preferred_focus,
+                "rationale": self.adaptive_policy.rationale,
+                "source_evidence": list(self.adaptive_policy.source_evidence),
+            },
+            "needs": [
+                {
+                    "need_type": need.need_type,
+                    "severity": round(need.severity, 4),
+                    "urgency": round(need.urgency, 4),
+                    "confidence": round(need.confidence, 4),
+                    "rationale": need.rationale,
+                    "source_evidence": list(need.source_evidence),
+                }
+                for need in self.needs
+            ],
+            "intents": [
+                {
+                    "intent_type": intent.intent_type,
+                    "priority": round(intent.priority, 4),
+                    "rationale": intent.rationale,
+                    "target_horizon": intent.target_horizon,
+                    "output_channel": intent.output_channel,
+                    "source_needs": list(intent.source_needs),
+                    "candidate_family": intent.candidate_family,
+                    "candidate_kind": intent.candidate_kind,
+                }
+                for intent in self.intents
+            ],
+            "signals": [
+                {
+                    "signal_type": signal.signal_type,
+                    "priority": round(signal.priority, 4),
+                    "message": signal.message,
+                    "rationale": signal.rationale,
+                    "source_needs": list(signal.source_needs),
+                    "related_intent": signal.related_intent,
+                    "payload": dict(signal.payload),
+                }
+                for signal in self.signals
+            ],
         }
 
 
@@ -74,6 +321,74 @@ class EndogenousDriveEngine:
     context-aware learning topics.
     """
 
+    def __init__(self, config: Any | None = None) -> None:
+        self.config = config
+        self._latest_lm_task_generation_context: Dict[str, Any] = {}
+
+    def get_latest_lm_task_generation_context(self) -> Dict[str, Any]:
+        return dict(self._latest_lm_task_generation_context or {})
+
+    def resolve_cognitive_posture_state(
+        self,
+        *,
+        idle_window: Dict[str, Any],
+        deliberation_dict: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        drive_context = self._build_drive_context(idle_window)
+        runtime_config = getattr(self.config, "service_runtime", None)
+        charter_model = getattr(runtime_config, "endogenous_drive_cognition_charter", None)
+        policy_model = getattr(charter_model, "cognitive_control_policy", None)
+        if hasattr(policy_model, "model_dump"):
+            policy = policy_model.model_dump(mode="json")
+        else:
+            policy = dict(policy_model or {})
+
+        recent_reference_alignment = self._build_recent_reference_alignment(drive_context)
+        proposal_drift_memory = self._build_proposal_drift_memory(drive_context)
+        recent_learning_evidence = self._build_recent_learning_evidence(drive_context)
+        external_research_evidence = self._build_external_research_evidence()
+        shell_slot = dict(self._get_shell_slot_meta(idle_window) or {})
+        shell_body_profile = self._build_shell_body_profile(shell_slot)
+        evidence_channels = self._build_evidence_channels(
+            recent_learning_evidence=recent_learning_evidence,
+            external_research_evidence=external_research_evidence,
+            shell_body_profile=shell_body_profile,
+            deliberation_dict=deliberation_dict,
+        )
+        evidence_graph = dict(evidence_channels.get("evidence_graph") or {})
+        agenda_graph = self._build_agenda_graph(
+            deliberation_dict=deliberation_dict,
+            evidence_graph=evidence_graph,
+        )
+        self_model_snapshot = self._build_self_model_snapshot(
+            perception=dict(deliberation_dict.get("perception") or {}),
+            world_model=dict(deliberation_dict.get("world_model") or {}),
+            reflection=dict(deliberation_dict.get("reflection") or {}),
+            adaptive_policy=dict(deliberation_dict.get("adaptive_policy") or {}),
+            shell_body_profile=shell_body_profile,
+            recent_learning_evidence=recent_learning_evidence,
+            external_research_evidence=external_research_evidence,
+            recent_reference_alignment=recent_reference_alignment,
+            evidence_graph=evidence_graph,
+            agenda_graph=agenda_graph,
+        )
+        evidence_credibility_summary = self._build_evidence_credibility_summary(
+            recent_learning_evidence=recent_learning_evidence,
+            external_research_evidence=external_research_evidence,
+            shell_body_profile=shell_body_profile,
+            evidence_channels=evidence_channels,
+            recent_reference_alignment=recent_reference_alignment,
+        )
+        return self._resolve_cognitive_posture_from_policy(
+            policy=policy,
+            deliberation_dict=deliberation_dict,
+            self_model_snapshot=self_model_snapshot,
+            evidence_credibility_summary=evidence_credibility_summary,
+            recent_reference_alignment=recent_reference_alignment,
+            proposal_drift_memory=proposal_drift_memory,
+            drive_context=drive_context,
+        )
+
     def generate_candidates(
         self,
         *,
@@ -86,15 +401,13 @@ class EndogenousDriveEngine:
         candidates.sort(key=lambda candidate: candidate.utility, reverse=True)
         return candidates[:max(max_candidates, 0)]
 
-    def _candidate_stream(
-        self, idle_window: Dict[str, Any], *, existing_keys: set[str] = None
-    ) -> List[EndogenousTaskCandidate]:
-        if existing_keys is None:
-            existing_keys = set()
+    def build_deliberation_report(
+        self,
+        *,
+        idle_window: Dict[str, Any],
+    ) -> DriveDeliberationReport:
         activity = dict(idle_window.get("activity") or {})
-        # Gateway exposes counts as both top-level fields (e.g. error_count,
-        # uncertainty_high_count) and (in some snapshots) under a "counts"
-        # sub-key.  Merge both so we don't double-count or miss signals.
+        drive_context = self._build_drive_context(idle_window)
         nested_counts = dict(activity.get("counts") or {})
         counts: Dict[str, Any] = dict(nested_counts)
         for _key in (
@@ -106,6 +419,1500 @@ class EndogenousDriveEngine:
             value = activity.get(_key)
             if value is not None and _key not in counts:
                 counts[_key] = value
+        decisions_by_family = dict(idle_window.get("task_family_decisions") or {})
+        decisions_by_governance = dict(idle_window.get("governance_task_type_decisions") or {})
+        memory_plan = self._decision_for(
+            "memory_maintenance",
+            decisions_by_family,
+            decisions_by_governance,
+        )
+        self_learning_plan = self._decision_for(
+            "self_learning",
+            decisions_by_family,
+            decisions_by_governance,
+        )
+        self_evolution_plan = self._decision_for(
+            "general_self_evolution",
+            decisions_by_family,
+            decisions_by_governance,
+        )
+        recent_errors = int(counts.get("error_count") or counts.get("recent_errors") or 0)
+        uncertainty_count = int(
+            counts.get("uncertainty_high_count")
+            or counts.get("high_uncertainty")
+            or 0
+        )
+        pre_decayed = idle_window.get("correction_signals")
+        if pre_decayed is not None:
+            try:
+                correction_signals = max(0, int(pre_decayed))
+            except (TypeError, ValueError):
+                correction_signals = recent_errors + uncertainty_count
+        else:
+            correction_signals = recent_errors + uncertainty_count
+        shell_slot_meta = self._get_shell_slot_meta(idle_window) or {}
+        perception = self._perceive_drive_state(
+            idle_window=idle_window,
+            activity=activity,
+            drive_context=drive_context,
+            counts=counts,
+            correction_signals=correction_signals,
+            shell_slot_meta=shell_slot_meta,
+        )
+        world_model = self._build_world_model(perception)
+        reflection = self._build_reflection(
+            perception=perception,
+            world_model=world_model,
+            drive_context=drive_context,
+            shell_slot_meta=shell_slot_meta,
+        )
+        adaptive_policy = self._build_adaptive_policy(
+            perception=perception,
+            world_model=world_model,
+            reflection=reflection,
+            drive_context=drive_context,
+        )
+        needs = self._detect_needs(
+            perception=perception,
+            world_model=world_model,
+            reflection=reflection,
+            adaptive_policy=adaptive_policy,
+            memory_plan=memory_plan,
+            self_learning_plan=self_learning_plan,
+            self_evolution_plan=self_evolution_plan,
+        )
+        intents = self._synthesize_intents(
+            needs=needs,
+            perception=perception,
+            world_model=world_model,
+            reflection=reflection,
+            adaptive_policy=adaptive_policy,
+        )
+        signals = self._emit_drive_signals(
+            perception=perception,
+            world_model=world_model,
+            reflection=reflection,
+            adaptive_policy=adaptive_policy,
+            needs=needs,
+            intents=intents,
+        )
+        return DriveDeliberationReport(
+            perception=perception,
+            world_model=world_model,
+            reflection=reflection,
+            adaptive_policy=adaptive_policy,
+            needs=needs,
+            intents=intents,
+            signals=signals,
+        )
+
+    def _perceive_drive_state(
+        self,
+        *,
+        idle_window: Dict[str, Any],
+        activity: Dict[str, Any],
+        drive_context: Dict[str, Any],
+        counts: Dict[str, Any],
+        correction_signals: int,
+        shell_slot_meta: Optional[Dict[str, Any]] = None,
+    ) -> DrivePerceptionSnapshot:
+        checks = dict(idle_window.get("checks") or {})
+        idle_seconds = dict(idle_window.get("idle_seconds") or {})
+        governor_mode_active = bool(idle_window.get("governor_mode_active", False))
+        active_sessions = int(activity.get("active_sessions") or 0)
+        queued_learning_count = len(list(drive_context.get("queued_learning_titles") or []))
+        queued_body_improvement_count = len(
+            list(drive_context.get("queued_body_improvement_titles") or [])
+        )
+        stale_queue_count = int(drive_context.get("stale_queue_count") or 0)
+        pending_review_count = int(drive_context.get("pending_review_count") or 0)
+        active_queue_count = int(drive_context.get("active_queue_count") or 0)
+        learning_quality = self._calculate_learning_quality_score(idle_window)
+        recent_errors = int(counts.get("error_count") or counts.get("recent_errors") or 0)
+        uncertainty_count = int(
+            counts.get("uncertainty_high_count")
+            or counts.get("high_uncertainty")
+            or 0
+        )
+        shell_slot_id = str((shell_slot_meta or {}).get("slot_id") or "").strip()
+        shell_slot_present = bool(shell_slot_id or (shell_slot_meta or {}).get("worktree_path"))
+
+        user_mode = "serving_user"
+        if governor_mode_active:
+            user_mode = "governor_autonomous"
+        elif checks.get("has_user_idle"):
+            user_mode = "idle_window"
+
+        system_posture = "stable"
+        if active_sessions > 0 and not checks.get("has_user_idle", False):
+            system_posture = "serving_user"
+        elif correction_signals >= 4:
+            system_posture = "strained"
+        elif pending_review_count > 0 or stale_queue_count > 1:
+            system_posture = "degrading"
+        elif learning_quality >= 60.0 and shell_slot_present:
+            system_posture = "growth_window"
+
+        return DrivePerceptionSnapshot(
+            user_mode=user_mode,
+            governor_mode_active=governor_mode_active,
+            in_execution_window=bool(checks.get("in_execution_window", False)),
+            system_posture=system_posture,
+            active_sessions=active_sessions,
+            recent_errors=recent_errors,
+            uncertainty_count=uncertainty_count,
+            correction_signals=max(0, correction_signals),
+            learning_quality=learning_quality,
+            has_learning_history=bool(idle_window.get("completed_learning_tasks") or []),
+            shell_slot_present=shell_slot_present,
+            shell_slot_id=shell_slot_id,
+            active_queue_count=active_queue_count,
+            queued_learning_count=queued_learning_count,
+            queued_body_improvement_count=queued_body_improvement_count,
+            stale_queue_count=stale_queue_count,
+            pending_review_count=pending_review_count,
+            checks=checks,
+            idle_seconds=idle_seconds,
+        )
+
+    def _build_world_model(
+        self,
+        perception: DrivePerceptionSnapshot,
+    ) -> DriveWorldModel:
+        truthfulness_pressure = self._clamp01(
+            0.15
+            + min(perception.correction_signals, 6) / 6.0 * 0.75
+        )
+        learning_momentum = self._clamp01(
+            (perception.learning_quality / 100.0) * 0.8
+            + (0.1 if perception.has_learning_history else 0.0)
+            - min(perception.queued_learning_count, 3) * 0.08
+        )
+        body_upgrade_readiness = self._clamp01(
+            (perception.learning_quality / 100.0) * 0.7
+            + (0.15 if perception.shell_slot_present else 0.0)
+            - min(perception.queued_body_improvement_count, 2) * 0.2
+        )
+        queue_strain = min(
+            perception.active_queue_count * 0.08
+            + perception.stale_queue_count * 0.12
+            + perception.pending_review_count * 0.1,
+            1.0,
+        )
+        memory_pressure = self._clamp01(
+            0.25
+            + (0.15 if perception.in_execution_window else 0.0)
+            + min(perception.stale_queue_count, 3) * 0.08
+        )
+        self_confidence = self._clamp01(
+            0.55
+            + (0.1 if perception.in_execution_window else 0.0)
+            + (0.08 if perception.governor_mode_active else 0.0)
+            - min(perception.active_sessions, 3) * 0.08
+            - min(perception.pending_review_count, 3) * 0.04
+        )
+        queue_health = "clear"
+        if queue_strain >= 0.55:
+            queue_health = "strained"
+        elif queue_strain >= 0.3:
+            queue_health = "busy"
+
+        return DriveWorldModel(
+            user_mode=perception.user_mode,
+            system_posture=perception.system_posture,
+            truthfulness_pressure=truthfulness_pressure,
+            learning_momentum=learning_momentum,
+            body_upgrade_readiness=body_upgrade_readiness,
+            queue_health=queue_health,
+            memory_pressure=memory_pressure,
+            self_confidence=self_confidence,
+        )
+
+    def _build_reflection(
+        self,
+        *,
+        perception: DrivePerceptionSnapshot,
+        world_model: DriveWorldModel,
+        drive_context: Dict[str, Any],
+        shell_slot_meta: Optional[Dict[str, Any]] = None,
+    ) -> DriveReflection:
+        completed_learning_tasks = list(drive_context.get("completed_learning_tasks") or [])
+        queued_tasks = list(drive_context.get("queued_tasks") or [])
+        drive_history = dict(drive_context.get("drive_history") or {})
+        historical_outcomes = [
+            dict(item)
+            for item in list(drive_history.get("outcomes") or [])
+            if isinstance(item, dict)
+        ]
+        recent_learning_count = len(completed_learning_tasks[:3])
+
+        quality_values: List[float] = []
+        for task in completed_learning_tasks[:3]:
+            try:
+                quality_values.append(self._clamp01(float(task.get("quality_score") or 0.0)))
+            except (TypeError, ValueError):
+                continue
+        recent_learning_quality = (
+            sum(quality_values) / len(quality_values)
+            if quality_values
+            else self._clamp01(perception.learning_quality / 100.0)
+        )
+
+        learning_yield_state = "cold"
+        if recent_learning_quality >= 0.75:
+            learning_yield_state = "strong"
+        elif recent_learning_quality >= 0.45 or recent_learning_count > 0:
+            learning_yield_state = "mixed"
+
+        blocked_status_count = 0
+        repeated_drive_count = 0
+        recent_endogenous_keys: set[str] = set()
+        for task in queued_tasks:
+            status = str(task.get("status") or "").strip().lower()
+            if status in _REVIEW_BACKLOG_STATUSES:
+                blocked_status_count += 1
+            metadata = dict(task.get("metadata") or {})
+            evidence = dict(task.get("evidence") or {})
+            endogenous_key = str(
+                metadata.get("endogenous_drive_key")
+                or evidence.get("endogenous_drive_key")
+                or ""
+            ).strip()
+            if endogenous_key:
+                recent_endogenous_keys.add(endogenous_key)
+                repeated_drive_count += 1
+
+        queue_blockage_pressure = self._clamp01(
+            blocked_status_count * 0.18
+            + perception.stale_queue_count * 0.16
+            + max(0, perception.active_queue_count - 2) * 0.05
+        )
+        if world_model.queue_health == "strained":
+            queue_blockage_pressure = self._clamp01(queue_blockage_pressure + 0.2)
+        elif world_model.queue_health == "busy":
+            queue_blockage_pressure = self._clamp01(queue_blockage_pressure + 0.08)
+
+        queue_blockage_state = "clear"
+        if queue_blockage_pressure >= 0.6:
+            queue_blockage_state = "blocked"
+        elif queue_blockage_pressure >= 0.32:
+            queue_blockage_state = "dragging"
+
+        body_growth_blocked = False
+        if shell_slot_meta:
+            policy = dict(drive_context.get("policy") or {})
+            body_growth_blocked = self._has_recent_body_improvement(
+                drive_context,
+                shell_slot_meta=dict(shell_slot_meta or {}),
+                cooldown_hours=int(policy.get("body_improvement_cooldown_hours", 12) or 12),
+            )
+
+        repeated_drive_pressure = self._clamp01(
+            repeated_drive_count * 0.08
+            + max(0, len(recent_endogenous_keys) - 1) * 0.04
+            + (0.14 if queue_blockage_state != "clear" else 0.0)
+        )
+        historical_completed = 0
+        historical_failed = 0
+        historical_blocked = 0
+        for item in historical_outcomes[:12]:
+            status = str(item.get("status") or "").strip().lower()
+            if status == "completed":
+                historical_completed += 1
+            elif status in {"failed", "cancelled"}:
+                historical_failed += 1
+            elif status in {"approved", "deferred", "paused", "awaiting_review", "retry"}:
+                historical_blocked += 1
+        historical_total = historical_completed + historical_failed + historical_blocked
+        historical_success_ratio = (
+            historical_completed / historical_total
+            if historical_total > 0
+            else 0.5
+        )
+        historical_drag_ratio = (
+            (historical_failed + historical_blocked) / historical_total
+            if historical_total > 0
+            else 0.0
+        )
+        autonomy_readiness = self._clamp01(
+            world_model.self_confidence * 0.34
+            + world_model.learning_momentum * 0.24
+            + world_model.body_upgrade_readiness * 0.12
+            + recent_learning_quality * 0.18
+            + historical_success_ratio * 0.1
+            - queue_blockage_pressure * 0.24
+            - repeated_drive_pressure * 0.12
+            - historical_drag_ratio * 0.16
+            - (0.08 if body_growth_blocked else 0.0)
+        )
+
+        dominant_constraint = "none"
+        if queue_blockage_pressure >= 0.55:
+            dominant_constraint = "queue_blockage"
+        elif body_growth_blocked:
+            dominant_constraint = "body_growth_cooldown"
+        elif historical_total >= 3 and historical_drag_ratio >= 0.66:
+            dominant_constraint = "historical_underdelivery"
+        elif recent_learning_quality < 0.4 and recent_learning_count > 0:
+            dominant_constraint = "weak_learning_yield"
+        elif perception.active_sessions > 0 and perception.user_mode == "serving_user":
+            dominant_constraint = "user_service_priority"
+
+        rationale_parts = [
+            f"recent learning yield is {learning_yield_state}",
+            f"queue blockage is {queue_blockage_state}",
+        ]
+        if historical_total > 0:
+            rationale_parts.append(
+                f"historical endogenous success ratio is {historical_success_ratio:.2f}"
+            )
+        if body_growth_blocked:
+            rationale_parts.append("body growth is temporarily blocked by recent shell-improvement activity")
+        if dominant_constraint != "none":
+            rationale_parts.append(f"dominant constraint is {dominant_constraint}")
+
+        return DriveReflection(
+            recent_learning_count=recent_learning_count,
+            recent_learning_quality=recent_learning_quality,
+            learning_yield_state=learning_yield_state,
+            queue_blockage_pressure=queue_blockage_pressure,
+            queue_blockage_state=queue_blockage_state,
+            body_growth_blocked=body_growth_blocked,
+            repeated_drive_pressure=repeated_drive_pressure,
+            autonomy_readiness=autonomy_readiness,
+            dominant_constraint=dominant_constraint,
+            rationale="; ".join(rationale_parts) + ".",
+            source_evidence=[
+                f"recent_learning_count={recent_learning_count}",
+                f"recent_learning_quality={recent_learning_quality:.2f}",
+                f"blocked_status_count={blocked_status_count}",
+                f"stale_queue_count={perception.stale_queue_count}",
+                f"body_growth_blocked={body_growth_blocked}",
+                f"repeated_drive_count={repeated_drive_count}",
+                f"historical_outcomes={historical_total}",
+                f"historical_success_ratio={historical_success_ratio:.2f}",
+            ],
+        )
+
+    def _build_adaptive_policy(
+        self,
+        *,
+        perception: DrivePerceptionSnapshot,
+        world_model: DriveWorldModel,
+        reflection: DriveReflection,
+        drive_context: Dict[str, Any],
+    ) -> DriveAdaptivePolicy:
+        drive_history = dict(drive_context.get("drive_history") or {})
+        policy = dict(drive_context.get("policy") or {})
+        strategy_memory = self._normalize_strategy_memory(
+            drive_history.get("strategy_memory")
+        )
+        historical_outcomes = [
+            dict(item)
+            for item in list(drive_history.get("outcomes") or [])
+            if isinstance(item, dict)
+        ]
+
+        stats: Dict[str, Dict[str, int]] = {}
+        for item in historical_outcomes[:18]:
+            family = str(
+                item.get("task_family")
+                or item.get("governance_task_type")
+                or item.get("execution_kind")
+                or "unknown"
+            ).strip().lower()
+            if not family:
+                continue
+            bucket = stats.setdefault(
+                family,
+                {"completed": 0, "failed": 0, "dragging": 0},
+            )
+            status = str(item.get("status") or "").strip().lower()
+            if status == "completed":
+                bucket["completed"] += 1
+            elif status in {"failed", "cancelled"}:
+                bucket["failed"] += 1
+            elif status in {"approved", "deferred", "paused", "awaiting_review", "retry"}:
+                bucket["dragging"] += 1
+
+        def _family_success(families: List[str], default: float = 0.5) -> float:
+            completed = failed = dragging = 0
+            for family in families:
+                bucket = stats.get(family, {})
+                completed += int(bucket.get("completed") or 0)
+                failed += int(bucket.get("failed") or 0)
+                dragging += int(bucket.get("dragging") or 0)
+            total = completed + failed + dragging
+            if total <= 0:
+                return default
+            return completed / total
+
+        historical_completed = 0
+        historical_failed = 0
+        historical_dragging = 0
+        for bucket in stats.values():
+            historical_completed += int(bucket.get("completed") or 0)
+            historical_failed += int(bucket.get("failed") or 0)
+            historical_dragging += int(bucket.get("dragging") or 0)
+        historical_total = historical_completed + historical_failed + historical_dragging
+        historical_drag_ratio = (
+            (historical_failed + historical_dragging) / historical_total
+            if historical_total > 0
+            else 0.0
+        )
+
+        learning_success = _family_success(["self_learning"], default=0.55)
+        queue_success = _family_success(["general_self_evolution", "self_evolution"], default=0.45)
+        body_success = _family_success(["body_upgrade", "body_improvement"], default=0.4)
+        memory_success = _family_success(["memory_maintenance"], default=0.65)
+
+        focus_stats = dict(strategy_memory.get("focus_stats") or {})
+        context_key = self._strategy_context_key(
+            perception=perception,
+            reflection=reflection,
+        )
+        contextual_focus_stats = dict(
+            dict(strategy_memory.get("contextual_focus_stats") or {}).get(context_key) or {}
+        )
+        agenda_topic_stats = dict(strategy_memory.get("agenda_topic_stats") or {})
+        observation_target_stats = dict(strategy_memory.get("observation_target_stats") or {})
+
+        def _effectiveness_from_bucket(bucket: Dict[str, Any], default: float) -> float:
+            completed = int(bucket.get("completed") or 0)
+            failed = int(bucket.get("failed") or 0)
+            dragging = int(bucket.get("dragging") or 0)
+            judged = int(bucket.get("judged") or 0)
+            resolved = completed + failed + dragging
+            if judged <= 0 and resolved <= 0:
+                return default
+            if resolved <= 0:
+                return default
+            success = completed / resolved
+            drag_penalty = dragging / resolved
+            failure_penalty = failed / resolved
+            return self._clamp01(success - drag_penalty * 0.18 - failure_penalty * 0.24)
+
+        def _focus_effectiveness(focus: str, default: float) -> float:
+            global_bucket = dict(focus_stats.get(focus) or {})
+            contextual_bucket = dict(contextual_focus_stats.get(focus) or {})
+            global_effect = _effectiveness_from_bucket(global_bucket, default)
+            if not contextual_bucket:
+                return global_effect
+            contextual_effect = _effectiveness_from_bucket(contextual_bucket, global_effect)
+            contextual_judged = int(contextual_bucket.get("judged") or 0)
+            global_judged = int(global_bucket.get("judged") or 0)
+            if contextual_judged <= 0:
+                return global_effect
+            confidence = min(0.75, 0.35 + contextual_judged * 0.08 + global_judged * 0.02)
+            return self._clamp01(global_effect * (1.0 - confidence) + contextual_effect * confidence)
+
+        focus_effectiveness = {
+            "truthfulness": _focus_effectiveness("truthfulness", default=0.56),
+            "memory_continuity": _focus_effectiveness("memory_continuity", default=0.58),
+            "learning_expansion": _focus_effectiveness("learning_expansion", default=0.54),
+            "queue_hygiene": _focus_effectiveness("queue_hygiene", default=0.48),
+            "body_growth": _focus_effectiveness("body_growth", default=0.44),
+            "observation": _focus_effectiveness("observation", default=0.52),
+        }
+        observation_recovery_advantage = max(
+            0.0,
+            focus_effectiveness["observation"] - focus_effectiveness["learning_expansion"],
+        )
+        contextual_observation_available = bool(contextual_focus_stats.get("observation"))
+        unresolved_observation_pressure = 0.0
+        observation_recovery_signal = 0.0
+        for stats in observation_target_stats.values():
+            if not isinstance(stats, dict):
+                continue
+            recommended = max(0, int(stats.get("recommended") or 0))
+            resolved = max(0, int(stats.get("resolved") or 0))
+            stalled = max(0, int(stats.get("stalled") or 0))
+            last_risk = self._clamp01(stats.get("last_risk") or 0.0)
+            if recommended <= 0:
+                continue
+            unresolved_ratio = max(0.0, (recommended - resolved) / max(recommended, 1))
+            recovery_ratio = resolved / max(recommended, 1)
+            unresolved_observation_pressure += (
+                unresolved_ratio * 0.12
+                + min(stalled, 3) * 0.05
+                + last_risk * 0.08
+            )
+            observation_recovery_signal += recovery_ratio * 0.08
+
+        agenda_drag_pressure = 0.0
+        agenda_resolution_signal = 0.0
+        for topic, stats in agenda_topic_stats.items():
+            if not isinstance(stats, dict):
+                continue
+            dragging = max(0, int(stats.get("dragging") or 0))
+            active_cycles = max(0, int(stats.get("active_cycles") or 0))
+            resolved = max(0, int(stats.get("resolved") or 0))
+            seen = max(0, int(stats.get("seen") or 0))
+            if seen <= 0:
+                continue
+            agenda_drag_pressure += max(0.0, (dragging + max(active_cycles - resolved, 0)) / max(seen, 1)) * 0.06
+            agenda_resolution_signal += (resolved / max(seen, 1)) * 0.05
+
+        learning_expansion_bias = self._clamp01(
+            0.52
+            + (learning_success - 0.5) * 0.4
+            + (0.08 if reflection.learning_yield_state == "strong" else 0.0)
+            - reflection.queue_blockage_pressure * 0.18
+            + (focus_effectiveness["learning_expansion"] - 0.5) * 0.16
+            - unresolved_observation_pressure * 0.22
+            + observation_recovery_signal * 0.18
+            + agenda_resolution_signal * 0.12
+            - float(policy.get("dynamic_learning_expansion_suppression") or 0.0)
+        )
+        truthfulness_bias = self._clamp01(
+            0.56
+            + world_model.truthfulness_pressure * 0.32
+            + max(0.0, 0.55 - learning_success) * 0.08
+            + (focus_effectiveness["truthfulness"] - 0.5) * 0.18
+            + min(
+                0.18,
+                sum(
+                    (
+                        self._clamp01(stats.get("last_risk") or 0.0) * 0.1
+                        + max(0, int(stats.get("stalled") or 0)) * 0.03
+                    )
+                    for target, stats in observation_target_stats.items()
+                    if target in {"truthfulness", "latent_truthfulness"}
+                    and isinstance(stats, dict)
+                ),
+            )
+            + float(policy.get("dynamic_truthfulness_bias_boost") or 0.0)
+        )
+        memory_continuity_bias = self._clamp01(
+            0.58
+            + (memory_success - 0.5) * 0.18
+            + world_model.memory_pressure * 0.22
+            + (focus_effectiveness["memory_continuity"] - 0.5) * 0.14
+        )
+        queue_hygiene_bias = self._clamp01(
+            0.44
+            + reflection.queue_blockage_pressure * 0.34
+            + max(0.0, 0.5 - queue_success) * 0.22
+            + reflection.repeated_drive_pressure * 0.1
+            + (focus_effectiveness["queue_hygiene"] - 0.45) * 0.16
+            + min(
+                0.16,
+                sum(
+                    (
+                        self._clamp01(stats.get("last_risk") or 0.0) * 0.08
+                        + max(0, int(stats.get("stalled") or 0)) * 0.03
+                    )
+                    for target, stats in observation_target_stats.items()
+                    if target == "queue_blockage" and isinstance(stats, dict)
+                ),
+            )
+            + agenda_drag_pressure * 0.08
+        )
+        body_growth_bias = self._clamp01(
+            0.42
+            + (body_success - 0.45) * 0.28
+            + world_model.body_upgrade_readiness * 0.16
+            - (0.18 if reflection.body_growth_blocked else 0.0)
+            - reflection.queue_blockage_pressure * 0.12
+            + (focus_effectiveness["body_growth"] - 0.42) * 0.14
+            - unresolved_observation_pressure * 0.08
+        )
+        observation_bias = self._clamp01(
+            0.3
+            + reflection.queue_blockage_pressure * 0.28
+            + max(0.0, 0.52 - reflection.autonomy_readiness) * 0.45
+            + max(0.0, 0.55 - learning_success) * 0.14
+            + (focus_effectiveness["observation"] - 0.5) * 0.34
+            + (0.22 if reflection.dominant_constraint == "weak_learning_yield" else 0.0)
+            + (0.18 if reflection.dominant_constraint == "historical_underdelivery" else 0.0)
+            + (
+                observation_recovery_advantage * 0.28
+                if reflection.dominant_constraint in {"weak_learning_yield", "historical_underdelivery"}
+                else 0.0
+            )
+            + (
+                0.08
+                if contextual_observation_available
+                and reflection.dominant_constraint in {"weak_learning_yield", "historical_underdelivery"}
+                else 0.0
+            )
+            + unresolved_observation_pressure * 0.36
+            - observation_recovery_signal * 0.18
+            + agenda_drag_pressure * 0.12
+        )
+        candidate_throttle = self._clamp01(
+            0.18
+            + reflection.queue_blockage_pressure * 0.32
+            + reflection.repeated_drive_pressure * 0.24
+            + max(0.0, 0.5 - reflection.autonomy_readiness) * 0.3
+            + max(0.0, 0.5 - focus_effectiveness["learning_expansion"]) * 0.06
+            + max(0.0, 0.5 - focus_effectiveness["body_growth"]) * 0.04
+            + (0.08 if reflection.dominant_constraint == "weak_learning_yield" else 0.0)
+            + unresolved_observation_pressure * 0.34
+            + agenda_drag_pressure * 0.1
+            - observation_recovery_signal * 0.1
+            + float(policy.get("dynamic_candidate_throttle_boost") or 0.0)
+        )
+        observation_bias = self._clamp01(
+            observation_bias + float(policy.get("dynamic_observation_bias_boost") or 0.0)
+        )
+
+        focus_candidates = {
+            "truthfulness": truthfulness_bias,
+            "memory_continuity": memory_continuity_bias,
+            "learning_expansion": learning_expansion_bias,
+            "queue_hygiene": queue_hygiene_bias,
+            "body_growth": body_growth_bias,
+            "observation": observation_bias,
+        }
+        preferred_focus = max(focus_candidates.items(), key=lambda item: item[1])[0]
+        if (
+            historical_drag_ratio >= 0.66
+            and (
+                preferred_focus == "observation"
+                or reflection.autonomy_readiness <= 0.18
+                or observation_bias >= 0.58
+            )
+        ):
+            candidate_budget = 1
+        elif candidate_throttle >= 0.72:
+            candidate_budget = 1
+        elif candidate_throttle >= 0.45:
+            candidate_budget = 2
+        else:
+            candidate_budget = 4
+        if preferred_focus == "observation" or observation_bias >= 0.7:
+            exploratory_learning_quota = 0
+        elif candidate_throttle >= 0.65:
+            exploratory_learning_quota = 0
+        elif candidate_throttle >= 0.4 or preferred_focus == "queue_hygiene":
+            exploratory_learning_quota = 1
+        else:
+            exploratory_learning_quota = 2
+        body_growth_quota = (
+            1
+            if (
+                body_growth_bias >= 0.58
+                and candidate_throttle < 0.62
+                and preferred_focus in {"body_growth", "learning_expansion"}
+            )
+            else 0
+        )
+
+        rationale_parts = [
+            f"preferred focus is {preferred_focus}",
+            f"candidate throttle is {candidate_throttle:.2f}",
+            f"candidate budget is {candidate_budget}",
+            f"learning bias is {learning_expansion_bias:.2f}",
+            f"queue bias is {queue_hygiene_bias:.2f}",
+        ]
+        if focus_stats:
+            rationale_parts.append(
+                f"strategy memory favors {preferred_focus} at {focus_effectiveness.get(preferred_focus, 0.5):.2f} effectiveness"
+            )
+        if contextual_focus_stats:
+            rationale_parts.append(
+                f"context posture memory is active for {context_key}"
+            )
+        if observation_bias >= 0.6:
+            rationale_parts.append("observation bias is elevated because autonomous output should slow down")
+
+        return DriveAdaptivePolicy(
+            learning_expansion_bias=learning_expansion_bias,
+            truthfulness_bias=truthfulness_bias,
+            memory_continuity_bias=memory_continuity_bias,
+            queue_hygiene_bias=queue_hygiene_bias,
+            body_growth_bias=body_growth_bias,
+            observation_bias=observation_bias,
+            candidate_throttle=candidate_throttle,
+            candidate_budget=candidate_budget,
+            exploratory_learning_quota=exploratory_learning_quota,
+            body_growth_quota=body_growth_quota,
+            preferred_focus=preferred_focus,
+            rationale="; ".join(rationale_parts) + ".",
+            source_evidence=[
+                f"learning_success={learning_success:.2f}",
+                f"queue_success={queue_success:.2f}",
+                f"body_success={body_success:.2f}",
+                f"memory_success={memory_success:.2f}",
+                f"queue_blockage_pressure={reflection.queue_blockage_pressure:.2f}",
+                f"autonomy_readiness={reflection.autonomy_readiness:.2f}",
+                f"context_key={context_key}",
+                f"observation_recovery_advantage={observation_recovery_advantage:.2f}",
+                f"unresolved_observation_pressure={unresolved_observation_pressure:.2f}",
+                f"observation_recovery_signal={observation_recovery_signal:.2f}",
+                f"agenda_drag_pressure={agenda_drag_pressure:.2f}",
+                f"agenda_resolution_signal={agenda_resolution_signal:.2f}",
+                f"dynamic_candidate_throttle_boost={float(policy.get('dynamic_candidate_throttle_boost') or 0.0):.2f}",
+                f"dynamic_observation_bias_boost={float(policy.get('dynamic_observation_bias_boost') or 0.0):.2f}",
+                f"dynamic_truthfulness_bias_boost={float(policy.get('dynamic_truthfulness_bias_boost') or 0.0):.2f}",
+                f"dynamic_learning_expansion_suppression={float(policy.get('dynamic_learning_expansion_suppression') or 0.0):.2f}",
+                f"focus_effectiveness[{preferred_focus}]={focus_effectiveness.get(preferred_focus, 0.5):.2f}",
+                f"candidate_budget={candidate_budget}",
+                f"exploratory_learning_quota={exploratory_learning_quota}",
+                f"body_growth_quota={body_growth_quota}",
+            ],
+        )
+
+    def _strategy_context_key(
+        self,
+        *,
+        perception: DrivePerceptionSnapshot,
+        reflection: DriveReflection,
+    ) -> str:
+        user_mode = str(perception.user_mode or "unknown").strip().lower() or "unknown"
+        system_posture = str(perception.system_posture or "unknown").strip().lower() or "unknown"
+        dominant_constraint = (
+            str(reflection.dominant_constraint or "none").strip().lower() or "none"
+        )
+        return f"{user_mode}|{system_posture}|{dominant_constraint}"
+
+    def _detect_needs(
+        self,
+        *,
+        perception: DrivePerceptionSnapshot,
+        world_model: DriveWorldModel,
+        reflection: DriveReflection,
+        adaptive_policy: DriveAdaptivePolicy,
+        memory_plan: Dict[str, Any],
+        self_learning_plan: Dict[str, Any],
+        self_evolution_plan: Dict[str, Any],
+    ) -> List[DriveNeed]:
+        needs: List[DriveNeed] = []
+        if memory_plan.get("eligible_for_planning"):
+            needs.append(
+                DriveNeed(
+                    need_type="stabilize_memory_continuity",
+                    severity=self._clamp01(
+                        world_model.memory_pressure
+                        + 0.08
+                        + adaptive_policy.memory_continuity_bias * 0.22
+                    ),
+                    urgency=self._clamp01(
+                        world_model.memory_pressure
+                        + 0.1
+                        + adaptive_policy.memory_continuity_bias * 0.18
+                    ),
+                    confidence=self._clamp01(0.68 + adaptive_policy.memory_continuity_bias * 0.22),
+                    rationale="Memory continuity work remains a standing supervisory obligation during viable execution windows.",
+                    source_evidence=[
+                        f"in_execution_window={perception.in_execution_window}",
+                        f"memory_idle={perception.checks.get('has_memory_idle', False)}",
+                        f"memory_continuity_bias={adaptive_policy.memory_continuity_bias:.2f}",
+                    ],
+                )
+            )
+        if self_learning_plan.get("eligible_for_planning") and perception.correction_signals > 0:
+            needs.append(
+                DriveNeed(
+                    need_type="repair_truthfulness",
+                    severity=self._clamp01(
+                        world_model.truthfulness_pressure
+                        + adaptive_policy.truthfulness_bias * 0.16
+                    ),
+                    urgency=self._clamp01(
+                        world_model.truthfulness_pressure
+                        + adaptive_policy.truthfulness_bias * 0.12
+                    ),
+                    confidence=self._clamp01(0.72 + adaptive_policy.truthfulness_bias * 0.24),
+                    rationale="Recent errors and uncertainty signals indicate truthfulness debt that should be surfaced and reviewed.",
+                    source_evidence=[
+                        f"correction_signals={perception.correction_signals}",
+                        f"recent_errors={perception.recent_errors}",
+                        f"uncertainty_count={perception.uncertainty_count}",
+                        f"truthfulness_bias={adaptive_policy.truthfulness_bias:.2f}",
+                    ],
+                )
+            )
+        if self_learning_plan.get("eligible_for_planning"):
+            needs.append(
+                DriveNeed(
+                    need_type="expand_learning_frontier",
+                    severity=self._clamp01(
+                        world_model.learning_momentum
+                        - 0.02
+                        + reflection.autonomy_readiness * 0.16
+                        + adaptive_policy.learning_expansion_bias * 0.2
+                        - reflection.queue_blockage_pressure * 0.12
+                    ),
+                    urgency=self._clamp01(
+                        world_model.learning_momentum
+                        + reflection.recent_learning_quality * 0.15
+                        + adaptive_policy.learning_expansion_bias * 0.1
+                        - reflection.queue_blockage_pressure * 0.08
+                        - adaptive_policy.candidate_throttle * 0.12
+                    ),
+                    confidence=self._clamp01(
+                        world_model.self_confidence * 0.52
+                        + reflection.autonomy_readiness * 0.22
+                        + adaptive_policy.learning_expansion_bias * 0.26
+                    ),
+                    rationale=(
+                        "Learning should expand when recent evidence still yields value, "
+                        "but it should cool down when queue blockage suggests more output would only add pressure."
+                    ),
+                    source_evidence=[
+                        f"learning_quality={perception.learning_quality:.2f}",
+                        f"queued_learning_count={perception.queued_learning_count}",
+                        f"has_learning_history={perception.has_learning_history}",
+                        f"learning_yield_state={reflection.learning_yield_state}",
+                        f"queue_blockage_state={reflection.queue_blockage_state}",
+                        f"learning_expansion_bias={adaptive_policy.learning_expansion_bias:.2f}",
+                        f"candidate_throttle={adaptive_policy.candidate_throttle:.2f}",
+                    ],
+                )
+            )
+        if (
+            self_evolution_plan.get("eligible_for_planning")
+            and perception.shell_slot_present
+            and perception.learning_quality >= 60.0
+            and not reflection.body_growth_blocked
+        ):
+            needs.append(
+                DriveNeed(
+                    need_type="prepare_body_growth",
+                    severity=self._clamp01(
+                        world_model.body_upgrade_readiness
+                        - 0.02
+                        + reflection.autonomy_readiness * 0.12
+                        + adaptive_policy.body_growth_bias * 0.18
+                    ),
+                    urgency=self._clamp01(
+                        world_model.body_upgrade_readiness
+                        + reflection.recent_learning_quality * 0.08
+                        + adaptive_policy.body_growth_bias * 0.1
+                        - adaptive_policy.candidate_throttle * 0.08
+                    ),
+                    confidence=self._clamp01(
+                        0.5
+                        + world_model.self_confidence * 0.12
+                        + reflection.autonomy_readiness * 0.1
+                        + adaptive_policy.body_growth_bias * 0.28
+                    ),
+                    rationale="Body growth should only be prepared when recent learning has real yield and shell improvement is not already blocked by recent output pressure.",
+                    source_evidence=[
+                        f"learning_quality={perception.learning_quality:.2f}",
+                        f"shell_slot_present={perception.shell_slot_present}",
+                        f"queued_body_improvement_count={perception.queued_body_improvement_count}",
+                        f"body_growth_blocked={reflection.body_growth_blocked}",
+                        f"body_growth_bias={adaptive_policy.body_growth_bias:.2f}",
+                    ],
+                )
+            )
+        if self_evolution_plan.get("eligible_for_planning"):
+            queue_need_score = self._clamp01(
+                0.2
+                + min(perception.active_queue_count, 5) * 0.08
+                + min(perception.stale_queue_count + perception.pending_review_count, 4) * 0.08
+                + reflection.queue_blockage_pressure * 0.18
+                + adaptive_policy.queue_hygiene_bias * 0.16
+            )
+            needs.append(
+                DriveNeed(
+                    need_type="clear_governance_backlog",
+                    severity=queue_need_score,
+                    urgency=self._clamp01(
+                        queue_need_score
+                        - 0.02
+                        + reflection.repeated_drive_pressure * 0.08
+                        + adaptive_policy.queue_hygiene_bias * 0.12
+                    ),
+                    confidence=self._clamp01(
+                        0.56
+                        + reflection.queue_blockage_pressure * 0.16
+                        + adaptive_policy.queue_hygiene_bias * 0.22
+                    ),
+                    rationale="Queue hygiene becomes more important when repeated endogenous output is not closing loops and backlog pressure keeps accumulating.",
+                    source_evidence=[
+                        f"active_queue_count={perception.active_queue_count}",
+                        f"stale_queue_count={perception.stale_queue_count}",
+                        f"pending_review_count={perception.pending_review_count}",
+                        f"repeated_drive_pressure={reflection.repeated_drive_pressure:.2f}",
+                        f"queue_hygiene_bias={adaptive_policy.queue_hygiene_bias:.2f}",
+                    ],
+                )
+            )
+        if (
+            reflection.queue_blockage_pressure >= 0.45
+            or reflection.autonomy_readiness <= 0.42
+            or adaptive_policy.observation_bias >= 0.58
+        ):
+            needs.append(
+                DriveNeed(
+                    need_type="observe_before_acting",
+                    severity=self._clamp01(
+                        0.34
+                        + reflection.queue_blockage_pressure * 0.32
+                        + max(0.0, 0.5 - reflection.autonomy_readiness) * 0.45
+                        + adaptive_policy.observation_bias * 0.18
+                    ),
+                    urgency=self._clamp01(
+                        0.28
+                        + reflection.queue_blockage_pressure * 0.28
+                        + max(0.0, 0.45 - reflection.autonomy_readiness) * 0.4
+                        + adaptive_policy.observation_bias * 0.14
+                    ),
+                    confidence=self._clamp01(0.62 + adaptive_policy.observation_bias * 0.28),
+                    rationale="The drive should slow itself down and observe when repeated output is meeting blockage or autonomy readiness is not yet strong enough.",
+                    source_evidence=[
+                        f"queue_blockage_pressure={reflection.queue_blockage_pressure:.2f}",
+                        f"autonomy_readiness={reflection.autonomy_readiness:.2f}",
+                        f"dominant_constraint={reflection.dominant_constraint}",
+                        f"observation_bias={adaptive_policy.observation_bias:.2f}",
+                    ],
+                )
+            )
+        return needs
+
+    def _synthesize_intents(
+        self,
+        *,
+        needs: List[DriveNeed],
+        perception: DrivePerceptionSnapshot,
+        world_model: DriveWorldModel,
+        reflection: DriveReflection,
+        adaptive_policy: DriveAdaptivePolicy,
+    ) -> List[DriveIntent]:
+        intents: List[DriveIntent] = []
+        for need in needs:
+            priority = self._clamp01(
+                need.severity * 0.45
+                + need.urgency * 0.35
+                + need.confidence * 0.20
+            )
+            if need.need_type == "expand_learning_frontier":
+                priority = self._clamp01(
+                    priority
+                    + adaptive_policy.learning_expansion_bias * 0.08
+                    - adaptive_policy.candidate_throttle * 0.1
+                )
+            elif need.need_type == "prepare_body_growth":
+                priority = self._clamp01(
+                    priority
+                    + adaptive_policy.body_growth_bias * 0.08
+                    - adaptive_policy.candidate_throttle * 0.06
+                )
+            elif need.need_type == "clear_governance_backlog":
+                priority = self._clamp01(priority + adaptive_policy.queue_hygiene_bias * 0.08)
+            elif need.need_type == "observe_before_acting":
+                priority = self._clamp01(priority + adaptive_policy.observation_bias * 0.12)
+            if need.need_type == "stabilize_memory_continuity":
+                intents.append(
+                    DriveIntent(
+                        intent_type="maintain_memory_continuity",
+                        priority=priority,
+                        rationale=need.rationale,
+                        target_horizon="immediate",
+                        output_channel="task_candidate",
+                        source_needs=[need.need_type],
+                        candidate_family="memory_maintenance",
+                        candidate_kind="memory_maintenance",
+                    )
+                )
+            elif need.need_type == "repair_truthfulness":
+                intents.append(
+                    DriveIntent(
+                        intent_type="review_truthfulness_signals",
+                        priority=priority,
+                        rationale=need.rationale,
+                        target_horizon="immediate",
+                        output_channel="task_candidate",
+                        source_needs=[need.need_type],
+                        candidate_family="self_learning",
+                        candidate_kind="truthfulness_review",
+                    )
+                )
+            elif need.need_type == "expand_learning_frontier":
+                intents.append(
+                    DriveIntent(
+                        intent_type="expand_learning_frontier",
+                        priority=priority,
+                        rationale=need.rationale,
+                        target_horizon="near_term",
+                        output_channel="task_candidate",
+                        source_needs=[need.need_type],
+                        candidate_family="self_learning",
+                        candidate_kind=(
+                            "shell_baseline_learning"
+                            if perception.shell_slot_present and not perception.has_learning_history
+                            else "exploratory_learning"
+                        ),
+                    )
+                )
+            elif need.need_type == "prepare_body_growth":
+                intents.append(
+                    DriveIntent(
+                        intent_type="prepare_body_growth",
+                        priority=priority,
+                        rationale=need.rationale,
+                        target_horizon="near_term",
+                        output_channel="task_candidate",
+                        source_needs=[need.need_type],
+                        candidate_family="body_upgrade",
+                        candidate_kind="body_improvement",
+                    )
+                )
+            elif need.need_type == "clear_governance_backlog":
+                intents.append(
+                    DriveIntent(
+                        intent_type="review_queue_hygiene",
+                        priority=priority,
+                        rationale=need.rationale,
+                        target_horizon="near_term",
+                        output_channel="task_candidate",
+                        source_needs=[need.need_type],
+                        candidate_family="general_self_evolution",
+                        candidate_kind="queue_hygiene_review",
+                    )
+                )
+            elif need.need_type == "observe_before_acting":
+                intents.append(
+                    DriveIntent(
+                        intent_type="observe_before_acting",
+                        priority=priority,
+                        rationale=need.rationale,
+                        target_horizon=(
+                            "immediate"
+                            if reflection.queue_blockage_pressure >= 0.55
+                            else "near_term"
+                        ),
+                        output_channel="drive_signal",
+                        source_needs=[need.need_type],
+                    )
+                )
+        intents.sort(key=lambda item: item.priority, reverse=True)
+        return intents
+
+    def _emit_drive_signals(
+        self,
+        *,
+        perception: DrivePerceptionSnapshot,
+        world_model: DriveWorldModel,
+        reflection: DriveReflection,
+        adaptive_policy: DriveAdaptivePolicy,
+        needs: List[DriveNeed],
+        intents: List[DriveIntent],
+    ) -> List[DriveSignal]:
+        signals: List[DriveSignal] = []
+        need_lookup = {need.need_type: need for need in needs}
+        intent_lookup = {intent.intent_type: intent for intent in intents}
+
+        if world_model.queue_health in {"busy", "strained"}:
+            queue_need = need_lookup.get("clear_governance_backlog")
+            queue_intent = intent_lookup.get("review_queue_hygiene")
+            signals.append(
+                DriveSignal(
+                    signal_type="governance_review_suggestion",
+                    priority=self._clamp01(
+                        (queue_need.severity if queue_need else 0.45)
+                        + (0.08 if world_model.queue_health == "strained" else 0.0)
+                    ),
+                    message="Queue state suggests a governance review pass before more autonomous work accumulates.",
+                    rationale=(
+                        queue_need.rationale
+                        if queue_need is not None
+                        else "Backlog pressure and review debt indicate the queue should be examined."
+                    ),
+                    source_needs=(
+                        [queue_need.need_type]
+                        if queue_need is not None
+                        else ["clear_governance_backlog"]
+                    ),
+                    related_intent=queue_intent.intent_type if queue_intent is not None else None,
+                    payload={
+                        "queue_health": world_model.queue_health,
+                        "active_queue_count": perception.active_queue_count,
+                        "stale_queue_count": perception.stale_queue_count,
+                        "pending_review_count": perception.pending_review_count,
+                    },
+                )
+            )
+        else:
+            queue_need = need_lookup.get("clear_governance_backlog")
+            queue_intent = intent_lookup.get("review_queue_hygiene")
+            if (
+                queue_need is not None
+                and (
+                    perception.pending_review_count > 0
+                    or perception.stale_queue_count > 0
+                    or queue_need.severity >= 0.28
+                )
+            ):
+                signals.append(
+                    DriveSignal(
+                        signal_type="governance_review_suggestion",
+                        priority=self._clamp01(queue_need.severity + 0.06),
+                        message="Queue review is suggested because review debt or stale work is already present even before full backlog strain emerges.",
+                        rationale=queue_need.rationale,
+                        source_needs=[queue_need.need_type],
+                        related_intent=queue_intent.intent_type if queue_intent is not None else None,
+                        payload={
+                            "queue_health": world_model.queue_health,
+                            "active_queue_count": perception.active_queue_count,
+                            "stale_queue_count": perception.stale_queue_count,
+                            "pending_review_count": perception.pending_review_count,
+                            "trigger": "early_review_debt",
+                        },
+                    )
+                )
+
+        observe_need = need_lookup.get("observe_before_acting")
+        if observe_need is not None:
+            observe_intent = intent_lookup.get("observe_before_acting")
+            signals.append(
+                DriveSignal(
+                    signal_type="observation_signal",
+                    priority=self._clamp01(
+                        observe_need.severity + 0.06 + adaptive_policy.observation_bias * 0.12
+                    ),
+                    message="Observation is recommended before more autonomous output because the drive is encountering blockage or weak readiness.",
+                    rationale=observe_need.rationale,
+                    source_needs=[observe_need.need_type],
+                    related_intent=observe_intent.intent_type if observe_intent is not None else None,
+                    payload={
+                        "observation_target": reflection.dominant_constraint,
+                        "queue_blockage_state": reflection.queue_blockage_state,
+                        "autonomy_readiness": round(reflection.autonomy_readiness, 4),
+                        "repeated_drive_pressure": round(reflection.repeated_drive_pressure, 4),
+                    },
+                )
+            )
+            signals.append(
+                DriveSignal(
+                    signal_type="autonomy_alignment_signal",
+                    priority=self._clamp01(
+                        observe_need.urgency + 0.04 + adaptive_policy.observation_bias * 0.16
+                    ),
+                    message="Autonomous output should be aligned and throttled before pushing more candidate work.",
+                    rationale=(
+                        f"{reflection.rationale} {adaptive_policy.rationale}"
+                    ),
+                    source_needs=[observe_need.need_type],
+                    related_intent=observe_intent.intent_type if observe_intent is not None else None,
+                    payload={
+                        "dominant_constraint": reflection.dominant_constraint,
+                        "learning_yield_state": reflection.learning_yield_state,
+                        "queue_blockage_state": reflection.queue_blockage_state,
+                    },
+                )
+            )
+        elif perception.correction_signals >= 3 or perception.learning_quality >= 75.0:
+            observation_target = "truthfulness" if perception.correction_signals >= 3 else "body_growth"
+            related_intent = (
+                "review_truthfulness_signals"
+                if observation_target == "truthfulness"
+                else "prepare_body_growth"
+            )
+            source_need = (
+                "repair_truthfulness"
+                if observation_target == "truthfulness"
+                else "prepare_body_growth"
+            )
+            signals.append(
+                DriveSignal(
+                    signal_type="observation_signal",
+                    priority=self._clamp01(
+                        0.52
+                        + (0.18 if observation_target == "truthfulness" else 0.1)
+                        + min(perception.correction_signals, 4) * 0.04
+                    ),
+                    message=(
+                        "Observation is recommended before further autonomous actions because correction pressure is rising."
+                        if observation_target == "truthfulness"
+                        else "Observation is recommended because learning quality suggests a possible growth window is forming."
+                    ),
+                    rationale=(
+                        need_lookup[source_need].rationale
+                        if source_need in need_lookup
+                        else "The current state warrants supervisory observation."
+                    ),
+                    source_needs=[source_need],
+                    related_intent=related_intent,
+                    payload={
+                        "observation_target": observation_target,
+                        "correction_signals": perception.correction_signals,
+                        "learning_quality": round(perception.learning_quality, 4),
+                        "system_posture": perception.system_posture,
+                    },
+                )
+            )
+
+        signals.append(
+            DriveSignal(
+                signal_type="drive_posture_signal",
+                priority=self._clamp01(0.4 + adaptive_policy.candidate_throttle * 0.3),
+                message="The endogenous drive has selected a current governance posture and compatibility budget for this cycle.",
+                rationale=adaptive_policy.rationale,
+                source_needs=(
+                    [observe_need.need_type]
+                    if observe_need is not None
+                    else []
+                ),
+                related_intent=(
+                    "observe_before_acting"
+                    if adaptive_policy.preferred_focus == "observation"
+                    else None
+                ),
+                payload={
+                    "preferred_focus": adaptive_policy.preferred_focus,
+                    "candidate_budget": adaptive_policy.candidate_budget,
+                    "exploratory_learning_quota": adaptive_policy.exploratory_learning_quota,
+                    "body_growth_quota": adaptive_policy.body_growth_quota,
+                    "candidate_throttle": round(adaptive_policy.candidate_throttle, 4),
+                    "source_evidence": list(adaptive_policy.source_evidence),
+                },
+            )
+        )
+
+        signals.sort(key=lambda item: item.priority, reverse=True)
+        return signals
+
+    def _intent_metadata(
+        self,
+        *,
+        intent: DriveIntent,
+        needs: List[DriveNeed],
+        perception: DrivePerceptionSnapshot,
+        world_model: DriveWorldModel,
+        reflection: DriveReflection,
+        adaptive_policy: DriveAdaptivePolicy,
+    ) -> Dict[str, Any]:
+        report = DriveDeliberationReport(
+            perception=perception,
+            world_model=world_model,
+            reflection=reflection,
+            adaptive_policy=adaptive_policy,
+            needs=needs,
+            intents=[intent],
+        ).to_dict()
+        intent_dict = report["intents"][0] if report["intents"] else {}
+        linked_needs = [
+            need
+            for need in report["needs"]
+            if need["need_type"] in set(intent.source_needs)
+        ]
+        return {
+            "perception": report["perception"],
+            "world_model": report["world_model"],
+            "reflection": report["reflection"],
+            "adaptive_policy": report["adaptive_policy"],
+            "intent": intent_dict,
+            "needs": linked_needs,
+        }
+
+    def _build_scored_candidate(
+        self,
+        *,
+        stable_key: str,
+        title: str,
+        summary: str,
+        priority: str,
+        governance_task_type: str,
+        task_family: str,
+        execution_kind: Optional[str],
+        value_tags: List[str],
+        candidate_kind: str,
+        score_inputs: Dict[str, Any],
+        metadata: Optional[Dict[str, Any]] = None,
+        evidence: Optional[Dict[str, Any]] = None,
+        constraints: Optional[Dict[str, Any]] = None,
+    ) -> EndogenousTaskCandidate:
+        utility, score_breakdown = self._score_candidate(
+            candidate_kind=candidate_kind,
+            **score_inputs,
+        )
+        merged_metadata = dict(metadata or {})
+        merged_metadata["score_breakdown"] = score_breakdown
+        merged_evidence = dict(evidence or {})
+        merged_evidence["score_breakdown"] = score_breakdown
+        return EndogenousTaskCandidate(
+            stable_key=stable_key,
+            title=title,
+            summary=summary,
+            priority=priority,
+            governance_task_type=governance_task_type,
+            task_family=task_family,
+            execution_kind=execution_kind,
+            value_tags=list(value_tags),
+            utility=utility,
+            metadata=merged_metadata,
+            evidence=merged_evidence,
+            constraints=dict(constraints or {}),
+        )
+
+    def _score_candidate(
+        self,
+        *,
+        candidate_kind: str,
+        core_value_strength: float,
+        urgency: float,
+        novelty: float,
+        specificity: float,
+        execution_readiness: float,
+        queue_pressure_penalty: float = 0.0,
+        repetition_penalty: float = 0.0,
+        adaptive_factor: float = 1.0,
+    ) -> tuple[float, Dict[str, Any]]:
+        dimensions = {
+            "core_value_strength": round(self._clamp01(core_value_strength), 4),
+            "urgency": round(self._clamp01(urgency), 4),
+            "novelty": round(self._clamp01(novelty), 4),
+            "specificity": round(self._clamp01(specificity), 4),
+            "execution_readiness": round(self._clamp01(execution_readiness), 4),
+        }
+        penalties = {
+            "queue_pressure_penalty": round(self._clamp01(queue_pressure_penalty), 4),
+            "repetition_penalty": round(self._clamp01(repetition_penalty), 4),
+        }
+        raw_score = (
+            dimensions["core_value_strength"] * _SCORE_WEIGHTS["core_value_strength"]
+            + dimensions["urgency"] * _SCORE_WEIGHTS["urgency"]
+            + dimensions["novelty"] * _SCORE_WEIGHTS["novelty"]
+            + dimensions["specificity"] * _SCORE_WEIGHTS["specificity"]
+            + dimensions["execution_readiness"] * _SCORE_WEIGHTS["execution_readiness"]
+            - penalties["queue_pressure_penalty"] * _SCORE_WEIGHTS["queue_pressure_penalty"]
+            - penalties["repetition_penalty"] * _SCORE_WEIGHTS["repetition_penalty"]
+        )
+        normalized_adaptive_factor = round(max(0.7, min(1.25, float(adaptive_factor))), 4)
+        utility = round(self._clamp01(raw_score * normalized_adaptive_factor), 4)
+        return utility, {
+            "score_model": "endogenous_drive_v2",
+            "candidate_kind": candidate_kind,
+            "dimensions": dimensions,
+            "penalties": penalties,
+            "weights": dict(_SCORE_WEIGHTS),
+            "adaptive_factor": normalized_adaptive_factor,
+            "utility": utility,
+        }
+
+    def _adaptive_factor_for_candidate(
+        self,
+        *,
+        candidate_kind: str,
+        adaptive_policy: DriveAdaptivePolicy,
+    ) -> float:
+        if candidate_kind == "memory_maintenance":
+            factor = 0.9 + adaptive_policy.memory_continuity_bias * 0.35
+            if adaptive_policy.preferred_focus == "memory_continuity":
+                factor += 0.08
+            return factor
+        if candidate_kind == "truthfulness_review":
+            factor = 0.9 + adaptive_policy.truthfulness_bias * 0.35
+            if adaptive_policy.preferred_focus == "truthfulness":
+                factor += 0.08
+            return factor
+        if candidate_kind in {"exploratory_learning", "shell_baseline_learning", "generic_learning_fallback"}:
+            factor = (
+                0.82
+                + adaptive_policy.learning_expansion_bias * 0.3
+                - adaptive_policy.candidate_throttle * 0.2
+            )
+            if adaptive_policy.preferred_focus == "learning_expansion":
+                factor += 0.06
+            return factor
+        if candidate_kind == "queue_hygiene_review":
+            factor = 0.84 + adaptive_policy.queue_hygiene_bias * 0.32
+            if adaptive_policy.preferred_focus == "queue_hygiene":
+                factor += 0.08
+            return factor
+        if candidate_kind == "body_improvement":
+            factor = (
+                0.8
+                + adaptive_policy.body_growth_bias * 0.3
+                - adaptive_policy.candidate_throttle * 0.16
+            )
+            if adaptive_policy.preferred_focus == "body_growth":
+                factor += 0.08
+            return factor
+        return 1.0
+
+    def _neutral_adaptive_policy(self) -> DriveAdaptivePolicy:
+        return DriveAdaptivePolicy(
+            learning_expansion_bias=0.5,
+            truthfulness_bias=0.5,
+            memory_continuity_bias=0.5,
+            queue_hygiene_bias=0.5,
+            body_growth_bias=0.5,
+            observation_bias=0.5,
+            candidate_throttle=0.0,
+            candidate_budget=4,
+            exploratory_learning_quota=2,
+            body_growth_quota=1,
+            preferred_focus="learning_expansion",
+            rationale="fallback adaptive policy.",
+        )
+
+    def _candidate_kind_of(self, candidate: EndogenousTaskCandidate) -> str:
+        metadata = dict(candidate.metadata or {})
+        score_breakdown = dict(metadata.get("score_breakdown") or {})
+        return str(score_breakdown.get("candidate_kind") or "").strip()
+
+    def _adaptive_group_for_candidate(self, candidate: EndogenousTaskCandidate) -> Optional[str]:
+        candidate_kind = self._candidate_kind_of(candidate)
+        if candidate_kind in {
+            "exploratory_learning",
+            "shell_baseline_learning",
+            "generic_learning_fallback",
+        }:
+            return "exploratory_learning"
+        if candidate_kind == "body_improvement":
+            return "body_growth"
+        return None
+
+    def _apply_adaptive_candidate_budget(
+        self,
+        candidates: List[EndogenousTaskCandidate],
+        *,
+        adaptive_policy: DriveAdaptivePolicy,
+    ) -> List[EndogenousTaskCandidate]:
+        if not candidates:
+            return []
+
+        ordered = sorted(candidates, key=lambda candidate: candidate.utility, reverse=True)
+        selected: List[EndogenousTaskCandidate] = []
+        group_counts: Dict[str, int] = {
+            "exploratory_learning": 0,
+            "body_growth": 0,
+        }
+        group_limits: Dict[str, int] = {
+            "exploratory_learning": max(0, int(adaptive_policy.exploratory_learning_quota)),
+            "body_growth": max(0, int(adaptive_policy.body_growth_quota)),
+        }
+        budget = max(1, int(adaptive_policy.candidate_budget))
+        observation_mode = (
+            adaptive_policy.preferred_focus == "observation"
+            or adaptive_policy.observation_bias >= 0.72
+        )
+
+        for candidate in ordered:
+            candidate_kind = self._candidate_kind_of(candidate)
+            if observation_mode and candidate_kind not in {
+                "truthfulness_review",
+                "queue_hygiene_review",
+                "memory_maintenance",
+            }:
+                continue
+            group = self._adaptive_group_for_candidate(candidate)
+            if group is not None and group_counts[group] >= group_limits[group]:
+                continue
+            selected.append(candidate)
+            if group is not None:
+                group_counts[group] += 1
+            if len(selected) >= budget:
+                break
+
+        if not selected:
+            return ordered[:1]
+        return selected
+
+    def _candidate_stream(
+        self, idle_window: Dict[str, Any], *, existing_keys: set[str] = None
+    ) -> List[EndogenousTaskCandidate]:
+        if existing_keys is None:
+            existing_keys = set()
+        activity = dict(idle_window.get("activity") or {})
+        drive_context = self._build_drive_context(idle_window)
+        policy = drive_context["policy"]
         decisions_by_family = dict(idle_window.get("task_family_decisions") or {})
         decisions_by_governance = dict(idle_window.get("governance_task_type_decisions") or {})
 
@@ -124,11 +1931,35 @@ class EndogenousDriveEngine:
             decisions_by_family,
             decisions_by_governance,
         )
+        deliberation = self.build_deliberation_report(idle_window=idle_window)
+        perception = deliberation.perception
+        world_model = deliberation.world_model
+        reflection = deliberation.reflection
+        adaptive_policy = deliberation.adaptive_policy
+        needs = list(deliberation.needs)
+        intents = list(deliberation.intents)
+        intents_by_kind = {
+            str(intent.candidate_kind or ""): intent
+            for intent in intents
+            if intent.candidate_kind
+        }
 
         candidates: List[EndogenousTaskCandidate] = []
+        candidates.extend(
+            self._llm_task_proposals(
+                idle_window=idle_window,
+                existing_keys=existing_keys,
+                deliberation=deliberation,
+                drive_context=drive_context,
+                memory_plan=memory_plan,
+                self_learning_plan=self_learning_plan,
+                self_evolution_plan=self_evolution_plan,
+            )
+        )
         if memory_plan.get("eligible_for_planning") and "continuity:memory_maintenance_sweep" not in existing_keys:
+            memory_intent = intents_by_kind.get("memory_maintenance")
             candidates.append(
-                EndogenousTaskCandidate(
+                self._build_scored_candidate(
                     stable_key="continuity:memory_maintenance_sweep",
                     title="Maintain long-term memory continuity",
                     summary=(
@@ -140,7 +1971,38 @@ class EndogenousDriveEngine:
                     task_family="memory_maintenance",
                     execution_kind="memory_maintenance",
                     value_tags=["continuity"],
-                    utility=0.92,
+                    candidate_kind="memory_maintenance",
+                    score_inputs={
+                        "core_value_strength": 1.0,
+                        "urgency": self._memory_maintenance_urgency(idle_window),
+                        "novelty": 0.58,
+                        "specificity": 0.78,
+                        "execution_readiness": 1.0,
+                        "queue_pressure_penalty": self._queue_pressure_penalty(
+                            drive_context,
+                            governance_task_type="memory_maintenance",
+                            task_family="memory_maintenance",
+                            execution_kind="memory_maintenance",
+                        ),
+                        "adaptive_factor": self._adaptive_factor_for_candidate(
+                            candidate_kind="memory_maintenance",
+                            adaptive_policy=adaptive_policy,
+                        ),
+                    },
+                    metadata=(
+                        {
+                            "drive_judgement": self._intent_metadata(
+                                intent=memory_intent,
+                                needs=needs,
+                                perception=perception,
+                                world_model=world_model,
+                                reflection=reflection,
+                                adaptive_policy=adaptive_policy,
+                            )
+                        }
+                        if memory_intent is not None
+                        else None
+                    ),
                     evidence={
                         "idle_window_checks": dict(idle_window.get("checks") or {}),
                         "idle_seconds": dict(idle_window.get("idle_seconds") or {}),
@@ -148,55 +2010,77 @@ class EndogenousDriveEngine:
                 )
             )
 
-        recent_errors = int(counts.get("error_count") or counts.get("recent_errors") or 0)
-        uncertainty_count = int(
-            counts.get("uncertainty_high_count")
-            or counts.get("high_uncertainty")
-            or 0
-        )
-        # Prefer the pre-decayed signal from evaluate_idle_window when it
-        # is available, since that path applies a 4-hour half-life to keep
-        # old errors from permanently producing truthfulness candidates.
-        pre_decayed = idle_window.get("correction_signals")
-        if pre_decayed is not None:
-            try:
-                correction_signals = max(0, int(pre_decayed))
-            except (TypeError, ValueError):
-                correction_signals = recent_errors + uncertainty_count
-        else:
-            correction_signals = recent_errors + uncertainty_count
-        if correction_signals > 0 and self_learning_plan.get("eligible_for_planning") and "truthfulness:review_correction_signals" not in existing_keys:
+        recent_errors = perception.recent_errors
+        uncertainty_count = perception.uncertainty_count
+        if perception.correction_signals > 0 and self_learning_plan.get("eligible_for_planning") and "truthfulness:review_correction_signals" not in existing_keys:
+            truth_intent = intents_by_kind.get("truthfulness_review")
             candidates.append(
-                EndogenousTaskCandidate(
+                self._build_scored_candidate(
                     stable_key="truthfulness:review_correction_signals",
                     title="Review recent uncertainty and correction signals",
                     summary=(
                         "Turn recent errors or high-uncertainty answers into a bounded "
                         "self-learning follow-up instead of letting them remain invisible."
                     ),
-                    priority="high" if correction_signals >= 3 else "normal",
+                    priority="high" if perception.correction_signals >= 3 else "normal",
                     governance_task_type="self_learning",
                     task_family="self_learning",
                     execution_kind=None,
                     value_tags=["truthfulness"],
-                    utility=min(0.65 + correction_signals * 0.08, 0.95),
+                    candidate_kind="truthfulness_review",
+                    score_inputs={
+                        "core_value_strength": 0.98,
+                        "urgency": self._clamp01(
+                            0.35 + (min(perception.correction_signals, 6) / 6.0) * 0.65
+                        ),
+                        "novelty": 0.72 if idle_window.get("correction_signals") is not None else 0.68,
+                        "specificity": self._clamp01(
+                            0.55 + min(perception.correction_signals, 5) * 0.08
+                        ),
+                        "execution_readiness": 0.92,
+                        "queue_pressure_penalty": self._queue_pressure_penalty(
+                            drive_context,
+                            governance_task_type="self_learning",
+                            task_family="self_learning",
+                        ),
+                        "adaptive_factor": self._adaptive_factor_for_candidate(
+                            candidate_kind="truthfulness_review",
+                            adaptive_policy=adaptive_policy,
+                        ),
+                    },
+                    metadata=(
+                        {
+                            "drive_judgement": self._intent_metadata(
+                                intent=truth_intent,
+                                needs=needs,
+                                perception=perception,
+                                world_model=world_model,
+                                reflection=reflection,
+                                adaptive_policy=adaptive_policy,
+                            )
+                        }
+                        if truth_intent is not None
+                        else None
+                    ),
                     evidence={
                         "recent_errors": recent_errors,
                         "uncertainty_high_count": uncertainty_count,
-                        "correction_signals": correction_signals,
-                        "signal_source": "evaluate_idle_window" if pre_decayed is not None else "raw_counts",
+                        "correction_signals": perception.correction_signals,
+                        "signal_source": "evaluate_idle_window" if idle_window.get("correction_signals") is not None else "raw_counts",
                     },
                 )
             )
 
-        active_sessions = int(activity.get("active_sessions") or 0)
+        active_sessions = perception.active_sessions
         if self_learning_plan.get("eligible_for_planning"):
             shell_slot_meta = self._get_shell_slot_meta(idle_window) or {}
             shell_slot_id = str(shell_slot_meta.get("slot_id") or "shell").strip()
             shell_worktree = str(shell_slot_meta.get("worktree_path") or "").strip()
             baseline_key = f"creativity:self_learning:shell_baseline:{shell_slot_id or 'shell'}"
             baseline_added = False
-            has_learning_history = bool(idle_window.get("completed_learning_tasks") or [])
+            has_learning_history = perception.has_learning_history
+            learning_intent = intents_by_kind.get("exploratory_learning")
+            shell_baseline_intent = intents_by_kind.get("shell_baseline_learning")
 
             # Three-tier fallback chain for learning topics, matching the
             # architectural baseline §3.4 "LLM 优先 + 启发式降级" pattern:
@@ -207,13 +2091,18 @@ class EndogenousDriveEngine:
             topic_source = "none"
 
             governor_active = idle_window.get("governor_mode_active", False)
-            llm_topics = self._llm_generate_learning_topics(activity, max_topics=3, governor_mode=governor_active)
+            llm_topics = self._llm_generate_learning_topics(
+                activity,
+                max_topics=4,
+                governor_mode=governor_active,
+                drive_context=drive_context,
+            )
             if llm_topics:
                 topics = llm_topics
                 topic_source = "llm"
 
             if not topics:
-                mem_topics = self._mem_extract_learning_topics(activity, max_topics=3)
+                mem_topics = self._mem_extract_learning_topics(activity, max_topics=4)
                 if mem_topics:
                     topics = mem_topics
                     topic_source = "mem_compressed"
@@ -227,6 +2116,16 @@ class EndogenousDriveEngine:
                     )}]
                     topic_source = "activity_metadata"
 
+            had_raw_topics = bool(topics)
+            topics = self._filter_learning_topics(
+                topics,
+                drive_context=drive_context,
+                existing_keys=existing_keys,
+                cooldown_hours=int(policy.get("learning_topic_cooldown_hours", 24) or 24),
+                overlap_threshold=float(policy.get("topic_overlap_threshold", 0.6) or 0.6),
+                max_topics=3,
+            )
+
             if (
                 shell_worktree
                 and not has_learning_history
@@ -238,8 +2137,22 @@ class EndogenousDriveEngine:
                         active_sessions=active_sessions,
                         shell_slot_id=shell_slot_id,
                         shell_worktree=shell_worktree,
-                        utility=0.74,
                         trigger="bootstrap_shell_baseline",
+                        drive_context=drive_context,
+                        bootstrap=True,
+                        drive_judgement=(
+                            self._intent_metadata(
+                                intent=shell_baseline_intent,
+                                needs=needs,
+                                perception=perception,
+                                world_model=world_model,
+                                reflection=reflection,
+                                adaptive_policy=adaptive_policy,
+                            )
+                            if shell_baseline_intent is not None
+                            else None
+                        ),
+                        adaptive_policy=adaptive_policy,
                     )
                 )
                 existing_keys.add(baseline_key)
@@ -253,7 +2166,7 @@ class EndogenousDriveEngine:
                 title = f"Research: {topic['title']}"
                 summary = topic.get("summary") or topic["title"]
                 candidates.append(
-                    EndogenousTaskCandidate(
+                    self._build_scored_candidate(
                         stable_key=topic_key,  # Dynamic key: "creativity:idle_learning:{hash}"
                         title=title,
                         summary=summary,
@@ -262,10 +2175,56 @@ class EndogenousDriveEngine:
                         task_family="self_learning",
                         execution_kind=None,
                         value_tags=["creativity"],
-                        utility=0.72 if topic_source == "llm" else 0.65,
+                        candidate_kind="exploratory_learning",
+                        score_inputs={
+                            "core_value_strength": {
+                                "llm": 0.76,
+                                "mem_compressed": 0.69,
+                                "activity_metadata": 0.64,
+                            }.get(topic_source, 0.62),
+                            "urgency": self._idle_learning_urgency(
+                                active_sessions=active_sessions,
+                                topic_source=topic_source,
+                                governor_mode=governor_active,
+                            ),
+                            "novelty": float(topic.get("novelty_score") or 0.6),
+                            "specificity": float(topic.get("specificity_score") or 0.55),
+                            "execution_readiness": {
+                                "llm": 0.84,
+                                "mem_compressed": 0.72,
+                                "activity_metadata": 0.66,
+                            }.get(topic_source, 0.62),
+                            "queue_pressure_penalty": self._queue_pressure_penalty(
+                                drive_context,
+                                governance_task_type="self_learning",
+                                task_family="self_learning",
+                            ),
+                            "repetition_penalty": round(
+                                max(0.0, 0.55 - float(topic.get("novelty_score") or 0.6)),
+                                4,
+                            ),
+                            "adaptive_factor": self._adaptive_factor_for_candidate(
+                                candidate_kind="exploratory_learning",
+                                adaptive_policy=adaptive_policy,
+                            ),
+                        },
                         metadata={
                             "learning_branch": "exploratory",
                             "self_learning_mode": "no_dependency_exploration",
+                            **(
+                                {
+                                    "drive_judgement": self._intent_metadata(
+                                        intent=learning_intent,
+                                        needs=needs,
+                                        perception=perception,
+                                        world_model=world_model,
+                                        reflection=reflection,
+                                        adaptive_policy=adaptive_policy,
+                                    )
+                                }
+                                if learning_intent is not None
+                                else {}
+                            ),
                         },
                         evidence={
                             "active_sessions": active_sessions,
@@ -274,6 +2233,8 @@ class EndogenousDriveEngine:
                             "topic_source": topic_source,
                             "learning_branch": "exploratory",
                             "llm_generated": topic_source == "llm",
+                            "novelty_score": topic.get("novelty_score"),
+                            "specificity_score": topic.get("specificity_score"),
                         },
                         constraints={
                             "execution_policy": "learn_only",
@@ -289,7 +2250,7 @@ class EndogenousDriveEngine:
             # Final fallback: completely static topic when even Tier 3 found
             # nothing.  This is the only path that yields a generic task and
             # exists so the creativity candidate is never silently dropped.
-            if generated_count == 0:
+            if generated_count == 0 and not had_raw_topics:
                 topic_key = baseline_key if shell_worktree else "creativity:idle_learning:fallback"
                 if topic_key not in existing_keys:
                     if shell_worktree:
@@ -299,13 +2260,15 @@ class EndogenousDriveEngine:
                                 active_sessions=active_sessions,
                                 shell_slot_id=shell_slot_id,
                                 shell_worktree=shell_worktree,
-                                utility=0.58 if not baseline_added else 0.5,
                                 trigger="idle_capacity",
+                                drive_context=drive_context,
+                                bootstrap=False,
+                                adaptive_policy=adaptive_policy,
                             )
                         )
                     else:
                         candidates.append(
-                            EndogenousTaskCandidate(
+                            self._build_scored_candidate(
                                 stable_key=topic_key,
                                 title="Explore one unresolved learning thread",
                                 summary=(
@@ -318,10 +2281,45 @@ class EndogenousDriveEngine:
                                 task_family="self_learning",
                                 execution_kind=None,
                                 value_tags=["creativity"],
-                                utility=0.55,
+                                candidate_kind="generic_learning_fallback",
+                                score_inputs={
+                                    "core_value_strength": 0.56,
+                                    "urgency": self._idle_learning_urgency(
+                                        active_sessions=active_sessions,
+                                        topic_source="generic_fallback",
+                                        governor_mode=governor_active,
+                                    ),
+                                    "novelty": 0.2,
+                                    "specificity": 0.22,
+                                    "execution_readiness": 0.48,
+                                    "queue_pressure_penalty": self._queue_pressure_penalty(
+                                        drive_context,
+                                        governance_task_type="self_learning",
+                                        task_family="self_learning",
+                                    ),
+                                    "repetition_penalty": 0.18,
+                                    "adaptive_factor": self._adaptive_factor_for_candidate(
+                                        candidate_kind="generic_learning_fallback",
+                                        adaptive_policy=adaptive_policy,
+                                    ),
+                                },
                                 metadata={
                                     "learning_branch": "exploratory",
                                     "self_learning_mode": "no_dependency_exploration",
+                                    **(
+                                        {
+                                            "drive_judgement": self._intent_metadata(
+                                                intent=learning_intent,
+                                                needs=needs,
+                                                perception=perception,
+                                                world_model=world_model,
+                                                reflection=reflection,
+                                                adaptive_policy=adaptive_policy,
+                                            )
+                                        }
+                                        if learning_intent is not None
+                                        else {}
+                                    ),
                                 },
                                 evidence={
                                     "active_sessions": active_sessions,
@@ -339,8 +2337,9 @@ class EndogenousDriveEngine:
                         )
 
         if self_evolution_plan.get("eligible_for_planning") and "continuity:queue_hygiene_review" not in existing_keys:
+            queue_intent = intents_by_kind.get("queue_hygiene_review")
             candidates.append(
-                EndogenousTaskCandidate(
+                self._build_scored_candidate(
                     stable_key="continuity:queue_hygiene_review",
                     title="Review self-evolution queue hygiene",
                     summary=(
@@ -352,7 +2351,34 @@ class EndogenousDriveEngine:
                     task_family="general_self_evolution",
                     execution_kind="general_self_evolution",
                     value_tags=["continuity", "truthfulness"],
-                    utility=0.52,
+                    candidate_kind="queue_hygiene_review",
+                    score_inputs={
+                        "core_value_strength": 0.62,
+                        "urgency": self._queue_hygiene_urgency(drive_context),
+                        "novelty": 0.38,
+                        "specificity": self._clamp01(
+                            0.46 + min(int(drive_context.get("active_queue_count") or 0), 4) * 0.05
+                        ),
+                        "execution_readiness": 0.85,
+                        "adaptive_factor": self._adaptive_factor_for_candidate(
+                            candidate_kind="queue_hygiene_review",
+                            adaptive_policy=adaptive_policy,
+                        ),
+                    },
+                    metadata=(
+                        {
+                            "drive_judgement": self._intent_metadata(
+                                intent=queue_intent,
+                                needs=needs,
+                                perception=perception,
+                                world_model=world_model,
+                                reflection=reflection,
+                                adaptive_policy=adaptive_policy,
+                            )
+                        }
+                        if queue_intent is not None
+                        else None
+                    ),
                     evidence={
                         "trigger": "supervisor_queue_governance",
                     },
@@ -363,11 +2389,14 @@ class EndogenousDriveEngine:
             )
 
         if self_evolution_plan.get("eligible_for_planning"):
-            learning_quality = self._calculate_learning_quality_score(idle_window)
-            shell_slot_meta = self._get_shell_slot_meta(idle_window)
-            if (learning_quality >= 60
+            learning_quality = perception.learning_quality
+            if (learning_quality >= float(policy.get("body_improvement_min_quality", 60.0) or 60.0)
                 and shell_slot_meta
-                and "body_improvement" not in existing_keys):
+                and not self._has_recent_body_improvement(
+                    drive_context,
+                    shell_slot_meta=shell_slot_meta,
+                    cooldown_hours=int(policy.get("body_improvement_cooldown_hours", 12) or 12),
+                )):
 
                 improvement = self._generate_body_improvement_direction(
                     idle_window,
@@ -375,10 +2404,11 @@ class EndogenousDriveEngine:
                     shell_slot_meta,
                 )
                 if improvement:
+                    body_intent = intents_by_kind.get("body_improvement")
                     task_key = f"body_improvement:{_stable_key_for_topic(improvement['title'])}"
                     if task_key not in existing_keys:
                         candidates.append(
-                            EndogenousTaskCandidate(
+                            self._build_scored_candidate(
                                 stable_key=task_key,
                                 title=f"Improve shell body: {improvement['title']}",
                                 summary=improvement.get("summary", improvement["title"]),
@@ -387,7 +2417,62 @@ class EndogenousDriveEngine:
                                 task_family="body_upgrade",
                                 execution_kind="body_improvement",
                                 value_tags=["creativity", "continuity"],
-                                utility=0.80 if learning_quality >= 80 else 0.70,
+                                candidate_kind="body_improvement",
+                                score_inputs={
+                                    "core_value_strength": 0.86,
+                                    "urgency": self._clamp01(
+                                        0.42
+                                        + max(0.0, learning_quality - 60.0) / 40.0 * 0.4
+                                        + (0.12 if improvement.get("source") != "fallback" else 0.0)
+                                    ),
+                                    "novelty": {
+                                        "llm": 0.78,
+                                        "history": 0.64,
+                                        "git_diff": 0.7,
+                                        "fallback": 0.42,
+                                    }.get(str(improvement.get("source") or "fallback"), 0.5),
+                                    "specificity": (
+                                        0.84
+                                        if str(improvement.get("diff_summary") or "").strip()
+                                        else {
+                                            "llm": 0.78,
+                                            "history": 0.72,
+                                            "git_diff": 0.75,
+                                            "fallback": 0.55,
+                                        }.get(str(improvement.get("source") or "fallback"), 0.6)
+                                    ),
+                                    "execution_readiness": self._clamp01(
+                                        0.92
+                                        - min(len(drive_context.get("queued_learning_titles") or []), 3) * 0.08
+                                    ),
+                                    "queue_pressure_penalty": self._clamp01(
+                                        self._queue_pressure_penalty(
+                                            drive_context,
+                                            governance_task_type="self_evolution",
+                                            task_family="body_upgrade",
+                                            execution_kind="body_improvement",
+                                        )
+                                        + min(len(drive_context.get("queued_learning_titles") or []), 3) * 0.04
+                                    ),
+                                    "adaptive_factor": self._adaptive_factor_for_candidate(
+                                        candidate_kind="body_improvement",
+                                        adaptive_policy=adaptive_policy,
+                                    ),
+                                },
+                                metadata=(
+                                    {
+                                        "drive_judgement": self._intent_metadata(
+                                            intent=body_intent,
+                                            needs=needs,
+                                            perception=perception,
+                                            world_model=world_model,
+                                            reflection=reflection,
+                                            adaptive_policy=adaptive_policy,
+                                        )
+                                    }
+                    if body_intent is not None
+                                    else None
+                                ),
                                 constraints={
                                     "execution_policy": "improve_shell_body",
                                     "target_slot": "shell",
@@ -395,11 +2480,15 @@ class EndogenousDriveEngine:
                                     "worktree_path": shell_slot_meta.get("worktree_path"),
                                     "must_commit": True,
                                     "evolution_boundary_check": True,
-                                    "max_files_changed": 5,
-                                    "editable_dirs": ["skills/", "tools/", "agent/", "prompts/"],
-                                    "forbidden_patterns": [
-                                        "**/credential*", "**/.env*", "systems/**",
-                                    ],
+                                    "max_files_changed": int(policy.get("body_improvement_max_files", 5) or 5),
+                                    "editable_dirs": list(
+                                        policy.get("body_improvement_editable_dirs")
+                                        or ["skills/", "tools/", "agent/", "prompts/"]
+                                    ),
+                                    "forbidden_patterns": list(
+                                        policy.get("body_improvement_forbidden_patterns")
+                                        or ["**/credential*", "**/.env*", "systems/**"]
+                                    ),
                                 },
                                 evidence={
                                     "learning_quality_score": learning_quality,
@@ -407,11 +2496,3301 @@ class EndogenousDriveEngine:
                                     "worktree_path": shell_slot_meta.get("worktree_path"),
                                     "git_diff_summary": improvement.get("diff_summary", ""),
                                     "source": improvement.get("source", "fallback"),
+                                    "recent_learning_topics": drive_context["recent_learning_titles"][:3],
                                 },
                             )
                         )
 
-        return candidates
+        return self._apply_adaptive_candidate_budget(
+            candidates,
+            adaptive_policy=adaptive_policy,
+        )
+
+    def _llm_task_proposals(
+        self,
+        *,
+        idle_window: Dict[str, Any],
+        existing_keys: set[str],
+        deliberation: DriveDeliberationReport,
+        drive_context: Dict[str, Any],
+        memory_plan: Dict[str, Any],
+        self_learning_plan: Dict[str, Any],
+        self_evolution_plan: Dict[str, Any],
+    ) -> List[EndogenousTaskCandidate]:
+        service_runtime = getattr(self.config, "service_runtime", None)
+        if service_runtime is None:
+            return []
+        if not bool(getattr(service_runtime, "endogenous_drive_lm_task_generation_enabled", False)):
+            return []
+
+        evidence_packet = self._build_lm_evidence_packet(
+            idle_window=idle_window,
+            deliberation=deliberation,
+            drive_context=drive_context,
+            memory_plan=memory_plan,
+            self_learning_plan=self_learning_plan,
+            self_evolution_plan=self_evolution_plan,
+        )
+        proposals = self._generate_lm_task_proposals(evidence_packet=evidence_packet)
+        if not proposals:
+            return []
+        return self._materialize_lm_task_proposals(
+            proposals=proposals,
+            existing_keys=existing_keys,
+            deliberation=deliberation,
+            drive_context=drive_context,
+            evidence_packet=evidence_packet,
+        )
+
+    def _build_lm_evidence_packet(
+        self,
+        *,
+        idle_window: Dict[str, Any],
+        deliberation: DriveDeliberationReport,
+        drive_context: Dict[str, Any],
+        memory_plan: Dict[str, Any],
+        self_learning_plan: Dict[str, Any],
+        self_evolution_plan: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        deliberation_dict = deliberation.to_dict()
+        perception = deliberation_dict.get("perception", {})
+        world_model = deliberation_dict.get("world_model", {})
+        reflection = deliberation_dict.get("reflection", {})
+        adaptive_policy = deliberation_dict.get("adaptive_policy", {})
+        shell_slot = dict(self._get_shell_slot_meta(idle_window) or {})
+        recent_learning_evidence = self._build_recent_learning_evidence(drive_context)
+        external_research_evidence = self._build_external_research_evidence()
+        shell_body_profile = self._build_shell_body_profile(shell_slot)
+        evidence_channels = self._build_evidence_channels(
+            recent_learning_evidence=recent_learning_evidence,
+            external_research_evidence=external_research_evidence,
+            shell_body_profile=shell_body_profile,
+            deliberation_dict=deliberation_dict,
+        )
+        evidence_graph = dict(evidence_channels.get("evidence_graph") or {})
+        agenda_graph = self._build_agenda_graph(
+            deliberation_dict=deliberation_dict,
+            evidence_graph=evidence_graph,
+        )
+        recent_reference_alignment = self._build_recent_reference_alignment(drive_context)
+        proposal_drift_memory = self._build_proposal_drift_memory(drive_context)
+        self_model_snapshot = self._build_self_model_snapshot(
+            perception=perception,
+            world_model=world_model,
+            reflection=reflection,
+            adaptive_policy=adaptive_policy,
+            shell_body_profile=shell_body_profile,
+            recent_learning_evidence=recent_learning_evidence,
+            external_research_evidence=external_research_evidence,
+            recent_reference_alignment=recent_reference_alignment,
+            evidence_graph=evidence_graph,
+            agenda_graph=agenda_graph,
+        )
+        evidence_credibility_summary = self._build_evidence_credibility_summary(
+            recent_learning_evidence=recent_learning_evidence,
+            external_research_evidence=external_research_evidence,
+            shell_body_profile=shell_body_profile,
+            evidence_channels=evidence_channels,
+            recent_reference_alignment=recent_reference_alignment,
+        )
+        task_type_priors = self._build_task_type_priors(
+            reflection=reflection,
+            adaptive_policy=adaptive_policy,
+            self_model_snapshot=self_model_snapshot,
+            evidence_credibility_summary=evidence_credibility_summary,
+            agenda_graph=agenda_graph,
+            recent_reference_alignment=recent_reference_alignment,
+            proposal_drift_memory=proposal_drift_memory,
+        )
+        cognitive_posture = self.resolve_cognitive_posture_state(
+            idle_window=idle_window,
+            deliberation_dict=deliberation_dict,
+        )
+        return {
+            "identity": {
+                "role": "endogenous_supervisory_core",
+                "goal": "evidence-driven self-iteration under governance constraints",
+            },
+            "plans": {
+                "memory_maintenance": dict(memory_plan),
+                "self_learning": dict(self_learning_plan),
+                "self_evolution": dict(self_evolution_plan),
+            },
+            "perception": perception,
+            "world_model": world_model,
+            "reflection": reflection,
+            "adaptive_policy": adaptive_policy,
+            "cognitive_posture": cognitive_posture,
+            "self_model_snapshot": self_model_snapshot,
+            "evidence_credibility_summary": evidence_credibility_summary,
+            "task_type_priors": task_type_priors,
+            "needs": deliberation_dict.get("needs", []),
+            "intents": deliberation_dict.get("intents", []),
+            "signals": deliberation_dict.get("signals", []),
+            "evidence_channels": evidence_channels,
+            "research_digest": evidence_channels.get("research_digest", {}),
+            "evidence_graph": evidence_graph,
+            "agenda_graph": agenda_graph,
+            "recent_reference_alignment": recent_reference_alignment,
+            "proposal_drift_memory": proposal_drift_memory,
+            "memory_context": self._fetch_memory_context(deep=True),
+            "recent_learning_titles": list(drive_context.get("recent_learning_titles") or [])[:8],
+            "recent_learning_evidence": recent_learning_evidence,
+            "external_research_evidence": external_research_evidence,
+            "queued_learning_titles": list(drive_context.get("queued_learning_titles") or [])[:8],
+            "queued_body_improvement_titles": list(drive_context.get("queued_body_improvement_titles") or [])[:8],
+            "queued_tasks": list(drive_context.get("queued_tasks") or [])[:12],
+            "checks": dict(idle_window.get("checks") or {}),
+            "idle_seconds": dict(idle_window.get("idle_seconds") or {}),
+            "shell_slot": shell_slot,
+            "shell_body_profile": shell_body_profile,
+        }
+
+    def _generate_lm_task_proposals(
+        self,
+        *,
+        evidence_packet: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        role = "governance_reasoner"
+        runtime_config = getattr(self.config, "service_runtime", None)
+        if runtime_config is not None:
+            role = str(
+                getattr(runtime_config, "endogenous_drive_lm_task_model_role", "governance_reasoner")
+                or "governance_reasoner"
+            )
+        cognition_charter = self._resolve_endogenous_cognition_charter(runtime_config)
+        max_candidates = max(
+            0,
+            int(getattr(runtime_config, "endogenous_drive_lm_task_max_candidates", 3) or 3),
+        )
+        core_mission = str(cognition_charter.get("core_mission") or "").strip()
+        if not core_mission or max_candidates <= 0:
+            self._latest_lm_task_generation_context = self._build_lm_task_generation_context_snapshot(
+                evidence_packet=evidence_packet,
+                cognition_charter=cognition_charter,
+                role=role,
+                max_candidates=max_candidates,
+                status="disabled",
+                proposal_count=0,
+                raw_candidate_kinds=[],
+                error=(
+                    "missing_core_mission"
+                    if not core_mission
+                    else "max_candidates_disabled"
+                ),
+            )
+            return []
+        try:
+            from memai.model_config import resolve_mem_llm_client
+
+            llm_client, _ = resolve_mem_llm_client(role=role)
+            if llm_client is None:
+                self._latest_lm_task_generation_context = self._build_lm_task_generation_context_snapshot(
+                    evidence_packet=evidence_packet,
+                    cognition_charter=cognition_charter,
+                    role=role,
+                    max_candidates=max_candidates,
+                    status="llm_unavailable",
+                    proposal_count=0,
+                    raw_candidate_kinds=[],
+                    error="llm_client_unavailable",
+                )
+                return []
+        except Exception as exc:
+            self._latest_lm_task_generation_context = self._build_lm_task_generation_context_snapshot(
+                evidence_packet=evidence_packet,
+                cognition_charter=cognition_charter,
+                role=role,
+                max_candidates=max_candidates,
+                status="llm_unavailable",
+                proposal_count=0,
+                raw_candidate_kinds=[],
+                error=str(exc),
+            )
+            return []
+
+        system_prompt = build_endogenous_core_mission_prompt(
+            cognition_charter=cognition_charter,
+            cognitive_posture=evidence_packet.get("cognitive_posture"),
+        )
+        payload = build_endogenous_task_generation_payload(
+            evidence_packet=evidence_packet,
+            max_candidates=max_candidates,
+        )
+        try:
+            result = llm_client.complete_json(
+                system_prompt=system_prompt,
+                user_payload={"task_generation": payload},
+                task="scholar.revision",
+            )
+        except Exception as exc:
+            self._latest_lm_task_generation_context = self._build_lm_task_generation_context_snapshot(
+                evidence_packet=evidence_packet,
+                cognition_charter=cognition_charter,
+                role=role,
+                max_candidates=max_candidates,
+                status="generation_error",
+                proposal_count=0,
+                raw_candidate_kinds=[],
+                error=str(exc),
+            )
+            return []
+        if not isinstance(result, dict):
+            self._latest_lm_task_generation_context = self._build_lm_task_generation_context_snapshot(
+                evidence_packet=evidence_packet,
+                cognition_charter=cognition_charter,
+                role=role,
+                max_candidates=max_candidates,
+                status="invalid_response",
+                proposal_count=0,
+                raw_candidate_kinds=[],
+                error="non_dict_response",
+            )
+            return []
+        proposals = result.get("proposals")
+        if not isinstance(proposals, list):
+            self._latest_lm_task_generation_context = self._build_lm_task_generation_context_snapshot(
+                evidence_packet=evidence_packet,
+                cognition_charter=cognition_charter,
+                role=role,
+                max_candidates=max_candidates,
+                status="invalid_response",
+                proposal_count=0,
+                raw_candidate_kinds=[],
+                error="missing_proposals_list",
+            )
+            return []
+        normalized_proposals = [dict(item) for item in proposals if isinstance(item, dict)]
+        self._latest_lm_task_generation_context = self._build_lm_task_generation_context_snapshot(
+            evidence_packet=evidence_packet,
+            cognition_charter=cognition_charter,
+            role=role,
+            max_candidates=max_candidates,
+            status="completed",
+            proposal_count=len(normalized_proposals),
+            raw_candidate_kinds=[
+                str(item.get("candidate_kind") or "").strip()
+                for item in normalized_proposals
+                if str(item.get("candidate_kind") or "").strip()
+            ][:8],
+        )
+        return normalized_proposals
+
+    def _resolve_endogenous_cognition_charter(
+        self,
+        runtime_config: Any,
+    ) -> Dict[str, Any]:
+        charter_model = getattr(runtime_config, "endogenous_drive_cognition_charter", None)
+        if hasattr(charter_model, "model_dump"):
+            cognition_charter = charter_model.model_dump(mode="json")
+        else:
+            cognition_charter = dict(charter_model or {})
+        if not str(cognition_charter.get("core_mission") or "").strip():
+            cognition_charter["core_mission"] = str(
+                getattr(runtime_config, "endogenous_drive_core_mission_prompt", "") or ""
+            ).strip()
+        if not list(cognition_charter.get("task_generation_policy") or []):
+            cognition_charter["task_generation_policy"] = list(
+                getattr(runtime_config, "endogenous_drive_task_generation_principles", []) or []
+            )
+        return cognition_charter
+
+    def _resolve_cognitive_posture_from_policy(
+        self,
+        *,
+        policy: Dict[str, Any],
+        deliberation_dict: Dict[str, Any],
+        self_model_snapshot: Dict[str, Any],
+        evidence_credibility_summary: Dict[str, Any],
+        recent_reference_alignment: Dict[str, Any],
+        proposal_drift_memory: Dict[str, Any],
+        drive_context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        profiles = dict(policy.get("posture_profiles") or {})
+        selection_mode = str(policy.get("posture_selection_mode") or "auto").strip().lower()
+        manual_profile = str(policy.get("active_posture_profile") or "balanced").strip().lower()
+        profile_name = manual_profile or "balanced"
+        selection_reason = "manual_selection"
+
+        perception = dict(deliberation_dict.get("perception") or {})
+        reflection = dict(deliberation_dict.get("reflection") or {})
+        recent_cognitive_alignment = self._build_recent_cognitive_alignment_summary(
+            drive_context.get("drive_history") or {},
+        )
+        weak_channels = [
+            str(item).strip()
+            for item in list(evidence_credibility_summary.get("weak_or_missing_channels") or [])[:6]
+            if str(item).strip()
+        ]
+        self_gaps = [
+            str(item).strip()
+            for item in list(self_model_snapshot.get("self_understanding_gaps") or [])[:6]
+            if str(item).strip()
+        ]
+        weak_reference_count = max(
+            0,
+            int(recent_reference_alignment.get("weak_or_partial_count") or 0),
+        )
+        correction_signals = max(0, int(perception.get("correction_signals") or 0))
+        active_sessions = max(0, int(perception.get("active_sessions") or 0))
+        readiness_score = self._clamp01(
+            (self_model_snapshot.get("readiness") or {}).get("self_iteration_readiness_score") or 0.0
+        )
+        drift_state = str(proposal_drift_memory.get("drift_state") or "").strip().lower()
+        posture_alignment_health = str(
+            proposal_drift_memory.get("posture_alignment_health") or ""
+        ).strip().lower()
+        priority_basis_health = str(
+            proposal_drift_memory.get("priority_basis_health") or ""
+        ).strip().lower()
+        missing_posture_alignment_count = max(
+            0,
+            int(proposal_drift_memory.get("missing_posture_alignment_count") or 0),
+        )
+        missing_priority_basis_count = max(
+            0,
+            int(proposal_drift_memory.get("missing_priority_basis_count") or 0),
+        )
+        dominant_posture_conflict_reason = str(
+            proposal_drift_memory.get("dominant_posture_conflict_reason") or ""
+        ).strip().lower()
+        alignment_average_score = self._clamp01(
+            recent_cognitive_alignment.get("average_score") or 0.0
+        )
+        dominant_constraint = str(reflection.get("dominant_constraint") or "").strip().lower()
+
+        if selection_mode != "manual":
+            service_threshold = max(
+                0,
+                int(policy.get("auto_service_active_sessions_threshold") or 1),
+            )
+            truthfulness_threshold = max(
+                1,
+                int(policy.get("auto_truthfulness_correction_signal_threshold") or 3),
+            )
+            evidence_threshold = max(
+                1,
+                int(policy.get("auto_evidence_repair_signal_threshold") or 3),
+            )
+            explanation_missing_threshold = max(
+                1,
+                int(policy.get("auto_explanation_repair_missing_threshold") or 2),
+            )
+            explanation_inconsistent_threshold = max(
+                1,
+                int(policy.get("auto_explanation_repair_inconsistent_threshold") or 1),
+            )
+            explanation_missing_pressure = max(
+                missing_posture_alignment_count,
+                missing_priority_basis_count,
+            )
+            explanation_inconsistent_pressure = 0
+            if posture_alignment_health == "inconsistent":
+                explanation_inconsistent_pressure += 1
+            if priority_basis_health == "inconsistent":
+                explanation_inconsistent_pressure += 1
+            if active_sessions >= service_threshold:
+                profile_name = "conservative"
+                selection_reason = "service_pressure_requires_conservative_posture"
+            elif correction_signals >= truthfulness_threshold:
+                profile_name = "truthfulness_first"
+                selection_reason = "truthfulness_signals_are_elevated"
+            elif (
+                explanation_missing_pressure >= explanation_missing_threshold
+                and explanation_inconsistent_pressure >= explanation_inconsistent_threshold
+            ):
+                profile_name = "evidence_repair_first"
+                selection_reason = "explanation_quality_requires_evidence_repair"
+            elif explanation_missing_pressure >= explanation_missing_threshold:
+                profile_name = "observe_first"
+                selection_reason = "missing_explanation_memory_requires_observation"
+            elif explanation_inconsistent_pressure >= explanation_inconsistent_threshold:
+                if "truthfulness" in dominant_posture_conflict_reason or "reference_alignment" in dominant_posture_conflict_reason:
+                    profile_name = "truthfulness_first"
+                    selection_reason = "explanation_conflict_requires_truthfulness_repair"
+                else:
+                    profile_name = "observe_first"
+                    selection_reason = "explanation_conflict_requires_observation"
+            elif (
+                weak_reference_count >= evidence_threshold
+                or len(weak_channels) >= evidence_threshold
+                or "reference_alignment_is_unstable" in self_gaps
+            ):
+                profile_name = "evidence_repair_first"
+                selection_reason = "evidence_repair_pressure_is_elevated"
+            elif (
+                drift_state in {"drifting", "correcting"}
+                or alignment_average_score < self._clamp01(
+                    policy.get("drift_observe_trigger_score") or 0.5
+                )
+                or readiness_score < self._clamp01(
+                    policy.get("readiness_min_score") or 0.52
+                )
+                or dominant_constraint in {"queue_blockage", "historical_underdelivery"}
+            ):
+                profile_name = "observe_first"
+                selection_reason = "drift_or_readiness_requires_observation"
+            else:
+                profile_name = "balanced"
+                selection_reason = "balanced_posture_is_sufficient"
+
+        selected = profiles.get(profile_name)
+        if not isinstance(selected, dict):
+            profile_name = "balanced"
+            selected = profiles.get(profile_name) or {}
+        return {
+            "name": profile_name,
+            "selection_mode": selection_mode,
+            "selection_reason": selection_reason,
+            "summary": str(selected.get("summary") or "").strip(),
+            "observation_multiplier": round(
+                self._clamp01(selected.get("observation_multiplier") or 1.0),
+                4,
+            ),
+            "throttle_multiplier": round(
+                self._clamp01(selected.get("throttle_multiplier") or 1.0),
+                4,
+            ),
+            "truthfulness_multiplier": round(
+                self._clamp01(selected.get("truthfulness_multiplier") or 1.0),
+                4,
+            ),
+            "learning_suppression_multiplier": round(
+                self._clamp01(selected.get("learning_suppression_multiplier") or 1.0),
+                4,
+            ),
+        }
+
+    def _build_recent_cognitive_alignment_summary(
+        self,
+        history_snapshot: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        drive_history = dict(history_snapshot or {})
+        outcomes = [
+            dict(item)
+            for item in list(drive_history.get("outcomes") or [])
+            if isinstance(item, dict)
+        ]
+        entries: List[Dict[str, Any]] = []
+        quality_counts = {"strong": 0, "partial": 0, "weak": 0}
+        for outcome in outcomes[:12]:
+            cognitive_alignment = outcome.get("cognitive_alignment")
+            metadata = dict(outcome.get("metadata") or {})
+            evidence = dict(outcome.get("evidence") or {})
+            if not isinstance(cognitive_alignment, dict):
+                cognitive_alignment = metadata.get("cognitive_alignment")
+            if not isinstance(cognitive_alignment, dict):
+                cognitive_alignment = evidence.get("cognitive_alignment")
+            if not isinstance(cognitive_alignment, dict) or not cognitive_alignment:
+                continue
+            quality = str(cognitive_alignment.get("quality") or "partial").strip().lower()
+            if quality not in quality_counts:
+                quality = "partial"
+            quality_counts[quality] += 1
+            entries.append(
+                {
+                    "score": float(cognitive_alignment.get("score") or 0.0),
+                    "quality": quality,
+                }
+            )
+            if len(entries) >= 4:
+                break
+        if not entries:
+            return {
+                "available": False,
+                "average_score": 0.0,
+                "quality_counts": {},
+            }
+        average_score = sum(item["score"] for item in entries) / len(entries)
+        return {
+            "available": True,
+            "average_score": round(self._clamp01(average_score), 4),
+            "quality_counts": quality_counts,
+        }
+
+    def _build_lm_task_generation_context_snapshot(
+        self,
+        *,
+        evidence_packet: Dict[str, Any],
+        cognition_charter: Dict[str, Any],
+        role: str,
+        max_candidates: int,
+        status: str,
+        proposal_count: int,
+        raw_candidate_kinds: List[str],
+        error: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        self_model_snapshot = dict(evidence_packet.get("self_model_snapshot") or {})
+        readiness = dict(self_model_snapshot.get("readiness") or {})
+        evidence_credibility_summary = dict(
+            evidence_packet.get("evidence_credibility_summary") or {}
+        )
+        task_type_priors = dict(evidence_packet.get("task_type_priors") or {})
+        proposal_drift_memory = dict(evidence_packet.get("proposal_drift_memory") or {})
+        recent_reference_alignment = dict(
+            evidence_packet.get("recent_reference_alignment") or {}
+        )
+        cognitive_posture = dict(evidence_packet.get("cognitive_posture") or {})
+        evidence_channels = [
+            {
+                "channel": str(channel.get("channel") or "").strip(),
+                "kind": str(channel.get("kind") or "").strip(),
+                "confidence": round(self._clamp01(channel.get("confidence") or 0.0), 4),
+                "evidence_strength": str(channel.get("evidence_strength") or "").strip(),
+                "item_count": max(0, int(channel.get("item_count") or 0)),
+            }
+            for channel in list((evidence_packet.get("evidence_channels") or {}).get("channels") or [])[:6]
+            if isinstance(channel, dict) and str(channel.get("channel") or "").strip()
+        ]
+        prior_rows = [
+            {
+                "task_type": str(item.get("task_type") or "").strip(),
+                "score": round(self._clamp01(item.get("score") or 0.0), 4),
+                "reasons": [
+                    str(reason).strip()
+                    for reason in list(item.get("reasons") or [])[:3]
+                    if str(reason).strip()
+                ],
+            }
+            for item in list(task_type_priors.get("priors") or [])[:5]
+            if isinstance(item, dict) and str(item.get("task_type") or "").strip()
+        ]
+        top_priority_task_type = str(task_type_priors.get("top_priority_task_type") or "").strip()
+        top_priority_score = round(
+            self._clamp01(task_type_priors.get("top_priority_score") or 0.0),
+            4,
+        )
+        summary = (
+            f"LM task generation status={status}; top priority task type="
+            f"{top_priority_task_type or 'unknown'} ({top_priority_score:.2f}); "
+            f"proposal drift={str(proposal_drift_memory.get('drift_state') or 'unknown').strip() or 'unknown'}."
+        )
+        if error:
+            summary += f" Error={error}."
+        return {
+            "status": status,
+            "model_role": role,
+            "max_candidates": max(0, int(max_candidates)),
+            "proposal_count": max(0, int(proposal_count)),
+            "raw_candidate_kinds": list(raw_candidate_kinds or [])[:8],
+            "error": error,
+            "charter": {
+                "core_mission": str(cognition_charter.get("core_mission") or "").strip(),
+                "self_model_principles": [
+                    str(item).strip()
+                    for item in list(cognition_charter.get("self_model_principles") or [])[:8]
+                    if str(item).strip()
+                ],
+                "evidence_policy": [
+                    str(item).strip()
+                    for item in list(cognition_charter.get("evidence_policy") or [])[:8]
+                    if str(item).strip()
+                ],
+                "task_generation_policy": [
+                    str(item).strip()
+                    for item in list(cognition_charter.get("task_generation_policy") or [])[:8]
+                    if str(item).strip()
+                ],
+                "self_iteration_guardrails": [
+                    str(item).strip()
+                    for item in list(cognition_charter.get("self_iteration_guardrails") or [])[:8]
+                    if str(item).strip()
+                ],
+            },
+            "task_type_priors": {
+                "top_priority_task_type": top_priority_task_type,
+                "top_priority_score": top_priority_score,
+                "priors": prior_rows,
+            },
+            "proposal_drift_memory": {
+                "available": bool(proposal_drift_memory.get("available")),
+                "average_score": round(
+                    self._clamp01(proposal_drift_memory.get("average_score") or 0.0),
+                    4,
+                ),
+                "drift_state": str(proposal_drift_memory.get("drift_state") or "").strip(),
+                "quality_counts": dict(proposal_drift_memory.get("quality_counts") or {}),
+                "common_posture_alignment": [
+                    str(item).strip()
+                    for item in list(proposal_drift_memory.get("common_posture_alignment") or [])[:4]
+                    if str(item).strip()
+                ],
+                "common_priority_basis": [
+                    str(item).strip()
+                    for item in list(proposal_drift_memory.get("common_priority_basis") or [])[:4]
+                    if str(item).strip()
+                ],
+                "posture_alignment_health": str(
+                    proposal_drift_memory.get("posture_alignment_health") or ""
+                ).strip(),
+                "priority_basis_health": str(
+                    proposal_drift_memory.get("priority_basis_health") or ""
+                ).strip(),
+                "dominant_posture_conflict_reason": str(
+                    proposal_drift_memory.get("dominant_posture_conflict_reason") or ""
+                ).strip(),
+                "summary": str(proposal_drift_memory.get("summary") or "").strip(),
+            },
+            "recent_reference_alignment": {
+                "available": bool(recent_reference_alignment.get("available")),
+                "average_alignment_score": round(
+                    self._clamp01(
+                        recent_reference_alignment.get("average_alignment_score") or 0.0
+                    ),
+                    4,
+                ),
+                "weak_or_partial_count": max(
+                    0,
+                    int(recent_reference_alignment.get("weak_or_partial_count") or 0),
+                ),
+                "summary": str(recent_reference_alignment.get("summary") or "").strip(),
+            },
+            "cognitive_posture": {
+                "name": str(cognitive_posture.get("name") or "").strip(),
+                "selection_mode": str(cognitive_posture.get("selection_mode") or "").strip(),
+                "selection_reason": str(cognitive_posture.get("selection_reason") or "").strip(),
+                "summary": str(cognitive_posture.get("summary") or "").strip(),
+                "observation_multiplier": round(
+                    self._clamp01(cognitive_posture.get("observation_multiplier") or 0.0),
+                    4,
+                ),
+                "throttle_multiplier": round(
+                    self._clamp01(cognitive_posture.get("throttle_multiplier") or 0.0),
+                    4,
+                ),
+                "truthfulness_multiplier": round(
+                    self._clamp01(cognitive_posture.get("truthfulness_multiplier") or 0.0),
+                    4,
+                ),
+                "learning_suppression_multiplier": round(
+                    self._clamp01(
+                        cognitive_posture.get("learning_suppression_multiplier") or 0.0
+                    ),
+                    4,
+                ),
+            },
+            "evidence_basis": {
+                "self_iteration_readiness_score": round(
+                    self._clamp01(
+                        readiness.get("self_iteration_readiness_score") or 0.0
+                    ),
+                    4,
+                ),
+                "autonomy_readiness": round(
+                    self._clamp01(readiness.get("autonomy_readiness") or 0.0),
+                    4,
+                ),
+                "self_understanding_gaps": [
+                    str(item).strip()
+                    for item in list(self_model_snapshot.get("self_understanding_gaps") or [])[:6]
+                    if str(item).strip()
+                ],
+                "high_credibility_channels": [
+                    str(item).strip()
+                    for item in list(
+                        evidence_credibility_summary.get("high_credibility_channels") or []
+                    )[:5]
+                    if str(item).strip()
+                ],
+                "weak_or_missing_channels": [
+                    str(item).strip()
+                    for item in list(
+                        evidence_credibility_summary.get("weak_or_missing_channels") or []
+                    )[:5]
+                    if str(item).strip()
+                ],
+                "reference_alignment_score": round(
+                    self._clamp01(
+                        evidence_credibility_summary.get("reference_alignment_score") or 0.0
+                    ),
+                    4,
+                ),
+                "evidence_channels": evidence_channels,
+            },
+            "summary": summary,
+        }
+
+    def _materialize_lm_task_proposals(
+        self,
+        *,
+        proposals: List[Dict[str, Any]],
+        existing_keys: set[str],
+        deliberation: DriveDeliberationReport,
+        drive_context: Dict[str, Any],
+        evidence_packet: Dict[str, Any],
+    ) -> List[EndogenousTaskCandidate]:
+        realized: List[EndogenousTaskCandidate] = []
+        perception = deliberation.perception
+        adaptive_policy = deliberation.adaptive_policy
+        evidence_graph = dict(evidence_packet.get("evidence_graph") or {})
+        agenda_graph = dict(evidence_packet.get("agenda_graph") or {})
+        intent_by_kind = {
+            str(intent.candidate_kind or "").strip(): intent
+            for intent in deliberation.intents
+            if intent.candidate_kind
+        }
+        kind_map = {
+            "memory_maintenance": {
+                "stable_prefix": "lm:continuity:memory_maintenance",
+                "governance_task_type": "memory_maintenance",
+                "task_family": "memory_maintenance",
+                "execution_kind": "memory_maintenance",
+                "value_tags": ["continuity"],
+            },
+            "truthfulness_review": {
+                "stable_prefix": "lm:truthfulness:review",
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+                "execution_kind": None,
+                "value_tags": ["truthfulness"],
+            },
+            "exploratory_learning": {
+                "stable_prefix": "lm:creativity:exploratory",
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+                "execution_kind": None,
+                "value_tags": ["creativity"],
+            },
+            "shell_baseline_learning": {
+                "stable_prefix": "lm:creativity:shell_baseline",
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+                "execution_kind": None,
+                "value_tags": ["creativity"],
+            },
+            "queue_hygiene_review": {
+                "stable_prefix": "lm:continuity:queue_hygiene",
+                "governance_task_type": "self_evolution",
+                "task_family": "general_self_evolution",
+                "execution_kind": "general_self_evolution",
+                "value_tags": ["continuity", "truthfulness"],
+            },
+            "body_improvement": {
+                "stable_prefix": "lm:creativity:body_improvement",
+                "governance_task_type": "self_evolution",
+                "task_family": "body_upgrade",
+                "execution_kind": "body_improvement",
+                "value_tags": ["creativity", "continuity"],
+            },
+        }
+
+        for item in proposals:
+            candidate_kind = str(item.get("candidate_kind") or "").strip()
+            mapping = kind_map.get(candidate_kind)
+            if mapping is None:
+                continue
+            title = str(item.get("title") or "").strip()
+            summary = str(item.get("summary") or "").strip()
+            if not title or not summary:
+                continue
+            stable_key = f"{mapping['stable_prefix']}:{_stable_key_for_topic(title)}"
+            if stable_key in existing_keys:
+                continue
+            confidence = self._clamp01(item.get("confidence") or 0.5)
+            evidence_summary = [
+                str(row).strip()
+                for row in list(item.get("evidence_summary") or [])
+                if str(row).strip()
+            ][:6]
+            rationale = str(item.get("rationale") or "").strip()
+            task_type = self._normalize_lm_task_type(item.get("task_type"), candidate_kind)
+            risk_level = self._normalize_lm_risk_level(item.get("risk_level"), candidate_kind)
+            evidence_level = self._normalize_lm_evidence_level(
+                item.get("evidence_level"),
+                confidence=confidence,
+            )
+            llm_observation_required = self._normalize_lm_observation_required(
+                item.get("observation_required"),
+                candidate_kind=candidate_kind,
+                evidence_level=evidence_level,
+                risk_level=risk_level,
+            )
+            llm_execution_mode = self._normalize_lm_execution_mode(
+                item.get("execution_mode"),
+                candidate_kind=candidate_kind,
+                evidence_level=evidence_level,
+                risk_level=risk_level,
+                observation_required=llm_observation_required,
+            )
+            blocking_factors = self._normalize_lm_string_list(
+                item.get("blocking_factors"),
+                limit=6,
+            )
+            referenced_evidence_nodes = self._normalize_lm_string_list(
+                item.get("referenced_evidence_nodes"),
+                limit=8,
+            )
+            referenced_agenda_nodes = self._normalize_lm_string_list(
+                item.get("referenced_agenda_nodes"),
+                limit=8,
+            )
+            posture_alignment = self._normalize_lm_string_list(
+                item.get("posture_alignment"),
+                limit=6,
+            )
+            priority_basis = self._normalize_lm_string_list(
+                item.get("priority_basis"),
+                limit=6,
+            )
+            reference_alignment = self._align_lm_references(
+                referenced_evidence_nodes=referenced_evidence_nodes,
+                referenced_agenda_nodes=referenced_agenda_nodes,
+                evidence_graph=evidence_graph,
+                agenda_graph=agenda_graph,
+            )
+            supervisor_advisory = self._supervisor_advisory_for_lm_proposal(
+                candidate_kind=candidate_kind,
+                evidence_level=evidence_level,
+                risk_level=risk_level,
+                observation_required=llm_observation_required,
+                execution_mode=llm_execution_mode,
+                blocking_factors=blocking_factors,
+            )
+            cognitive_alignment = self._score_lm_proposal_cognitive_alignment(
+                candidate_kind=candidate_kind,
+                task_type=task_type,
+                evidence_level=evidence_level,
+                risk_level=risk_level,
+                observation_required=llm_observation_required,
+                execution_mode=llm_execution_mode,
+                blocking_factors=blocking_factors,
+                reference_alignment=reference_alignment,
+                evidence_packet=evidence_packet,
+                posture_alignment=posture_alignment,
+                priority_basis=priority_basis,
+            )
+            intent = intent_by_kind.get(candidate_kind)
+            constraints = self._constraints_for_lm_candidate_kind(
+                candidate_kind=candidate_kind,
+            )
+            constraints.update(
+                {
+                    "lm_execution_mode": llm_execution_mode,
+                    "lm_observation_required": llm_observation_required,
+                }
+            )
+            if blocking_factors:
+                constraints["lm_blocking_factors"] = list(blocking_factors)
+            if referenced_evidence_nodes:
+                constraints["lm_referenced_evidence_nodes"] = list(referenced_evidence_nodes)
+            if referenced_agenda_nodes:
+                constraints["lm_referenced_agenda_nodes"] = list(referenced_agenda_nodes)
+            if posture_alignment:
+                constraints["lm_posture_alignment"] = list(posture_alignment)
+            if priority_basis:
+                constraints["lm_priority_basis"] = list(priority_basis)
+            constraints["reference_alignment"] = reference_alignment
+            constraints["cognitive_alignment"] = cognitive_alignment
+            constraints["supervisor_recommended_execution_mode"] = supervisor_advisory["recommended_execution_mode"]
+            constraints["supervisor_recommended_observation_required"] = supervisor_advisory["recommended_observation_required"]
+            if supervisor_advisory["advisory_reasons"]:
+                constraints["supervisor_advisory_reasons"] = list(supervisor_advisory["advisory_reasons"])
+            realized.append(
+                self._build_scored_candidate(
+                    stable_key=stable_key,
+                    title=title,
+                    summary=summary,
+                    priority="high" if confidence >= 0.75 else "normal",
+                    governance_task_type=str(mapping["governance_task_type"]),
+                    task_family=str(mapping["task_family"]),
+                    execution_kind=mapping["execution_kind"],
+                    value_tags=list(mapping["value_tags"]),
+                    candidate_kind=candidate_kind,
+                    score_inputs={
+                        "core_value_strength": 0.72,
+                        "urgency": confidence,
+                        "novelty": 0.66,
+                        "specificity": self._clamp01(0.45 + min(len(summary), 240) / 400.0),
+                        "execution_readiness": self._clamp01(0.48 + confidence * 0.4),
+                        "queue_pressure_penalty": self._queue_pressure_penalty(
+                            drive_context,
+                            governance_task_type=str(mapping["governance_task_type"]),
+                            task_family=str(mapping["task_family"]),
+                            execution_kind=mapping["execution_kind"],
+                        ),
+                        "adaptive_factor": self._adaptive_factor_for_candidate(
+                            candidate_kind=candidate_kind,
+                            adaptive_policy=adaptive_policy,
+                        ),
+                    },
+                    metadata={
+                        "llm_task_generated": True,
+                        "llm_task_confidence": confidence,
+                        "llm_task_rationale": rationale,
+                        "llm_task_type": task_type,
+                        "llm_task_risk_level": risk_level,
+                        "llm_task_evidence_level": evidence_level,
+                        "llm_task_observation_required": llm_observation_required,
+                        "llm_task_execution_mode": llm_execution_mode,
+                        "llm_task_blocking_factors": list(blocking_factors),
+                        "llm_referenced_evidence_nodes": list(referenced_evidence_nodes),
+                        "llm_referenced_agenda_nodes": list(referenced_agenda_nodes),
+                        "llm_posture_alignment": list(posture_alignment),
+                        "llm_priority_basis": list(priority_basis),
+                        "reference_alignment": reference_alignment,
+                        "cognitive_alignment": cognitive_alignment,
+                        "supervisor_advisory": supervisor_advisory,
+                        **(
+                            {
+                                "drive_judgement": self._intent_metadata(
+                                    intent=intent,
+                                    needs=list(deliberation.needs),
+                                    perception=deliberation.perception,
+                                    world_model=deliberation.world_model,
+                                    reflection=deliberation.reflection,
+                                    adaptive_policy=deliberation.adaptive_policy,
+                                )
+                            }
+                            if intent is not None
+                            else {}
+                        ),
+                    },
+                    evidence={
+                        "llm_generated": True,
+                        "evidence_summary": evidence_summary,
+                        "llm_rationale": rationale,
+                        "llm_task_type": task_type,
+                        "llm_risk_level": risk_level,
+                        "llm_evidence_level": evidence_level,
+                        "llm_observation_required": llm_observation_required,
+                        "llm_execution_mode": llm_execution_mode,
+                        "llm_blocking_factors": list(blocking_factors),
+                        "llm_referenced_evidence_nodes": list(referenced_evidence_nodes),
+                        "llm_referenced_agenda_nodes": list(referenced_agenda_nodes),
+                        "llm_posture_alignment": list(posture_alignment),
+                        "llm_priority_basis": list(priority_basis),
+                        "reference_alignment": reference_alignment,
+                        "cognitive_alignment": cognitive_alignment,
+                        "supervisor_advisory": supervisor_advisory,
+                        "active_sessions": perception.active_sessions,
+                    },
+                    constraints=constraints,
+                )
+            )
+            existing_keys.add(stable_key)
+        return realized
+
+    def _constraints_for_lm_candidate_kind(
+        self,
+        *,
+        candidate_kind: str,
+    ) -> Dict[str, Any]:
+        if candidate_kind in {"exploratory_learning", "truthfulness_review", "shell_baseline_learning"}:
+            constraints: Dict[str, Any] = {
+                "execution_policy": "learn_only",
+                "must_not_modify_active_body": True,
+            }
+            if candidate_kind == "shell_baseline_learning":
+                constraints["execution_policy"] = "learn_shell_baseline"
+            return constraints
+        if candidate_kind == "queue_hygiene_review":
+            return {"must_not_execute_without_review": True}
+        if candidate_kind == "body_improvement":
+            return {
+                "execution_policy": "improve_shell_body",
+                "target_slot": "shell",
+                "must_commit": True,
+                "evolution_boundary_check": True,
+            }
+        return {}
+
+    def _normalize_lm_task_type(self, value: Any, candidate_kind: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in _LM_TASK_TYPES:
+            return normalized
+        return self._task_type_for_candidate_kind(candidate_kind)
+
+    def _task_type_for_candidate_kind(self, candidate_kind: Any) -> str:
+        normalized_kind = str(candidate_kind or "").strip()
+        defaults = {
+            "memory_maintenance": "maintenance",
+            "truthfulness_review": "review",
+            "exploratory_learning": "learning",
+            "shell_baseline_learning": "learning",
+            "queue_hygiene_review": "review",
+            "body_improvement": "improvement",
+        }
+        return defaults.get(normalized_kind, "observation")
+
+    def _normalize_lm_risk_level(self, value: Any, candidate_kind: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in _LM_RISK_LEVELS:
+            return normalized
+        defaults = {
+            "memory_maintenance": "medium",
+            "truthfulness_review": "low",
+            "exploratory_learning": "low",
+            "shell_baseline_learning": "low",
+            "queue_hygiene_review": "medium",
+            "body_improvement": "high",
+        }
+        return defaults.get(candidate_kind, "medium")
+
+    def _normalize_lm_evidence_level(self, value: Any, *, confidence: float) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in _LM_EVIDENCE_LEVELS:
+            return normalized
+        if confidence >= 0.8:
+            return "strong"
+        if confidence >= 0.45:
+            return "moderate"
+        return "weak"
+
+    def _normalize_lm_observation_required(
+        self,
+        value: Any,
+        *,
+        candidate_kind: str,
+        evidence_level: str,
+        risk_level: str,
+    ) -> bool:
+        if isinstance(value, bool):
+            normalized = value
+        else:
+            text = str(value or "").strip().lower()
+            if text in {"true", "1", "yes", "on"}:
+                normalized = True
+            elif text in {"false", "0", "no", "off"}:
+                normalized = False
+            else:
+                normalized = candidate_kind in {"truthfulness_review", "queue_hygiene_review"}
+        return normalized
+
+    def _normalize_lm_execution_mode(
+        self,
+        value: Any,
+        *,
+        candidate_kind: str,
+        evidence_level: str,
+        risk_level: str,
+        observation_required: bool,
+    ) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in _LM_EXECUTION_MODES:
+            defaults = {
+                "memory_maintenance": "guarded_execution",
+                "truthfulness_review": "observe_only",
+                "exploratory_learning": "review_then_queue",
+                "shell_baseline_learning": "review_then_queue",
+                "queue_hygiene_review": "review_then_queue",
+                "body_improvement": "guarded_execution",
+            }
+            normalized = defaults.get(candidate_kind, "review_then_queue")
+        return normalized
+
+    def _normalize_lm_string_list(self, value: Any, *, limit: int = 6) -> List[str]:
+        if isinstance(value, list):
+            items = value
+        elif value is None:
+            items = []
+        else:
+            items = [value]
+        normalized: List[str] = []
+        for item in items:
+            text = str(item or "").strip()
+            if text:
+                normalized.append(text)
+            if len(normalized) >= limit:
+                break
+        return normalized
+
+    def _align_lm_references(
+        self,
+        *,
+        referenced_evidence_nodes: List[str],
+        referenced_agenda_nodes: List[str],
+        evidence_graph: Dict[str, Any],
+        agenda_graph: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        evidence_nodes = {
+            str(node.get("topic") or "").strip(): dict(node)
+            for node in list(evidence_graph.get("nodes") or [])
+            if isinstance(node, dict) and str(node.get("topic") or "").strip()
+        }
+        valid_evidence_nodes = set(evidence_nodes.keys())
+        valid_agenda_nodes = set()
+        agenda_priorities: Dict[str, float] = {}
+        focus = str(agenda_graph.get("focus") or "").strip()
+        if focus:
+            valid_agenda_nodes.add(f"focus:{focus}")
+            agenda_priorities[f"focus:{focus}"] = float(agenda_graph.get("focus_confidence") or 0.0)
+        for item in list(agenda_graph.get("unresolved_gaps") or []):
+            if isinstance(item, dict):
+                gap = str(item.get("gap") or "").strip()
+                if gap:
+                    valid_agenda_nodes.add(gap)
+                    agenda_priorities[gap] = float(item.get("priority") or 0.0)
+        for item in list(agenda_graph.get("recommended_directions") or []):
+            if isinstance(item, dict):
+                direction = str(item.get("direction") or "").strip()
+                if direction:
+                    valid_agenda_nodes.add(direction)
+                    agenda_priorities[direction] = float(item.get("priority") or 0.0)
+        for item in list(agenda_graph.get("active_signals") or []):
+            if isinstance(item, dict):
+                signal = str(item.get("signal") or "").strip()
+                if signal:
+                    valid_agenda_nodes.add(signal)
+                    agenda_priorities[signal] = float(item.get("priority") or 0.0)
+
+        matched_evidence = [node for node in referenced_evidence_nodes if node in valid_evidence_nodes]
+        missing_evidence = [node for node in referenced_evidence_nodes if node not in valid_evidence_nodes]
+        matched_agenda = [node for node in referenced_agenda_nodes if node in valid_agenda_nodes]
+        missing_agenda = [node for node in referenced_agenda_nodes if node not in valid_agenda_nodes]
+
+        weak_evidence = [
+            node
+            for node in matched_evidence
+            if float(evidence_nodes.get(node, {}).get("avg_confidence") or 0.0) < 0.45
+        ]
+        weak_agenda = [
+            node
+            for node in matched_agenda
+            if float(agenda_priorities.get(node) or 0.0) < 0.45
+        ]
+
+        total_requested = len(referenced_evidence_nodes) + len(referenced_agenda_nodes)
+        total_matched = len(matched_evidence) + len(matched_agenda)
+        weak_penalty = (len(weak_evidence) + len(weak_agenda)) * 0.12
+        alignment_score = (
+            round(self._clamp01(total_matched / total_requested - weak_penalty), 4)
+            if total_requested > 0
+            else 1.0
+        )
+        alignment_quality = "strong"
+        if total_requested > 0 and (missing_evidence or missing_agenda):
+            alignment_quality = "partial"
+        if weak_evidence or weak_agenda:
+            alignment_quality = "weak"
+        if total_requested > 0 and total_matched == 0:
+            alignment_quality = "drifted"
+        return {
+            "matched_evidence_nodes": matched_evidence,
+            "weak_evidence_nodes": weak_evidence,
+            "missing_evidence_nodes": missing_evidence,
+            "matched_agenda_nodes": matched_agenda,
+            "weak_agenda_nodes": weak_agenda,
+            "missing_agenda_nodes": missing_agenda,
+            "alignment_score": alignment_score,
+            "alignment_quality": alignment_quality,
+        }
+
+    def _supervisor_advisory_for_lm_proposal(
+        self,
+        *,
+        candidate_kind: str,
+        evidence_level: str,
+        risk_level: str,
+        observation_required: bool,
+        execution_mode: str,
+        blocking_factors: List[str],
+    ) -> Dict[str, Any]:
+        advisory_reasons: List[str] = []
+        recommended_observation_required = observation_required
+        recommended_execution_mode = execution_mode
+        if evidence_level == "weak":
+            advisory_reasons.append("weak_evidence_requires_additional_validation")
+            if recommended_execution_mode == "guarded_execution":
+                recommended_execution_mode = "review_then_queue"
+        if risk_level == "high":
+            advisory_reasons.append("high_risk_requires_governance_review")
+            recommended_observation_required = True
+            if recommended_execution_mode == "guarded_execution":
+                recommended_execution_mode = "review_then_queue"
+        if candidate_kind in {"truthfulness_review", "queue_hygiene_review"}:
+            advisory_reasons.append("review_family_prefers_observation_or_review_first")
+            recommended_observation_required = True
+        if blocking_factors:
+            advisory_reasons.append("blocking_factors_present")
+        if recommended_observation_required and recommended_execution_mode == "guarded_execution":
+            recommended_execution_mode = "review_then_queue"
+        return {
+            "recommended_execution_mode": recommended_execution_mode,
+            "recommended_observation_required": recommended_observation_required,
+            "advisory_reasons": advisory_reasons,
+        }
+
+    def _score_lm_proposal_cognitive_alignment(
+        self,
+        *,
+        candidate_kind: str,
+        task_type: str,
+        evidence_level: str,
+        risk_level: str,
+        observation_required: bool,
+        execution_mode: str,
+        blocking_factors: List[str],
+        reference_alignment: Dict[str, Any],
+        evidence_packet: Dict[str, Any],
+        posture_alignment: List[str],
+        priority_basis: List[str],
+    ) -> Dict[str, Any]:
+        task_type_priors = dict(evidence_packet.get("task_type_priors") or {})
+        priors = [
+            dict(item)
+            for item in list(task_type_priors.get("priors") or [])
+            if isinstance(item, dict)
+        ]
+        prior_map = {
+            str(item.get("task_type") or "").strip(): dict(item)
+            for item in priors
+            if str(item.get("task_type") or "").strip()
+        }
+        prior_row = prior_map.get(task_type, {})
+        prior_score = self._clamp01(prior_row.get("score") or 0.0)
+        top_priority_task_type = str(task_type_priors.get("top_priority_task_type") or "").strip()
+        top_priority_score = self._clamp01(task_type_priors.get("top_priority_score") or 0.0)
+
+        evidence_credibility_summary = dict(evidence_packet.get("evidence_credibility_summary") or {})
+        weak_channels = [
+            str(item).strip()
+            for item in list(evidence_credibility_summary.get("weak_or_missing_channels") or [])
+            if str(item).strip()
+        ]
+        high_channels = [
+            str(item).strip()
+            for item in list(evidence_credibility_summary.get("high_credibility_channels") or [])
+            if str(item).strip()
+        ]
+        self_model_snapshot = dict(evidence_packet.get("self_model_snapshot") or {})
+        cognitive_posture = dict(evidence_packet.get("cognitive_posture") or {})
+        self_gaps = [
+            str(item).strip()
+            for item in list(self_model_snapshot.get("self_understanding_gaps") or [])
+            if str(item).strip()
+        ]
+        reasons: List[str] = []
+        score = 0.34
+
+        if top_priority_task_type and task_type == top_priority_task_type:
+            score += 0.26
+            reasons.append("matches_program_top_task_type_prior")
+        elif prior_score >= 0.55:
+            score += 0.16
+            reasons.append("matches_high_program_task_type_prior")
+        else:
+            score -= 0.06
+            reasons.append("task_type_is_not_favored_by_current_program_priors")
+
+        alignment_score = self._clamp01(reference_alignment.get("alignment_score") or 0.0)
+        score += alignment_score * 0.18
+        if alignment_score >= 0.75:
+            reasons.append("reference_alignment_is_strong")
+        elif alignment_score < 0.5:
+            score -= 0.08
+            reasons.append("reference_alignment_is_weak")
+
+        if task_type == "improvement":
+            if self_gaps:
+                score -= 0.1
+                reasons.append("improvement_is_early_while_self_model_gaps_remain")
+            if weak_channels:
+                score -= 0.08
+                reasons.append("improvement_runs_against_weak_or_missing_channels")
+            if evidence_level == "strong" and risk_level != "high" and not weak_channels:
+                score += 0.08
+                reasons.append("improvement_has_strong_enough_evidence")
+
+        if task_type in {"observation", "review"} and weak_channels:
+            score += 0.08
+            reasons.append("conservative_task_type_matches_weak_channel_context")
+        if task_type == "learning" and self_gaps:
+            score += 0.07
+            reasons.append("learning_can_reduce_current_self_model_gaps")
+        if evidence_level == "weak" and task_type in {"observation", "review"}:
+            score += 0.06
+            reasons.append("weak_evidence_is_handled_conservatively")
+        if evidence_level == "weak" and task_type == "improvement":
+            score -= 0.12
+            reasons.append("weak_evidence_conflicts_with_improvement_shape")
+
+        if risk_level == "high" and execution_mode == "guarded_execution":
+            score += 0.05
+            reasons.append("high_risk_is_at_least_guarded")
+        elif risk_level == "high":
+            score -= 0.08
+            reasons.append("high_risk_is_not_guarded_enough")
+
+        if observation_required and task_type in {"observation", "review"}:
+            score += 0.04
+            reasons.append("observation_requirement_matches_task_type")
+        if blocking_factors and task_type in {"observation", "review"}:
+            score += 0.03
+            reasons.append("blocking_factors_are_handled_with_conservative_task_shape")
+        if candidate_kind == "body_improvement" and weak_channels:
+            score -= 0.06
+            reasons.append("body_improvement_should_wait_for_stronger_channels")
+
+        posture_name = str(cognitive_posture.get("name") or "").strip().lower()
+        if posture_alignment:
+            score += 0.05
+            reasons.append("proposal_explicitly_states_posture_alignment")
+        if priority_basis:
+            score += 0.04
+            reasons.append("proposal_explicitly_states_priority_basis")
+        if posture_name == "truthfulness_first" and task_type == "review":
+            score += 0.06
+            reasons.append("task_shape_matches_truthfulness_first_posture")
+        elif posture_name == "evidence_repair_first" and task_type in {"review", "observation"}:
+            score += 0.06
+            reasons.append("task_shape_matches_evidence_repair_first_posture")
+        elif posture_name == "observe_first" and task_type in {"observation", "review"}:
+            score += 0.06
+            reasons.append("task_shape_matches_observe_first_posture")
+        elif posture_name == "conservative" and task_type in {"maintenance", "observation", "review"}:
+            score += 0.05
+            reasons.append("task_shape_matches_conservative_posture")
+        elif posture_name in {"truthfulness_first", "evidence_repair_first", "observe_first"} and task_type == "improvement":
+            score -= 0.08
+            reasons.append("task_shape_conflicts_with_current_cognitive_posture")
+
+        score = self._clamp01(score)
+        quality = "strong"
+        if score < 0.45:
+            quality = "weak"
+        elif score < 0.7:
+            quality = "partial"
+        return {
+            "score": round(score, 4),
+            "quality": quality,
+            "task_type_prior_score": round(prior_score, 4),
+            "top_priority_task_type": top_priority_task_type,
+            "top_priority_score": round(top_priority_score, 4),
+            "weak_or_missing_channels": weak_channels,
+            "high_credibility_channels": high_channels,
+            "self_understanding_gaps": self_gaps,
+            "reasons": reasons[:8],
+            "summary": (
+                f"Proposal cognitive alignment is {quality} "
+                f"(score={score:.2f}) against current program-side priors and evidence posture."
+            ),
+        }
+
+    def _build_external_research_evidence(self) -> List[Dict[str, Any]]:
+        service_runtime = getattr(self.config, "service_runtime", None)
+        if service_runtime is None:
+            return []
+        if not bool(getattr(service_runtime, "endogenous_drive_external_research_enabled", False)):
+            return []
+        entries = list(
+            getattr(service_runtime, "endogenous_drive_external_research_entries", []) or []
+        )
+        evidence_rows = self._normalize_external_research_entries(entries)
+        evidence_rows.extend(
+            self._load_external_research_files(
+                list(getattr(service_runtime, "endogenous_drive_external_research_files", []) or [])
+            )
+        )
+        return evidence_rows[:16]
+
+    def _normalize_external_research_entries(self, entries: List[Any]) -> List[Dict[str, Any]]:
+        evidence_rows: List[Dict[str, Any]] = []
+        for raw in entries[:12]:
+            text = str(raw or "").strip()
+            if not text:
+                continue
+            if "::" in text:
+                title, detail = text.split("::", 1)
+                row = {
+                    "title": title.strip(),
+                    "summary": detail.strip(),
+                    "source": "configured_external_research",
+                }
+                row.update(
+                    self._item_evidence_quality(
+                        item=row,
+                        source_reliability=0.62,
+                        supports=["external_research", "forward_direction"],
+                        contradicts=[],
+                    )
+                )
+                evidence_rows.append(row)
+            else:
+                row = {
+                    "title": text[:80],
+                    "summary": text,
+                    "source": "configured_external_research",
+                }
+                row.update(
+                    self._item_evidence_quality(
+                        item=row,
+                        source_reliability=0.58,
+                        supports=["external_research"],
+                        contradicts=[],
+                    )
+                )
+                evidence_rows.append(row)
+        return evidence_rows
+
+    def _load_external_research_files(self, file_entries: List[Any]) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+        for raw_path in file_entries[:6]:
+            path_text = str(raw_path or "").strip()
+            if not path_text:
+                continue
+            rows.extend(self._load_external_research_file(path_text))
+            if len(rows) >= 12:
+                break
+        return rows[:12]
+
+    def _load_external_research_file(self, raw_path: str) -> List[Dict[str, Any]]:
+        try:
+            path = Path(raw_path).expanduser()
+            if not path.is_absolute():
+                repo_root = Path(getattr(self.config.execution, "git_repo_path", "./") or "./")
+                path = (repo_root / path).resolve()
+            else:
+                path = path.resolve()
+            if not path.exists() or not path.is_file():
+                return []
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        rows = self._normalize_external_research_file_payload(data, source_path=str(path))
+        return rows[:8]
+
+    def _normalize_external_research_file_payload(
+        self,
+        data: Any,
+        *,
+        source_path: str,
+    ) -> List[Dict[str, Any]]:
+        if isinstance(data, dict):
+            items = data.get("entries")
+            if isinstance(items, list):
+                return self._normalize_external_research_items(items, source_path=source_path)
+            return self._normalize_external_research_items([data], source_path=source_path)
+        if isinstance(data, list):
+            return self._normalize_external_research_items(data, source_path=source_path)
+        return []
+
+    def _normalize_external_research_items(
+        self,
+        items: List[Any],
+        *,
+        source_path: str,
+    ) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+        for item in items[:12]:
+            if isinstance(item, dict):
+                title = str(item.get("title") or item.get("topic") or "").strip()
+                summary = str(item.get("summary") or item.get("note") or item.get("content") or "").strip()
+                if not title and not summary:
+                    continue
+                row: Dict[str, Any] = {
+                    "title": title or summary[:80],
+                    "summary": summary or title,
+                    "source": str(item.get("source") or "external_research_file"),
+                    "source_path": source_path,
+                }
+                if item.get("url"):
+                    row["url"] = str(item.get("url"))
+                if item.get("published_at"):
+                    row["published_at"] = str(item.get("published_at"))
+                if item.get("tags"):
+                    row["tags"] = [
+                        str(tag).strip()
+                        for tag in list(item.get("tags") or [])
+                        if str(tag).strip()
+                    ][:6]
+                row.update(
+                    self._item_evidence_quality(
+                        item=row,
+                        source_reliability=0.74 if row.get("url") else 0.64,
+                        supports=["external_research", "forward_direction"],
+                        contradicts=[],
+                    )
+                )
+                rows.append(row)
+            else:
+                text = str(item or "").strip()
+                if not text:
+                    continue
+                row = {
+                    "title": text[:80],
+                    "summary": text,
+                    "source": "external_research_file",
+                    "source_path": source_path,
+                }
+                row.update(
+                    self._item_evidence_quality(
+                        item=row,
+                        source_reliability=0.56,
+                        supports=["external_research"],
+                        contradicts=[],
+                    )
+                )
+                rows.append(row)
+        return rows
+
+    def _build_recent_learning_evidence(self, drive_context: Dict[str, Any]) -> List[Dict[str, Any]]:
+        completed_learning_tasks = list(drive_context.get("completed_learning_tasks") or [])
+        evidence_rows: List[Dict[str, Any]] = []
+        for task in completed_learning_tasks[:5]:
+            title = str(task.get("title") or task.get("topic") or "").strip()
+            if not title:
+                continue
+            row: Dict[str, Any] = {
+                "title": title,
+                "summary": str(task.get("summary") or "").strip()[:280],
+                "quality_score": task.get("quality_score"),
+                "completed_at": task.get("completed_at"),
+                "task_family": task.get("task_family"),
+                "execution_kind": task.get("execution_kind"),
+            }
+            evidence = task.get("evidence")
+            if isinstance(evidence, dict):
+                row["evidence_summary"] = [
+                    str(item).strip()
+                    for item in list(evidence.get("evidence_summary") or [])
+                    if str(item).strip()
+                ][:4]
+            row.update(
+                self._item_evidence_quality(
+                    item=row,
+                    source_reliability=0.84,
+                    supports=["self_understanding", "learning_trace"],
+                    contradicts=[],
+                )
+            )
+            evidence_rows.append(row)
+        return evidence_rows
+
+    def _build_shell_body_profile(self, shell_slot_meta: Dict[str, Any]) -> Dict[str, Any]:
+        profile: Dict[str, Any] = {
+            "slot_id": str(shell_slot_meta.get("slot_id") or "").strip(),
+            "worktree_path": str(shell_slot_meta.get("worktree_path") or "").strip(),
+            "body_version": shell_slot_meta.get("body_version"),
+            "generation": shell_slot_meta.get("generation"),
+            "materialized_from": shell_slot_meta.get("materialized_from"),
+            "candidate_branch": shell_slot_meta.get("candidate_branch"),
+            "candidate_commit": shell_slot_meta.get("candidate_commit"),
+        }
+        worktree_path = profile["worktree_path"]
+        if not worktree_path:
+            profile["profile_status"] = "missing_worktree"
+            return profile
+
+        worktree = Path(worktree_path)
+        if not worktree.exists():
+            profile["profile_status"] = "worktree_missing_on_disk"
+            return profile
+
+        manifest_path = worktree / ".body-origin.json"
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                profile["origin_manifest"] = {
+                    "source": manifest.get("source"),
+                    "source_root": manifest.get("source_root"),
+                    "source_branch": manifest.get("source_branch"),
+                    "source_commit": manifest.get("source_commit"),
+                    "candidate_branch": manifest.get("candidate_branch"),
+                    "candidate_commit": manifest.get("candidate_commit"),
+                    "materialized_at": manifest.get("materialized_at"),
+                }
+            except Exception:
+                profile["origin_manifest_error"] = True
+
+        editable_indicators = [
+            "agent",
+            "skills",
+            "tools",
+            "prompts",
+            "systems",
+            "Mem",
+            "tests",
+        ]
+        present_roots = [name for name in editable_indicators if (worktree / name).exists()]
+        try:
+            top_level_entries = sorted(child.name for child in worktree.iterdir())[:20]
+        except Exception:
+            top_level_entries = []
+
+        profile.update(
+            {
+                "profile_status": "ready",
+                "present_roots": present_roots,
+                "top_level_entries": top_level_entries,
+                "has_run_agent": (worktree / "run_agent.py").exists(),
+                "has_config": (worktree / "config.yaml").exists(),
+            }
+        )
+        profile.update(
+            self._item_evidence_quality(
+                item=profile,
+                source_reliability=0.9,
+                supports=["self_structure", "body_state"],
+                contradicts=[],
+            )
+        )
+        return profile
+
+    def _item_evidence_quality(
+        self,
+        *,
+        item: Dict[str, Any],
+        source_reliability: float,
+        supports: List[str],
+        contradicts: List[str],
+    ) -> Dict[str, Any]:
+        confidence_score = self._item_confidence_score(
+            item=item,
+            source_reliability=source_reliability,
+        )
+        novelty_score = self._item_novelty_score(item)
+        return {
+            "confidence_score": confidence_score,
+            "novelty_score": novelty_score,
+            "source_reliability": round(self._clamp01(source_reliability), 4),
+            "supports": list(supports),
+            "contradicts": list(contradicts),
+        }
+
+    def _item_confidence_score(
+        self,
+        *,
+        item: Dict[str, Any],
+        source_reliability: float,
+    ) -> float:
+        quality_component = 0.0
+        try:
+            quality_component = self._clamp01(float(item.get("quality_score") or 0.0))
+        except (TypeError, ValueError):
+            quality_component = 0.0
+        evidence_summary = list(item.get("evidence_summary") or [])
+        evidence_bonus = min(len(evidence_summary), 4) * 0.06
+        freshness_bonus = 0.0
+        published_at = item.get("published_at") or item.get("completed_at")
+        parsed_time = self._parse_timestamp(published_at)
+        if parsed_time is not None:
+            age_days = max(0, (datetime.now(timezone.utc) - parsed_time).days)
+            if age_days <= 14:
+                freshness_bonus = 0.18
+            elif age_days <= 90:
+                freshness_bonus = 0.1
+            else:
+                freshness_bonus = 0.03
+        base = (
+            0.22
+            + self._clamp01(source_reliability) * 0.45
+            + quality_component * 0.18
+            + evidence_bonus
+            + freshness_bonus
+        )
+        return round(self._clamp01(base), 4)
+
+    def _item_novelty_score(self, item: Dict[str, Any]) -> float:
+        text = " ".join(
+            [
+                str(item.get("title") or ""),
+                str(item.get("summary") or ""),
+            ]
+        ).strip()
+        if not text:
+            return 0.2
+        token_count = len({token.lower() for token in _TOPIC_WORD_RE.findall(text)})
+        return round(self._clamp01(0.18 + min(token_count, 12) * 0.055), 4)
+
+    def _build_evidence_channels(
+        self,
+        *,
+        recent_learning_evidence: List[Dict[str, Any]],
+        external_research_evidence: List[Dict[str, Any]],
+        shell_body_profile: Dict[str, Any],
+        deliberation_dict: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        learning_strength = self._channel_strength_from_learning(recent_learning_evidence)
+        learning_confidence = self._channel_confidence_from_learning(recent_learning_evidence)
+        body_confidence = self._channel_confidence_from_body(shell_body_profile)
+        body_strength = "strong" if shell_body_profile.get("profile_status") == "ready" else "weak"
+        research_strength = self._channel_strength_from_research(external_research_evidence)
+        research_confidence = self._channel_confidence_from_research(external_research_evidence)
+        research_freshness = self._research_freshness_hint(external_research_evidence)
+        conflict_flags = self._evidence_conflict_flags(
+            recent_learning_evidence=recent_learning_evidence,
+            external_research_evidence=external_research_evidence,
+            shell_body_profile=shell_body_profile,
+        )
+        evidence_graph = self._build_evidence_graph(
+            recent_learning_evidence=recent_learning_evidence,
+            external_research_evidence=external_research_evidence,
+            shell_body_profile=shell_body_profile,
+        )
+        learning_channel = {
+            "channel": "recent_learning",
+            "kind": "internal_learning_evidence",
+            "item_count": len(recent_learning_evidence),
+            "freshness_hint": "recent",
+            "confidence": learning_confidence,
+            "evidence_strength": learning_strength,
+            "conflict_flags": [
+                flag for flag in conflict_flags if flag.startswith("learning_")
+            ],
+            "items": recent_learning_evidence[:5],
+        }
+        body_channel = {
+            "channel": "shell_body_profile",
+            "kind": "self_structure_evidence",
+            "item_count": 1 if shell_body_profile else 0,
+            "freshness_hint": "current",
+            "confidence": body_confidence,
+            "evidence_strength": body_strength,
+            "conflict_flags": [
+                flag for flag in conflict_flags if flag.startswith("body_")
+            ],
+            "items": [shell_body_profile] if shell_body_profile else [],
+        }
+        research_channel = {
+            "channel": "external_research",
+            "kind": "external_research_evidence",
+            "item_count": len(external_research_evidence),
+            "freshness_hint": research_freshness,
+            "confidence": research_confidence,
+            "evidence_strength": research_strength,
+            "conflict_flags": [
+                flag for flag in conflict_flags if flag.startswith("research_")
+            ],
+            "items": external_research_evidence[:8],
+        }
+        cognition_channel = {
+            "channel": "deliberation_state",
+            "kind": "internal_cognition_state",
+            "item_count": 1,
+            "freshness_hint": "current",
+            "confidence": self._clamp01(
+                0.45
+                + float(deliberation_dict.get("world_model", {}).get("self_confidence") or 0.0) * 0.4
+            ),
+            "evidence_strength": "moderate",
+            "conflict_flags": [],
+            "items": [
+                {
+                    "perception": deliberation_dict.get("perception", {}),
+                    "world_model": deliberation_dict.get("world_model", {}),
+                    "reflection": deliberation_dict.get("reflection", {}),
+                    "adaptive_policy": deliberation_dict.get("adaptive_policy", {}),
+                }
+            ],
+        }
+        return {
+            "channels": [
+                learning_channel,
+                body_channel,
+                research_channel,
+                cognition_channel,
+            ],
+            "research_digest": {
+                "item_count": len(external_research_evidence),
+                "freshness_hint": research_freshness,
+                "confidence": research_confidence,
+                "evidence_strength": research_strength,
+                "conflict_flags": [
+                    flag for flag in conflict_flags if flag.startswith("research_")
+                ],
+                "sources": sorted(
+                    {
+                        str(item.get("source") or "").strip()
+                        for item in external_research_evidence
+                        if str(item.get("source") or "").strip()
+                    }
+                ),
+                "topics": [
+                    str(item.get("title") or "").strip()
+                    for item in external_research_evidence[:6]
+                    if str(item.get("title") or "").strip()
+                ],
+            },
+            "evidence_graph": evidence_graph,
+        }
+
+    def _channel_strength_from_learning(self, items: List[Dict[str, Any]]) -> str:
+        if not items:
+            return "weak"
+        quality_scores: List[float] = []
+        for item in items[:5]:
+            try:
+                quality_scores.append(self._clamp01(float(item.get("quality_score") or 0.0)))
+            except (TypeError, ValueError):
+                continue
+        if not quality_scores:
+            return "moderate"
+        avg = sum(quality_scores) / len(quality_scores)
+        if avg >= 0.75:
+            return "strong"
+        if avg >= 0.4:
+            return "moderate"
+        return "weak"
+
+    def _channel_confidence_from_learning(self, items: List[Dict[str, Any]]) -> float:
+        if not items:
+            return 0.22
+        quality_scores: List[float] = []
+        for item in items[:5]:
+            try:
+                quality_scores.append(self._clamp01(float(item.get("quality_score") or 0.0)))
+            except (TypeError, ValueError):
+                continue
+        if not quality_scores:
+            return 0.45
+        avg = sum(quality_scores) / len(quality_scores)
+        return round(self._clamp01(0.3 + avg * 0.6), 4)
+
+    def _channel_confidence_from_body(self, shell_body_profile: Dict[str, Any]) -> float:
+        status = str(shell_body_profile.get("profile_status") or "").strip().lower()
+        if status == "ready":
+            return 0.86
+        if status in {"missing_worktree", "worktree_missing_on_disk"}:
+            return 0.2
+        return 0.45
+
+    def _channel_strength_from_research(self, items: List[Dict[str, Any]]) -> str:
+        if not items:
+            return "weak"
+        if len(items) >= 3 and self._research_freshness_hint(items) in {"fresh", "recent"}:
+            return "strong"
+        if len(items) >= 1:
+            return "moderate"
+        return "weak"
+
+    def _channel_confidence_from_research(self, items: List[Dict[str, Any]]) -> float:
+        if not items:
+            return 0.18
+        freshness = self._research_freshness_hint(items)
+        freshness_bonus = {
+            "fresh": 0.3,
+            "recent": 0.22,
+            "stale": 0.08,
+            "unknown": 0.14,
+        }.get(freshness, 0.12)
+        source_count = len(
+            {
+                str(item.get("source") or "").strip()
+                for item in items
+                if str(item.get("source") or "").strip()
+            }
+        )
+        return round(self._clamp01(0.24 + min(len(items), 4) * 0.08 + source_count * 0.05 + freshness_bonus), 4)
+
+    def _evidence_conflict_flags(
+        self,
+        *,
+        recent_learning_evidence: List[Dict[str, Any]],
+        external_research_evidence: List[Dict[str, Any]],
+        shell_body_profile: Dict[str, Any],
+    ) -> List[str]:
+        flags: List[str] = []
+        if not recent_learning_evidence:
+            flags.append("learning_missing_recent_history")
+        if recent_learning_evidence and self._channel_strength_from_learning(recent_learning_evidence) == "weak":
+            flags.append("learning_weak_quality_signal")
+        if shell_body_profile.get("profile_status") != "ready":
+            flags.append("body_profile_incomplete")
+        if not external_research_evidence:
+            flags.append("research_missing_external_support")
+        elif self._research_freshness_hint(external_research_evidence) == "stale":
+            flags.append("research_stale_support")
+        return flags
+
+    def _build_recent_reference_alignment(self, drive_context: Dict[str, Any]) -> Dict[str, Any]:
+        drive_history = dict(drive_context.get("drive_history") or {})
+        outcomes = [
+            dict(item)
+            for item in list(drive_history.get("outcomes") or [])
+            if isinstance(item, dict)
+        ]
+        recent_alignment_entries: List[Dict[str, Any]] = []
+        for outcome in outcomes[:12]:
+            metadata = dict(outcome.get("metadata") or {})
+            evidence = dict(outcome.get("evidence") or {})
+            alignment = outcome.get("reference_alignment")
+            if not isinstance(alignment, dict):
+                alignment = metadata.get("reference_alignment")
+            if not isinstance(alignment, dict):
+                alignment = evidence.get("reference_alignment")
+            if not isinstance(alignment, dict):
+                continue
+            recent_alignment_entries.append(
+                {
+                    "title": str(outcome.get("title") or "").strip(),
+                    "alignment_quality": str(alignment.get("alignment_quality") or "").strip(),
+                    "alignment_score": float(alignment.get("alignment_score") or 0.0),
+                    "missing_evidence_nodes": list(alignment.get("missing_evidence_nodes") or [])[:4],
+                    "missing_agenda_nodes": list(alignment.get("missing_agenda_nodes") or [])[:4],
+                }
+            )
+            if len(recent_alignment_entries) >= 4:
+                break
+
+        if not recent_alignment_entries:
+            return {
+                "available": False,
+                "recent_entries": [],
+                "summary": "No recent reference-alignment feedback is available yet.",
+            }
+
+        avg_score = sum(entry["alignment_score"] for entry in recent_alignment_entries) / len(recent_alignment_entries)
+        weak_count = sum(
+            1
+            for entry in recent_alignment_entries
+            if entry["alignment_quality"] in {"weak", "partial", "drifted"}
+        )
+        return {
+            "available": True,
+            "recent_entries": recent_alignment_entries,
+            "average_alignment_score": round(self._clamp01(avg_score), 4),
+            "weak_or_partial_count": weak_count,
+            "summary": (
+                f"Recent proposals show average reference alignment {self._clamp01(avg_score):.2f}; "
+                f"{weak_count} entries were weak/partial/drifted."
+            ),
+        }
+
+    def _build_proposal_drift_memory(self, drive_context: Dict[str, Any]) -> Dict[str, Any]:
+        drive_history = dict(drive_context.get("drive_history") or {})
+        outcomes = [
+            dict(item)
+            for item in list(drive_history.get("outcomes") or [])
+            if isinstance(item, dict)
+        ]
+        recent_entries: List[Dict[str, Any]] = []
+        quality_counts = {"strong": 0, "partial": 0, "weak": 0}
+        posture_alignment_counts: Dict[str, int] = {}
+        priority_basis_counts: Dict[str, int] = {}
+        posture_conflict_reason_counts: Dict[str, int] = {}
+        missing_posture_alignment_count = 0
+        missing_priority_basis_count = 0
+        for outcome in outcomes[:12]:
+            metadata = dict(outcome.get("metadata") or {})
+            evidence = dict(outcome.get("evidence") or {})
+            cognitive_alignment = outcome.get("cognitive_alignment")
+            if not isinstance(cognitive_alignment, dict):
+                cognitive_alignment = metadata.get("cognitive_alignment")
+            if not isinstance(cognitive_alignment, dict):
+                cognitive_alignment = evidence.get("cognitive_alignment")
+            if not isinstance(cognitive_alignment, dict):
+                continue
+            quality = str(cognitive_alignment.get("quality") or "partial").strip().lower() or "partial"
+            if quality not in quality_counts:
+                quality = "partial"
+            quality_counts[quality] += 1
+            posture_alignment = outcome.get("llm_posture_alignment")
+            if not isinstance(posture_alignment, list):
+                posture_alignment = metadata.get("llm_posture_alignment")
+            if not isinstance(posture_alignment, list):
+                posture_alignment = evidence.get("llm_posture_alignment")
+            normalized_posture_alignment = [
+                str(item).strip()
+                for item in list(posture_alignment or [])[:3]
+                if str(item).strip()
+            ]
+            if normalized_posture_alignment:
+                for item in normalized_posture_alignment:
+                    posture_alignment_counts[item] = posture_alignment_counts.get(item, 0) + 1
+            else:
+                missing_posture_alignment_count += 1
+            priority_basis = outcome.get("llm_priority_basis")
+            if not isinstance(priority_basis, list):
+                priority_basis = metadata.get("llm_priority_basis")
+            if not isinstance(priority_basis, list):
+                priority_basis = evidence.get("llm_priority_basis")
+            normalized_priority_basis = [
+                str(item).strip()
+                for item in list(priority_basis or [])[:3]
+                if str(item).strip()
+            ]
+            if normalized_priority_basis:
+                for item in normalized_priority_basis:
+                    priority_basis_counts[item] = priority_basis_counts.get(item, 0) + 1
+            else:
+                missing_priority_basis_count += 1
+            conflict_reasons = [
+                str(item).strip()
+                for item in list(cognitive_alignment.get("reasons") or [])[:4]
+                if str(item).strip()
+                and (
+                    "posture" in str(item).strip().lower()
+                    or "priority" in str(item).strip().lower()
+                    or "task_type" in str(item).strip().lower()
+                )
+            ]
+            for item in conflict_reasons:
+                posture_conflict_reason_counts[item] = posture_conflict_reason_counts.get(item, 0) + 1
+            recent_entries.append(
+                {
+                    "title": str(outcome.get("title") or "").strip(),
+                    "quality": quality,
+                    "score": float(cognitive_alignment.get("score") or 0.0),
+                    "top_priority_task_type": str(
+                        cognitive_alignment.get("top_priority_task_type") or ""
+                    ).strip(),
+                    "reasons": [
+                        str(item).strip()
+                        for item in list(cognitive_alignment.get("reasons") or [])[:4]
+                        if str(item).strip()
+                    ],
+                    "llm_posture_alignment": normalized_posture_alignment,
+                    "llm_priority_basis": normalized_priority_basis,
+                }
+            )
+            if len(recent_entries) >= 4:
+                break
+
+        if not recent_entries:
+            return {
+                "available": False,
+                "recent_entries": [],
+                "summary": "No recent proposal-drift memory is available yet.",
+            }
+
+        avg_score = sum(entry["score"] for entry in recent_entries) / len(recent_entries)
+        weak_or_partial = quality_counts["weak"] + quality_counts["partial"]
+        drift_state = "stable"
+        if quality_counts["weak"] >= 2 or avg_score < 0.45:
+            drift_state = "drifting"
+        elif (quality_counts["weak"] >= 1 and quality_counts["strong"] >= 1) or weak_or_partial >= 2:
+            drift_state = "correcting"
+        common_posture_alignment = [
+            item
+            for item, _count in sorted(
+                posture_alignment_counts.items(),
+                key=lambda pair: (-pair[1], pair[0]),
+            )[:4]
+        ]
+        common_priority_basis = [
+            item
+            for item, _count in sorted(
+                priority_basis_counts.items(),
+                key=lambda pair: (-pair[1], pair[0]),
+            )[:4]
+        ]
+        dominant_posture_conflict_reason = None
+        if posture_conflict_reason_counts:
+            dominant_posture_conflict_reason = max(
+                posture_conflict_reason_counts.items(),
+                key=lambda pair: (pair[1], pair[0]),
+            )[0]
+        posture_alignment_health = "strong"
+        if missing_posture_alignment_count >= 2:
+            posture_alignment_health = "missing"
+        elif quality_counts["weak"] >= 1 or dominant_posture_conflict_reason:
+            posture_alignment_health = "inconsistent"
+        priority_basis_health = "strong"
+        if missing_priority_basis_count >= 2:
+            priority_basis_health = "missing"
+        elif quality_counts["weak"] >= 1 or not common_priority_basis:
+            priority_basis_health = "inconsistent"
+        return {
+            "available": True,
+            "recent_entries": recent_entries,
+            "average_score": round(self._clamp01(avg_score), 4),
+            "quality_counts": quality_counts,
+            "drift_state": drift_state,
+            "common_posture_alignment": common_posture_alignment,
+            "common_priority_basis": common_priority_basis,
+            "missing_posture_alignment_count": missing_posture_alignment_count,
+            "missing_priority_basis_count": missing_priority_basis_count,
+            "dominant_posture_conflict_reason": dominant_posture_conflict_reason,
+            "posture_alignment_health": posture_alignment_health,
+            "priority_basis_health": priority_basis_health,
+            "summary": (
+                f"Recent proposal alignment is {drift_state}; average cognitive alignment "
+                f"score is {self._clamp01(avg_score):.2f}."
+            ),
+        }
+
+    def _build_self_model_snapshot(
+        self,
+        *,
+        perception: Dict[str, Any],
+        world_model: Dict[str, Any],
+        reflection: Dict[str, Any],
+        adaptive_policy: Dict[str, Any],
+        shell_body_profile: Dict[str, Any],
+        recent_learning_evidence: List[Dict[str, Any]],
+        external_research_evidence: List[Dict[str, Any]],
+        recent_reference_alignment: Dict[str, Any],
+        evidence_graph: Dict[str, Any],
+        agenda_graph: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        body_profile_status = str(shell_body_profile.get("profile_status") or "unknown").strip()
+        learning_state = str(reflection.get("learning_yield_state") or "unknown").strip()
+        dominant_constraint = str(reflection.get("dominant_constraint") or "unknown").strip()
+        preferred_focus = str(adaptive_policy.get("preferred_focus") or "observation").strip()
+        queue_health = str(world_model.get("queue_health") or "unknown").strip()
+        alignment_available = bool(recent_reference_alignment.get("available"))
+        alignment_score = self._clamp01(
+            recent_reference_alignment.get("average_alignment_score") or 0.0
+        )
+        weak_alignment_count = max(
+            0,
+            int(recent_reference_alignment.get("weak_or_partial_count") or 0)
+        )
+        research_freshness = self._research_freshness_hint(external_research_evidence)
+        top_topics = [
+            str(item.get("topic") or "").strip()
+            for item in list(evidence_graph.get("nodes") or [])[:4]
+            if isinstance(item, dict) and str(item.get("topic") or "").strip()
+        ]
+        unresolved_gaps = [
+            str(item.get("gap") or "").strip()
+            for item in list(agenda_graph.get("unresolved_gaps") or [])[:4]
+            if isinstance(item, dict) and str(item.get("gap") or "").strip()
+        ]
+        current_directions = [
+            str(item.get("direction") or "").strip()
+            for item in list(agenda_graph.get("recommended_directions") or [])[:4]
+            if isinstance(item, dict) and str(item.get("direction") or "").strip()
+        ]
+        self_understanding_gaps: List[str] = []
+        if body_profile_status != "ready":
+            self_understanding_gaps.append("body_profile_incomplete")
+        if not recent_learning_evidence:
+            self_understanding_gaps.append("missing_recent_learning_trace")
+        elif learning_state in {"weak", "low_yield", "unknown"}:
+            self_understanding_gaps.append("recent_learning_not_yet_reliable")
+        if not external_research_evidence:
+            self_understanding_gaps.append("missing_external_research_support")
+        elif research_freshness == "stale":
+            self_understanding_gaps.append("external_research_is_stale")
+        if alignment_available and weak_alignment_count > 0:
+            self_understanding_gaps.append("reference_alignment_is_unstable")
+
+        readiness_factors = {
+            "body_structure": body_profile_status == "ready",
+            "recent_learning": bool(recent_learning_evidence),
+            "external_research": bool(external_research_evidence),
+            "reference_alignment_feedback": alignment_available,
+        }
+        readiness_score = (
+            (1.0 if readiness_factors["body_structure"] else 0.0) * 0.28
+            + (1.0 if readiness_factors["recent_learning"] else 0.0) * 0.24
+            + (1.0 if readiness_factors["external_research"] else 0.0) * 0.16
+            + alignment_score * 0.16
+            + self._clamp01(world_model.get("self_confidence") or 0.0) * 0.16
+        )
+
+        summary = (
+            f"Current self model sees dominant constraint={dominant_constraint}, "
+            f"preferred focus={preferred_focus}, body status={body_profile_status}, "
+            f"learning state={learning_state}, queue health={queue_health}."
+        )
+        if self_understanding_gaps:
+            summary += " Active self-understanding gaps: " + ", ".join(self_understanding_gaps[:4]) + "."
+
+        return {
+            "identity_view": {
+                "role": "endogenous_supervisory_core",
+                "responsibility": "self-understanding before self-iteration",
+                "execution_scope": "governance_only",
+            },
+            "current_state": {
+                "user_mode": perception.get("user_mode"),
+                "system_posture": perception.get("system_posture"),
+                "dominant_constraint": dominant_constraint,
+                "preferred_focus": preferred_focus,
+                "queue_health": queue_health,
+                "learning_yield_state": learning_state,
+                "body_profile_status": body_profile_status,
+                "research_freshness": research_freshness,
+            },
+            "readiness": {
+                "self_iteration_readiness_score": round(self._clamp01(readiness_score), 4),
+                "autonomy_readiness": round(
+                    self._clamp01(reflection.get("autonomy_readiness") or 0.0),
+                    4,
+                ),
+                "readiness_factors": readiness_factors,
+            },
+            "self_understanding_gaps": self_understanding_gaps,
+            "reference_alignment_feedback": {
+                "available": alignment_available,
+                "average_alignment_score": round(alignment_score, 4),
+                "weak_or_partial_count": weak_alignment_count,
+                "summary": recent_reference_alignment.get("summary"),
+            },
+            "current_topics": top_topics,
+            "unresolved_gaps": unresolved_gaps,
+            "current_directions": current_directions,
+            "summary": summary,
+        }
+
+    def _build_evidence_credibility_summary(
+        self,
+        *,
+        recent_learning_evidence: List[Dict[str, Any]],
+        external_research_evidence: List[Dict[str, Any]],
+        shell_body_profile: Dict[str, Any],
+        evidence_channels: Dict[str, Any],
+        recent_reference_alignment: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        learning_confidence = self._channel_confidence_from_learning(recent_learning_evidence)
+        research_confidence = self._channel_confidence_from_research(external_research_evidence)
+        body_confidence = self._channel_confidence_from_body(shell_body_profile)
+        channel_rows = [
+            {
+                "channel": "recent_learning",
+                "confidence": round(self._clamp01(learning_confidence), 4),
+                "evidence_strength": self._channel_strength_from_learning(recent_learning_evidence),
+                "item_count": len(recent_learning_evidence),
+            },
+            {
+                "channel": "external_research",
+                "confidence": round(self._clamp01(research_confidence), 4),
+                "evidence_strength": self._channel_strength_from_research(external_research_evidence),
+                "item_count": len(external_research_evidence),
+            },
+            {
+                "channel": "shell_body_profile",
+                "confidence": round(self._clamp01(body_confidence), 4),
+                "evidence_strength": (
+                    "strong" if str(shell_body_profile.get("profile_status") or "") == "ready" else "weak"
+                ),
+                "item_count": 1 if shell_body_profile else 0,
+            },
+        ]
+        high_credibility_channels = [
+            row["channel"]
+            for row in channel_rows
+            if row["confidence"] >= 0.72 and row["evidence_strength"] in {"moderate", "strong"}
+        ]
+        weak_or_missing_channels = [
+            row["channel"]
+            for row in channel_rows
+            if row["confidence"] < 0.45 or row["item_count"] <= 0 or row["evidence_strength"] == "weak"
+        ]
+        conflict_flags: List[str] = []
+        for channel in list(evidence_channels.get("channels") or []):
+            if not isinstance(channel, dict):
+                continue
+            for flag in list(channel.get("conflict_flags") or []):
+                text = str(flag).strip()
+                if text and text not in conflict_flags:
+                    conflict_flags.append(text)
+        alignment_score = self._clamp01(recent_reference_alignment.get("average_alignment_score") or 0.0)
+        summary = (
+            f"High-credibility channels: {', '.join(high_credibility_channels) if high_credibility_channels else 'none'}. "
+            f"Weak or missing channels: {', '.join(weak_or_missing_channels) if weak_or_missing_channels else 'none'}. "
+            f"Reference alignment score={alignment_score:.2f}."
+        )
+        return {
+            "channels": channel_rows,
+            "high_credibility_channels": high_credibility_channels,
+            "weak_or_missing_channels": weak_or_missing_channels,
+            "conflict_flags": conflict_flags[:8],
+            "reference_alignment_score": round(alignment_score, 4),
+            "summary": summary,
+        }
+
+    def _build_task_type_priors(
+        self,
+        *,
+        reflection: Dict[str, Any],
+        adaptive_policy: Dict[str, Any],
+        self_model_snapshot: Dict[str, Any],
+        evidence_credibility_summary: Dict[str, Any],
+        agenda_graph: Dict[str, Any],
+        recent_reference_alignment: Dict[str, Any],
+        proposal_drift_memory: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        preferred_focus = str(adaptive_policy.get("preferred_focus") or "observation").strip()
+        dominant_constraint = str(reflection.get("dominant_constraint") or "unknown").strip()
+        self_gaps = list(self_model_snapshot.get("self_understanding_gaps") or [])
+        weak_channels = list(evidence_credibility_summary.get("weak_or_missing_channels") or [])
+        high_channels = list(evidence_credibility_summary.get("high_credibility_channels") or [])
+        unresolved_gaps = [
+            str(item.get("gap") or "").strip()
+            for item in list(agenda_graph.get("unresolved_gaps") or [])[:4]
+            if isinstance(item, dict) and str(item.get("gap") or "").strip()
+        ]
+        alignment_score = self._clamp01(recent_reference_alignment.get("average_alignment_score") or 0.0)
+        drift_state = str(proposal_drift_memory.get("drift_state") or "").strip().lower()
+        drift_average_score = self._clamp01(proposal_drift_memory.get("average_score") or 0.0)
+
+        observation_score = 0.22
+        review_score = 0.2
+        learning_score = 0.24
+        maintenance_score = 0.12
+        improvement_score = 0.1
+
+        if preferred_focus == "observation":
+            observation_score += 0.22
+            review_score += 0.08
+        if preferred_focus == "truthfulness":
+            review_score += 0.2
+            observation_score += 0.06
+        if preferred_focus == "learning_expansion":
+            learning_score += 0.18
+        if preferred_focus == "memory_continuity":
+            maintenance_score += 0.18
+        if preferred_focus == "body_growth":
+            improvement_score += 0.16
+
+        if dominant_constraint in {"weak_learning_yield", "historical_underdelivery"}:
+            observation_score += 0.12
+            review_score += 0.1
+        if dominant_constraint == "queue_blockage":
+            review_score += 0.14
+            maintenance_score += 0.08
+
+        if self_gaps:
+            observation_score += min(len(self_gaps), 4) * 0.06
+            learning_score += 0.08
+            improvement_score -= 0.05
+        if weak_channels:
+            observation_score += min(len(weak_channels), 3) * 0.05
+            review_score += 0.07
+            improvement_score -= 0.06
+        if high_channels:
+            learning_score += 0.06
+            improvement_score += 0.04
+        if alignment_score < 0.7:
+            observation_score += 0.08
+            review_score += 0.08
+            improvement_score -= 0.05
+        if drift_state == "drifting":
+            observation_score += 0.14
+            review_score += 0.14
+            learning_score -= 0.05
+            improvement_score -= 0.08
+        elif drift_state == "correcting":
+            observation_score += 0.08
+            review_score += 0.06
+            improvement_score -= 0.04
+        if drift_average_score < 0.5 and proposal_drift_memory.get("available"):
+            observation_score += 0.06
+            review_score += 0.05
+            improvement_score -= 0.04
+        if "prepare_body_growth" in unresolved_gaps and not self_gaps and alignment_score >= 0.7:
+            improvement_score += 0.1
+
+        prior_rows = [
+            {
+                "task_type": "observation",
+                "score": round(self._clamp01(observation_score), 4),
+                "reasons": self._task_type_prior_reasons(
+                    task_type="observation",
+                    preferred_focus=preferred_focus,
+                    dominant_constraint=dominant_constraint,
+                    self_gaps=self_gaps,
+                    weak_channels=weak_channels,
+                    unresolved_gaps=unresolved_gaps,
+                    alignment_score=alignment_score,
+                    drift_state=drift_state,
+                ),
+            },
+            {
+                "task_type": "review",
+                "score": round(self._clamp01(review_score), 4),
+                "reasons": self._task_type_prior_reasons(
+                    task_type="review",
+                    preferred_focus=preferred_focus,
+                    dominant_constraint=dominant_constraint,
+                    self_gaps=self_gaps,
+                    weak_channels=weak_channels,
+                    unresolved_gaps=unresolved_gaps,
+                    alignment_score=alignment_score,
+                    drift_state=drift_state,
+                ),
+            },
+            {
+                "task_type": "learning",
+                "score": round(self._clamp01(learning_score), 4),
+                "reasons": self._task_type_prior_reasons(
+                    task_type="learning",
+                    preferred_focus=preferred_focus,
+                    dominant_constraint=dominant_constraint,
+                    self_gaps=self_gaps,
+                    weak_channels=weak_channels,
+                    unresolved_gaps=unresolved_gaps,
+                    alignment_score=alignment_score,
+                    drift_state=drift_state,
+                ),
+            },
+            {
+                "task_type": "maintenance",
+                "score": round(self._clamp01(maintenance_score), 4),
+                "reasons": self._task_type_prior_reasons(
+                    task_type="maintenance",
+                    preferred_focus=preferred_focus,
+                    dominant_constraint=dominant_constraint,
+                    self_gaps=self_gaps,
+                    weak_channels=weak_channels,
+                    unresolved_gaps=unresolved_gaps,
+                    alignment_score=alignment_score,
+                    drift_state=drift_state,
+                ),
+            },
+            {
+                "task_type": "improvement",
+                "score": round(self._clamp01(improvement_score), 4),
+                "reasons": self._task_type_prior_reasons(
+                    task_type="improvement",
+                    preferred_focus=preferred_focus,
+                    dominant_constraint=dominant_constraint,
+                    self_gaps=self_gaps,
+                    weak_channels=weak_channels,
+                    unresolved_gaps=unresolved_gaps,
+                    alignment_score=alignment_score,
+                    drift_state=drift_state,
+                ),
+            },
+        ]
+        prior_rows.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
+        top = prior_rows[0] if prior_rows else {"task_type": "observation", "score": 0.0}
+        return {
+            "top_priority_task_type": top["task_type"],
+            "top_priority_score": top["score"],
+            "priors": prior_rows,
+            "drift_state": drift_state or "stable",
+            "summary": (
+                f"Program-side priors currently favor {top['task_type']} "
+                f"(score={float(top['score']):.2f}) before lower-priority task types; "
+                f"proposal drift state is {drift_state or 'stable'}."
+            ),
+        }
+
+    def _task_type_prior_reasons(
+        self,
+        *,
+        task_type: str,
+        preferred_focus: str,
+        dominant_constraint: str,
+        self_gaps: List[str],
+        weak_channels: List[str],
+        unresolved_gaps: List[str],
+        alignment_score: float,
+        drift_state: str,
+    ) -> List[str]:
+        reasons: List[str] = []
+        if task_type == "observation":
+            if self_gaps:
+                reasons.append("self_understanding_gaps_require_more_observation")
+            if weak_channels:
+                reasons.append("weak_channels_make_direct_action_less_reliable")
+            if alignment_score < 0.7:
+                reasons.append("reference_alignment_is_not_yet_stable")
+            if drift_state == "drifting":
+                reasons.append("proposal_drift_requires_more_observation")
+        elif task_type == "review":
+            if dominant_constraint in {"queue_blockage", "historical_underdelivery"}:
+                reasons.append("dominant_constraint_calls_for_review")
+            if preferred_focus == "truthfulness":
+                reasons.append("preferred_focus_is_truthfulness")
+            if alignment_score < 0.7:
+                reasons.append("review_can_repair_reference_drift")
+            if drift_state in {"drifting", "correcting"}:
+                reasons.append("review_can_help_correct_recent_proposal_drift")
+        elif task_type == "learning":
+            if preferred_focus == "learning_expansion":
+                reasons.append("preferred_focus_is_learning_expansion")
+            if "expand_learning_frontier" in unresolved_gaps:
+                reasons.append("agenda_still_contains_learning_frontier_gap")
+            if self_gaps:
+                reasons.append("learning_can_reduce_self_model_gaps")
+            if drift_state == "drifting":
+                reasons.append("learning_should_wait_until_drift_stabilizes")
+        elif task_type == "maintenance":
+            if preferred_focus == "memory_continuity":
+                reasons.append("preferred_focus_is_memory_continuity")
+            if dominant_constraint == "queue_blockage":
+                reasons.append("maintenance_can_reduce_backlog_pressure")
+        elif task_type == "improvement":
+            if "prepare_body_growth" in unresolved_gaps:
+                reasons.append("agenda_contains_body_growth_gap")
+            if alignment_score >= 0.7 and not self_gaps:
+                reasons.append("evidence_is_stable_enough_for_guarded_improvement")
+            if weak_channels:
+                reasons.append("improvement_should_remain_guarded_under_weak_channels")
+            if drift_state in {"drifting", "correcting"}:
+                reasons.append("recent_proposal_drift_discourages_direct_improvement")
+        if not reasons:
+            reasons.append("baseline_program_prior")
+        return reasons[:4]
+
+    def _build_evidence_graph(
+        self,
+        *,
+        recent_learning_evidence: List[Dict[str, Any]],
+        external_research_evidence: List[Dict[str, Any]],
+        shell_body_profile: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        evidence_items: List[Dict[str, Any]] = []
+        evidence_items.extend(recent_learning_evidence[:5])
+        evidence_items.extend(external_research_evidence[:8])
+        if shell_body_profile:
+            evidence_items.append(shell_body_profile)
+
+        node_scores: Dict[str, Dict[str, Any]] = {}
+        support_edges: List[Dict[str, Any]] = []
+        contradiction_edges: List[Dict[str, Any]] = []
+
+        for item in evidence_items:
+            title = str(item.get("title") or item.get("slot_id") or "evidence_item").strip()
+            confidence = self._clamp01(item.get("confidence_score") or item.get("source_reliability") or 0.4)
+            for topic in list(item.get("supports") or []):
+                topic_name = str(topic or "").strip()
+                if not topic_name:
+                    continue
+                bucket = node_scores.setdefault(
+                    topic_name,
+                    {"support_count": 0, "contradict_count": 0, "confidence_sum": 0.0},
+                )
+                bucket["support_count"] += 1
+                bucket["confidence_sum"] += confidence
+                support_edges.append(
+                    {
+                        "from": title,
+                        "to": topic_name,
+                        "relation": "supports",
+                        "weight": round(confidence, 4),
+                    }
+                )
+            for topic in list(item.get("contradicts") or []):
+                topic_name = str(topic or "").strip()
+                if not topic_name:
+                    continue
+                bucket = node_scores.setdefault(
+                    topic_name,
+                    {"support_count": 0, "contradict_count": 0, "confidence_sum": 0.0},
+                )
+                bucket["contradict_count"] += 1
+                bucket["confidence_sum"] += confidence
+                contradiction_edges.append(
+                    {
+                        "from": title,
+                        "to": topic_name,
+                        "relation": "contradicts",
+                        "weight": round(confidence, 4),
+                    }
+                )
+
+        nodes: List[Dict[str, Any]] = []
+        for topic_name, bucket in sorted(node_scores.items()):
+            total = bucket["support_count"] + bucket["contradict_count"]
+            avg_confidence = bucket["confidence_sum"] / total if total > 0 else 0.0
+            nodes.append(
+                {
+                    "topic": topic_name,
+                    "support_count": bucket["support_count"],
+                    "contradict_count": bucket["contradict_count"],
+                    "net_signal": bucket["support_count"] - bucket["contradict_count"],
+                    "avg_confidence": round(self._clamp01(avg_confidence), 4),
+                }
+            )
+
+        return {
+            "node_count": len(nodes),
+            "edge_count": len(support_edges) + len(contradiction_edges),
+            "nodes": nodes[:16],
+            "support_edges": support_edges[:10],
+            "contradiction_edges": contradiction_edges[:8],
+        }
+
+    def _build_agenda_graph(
+        self,
+        *,
+        deliberation_dict: Dict[str, Any],
+        evidence_graph: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        adaptive_policy = dict(deliberation_dict.get("adaptive_policy") or {})
+        needs = [
+            dict(item)
+            for item in list(deliberation_dict.get("needs") or [])
+            if isinstance(item, dict)
+        ]
+        intents = [
+            dict(item)
+            for item in list(deliberation_dict.get("intents") or [])
+            if isinstance(item, dict)
+        ]
+        signals = [
+            dict(item)
+            for item in list(deliberation_dict.get("signals") or [])
+            if isinstance(item, dict)
+        ]
+        evidence_nodes = [
+            dict(item)
+            for item in list(evidence_graph.get("nodes") or [])
+            if isinstance(item, dict)
+        ]
+
+        focus = str(adaptive_policy.get("preferred_focus") or "").strip() or "observation"
+        current_topics = [
+            {
+                "topic": str(node.get("topic") or "").strip(),
+                "priority": round(
+                    self._clamp01(
+                        0.28
+                        + max(0, float(node.get("net_signal") or 0.0)) * 0.18
+                        + float(node.get("avg_confidence") or 0.0) * 0.42
+                    ),
+                    4,
+                ),
+                "status": (
+                    "supported"
+                    if float(node.get("net_signal") or 0.0) > 0
+                    else "contested"
+                    if float(node.get("contradict_count") or 0.0) > 0
+                    else "emerging"
+                ),
+            }
+            for node in evidence_nodes[:8]
+            if str(node.get("topic") or "").strip()
+        ]
+
+        unresolved_gaps: List[Dict[str, Any]] = []
+        for need in needs[:6]:
+            need_type = str(need.get("need_type") or "").strip()
+            if not need_type:
+                continue
+            unresolved_gaps.append(
+                {
+                    "gap": need_type,
+                    "priority": round(self._clamp01(float(need.get("urgency") or 0.0) * 0.6 + float(need.get("severity") or 0.0) * 0.4), 4),
+                    "rationale": str(need.get("rationale") or "").strip(),
+                }
+            )
+
+        recommended_directions: List[Dict[str, Any]] = []
+        for intent in intents[:6]:
+            intent_type = str(intent.get("intent_type") or "").strip()
+            if not intent_type:
+                continue
+            candidate_kind = intent.get("candidate_kind")
+            recommended_directions.append(
+                {
+                    "direction": intent_type,
+                    "priority": round(self._clamp01(float(intent.get("priority") or 0.0)), 4),
+                    "candidate_kind": candidate_kind,
+                    "task_type": self._task_type_for_candidate_kind(candidate_kind),
+                    "target_horizon": intent.get("target_horizon"),
+                }
+            )
+
+        active_signals = [
+            {
+                "signal": str(signal.get("signal_type") or "").strip(),
+                "priority": round(self._clamp01(float(signal.get("priority") or 0.0)), 4),
+                "message": str(signal.get("message") or "").strip(),
+            }
+            for signal in signals[:6]
+            if str(signal.get("signal_type") or "").strip()
+        ]
+
+        relation_edges: List[Dict[str, Any]] = []
+        gap_by_name = {
+            str(item.get("gap") or "").strip(): item
+            for item in unresolved_gaps
+            if str(item.get("gap") or "").strip()
+        }
+        direction_by_name = {
+            str(item.get("direction") or "").strip(): item
+            for item in recommended_directions
+            if str(item.get("direction") or "").strip()
+        }
+
+        for intent in intents[:8]:
+            direction = str(intent.get("intent_type") or "").strip()
+            if not direction:
+                continue
+            direction_meta = direction_by_name.get(direction)
+            if direction_meta is None:
+                continue
+            for source_need in list(intent.get("source_needs") or []):
+                gap_name = str(source_need or "").strip()
+                gap_meta = gap_by_name.get(gap_name)
+                if gap_meta is None:
+                    continue
+                relation_edges.append(
+                    {
+                        "from": gap_name,
+                        "to": direction,
+                        "relation": "elevates_direction",
+                        "weight": round(
+                            self._clamp01(
+                                float(gap_meta.get("priority") or 0.0) * 0.55
+                                + float(direction_meta.get("priority") or 0.0) * 0.45
+                            ),
+                            4,
+                        ),
+                    }
+                )
+
+        for signal in signals[:8]:
+            signal_name = str(signal.get("signal_type") or "").strip()
+            if not signal_name:
+                continue
+            related_intent = str(signal.get("related_intent") or "").strip()
+            if related_intent and related_intent in direction_by_name:
+                relation_edges.append(
+                    {
+                        "from": signal_name,
+                        "to": related_intent,
+                        "relation": "amplifies_direction",
+                        "weight": round(self._clamp01(float(signal.get("priority") or 0.0)), 4),
+                    }
+                )
+            if focus:
+                relation_edges.append(
+                    {
+                        "from": signal_name,
+                        "to": focus,
+                        "relation": "shapes_focus",
+                        "weight": round(self._clamp01(float(signal.get("priority") or 0.0) * 0.82), 4),
+                    }
+                )
+
+        evidence_to_gap_edges: List[Dict[str, Any]] = []
+        evidence_topics = {
+            str(node.get("topic") or "").strip(): dict(node)
+            for node in evidence_nodes
+            if str(node.get("topic") or "").strip()
+        }
+        need_topic_map = {
+            "stabilize_memory_continuity": "self_understanding",
+            "repair_truthfulness": "external_research",
+            "expand_learning_frontier": "external_research",
+            "prepare_body_growth": "body_state",
+            "clear_governance_backlog": "learning_trace",
+            "observe_before_acting": "body_state",
+        }
+        for gap in unresolved_gaps:
+            gap_name = str(gap.get("gap") or "").strip()
+            topic_name = need_topic_map.get(gap_name)
+            if not topic_name:
+                continue
+            topic_meta = evidence_topics.get(topic_name)
+            if topic_meta is None:
+                continue
+            evidence_to_gap_edges.append(
+                {
+                    "from": topic_name,
+                    "to": gap_name,
+                    "relation": "supports_gap_assessment",
+                    "weight": round(
+                        self._clamp01(
+                            float(topic_meta.get("avg_confidence") or 0.0) * 0.55
+                            + float(gap.get("priority") or 0.0) * 0.45
+                        ),
+                        4,
+                    ),
+                    }
+                )
+
+        direction_task_links: List[Dict[str, Any]] = []
+        for direction_meta in recommended_directions[:8]:
+            direction = str(direction_meta.get("direction") or "").strip()
+            candidate_kind = str(direction_meta.get("candidate_kind") or "").strip()
+            task_type = str(direction_meta.get("task_type") or "").strip()
+            if not direction or not candidate_kind or not task_type:
+                continue
+            direction_task_links.append(
+                {
+                    "from": direction,
+                    "to_candidate_kind": candidate_kind,
+                    "to_task_type": task_type,
+                    "relation": "maps_to_task_shape",
+                    "weight": round(self._clamp01(float(direction_meta.get("priority") or 0.0)), 4),
+                }
+            )
+
+        return {
+            "focus": focus,
+            "focus_confidence": round(
+                self._clamp01(
+                    0.35
+                    + float(adaptive_policy.get("candidate_throttle") or 0.0) * 0.18
+                    + float(adaptive_policy.get("observation_bias") or 0.0) * 0.12
+                ),
+                4,
+            ),
+            "current_topics": current_topics,
+            "unresolved_gaps": sorted(
+                unresolved_gaps,
+                key=lambda item: float(item.get("priority") or 0.0),
+                reverse=True,
+            )[:8],
+            "recommended_directions": sorted(
+                recommended_directions,
+                key=lambda item: float(item.get("priority") or 0.0),
+                reverse=True,
+            )[:8],
+            "active_signals": sorted(
+                active_signals,
+                key=lambda item: float(item.get("priority") or 0.0),
+                reverse=True,
+            )[:8],
+            "evidence_to_gap_edges": evidence_to_gap_edges[:12],
+            "relation_edges": relation_edges[:16],
+            "direction_task_links": direction_task_links[:12],
+        }
+
+    def _research_freshness_hint(self, items: List[Dict[str, Any]]) -> str:
+        published_tokens = [
+            str(item.get("published_at") or "").strip()
+            for item in items
+            if str(item.get("published_at") or "").strip()
+        ]
+        if not published_tokens:
+            return "unknown"
+        latest_seen: Optional[datetime] = None
+        for token in published_tokens:
+            parsed = self._parse_timestamp(token)
+            if parsed is not None and (latest_seen is None or parsed > latest_seen):
+                latest_seen = parsed
+        if latest_seen is None:
+            return "unknown"
+        age_days = max(0, (datetime.now(timezone.utc) - latest_seen).days)
+        if age_days <= 14:
+            return "fresh"
+        if age_days <= 90:
+            return "recent"
+        return "stale"
+
+    def _build_drive_context(self, idle_window: Dict[str, Any]) -> Dict[str, Any]:
+        policy = dict(idle_window.get("endogenous_drive_policy") or {})
+        drive_history = dict(idle_window.get("drive_history") or {})
+        queued_tasks = list(idle_window.get("queued_tasks") or [])
+        completed_learning_tasks = list(idle_window.get("completed_learning_tasks") or [])
+
+        recent_learning_titles = [
+            str(task.get("title") or "").strip()
+            for task in completed_learning_tasks
+            if str(task.get("title") or "").strip()
+        ]
+        queued_learning_titles = []
+        queued_body_improvement_titles = []
+        signatures: list[set[str]] = []
+        active_queue_tasks: list[Dict[str, Any]] = []
+        active_queue_by_governance: dict[str, int] = {}
+        active_queue_by_family: dict[str, int] = {}
+        active_queue_by_execution_kind: dict[str, int] = {}
+        stale_queue_count = 0
+        pending_review_count = 0
+        now = datetime.now(timezone.utc)
+
+        for title in recent_learning_titles:
+            signatures.append(self._topic_signature(title))
+
+        for task in queued_tasks:
+            title = str(task.get("title") or "").strip()
+            if not title:
+                continue
+            status = str(task.get("status") or "").strip().lower()
+            execution_kind = str(task.get("execution_kind") or "").strip().lower()
+            governance_task_type = str(task.get("governance_task_type") or "").strip().lower()
+            task_family = str(task.get("task_family") or "").strip().lower()
+            if task_family == "self_learning" and status not in {"completed", "failed", "cancelled"}:
+                queued_learning_titles.append(title)
+                signatures.append(self._topic_signature(title))
+            if execution_kind == "body_improvement":
+                queued_body_improvement_titles.append(title)
+            if status not in _TERMINAL_QUEUE_STATUSES:
+                active_queue_tasks.append(task)
+                if governance_task_type:
+                    active_queue_by_governance[governance_task_type] = (
+                        active_queue_by_governance.get(governance_task_type, 0) + 1
+                    )
+                if task_family:
+                    active_queue_by_family[task_family] = (
+                        active_queue_by_family.get(task_family, 0) + 1
+                    )
+                if execution_kind:
+                    active_queue_by_execution_kind[execution_kind] = (
+                        active_queue_by_execution_kind.get(execution_kind, 0) + 1
+                    )
+                if status in _REVIEW_BACKLOG_STATUSES:
+                    pending_review_count += 1
+                updated_at = self._parse_timestamp(task.get("updated_at") or task.get("created_at"))
+                if updated_at is not None and now - updated_at >= timedelta(hours=24):
+                    stale_queue_count += 1
+
+        return {
+            "policy": policy,
+            "drive_history": {
+                "judgements": [
+                    dict(item)
+                    for item in list(drive_history.get("judgements") or [])
+                    if isinstance(item, dict)
+                ],
+                "outcomes": [
+                    dict(item)
+                    for item in list(drive_history.get("outcomes") or [])
+                    if isinstance(item, dict)
+                ],
+                "strategy_memory": self._normalize_strategy_memory(
+                    drive_history.get("strategy_memory")
+                ),
+            },
+            "queued_tasks": queued_tasks,
+            "completed_learning_tasks": completed_learning_tasks,
+            "recent_learning_titles": recent_learning_titles,
+            "queued_learning_titles": queued_learning_titles,
+            "queued_body_improvement_titles": queued_body_improvement_titles,
+            "recent_learning_signatures": signatures,
+            "active_queue_count": len(active_queue_tasks),
+            "active_queue_by_governance": active_queue_by_governance,
+            "active_queue_by_family": active_queue_by_family,
+            "active_queue_by_execution_kind": active_queue_by_execution_kind,
+            "stale_queue_count": stale_queue_count,
+            "pending_review_count": pending_review_count,
+        }
+
+    @staticmethod
+    def _clamp01(value: Any) -> float:
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _normalize_strategy_memory(self, raw: Any) -> Dict[str, Any]:
+        source = dict(raw or {}) if isinstance(raw, dict) else {}
+        raw_focus_stats = source.get("focus_stats")
+        focus_stats: Dict[str, Dict[str, int]] = {}
+        contextual_focus_stats: Dict[str, Dict[str, Dict[str, int]]] = {}
+        agenda_topic_stats: Dict[str, Dict[str, Any]] = {}
+        observation_target_stats: Dict[str, Dict[str, Any]] = {}
+        if isinstance(raw_focus_stats, dict):
+            for focus, stats in raw_focus_stats.items():
+                focus_name = str(focus or "").strip().lower()
+                if not focus_name or not isinstance(stats, dict):
+                    continue
+                focus_stats[focus_name] = {
+                    "judged": max(0, int(stats.get("judged") or 0)),
+                    "completed": max(0, int(stats.get("completed") or 0)),
+                    "failed": max(0, int(stats.get("failed") or 0)),
+                    "dragging": max(0, int(stats.get("dragging") or 0)),
+                }
+        raw_contextual = source.get("contextual_focus_stats")
+        if isinstance(raw_contextual, dict):
+            for context_key, focus_map in raw_contextual.items():
+                normalized_context = str(context_key or "").strip().lower()
+                if not normalized_context or not isinstance(focus_map, dict):
+                    continue
+                context_bucket: Dict[str, Dict[str, int]] = {}
+                for focus, stats in focus_map.items():
+                    focus_name = str(focus or "").strip().lower()
+                    if not focus_name or not isinstance(stats, dict):
+                        continue
+                    context_bucket[focus_name] = {
+                        "judged": max(0, int(stats.get("judged") or 0)),
+                        "completed": max(0, int(stats.get("completed") or 0)),
+                        "failed": max(0, int(stats.get("failed") or 0)),
+                        "dragging": max(0, int(stats.get("dragging") or 0)),
+                    }
+                if context_bucket:
+                    contextual_focus_stats[normalized_context] = context_bucket
+        raw_agenda_topic_stats = source.get("agenda_topic_stats")
+        if isinstance(raw_agenda_topic_stats, dict):
+            for topic, stats in raw_agenda_topic_stats.items():
+                topic_name = str(topic or "").strip().lower()
+                if not topic_name or not isinstance(stats, dict):
+                    continue
+                agenda_topic_stats[topic_name] = {
+                    "seen": max(0, int(stats.get("seen") or 0)),
+                    "active_cycles": max(0, int(stats.get("active_cycles") or 0)),
+                    "resolved": max(0, int(stats.get("resolved") or 0)),
+                    "dragging": max(0, int(stats.get("dragging") or 0)),
+                    "last_priority": round(self._clamp01(stats.get("last_priority") or 0.0), 4),
+                    "last_confidence": round(self._clamp01(stats.get("last_confidence") or 0.0), 4),
+                    "last_status": str(stats.get("last_status") or "unknown").strip().lower() or "unknown",
+                    "last_seen_at": stats.get("last_seen_at"),
+                    "last_resolved_at": stats.get("last_resolved_at"),
+                    "last_context_key": str(stats.get("last_context_key") or "").strip().lower() or None,
+                }
+        raw_observation_target_stats = source.get("observation_target_stats")
+        if isinstance(raw_observation_target_stats, dict):
+            for target, stats in raw_observation_target_stats.items():
+                target_name = str(target or "").strip().lower()
+                if not target_name or not isinstance(stats, dict):
+                    continue
+                observation_target_stats[target_name] = {
+                    "seen": max(0, int(stats.get("seen") or 0)),
+                    "recommended": max(0, int(stats.get("recommended") or 0)),
+                    "resolved": max(0, int(stats.get("resolved") or 0)),
+                    "stalled": max(0, int(stats.get("stalled") or 0)),
+                    "last_priority": round(self._clamp01(stats.get("last_priority") or 0.0), 4),
+                    "last_risk": round(self._clamp01(stats.get("last_risk") or 0.0), 4),
+                    "last_status": str(stats.get("last_status") or "unknown").strip().lower() or "unknown",
+                    "last_seen_at": stats.get("last_seen_at"),
+                    "last_resolved_at": stats.get("last_resolved_at"),
+                    "last_context_key": str(stats.get("last_context_key") or "").strip().lower() or None,
+                }
+        return {
+            "focus_stats": focus_stats,
+            "contextual_focus_stats": contextual_focus_stats,
+            "agenda_topic_stats": agenda_topic_stats,
+            "observation_target_stats": observation_target_stats,
+        }
+
+    def _queue_pressure_penalty(
+        self,
+        drive_context: Dict[str, Any],
+        *,
+        governance_task_type: Optional[str] = None,
+        task_family: Optional[str] = None,
+        execution_kind: Optional[str] = None,
+    ) -> float:
+        total_active = int(drive_context.get("active_queue_count") or 0)
+        related = 0
+        if governance_task_type:
+            related += int(
+                dict(drive_context.get("active_queue_by_governance") or {}).get(
+                    governance_task_type,
+                    0,
+                )
+            )
+        if task_family:
+            related += int(
+                dict(drive_context.get("active_queue_by_family") or {}).get(
+                    task_family,
+                    0,
+                )
+            )
+        if execution_kind:
+            related += int(
+                dict(drive_context.get("active_queue_by_execution_kind") or {}).get(
+                    execution_kind,
+                    0,
+                )
+            )
+        penalty = 0.02 * max(total_active - 1, 0) + 0.03 * related
+        return round(min(penalty, 0.28), 4)
+
+    def _memory_maintenance_urgency(self, idle_window: Dict[str, Any]) -> float:
+        idle_seconds = dict(idle_window.get("idle_seconds") or {})
+        coverage = [
+            self._clamp01(float(idle_seconds.get(name) or 0) / 900.0)
+            for name in ("user", "agent", "memory")
+        ]
+        avg_idle_coverage = sum(coverage) / len(coverage) if coverage else 0.0
+        checks = dict(idle_window.get("checks") or {})
+        execution_window_bonus = 0.1 if checks.get("in_execution_window") else 0.0
+        return round(self._clamp01(0.72 + avg_idle_coverage * 0.18 + execution_window_bonus), 4)
+
+    def _idle_learning_urgency(
+        self,
+        *,
+        active_sessions: int,
+        topic_source: str,
+        governor_mode: bool,
+    ) -> float:
+        base = {
+            "llm": 0.58,
+            "mem_compressed": 0.48,
+            "activity_metadata": 0.42,
+            "generic_fallback": 0.3,
+            "shell_baseline_bootstrap": 0.55,
+            "shell_baseline_fallback": 0.4,
+        }.get(topic_source, 0.4)
+        session_penalty = min(max(active_sessions, 0), 3) * 0.05
+        governor_bonus = 0.05 if governor_mode else 0.0
+        return round(self._clamp01(base - session_penalty + governor_bonus), 4)
+
+    def _queue_hygiene_urgency(self, drive_context: Dict[str, Any]) -> float:
+        active_queue_count = int(drive_context.get("active_queue_count") or 0)
+        stale_queue_count = int(drive_context.get("stale_queue_count") or 0)
+        pending_review_count = int(drive_context.get("pending_review_count") or 0)
+        urgency = (
+            0.24
+            + min(active_queue_count, 5) * 0.08
+            + min(stale_queue_count + pending_review_count, 3) * 0.08
+        )
+        return round(self._clamp01(urgency), 4)
+
+    def _filter_learning_topics(
+        self,
+        topics: List[Dict[str, str]],
+        *,
+        drive_context: Dict[str, Any],
+        existing_keys: set[str],
+        cooldown_hours: int,
+        overlap_threshold: float,
+        max_topics: int,
+    ) -> List[Dict[str, Any]]:
+        filtered: list[Dict[str, Any]] = []
+        seen_signatures: list[set[str]] = []
+        completed_learning_tasks = list(drive_context.get("completed_learning_tasks") or [])
+        queued_tasks = list(drive_context.get("queued_tasks") or [])
+
+        for topic in topics:
+            title = str(topic.get("title") or "").strip()
+            if not title:
+                continue
+            topic_key = _stable_key_for_topic(title)
+            if topic_key in existing_keys:
+                continue
+            signature = self._topic_signature(title)
+            if any(self._topic_overlap(signature, previous) >= overlap_threshold for previous in seen_signatures):
+                continue
+            if self._topic_seen_recently(
+                title,
+                signature,
+                completed_learning_tasks=completed_learning_tasks,
+                queued_tasks=queued_tasks,
+                cooldown_hours=cooldown_hours,
+                overlap_threshold=overlap_threshold,
+            ):
+                continue
+            novelty_score = self._topic_novelty_score(signature, drive_context=drive_context)
+            specificity_score = self._topic_specificity_score(title, signature)
+            filtered.append(
+                {
+                    "title": title,
+                    "summary": str(topic.get("summary") or title).strip(),
+                    "novelty_score": novelty_score,
+                    "specificity_score": specificity_score,
+                }
+            )
+            seen_signatures.append(signature)
+
+        filtered.sort(
+            key=lambda item: (
+                float(item.get("novelty_score") or 0.0),
+                float(item.get("specificity_score") or 0.0),
+            ),
+            reverse=True,
+        )
+        return filtered[: max(0, max_topics)]
+
+    def _topic_seen_recently(
+        self,
+        title: str,
+        signature: set[str],
+        *,
+        completed_learning_tasks: List[Dict[str, Any]],
+        queued_tasks: List[Dict[str, Any]],
+        cooldown_hours: int,
+        overlap_threshold: float,
+    ) -> bool:
+        normalized = self._normalize_topic_text(title)
+        now = datetime.now(timezone.utc)
+
+        for task in completed_learning_tasks:
+            prior_title = str(task.get("title") or "").strip()
+            if not prior_title:
+                continue
+            if normalized == self._normalize_topic_text(prior_title):
+                if self._within_cooldown(task.get("completed_at"), now=now, cooldown_hours=cooldown_hours):
+                    return True
+            if self._topic_overlap(signature, self._topic_signature(prior_title)) >= overlap_threshold:
+                if self._within_cooldown(task.get("completed_at"), now=now, cooldown_hours=cooldown_hours):
+                    return True
+
+        for task in queued_tasks:
+            prior_title = str(task.get("title") or "").strip()
+            if not prior_title:
+                continue
+            status = str(task.get("status") or "").strip().lower()
+            if status in {"completed", "failed", "cancelled"}:
+                continue
+            prior_signature = self._topic_signature(prior_title)
+            if normalized == self._normalize_topic_text(prior_title):
+                return True
+            if self._topic_overlap(signature, prior_signature) >= overlap_threshold:
+                return True
+
+        return False
+
+    def _has_recent_body_improvement(
+        self,
+        drive_context: Dict[str, Any],
+        *,
+        shell_slot_meta: Dict[str, Any],
+        cooldown_hours: int,
+    ) -> bool:
+        slot_id = str(shell_slot_meta.get("slot_id") or "").strip()
+        now = datetime.now(timezone.utc)
+        queued_tasks = list(drive_context.get("queued_tasks") or [])
+
+        for task in queued_tasks:
+            execution_kind = str(task.get("execution_kind") or "").strip().lower()
+            if execution_kind != "body_improvement":
+                continue
+            status = str(task.get("status") or "").strip().lower()
+            if status not in {
+                "planned", "approved", "running", "paused", "deferred", "awaiting_review", "retry",
+            }:
+                continue
+            target_slot_id = str(task.get("constraints", {}).get("target_slot_id") or "").strip()
+            if not slot_id or not target_slot_id or slot_id == target_slot_id:
+                return True
+
+        for task in queued_tasks:
+            execution_kind = str(task.get("execution_kind") or "").strip().lower()
+            if execution_kind != "body_improvement":
+                continue
+            status = str(task.get("status") or "").strip().lower()
+            if status != "completed":
+                continue
+            target_slot_id = str(task.get("constraints", {}).get("target_slot_id") or "").strip()
+            if slot_id and target_slot_id and slot_id != target_slot_id:
+                continue
+            completed_at = task.get("updated_at") or task.get("created_at")
+            if self._within_cooldown(completed_at, now=now, cooldown_hours=cooldown_hours):
+                return True
+
+        return False
+
+    def _topic_novelty_score(self, signature: set[str], *, drive_context: Dict[str, Any]) -> float:
+        if not signature:
+            return 0.0
+        recent_signatures = list(drive_context.get("recent_learning_signatures") or [])
+        if not recent_signatures:
+            return 1.0
+        highest_overlap = max((self._topic_overlap(signature, prior) for prior in recent_signatures), default=0.0)
+        return max(0.0, 1.0 - highest_overlap)
+
+    def _topic_specificity_score(self, title: str, signature: set[str]) -> float:
+        word_count = len(str(title or "").split())
+        signature_bonus = min(len(signature), 6) / 6.0
+        word_bonus = min(max(word_count, 1), 12) / 12.0
+        return round(signature_bonus * 0.7 + word_bonus * 0.3, 4)
+
+    def _normalize_topic_text(self, text: str) -> str:
+        return " ".join(_TOPIC_WORD_RE.findall(str(text or "").lower())).strip()
+
+    def _topic_signature(self, text: str) -> set[str]:
+        normalized_words = {
+            word.lower()
+            for word in _TOPIC_WORD_RE.findall(str(text or "").lower())
+            if word.lower() not in _TOPIC_STOPWORDS
+        }
+        return normalized_words
+
+    def _topic_overlap(self, left: set[str], right: set[str]) -> float:
+        if not left or not right:
+            return 0.0
+        union = left | right
+        if not union:
+            return 0.0
+        return len(left & right) / len(union)
+
+    def _within_cooldown(
+        self,
+        raw_timestamp: Any,
+        *,
+        now: datetime,
+        cooldown_hours: int,
+    ) -> bool:
+        if cooldown_hours <= 0:
+            return False
+        parsed = self._parse_timestamp(raw_timestamp)
+        if parsed is None:
+            return False
+        return now - parsed <= timedelta(hours=cooldown_hours)
+
+    def _parse_timestamp(self, raw_timestamp: Any) -> Optional[datetime]:
+        if not raw_timestamp:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(raw_timestamp))
+        except Exception:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
 
     def _extract_learning_topic(self, activity: Dict[str, Any]) -> str:
         """Extract a concise learning topic from recent gateway activity metadata.
@@ -448,7 +5827,11 @@ class EndogenousDriveEngine:
         return ""
 
     def _llm_generate_learning_topics(
-        self, activity: Dict[str, Any], max_topics: int = 3, governor_mode: bool = False
+        self,
+        activity: Dict[str, Any],
+        max_topics: int = 3,
+        governor_mode: bool = False,
+        drive_context: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, str]]:
         """Use LLM to generate intelligent learning topics from memory context.
 
@@ -481,6 +5864,7 @@ class EndogenousDriveEngine:
             agent_resp = str(recent.get("agent_work", {}).get("summary", ""))[:500]
             errors = int(activity.get("counts", {}).get("error_count", 0))
             uncertainty = int(activity.get("counts", {}).get("uncertainty_high_count", 0))
+            history_context = self._format_learning_history_context(drive_context or {})
 
             if governor_mode:
                 # Auto/Governor mode: user requests are blocked — rely on
@@ -491,11 +5875,13 @@ class EndogenousDriveEngine:
                     f"【系统状态】错误={errors}  高不确定性={uncertainty}\n\n"
                     f"【压缩记忆上下文 — 历史弧线、场景和事件摘要】\n"
                     f"{memory_context if memory_context else '(暂无压缩记忆，请基于系统错误和不确定性生成)'}\n\n"
+                    f"{history_context}\n\n"
                     f"生成 {max_topics} 个有实质价值的学习方向。优先考虑：\n"
                     f"1. 记忆中提到但未解决的架构问题或技术债务\n"
                     f"2. 反复出现的错误模式或不确定性问题\n"
                     f"3. 记忆显示的代码改进机会\n"
                     f"4. 可执行的、可验证的具体研究主题\n"
+                    f"5. 避免重复最近已完成或当前队列里已经存在的学习方向\n"
                     f"输出JSON数组: [{{\"title\": \"...\", \"summary\": \"...\"}}]"
                 )
                 system_prompt = (
@@ -513,8 +5899,10 @@ class EndogenousDriveEngine:
                     f"【系统错误】{errors}  【高不确定性】{uncertainty}\n\n"
                     f"【压缩记忆上下文 — 最近的活跃弧线和场景】\n"
                     f"{memory_context if memory_context else '(暂无压缩记忆)'}\n\n"
+                    f"{history_context}\n\n"
                     f"基于以上所有信息生成学习方向。不要泛泛而谈——"
                     f"基于记忆中的实际问题、未解决的疑问、代码改进机会来生成。"
+                    f"避免重复最近已完成或当前队列里已经存在的学习任务。"
                     f"输出JSON数组: [{{\"title\": \"...\", \"summary\": \"...\"}}]"
                 )
                 system_prompt = (
@@ -540,6 +5928,22 @@ class EndogenousDriveEngine:
             return []
         except Exception:
             return []
+
+    def _format_learning_history_context(self, drive_context: Dict[str, Any]) -> str:
+        recent_learning_titles = list(drive_context.get("recent_learning_titles") or [])
+        queued_learning_titles = list(drive_context.get("queued_learning_titles") or [])
+        queued_body_improvement_titles = list(drive_context.get("queued_body_improvement_titles") or [])
+        lines = []
+        if recent_learning_titles:
+            lines.append("【最近已完成的学习主题】")
+            lines.extend(f"- {title}" for title in recent_learning_titles[:5])
+        if queued_learning_titles:
+            lines.append("【当前队列中的学习任务】")
+            lines.extend(f"- {title}" for title in queued_learning_titles[:5])
+        if queued_body_improvement_titles:
+            lines.append("【当前队列中的替身改进任务】")
+            lines.extend(f"- {title}" for title in queued_body_improvement_titles[:3])
+        return "\n".join(lines)
 
     def _fetch_memory_context(self, deep: bool = False) -> str:
         """Fetch recent compressed memory summaries from memory_service for LLM context.
@@ -676,8 +6080,11 @@ class EndogenousDriveEngine:
         active_sessions: int,
         shell_slot_id: str,
         shell_worktree: str,
-        utility: float,
         trigger: str,
+        drive_context: Dict[str, Any],
+        bootstrap: bool,
+        drive_judgement: Optional[Dict[str, Any]] = None,
+        adaptive_policy: Optional[DriveAdaptivePolicy] = None,
     ) -> EndogenousTaskCandidate:
         summary = (
             "Use idle capacity to inspect the current shell-body codebase, "
@@ -686,7 +6093,7 @@ class EndogenousDriveEngine:
         )
         if shell_worktree:
             summary += f" Start from shell slot {shell_slot_id} at {shell_worktree}."
-        return EndogenousTaskCandidate(
+        return self._build_scored_candidate(
             stable_key=stable_key,
             title="Understand the current shell body codebase",
             summary=summary,
@@ -695,10 +6102,35 @@ class EndogenousDriveEngine:
             task_family="self_learning",
             execution_kind=None,
             value_tags=["creativity"],
-            utility=utility,
+            candidate_kind="shell_baseline_learning",
+            score_inputs={
+                "core_value_strength": 0.79 if bootstrap else 0.66,
+                "urgency": self._idle_learning_urgency(
+                    active_sessions=active_sessions,
+                    topic_source=(
+                        "shell_baseline_bootstrap"
+                        if bootstrap
+                        else "shell_baseline_fallback"
+                    ),
+                    governor_mode=False,
+                ),
+                "novelty": 0.88 if bootstrap else 0.45,
+                "specificity": 0.68 if bootstrap else 0.58,
+                "execution_readiness": 0.92 if shell_worktree else 0.78,
+                "queue_pressure_penalty": self._queue_pressure_penalty(
+                    drive_context,
+                    governance_task_type="self_learning",
+                    task_family="self_learning",
+                ),
+                "adaptive_factor": self._adaptive_factor_for_candidate(
+                    candidate_kind="shell_baseline_learning",
+                    adaptive_policy=adaptive_policy or self._neutral_adaptive_policy(),
+                ),
+            },
             metadata={
                 "learning_branch": "codebase_baseline",
                 "self_learning_mode": "shell_codebase_baseline",
+                **({"drive_judgement": drive_judgement} if drive_judgement else {}),
             },
             evidence={
                 "active_sessions": active_sessions,
