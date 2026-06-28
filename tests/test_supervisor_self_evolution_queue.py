@@ -13,6 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from systems.supervisor.supervisor import Supervisor, SupervisorConfig, SupervisorExecutionConfig
+from systems.supervisor.endogenous_drive import EndogenousTaskCandidate, DriveAdaptivePolicy
 from systems.config import load_config_from_env
 
 
@@ -818,6 +819,52 @@ async def test_endogenous_drive_history_outcome_persists_lm_posture_reasoning(tm
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_endogenous_drive_history_outcome_persists_lm_cognitive_assessment(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    task = supervisor._self_evolution_queue.create_task(
+        title="Record LM cognitive assessment",
+        summary="Persist batch-level LM judgement for future endogenous cognition loops.",
+        source="endogenous_drive",
+        metadata={
+            "endogenous_drive_key": "lm:truthfulness:review:record-cognitive-assessment",
+            "llm_cognitive_assessment": {
+                "current_judgement": "review should dominate until grounding is repaired",
+                "dominant_constraint": "weak self structure grounding",
+                "primary_grounding_gaps": [
+                    "missing_evidence:self_structure",
+                ],
+                "why_this_task_type_now": [
+                    "review is the safest way to repair the evidence graph",
+                ],
+                "why_not_improvement_now": [
+                    "improvement would run ahead of self-understanding",
+                ],
+            },
+        },
+        evidence={},
+    )
+
+    supervisor._record_endogenous_drive_outcome(task, event_type="planned")
+    history = supervisor._load_endogenous_drive_history()
+    recorded = next(
+        outcome
+        for outcome in history["outcomes"]
+        if outcome["task_id"] == task.task_id and outcome["event_type"] == "planned"
+    )
+
+    assert recorded["llm_cognitive_assessment"]["current_judgement"] == (
+        "review should dominate until grounding is repaired"
+    )
+    assert recorded["llm_cognitive_assessment"]["dominant_constraint"] == (
+        "weak self structure grounding"
+    )
+    assert recorded["llm_cognitive_assessment"]["why_not_improvement_now"] == [
+        "improvement would run ahead of self-understanding",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_run_endogenous_drive_cycle_exposes_drive_posture(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
@@ -1346,6 +1393,171 @@ def test_cognition_charter_control_policy_can_be_overridden_from_env(monkeypatch
     assert policy.weak_alignment_count_trigger == 3
     assert policy.auto_explanation_repair_missing_threshold == 4
     assert policy.explanation_inconsistent_truthfulness_boost == 0.19
+
+
+@pytest.mark.unit
+def test_cognition_charter_context_layering_policy_can_be_overridden_from_env(monkeypatch):
+    monkeypatch.setenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTEXT_DECISION_CORE_FIELDS",
+        '["current_judgement","primary_evidence_nodes","decision_summary"]',
+    )
+    monkeypatch.setenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTEXT_SUPPORTING_DETAIL_FIELDS",
+        '["grounding_gaps","why_not_improvement_now"]',
+    )
+    monkeypatch.setenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTEXT_LONG_TAIL_FIELDS",
+        '["external_research_titles","long_tail_summary"]',
+    )
+
+    config = load_config_from_env()
+    policy = (
+        config.supervisor.service_runtime.endogenous_drive_cognition_charter.context_layering_policy
+    )
+
+    assert policy.decision_core_fields == [
+        "current_judgement",
+        "primary_evidence_nodes",
+        "decision_summary",
+    ]
+    assert policy.supporting_detail_fields == [
+        "grounding_gaps",
+        "why_not_improvement_now",
+    ]
+    assert policy.long_tail_context_fields == [
+        "external_research_titles",
+        "long_tail_summary",
+    ]
+
+
+@pytest.mark.unit
+def test_cognition_charter_prompt_attention_policy_can_be_overridden_from_env(monkeypatch):
+    monkeypatch.setenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_PROMPT_ATTENTION_MAX_CHARS",
+        "4200",
+    )
+    monkeypatch.setenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_PROMPT_ATTENTION_PRIORITY_ORDER",
+        '["decision_core","queue_state_snapshot","identity"]',
+    )
+    monkeypatch.setenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_PROMPT_ATTENTION_STRUCTURE_KEYS",
+        '["decision_core","queue_state_snapshot"]',
+    )
+    monkeypatch.setenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_PROMPT_ATTENTION_TRIM_STAGE_ORDER",
+        '["graph_compaction","primary_context_compaction"]',
+    )
+
+    config = load_config_from_env()
+    policy = (
+        config.supervisor.service_runtime.endogenous_drive_cognition_charter.prompt_attention_policy
+    )
+
+    assert policy.max_chars == 4200
+    assert policy.priority_order == [
+        "decision_core",
+        "queue_state_snapshot",
+        "identity",
+    ]
+    assert policy.structure_keys == [
+        "decision_core",
+        "queue_state_snapshot",
+    ]
+    assert policy.trim_stage_order == [
+        "graph_compaction",
+        "primary_context_compaction",
+    ]
+
+
+@pytest.mark.unit
+def test_cognition_charter_evidence_attention_policy_can_be_overridden_from_env(monkeypatch):
+    monkeypatch.setenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_EVIDENCE_ATTENTION_ENABLED",
+        "true",
+    )
+    monkeypatch.setenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_EVIDENCE_ATTENTION_CONFIDENCE_WEIGHT",
+        "0.41",
+    )
+    monkeypatch.setenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_EVIDENCE_ATTENTION_AGENDA_RELEVANCE_WEIGHT",
+        "0.33",
+    )
+    monkeypatch.setenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_EVIDENCE_ATTENTION_DECISION_CORE_TOPIC_LIMIT",
+        "2",
+    )
+    monkeypatch.setenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_EVIDENCE_ATTENTION_LONG_TAIL_ITEM_LIMIT",
+        "1",
+    )
+
+    config = load_config_from_env()
+    policy = (
+        config.supervisor.service_runtime.endogenous_drive_cognition_charter.evidence_attention_policy
+    )
+
+    assert policy.enabled is True
+    assert policy.confidence_weight == 0.41
+    assert policy.agenda_relevance_weight == 0.33
+    assert policy.decision_core_topic_limit == 2
+    assert policy.long_tail_item_limit == 1
+
+
+@pytest.mark.unit
+def test_cognition_charter_cognitive_feedback_policy_can_be_overridden_from_env(monkeypatch):
+    monkeypatch.setenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_FEEDBACK_ENABLED",
+        "true",
+    )
+    monkeypatch.setenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_FEEDBACK_ADAPTATION_STRENGTH",
+        "0.37",
+    )
+    monkeypatch.setenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_FEEDBACK_CONFLICT_WEIGHT_STEP",
+        "0.12",
+    )
+    monkeypatch.setenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_FEEDBACK_SELF_RELEVANCE_WEIGHT_STEP",
+        "0.09",
+    )
+
+    config = load_config_from_env()
+    policy = (
+        config.supervisor.service_runtime.endogenous_drive_cognition_charter.cognitive_feedback_policy
+    )
+
+    assert policy.enabled is True
+    assert policy.adaptation_strength == 0.37
+    assert policy.conflict_weight_step == 0.12
+    assert policy.self_relevance_weight_step == 0.09
+
+
+@pytest.mark.unit
+def test_cognition_charter_cognitive_strategy_delta_policy_can_be_overridden_from_env(monkeypatch):
+    monkeypatch.setenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_STRATEGY_DELTA_ENABLED",
+        "true",
+    )
+    monkeypatch.setenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_STRATEGY_DELTA_PROPOSAL_THRESHOLD",
+        "0.07",
+    )
+    monkeypatch.setenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_STRATEGY_DELTA_MAX_RECOMMENDED_CHANGES",
+        "4",
+    )
+
+    config = load_config_from_env()
+    policy = (
+        config.supervisor.service_runtime.endogenous_drive_cognition_charter.cognitive_strategy_delta_policy
+    )
+
+    assert policy.enabled is True
+    assert policy.proposal_threshold == 0.07
+    assert policy.max_recommended_changes == 4
 
 
 @pytest.mark.asyncio
@@ -3209,6 +3421,8 @@ async def test_endogenous_drive_can_materialize_llm_task_proposals_from_evidence
     }
     assert lm_candidates[0]["metadata"]["reference_alignment"]["alignment_score"] < 1.0
     assert lm_candidates[0]["metadata"]["reference_alignment"]["alignment_quality"] in {"partial", "weak"}
+    assert "primary_evidence_nodes" in lm_candidates[0]["metadata"]["reference_alignment"]
+    assert "grounding_penalty" in lm_candidates[0]["metadata"]["reference_alignment"]
     assert lm_candidates[0]["evidence"]["llm_generated"] is True
     assert lm_candidates[0]["evidence"]["llm_task_type"] == "learning"
     assert lm_candidates[0]["evidence"]["llm_referenced_evidence_nodes"] == [
@@ -3236,6 +3450,261 @@ async def test_endogenous_drive_can_materialize_llm_task_proposals_from_evidence
     assert "score" in lm_candidates[0]["metadata"]["cognitive_alignment"]
     assert "quality" in lm_candidates[0]["constraints"]["cognitive_alignment"]
     assert "summary" in lm_candidates[0]["evidence"]["cognitive_alignment"]
+    assert "primary_evidence_or_agenda_binding_is_missing" in lm_candidates[0]["metadata"]["supervisor_advisory"]["advisory_reasons"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_prefers_lm_led_candidate_stream_with_small_heuristic_complement(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    engine = supervisor._endogenous_drive_engine
+
+    lm_candidates = [
+        EndogenousTaskCandidate(
+            stable_key="lm:truthfulness:review:alpha",
+            title="Review grounding drift",
+            summary="LM-led review",
+            priority="high",
+            governance_task_type="self_learning",
+            task_family="self_learning",
+            execution_kind=None,
+            value_tags=["truthfulness"],
+            utility=0.92,
+            metadata={"score_breakdown": {"candidate_kind": "truthfulness_review"}},
+        )
+    ]
+    heuristic_candidates = [
+        EndogenousTaskCandidate(
+            stable_key="continuity:memory_maintenance_sweep",
+            title="Maintain long-term memory continuity",
+            summary="Heuristic maintenance",
+            priority="normal",
+            governance_task_type="memory_maintenance",
+            task_family="memory_maintenance",
+            execution_kind="memory_maintenance",
+            value_tags=["continuity"],
+            utility=0.78,
+            metadata={"score_breakdown": {"candidate_kind": "memory_maintenance"}},
+        ),
+        EndogenousTaskCandidate(
+            stable_key="truthfulness:review_correction_signals",
+            title="Review grounding drift",
+            summary="Heuristic duplicate",
+            priority="high",
+            governance_task_type="self_learning",
+            task_family="self_learning",
+            execution_kind=None,
+            value_tags=["truthfulness"],
+            utility=0.81,
+            metadata={"score_breakdown": {"candidate_kind": "truthfulness_review"}},
+        ),
+        EndogenousTaskCandidate(
+            stable_key="continuity:queue_hygiene_review",
+            title="Review self-evolution queue hygiene",
+            summary="Heuristic queue review",
+            priority="normal",
+            governance_task_type="self_evolution",
+            task_family="general_self_evolution",
+            execution_kind="general_self_evolution",
+            value_tags=["continuity", "truthfulness"],
+            utility=0.71,
+            metadata={"score_breakdown": {"candidate_kind": "queue_hygiene_review"}},
+        ),
+    ]
+
+    merged = engine._merge_lm_led_candidate_stream(
+        lm_candidates=lm_candidates,
+        heuristic_candidates=heuristic_candidates,
+        adaptive_policy=DriveAdaptivePolicy(
+            learning_expansion_bias=0.5,
+            truthfulness_bias=0.5,
+            memory_continuity_bias=0.5,
+            queue_hygiene_bias=0.5,
+            body_growth_bias=0.5,
+            observation_bias=0.5,
+            candidate_throttle=0.0,
+            candidate_budget=4,
+            exploratory_learning_quota=2,
+            body_growth_quota=1,
+            preferred_focus="truthfulness",
+            rationale="test",
+        ),
+    )
+
+    assert merged[0].stable_key == "lm:truthfulness:review:alpha"
+    assert all(candidate.stable_key != "truthfulness:review_correction_signals" for candidate in merged)
+    assert len(merged) <= 3
+    assert any(candidate.stable_key == "continuity:memory_maintenance_sweep" for candidate in merged)
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_prompt_packet_budget_preserves_queue_state_snapshot_under_large_context(tmp_path):
+    from systems.supervisor.endogenous_drive_prompts import _prompt_facing_evidence_packet
+
+    large_packet = {
+        "identity": {"role": "endogenous_supervisory_core"},
+        "decision_core": {
+            "current_judgement": "review should dominate until grounding is repaired",
+            "dominant_constraint": "weak self structure grounding",
+            "grounding_pressure": "high",
+            "recommended_task_posture": "observation_or_review",
+            "top_task_type": "review",
+            "top_task_score": 0.82,
+            "top_self_iteration_domain": "grounding",
+            "primary_evidence_nodes": ["self_structure"],
+            "primary_agenda_nodes": ["focus:learning_expansion"],
+            "queue_state_summary": "queued_tasks=2",
+            "summary": "Decision core summary",
+        },
+        "supporting_detail": {
+            "grounding_gaps": ["missing_evidence:self_structure"],
+            "contradictory_topics": ["self_structure->external_research:contradicts"],
+            "weak_or_missing_channels": ["recent_learning"],
+            "self_understanding_gaps": ["missing_recent_learning_trace"],
+            "why_not_improvement_now": ["improvement would outrun grounding"],
+            "trend_state": "locked",
+            "recent_effect_direction": "mixed",
+            "summary": "Supporting detail summary",
+        },
+        "long_tail_context": {
+            "recent_learning_titles": ["Learning A", "Learning B"],
+            "external_research_titles": ["Research A", "Research B"],
+            "evidence_channels": [{"channel": "recent_learning", "evidence_strength": "weak", "item_count": 6}],
+            "memory_context_preview": "memory preview",
+            "summary": "Long tail summary",
+        },
+        "queued_tasks": [
+            {
+                "title": "Existing queue task A",
+                "status": "queued",
+                "priority": "high",
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+                "execution_kind": None,
+            },
+            {
+                "title": "Existing queue task B",
+                "status": "deferred",
+                "priority": "normal",
+                "governance_task_type": "self_evolution",
+                "task_family": "general_self_evolution",
+                "execution_kind": "general_self_evolution",
+            },
+        ],
+        "queued_learning_titles": ["Existing queue task A"],
+        "queued_body_improvement_titles": ["Existing improvement task"],
+        "recent_learning_evidence": [
+            {"title": f"Learning {idx}", "summary": "x" * 400, "quality_score": 0.7}
+            for idx in range(12)
+        ],
+        "external_research_evidence": [
+            {"title": f"Research {idx}", "summary": "y" * 400, "source": "test"}
+            for idx in range(12)
+        ],
+        "memory_context": "z" * 5000,
+        "evidence_channels": {
+            "channels": [
+                {
+                    "channel": f"channel_{idx}",
+                    "kind": "generic",
+                    "items": [{"title": f"Item {idx}", "summary": "w" * 300}],
+                }
+                for idx in range(8)
+            ]
+        },
+    }
+
+    compact = _prompt_facing_evidence_packet(large_packet)
+    assert "decision_core" in compact
+    assert compact["decision_core"]["current_judgement"] == (
+        "review should dominate until grounding is repaired"
+    )
+    assert "supporting_detail" in compact
+    assert compact["supporting_detail"]["grounding_gaps"] == [
+        "missing_evidence:self_structure",
+    ]
+    assert "long_tail_context" in compact
+    assert "Learning A" in compact["long_tail_context"]["recent_learning_titles"]
+    assert "queue_state_snapshot" in compact
+    queue_snapshot = compact["queue_state_snapshot"]
+    assert queue_snapshot["queued_task_count"] == 2
+    assert "Existing queue task A" in queue_snapshot["recent_titles"]
+    assert "guidance" in queue_snapshot
+
+
+@pytest.mark.unit
+def test_prompt_packet_priority_order_follows_charter_attention_policy():
+    from systems.supervisor.endogenous_drive_prompts import _prompt_facing_evidence_packet
+
+    compact = _prompt_facing_evidence_packet(
+        {
+            "identity": {"role": "endogenous_supervisory_core"},
+            "decision_core": {"current_judgement": "review first"},
+            "queue_state_snapshot": {"summary": "queued_tasks=1"},
+            "supporting_detail": {"grounding_gaps": ["missing_evidence:self_structure"]},
+        },
+        cognition_charter={
+            "prompt_attention_policy": {
+                "priority_order": [
+                    "queue_state_snapshot",
+                    "decision_core",
+                    "identity",
+                    "supporting_detail",
+                ],
+            }
+        },
+    )
+
+    assert list(compact.keys())[:4] == [
+        "queue_state_snapshot",
+        "decision_core",
+        "identity",
+        "supporting_detail",
+    ]
+
+
+@pytest.mark.unit
+def test_prompt_packet_trim_stage_order_follows_charter_attention_policy():
+    from systems.supervisor.endogenous_drive_prompts import _ensure_prompt_packet_budget
+
+    packet = {
+        "decision_core": {
+            "current_judgement": "x" * 400,
+            "dominant_constraint": "y" * 400,
+            "grounding_pressure": "high",
+            "recommended_task_posture": "review",
+            "top_task_type": "review",
+            "top_task_score": 0.8,
+            "top_self_iteration_domain": "grounding",
+            "primary_evidence_nodes": ["self_structure"] * 10,
+            "primary_agenda_nodes": ["focus:learning_expansion"] * 10,
+            "queue_state_summary": "queued_tasks=2;" + ("q" * 500),
+            "summary": "s" * 500,
+        },
+        "agenda_graph": {
+            "relation_edges": [{"from": "a", "to": "b"} for _ in range(10)],
+            "evidence_to_gap_edges": [{"from": "c", "to": "d"} for _ in range(10)],
+            "direction_task_links": [{"direction": "learn", "candidate_kind": "exploratory_learning"} for _ in range(8)],
+        },
+        "evidence_graph": {
+            "nodes": [{"topic": f"topic_{idx}"} for idx in range(10)],
+            "support_edges": [{"from": "a", "to": "b"} for _ in range(10)],
+            "contradiction_edges": [{"from": "a", "to": "b"} for _ in range(10)],
+        },
+    }
+
+    trimmed = _ensure_prompt_packet_budget(
+        packet,
+        max_chars=600,
+        prompt_attention_policy={
+            "trim_stage_order": ["graph_compaction"],
+        },
+    )
+
+    assert len(trimmed["agenda_graph"]["relation_edges"]) == 4
+    assert len(trimmed["evidence_graph"]["nodes"]) == 3
+    assert len(trimmed["decision_core"]["primary_evidence_nodes"]) == 10
 
 
 @pytest.mark.asyncio
@@ -3259,6 +3728,12 @@ async def test_endogenous_drive_passes_cognition_charter_to_lm_system_prompt(tmp
                         ],
                         "task_generation_policy": [
                             "优先提出能提升自我理解质量的结构化任务。",
+                        ],
+                        "task_generation_focus": [
+                            "先综合证据主轴与认知记忆，再决定任务类型。",
+                        ],
+                        "prompt_output_requirements": [
+                            "提案必须解释为什么当前不是 improvement。",
                         ],
                         "self_iteration_guardrails": [
                             "不得抢占 API-A 的对外服务链路。",
@@ -3304,11 +3779,719 @@ async def test_endogenous_drive_passes_cognition_charter_to_lm_system_prompt(tmp
     assert "【认知宪章：自我模型原则】" in system_prompt
     assert "【认知宪章：证据政策】" in system_prompt
     assert "【认知宪章：任务生成政策】" in system_prompt
+    assert "【认知宪章：任务生成焦点】" in system_prompt
+    assert "【认知宪章：输出要求】" in system_prompt
     assert "【认知宪章：自我迭代护栏】" in system_prompt
     assert "先理解自身结构，再决定是否提出升级。" in system_prompt
     assert "必须综合 evidence_channels 与历史纠偏结果。" in system_prompt
     assert "优先提出能提升自我理解质量的结构化任务。" in system_prompt
+    assert "先综合证据主轴与认知记忆，再决定任务类型。" in system_prompt
+    assert "提案必须解释为什么当前不是 improvement。" in system_prompt
     assert "不得抢占 API-A 的对外服务链路。" in system_prompt
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_passes_configurable_task_generation_focus_to_payload(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor.config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={
+                    "endogenous_drive_lm_task_generation_enabled": True,
+                    "endogenous_drive_lm_task_max_candidates": 1,
+                    "endogenous_drive_cognition_charter": {
+                        "core_mission": "你是内生驱动核心。",
+                        "task_generation_focus": [
+                            "先判断当前最值得修复的是 grounding 还是 self_model。",
+                            "如果存在趋势记忆，先判断延续还是切换。",
+                        ],
+                        "prompt_output_requirements": [
+                            "提案必须解释为什么当前优先级成立。",
+                            "如果证据不够，允许返回空 proposals。",
+                        ],
+                    },
+                }
+            )
+        }
+    )
+    supervisor._endogenous_drive_engine.config = supervisor.config
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    payload = fake_client.calls[0]["user_payload"]["task_generation"]
+    assert "【本轮任务生成焦点】" in payload
+    assert "【decision_core】" in payload
+    assert "【supporting_detail】" in payload
+    assert "【long_tail_context】" in payload
+    assert "先判断当前最值得修复的是 grounding 还是 self_model。" in payload
+    assert "如果存在趋势记忆，先判断延续还是切换。" in payload
+    assert "【本轮输出附加要求】" in payload
+    assert "提案必须解释为什么当前优先级成立。" in payload
+    assert "如果证据不够，允许返回空 proposals。" in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_builds_context_layers_in_evidence_packet(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Previous cognition",
+            "event_type": "planned",
+            "reference_alignment": {
+                "alignment_score": 0.33,
+                "missing_evidence_nodes": ["self_structure"],
+                "missing_agenda_nodes": ["focus:learning_expansion"],
+            },
+            "llm_cognitive_assessment": {
+                "current_judgement": "review should dominate until grounding is repaired",
+                "dominant_constraint": "weak self structure grounding",
+                "self_iteration_target": "grounding",
+                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+            },
+        }
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    idle_window = await fake_idle_window()
+    idle_window["drive_history"] = supervisor._history_for_endogenous_drive(
+        supervisor._load_endogenous_drive_history()
+    )
+    drive_context = supervisor._endogenous_drive_engine._build_drive_context(idle_window)
+    evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(
+        idle_window=idle_window,
+        deliberation=supervisor._endogenous_drive_engine.build_deliberation_report(
+            idle_window=idle_window
+        ),
+        drive_context=drive_context,
+        memory_plan={},
+        self_learning_plan={},
+        self_evolution_plan={},
+    )
+
+    assert "decision_core" in evidence_packet
+    assert "supporting_detail" in evidence_packet
+    assert "long_tail_context" in evidence_packet
+    assert evidence_packet["decision_core"]["top_self_iteration_domain"] == "grounding"
+    assert "grounding_gaps" in evidence_packet["supporting_detail"]
+    assert "recent_learning_titles" in evidence_packet["long_tail_context"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_context_layers_follow_charter_layering_policy(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor.config.service_runtime.endogenous_drive_cognition_charter.context_layering_policy.decision_core_fields = [
+        "current_judgement",
+        "primary_evidence_nodes",
+        "decision_summary",
+    ]
+    supervisor.config.service_runtime.endogenous_drive_cognition_charter.context_layering_policy.supporting_detail_fields = [
+        "grounding_gaps",
+        "why_not_improvement_now",
+    ]
+    supervisor.config.service_runtime.endogenous_drive_cognition_charter.context_layering_policy.long_tail_context_fields = [
+        "external_research_titles",
+        "long_tail_summary",
+    ]
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Previous cognition",
+            "event_type": "planned",
+            "reference_alignment": {
+                "alignment_score": 0.33,
+                "missing_evidence_nodes": ["self_structure"],
+                "missing_agenda_nodes": ["focus:learning_expansion"],
+            },
+            "llm_cognitive_assessment": {
+                "current_judgement": "review should dominate until grounding is repaired",
+                "dominant_constraint": "weak self structure grounding",
+                "self_iteration_target": "grounding",
+                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "why_not_improvement_now": [
+                    "improvement would outrun grounding",
+                ],
+            },
+        }
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    idle_window = await fake_idle_window()
+    idle_window["drive_history"] = supervisor._history_for_endogenous_drive(
+        supervisor._load_endogenous_drive_history()
+    )
+    drive_context = supervisor._endogenous_drive_engine._build_drive_context(idle_window)
+    evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(
+        idle_window=idle_window,
+        deliberation=supervisor._endogenous_drive_engine.build_deliberation_report(
+            idle_window=idle_window
+        ),
+        drive_context=drive_context,
+        memory_plan={},
+        self_learning_plan={},
+        self_evolution_plan={},
+    )
+
+    assert set(evidence_packet["decision_core"].keys()) == {
+        "current_judgement",
+        "primary_evidence_nodes",
+        "summary",
+    }
+    assert set(evidence_packet["supporting_detail"].keys()) == {
+        "grounding_gaps",
+        "why_not_improvement_now",
+    }
+    assert set(evidence_packet["long_tail_context"].keys()) == {
+        "external_research_titles",
+        "summary",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_evidence_attention_policy_changes_context_promotion(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    policy = supervisor.config.service_runtime.endogenous_drive_cognition_charter.evidence_attention_policy
+    policy.decision_core_topic_limit = 2
+    policy.long_tail_item_limit = 1
+    policy.agenda_relevance_weight = 0.55
+    policy.conflict_weight = 0.22
+    policy.self_relevance_weight = 0.02
+
+    history = supervisor._endogenous_drive_history_default()
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [
+                {
+                    "title": "Study scheduler backpressure",
+                    "summary": "Focus on memory continuity rather than learning frontier gaps.",
+                    "quality_score": 0.72,
+                    "completed_at": "2026-06-20T12:00:00+00:00",
+                    "task_family": "self_learning",
+                    "execution_kind": None,
+                    "evidence": {"evidence_summary": ["memory continuity", "backpressure"]},
+                },
+                {
+                    "title": "Inspect learning frontier evidence gap",
+                    "summary": "Explicitly covers focus learning_expansion and missing agenda alignment.",
+                    "quality_score": 0.61,
+                    "completed_at": "2026-06-27T12:00:00+00:00",
+                    "task_family": "self_learning",
+                    "execution_kind": None,
+                    "evidence": {"evidence_summary": ["focus:learning_expansion", "missing_agenda"]},
+                },
+            ],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={
+                    "endogenous_drive_external_research_enabled": True,
+                    "endogenous_drive_external_research_entries": [
+                        "Learning expansion repair::focus:learning_expansion missing_agenda evidence should be repaired first.",
+                        "Memory continuity note::Maintain archive coherence and old queue continuity.",
+                    ],
+                }
+            )
+        }
+    )
+    supervisor._endogenous_drive_engine.config = supervisor.config
+
+    idle_window = await fake_idle_window()
+    idle_window["drive_history"] = supervisor._history_for_endogenous_drive(
+        supervisor._load_endogenous_drive_history()
+    )
+    drive_context = supervisor._endogenous_drive_engine._build_drive_context(idle_window)
+    evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(
+        idle_window=idle_window,
+        deliberation=supervisor._endogenous_drive_engine.build_deliberation_report(
+            idle_window=idle_window
+        ),
+        drive_context=drive_context,
+        memory_plan={},
+        self_learning_plan={},
+        self_evolution_plan={},
+    )
+
+    assert "evidence_attention" in evidence_packet
+    assert len(evidence_packet["decision_core"]["primary_evidence_nodes"]) <= 2
+    assert "learning_expansion" in " ".join(evidence_packet["decision_core"]["primary_agenda_nodes"]).lower()
+    assert len(evidence_packet["long_tail_context"]["external_research_titles"]) == 1
+    assert evidence_packet["long_tail_context"]["external_research_titles"][0].startswith(
+        "Learning expansion repair"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_builds_cognitive_feedback_memory_and_applies_attention_feedback(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Weak reference outcome",
+            "event_type": "planned",
+            "quality_score": 0.31,
+            "cognitive_alignment": {"score": 0.42},
+            "reference_alignment": {"alignment_score": 0.28},
+            "llm_cognitive_assessment": {
+                "primary_grounding_gaps": ["missing_evidence:self_structure"],
+                "self_iteration_target": "grounding",
+            },
+        },
+        {
+            "title": "Another weak reference outcome",
+            "event_type": "planned",
+            "quality_score": 0.34,
+            "cognitive_alignment": {"score": 0.4},
+            "reference_alignment": {"alignment_score": 0.35},
+            "llm_cognitive_assessment": {
+                "primary_grounding_gaps": ["missing_agenda:focus:learning_expansion"],
+                "self_iteration_target": "grounding",
+            },
+        },
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    idle_window = await fake_idle_window()
+    idle_window["drive_history"] = supervisor._history_for_endogenous_drive(
+        supervisor._load_endogenous_drive_history()
+    )
+    drive_context = supervisor._endogenous_drive_engine._build_drive_context(idle_window)
+    feedback_memory = supervisor._endogenous_drive_engine._build_cognitive_feedback_memory(
+        drive_context
+    )
+
+    assert feedback_memory["available"] is True
+    assert feedback_memory["reference_feedback_direction"] == "weak"
+    assert feedback_memory["long_tail_signal_bias"] == "compress"
+
+    charter = supervisor._endogenous_drive_engine._resolve_endogenous_cognition_charter(
+        supervisor.config.service_runtime
+    )
+    adjusted_policy = supervisor._endogenous_drive_engine._resolve_evidence_attention_policy(
+        charter,
+        cognitive_feedback_memory=feedback_memory,
+    )
+
+    assert adjusted_policy["conflict_weight"] > charter["evidence_attention_policy"]["conflict_weight"]
+    assert adjusted_policy["agenda_relevance_weight"] > charter["evidence_attention_policy"]["agenda_relevance_weight"]
+    assert adjusted_policy["long_tail_item_limit"] < charter["evidence_attention_policy"]["long_tail_item_limit"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_run_endogenous_drive_cycle_exposes_cognitive_feedback_memory(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = {
+        "status": "completed",
+        "cognitive_feedback_memory": {
+            "available": True,
+            "average_quality_score": 0.42,
+            "average_reference_alignment_score": 0.36,
+            "average_cognitive_alignment_score": 0.44,
+            "confidence_feedback_direction": "weak",
+            "reference_feedback_direction": "weak",
+            "freshness_feedback_direction": "strong",
+            "self_relevance_feedback_direction": "strong",
+            "long_tail_signal_bias": "compress",
+            "summary": "Recent cognitive outcomes suggest reference repair pressure.",
+        },
+    }
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 1200, "agent": 1200, "memory": 1200},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    feedback_memory = result["cognition_state"]["proposal_cognition"]["cognitive_feedback_memory"]
+    assert feedback_memory["available"] is True
+    assert feedback_memory["reference_feedback_direction"] == "weak"
+    assert feedback_memory["long_tail_signal_bias"] == "compress"
+    assert feedback_memory["summary"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_builds_cognitive_strategy_delta(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Weak reference outcome",
+            "event_type": "planned",
+            "quality_score": 0.31,
+            "cognitive_alignment": {"score": 0.42},
+            "reference_alignment": {"alignment_score": 0.28},
+            "llm_cognitive_assessment": {
+                "primary_grounding_gaps": ["missing_evidence:self_structure"],
+                "self_iteration_target": "grounding",
+            },
+        },
+        {
+            "title": "Another weak reference outcome",
+            "event_type": "planned",
+            "quality_score": 0.34,
+            "cognitive_alignment": {"score": 0.4},
+            "reference_alignment": {"alignment_score": 0.35},
+            "llm_cognitive_assessment": {
+                "primary_grounding_gaps": ["missing_agenda:focus:learning_expansion"],
+                "self_iteration_target": "grounding",
+            },
+        },
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    idle_window = {
+        "drive_history": supervisor._history_for_endogenous_drive(
+            supervisor._load_endogenous_drive_history()
+        )
+    }
+    drive_context = supervisor._endogenous_drive_engine._build_drive_context(idle_window)
+    feedback_memory = supervisor._endogenous_drive_engine._build_cognitive_feedback_memory(
+        drive_context
+    )
+    charter = supervisor._endogenous_drive_engine._resolve_endogenous_cognition_charter(
+        supervisor.config.service_runtime
+    )
+    delta = supervisor._endogenous_drive_engine._build_cognitive_strategy_delta(
+        cognition_charter=charter,
+        cognitive_feedback_memory=feedback_memory,
+    )
+
+    assert delta["available"] is True
+    assert delta["recommended_changes"]
+    assert any(
+        change["target"] == "evidence_attention_policy.conflict_weight"
+        for change in delta["recommended_changes"]
+    )
+    assert delta["summary"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_run_endogenous_drive_cycle_exposes_cognitive_strategy_delta(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = {
+        "status": "completed",
+        "cognitive_strategy_delta": {
+            "available": True,
+            "recommended_changes": [
+                {
+                    "target": "evidence_attention_policy.conflict_weight",
+                    "direction": "increase",
+                    "current_value": 0.14,
+                    "suggested_value": 0.19,
+                    "delta": 0.05,
+                    "reason": "reference alignment remains weak, so conflict-sensitive evidence should be weighted more heavily.",
+                }
+            ],
+            "summary": "Recent cognitive feedback suggests adjusting 1 evidence-attention parameters.",
+        },
+    }
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 1200, "agent": 1200, "memory": 1200},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    delta = result["cognition_state"]["proposal_cognition"]["cognitive_strategy_delta"]
+    assert delta["available"] is True
+    assert delta["recommended_changes"][0]["target"] == (
+        "evidence_attention_policy.conflict_weight"
+    )
+    assert delta["summary"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_cognitive_briefing_prefers_context_layers(tmp_path):
+    from systems.supervisor.endogenous_drive_prompts import build_endogenous_task_generation_payload
+
+    payload = build_endogenous_task_generation_payload(
+        evidence_packet={
+            "decision_core": {
+                "current_judgement": "review should dominate until grounding is repaired",
+                "dominant_constraint": "weak self structure grounding",
+                "grounding_pressure": "high",
+                "recommended_task_posture": "observation_or_review",
+                "top_task_type": "review",
+                "top_task_score": 0.82,
+                "top_self_iteration_domain": "grounding",
+                "top_self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "primary_evidence_nodes": ["self_structure"],
+                "primary_agenda_nodes": ["focus:learning_expansion"],
+                "queue_state_summary": "queued_tasks=2; recent_titles=Existing queue task A.",
+                "cognitive_posture": {
+                    "name": "truthfulness_first",
+                    "selection_reason": "grounding remains unstable",
+                },
+                "summary": "Decision core: review-first until grounding is repaired.",
+            },
+            "supporting_detail": {
+                "grounding_gaps": ["missing_evidence:self_structure"],
+                "contradictory_topics": ["self_structure->external_research:contradicts"],
+                "weak_or_missing_channels": ["recent_learning"],
+                "self_understanding_gaps": ["missing_recent_learning_trace"],
+                "why_not_improvement_now": ["improvement would outrun grounding"],
+                "trend_state": "locked",
+                "recent_effect_direction": "mixed",
+                "summary": "Supporting detail summary",
+            },
+            "long_tail_context": {
+                "recent_learning_titles": ["Learning A"],
+                "summary": "Long tail summary",
+            },
+            "queue_state_snapshot": {
+                "queued_task_count": 2,
+                "recent_titles": ["Existing queue task A"],
+                "summary": "queued_tasks=2; recent_titles=Existing queue task A.",
+            },
+            "meta_cognition_profile": {
+                "summary": "stale fallback summary",
+                "dominant_failure_mode": "grounding_instability",
+            },
+            "grounding_focus": {
+                "summary": "stale fallback grounding summary",
+            },
+            "self_iteration_hypotheses": {
+                "summary": "stale fallback iteration summary",
+            },
+        },
+        cognition_charter={},
+        max_candidates=2,
+    )
+
+    assert "【认知简报】" in payload
+    assert "- 当前判断: review should dominate until grounding is repaired" in payload
+    assert "- 当前主约束: weak self structure grounding" in payload
+    assert "- 当前首要自我迭代域: grounding" in payload
+    assert "- 当前不宜直接 improvement 的原因: improvement would outrun grounding" in payload
+    assert "- 当前排队上下文: queued_tasks=2; recent_titles=Existing queue task A." in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_uses_default_task_generation_focus_when_not_configured(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor.config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={
+                    "endogenous_drive_lm_task_generation_enabled": True,
+                    "endogenous_drive_lm_task_max_candidates": 1,
+                }
+            )
+        }
+    )
+    supervisor._endogenous_drive_engine.config = supervisor.config
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    payload = fake_client.calls[0]["user_payload"]["task_generation"]
+    assert "【本轮任务生成焦点】" in payload
+    assert "先综合主证据主题、主议程主题、grounding 缺口和近期认知记忆，再判断当前最该做什么。" in payload
+    assert "【本轮输出附加要求】" in payload
+    assert "提案必须显式绑定 evidence graph / agenda graph 节点，避免漂浮任务。" in payload
 
 
 @pytest.mark.asyncio
@@ -3460,7 +4643,7 @@ async def test_endogenous_drive_constrains_high_risk_or_weak_evidence_lm_proposa
     assert candidate["metadata"]["supervisor_advisory"]["recommended_observation_required"] is True
     assert candidate["metadata"]["supervisor_advisory"]["recommended_execution_mode"] == "review_then_queue"
     assert "high_risk_requires_governance_review" in candidate["metadata"]["supervisor_advisory"]["advisory_reasons"]
-    assert candidate["metadata"]["cognitive_alignment"]["quality"] in {"strong", "partial"}
+    assert candidate["metadata"]["cognitive_alignment"]["quality"] in {"weak", "partial", "strong"}
 
 
 @pytest.mark.asyncio
@@ -3557,10 +4740,92 @@ async def test_endogenous_drive_marks_improvement_proposal_weak_when_it_conflict
         assert "task_shape_conflicts_with_current_cognitive_posture" in alignment["reasons"] or (
             "proposal_explicitly_states_posture_alignment" in alignment["reasons"]
         )
+        assert "proposal_does_not_bind_primary_evidence_nodes" in alignment["reasons"] or (
+            "reference_grounding_penalty_is_active" in alignment["reasons"]
+        )
     else:
         posture = result["cognition_state"]["proposal_cognition"]["active_cognitive_posture_profile"]
         assert posture["name"] in {"observe_first", "truthfulness_first", "evidence_repair_first"}
         assert result["cognitive_self_regulation"]["dynamic_observation_bias_boost"] > 0.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_softly_weakens_lm_proposal_when_it_omits_graph_bindings(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    engine = supervisor._endogenous_drive_engine
+    reference_alignment = engine._align_lm_references(
+        referenced_evidence_nodes=[],
+        referenced_agenda_nodes=[],
+        evidence_graph={
+            "nodes": [
+                {"topic": "self_structure", "avg_confidence": 0.74, "priority": 0.8},
+                {"topic": "external_research", "avg_confidence": 0.66, "priority": 0.7},
+            ]
+        },
+        agenda_graph={
+            "focus": "learning_expansion",
+            "focus_confidence": 0.82,
+            "unresolved_gaps": [
+                {"gap": "expand_learning_frontier", "priority": 0.77},
+            ],
+            "recommended_directions": [],
+            "active_signals": [],
+        },
+    )
+    cognitive_alignment = engine._score_lm_proposal_cognitive_alignment(
+        candidate_kind="exploratory_learning",
+        task_type="learning",
+        evidence_level="moderate",
+        risk_level="medium",
+        observation_required=False,
+        execution_mode="guarded_execution",
+        blocking_factors=[],
+        reference_alignment=reference_alignment,
+        evidence_packet={
+            "task_type_priors": {
+                "top_priority_task_type": "observation",
+                "top_priority_score": 0.88,
+                "priors": [
+                    {"task_type": "observation", "score": 0.88, "reasons": ["self gaps remain active"]},
+                    {"task_type": "learning", "score": 0.42, "reasons": ["learning may still help"]},
+                ],
+            },
+            "evidence_credibility_summary": {
+                "high_credibility_channels": ["deliberation_state"],
+                "weak_or_missing_channels": ["recent_learning", "external_research"],
+            },
+            "self_model_snapshot": {
+                "self_understanding_gaps": ["missing_recent_learning_trace"],
+            },
+            "cognitive_posture": {
+                "name": "evidence_repair_first",
+            },
+        },
+        posture_alignment=["suggests learning could still help"],
+        priority_basis=["future upside may exist"],
+    )
+    advisory = engine._supervisor_advisory_for_lm_proposal(
+        candidate_kind="exploratory_learning",
+        evidence_level="moderate",
+        risk_level="medium",
+        observation_required=False,
+        execution_mode="guarded_execution",
+        blocking_factors=[],
+        reference_alignment=reference_alignment,
+    )
+
+    assert reference_alignment["grounding_penalty"] > 0.0
+    assert reference_alignment["missing_primary_evidence_nodes"]
+    assert reference_alignment["missing_primary_agenda_nodes"]
+    assert cognitive_alignment["quality"] in {"weak", "partial"}
+    assert "proposal_does_not_reference_evidence_graph" in cognitive_alignment["reasons"]
+    assert "proposal_does_not_reference_agenda_graph" in cognitive_alignment["reasons"]
+    assert advisory["recommended_observation_required"] is True
+    assert advisory["recommended_execution_mode"] == "review_then_queue"
+    assert "reference_binding_is_not_grounded_enough" in advisory["advisory_reasons"] or (
+        "primary_evidence_or_agenda_binding_is_missing" in advisory["advisory_reasons"]
+    )
 
 
 @pytest.mark.asyncio
@@ -3985,6 +5250,689 @@ async def test_endogenous_drive_passes_recent_reference_alignment_feedback_to_lm
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_endogenous_drive_passes_grounding_focus_summary_to_lm(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor.config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={
+                    "endogenous_drive_lm_task_generation_enabled": True,
+                    "endogenous_drive_lm_task_max_candidates": 1,
+                    "endogenous_drive_external_research_enabled": True,
+                    "endogenous_drive_external_research_entries": [
+                        "Grounding research::Evidence-bound proposals improve autonomous planning stability.",
+                    ],
+                }
+            )
+        }
+    )
+    supervisor._endogenous_drive_engine.config = supervisor.config
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Recent grounding miss",
+            "reference_alignment": {
+                "alignment_quality": "weak",
+                "alignment_score": 0.41,
+                "missing_evidence_nodes": ["self_structure"],
+                "missing_agenda_nodes": ["focus:learning_expansion"],
+            },
+        }
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    shell_worktree = (tmp_path / ".body-slots" / "slot-Z" / "worktree").resolve()
+    shell_worktree.mkdir(parents=True, exist_ok=True)
+    (shell_worktree / "run_agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (shell_worktree / "config.yaml").write_text("name: shell\n", encoding="utf-8")
+    (shell_worktree / "agent").mkdir(exist_ok=True)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {
+                "active_sessions": 0,
+                "counts": {"error_count": 1, "uncertainty_high_count": 1},
+            },
+            "shell_slot": {
+                "slot_id": "slot-Z",
+                "worktree_path": str(shell_worktree),
+                "candidate_commit": "zzz999",
+            },
+            "completed_learning_tasks": [
+                {
+                    "title": "Inspect structure grounding",
+                    "summary": "Found weak evidence binding around self structure topics.",
+                    "quality_score": 0.78,
+                    "completed_at": "2026-06-27T12:00:00+00:00",
+                }
+            ],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    assert fake_client.calls
+    payload = fake_client.calls[0]["user_payload"]["task_generation"]
+    assert "grounding_focus" in payload
+    assert "\"primary_evidence_nodes\":" in payload
+    assert "\"primary_agenda_nodes\":" in payload
+    assert "\"grounding_gaps\":" in payload
+    assert "\"weak_or_missing_channels\":" in payload
+    assert "Bind proposals to primary evidence and agenda nodes first" in payload
+    assert "missing_evidence:self_structure" in payload
+    assert "missing_agenda:focus:learning_expansion" in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_passes_cognitive_assessment_memory_to_lm(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor.config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={
+                    "endogenous_drive_lm_task_generation_enabled": True,
+                    "endogenous_drive_lm_task_max_candidates": 1,
+                }
+            )
+        }
+    )
+    supervisor._endogenous_drive_engine.config = supervisor.config
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Previous review-first judgement",
+            "event_type": "planned",
+            "llm_cognitive_assessment": {
+                "current_judgement": "review should dominate until grounding is repaired",
+                "dominant_constraint": "weak self structure grounding",
+                "primary_grounding_gaps": [
+                    "missing_evidence:self_structure",
+                    "missing_agenda:focus:learning_expansion",
+                ],
+                "why_not_improvement_now": [
+                    "improvement would run ahead of self-understanding",
+                ],
+            },
+        }
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    assert fake_client.calls
+    payload = fake_client.calls[0]["user_payload"]["task_generation"]
+    assert "cognitive_assessment_memory" in payload
+    assert "review should dominate until grounding is repaired" in payload
+    assert "weak self structure grounding" in payload
+    assert "improvement would run ahead of self-understanding" in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_passes_self_iteration_hypotheses_to_lm(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor.config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={
+                    "endogenous_drive_lm_task_generation_enabled": True,
+                    "endogenous_drive_lm_task_max_candidates": 1,
+                }
+            )
+        }
+    )
+    supervisor._endogenous_drive_engine.config = supervisor.config
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Previous cognition",
+            "event_type": "planned",
+            "llm_cognitive_assessment": {
+                "current_judgement": "review should dominate until grounding is repaired",
+                "dominant_constraint": "weak self structure grounding",
+                "self_iteration_target": "grounding",
+                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "why_not_improvement_now": [
+                    "improvement would run ahead of self-understanding",
+                ],
+            },
+        }
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    assert fake_client.calls
+    payload = fake_client.calls[0]["user_payload"]["task_generation"]
+    assert "self_iteration_hypotheses" in payload
+    assert "\"top_target_domain\"" in payload
+    assert "\"dominant_hypothesis\"" in payload
+    assert "self_iteration_target" in payload
+    assert "self_iteration_hypothesis" in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_passes_self_iteration_trend_memory_to_lm(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor.config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={
+                    "endogenous_drive_lm_task_generation_enabled": True,
+                    "endogenous_drive_lm_task_max_candidates": 1,
+                }
+            )
+        }
+    )
+    supervisor._endogenous_drive_engine.config = supervisor.config
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Trend A",
+            "event_type": "planned",
+            "llm_cognitive_assessment": {
+                "self_iteration_target": "grounding",
+                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+            },
+        },
+        {
+            "title": "Trend B",
+            "event_type": "planned",
+            "llm_cognitive_assessment": {
+                "self_iteration_target": "grounding",
+                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+            },
+        },
+        {
+            "title": "Trend C",
+            "event_type": "planned",
+            "llm_cognitive_assessment": {
+                "self_iteration_target": "grounding",
+                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+            },
+        },
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    payload = fake_client.calls[0]["user_payload"]["task_generation"]
+    assert "self_iteration_trend_memory" in payload
+    assert "\"dominant_target\": \"grounding\"" in payload
+    assert "\"trend_state\": \"locked\"" in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_passes_switch_self_regulation_memory_to_lm(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor.config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={
+                    "endogenous_drive_lm_task_generation_enabled": True,
+                    "endogenous_drive_lm_task_max_candidates": 1,
+                }
+            )
+        }
+    )
+    supervisor._endogenous_drive_engine.config = supervisor.config
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Switch outcome",
+            "event_type": "planned",
+            "quality_score": 0.82,
+            "llm_cognitive_assessment": {
+                "stay_or_switch": "switch",
+                "switch_reason": "new evidence overturned previous focus",
+            },
+        },
+        {
+            "title": "Stay outcome",
+            "event_type": "planned",
+            "quality_score": 0.31,
+            "llm_cognitive_assessment": {
+                "stay_or_switch": "stay",
+                "switch_reason": "current path still looked acceptable",
+            },
+        },
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    payload = fake_client.calls[0]["user_payload"]["task_generation"]
+    assert "switch_self_regulation_memory" in payload
+    assert "\"preferred_switch_bias\": \"switch\"" in payload
+    assert "\"average_switch_quality\": 0.82" in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_passes_post_task_effect_memory_to_lm(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor.config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={
+                    "endogenous_drive_lm_task_generation_enabled": True,
+                    "endogenous_drive_lm_task_max_candidates": 1,
+                }
+            )
+        }
+    )
+    supervisor._endogenous_drive_engine.config = supervisor.config
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Helpful grounding task",
+            "event_type": "planned",
+            "quality_score": 0.82,
+            "cognitive_alignment": {"score": 0.73},
+            "reference_alignment": {"alignment_score": 0.71},
+            "llm_cognitive_assessment": {
+                "self_iteration_target": "grounding",
+            },
+        },
+        {
+            "title": "Weak grounding task",
+            "event_type": "planned",
+            "quality_score": 0.28,
+            "cognitive_alignment": {"score": 0.31},
+            "reference_alignment": {"alignment_score": 0.22},
+            "llm_cognitive_assessment": {
+                "self_iteration_target": "grounding",
+            },
+        },
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    payload = fake_client.calls[0]["user_payload"]["task_generation"]
+    assert "post_task_effect_memory" in payload
+    assert "\"effect_direction\": \"mixed\"" in payload
+    assert "\"dominant_target_effect\": \"grounding:helped\"" in payload or "\"dominant_target_effect\": \"grounding:hurt\"" in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_passes_meta_cognition_profile_to_lm(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor.config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={
+                    "endogenous_drive_lm_task_generation_enabled": True,
+                    "endogenous_drive_lm_task_max_candidates": 1,
+                }
+            )
+        }
+    )
+    supervisor._endogenous_drive_engine.config = supervisor.config
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Previous review-first judgement",
+            "event_type": "planned",
+            "quality_score": 0.33,
+            "cognitive_alignment": {"score": 0.38},
+            "reference_alignment": {
+                "alignment_score": 0.29,
+                "missing_evidence_nodes": ["self_structure"],
+                "missing_agenda_nodes": ["focus:learning_expansion"],
+            },
+            "llm_cognitive_assessment": {
+                "current_judgement": "review should dominate until grounding is repaired",
+                "dominant_constraint": "weak self structure grounding",
+                "self_iteration_target": "grounding",
+                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "stay_or_switch": "stay",
+                "switch_reason": "grounding gaps still dominate the agenda",
+            },
+        }
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {"uncertainty_high_count": 1}},
+            "completed_learning_tasks": [],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    payload = fake_client.calls[0]["user_payload"]["task_generation"]
+    assert "meta_cognition_profile" in payload
+    assert "review should dominate until grounding is repaired" in payload
+    assert "\"grounding_pressure\": \"high\"" in payload or "\"grounding_pressure\": \"medium\"" in payload
+    assert "repair evidence-to-agenda grounding before aggressive self-iteration" in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_passes_cognitive_briefing_to_lm(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor.config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={
+                    "endogenous_drive_lm_task_generation_enabled": True,
+                    "endogenous_drive_lm_task_max_candidates": 1,
+                    "endogenous_drive_external_research_enabled": True,
+                    "endogenous_drive_external_research_entries": [
+                        "Briefing research::Grounded cognition improves planning quality.",
+                    ],
+                }
+            )
+        }
+    )
+    supervisor._endogenous_drive_engine.config = supervisor.config
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {
+                "active_sessions": 0,
+                "counts": {"error_count": 1, "uncertainty_high_count": 1},
+            },
+            "completed_learning_tasks": [
+                {
+                    "title": "Inspect grounding posture",
+                    "summary": "Mapped weak grounding and current observation-first pressure.",
+                    "quality_score": 0.82,
+                    "completed_at": "2026-06-27T12:00:00+00:00",
+                }
+            ],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    assert fake_client.calls
+    payload = fake_client.calls[0]["user_payload"]["task_generation"]
+    assert "【认知简报】" in payload
+    assert "元认知画像:" in payload
+    assert "当前主失败模式:" in payload
+    assert "当前建议任务姿态:" in payload
+    assert "当前姿态:" in payload
+    assert "当前最高优先任务类型:" in payload
+    assert "当前主证据主题:" in payload
+    assert "当前主议程主题:" in payload
+    assert "当前 grounding 缺口:" in payload
+    assert "当前弱通道:" in payload
+    assert "先基于主证据主题与主议程主题做判断" in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_requests_cognitive_assessment_from_lm(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor.config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={
+                    "endogenous_drive_lm_task_generation_enabled": True,
+                    "endogenous_drive_lm_task_max_candidates": 1,
+                }
+            )
+        }
+    )
+    supervisor._endogenous_drive_engine.config = supervisor.config
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {
+                "active_sessions": 0,
+                "counts": {"uncertainty_high_count": 1},
+            },
+            "completed_learning_tasks": [],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    assert fake_client.calls
+    payload = fake_client.calls[0]["user_payload"]["task_generation"]
+    assert "\"cognitive_assessment\"" in payload
+    assert "\"current_judgement\":\"...\"" in payload
+    assert "\"dominant_constraint\":\"...\"" in payload
+    assert "\"primary_grounding_gaps\":[\"...\"]" in payload
+    assert "\"why_this_task_type_now\":[\"...\"]" in payload
+    assert "\"stay_or_switch\":\"stay\"" in payload
+    assert "\"switch_reason\":\"...\"" in payload
+    assert "先输出一个 cognitive_assessment" in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_endogenous_drive_passes_self_model_snapshot_to_lm(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
@@ -4082,7 +6030,7 @@ async def test_endogenous_drive_passes_self_model_snapshot_to_lm(tmp_path):
     assert "\"body_profile_status\": \"ready\"" in payload
     assert "\"research_freshness\": \"unknown\"" in payload
     assert "Inspect self-model bottlenecks" in payload
-    assert "Repair evidence references" in payload
+    assert "\"grounding_focus\":" in payload
 
 
 @pytest.mark.asyncio
@@ -4501,6 +6449,637 @@ async def test_endogenous_drive_records_cognitive_posture_in_lm_generation_conte
     state = supervisor._endogenous_drive_engine.get_latest_lm_task_generation_context()
     assert state["cognitive_posture"]["name"] == "observe_first"
     assert state["cognitive_posture"]["selection_mode"] == "manual"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_records_lm_cognitive_assessment_in_generation_context(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor.config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={
+                    "endogenous_drive_lm_task_generation_enabled": True,
+                    "endogenous_drive_lm_task_max_candidates": 1,
+                }
+            )
+        }
+    )
+    supervisor._endogenous_drive_engine.config = supervisor.config
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient(
+        {
+            "cognitive_assessment": {
+                "current_judgement": "evidence is still incomplete, so review should dominate",
+                "dominant_constraint": "weak grounding around self structure",
+                "primary_grounding_gaps": [
+                    "missing_evidence:self_structure",
+                    "missing_agenda:focus:learning_expansion",
+                ],
+                "why_this_task_type_now": [
+                    "review can repair evidence binding before risky action",
+                ],
+                "why_not_improvement_now": [
+                    "improvement would outrun current self-understanding",
+                ],
+            },
+            "proposals": [],
+        }
+    )
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    state = supervisor._endogenous_drive_engine.get_latest_lm_task_generation_context()
+    assessment = state["cognitive_assessment"]
+    assert assessment["current_judgement"] == "evidence is still incomplete, so review should dominate"
+    assert assessment["dominant_constraint"] == "weak grounding around self structure"
+    assert assessment["primary_grounding_gaps"] == [
+        "missing_evidence:self_structure",
+        "missing_agenda:focus:learning_expansion",
+    ]
+    assert assessment["why_this_task_type_now"] == [
+        "review can repair evidence binding before risky action",
+    ]
+    assert assessment["why_not_improvement_now"] == [
+        "improvement would outrun current self-understanding",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_records_self_iteration_fields_in_generation_context(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor.config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={
+                    "endogenous_drive_lm_task_generation_enabled": True,
+                    "endogenous_drive_lm_task_max_candidates": 1,
+                }
+            )
+        }
+    )
+    supervisor._endogenous_drive_engine.config = supervisor.config
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient(
+        {
+            "cognitive_assessment": {
+                "current_judgement": "review should dominate until grounding is repaired",
+                "dominant_constraint": "weak grounding around self structure",
+                "primary_grounding_gaps": ["missing_evidence:self_structure"],
+                "why_this_task_type_now": ["review can repair grounding"],
+                "why_not_improvement_now": ["improvement would outrun current self-understanding"],
+                "self_iteration_target": "grounding",
+                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "stay_or_switch": "stay",
+                "switch_reason": "grounding gaps still dominate the agenda",
+            },
+            "proposals": [],
+        }
+    )
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    state = supervisor._endogenous_drive_engine.get_latest_lm_task_generation_context()
+    assessment = state["cognitive_assessment"]
+    assert assessment["self_iteration_target"] == "grounding"
+    assert assessment["self_iteration_hypothesis"] == (
+        "repair evidence-to-agenda grounding before aggressive self-iteration"
+    )
+    assert assessment["stay_or_switch"] == "stay"
+    assert assessment["switch_reason"] == "grounding gaps still dominate the agenda"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_run_endogenous_drive_cycle_exposes_stay_switch_trend_memory(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Trend A",
+            "event_type": "planned",
+            "llm_cognitive_assessment": {
+                "self_iteration_target": "grounding",
+                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "stay_or_switch": "stay",
+                "switch_reason": "grounding gaps still dominate the agenda",
+            },
+        },
+        {
+            "title": "Trend B",
+            "event_type": "planned",
+            "llm_cognitive_assessment": {
+                "self_iteration_target": "grounding",
+                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "stay_or_switch": "stay",
+                "switch_reason": "grounding gaps still dominate the agenda",
+            },
+        },
+        {
+            "title": "Trend C",
+            "event_type": "planned",
+            "llm_cognitive_assessment": {
+                "self_iteration_target": "self_model",
+                "self_iteration_hypothesis": "expand self-understanding before escalation",
+                "stay_or_switch": "switch",
+                "switch_reason": "self-model uncertainty has overtaken grounding pressure",
+            },
+        },
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "completed_learning_tasks": [],
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    trend_memory = result["cognition_state"]["proposal_cognition"]["self_iteration_trend_memory"]
+    assert trend_memory["available"] is True
+    assert "stay" in trend_memory["common_stay_or_switch"]
+    assert "switch" in trend_memory["common_stay_or_switch"]
+    assert "grounding gaps still dominate the agenda" in trend_memory["common_switch_reasons"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_run_endogenous_drive_cycle_exposes_cognitive_assessment_memory(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Previous cognition",
+            "event_type": "planned",
+            "llm_cognitive_assessment": {
+                "current_judgement": "review should dominate until grounding is repaired",
+                "dominant_constraint": "weak self structure grounding",
+                "why_not_improvement_now": [
+                    "improvement would run ahead of self-understanding",
+                ],
+            },
+        }
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "completed_learning_tasks": [],
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    proposal_cognition = result["cognition_state"]["proposal_cognition"]
+    assert proposal_cognition["cognitive_assessment_memory"]["available"] is True
+    assert proposal_cognition["cognitive_assessment_memory"]["dominant_constraint"] == (
+        "weak self structure grounding"
+    )
+    assert proposal_cognition["cognitive_assessment_memory"]["common_current_judgements"] == [
+        "review should dominate until grounding is repaired",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_run_endogenous_drive_cycle_exposes_self_iteration_trend_memory(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Trend A",
+            "event_type": "planned",
+            "llm_cognitive_assessment": {
+                "self_iteration_target": "grounding",
+                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+            },
+        },
+        {
+            "title": "Trend B",
+            "event_type": "planned",
+            "llm_cognitive_assessment": {
+                "self_iteration_target": "grounding",
+                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+            },
+        },
+        {
+            "title": "Trend C",
+            "event_type": "planned",
+            "llm_cognitive_assessment": {
+                "self_iteration_target": "grounding",
+                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+            },
+        },
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "completed_learning_tasks": [],
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    trend_memory = result["cognition_state"]["proposal_cognition"]["self_iteration_trend_memory"]
+    assert trend_memory["available"] is True
+    assert trend_memory["dominant_target"] == "grounding"
+    assert trend_memory["trend_state"] == "locked"
+    assert trend_memory["target_stability"] == "stable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_run_endogenous_drive_cycle_exposes_switch_self_regulation_memory(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Switch outcome",
+            "event_type": "planned",
+            "quality_score": 0.82,
+            "llm_cognitive_assessment": {
+                "stay_or_switch": "switch",
+                "switch_reason": "new evidence overturned previous focus",
+            },
+        },
+        {
+            "title": "Stay outcome",
+            "event_type": "planned",
+            "quality_score": 0.31,
+            "llm_cognitive_assessment": {
+                "stay_or_switch": "stay",
+                "switch_reason": "current path still looked acceptable",
+            },
+        },
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "completed_learning_tasks": [],
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    switch_memory = result["cognition_state"]["proposal_cognition"]["switch_self_regulation_memory"]
+    assert switch_memory["available"] is True
+    assert switch_memory["preferred_switch_bias"] == "switch"
+    assert switch_memory["average_switch_quality"] == 0.82
+    assert switch_memory["average_stay_quality"] == 0.31
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_run_endogenous_drive_cycle_exposes_post_task_effect_memory(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Helpful grounding task",
+            "event_type": "planned",
+            "quality_score": 0.82,
+            "cognitive_alignment": {"score": 0.73},
+            "reference_alignment": {"alignment_score": 0.71},
+            "llm_cognitive_assessment": {
+                "self_iteration_target": "grounding",
+            },
+        },
+        {
+            "title": "Weak grounding task",
+            "event_type": "planned",
+            "quality_score": 0.28,
+            "cognitive_alignment": {"score": 0.31},
+            "reference_alignment": {"alignment_score": 0.22},
+            "llm_cognitive_assessment": {
+                "self_iteration_target": "grounding",
+            },
+        },
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "completed_learning_tasks": [],
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    effect_memory = result["cognition_state"]["proposal_cognition"]["post_task_effect_memory"]
+    assert effect_memory["available"] is True
+    assert effect_memory["effect_direction"] == "mixed"
+    assert effect_memory["average_quality_score"] == 0.55
+    assert effect_memory["average_cognitive_alignment_score"] == 0.52
+    assert effect_memory["average_reference_alignment_score"] == 0.465
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_run_endogenous_drive_cycle_exposes_meta_cognition_profile(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Meta cognition seed",
+            "event_type": "planned",
+            "quality_score": 0.25,
+            "cognitive_alignment": {"score": 0.34},
+            "reference_alignment": {
+                "alignment_score": 0.28,
+                "missing_evidence_nodes": ["self_structure"],
+                "missing_agenda_nodes": ["focus:learning_expansion"],
+            },
+            "llm_cognitive_assessment": {
+                "current_judgement": "review should dominate until grounding is repaired",
+                "dominant_constraint": "weak self structure grounding",
+                "self_iteration_target": "grounding",
+                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "stay_or_switch": "stay",
+                "switch_reason": "grounding gaps still dominate the agenda",
+            },
+        }
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "completed_learning_tasks": [],
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    profile = result["cognition_state"]["proposal_cognition"]["meta_cognition_profile"]
+    assert profile["available"] is True
+    assert profile["current_judgement"] == "review should dominate until grounding is repaired"
+    assert profile["top_self_iteration_domain"] == "grounding"
+    assert profile["dominant_failure_mode"] in {
+        "grounding_instability",
+        "weak self structure grounding",
+    }
+    assert profile["recommended_task_posture"] in {"observation_or_review", "review"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_builds_meta_cognition_profile_in_evidence_packet(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Evidence packet seed",
+            "event_type": "planned",
+            "quality_score": 0.24,
+            "cognitive_alignment": {"score": 0.35},
+            "reference_alignment": {
+                "alignment_score": 0.31,
+                "missing_evidence_nodes": ["self_structure"],
+                "missing_agenda_nodes": ["focus:learning_expansion"],
+            },
+            "llm_cognitive_assessment": {
+                "current_judgement": "review should dominate until grounding is repaired",
+                "dominant_constraint": "weak self structure grounding",
+                "self_iteration_target": "grounding",
+                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+            },
+        }
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    idle_window = await fake_idle_window()
+    idle_window["drive_history"] = supervisor._history_for_endogenous_drive(
+        supervisor._load_endogenous_drive_history()
+    )
+    drive_context = supervisor._endogenous_drive_engine._build_drive_context(idle_window)
+    evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(
+        idle_window=idle_window,
+        deliberation=supervisor._endogenous_drive_engine.build_deliberation_report(
+            idle_window=idle_window
+        ),
+        drive_context=drive_context,
+        memory_plan={},
+        self_learning_plan={},
+        self_evolution_plan={},
+    )
+
+    profile = evidence_packet["meta_cognition_profile"]
+    assert profile["available"] is True
+    assert profile["current_judgement"] == "review should dominate until grounding is repaired"
+    assert profile["top_self_iteration_domain"] == "grounding"
+    assert "grounding_pressure" in profile
+    assert profile["priority_signals"]
 
 
 @pytest.mark.asyncio

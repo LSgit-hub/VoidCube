@@ -332,7 +332,7 @@ class ServiceRuntimeMixin:
             self._endogenous_drive_task = asyncio.create_task(endogenous_drive_loop())
             logger.info("Governor Mode: drive loop started (interval=%ds)", runtime_config.endogenous_drive_interval)
 
-            # ── Immediate first-run: don't wait 300s for the first cycle ──
+            # ── Immediate first-run: fire the first cycle without waiting for the interval ──
             async def _immediate_first_drive():
                 await asyncio.sleep(2)  # short grace for gateway notification
                 await self._run_endogenous_drive_cycle()

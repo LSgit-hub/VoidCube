@@ -1141,10 +1141,45 @@ class PlanningRuntimeMixin:
                 lm_reasoning_state = {}
 
         task_type_priors = dict(lm_reasoning_state.get("task_type_priors") or {})
+        meta_cognition_profile = dict(
+            lm_reasoning_state.get("meta_cognition_profile") or {}
+        )
         proposal_drift_memory = dict(lm_reasoning_state.get("proposal_drift_memory") or {})
         recent_reference_alignment = dict(
             lm_reasoning_state.get("recent_reference_alignment") or {}
         )
+        cognitive_assessment_memory = dict(
+            lm_reasoning_state.get("cognitive_assessment_memory") or {}
+        )
+        cognitive_feedback_memory = dict(
+            lm_reasoning_state.get("cognitive_feedback_memory") or {}
+        )
+        cognitive_strategy_delta = dict(
+            lm_reasoning_state.get("cognitive_strategy_delta") or {}
+        )
+        if not cognitive_assessment_memory:
+            cognitive_assessment_memory = self._build_recent_lm_cognitive_assessment_summary(
+                history_snapshot=history_snapshot,
+            )
+        self_iteration_trend_memory = self._build_recent_self_iteration_trend_summary(
+            history_snapshot=history_snapshot,
+        )
+        switch_self_regulation_memory = self._build_recent_switch_self_regulation_summary(
+            history_snapshot=history_snapshot,
+        )
+        post_task_effect_memory = self._build_recent_post_task_effect_summary(
+            history_snapshot=history_snapshot,
+        )
+        if not meta_cognition_profile:
+            meta_cognition_profile = self._build_recent_meta_cognition_profile_summary(
+                cognitive_assessment_memory=cognitive_assessment_memory,
+                self_iteration_trend_memory=self_iteration_trend_memory,
+                switch_self_regulation_memory=switch_self_regulation_memory,
+                post_task_effect_memory=post_task_effect_memory,
+                proposal_drift_memory=proposal_drift_memory,
+                task_type_priors=task_type_priors,
+                recent_reference_alignment=recent_reference_alignment,
+            )
         recent_cognitive_alignment = self._build_recent_cognitive_alignment_summary(
             history_snapshot=history_snapshot,
         )
@@ -1180,6 +1215,12 @@ class PlanningRuntimeMixin:
             f"tasks ({top_priority_score:.2f}); drift state is {drift_state}; "
             f"current candidate count={int(current_candidates.get('count') or 0)}."
         )
+        if meta_cognition_profile.get("available"):
+            summary += (
+                " Meta-cognition indicates "
+                f"{str(meta_cognition_profile.get('dominant_failure_mode') or 'unknown').strip() or 'unknown'}"
+                " as the dominant failure mode."
+            )
         if recent_cognitive_alignment.get("available"):
             summary += (
                 f" Recent cognitive alignment average="
@@ -1199,6 +1240,45 @@ class PlanningRuntimeMixin:
                 "top_priority_task_type": top_priority_task_type or None,
                 "top_priority_score": top_priority_score,
                 "priors": priors,
+            },
+            "meta_cognition_profile": {
+                "available": bool(meta_cognition_profile.get("available")),
+                "current_judgement": str(
+                    meta_cognition_profile.get("current_judgement") or ""
+                ).strip(),
+                "dominant_constraint": str(
+                    meta_cognition_profile.get("dominant_constraint") or ""
+                ).strip(),
+                "grounding_pressure": str(
+                    meta_cognition_profile.get("grounding_pressure") or ""
+                ).strip(),
+                "top_self_iteration_domain": str(
+                    meta_cognition_profile.get("top_self_iteration_domain") or ""
+                ).strip(),
+                "top_self_iteration_hypothesis": str(
+                    meta_cognition_profile.get("top_self_iteration_hypothesis") or ""
+                ).strip(),
+                "stay_or_switch_bias": str(
+                    meta_cognition_profile.get("stay_or_switch_bias") or ""
+                ).strip(),
+                "switch_bias_effectiveness": str(
+                    meta_cognition_profile.get("switch_bias_effectiveness") or ""
+                ).strip(),
+                "recent_effect_direction": str(
+                    meta_cognition_profile.get("recent_effect_direction") or ""
+                ).strip(),
+                "dominant_failure_mode": str(
+                    meta_cognition_profile.get("dominant_failure_mode") or ""
+                ).strip(),
+                "recommended_task_posture": str(
+                    meta_cognition_profile.get("recommended_task_posture") or ""
+                ).strip(),
+                "priority_signals": [
+                    str(item).strip()
+                    for item in list(meta_cognition_profile.get("priority_signals") or [])[:6]
+                    if str(item).strip()
+                ],
+                "summary": str(meta_cognition_profile.get("summary") or "").strip(),
             },
             "proposal_drift_memory": {
                 "available": bool(proposal_drift_memory.get("available")),
@@ -1242,6 +1322,83 @@ class PlanningRuntimeMixin:
                 ),
                 "summary": str(recent_reference_alignment.get("summary") or "").strip(),
             },
+            "cognitive_assessment_memory": {
+                "available": bool(cognitive_assessment_memory.get("available")),
+                "dominant_constraint": str(
+                    cognitive_assessment_memory.get("dominant_constraint") or ""
+                ).strip(),
+                "common_current_judgements": [
+                    str(item).strip()
+                    for item in list(
+                        cognitive_assessment_memory.get("common_current_judgements") or []
+                    )[:4]
+                    if str(item).strip()
+                ],
+                "common_why_not_improvement_now": [
+                    str(item).strip()
+                    for item in list(
+                        cognitive_assessment_memory.get("common_why_not_improvement_now") or []
+                    )[:4]
+                    if str(item).strip()
+                ],
+                "summary": str(cognitive_assessment_memory.get("summary") or "").strip(),
+            },
+            "cognitive_feedback_memory": {
+                "available": bool(cognitive_feedback_memory.get("available")),
+                "average_quality_score": round(
+                    self._clamp_endogenous_ratio(
+                        cognitive_feedback_memory.get("average_quality_score") or 0.0
+                    ),
+                    4,
+                ),
+                "average_reference_alignment_score": round(
+                    self._clamp_endogenous_ratio(
+                        cognitive_feedback_memory.get("average_reference_alignment_score") or 0.0
+                    ),
+                    4,
+                ),
+                "average_cognitive_alignment_score": round(
+                    self._clamp_endogenous_ratio(
+                        cognitive_feedback_memory.get("average_cognitive_alignment_score") or 0.0
+                    ),
+                    4,
+                ),
+                "confidence_feedback_direction": str(
+                    cognitive_feedback_memory.get("confidence_feedback_direction") or ""
+                ).strip(),
+                "reference_feedback_direction": str(
+                    cognitive_feedback_memory.get("reference_feedback_direction") or ""
+                ).strip(),
+                "freshness_feedback_direction": str(
+                    cognitive_feedback_memory.get("freshness_feedback_direction") or ""
+                ).strip(),
+                "self_relevance_feedback_direction": str(
+                    cognitive_feedback_memory.get("self_relevance_feedback_direction") or ""
+                ).strip(),
+                "long_tail_signal_bias": str(
+                    cognitive_feedback_memory.get("long_tail_signal_bias") or ""
+                ).strip(),
+                "summary": str(cognitive_feedback_memory.get("summary") or "").strip(),
+            },
+            "cognitive_strategy_delta": {
+                "available": bool(cognitive_strategy_delta.get("available")),
+                "recommended_changes": [
+                    {
+                        "target": str(item.get("target") or "").strip(),
+                        "direction": str(item.get("direction") or "").strip(),
+                        "current_value": item.get("current_value"),
+                        "suggested_value": item.get("suggested_value"),
+                        "delta": item.get("delta"),
+                        "reason": str(item.get("reason") or "").strip(),
+                    }
+                    for item in list(cognitive_strategy_delta.get("recommended_changes") or [])[:6]
+                    if isinstance(item, dict) and str(item.get("target") or "").strip()
+                ],
+                "summary": str(cognitive_strategy_delta.get("summary") or "").strip(),
+            },
+            "self_iteration_trend_memory": self_iteration_trend_memory,
+            "switch_self_regulation_memory": switch_self_regulation_memory,
+            "post_task_effect_memory": post_task_effect_memory,
             "recent_cognitive_alignment": recent_cognitive_alignment,
             "current_candidates": current_candidates,
         }
@@ -1253,6 +1410,593 @@ class PlanningRuntimeMixin:
         if hasattr(policy_model, "model_dump"):
             return policy_model.model_dump(mode="json")
         return dict(policy_model or {})
+
+    def _build_recent_lm_cognitive_assessment_summary(
+        self,
+        *,
+        history_snapshot: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        outcomes = [
+            dict(item)
+            for item in list(history_snapshot.get("outcomes") or [])
+            if isinstance(item, dict)
+        ]
+        current_judgement_counts: Dict[str, int] = {}
+        dominant_constraint_counts: Dict[str, int] = {}
+        why_not_improvement_counts: Dict[str, int] = {}
+        stay_switch_counts: Dict[str, int] = {}
+        switch_reason_counts: Dict[str, int] = {}
+        entries: list[Dict[str, Any]] = []
+
+        for outcome in outcomes[:12]:
+            metadata = dict(outcome.get("metadata") or {})
+            evidence = dict(outcome.get("evidence") or {})
+            assessment = outcome.get("llm_cognitive_assessment")
+            if not isinstance(assessment, dict):
+                assessment = metadata.get("llm_cognitive_assessment")
+            if not isinstance(assessment, dict):
+                assessment = evidence.get("llm_cognitive_assessment")
+            if not isinstance(assessment, dict) or not assessment:
+                continue
+
+            current_judgement = str(assessment.get("current_judgement") or "").strip()
+            dominant_constraint = str(assessment.get("dominant_constraint") or "").strip()
+            why_not_improvement_now = [
+                str(item).strip()
+                for item in list(assessment.get("why_not_improvement_now") or [])[:3]
+                if str(item).strip()
+            ]
+            stay_or_switch = str(assessment.get("stay_or_switch") or "").strip().lower()
+            switch_reason = str(assessment.get("switch_reason") or "").strip()
+            if current_judgement:
+                current_judgement_counts[current_judgement] = (
+                    current_judgement_counts.get(current_judgement, 0) + 1
+                )
+            if dominant_constraint:
+                dominant_constraint_counts[dominant_constraint] = (
+                    dominant_constraint_counts.get(dominant_constraint, 0) + 1
+                )
+            for item in why_not_improvement_now:
+                why_not_improvement_counts[item] = (
+                    why_not_improvement_counts.get(item, 0) + 1
+                )
+            if stay_or_switch in {"stay", "switch"}:
+                stay_switch_counts[stay_or_switch] = (
+                    stay_switch_counts.get(stay_or_switch, 0) + 1
+                )
+            if switch_reason:
+                switch_reason_counts[switch_reason] = (
+                    switch_reason_counts.get(switch_reason, 0) + 1
+                )
+            entries.append(
+                {
+                    "title": str(outcome.get("title") or "").strip(),
+                    "current_judgement": current_judgement or None,
+                    "dominant_constraint": dominant_constraint or None,
+                    "stay_or_switch": stay_or_switch or None,
+                    "switch_reason": switch_reason or None,
+                    "why_not_improvement_now": why_not_improvement_now,
+                }
+            )
+            if len(entries) >= 4:
+                break
+
+        if not entries:
+            return {
+                "available": False,
+                "summary": "No recent LM cognitive-assessment memory is available yet.",
+            }
+
+        dominant_constraint = ""
+        if dominant_constraint_counts:
+            dominant_constraint = sorted(
+                dominant_constraint_counts.items(),
+                key=lambda pair: (-pair[1], pair[0]),
+            )[0][0]
+        return {
+            "available": True,
+            "dominant_constraint": dominant_constraint or None,
+            "common_current_judgements": [
+                item
+                for item, _count in sorted(
+                    current_judgement_counts.items(),
+                    key=lambda pair: (-pair[1], pair[0]),
+                )[:4]
+            ],
+            "common_why_not_improvement_now": [
+                item
+                for item, _count in sorted(
+                    why_not_improvement_counts.items(),
+                    key=lambda pair: (-pair[1], pair[0]),
+                )[:4]
+            ],
+            "common_stay_or_switch": [
+                item
+                for item, _count in sorted(
+                    stay_switch_counts.items(),
+                    key=lambda pair: (-pair[1], pair[0]),
+                )[:2]
+            ],
+            "common_switch_reasons": [
+                item
+                for item, _count in sorted(
+                    switch_reason_counts.items(),
+                    key=lambda pair: (-pair[1], pair[0]),
+                )[:4]
+            ],
+            "common_self_iteration_targets": [
+                str(entry.get("self_iteration_target") or "").strip()
+                for entry in entries
+                if str(entry.get("self_iteration_target") or "").strip()
+            ][:4],
+            "common_self_iteration_hypotheses": [
+                str(entry.get("self_iteration_hypothesis") or "").strip()
+                for entry in entries
+                if str(entry.get("self_iteration_hypothesis") or "").strip()
+            ][:4],
+            "entries": entries,
+            "summary": (
+                "Recent LM cognitive assessments remain available from history; "
+                f"dominant constraint={dominant_constraint or 'unknown'}."
+            ),
+        }
+
+    def _build_recent_self_iteration_trend_summary(
+        self,
+        *,
+        history_snapshot: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        outcomes = [
+            dict(item)
+            for item in list(history_snapshot.get("outcomes") or [])
+            if isinstance(item, dict)
+        ]
+        target_counts: Dict[str, int] = {}
+        hypothesis_counts: Dict[str, int] = {}
+        stay_switch_counts: Dict[str, int] = {}
+        switch_reason_counts: Dict[str, int] = {}
+        recent_targets: list[str] = []
+        entries: list[Dict[str, Any]] = []
+
+        for outcome in outcomes[:16]:
+            metadata = dict(outcome.get("metadata") or {})
+            evidence = dict(outcome.get("evidence") or {})
+            assessment = outcome.get("llm_cognitive_assessment")
+            if not isinstance(assessment, dict):
+                assessment = metadata.get("llm_cognitive_assessment")
+            if not isinstance(assessment, dict):
+                assessment = evidence.get("llm_cognitive_assessment")
+            if not isinstance(assessment, dict) or not assessment:
+                continue
+            target = str(assessment.get("self_iteration_target") or "").strip()
+            hypothesis = str(assessment.get("self_iteration_hypothesis") or "").strip()
+            stay_or_switch = str(assessment.get("stay_or_switch") or "").strip().lower()
+            switch_reason = str(assessment.get("switch_reason") or "").strip()
+            if not target and not hypothesis:
+                continue
+            if target:
+                target_counts[target] = target_counts.get(target, 0) + 1
+                recent_targets.append(target)
+            if hypothesis:
+                hypothesis_counts[hypothesis] = hypothesis_counts.get(hypothesis, 0) + 1
+            if stay_or_switch in {"stay", "switch"}:
+                stay_switch_counts[stay_or_switch] = (
+                    stay_switch_counts.get(stay_or_switch, 0) + 1
+                )
+            if switch_reason:
+                switch_reason_counts[switch_reason] = (
+                    switch_reason_counts.get(switch_reason, 0) + 1
+                )
+            entries.append(
+                {
+                    "title": str(outcome.get("title") or "").strip(),
+                    "self_iteration_target": target or None,
+                    "self_iteration_hypothesis": hypothesis or None,
+                    "stay_or_switch": stay_or_switch or None,
+                    "switch_reason": switch_reason or None,
+                }
+            )
+            if len(entries) >= 6:
+                break
+
+        if not entries:
+            return {
+                "available": False,
+                "summary": "No recent self-iteration trend memory is available yet.",
+            }
+
+        common_targets = [
+            item
+            for item, _count in sorted(
+                target_counts.items(),
+                key=lambda pair: (-pair[1], pair[0]),
+            )[:4]
+        ]
+        common_hypotheses = [
+            item
+            for item, _count in sorted(
+                hypothesis_counts.items(),
+                key=lambda pair: (-pair[1], pair[0]),
+            )[:4]
+        ]
+        dominant_target = common_targets[0] if common_targets else ""
+        unique_recent_targets = {
+            item for item in recent_targets[:4] if str(item or "").strip()
+        }
+        target_stability = "mixed"
+        if len(unique_recent_targets) <= 1 and dominant_target:
+            target_stability = "stable"
+        elif len(unique_recent_targets) >= 3:
+            target_stability = "volatile"
+        trend_state = "exploring"
+        dominant_count = target_counts.get(dominant_target, 0) if dominant_target else 0
+        if dominant_target and dominant_count >= 3 and target_stability == "stable":
+            trend_state = "locked"
+        elif dominant_target and dominant_count >= 2:
+            trend_state = "consolidating"
+        elif target_stability == "volatile":
+            trend_state = "searching"
+        return {
+            "available": True,
+            "dominant_target": dominant_target or None,
+            "trend_state": trend_state,
+            "target_stability": target_stability,
+            "common_targets": common_targets,
+            "common_hypotheses": common_hypotheses,
+            "common_stay_or_switch": [
+                item
+                for item, _count in sorted(
+                    stay_switch_counts.items(),
+                    key=lambda pair: (-pair[1], pair[0]),
+                )[:2]
+            ],
+            "common_switch_reasons": [
+                item
+                for item, _count in sorted(
+                    switch_reason_counts.items(),
+                    key=lambda pair: (-pair[1], pair[0]),
+                )[:4]
+            ],
+            "entries": entries,
+            "summary": (
+                "Recent self-iteration trend favors "
+                f"{dominant_target or 'unknown'}; trend_state={trend_state}; "
+                f"target_stability={target_stability}."
+            ),
+        }
+
+    def _build_recent_switch_self_regulation_summary(
+        self,
+        *,
+        history_snapshot: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        outcomes = [
+            dict(item)
+            for item in list(history_snapshot.get("outcomes") or [])
+            if isinstance(item, dict)
+        ]
+        switch_quality_scores: list[float] = []
+        stay_quality_scores: list[float] = []
+
+        for outcome in outcomes[:16]:
+            metadata = dict(outcome.get("metadata") or {})
+            evidence = dict(outcome.get("evidence") or {})
+            assessment = outcome.get("llm_cognitive_assessment")
+            if not isinstance(assessment, dict):
+                assessment = metadata.get("llm_cognitive_assessment")
+            if not isinstance(assessment, dict):
+                assessment = evidence.get("llm_cognitive_assessment")
+            if not isinstance(assessment, dict) or not assessment:
+                continue
+            decision = str(assessment.get("stay_or_switch") or "").strip().lower()
+            if decision not in {"stay", "switch"}:
+                continue
+            quality_score = self._clamp_endogenous_ratio(outcome.get("quality_score") or 0.0)
+            if decision == "switch":
+                switch_quality_scores.append(quality_score)
+            else:
+                stay_quality_scores.append(quality_score)
+
+        if not switch_quality_scores and not stay_quality_scores:
+            return {
+                "available": False,
+                "summary": "No switch self-regulation memory is available yet.",
+            }
+
+        def _avg(values: list[float]) -> float:
+            if not values:
+                return 0.0
+            return self._clamp_endogenous_ratio(sum(values) / len(values))
+
+        average_switch_quality = _avg(switch_quality_scores)
+        average_stay_quality = _avg(stay_quality_scores)
+        preferred_switch_bias = "balanced"
+        if switch_quality_scores and stay_quality_scores:
+            if average_switch_quality >= average_stay_quality + 0.12:
+                preferred_switch_bias = "switch"
+            elif average_stay_quality >= average_switch_quality + 0.12:
+                preferred_switch_bias = "stay"
+        elif switch_quality_scores:
+            preferred_switch_bias = "switch"
+        elif stay_quality_scores:
+            preferred_switch_bias = "stay"
+
+        return {
+            "available": True,
+            "preferred_switch_bias": preferred_switch_bias,
+            "switch_effectiveness": (
+                "strong" if average_switch_quality >= 0.65 else "weak"
+            )
+            if switch_quality_scores
+            else "unknown",
+            "stay_effectiveness": (
+                "strong" if average_stay_quality >= 0.65 else "weak"
+            )
+            if stay_quality_scores
+            else "unknown",
+            "average_switch_quality": round(average_switch_quality, 4),
+            "average_stay_quality": round(average_stay_quality, 4),
+            "summary": (
+                "Recent stay/switch outcomes suggest "
+                f"preferred_bias={preferred_switch_bias}; "
+                f"switch_quality={average_switch_quality:.2f}; "
+                f"stay_quality={average_stay_quality:.2f}."
+            ),
+        }
+
+    def _build_recent_post_task_effect_summary(
+        self,
+        *,
+        history_snapshot: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        outcomes = [
+            dict(item)
+            for item in list(history_snapshot.get("outcomes") or [])
+            if isinstance(item, dict)
+        ]
+        quality_scores: list[float] = []
+        cognitive_scores: list[float] = []
+        reference_scores: list[float] = []
+        target_effect_counts: Dict[str, int] = {}
+
+        for outcome in outcomes[:16]:
+            metadata = dict(outcome.get("metadata") or {})
+            evidence = dict(outcome.get("evidence") or {})
+            cognitive_alignment = outcome.get("cognitive_alignment")
+            if not isinstance(cognitive_alignment, dict):
+                cognitive_alignment = metadata.get("cognitive_alignment")
+            if not isinstance(cognitive_alignment, dict):
+                cognitive_alignment = evidence.get("cognitive_alignment")
+            reference_alignment = outcome.get("reference_alignment")
+            if not isinstance(reference_alignment, dict):
+                reference_alignment = metadata.get("reference_alignment")
+            if not isinstance(reference_alignment, dict):
+                reference_alignment = evidence.get("reference_alignment")
+            assessment = outcome.get("llm_cognitive_assessment")
+            if not isinstance(assessment, dict):
+                assessment = metadata.get("llm_cognitive_assessment")
+            if not isinstance(assessment, dict):
+                assessment = evidence.get("llm_cognitive_assessment")
+            target = str((assessment or {}).get("self_iteration_target") or "").strip()
+            quality_score = self._clamp_endogenous_ratio(outcome.get("quality_score") or 0.0)
+            cognitive_score = self._clamp_endogenous_ratio(
+                (cognitive_alignment or {}).get("score") or 0.0
+            )
+            reference_score = self._clamp_endogenous_ratio(
+                (reference_alignment or {}).get("alignment_score") or 0.0
+            )
+            if not quality_score and not cognitive_score and not reference_score:
+                continue
+            quality_scores.append(quality_score)
+            cognitive_scores.append(cognitive_score)
+            reference_scores.append(reference_score)
+            if target:
+                effect_label = "helped" if quality_score >= 0.65 and cognitive_score >= 0.55 else "unclear"
+                if quality_score < 0.4 or reference_score < 0.4:
+                    effect_label = "hurt"
+                key = f"{target}:{effect_label}"
+                target_effect_counts[key] = target_effect_counts.get(key, 0) + 1
+
+        if not quality_scores and not cognitive_scores and not reference_scores:
+            return {
+                "available": False,
+                "summary": "No recent post-task effect memory is available yet.",
+            }
+
+        def _avg(values: list[float]) -> float:
+            if not values:
+                return 0.0
+            return self._clamp_endogenous_ratio(sum(values) / len(values))
+
+        average_quality_score = _avg(quality_scores)
+        average_cognitive_alignment_score = _avg(cognitive_scores)
+        average_reference_alignment_score = _avg(reference_scores)
+        effect_direction = "mixed"
+        if (
+            average_quality_score >= 0.65
+            and average_cognitive_alignment_score >= 0.55
+            and average_reference_alignment_score >= 0.55
+        ):
+            effect_direction = "improving"
+        elif (
+            average_quality_score < 0.4
+            or average_cognitive_alignment_score < 0.4
+            or average_reference_alignment_score < 0.4
+        ):
+            effect_direction = "degrading"
+        dominant_target_effect = ""
+        if target_effect_counts:
+            dominant_target_effect = sorted(
+                target_effect_counts.items(),
+                key=lambda pair: (-pair[1], pair[0]),
+            )[0][0]
+        return {
+            "available": True,
+            "effect_direction": effect_direction,
+            "average_quality_score": round(average_quality_score, 4),
+            "average_cognitive_alignment_score": round(
+                average_cognitive_alignment_score,
+                4,
+            ),
+            "average_reference_alignment_score": round(
+                average_reference_alignment_score,
+                4,
+            ),
+            "dominant_target_effect": dominant_target_effect or None,
+            "summary": (
+                "Recent post-task effects appear "
+                f"{effect_direction}; avg_quality={average_quality_score:.2f}; "
+                f"avg_cognitive_alignment={average_cognitive_alignment_score:.2f}; "
+                f"avg_reference_alignment={average_reference_alignment_score:.2f}."
+            ),
+        }
+
+    def _build_recent_meta_cognition_profile_summary(
+        self,
+        *,
+        cognitive_assessment_memory: Dict[str, Any],
+        self_iteration_trend_memory: Dict[str, Any],
+        switch_self_regulation_memory: Dict[str, Any],
+        post_task_effect_memory: Dict[str, Any],
+        proposal_drift_memory: Dict[str, Any],
+        task_type_priors: Dict[str, Any],
+        recent_reference_alignment: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        current_judgement = str(
+            (
+                list(cognitive_assessment_memory.get("common_current_judgements") or [None])[0]
+                if cognitive_assessment_memory.get("common_current_judgements")
+                else ""
+            )
+            or ""
+        ).strip()
+        dominant_constraint = str(
+            cognitive_assessment_memory.get("dominant_constraint") or ""
+        ).strip()
+        top_self_iteration_domain = str(
+            (
+                list(cognitive_assessment_memory.get("common_self_iteration_targets") or [None])[0]
+                if cognitive_assessment_memory.get("common_self_iteration_targets")
+                else ""
+            )
+            or self_iteration_trend_memory.get("dominant_target")
+            or ""
+        ).strip()
+        top_self_iteration_hypothesis = str(
+            (
+                list(
+                    cognitive_assessment_memory.get(
+                        "common_self_iteration_hypotheses"
+                    )
+                    or [None]
+                )[0]
+                if cognitive_assessment_memory.get("common_self_iteration_hypotheses")
+                else ""
+            )
+            or (
+                list(self_iteration_trend_memory.get("common_hypotheses") or [None])[0]
+                if self_iteration_trend_memory.get("common_hypotheses")
+                else ""
+            )
+            or ""
+        ).strip()
+        stay_or_switch_bias = str(
+            (
+                list(self_iteration_trend_memory.get("common_stay_or_switch") or [None])[0]
+                if self_iteration_trend_memory.get("common_stay_or_switch")
+                else switch_self_regulation_memory.get("preferred_switch_bias")
+            )
+            or ""
+        ).strip()
+        if stay_or_switch_bias == "balanced":
+            stay_or_switch_bias = ""
+        switch_bias_effectiveness = str(
+            switch_self_regulation_memory.get("switch_effectiveness") or ""
+        ).strip()
+        if stay_or_switch_bias == "stay":
+            switch_bias_effectiveness = str(
+                switch_self_regulation_memory.get("stay_effectiveness") or ""
+            ).strip()
+        recent_effect_direction = str(
+            post_task_effect_memory.get("effect_direction") or ""
+        ).strip()
+        grounding_pressure = "low"
+        weak_or_partial_count = max(
+            0,
+            int(recent_reference_alignment.get("weak_or_partial_count") or 0),
+        )
+        average_alignment_score = self._clamp_endogenous_ratio(
+            recent_reference_alignment.get("average_alignment_score") or 0.0
+        )
+        if weak_or_partial_count >= 2 or average_alignment_score < 0.4:
+            grounding_pressure = "high"
+        elif weak_or_partial_count >= 1 or average_alignment_score < 0.65:
+            grounding_pressure = "medium"
+
+        drift_state = str(proposal_drift_memory.get("drift_state") or "").strip().lower()
+        dominant_failure_mode = ""
+        if grounding_pressure == "high":
+            dominant_failure_mode = "grounding_instability"
+        elif drift_state in {"drifting", "correcting"}:
+            dominant_failure_mode = "proposal_selection_drift"
+        elif recent_effect_direction == "degrading":
+            dominant_failure_mode = "self_iteration_not_improving_outcomes"
+        elif dominant_constraint:
+            dominant_failure_mode = dominant_constraint
+
+        top_task_type = str(task_type_priors.get("top_priority_task_type") or "").strip()
+        recommended_task_posture = top_task_type or "review"
+        if grounding_pressure == "high":
+            recommended_task_posture = "observation_or_review"
+        elif recent_effect_direction == "degrading" and top_task_type not in {"observation", "review"}:
+            recommended_task_posture = "review"
+
+        priority_signals = [
+            f"top_task_type:{top_task_type}" if top_task_type else "",
+            f"grounding_pressure:{grounding_pressure}",
+            f"top_self_iteration_domain:{top_self_iteration_domain}" if top_self_iteration_domain else "",
+            f"stay_or_switch_bias:{stay_or_switch_bias}" if stay_or_switch_bias else "",
+            f"recent_effect_direction:{recent_effect_direction}" if recent_effect_direction else "",
+            f"dominant_failure_mode:{dominant_failure_mode}" if dominant_failure_mode else "",
+        ]
+        priority_signals = [item for item in priority_signals if item]
+        if not any(
+            [
+                current_judgement,
+                dominant_constraint,
+                top_self_iteration_domain,
+                top_self_iteration_hypothesis,
+                recent_effect_direction,
+                priority_signals,
+            ]
+        ):
+            return {
+                "available": False,
+                "summary": "No recent meta-cognition profile is available yet.",
+            }
+
+        return {
+            "available": True,
+            "current_judgement": current_judgement or None,
+            "dominant_constraint": dominant_constraint or None,
+            "grounding_pressure": grounding_pressure,
+            "top_self_iteration_domain": top_self_iteration_domain or None,
+            "top_self_iteration_hypothesis": top_self_iteration_hypothesis or None,
+            "stay_or_switch_bias": stay_or_switch_bias or None,
+            "switch_bias_effectiveness": switch_bias_effectiveness or None,
+            "recent_effect_direction": recent_effect_direction or None,
+            "dominant_failure_mode": dominant_failure_mode or None,
+            "recommended_task_posture": recommended_task_posture,
+            "priority_signals": priority_signals[:6],
+            "summary": (
+                "Recent meta-cognition indicates "
+                f"judgement={current_judgement or 'unknown'}; "
+                f"constraint={dominant_constraint or 'unknown'}; "
+                f"grounding_pressure={grounding_pressure}; "
+                f"self_iteration_domain={top_self_iteration_domain or 'unknown'}; "
+                f"recent_effect_direction={recent_effect_direction or 'unknown'}."
+            ),
+        }
 
     def _current_active_cognitive_posture_profile(
         self,
@@ -2984,6 +3728,51 @@ class PlanningRuntimeMixin:
         ]
         if normalized_priority_basis:
             outcome["llm_priority_basis"] = list(normalized_priority_basis)
+        cognitive_assessment = metadata.get("llm_cognitive_assessment")
+        if not isinstance(cognitive_assessment, dict):
+            cognitive_assessment = evidence.get("llm_cognitive_assessment")
+        if isinstance(cognitive_assessment, dict) and cognitive_assessment:
+            outcome["llm_cognitive_assessment"] = {
+                "current_judgement": str(
+                    cognitive_assessment.get("current_judgement") or ""
+                ).strip(),
+                "dominant_constraint": str(
+                    cognitive_assessment.get("dominant_constraint") or ""
+                ).strip(),
+                "primary_grounding_gaps": [
+                    str(item).strip()
+                    for item in list(
+                        cognitive_assessment.get("primary_grounding_gaps") or []
+                    )[:6]
+                    if str(item).strip()
+                ],
+                "why_this_task_type_now": [
+                    str(item).strip()
+                    for item in list(
+                        cognitive_assessment.get("why_this_task_type_now") or []
+                    )[:6]
+                    if str(item).strip()
+                ],
+                "why_not_improvement_now": [
+                    str(item).strip()
+                    for item in list(
+                        cognitive_assessment.get("why_not_improvement_now") or []
+                    )[:6]
+                    if str(item).strip()
+                ],
+                "self_iteration_target": str(
+                    cognitive_assessment.get("self_iteration_target") or ""
+                ).strip(),
+                "self_iteration_hypothesis": str(
+                    cognitive_assessment.get("self_iteration_hypothesis") or ""
+                ).strip(),
+                "stay_or_switch": str(
+                    cognitive_assessment.get("stay_or_switch") or ""
+                ).strip(),
+                "switch_reason": str(
+                    cognitive_assessment.get("switch_reason") or ""
+                ).strip(),
+            }
         if outcome_bucket is not None:
             agenda_status = "dragging" if outcome_bucket == "dragging" else outcome_bucket
             recorded_at = str(outcome.get("recorded_at") or datetime.now(timezone.utc).isoformat())

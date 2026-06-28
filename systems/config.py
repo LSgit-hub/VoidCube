@@ -203,8 +203,110 @@ def load_config_from_env() -> SystemConfig:
     )
     _apply_string_list_override(
         cognition_charter,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CHARTER_TASK_GENERATION_FOCUS",
+        "task_generation_focus",
+    )
+    _apply_string_list_override(
+        cognition_charter,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CHARTER_PROMPT_OUTPUT_REQUIREMENTS",
+        "prompt_output_requirements",
+    )
+    _apply_string_list_override(
+        cognition_charter,
         "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CHARTER_SELF_ITERATION_GUARDRAILS",
         "self_iteration_guardrails",
+    )
+    context_layering_policy = cognition_charter.context_layering_policy
+    _apply_string_list_override(
+        context_layering_policy,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTEXT_DECISION_CORE_FIELDS",
+        "decision_core_fields",
+    )
+    _apply_string_list_override(
+        context_layering_policy,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTEXT_SUPPORTING_DETAIL_FIELDS",
+        "supporting_detail_fields",
+    )
+    _apply_string_list_override(
+        context_layering_policy,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITION_CONTEXT_LONG_TAIL_FIELDS",
+        "long_tail_context_fields",
+    )
+    prompt_attention_policy = cognition_charter.prompt_attention_policy
+    _apply_int_override(
+        prompt_attention_policy,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_PROMPT_ATTENTION_MAX_CHARS",
+        "max_chars",
+    )
+    _apply_string_list_override(
+        prompt_attention_policy,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_PROMPT_ATTENTION_PRIORITY_ORDER",
+        "priority_order",
+    )
+    _apply_string_list_override(
+        prompt_attention_policy,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_PROMPT_ATTENTION_STRUCTURE_KEYS",
+        "structure_keys",
+    )
+    _apply_string_list_override(
+        prompt_attention_policy,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_PROMPT_ATTENTION_TRIM_STAGE_ORDER",
+        "trim_stage_order",
+    )
+    evidence_attention_policy = cognition_charter.evidence_attention_policy
+    enabled_raw = os.getenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_EVIDENCE_ATTENTION_ENABLED",
+        "",
+    ).strip()
+    if enabled_raw:
+        evidence_attention_policy.enabled = enabled_raw.lower() not in {"0", "false", "no", "off"}
+    for env_name, field_name in (
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_EVIDENCE_ATTENTION_CONFIDENCE_WEIGHT", "confidence_weight"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_EVIDENCE_ATTENTION_NOVELTY_WEIGHT", "novelty_weight"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_EVIDENCE_ATTENTION_FRESHNESS_WEIGHT", "freshness_weight"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_EVIDENCE_ATTENTION_AGENDA_RELEVANCE_WEIGHT", "agenda_relevance_weight"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_EVIDENCE_ATTENTION_CONFLICT_WEIGHT", "conflict_weight"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_EVIDENCE_ATTENTION_SELF_RELEVANCE_WEIGHT", "self_relevance_weight"),
+    ):
+        _apply_float_override(evidence_attention_policy, env_name, field_name)
+    for env_name, field_name in (
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_EVIDENCE_ATTENTION_DECISION_CORE_TOPIC_LIMIT", "decision_core_topic_limit"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_EVIDENCE_ATTENTION_SUPPORTING_ITEM_LIMIT", "supporting_item_limit"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_EVIDENCE_ATTENTION_LONG_TAIL_ITEM_LIMIT", "long_tail_item_limit"),
+    ):
+        _apply_int_override(evidence_attention_policy, env_name, field_name)
+    cognitive_feedback_policy = cognition_charter.cognitive_feedback_policy
+    feedback_enabled_raw = os.getenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_FEEDBACK_ENABLED",
+        "",
+    ).strip()
+    if feedback_enabled_raw:
+        cognitive_feedback_policy.enabled = feedback_enabled_raw.lower() not in {"0", "false", "no", "off"}
+    for env_name, field_name in (
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_FEEDBACK_ADAPTATION_STRENGTH", "adaptation_strength"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_FEEDBACK_CONFIDENCE_WEIGHT_STEP", "confidence_weight_step"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_FEEDBACK_FRESHNESS_WEIGHT_STEP", "freshness_weight_step"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_FEEDBACK_AGENDA_RELEVANCE_WEIGHT_STEP", "agenda_relevance_weight_step"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_FEEDBACK_CONFLICT_WEIGHT_STEP", "conflict_weight_step"),
+        ("SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_FEEDBACK_SELF_RELEVANCE_WEIGHT_STEP", "self_relevance_weight_step"),
+    ):
+        _apply_float_override(cognitive_feedback_policy, env_name, field_name)
+    cognitive_strategy_delta_policy = cognition_charter.cognitive_strategy_delta_policy
+    strategy_enabled_raw = os.getenv(
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_STRATEGY_DELTA_ENABLED",
+        "",
+    ).strip()
+    if strategy_enabled_raw:
+        cognitive_strategy_delta_policy.enabled = strategy_enabled_raw.lower() not in {"0", "false", "no", "off"}
+    _apply_float_override(
+        cognitive_strategy_delta_policy,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_STRATEGY_DELTA_PROPOSAL_THRESHOLD",
+        "proposal_threshold",
+    )
+    _apply_int_override(
+        cognitive_strategy_delta_policy,
+        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_STRATEGY_DELTA_MAX_RECOMMENDED_CHANGES",
+        "max_recommended_changes",
     )
     cognitive_control_policy = cognition_charter.cognitive_control_policy
     posture_selection_mode = os.getenv(

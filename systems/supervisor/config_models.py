@@ -105,6 +105,134 @@ class EndogenousDriveCognitiveControlPolicyConfig(BaseModel):
     )
 
 
+class EndogenousDriveCognitiveContextLayeringPolicyConfig(BaseModel):
+    decision_core_fields: list[str] = [
+        "current_judgement",
+        "dominant_constraint",
+        "grounding_pressure",
+        "recommended_task_posture",
+        "top_task_type",
+        "top_task_score",
+        "top_self_iteration_domain",
+        "top_self_iteration_hypothesis",
+        "primary_evidence_nodes",
+        "primary_agenda_nodes",
+        "queue_state_summary",
+        "cognitive_posture",
+        "decision_summary",
+    ]
+    supporting_detail_fields: list[str] = [
+        "grounding_gaps",
+        "contradictory_topics",
+        "weak_or_missing_channels",
+        "self_understanding_gaps",
+        "why_not_improvement_now",
+        "trend_state",
+        "stay_or_switch_bias",
+        "recent_effect_direction",
+        "reference_alignment_score",
+        "self_iteration_readiness_score",
+        "supporting_summary",
+    ]
+    long_tail_context_fields: list[str] = [
+        "recent_learning_titles",
+        "recent_learning_evidence",
+        "external_research_titles",
+        "evidence_channels",
+        "memory_context_preview",
+        "long_tail_summary",
+    ]
+
+
+class EndogenousDrivePromptAttentionPolicyConfig(BaseModel):
+    max_chars: int = 11500
+    priority_order: list[str] = [
+        "identity",
+        "decision_core",
+        "supporting_detail",
+        "long_tail_context",
+        "queue_state_snapshot",
+        "perception",
+        "world_model",
+        "reflection",
+        "adaptive_policy",
+        "meta_cognition_profile",
+        "cognitive_posture",
+        "grounding_focus",
+        "self_iteration_hypotheses",
+        "self_iteration_trend_memory",
+        "switch_self_regulation_memory",
+        "post_task_effect_memory",
+        "self_model_snapshot",
+        "agenda_graph",
+        "evidence_credibility_summary",
+        "cognitive_assessment_memory",
+        "proposal_drift_memory",
+        "task_type_priors",
+        "evidence_channels",
+        "recent_learning_evidence",
+        "external_research_evidence",
+        "shell_body_profile",
+        "research_digest",
+        "recent_reference_alignment",
+        "evidence_graph",
+        "needs",
+        "intents",
+        "signals",
+        "recent_learning_titles",
+        "checks",
+        "idle_seconds",
+        "plans",
+        "queued_learning_titles",
+        "queued_body_improvement_titles",
+        "queued_tasks",
+        "shell_slot",
+        "memory_context",
+    ]
+    structure_keys: list[str] = [
+        "decision_core",
+        "supporting_detail",
+        "long_tail_context",
+        "queue_state_snapshot",
+    ]
+    trim_stage_order: list[str] = [
+        "primary_context_compaction",
+        "graph_compaction",
+        "grounding_focus_compaction",
+        "evidence_tail_compaction",
+        "activity_tail_compaction",
+    ]
+
+
+class EndogenousDriveEvidenceAttentionPolicyConfig(BaseModel):
+    enabled: bool = True
+    confidence_weight: float = 0.3
+    novelty_weight: float = 0.08
+    freshness_weight: float = 0.14
+    agenda_relevance_weight: float = 0.24
+    conflict_weight: float = 0.14
+    self_relevance_weight: float = 0.1
+    decision_core_topic_limit: int = 3
+    supporting_item_limit: int = 4
+    long_tail_item_limit: int = 3
+
+
+class EndogenousDriveCognitiveFeedbackPolicyConfig(BaseModel):
+    enabled: bool = True
+    adaptation_strength: float = 0.22
+    confidence_weight_step: float = 0.08
+    freshness_weight_step: float = 0.06
+    agenda_relevance_weight_step: float = 0.1
+    conflict_weight_step: float = 0.08
+    self_relevance_weight_step: float = 0.06
+
+
+class EndogenousDriveCognitiveStrategyDeltaPolicyConfig(BaseModel):
+    enabled: bool = True
+    proposal_threshold: float = 0.015
+    max_recommended_changes: int = 6
+
+
 class EndogenousDriveCognitionCharterConfig(BaseModel):
     core_mission: str = (
         "你是 VoidCube 的内生驱动核心。你的使命不是泛泛地产生任务，而是在证据充足时，"
@@ -132,6 +260,31 @@ class EndogenousDriveCognitionCharterConfig(BaseModel):
         "不得伪造证据，不得绕过执行边界，不得提出与当前证据明显冲突的任务。",
         "任务类型、风险等级、证据等级、执行模式必须彼此一致。",
     ]
+    task_generation_focus: list[str] = [
+        "先综合主证据主题、主议程主题、grounding 缺口和近期认知记忆，再判断当前最该做什么。",
+        "把 cognitive_assessment 当作真实认知中间层，而不是装饰性说明。",
+        "当存在自我迭代目标时，优先解释当前最值得迭代的缺陷域，以及为什么现在处理它。",
+    ]
+    prompt_output_requirements: list[str] = [
+        "提案必须显式绑定 evidence graph / agenda graph 节点，避免漂浮任务。",
+        "提案必须说明为什么现在做、为什么不是别的任务类型、为什么执行模式匹配当前风险。",
+        "如果证据不足或冲突明显，应允许返回空 proposals，而不是硬凑任务。",
+    ]
+    context_layering_policy: EndogenousDriveCognitiveContextLayeringPolicyConfig = Field(
+        default_factory=EndogenousDriveCognitiveContextLayeringPolicyConfig
+    )
+    prompt_attention_policy: EndogenousDrivePromptAttentionPolicyConfig = Field(
+        default_factory=EndogenousDrivePromptAttentionPolicyConfig
+    )
+    evidence_attention_policy: EndogenousDriveEvidenceAttentionPolicyConfig = Field(
+        default_factory=EndogenousDriveEvidenceAttentionPolicyConfig
+    )
+    cognitive_feedback_policy: EndogenousDriveCognitiveFeedbackPolicyConfig = Field(
+        default_factory=EndogenousDriveCognitiveFeedbackPolicyConfig
+    )
+    cognitive_strategy_delta_policy: EndogenousDriveCognitiveStrategyDeltaPolicyConfig = Field(
+        default_factory=EndogenousDriveCognitiveStrategyDeltaPolicyConfig
+    )
     cognitive_control_policy: EndogenousDriveCognitiveControlPolicyConfig = Field(
         default_factory=EndogenousDriveCognitiveControlPolicyConfig
     )
@@ -152,7 +305,7 @@ class SupervisorServiceRuntimeConfig(BaseModel):
     # Kept for config-file compatibility; no longer read by the supervisor.
     memory_compression_interval: int = 3600
     endogenous_drive_enabled: bool = True
-    endogenous_drive_interval: int = 300
+    endogenous_drive_interval: int = 900
     endogenous_drive_max_candidates: int = 3
     endogenous_drive_learning_topic_cooldown_hours: int = 24
     endogenous_drive_body_improvement_cooldown_hours: int = 12
