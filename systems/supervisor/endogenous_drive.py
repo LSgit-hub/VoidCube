@@ -712,10 +712,30 @@ class EndogenousDriveEngine:
             + max(0, len(recent_endogenous_keys) - 1) * 0.04
             + (0.14 if queue_blockage_state != "clear" else 0.0)
         )
+        recent_historical_outcomes = historical_outcomes[:12]
+
+        def _historical_family(item: Dict[str, Any]) -> str:
+            return str(
+                item.get("task_family")
+                or item.get("governance_task_type")
+                or ""
+            ).strip().lower()
+
+        recent_self_learning_outcomes = [
+            item
+            for item in historical_outcomes
+            if _historical_family(item) == "self_learning"
+        ][:12]
+        historical_scope = "global"
+        scoped_historical_outcomes = recent_historical_outcomes
+        if len(recent_self_learning_outcomes) >= 3:
+            historical_scope = "self_learning"
+            scoped_historical_outcomes = recent_self_learning_outcomes
+
         historical_completed = 0
         historical_failed = 0
         historical_blocked = 0
-        for item in historical_outcomes[:12]:
+        for item in scoped_historical_outcomes:
             status = str(item.get("status") or "").strip().lower()
             if status == "completed":
                 historical_completed += 1
@@ -746,12 +766,18 @@ class EndogenousDriveEngine:
             - (0.08 if body_growth_blocked else 0.0)
         )
 
+        historical_underdelivery_active = (
+            historical_total >= 3
+            and historical_drag_ratio >= 0.6
+            and historical_success_ratio <= 0.34
+        )
+
         dominant_constraint = "none"
         if queue_blockage_pressure >= 0.55:
             dominant_constraint = "queue_blockage"
         elif body_growth_blocked:
             dominant_constraint = "body_growth_cooldown"
-        elif historical_total >= 3 and historical_drag_ratio >= 0.66:
+        elif historical_underdelivery_active:
             dominant_constraint = "historical_underdelivery"
         elif recent_learning_quality < 0.4 and recent_learning_count > 0:
             dominant_constraint = "weak_learning_yield"
@@ -764,7 +790,7 @@ class EndogenousDriveEngine:
         ]
         if historical_total > 0:
             rationale_parts.append(
-                f"historical endogenous success ratio is {historical_success_ratio:.2f}"
+                f"historical {historical_scope} success ratio is {historical_success_ratio:.2f}"
             )
         if body_growth_blocked:
             rationale_parts.append("body growth is temporarily blocked by recent shell-improvement activity")
@@ -789,8 +815,10 @@ class EndogenousDriveEngine:
                 f"stale_queue_count={perception.stale_queue_count}",
                 f"body_growth_blocked={body_growth_blocked}",
                 f"repeated_drive_count={repeated_drive_count}",
+                f"historical_scope={historical_scope}",
                 f"historical_outcomes={historical_total}",
                 f"historical_success_ratio={historical_success_ratio:.2f}",
+                f"historical_drag_ratio={historical_drag_ratio:.2f}",
             ],
         )
 
@@ -861,6 +889,32 @@ class EndogenousDriveEngine:
             else 0.0
         )
 
+        self_learning_bucket = dict(stats.get("self_learning") or {})
+        scoped_historical_scope = "global"
+        scoped_historical_completed = historical_completed
+        scoped_historical_failed = historical_failed
+        scoped_historical_dragging = historical_dragging
+        self_learning_total = (
+            int(self_learning_bucket.get("completed") or 0)
+            + int(self_learning_bucket.get("failed") or 0)
+            + int(self_learning_bucket.get("dragging") or 0)
+        )
+        if self_learning_total >= 3:
+            scoped_historical_scope = "self_learning"
+            scoped_historical_completed = int(self_learning_bucket.get("completed") or 0)
+            scoped_historical_failed = int(self_learning_bucket.get("failed") or 0)
+            scoped_historical_dragging = int(self_learning_bucket.get("dragging") or 0)
+        scoped_historical_total = (
+            scoped_historical_completed
+            + scoped_historical_failed
+            + scoped_historical_dragging
+        )
+        scoped_historical_drag_ratio = (
+            (scoped_historical_failed + scoped_historical_dragging) / scoped_historical_total
+            if scoped_historical_total > 0
+            else 0.0
+        )
+
         learning_success = _family_success(["self_learning"], default=0.55)
         queue_success = _family_success(["general_self_evolution", "self_evolution"], default=0.45)
         body_success = _family_success(["body_upgrade", "body_improvement"], default=0.4)
@@ -921,6 +975,8 @@ class EndogenousDriveEngine:
         contextual_observation_available = bool(contextual_focus_stats.get("observation"))
         unresolved_observation_pressure = 0.0
         observation_recovery_signal = 0.0
+        observation_pressure_samples: list[float] = []
+        observation_recovery_samples: list[float] = []
         for stats in observation_target_stats.values():
             if not isinstance(stats, dict):
                 continue
@@ -932,12 +988,24 @@ class EndogenousDriveEngine:
                 continue
             unresolved_ratio = max(0.0, (recommended - resolved) / max(recommended, 1))
             recovery_ratio = resolved / max(recommended, 1)
-            unresolved_observation_pressure += (
-                unresolved_ratio * 0.12
-                + min(stalled, 3) * 0.05
-                + last_risk * 0.08
+            pressure_sample = last_risk * 0.04
+            if recommended >= 2 or stalled > 0:
+                pressure_sample += (
+                    unresolved_ratio * 0.12
+                    + min(stalled, 3) * 0.05
+                    + last_risk * 0.04
+                )
+            observation_pressure_samples.append(pressure_sample)
+            observation_recovery_samples.append(recovery_ratio * 0.08)
+        if observation_pressure_samples:
+            unresolved_observation_pressure = self._clamp01(
+                sum(observation_pressure_samples) / len(observation_pressure_samples)
+                + min(0.06, max(0, len(observation_pressure_samples) - 1) * 0.02)
             )
-            observation_recovery_signal += recovery_ratio * 0.08
+        if observation_recovery_samples:
+            observation_recovery_signal = self._clamp01(
+                sum(observation_recovery_samples) / len(observation_recovery_samples)
+            )
 
         agenda_drag_pressure = 0.0
         agenda_resolution_signal = 0.0
@@ -1067,7 +1135,7 @@ class EndogenousDriveEngine:
         }
         preferred_focus = max(focus_candidates.items(), key=lambda item: item[1])[0]
         if (
-            historical_drag_ratio >= 0.66
+            scoped_historical_drag_ratio >= 0.66
             and (
                 preferred_focus == "observation"
                 or reflection.autonomy_readiness <= 0.18
@@ -1135,6 +1203,9 @@ class EndogenousDriveEngine:
                 f"queue_success={queue_success:.2f}",
                 f"body_success={body_success:.2f}",
                 f"memory_success={memory_success:.2f}",
+                f"historical_drag_scope={scoped_historical_scope}",
+                f"historical_drag_ratio={historical_drag_ratio:.2f}",
+                f"scoped_historical_drag_ratio={scoped_historical_drag_ratio:.2f}",
                 f"queue_blockage_pressure={reflection.queue_blockage_pressure:.2f}",
                 f"autonomy_readiness={reflection.autonomy_readiness:.2f}",
                 f"context_key={context_key}",
@@ -1180,6 +1251,11 @@ class EndogenousDriveEngine:
     ) -> List[DriveNeed]:
         needs: List[DriveNeed] = []
         if memory_plan.get("eligible_for_planning"):
+            memory_constraint_penalty = 0.0
+            if reflection.dominant_constraint == "historical_underdelivery":
+                memory_constraint_penalty += 0.08
+            if adaptive_policy.preferred_focus == "observation":
+                memory_constraint_penalty += 0.06
             needs.append(
                 DriveNeed(
                     need_type="stabilize_memory_continuity",
@@ -1187,13 +1263,19 @@ class EndogenousDriveEngine:
                         world_model.memory_pressure
                         + 0.08
                         + adaptive_policy.memory_continuity_bias * 0.22
+                        - memory_constraint_penalty
                     ),
                     urgency=self._clamp01(
                         world_model.memory_pressure
                         + 0.1
                         + adaptive_policy.memory_continuity_bias * 0.18
+                        - memory_constraint_penalty * 0.82
                     ),
-                    confidence=self._clamp01(0.68 + adaptive_policy.memory_continuity_bias * 0.22),
+                    confidence=self._clamp01(
+                        0.68
+                        + adaptive_policy.memory_continuity_bias * 0.22
+                        - memory_constraint_penalty * 0.32
+                    ),
                     rationale="Memory continuity work remains a standing supervisory obligation during viable execution windows.",
                     source_evidence=[
                         f"in_execution_window={perception.in_execution_window}",
@@ -1225,6 +1307,11 @@ class EndogenousDriveEngine:
                 )
             )
         if self_learning_plan.get("eligible_for_planning"):
+            learning_constraint_penalty = 0.0
+            if reflection.dominant_constraint == "historical_underdelivery":
+                learning_constraint_penalty += 0.14
+            if adaptive_policy.preferred_focus == "observation":
+                learning_constraint_penalty += 0.08
             needs.append(
                 DriveNeed(
                     need_type="expand_learning_frontier",
@@ -1234,6 +1321,7 @@ class EndogenousDriveEngine:
                         + reflection.autonomy_readiness * 0.16
                         + adaptive_policy.learning_expansion_bias * 0.2
                         - reflection.queue_blockage_pressure * 0.12
+                        - learning_constraint_penalty
                     ),
                     urgency=self._clamp01(
                         world_model.learning_momentum
@@ -1241,11 +1329,13 @@ class EndogenousDriveEngine:
                         + adaptive_policy.learning_expansion_bias * 0.1
                         - reflection.queue_blockage_pressure * 0.08
                         - adaptive_policy.candidate_throttle * 0.12
+                        - learning_constraint_penalty * 0.72
                     ),
                     confidence=self._clamp01(
                         world_model.self_confidence * 0.52
                         + reflection.autonomy_readiness * 0.22
                         + adaptive_policy.learning_expansion_bias * 0.26
+                        - learning_constraint_penalty * 0.46
                     ),
                     rationale=(
                         "Learning should expand when recent evidence still yields value, "
@@ -1336,7 +1426,16 @@ class EndogenousDriveEngine:
             reflection.queue_blockage_pressure >= 0.45
             or reflection.autonomy_readiness <= 0.42
             or adaptive_policy.observation_bias >= 0.58
+            or (
+                reflection.dominant_constraint == "historical_underdelivery"
+                and adaptive_policy.observation_bias >= 0.68
+            )
         ):
+            observation_constraint_bonus = 0.0
+            if reflection.dominant_constraint == "historical_underdelivery":
+                observation_constraint_bonus += 0.08
+            if adaptive_policy.preferred_focus == "observation":
+                observation_constraint_bonus += 0.06
             needs.append(
                 DriveNeed(
                     need_type="observe_before_acting",
@@ -1345,12 +1444,14 @@ class EndogenousDriveEngine:
                         + reflection.queue_blockage_pressure * 0.32
                         + max(0.0, 0.5 - reflection.autonomy_readiness) * 0.45
                         + adaptive_policy.observation_bias * 0.18
+                        + observation_constraint_bonus
                     ),
                     urgency=self._clamp01(
                         0.28
                         + reflection.queue_blockage_pressure * 0.28
                         + max(0.0, 0.45 - reflection.autonomy_readiness) * 0.4
                         + adaptive_policy.observation_bias * 0.14
+                        + observation_constraint_bonus * 0.85
                     ),
                     confidence=self._clamp01(0.62 + adaptive_policy.observation_bias * 0.28),
                     rationale="The drive should slow itself down and observe when repeated output is meeting blockage or autonomy readiness is not yet strong enough.",
@@ -1362,6 +1463,14 @@ class EndogenousDriveEngine:
                     ],
                 )
             )
+        needs.sort(
+            key=lambda item: (
+                item.severity * 0.45
+                + item.urgency * 0.35
+                + item.confidence * 0.20
+            ),
+            reverse=True,
+        )
         return needs
 
     def _synthesize_intents(
@@ -1556,6 +1665,38 @@ class EndogenousDriveEngine:
                     )
                 )
 
+        truthfulness_need = need_lookup.get("repair_truthfulness")
+        truthfulness_intent = intent_lookup.get("review_truthfulness_signals")
+        if truthfulness_need is not None and perception.correction_signals >= 3:
+            signals.append(
+                DriveSignal(
+                    signal_type="observation_signal",
+                    priority=self._clamp01(
+                        truthfulness_need.severity
+                        + 0.08
+                        + adaptive_policy.truthfulness_bias * 0.1
+                    ),
+                    message=(
+                        "Truthfulness-focused observation is recommended because correction pressure is rising "
+                        "even if the overall drive is also slowing down."
+                    ),
+                    rationale=truthfulness_need.rationale,
+                    source_needs=[truthfulness_need.need_type],
+                    related_intent=(
+                        truthfulness_intent.intent_type
+                        if truthfulness_intent is not None
+                        else None
+                    ),
+                    payload={
+                        "observation_target": "truthfulness",
+                        "correction_signals": perception.correction_signals,
+                        "recent_errors": perception.recent_errors,
+                        "uncertainty_count": perception.uncertainty_count,
+                        "system_posture": perception.system_posture,
+                    },
+                )
+            )
+
         observe_need = need_lookup.get("observe_before_acting")
         if observe_need is not None:
             observe_intent = intent_lookup.get("observe_before_acting")
@@ -1596,18 +1737,10 @@ class EndogenousDriveEngine:
                     },
                 )
             )
-        elif perception.correction_signals >= 3 or perception.learning_quality >= 75.0:
-            observation_target = "truthfulness" if perception.correction_signals >= 3 else "body_growth"
-            related_intent = (
-                "review_truthfulness_signals"
-                if observation_target == "truthfulness"
-                else "prepare_body_growth"
-            )
-            source_need = (
-                "repair_truthfulness"
-                if observation_target == "truthfulness"
-                else "prepare_body_growth"
-            )
+        elif perception.learning_quality >= 75.0:
+            observation_target = "body_growth"
+            related_intent = "prepare_body_growth"
+            source_need = "prepare_body_growth"
             signals.append(
                 DriveSignal(
                     signal_type="observation_signal",
@@ -1859,6 +1992,24 @@ class EndogenousDriveEngine:
             return "body_growth"
         return None
 
+    def _budget_priority_for_candidate(
+        self,
+        candidate: EndogenousTaskCandidate,
+        *,
+        adaptive_policy: DriveAdaptivePolicy,
+    ) -> tuple[int, float]:
+        candidate_kind = self._candidate_kind_of(candidate)
+        preferred_focus = str(adaptive_policy.preferred_focus or "").strip().lower()
+        aligned_kinds: Dict[str, set[str]] = {
+            "truthfulness": {"truthfulness_review"},
+            "queue_hygiene": {"queue_hygiene_review"},
+            "memory_continuity": {"memory_maintenance"},
+        }
+        rank = 1
+        if candidate_kind in aligned_kinds.get(preferred_focus, set()):
+            rank = 0
+        return rank, -float(candidate.utility)
+
     def _apply_adaptive_candidate_budget(
         self,
         candidates: List[EndogenousTaskCandidate],
@@ -1868,7 +2019,13 @@ class EndogenousDriveEngine:
         if not candidates:
             return []
 
-        ordered = sorted(candidates, key=lambda candidate: candidate.utility, reverse=True)
+        ordered = sorted(
+            candidates,
+            key=lambda candidate: self._budget_priority_for_candidate(
+                candidate,
+                adaptive_policy=adaptive_policy,
+            ),
+        )
         selected: List[EndogenousTaskCandidate] = []
         group_counts: Dict[str, int] = {
             "exploratory_learning": 0,
@@ -1902,6 +2059,8 @@ class EndogenousDriveEngine:
                 break
 
         if not selected:
+            if observation_mode:
+                return []
             return ordered[:1]
         return selected
 
@@ -1913,6 +2072,7 @@ class EndogenousDriveEngine:
         activity = dict(idle_window.get("activity") or {})
         drive_context = self._build_drive_context(idle_window)
         policy = drive_context["policy"]
+        shell_slot_meta = self._get_shell_slot_meta(idle_window) or {}
         decisions_by_family = dict(idle_window.get("task_family_decisions") or {})
         decisions_by_governance = dict(idle_window.get("governance_task_type_decisions") or {})
 
@@ -2071,7 +2231,6 @@ class EndogenousDriveEngine:
 
         active_sessions = perception.active_sessions
         if self_learning_plan.get("eligible_for_planning"):
-            shell_slot_meta = self._get_shell_slot_meta(idle_window) or {}
             shell_slot_id = str(shell_slot_meta.get("slot_id") or "shell").strip()
             shell_worktree = str(shell_slot_meta.get("worktree_path") or "").strip()
             baseline_key = f"creativity:self_learning:shell_baseline:{shell_slot_id or 'shell'}"
@@ -2628,6 +2787,9 @@ class EndogenousDriveEngine:
         self_learning_plan: Dict[str, Any],
         self_evolution_plan: Dict[str, Any],
     ) -> Dict[str, Any]:
+        cognition_charter = self._resolve_endogenous_cognition_charter(
+            getattr(self.config, "service_runtime", None)
+        )
         deliberation_dict = deliberation.to_dict()
         perception = deliberation_dict.get("perception", {})
         world_model = deliberation_dict.get("world_model", {})
@@ -2790,9 +2952,7 @@ class EndogenousDriveEngine:
         queue_state_snapshot = self._build_queue_state_snapshot(drive_context)
         cognitive_feedback_memory = self._build_cognitive_feedback_memory(drive_context)
         evidence_attention = self._build_evidence_attention_summary(
-            cognition_charter=self._resolve_endogenous_cognition_charter(
-                getattr(self.config, "service_runtime", None)
-            ),
+            cognition_charter=cognition_charter,
             cognitive_feedback_memory=cognitive_feedback_memory,
             recent_learning_evidence=recent_learning_evidence,
             external_research_evidence=external_research_evidence,
@@ -2802,15 +2962,20 @@ class EndogenousDriveEngine:
             recent_reference_alignment=recent_reference_alignment,
         )
         cognitive_strategy_delta = self._build_cognitive_strategy_delta(
-            cognition_charter=self._resolve_endogenous_cognition_charter(
-                getattr(self.config, "service_runtime", None)
-            ),
+            cognition_charter=cognition_charter,
             cognitive_feedback_memory=cognitive_feedback_memory,
         )
+        cognitive_evolution_draft = self._build_cognitive_evolution_draft(
+            cognition_charter=cognition_charter,
+            cognitive_feedback_memory=cognitive_feedback_memory,
+            cognitive_strategy_delta=cognitive_strategy_delta,
+            meta_cognition_profile=meta_cognition_profile,
+            recent_reference_alignment=recent_reference_alignment,
+            self_iteration_trend_memory=self_iteration_trend_memory,
+            post_task_effect_memory=post_task_effect_memory,
+        )
         context_layers = self._build_lm_context_layers(
-            cognition_charter=self._resolve_endogenous_cognition_charter(
-                getattr(self.config, "service_runtime", None)
-            ),
+            cognition_charter=cognition_charter,
             cognitive_posture=cognitive_posture,
             grounding_focus=grounding_focus,
             self_iteration_hypotheses=self_iteration_hypotheses,
@@ -2856,6 +3021,7 @@ class EndogenousDriveEngine:
             "cognitive_feedback_memory": cognitive_feedback_memory,
             "evidence_attention": evidence_attention,
             "cognitive_strategy_delta": cognitive_strategy_delta,
+            "cognitive_evolution_draft": cognitive_evolution_draft,
             "self_model_snapshot": self_model_snapshot,
             "evidence_credibility_summary": evidence_credibility_summary,
             "task_type_priors": task_type_priors,
@@ -2979,13 +3145,18 @@ class EndogenousDriveEngine:
             "grounding_pressure": str(
                 meta_cognition_profile.get("grounding_pressure") or ""
             ).strip(),
-            "recommended_task_posture": str(
-                meta_cognition_profile.get("recommended_task_posture")
+            "governance_posture": str(
+                meta_cognition_profile.get("governance_posture")
+                or meta_cognition_profile.get("recommended_task_posture")
                 or task_type_priors.get("top_priority_task_type")
                 or ""
             ).strip(),
-            "top_task_type": str(task_type_priors.get("top_priority_task_type") or "").strip(),
-            "top_task_score": round(
+            "compatible_projection_bias": str(
+                meta_cognition_profile.get("compatible_projection_bias")
+                or task_type_priors.get("top_priority_task_type")
+                or ""
+            ).strip(),
+            "compatible_projection_score": round(
                 self._clamp01(task_type_priors.get("top_priority_score") or 0.0),
                 4,
             ),
@@ -3028,7 +3199,8 @@ class EndogenousDriveEngine:
                 "Decision core: "
                 f"judgement={str(meta_cognition_profile.get('current_judgement') or 'unknown').strip() or 'unknown'}; "
                 f"constraint={str(meta_cognition_profile.get('dominant_constraint') or 'unknown').strip() or 'unknown'}; "
-                f"top_task_type={str(task_type_priors.get('top_priority_task_type') or 'unknown').strip() or 'unknown'}; "
+                f"governance_posture={str(meta_cognition_profile.get('governance_posture') or meta_cognition_profile.get('recommended_task_posture') or 'unknown').strip() or 'unknown'}; "
+                f"projection_bias={str(task_type_priors.get('top_priority_task_type') or 'unknown').strip() or 'unknown'}; "
                 f"self_iteration_domain={str(meta_cognition_profile.get('top_self_iteration_domain') or 'unknown').strip() or 'unknown'}."
             ),
         }
@@ -3146,9 +3318,9 @@ class EndogenousDriveEngine:
             "current_judgement": decision_core.get("current_judgement"),
             "dominant_constraint": decision_core.get("dominant_constraint"),
             "grounding_pressure": decision_core.get("grounding_pressure"),
-            "recommended_task_posture": decision_core.get("recommended_task_posture"),
-            "top_task_type": decision_core.get("top_task_type"),
-            "top_task_score": decision_core.get("top_task_score"),
+            "governance_posture": decision_core.get("governance_posture"),
+            "compatible_projection_bias": decision_core.get("compatible_projection_bias"),
+            "compatible_projection_score": decision_core.get("compatible_projection_score"),
             "top_self_iteration_domain": decision_core.get("top_self_iteration_domain"),
             "top_self_iteration_hypothesis": decision_core.get("top_self_iteration_hypothesis"),
             "primary_evidence_nodes": decision_core.get("primary_evidence_nodes"),
@@ -3581,6 +3753,242 @@ class EndogenousDriveEngine:
             ),
         }
 
+    def _build_cognitive_evolution_draft(
+        self,
+        *,
+        cognition_charter: Dict[str, Any],
+        cognitive_feedback_memory: Dict[str, Any],
+        cognitive_strategy_delta: Dict[str, Any],
+        meta_cognition_profile: Dict[str, Any],
+        recent_reference_alignment: Dict[str, Any],
+        self_iteration_trend_memory: Dict[str, Any],
+        post_task_effect_memory: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        mission_pressure = self._cognitive_evolution_mission_pressure(
+            cognition_charter=cognition_charter,
+            cognitive_feedback_memory=cognitive_feedback_memory,
+            meta_cognition_profile=meta_cognition_profile,
+            self_iteration_trend_memory=self_iteration_trend_memory,
+            post_task_effect_memory=post_task_effect_memory,
+        )
+        attention_policy_delta = self._build_attention_policy_delta(
+            cognitive_strategy_delta=cognitive_strategy_delta,
+        )
+        charter_delta = self._build_charter_delta(
+            cognitive_feedback_memory=cognitive_feedback_memory,
+            meta_cognition_profile=meta_cognition_profile,
+            recent_reference_alignment=recent_reference_alignment,
+            self_iteration_trend_memory=self_iteration_trend_memory,
+            post_task_effect_memory=post_task_effect_memory,
+        )
+        evidence_basis = self._build_cognitive_evolution_evidence_basis(
+            cognitive_feedback_memory=cognitive_feedback_memory,
+            recent_reference_alignment=recent_reference_alignment,
+            self_iteration_trend_memory=self_iteration_trend_memory,
+            post_task_effect_memory=post_task_effect_memory,
+            meta_cognition_profile=meta_cognition_profile,
+        )
+        available = bool(attention_policy_delta.get("available")) or bool(
+            charter_delta.get("available")
+        )
+        if not available:
+            return {
+                "available": False,
+                "mission_pressure": mission_pressure,
+                "attention_policy_delta": attention_policy_delta,
+                "charter_delta": charter_delta,
+                "evidence_basis": evidence_basis,
+                "summary": "Current cognitive feedback is not yet strong enough to justify an evolution draft.",
+            }
+        attention_count = len(
+            list(attention_policy_delta.get("recommended_changes") or [])
+        )
+        charter_count = len(list(charter_delta.get("recommended_changes") or []))
+        return {
+            "available": True,
+            "mission_pressure": mission_pressure,
+            "attention_policy_delta": attention_policy_delta,
+            "charter_delta": charter_delta,
+            "evidence_basis": evidence_basis,
+            "summary": (
+                "Cognitive evolution draft proposes "
+                f"{attention_count} attention-policy adjustments and "
+                f"{charter_count} charter-level adjustments."
+            ),
+        }
+
+    def _build_attention_policy_delta(
+        self,
+        *,
+        cognitive_strategy_delta: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        recommended_changes = [
+            dict(item)
+            for item in list(cognitive_strategy_delta.get("recommended_changes") or [])
+            if isinstance(item, dict) and str(item.get("target") or "").strip()
+        ]
+        if not recommended_changes:
+            return {
+                "available": False,
+                "recommended_changes": [],
+                "summary": "No attention-policy adjustments are currently recommended.",
+            }
+        return {
+            "available": True,
+            "recommended_changes": recommended_changes[:6],
+            "summary": str(cognitive_strategy_delta.get("summary") or "").strip(),
+        }
+
+    def _build_charter_delta(
+        self,
+        *,
+        cognitive_feedback_memory: Dict[str, Any],
+        meta_cognition_profile: Dict[str, Any],
+        recent_reference_alignment: Dict[str, Any],
+        self_iteration_trend_memory: Dict[str, Any],
+        post_task_effect_memory: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        recommended_changes: List[Dict[str, Any]] = []
+        if (
+            str(cognitive_feedback_memory.get("reference_feedback_direction") or "").strip()
+            == "weak"
+            or float(recent_reference_alignment.get("average_alignment_score") or 0.0) < 0.58
+        ):
+            recommended_changes.append(
+                {
+                    "target": "prompt_output_requirements",
+                    "direction": "strengthen",
+                    "priority": "high",
+                    "reason": "reference alignment remains weak, so proposals should bind evidence and agenda nodes more explicitly.",
+                    "suggested_additions": [
+                        "提案必须明确列出关键 evidence / agenda 绑定关系，避免引用漂移。",
+                        "当 reference alignment 偏弱时，优先输出 review / observation / learning，而不是跳到 improvement。",
+                    ],
+                }
+            )
+        if (
+            str(meta_cognition_profile.get("dominant_failure_mode") or "").strip()
+            in {"grounding_instability", "weak self structure grounding"}
+            or str(meta_cognition_profile.get("top_self_iteration_domain") or "").strip()
+            == "grounding"
+        ):
+            recommended_changes.append(
+                {
+                    "target": "task_generation_focus",
+                    "direction": "strengthen",
+                    "priority": "high",
+                    "reason": "grounding remains the dominant failure mode, so task generation should keep prioritizing evidence repair before aggressive self-iteration.",
+                    "suggested_additions": [
+                        "当 grounding gap 未闭合时，优先提出修复证据链、核对引用和补足自身理解的任务。",
+                        "只有在 grounding 压力明显下降后，才提高 improvement 类任务优先级。",
+                    ],
+                }
+            )
+        if (
+            str(post_task_effect_memory.get("effect_direction") or "").strip() == "mixed"
+            or str(self_iteration_trend_memory.get("trend_state") or "").strip()
+            in {"locked", "stalled"}
+        ):
+            recommended_changes.append(
+                {
+                    "target": "self_iteration_guardrails",
+                    "direction": "clarify",
+                    "priority": "medium",
+                    "reason": "recent self-iteration effects are mixed, so the charter should better distinguish when to keep iterating and when to pause for evidence repair.",
+                    "suggested_additions": [
+                        "当近期自我迭代结果呈 mixed 或 stalled 时，应优先追加诊断型任务而不是连续放大同一路径。",
+                        "若收益方向不稳定，应允许显式返回空 proposals 或低风险 review 任务。",
+                    ],
+                }
+            )
+        if not recommended_changes:
+            return {
+                "available": False,
+                "recommended_changes": [],
+                "summary": "No charter-level adjustments are currently recommended.",
+            }
+        return {
+            "available": True,
+            "recommended_changes": recommended_changes[:4],
+            "summary": (
+                "Recent cognition suggests clarifying charter focus, output requirements, "
+                "or self-iteration guardrails."
+            ),
+        }
+
+    def _build_cognitive_evolution_evidence_basis(
+        self,
+        *,
+        cognitive_feedback_memory: Dict[str, Any],
+        recent_reference_alignment: Dict[str, Any],
+        self_iteration_trend_memory: Dict[str, Any],
+        post_task_effect_memory: Dict[str, Any],
+        meta_cognition_profile: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return {
+            "reference_alignment_score": round(
+                self._clamp01(
+                    float(recent_reference_alignment.get("average_alignment_score") or 0.0)
+                ),
+                4,
+            ),
+            "cognitive_alignment_score": round(
+                self._clamp01(
+                    float(
+                        cognitive_feedback_memory.get("average_cognitive_alignment_score")
+                        or 0.0
+                    )
+                ),
+                4,
+            ),
+            "quality_score": round(
+                self._clamp01(
+                    float(cognitive_feedback_memory.get("average_quality_score") or 0.0)
+                ),
+                4,
+            ),
+            "trend_state": str(self_iteration_trend_memory.get("trend_state") or "").strip(),
+            "effect_direction": str(post_task_effect_memory.get("effect_direction") or "").strip(),
+            "dominant_failure_mode": str(
+                meta_cognition_profile.get("dominant_failure_mode") or ""
+            ).strip(),
+        }
+
+    def _cognitive_evolution_mission_pressure(
+        self,
+        *,
+        cognition_charter: Dict[str, Any],
+        cognitive_feedback_memory: Dict[str, Any],
+        meta_cognition_profile: Dict[str, Any],
+        self_iteration_trend_memory: Dict[str, Any],
+        post_task_effect_memory: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        core_mission = str(cognition_charter.get("core_mission") or "").strip()
+        if not core_mission:
+            core_mission = "Maintain evidence-grounded self-iteration under governance constraints."
+        return {
+            "core_mission": core_mission,
+            "dominant_failure_mode": str(
+                meta_cognition_profile.get("dominant_failure_mode") or ""
+            ).strip(),
+            "top_self_iteration_domain": str(
+                meta_cognition_profile.get("top_self_iteration_domain") or ""
+            ).strip(),
+            "reference_feedback_direction": str(
+                cognitive_feedback_memory.get("reference_feedback_direction") or ""
+            ).strip(),
+            "confidence_feedback_direction": str(
+                cognitive_feedback_memory.get("confidence_feedback_direction") or ""
+            ).strip(),
+            "trend_state": str(self_iteration_trend_memory.get("trend_state") or "").strip(),
+            "effect_direction": str(post_task_effect_memory.get("effect_direction") or "").strip(),
+            "summary": (
+                "Mission pressure currently centers on "
+                f"{str(meta_cognition_profile.get('top_self_iteration_domain') or 'unknown').strip() or 'unknown'} "
+                "under ongoing evidence and outcome feedback."
+            ),
+        }
+
     def _resolve_cognitive_strategy_delta_policy(
         self,
         cognition_charter: Dict[str, Any],
@@ -3896,9 +4304,9 @@ class EndogenousDriveEngine:
                 "current_judgement",
                 "dominant_constraint",
                 "grounding_pressure",
-                "recommended_task_posture",
-                "top_task_type",
-                "top_task_score",
+                "governance_posture",
+                "compatible_projection_bias",
+                "compatible_projection_score",
                 "top_self_iteration_domain",
                 "top_self_iteration_hypothesis",
                 "primary_evidence_nodes",
@@ -4185,9 +4593,9 @@ class EndogenousDriveEngine:
                 "current_judgement",
                 "dominant_constraint",
                 "grounding_pressure",
-                "recommended_task_posture",
-                "top_task_type",
-                "top_task_score",
+                "governance_posture",
+                "compatible_projection_bias",
+                "compatible_projection_score",
                 "top_self_iteration_domain",
                 "top_self_iteration_hypothesis",
                 "primary_evidence_nodes",
@@ -4615,7 +5023,7 @@ class EndogenousDriveEngine:
             4,
         )
         summary = (
-            f"LM task generation status={status}; top priority task type="
+            f"LM cognition status={status}; strongest compatible execution shape if action is justified="
             f"{top_priority_task_type or 'unknown'} ({top_priority_score:.2f}); "
             f"proposal drift={str(proposal_drift_memory.get('drift_state') or 'unknown').strip() or 'unknown'}."
         )
@@ -4686,8 +5094,13 @@ class EndogenousDriveEngine:
                 "dominant_failure_mode": str(
                     meta_cognition_profile.get("dominant_failure_mode") or ""
                 ).strip(),
-                "recommended_task_posture": str(
-                    meta_cognition_profile.get("recommended_task_posture") or ""
+                "governance_posture": str(
+                    meta_cognition_profile.get("governance_posture")
+                    or meta_cognition_profile.get("recommended_task_posture")
+                    or ""
+                ).strip(),
+                "compatible_projection_bias": str(
+                    meta_cognition_profile.get("compatible_projection_bias") or ""
                 ).strip(),
                 "summary": str(meta_cognition_profile.get("summary") or "").strip(),
                 "priority_signals": [
@@ -5050,6 +5463,11 @@ class EndogenousDriveEngine:
         recent_effect_direction = str(
             post_task_effect_memory.get("effect_direction") or ""
         ).strip()
+        common_why_not_improvement_now = [
+            str(item).strip()
+            for item in list(cognitive_assessment_memory.get("common_why_not_improvement_now") or [])[:4]
+            if str(item).strip()
+        ]
         grounding_gap_count = len(
             [str(item).strip() for item in list(grounding_focus.get("grounding_gaps") or []) if str(item).strip()]
         )
@@ -5074,35 +5492,54 @@ class EndogenousDriveEngine:
         elif dominant_constraint:
             dominant_failure_mode = dominant_constraint
 
-        recommended_task_posture = top_task_type or "review"
+        governance_posture = "review"
         if grounding_pressure == "high":
-            recommended_task_posture = "observation_or_review"
-        elif recent_effect_direction == "degrading" and top_task_type not in {"observation", "review"}:
-            recommended_task_posture = "review"
+            governance_posture = "observation_or_review"
+        elif recent_effect_direction == "degrading":
+            governance_posture = "review"
+        elif common_why_not_improvement_now:
+            governance_posture = "review"
+        elif current_judgement and any(
+            token in current_judgement.lower()
+            for token in ("review", "observe", "observation", "grounding")
+        ):
+            governance_posture = "review"
+        elif top_task_type in {"observation", "review"}:
+            governance_posture = top_task_type
 
-        priority_signals = [
-            f"top_task_type:{top_task_type}" if top_task_type else "",
-            f"grounding_pressure:{grounding_pressure}",
-            f"top_self_iteration_domain:{top_self_iteration_domain}" if top_self_iteration_domain else "",
-            f"stay_or_switch_bias:{stay_or_switch_bias}" if stay_or_switch_bias else "",
-            f"recent_effect_direction:{recent_effect_direction}" if recent_effect_direction else "",
-            f"dominant_failure_mode:{dominant_failure_mode}" if dominant_failure_mode else "",
-        ]
-        priority_signals = [item for item in priority_signals if item]
-
-        available = any(
+        has_substantive_profile = any(
             [
                 current_judgement,
                 dominant_constraint,
                 top_self_iteration_domain,
                 top_self_iteration_hypothesis,
                 stay_or_switch_bias,
+                switch_bias_effectiveness,
                 recent_effect_direction,
                 dominant_failure_mode,
-                priority_signals,
+                grounding_pressure != "low",
             ]
         )
-        if not available:
+        priority_signals = [
+            (
+                f"grounding_pressure:{grounding_pressure}"
+                if grounding_pressure != "low"
+                else ""
+            ),
+            f"top_self_iteration_domain:{top_self_iteration_domain}" if top_self_iteration_domain else "",
+            f"stay_or_switch_bias:{stay_or_switch_bias}" if stay_or_switch_bias else "",
+            f"recent_effect_direction:{recent_effect_direction}" if recent_effect_direction else "",
+            f"dominant_failure_mode:{dominant_failure_mode}" if dominant_failure_mode else "",
+        ]
+        if (
+            has_substantive_profile
+            and top_task_type
+            and top_task_type in {"observation", "review"}
+        ):
+            priority_signals.append(f"compatible_projection_bias:{top_task_type}")
+        priority_signals = [item for item in priority_signals if item]
+
+        if not has_substantive_profile:
             return {
                 "available": False,
                 "summary": "No unified meta-cognition profile is available yet.",
@@ -5119,7 +5556,8 @@ class EndogenousDriveEngine:
             "switch_bias_effectiveness": switch_bias_effectiveness or None,
             "recent_effect_direction": recent_effect_direction or None,
             "dominant_failure_mode": dominant_failure_mode or None,
-            "recommended_task_posture": recommended_task_posture,
+            "governance_posture": governance_posture,
+            "compatible_projection_bias": top_task_type or None,
             "priority_signals": priority_signals[:6],
             "summary": (
                 "Unified meta-cognition indicates "
@@ -7291,7 +7729,7 @@ class EndogenousDriveEngine:
                 "Current self-iteration should likely focus on "
                 f"{str(top_hypothesis.get('target_domain') or 'unknown').strip() or 'unknown'}; "
                 f"dominant hypothesis={str(top_hypothesis.get('hypothesis') or '').strip() or 'unknown'}; "
-                f"top task type prior={top_priority_task_type or 'unknown'} ({top_priority_score:.2f})."
+                f"current compatible projection bias={top_priority_task_type or 'unknown'} ({top_priority_score:.2f})."
             ),
         }
 
@@ -7793,8 +8231,8 @@ class EndogenousDriveEngine:
             "priors": prior_rows,
             "drift_state": drift_state or "stable",
             "summary": (
-                f"Program-side priors currently favor {top['task_type']} "
-                f"(score={float(top['score']):.2f}) before lower-priority task types; "
+                f"Program-side governance priors currently lean toward {top['task_type']} "
+                f"as the safest compatible task projection (score={float(top['score']):.2f}); "
                 f"proposal drift state is {drift_state or 'stable'}."
             ),
         }

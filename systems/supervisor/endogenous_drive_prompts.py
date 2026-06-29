@@ -188,7 +188,7 @@ def build_endogenous_task_generation_payload(
         f"{output_requirements_block}\n\n"
         "在生成 proposals 之前，你必须先给出一层 `cognitive_assessment`，"
         "用来显式说明你基于哪些主证据、当前核心约束与 grounding 缺口做判断。"
-        "这层 assessment 是认知可见性，不是官样文章；它应直接服务于任务选择。"
+        "这层 assessment 是认知可见性，不是官样文章；它应直接服务于治理判断与是否需要行动投影。"
         "如果 evidence_packet 给出了 self_iteration_hypotheses，你应显式判断当前最应该被迭代的认知缺陷域。\n\n"
         "如果 evidence_packet 给出了 self_iteration_trend_memory，你还应判断应该延续当前自我迭代方向还是切换方向，"
         "并给出切换或维持的依据。\n\n"
@@ -275,20 +275,21 @@ def _render_cognitive_briefing(packet: Dict[str, Any]) -> str:
         or meta_cognition_profile.get("dominant_constraint")
         or "unknown"
     ).strip()
-    top_task_type = str(
-        decision_core.get("top_task_type")
+    compatible_projection_bias = str(
+        decision_core.get("compatible_projection_bias")
         or task_type_priors.get("top_priority_task_type")
+        or meta_cognition_profile.get("compatible_projection_bias")
         or "unknown"
     ).strip()
-    recommended_task_posture = str(
-        decision_core.get("recommended_task_posture")
-        or meta_cognition_profile.get("recommended_task_posture")
-        or top_task_type
+    governance_posture = str(
+        decision_core.get("governance_posture")
+        or meta_cognition_profile.get("governance_posture")
+        or compatible_projection_bias
         or "unknown"
     ).strip()
-    top_task_score = task_type_priors.get("top_priority_score")
-    if decision_core.get("top_task_score") is not None:
-        top_task_score = decision_core.get("top_task_score")
+    compatible_projection_score = task_type_priors.get("top_priority_score")
+    if decision_core.get("compatible_projection_score") is not None:
+        compatible_projection_score = decision_core.get("compatible_projection_score")
     self_gaps = [
         str(item).strip()
         for item in list(
@@ -384,16 +385,8 @@ def _render_cognitive_briefing(packet: Dict[str, Any]) -> str:
         f"- 当前主约束: {dominant_constraint}",
         f"- 当前主失败模式: {dominant_failure_mode}",
         f"- 当前 grounding 压力: {grounding_pressure}",
-        f"- 当前建议任务姿态: {recommended_task_posture}",
+        f"- 当前建议治理姿态: {governance_posture}",
         f"- 当前姿态: {posture_name} ({posture_reason})",
-        (
-            f"- 当前最高优先任务类型: {top_task_type}"
-            + (
-                f" ({float(top_task_score):.2f})"
-                if isinstance(top_task_score, (int, float))
-                else ""
-            )
-        ),
         f"- 当前主证据主题: {', '.join(primary_evidence_nodes) or 'none'}",
         f"- 当前主议程主题: {', '.join(primary_agenda_nodes) or 'none'}",
         f"- 当前 grounding 缺口: {', '.join(grounding_gaps) or 'none'}",
@@ -404,12 +397,23 @@ def _render_cognitive_briefing(packet: Dict[str, Any]) -> str:
         f"- 当前首要自我迭代假设: {dominant_iteration_hypothesis or 'none'}",
         f"- 当前排队上下文: {queue_state_summary or 'none'}",
         f"- 当前不宜直接 improvement 的原因: {', '.join(why_not_improvement_now) or 'none'}",
-        "- 先输出一个 cognitive_assessment，明确写出当前判断、主约束、grounding 缺口，以及为什么现在选择该任务类型。",
+        "- 先输出一个 cognitive_assessment，明确写出当前判断、主约束、grounding 缺口，以及为什么当前治理姿态成立。",
         "- 如果 evidence_packet 提供了 self_iteration_hypotheses，请在 cognitive_assessment 中写出 self_iteration_target 与 self_iteration_hypothesis。",
         "- 如果 evidence_packet 提供了 self_iteration_trend_memory，请在 cognitive_assessment 中写出 stay_or_switch 与 switch_reason。",
-        "- 先基于主证据主题与主议程主题做判断，再决定任务类型与优先级。",
+        "- 先基于主证据主题与主议程主题做判断，再决定是否需要形成任务投影以及投影强度。",
         "- 如果 grounding 缺口或证据冲突明显，优先提出 observation / review / learning，而不是直接 improvement。",
     ]
+    if compatible_projection_bias and compatible_projection_bias != "unknown":
+        projection_line = (
+            f"- 兼容投影提示: {compatible_projection_bias}"
+            + (
+                f" ({float(compatible_projection_score):.2f})"
+                if isinstance(compatible_projection_score, (int, float))
+                else ""
+            )
+            + "。仅作兼容参考，不得覆盖当前判断与治理姿态。"
+        )
+        lines.insert(7, projection_line)
     return "\n".join(lines)
 
 
@@ -440,11 +444,15 @@ def _prompt_facing_evidence_packet(
             "grounding_pressure": str(
                 decision_core.get("grounding_pressure") or ""
             ).strip(),
-            "recommended_task_posture": str(
-                decision_core.get("recommended_task_posture") or ""
+            "governance_posture": str(
+                decision_core.get("governance_posture")
+                or ""
             ).strip(),
-            "top_task_type": str(decision_core.get("top_task_type") or "").strip(),
-            "top_task_score": decision_core.get("top_task_score"),
+            "compatible_projection_bias": str(
+                decision_core.get("compatible_projection_bias")
+                or ""
+            ).strip(),
+            "compatible_projection_score": decision_core.get("compatible_projection_score"),
             "top_self_iteration_domain": str(
                 decision_core.get("top_self_iteration_domain") or ""
             ).strip(),
@@ -609,8 +617,13 @@ def _prompt_facing_evidence_packet(
             "dominant_failure_mode": str(
                 meta_cognition_profile.get("dominant_failure_mode") or ""
             ).strip(),
-            "recommended_task_posture": str(
-                meta_cognition_profile.get("recommended_task_posture") or ""
+            "governance_posture": str(
+                meta_cognition_profile.get("governance_posture")
+                or meta_cognition_profile.get("recommended_task_posture")
+                or ""
+            ).strip(),
+            "compatible_projection_bias": str(
+                meta_cognition_profile.get("compatible_projection_bias") or ""
             ).strip(),
             "priority_signals": [
                 str(item).strip()
@@ -863,15 +876,42 @@ def _prompt_facing_evidence_packet(
         packet.get(key) for key in ("decision_core", "supporting_detail", "long_tail_context")
     )
     if has_context_layers:
+        packet.pop("cognitive_evolution_draft", None)
         meta_cognition_profile = dict(packet.get("meta_cognition_profile") or {})
         if meta_cognition_profile:
             packet["meta_cognition_profile"] = {
+                "current_judgement": str(
+                    meta_cognition_profile.get("current_judgement") or ""
+                ).strip()[:140],
+                "dominant_constraint": str(
+                    meta_cognition_profile.get("dominant_constraint") or ""
+                ).strip()[:140],
+                "grounding_pressure": str(
+                    meta_cognition_profile.get("grounding_pressure") or ""
+                ).strip()[:32],
+                "top_self_iteration_domain": str(
+                    meta_cognition_profile.get("top_self_iteration_domain") or ""
+                ).strip()[:80],
+                "top_self_iteration_hypothesis": str(
+                    meta_cognition_profile.get("top_self_iteration_hypothesis") or ""
+                ).strip()[:160],
                 "dominant_failure_mode": str(
                     meta_cognition_profile.get("dominant_failure_mode") or ""
                 ).strip()[:120],
                 "stay_or_switch_bias": str(
                     meta_cognition_profile.get("stay_or_switch_bias") or ""
                 ).strip()[:32],
+                "recent_effect_direction": str(
+                    meta_cognition_profile.get("recent_effect_direction") or ""
+                ).strip()[:32],
+                "governance_posture": str(
+                    meta_cognition_profile.get("governance_posture")
+                    or meta_cognition_profile.get("recommended_task_posture")
+                    or ""
+                ).strip()[:80],
+                "compatible_projection_bias": str(
+                    meta_cognition_profile.get("compatible_projection_bias") or ""
+                ).strip()[:60],
                 "priority_signals": list(meta_cognition_profile.get("priority_signals") or [])[:3],
                 "summary": str(meta_cognition_profile.get("summary") or "").strip()[:180],
             }
@@ -898,6 +938,11 @@ def _prompt_facing_evidence_packet(
                 "top_priority_score": task_type_priors.get("top_priority_score"),
                 "summary": str(task_type_priors.get("summary") or "").strip()[:160],
             }
+        packet.pop("cognitive_assessment_memory", None)
+        packet.pop("self_iteration_trend_memory", None)
+        packet.pop("switch_self_regulation_memory", None)
+        packet.pop("post_task_effect_memory", None)
+        packet.pop("proposal_drift_memory", None)
     memory_context = str(packet.get("memory_context") or "")
     if memory_context:
         packet["memory_context"] = memory_context[:600]
@@ -1482,6 +1527,7 @@ def _resolve_prompt_attention_policy(
             "supporting_detail",
             "long_tail_context",
             "queue_state_snapshot",
+            "agenda_graph",
             "perception",
             "world_model",
             "reflection",
@@ -1494,17 +1540,16 @@ def _resolve_prompt_attention_policy(
             "switch_self_regulation_memory",
             "post_task_effect_memory",
             "self_model_snapshot",
-            "agenda_graph",
             "evidence_credibility_summary",
             "cognitive_assessment_memory",
             "proposal_drift_memory",
-            "task_type_priors",
+            "recent_reference_alignment",
             "evidence_channels",
             "recent_learning_evidence",
             "external_research_evidence",
-            "shell_body_profile",
             "research_digest",
-            "recent_reference_alignment",
+            "task_type_priors",
+            "shell_body_profile",
             "evidence_graph",
             "needs",
             "intents",
@@ -1550,9 +1595,15 @@ def _apply_prompt_trim_stage(packet: Dict[str, Any], *, stage_name: str) -> Dict
                 "current_judgement": str(decision_core.get("current_judgement") or "")[:140],
                 "dominant_constraint": str(decision_core.get("dominant_constraint") or "")[:140],
                 "grounding_pressure": str(decision_core.get("grounding_pressure") or "")[:32],
-                "recommended_task_posture": str(decision_core.get("recommended_task_posture") or "")[:80],
-                "top_task_type": str(decision_core.get("top_task_type") or "")[:60],
-                "top_task_score": decision_core.get("top_task_score"),
+                "governance_posture": str(
+                    decision_core.get("governance_posture")
+                    or ""
+                )[:80],
+                "compatible_projection_bias": str(
+                    decision_core.get("compatible_projection_bias")
+                    or ""
+                )[:60],
+                "compatible_projection_score": decision_core.get("compatible_projection_score"),
                 "top_self_iteration_domain": str(decision_core.get("top_self_iteration_domain") or "")[:80],
                 "primary_evidence_nodes": list(decision_core.get("primary_evidence_nodes") or [])[:3],
                 "primary_agenda_nodes": list(decision_core.get("primary_agenda_nodes") or [])[:3],
@@ -1598,10 +1649,20 @@ def _apply_prompt_trim_stage(packet: Dict[str, Any], *, stage_name: str) -> Dict
                 "dominant_constraint": str(meta_cognition_profile.get("dominant_constraint") or "")[:140],
                 "grounding_pressure": str(meta_cognition_profile.get("grounding_pressure") or "")[:32],
                 "top_self_iteration_domain": str(meta_cognition_profile.get("top_self_iteration_domain") or "")[:80],
+                "top_self_iteration_hypothesis": str(
+                    meta_cognition_profile.get("top_self_iteration_hypothesis") or ""
+                )[:160],
                 "stay_or_switch_bias": str(meta_cognition_profile.get("stay_or_switch_bias") or "")[:32],
                 "recent_effect_direction": str(meta_cognition_profile.get("recent_effect_direction") or "")[:32],
                 "dominant_failure_mode": str(meta_cognition_profile.get("dominant_failure_mode") or "")[:120],
-                "recommended_task_posture": str(meta_cognition_profile.get("recommended_task_posture") or "")[:80],
+                "governance_posture": str(
+                    meta_cognition_profile.get("governance_posture")
+                    or meta_cognition_profile.get("recommended_task_posture")
+                    or ""
+                )[:80],
+                "compatible_projection_bias": str(
+                    meta_cognition_profile.get("compatible_projection_bias") or ""
+                )[:60],
                 "priority_signals": list(meta_cognition_profile.get("priority_signals") or [])[:4],
                 "summary": str(meta_cognition_profile.get("summary") or "")[:220],
             }

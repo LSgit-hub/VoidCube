@@ -24,7 +24,7 @@ UI_HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>VoidCube · 义子的小屋</title>
+<title>VoidCube · 星子与西子的小屋</title>
 <!-- VoidCube Supervisor Room -->
 <!-- EventSource("/ui/events") -->
 <style>
@@ -1240,6 +1240,277 @@ body[data-action="write"] .action-glow { background: radial-gradient(circle, var
   100% { transform: translate(30px, -50%); opacity: 0; }
 }
 
+
+/* ── 角色切换: data-character 控制显示哪个角色 ── */
+.xizi, .xingzi { display: none; }
+body[data-character="xizi"] .xizi { display: block; }
+body[data-character="xingzi"] .xingzi { display: block; }
+/* 默认显示西子(女) */
+body:not([data-character]) .xizi,
+body[data-character=""] .xizi { display: block; }
+
+/* ── 角色: 星子(短发男) ── */
+.xingzi {
+  position: absolute;
+  left: 50%; bottom: 6%;
+  width: 140px; height: 210px;
+  margin-left: -70px;
+  z-index: 6;
+  transition:
+    left 1s var(--ease-out),
+    bottom 1s var(--ease-out),
+    transform 1s var(--ease-out);
+  animation: xizi-breathe 3.2s ease-in-out infinite;
+}
+
+/* 星子 - 短发(后) */
+.xs-hair-back {
+  position: absolute;
+  left: 16px; top: 14px;
+  width: 108px; height: 80px;
+  background: linear-gradient(180deg, #1a2530 0%, #0f1822 100%);
+  border-radius: 22px 22px 10px 10px;
+  z-index: 1;
+}
+/* 星子 - 脸 */
+.xs-head {
+  position: absolute;
+  left: 28px; top: 16px;
+  width: 78px; height: 74px;
+  border-radius: 50% 50% 46% 48%;
+  background: linear-gradient(155deg, #ffe8d0 0%, #f0c8a0 100%);
+  box-shadow:
+    inset -6px -8px rgba(170,110,70,.18),
+    inset 4px 4px rgba(255,255,255,.3);
+  z-index: 3;
+}
+/* 星子 - 短发(顶) */
+.xs-hair {
+  position: absolute;
+  left: 22px; top: 4px;
+  width: 90px; height: 32px;
+  background: linear-gradient(180deg, #1e2d3a 0%, #121a24 100%);
+  border-radius: 28px 30px 4px 4px;
+  z-index: 4;
+}
+/* 星子 - 短刘海(碎发) */
+.xs-bangs {
+  position: absolute;
+  left: 28px; top: 22px;
+  width: 78px; height: 16px;
+  background: linear-gradient(180deg, #1e2d3a, #121a24);
+  border-radius: 2px 2px 50% 50%;
+  z-index: 4;
+  clip-path: polygon(
+    0 0, 100% 0, 94% 60%, 84% 100%, 72% 70%, 60% 100%,
+    48% 70%, 36% 100%, 24% 70%, 12% 100%, 4% 60%
+  );
+}
+/* 星子 - 眼(略窄) */
+.xs-eye {
+  position: absolute; top: 46px;
+  width: 9px; height: 12px;
+  border-radius: 50%;
+  background: #141e28;
+  z-index: 5;
+}
+.xs-eye.l { left: 44px; }
+.xs-eye.r { left: 74px; }
+.xs-eye::after {
+  content: ""; position: absolute; left: 1.5px; top: 1.5px;
+  width: 2.5px; height: 3.5px;
+  border-radius: 50%;
+  background: #fff;
+}
+/* 星子 - 眉(略粗) */
+.xs-brow {
+  position: absolute; top: 40px;
+  width: 15px; height: 3px;
+  border-radius: 2px;
+  background: #3a2820;
+  z-index: 5;
+}
+.xs-brow.l { left: 42px; }
+.xs-brow.r { left: 72px; }
+/* 星子 - 腮红(更淡) */
+.xs-cheek {
+  position: absolute; top: 56px;
+  width: 8px; height: 5px;
+  border-radius: 50%;
+  background: rgba(210,110,90,.35);
+  z-index: 4;
+}
+.xs-cheek.l { left: 36px; }
+.xs-cheek.r { left: 82px; }
+/* 星子 - 嘴 */
+.xs-mouth {
+  position: absolute; left: 60px; top: 66px;
+  width: 10px; height: 4px;
+  border-bottom: 2px solid #904838;
+  border-radius: 0 0 50% 50%;
+  z-index: 5;
+  transition: border-color .4s;
+}
+/* 星子 - 上衣 */
+.xs-shirt {
+  position: absolute;
+  left: 24px; top: 84px;
+  width: 86px; height: 50px;
+  background: linear-gradient(140deg, #4a6088 0%, #2d4060 100%);
+  border-radius: 16px 16px 6px 6px;
+  z-index: 2;
+  transition: background .6s var(--ease-out);
+  box-shadow: inset 0 -4px rgba(0,0,0,.15);
+}
+.xs-shirt::before {
+  content: ""; position: absolute;
+  left: 50%; top: 12px;
+  transform: translateX(-50%);
+  width: 18px; height: 16px;
+  background: rgba(255,255,255,.12);
+  border-radius: 2px;
+}
+/* 星子 - 腰带 */
+.xs-belt {
+  position: absolute;
+  left: 24px; top: 130px;
+  width: 86px; height: 7px;
+  background: linear-gradient(180deg, #5a4030, #3a2012);
+  border-radius: 2px;
+  z-index: 5;
+}
+.xs-belt::after {
+  content: ""; position: absolute;
+  left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: 10px; height: 5px;
+  background: #c8a868;
+  border-radius: 2px;
+  border: 1px solid #8a6830;
+}
+/* 星子 - 长裤 */
+.xs-pants {
+  position: absolute;
+  left: 24px; top: 134px;
+  width: 86px; height: 42px;
+  background: linear-gradient(180deg, #2a3040 0%, #1a2030 100%);
+  border-radius: 4px 4px 14px 14px;
+  z-index: 2;
+  box-shadow: inset 0 -6px rgba(0,0,0,.2);
+}
+/* 星子 - 手臂 */
+.xs-arm {
+  position: absolute; top: 96px;
+  width: 18px; height: 58px;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #f0c8a0 0%, #d4a070 100%);
+  transform-origin: top center;
+  z-index: 3;
+  transition: transform .6s var(--ease-out);
+}
+.xs-arm.l { left: 16px; transform: rotate(8deg); }
+.xs-arm.r { left: 100px; transform: rotate(-8deg); }
+/* 星子 - 腿 */
+.xs-leg {
+  position: absolute; top: 170px;
+  width: 24px; height: 38px;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #2a3040, #1a2030);
+  z-index: 1;
+  transition: transform .6s var(--ease-out);
+}
+.xs-leg.l { left: 38px; }
+.xs-leg.r { left: 68px; }
+/* 星子 - 道具 */
+.xs-prop {
+  position: absolute;
+  left: 94px; top: 118px;
+  width: 36px; height: 26px;
+  border-radius: 3px;
+  background: var(--paper);
+  border: 2px solid #6b4a34;
+  transform: rotate(-12deg);
+  z-index: 4;
+  opacity: 0;
+  transition: opacity .5s, transform .5s;
+}
+.xs-prop::before {
+  content: ""; position: absolute; left: 4px; right: 4px; top: 4px; height: 1px;
+  background: rgba(80,60,40,.4);
+  box-shadow: 0 6px 0 rgba(80,60,40,.3), 0 12px 0 rgba(80,60,40,.4);
+}
+
+/* ═══════════════════════════════════════
+   星子 4 个动作状态
+   ═══════════════════════════════════════ */
+
+/* 整理书架 */
+body[data-action="organize"] .xingzi {
+  left: 12%; margin-left: -70px;
+  bottom: 29%;
+  transform: scale(1) translateY(0);
+}
+body[data-action="organize"] .xs-shirt {
+  background: linear-gradient(140deg, #f4d4a8 0%, #d4954a 100%);
+}
+body[data-action="organize"] .xs-arm.l { transform: rotate(-65deg) translate(-6px, -4px); animation: arm-reach 1.1s ease-in-out infinite; }
+body[data-action="organize"] .xs-arm.r { transform: rotate(20deg); }
+body[data-action="organize"] .xs-prop { opacity: 1; transform: rotate(8deg) translate(-10px, -4px); }
+body[data-action="organize"] .xingzi .thoughts { opacity: 1; transform: translateX(20px); }
+
+/* 坐沙发休息 */
+body[data-action="rest"] .xingzi {
+  left: 17%; margin-left: -40px;
+  bottom: 10%;
+  transform: scale(.88);
+}
+body[data-action="rest"] .xs-shirt {
+  background: linear-gradient(140deg, #6fc6a0 0%, #4a9070 100%);
+}
+body[data-action="rest"] .xs-arm.l { transform: rotate(-30deg) translate(4px, 14px); }
+body[data-action="rest"] .xs-arm.r { transform: rotate(30deg) translate(-4px, 14px); }
+body[data-action="rest"] .xs-leg.l { transform: rotate(-22deg) translateY(-4px); }
+body[data-action="rest"] .xs-leg.r { transform: rotate(22deg) translateY(-4px); }
+body[data-action="rest"] .xs-hair-back,
+body[data-action="rest"] .xs-hair,
+body[data-action="rest"] .xs-bangs { transform: scaleY(.85) translateY(8px); transform-origin: top; }
+body[data-action="rest"] .xs-prop { opacity: 0; }
+body[data-action="rest"] .xs-eye { height: 5px; border-radius: 50%; animation: rest-eyes 3s ease-in-out infinite; }
+
+/* 在电脑桌前工作 */
+body[data-action="work"] .xingzi {
+  left: 50%; margin-left: -70px;
+  bottom: 27%;
+  transform: scale(.92);
+}
+body[data-action="work"] .xs-shirt {
+  background: linear-gradient(140deg, #6a7eb8 0%, #4a6098 100%);
+}
+body[data-action="work"] .xs-arm.l { transform: rotate(35deg) translate(2px, 6px); animation: arm-type .55s ease-in-out infinite; }
+body[data-action="work"] .xs-arm.r { transform: rotate(40deg) translate(-2px, 6px); animation: arm-type .55s ease-in-out .27s infinite; }
+body[data-action="work"] .xs-prop { opacity: 0; }
+body[data-action="work"] .xs-eye { animation: work-blink 4s ease-in-out infinite; }
+
+/* 在写字桌前任务审核 */
+body[data-action="write"] .xingzi {
+  left: 86%; margin-left: -70px;
+  bottom: 19%;
+  transform: scale(.92);
+  z-index: 2;
+}
+body[data-action="write"] .xs-shirt {
+  background: linear-gradient(140deg, #a78ad4 0%, #7a5ab0 100%);
+}
+body[data-action="write"] .xs-arm.l { transform: rotate(45deg) translate(0, 8px); animation: arm-write .8s ease-in-out infinite; z-index: 9; }
+body[data-action="write"] .xs-arm.r { transform: rotate(8deg); z-index: 9; }
+body[data-action="write"] .xs-prop { opacity: 0; }
+body[data-action="write"] .xs-mouth { width: 8px; }
+
+/* 星子 - 错误状态 */
+body[data-has-errors="true"] .xs-mouth { border-bottom-color: #b84040; width: 14px; }
+body[data-has-errors="true"] .xs-brow.l { transform: rotate(-12deg) translateY(-1px); }
+body[data-has-errors="true"] .xs-brow.r { transform: rotate(12deg) translateY(-1px); }
+
+
 /* ── 状态面板(右下方) ── */
 .status {
   position: absolute;
@@ -1744,6 +2015,647 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
   .action-bar { flex-wrap: wrap; max-width: calc(100% - 24px); justify-content: center; }
   .action-btn { padding: 6px 12px; font-size: 11px; }
 }
+
+/*━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  底部菜单系统  v1  ——  游戏风格 Dock + 滑出面板
+  默认隐藏，鼠标触及下边缘自动弹出
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━*/
+
+/* ── 底部触发区 ── */
+.bottom-trigger {
+  position: fixed; left: 0; right: 0; bottom: 0;
+  height: 36px;
+  z-index: 100;
+  /* 透明不可见，仅用于 hover 检测 */
+}
+
+/* ── 底部 Dock 栏 ── */
+.bottom-dock {
+  position: fixed; left: 0; right: 0; bottom: 0;
+  height: 48px;
+  z-index: 99;
+  display: flex; align-items: center; justify-content: center;
+  gap: 2px;
+  padding: 0 16px;
+  background: linear-gradient(180deg,
+    rgba(18,12,8,.94) 0%,
+    rgba(28,18,12,.96) 100%);
+  border-top: 1px solid rgba(255,255,255,.12);
+  box-shadow:
+    0 -4px 20px rgba(0,0,0,.5),
+    0 -1px 0 rgba(255,255,255,.06),
+    inset 0 1px 0 rgba(255,255,255,.04);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  transform: translateY(calc(100% - 4px));
+  transition: transform .35s var(--ease-out);
+  /* 顶部发光线 */
+}
+.bottom-dock::before {
+  content: ""; position: absolute; left: 8px; right: 8px; top: -1px;
+  height: 1px;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    rgba(226,176,74,.5) 20%,
+    rgba(111,198,160,.5) 50%,
+    rgba(167,138,212,.5) 80%,
+    transparent 100%);
+  opacity: .6;
+  transition: opacity .4s;
+}
+.bottom-dock.visible {
+  transform: translateY(0);
+}
+.bottom-dock.visible::before {
+  opacity: 1;
+}
+/* 底部小凸起指示器 */
+.bottom-dock::after {
+  content: ""; position: absolute; left: 50%; top: -6px;
+  transform: translateX(-50%);
+  width: 36px; height: 6px;
+  background: rgba(255,255,255,.18);
+  border-radius: 0 0 6px 6px;
+  transition: opacity .35s;
+}
+.bottom-dock.visible::after {
+  opacity: 0;
+}
+
+/* ── Dock 按钮 ── */
+.dock-btn {
+  position: relative;
+  width: 48px; height: 40px;
+  border: 0; background: transparent;
+  color: rgba(244,228,188,.55);
+  cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px;
+  border-radius: 8px;
+  transition: all .25s var(--ease-out);
+  font-family: inherit;
+  padding: 0;
+  z-index: 1;
+}
+.dock-btn .db-icon {
+  font-size: 18px; line-height: 1;
+  transition: transform .25s var(--ease-out), filter .25s;
+}
+.dock-btn .db-label {
+  font-size: 8.5px; font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: rgba(244,228,188,.35);
+  transition: color .25s;
+}
+.dock-btn:hover {
+  background: rgba(255,255,255,.08);
+  color: rgba(244,228,188,.9);
+}
+.dock-btn:hover .db-icon {
+  transform: translateY(-2px);
+  filter: drop-shadow(0 0 6px currentColor);
+}
+.dock-btn:hover .db-label {
+  color: rgba(244,228,188,.7);
+}
+.dock-btn.active {
+  background: rgba(255,255,255,.1);
+  color: #fff;
+  box-shadow: 0 0 14px rgba(226,176,74,.25);
+}
+.dock-btn.active .db-icon {
+  filter: drop-shadow(0 0 8px currentColor);
+}
+.dock-btn.active .db-label {
+  color: var(--gold);
+}
+/* 分隔线 */
+.dock-sep {
+  width: 1px; height: 22px;
+  background: rgba(255,255,255,.08);
+  margin: 0 6px;
+  border-radius: 1px;
+}
+
+/* ── 面板容器 ── */
+.dock-panels {
+  position: fixed; left: 0; right: 0; bottom: 48px;
+  z-index: 98;
+  display: flex; align-items: flex-end; justify-content: center;
+  pointer-events: none;
+  padding: 0 16px 8px;
+}
+
+/* ── 单个面板 ── */
+.dock-panel {
+  display: none;
+  width: 100%; max-width: 900px; max-height: 420px;
+  background: linear-gradient(180deg,
+    rgba(20,14,10,.96) 0%,
+    rgba(28,18,14,.98) 100%);
+  border: 1px solid rgba(255,255,255,.1);
+  border-bottom: none;
+  border-radius: 14px 14px 0 0;
+  box-shadow:
+    0 -8px 32px rgba(0,0,0,.55),
+    inset 0 1px 0 rgba(255,255,255,.04);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  overflow: hidden;
+  flex-direction: column;
+  pointer-events: auto;
+  animation: panel-slide-up .3s var(--ease-out);
+}
+.dock-panel.open {
+  display: flex;
+}
+@keyframes panel-slide-up {
+  from { transform: translateY(20px); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+
+/* ── 面板标题栏 ── */
+.panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+  flex-shrink: 0;
+  background: rgba(255,255,255,.02);
+}
+.panel-title {
+  font-size: 13px; font-weight: 700;
+  color: var(--text-primary);
+  display: flex; align-items: center; gap: 8px;
+  letter-spacing: .01em;
+}
+.panel-title .pt-icon {
+  font-size: 16px;
+}
+.panel-close {
+  width: 26px; height: 26px;
+  border: 0; background: rgba(255,255,255,.06);
+  color: var(--text-secondary);
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 14px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  transition: all .2s;
+  font-family: inherit;
+  line-height: 1;
+  padding: 0;
+}
+.panel-close:hover {
+  background: rgba(232,130,110,.25);
+  color: var(--coral);
+}
+
+/* ── 面板内容滚动区 ── */
+.panel-body {
+  flex: 1; overflow-y: auto; overflow-x: hidden;
+  padding: 12px 16px;
+  display: grid; gap: 10px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,.1) transparent;
+}
+.panel-body::-webkit-scrollbar { width: 4px; }
+.panel-body::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,.1);
+  border-radius: 2px;
+}
+
+/* ── 游戏风格卡片(面板内用) ── */
+.game-card {
+  display: grid; gap: 8px;
+  padding: 11px 14px;
+  border-radius: 10px;
+  background: rgba(255,255,255,.035);
+  border: 1px solid rgba(255,255,255,.07);
+  transition: all .3s;
+  position: relative;
+  overflow: hidden;
+}
+.game-card::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+}
+.game-card:hover {
+  background: rgba(255,255,255,.055);
+  border-color: rgba(255,255,255,.12);
+}
+/* 稀有度颜色 */
+.game-card.rarity-common::before    { background: #8a8a7a; }
+.game-card.rarity-uncommon::before  { background: #6fc6a0; box-shadow: 0 0 8px rgba(111,198,160,.3); }
+.game-card.rarity-rare::before      { background: #6a9ee8; box-shadow: 0 0 10px rgba(106,158,232,.4); }
+.game-card.rarity-epic::before      { background: #a78ad4; box-shadow: 0 0 12px rgba(167,138,212,.5); }
+.game-card.rarity-legendary::before { background: #e2b04a; box-shadow: 0 0 16px rgba(226,176,74,.6); }
+.game-card.rarity-mythic::before    {
+  background: linear-gradient(180deg, #e8826e, #e2b04a, #6fc6a0);
+  box-shadow: 0 0 20px rgba(232,130,110,.5);
+}
+
+.game-card-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px;
+}
+.game-card-title {
+  font-size: 12.5px; font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.3;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.game-card-badge {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  border-radius: 99px;
+  font-size: 9.5px; font-weight: 600;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+.game-card-badge.planned   { background: rgba(226,176,74,.15); color: var(--gold); }
+.game-card-badge.approved  { background: rgba(111,198,160,.15); color: var(--mint); }
+.game-card-badge.running   { background: rgba(106,158,232,.2); color: var(--accent-blue); animation: badge-pulse 2s ease-in-out infinite; }
+.game-card-badge.completed { background: rgba(255,255,255,.05); color: var(--text-muted); }
+.game-card-badge.failed    { background: rgba(232,130,110,.12); color: var(--coral); }
+.game-card-badge.deferred  { background: rgba(167,138,212,.12); color: var(--plum); }
+.game-card-badge.paused    { background: rgba(255,255,255,.05); color: var(--text-muted); }
+@keyframes badge-pulse {
+  0%, 100% { box-shadow: 0 0 0 rgba(106,158,232,0); }
+  50%      { box-shadow: 0 0 10px rgba(106,158,232,.35); }
+}
+
+.game-card-sub {
+  font-size: 10.5px; color: rgba(244,228,188,.7);
+  line-height: 1.4;
+  overflow: hidden; text-overflow: ellipsis;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.game-card-meta {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px;
+  font-size: 10px; color: var(--text-muted);
+}
+.game-card-tags {
+  display: flex; gap: 5px; flex-wrap: wrap;
+}
+.game-card-tag {
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 9px; font-weight: 600;
+  letter-spacing: .03em;
+  background: rgba(255,255,255,.06);
+  color: var(--text-secondary);
+}
+.game-card-tag.memory    { background: rgba(226,176,74,.14); color: var(--gold); }
+.game-card-tag.learning  { background: rgba(111,198,160,.14); color: var(--mint); }
+.game-card-tag.evolution { background: rgba(232,130,110,.14); color: var(--coral); }
+.game-card-tag.truthfulness { background: rgba(106,158,232,.14); color: var(--accent-blue); }
+.game-card-tag.creativity   { background: rgba(167,138,212,.14); color: var(--plum); }
+
+/* score bar */
+.game-score-bar {
+  height: 5px; border-radius: 3px;
+  background: rgba(255,255,255,.06);
+  overflow: hidden;
+}
+.game-score-fill {
+  height: 100%; border-radius: 3px;
+  transition: width .6s var(--ease-out);
+}
+.game-score-fill.high  { background: linear-gradient(90deg, var(--mint), var(--accent-green)); }
+.game-score-fill.mid   { background: linear-gradient(90deg, var(--gold), var(--accent-yellow)); }
+.game-score-fill.low   { background: linear-gradient(90deg, var(--coral), var(--accent-red)); }
+
+/* ── LM Input 面板专用 ── */
+.lm-section {
+  display: grid; gap: 8px;
+}
+.lm-section-label {
+  font-size: 9.5px; font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+.lm-stat-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(255,255,255,.03);
+  border: 1px solid rgba(255,255,255,.04);
+}
+.lm-stat-icon { font-size: 14px; }
+.lm-stat-label { font-size: 10.5px; color: var(--text-secondary); min-width: 70px; }
+.lm-stat-value {
+  font-size: 11px; font-weight: 700; color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.lm-stat-value.highlight { color: var(--gold); }
+.lm-evidence-list {
+  display: grid; gap: 4px;
+  max-height: 140px; overflow-y: auto;
+}
+.lm-evidence-item {
+  font-size: 10px; color: rgba(244,228,188,.65);
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: rgba(255,255,255,.025);
+  border-left: 2px solid rgba(255,255,255,.08);
+  line-height: 1.4;
+}
+.lm-evidence-item .ei-node {
+  color: var(--accent-purple);
+  font-weight: 600;
+}
+.lm-prompt-preview {
+  font: 9px/1.5 "Courier New", monospace;
+  color: #7ee0c0;
+  background: rgba(0,0,0,.3);
+  border-radius: 8px;
+  padding: 10px 12px;
+  max-height: 120px; overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ── 认知面板专用 ── */
+.cog-flow {
+  display: grid; gap: 8px;
+}
+.cog-step {
+  display: grid; grid-template-columns: 90px 1fr;
+  gap: 8px; align-items: start;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255,255,255,.025);
+  border: 1px solid rgba(255,255,255,.04);
+}
+.cog-step-label {
+  font-size: 10px; font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding-top: 1px;
+}
+.cog-step-content {
+  display: grid; gap: 3px;
+}
+.cog-step-title {
+  font-size: 11.5px; font-weight: 600;
+  color: var(--text-primary);
+}
+.cog-step-detail {
+  font-size: 10px; color: rgba(244,228,188,.65);
+  line-height: 1.35;
+}
+.cog-need-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 9px; font-weight: 600;
+  margin: 1px 2px;
+}
+.cog-need-tag.severity-high { background: rgba(232,130,110,.2); color: var(--coral); }
+.cog-need-tag.severity-mid  { background: rgba(226,176,74,.18); color: var(--gold); }
+.cog-need-tag.severity-low  { background: rgba(111,198,160,.14); color: var(--mint); }
+
+/* ── 队列面板专用 ── */
+.queue-filter-row {
+  display: flex; gap: 6px; flex-wrap: wrap;
+}
+.queue-filter-chip {
+  padding: 4px 12px;
+  border-radius: 99px;
+  font-size: 10px; font-weight: 600;
+  border: 1px solid rgba(255,255,255,.08);
+  background: rgba(255,255,255,.03);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all .2s;
+  font-family: inherit;
+}
+.queue-filter-chip:hover {
+  background: rgba(255,255,255,.07);
+  color: var(--text-primary);
+}
+.queue-filter-chip.active {
+  background: rgba(226,176,74,.15);
+  border-color: rgba(226,176,74,.3);
+  color: var(--gold);
+}
+
+/* ── 角色迷你状态条(Dock 左侧) ── */
+.dock-char-strip {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 10px;
+  height: 38px;
+  border-radius: 8px;
+  background: rgba(255,255,255,.03);
+  border: 1px solid rgba(255,255,255,.05);
+  margin-right: auto;
+  min-width: 0;
+}
+.dock-char-strip .dcs-avatar {
+  position: relative; width: 26px; height: 32px; flex-shrink: 0;
+}
+.dcs-avatar .dcs-head {
+  position: absolute; top: 0; left: 3px;
+  width: 20px; height: 18px;
+  background: linear-gradient(155deg, #ffe8d0, #f4d4b0);
+  border-radius: 50% 50% 46% 48%;
+}
+.dcs-avatar .dcs-hair {
+  position: absolute; top: -2px; left: 1px;
+  width: 24px; height: 10px;
+  background: linear-gradient(180deg, #3a4a5e, #1a2030);
+  border-radius: 12px 12px 2px 2px;
+  z-index: 2;
+}
+.dcs-avatar .dcs-body-mini {
+  position: absolute; bottom: 0; left: 5px;
+  width: 16px; height: 14px;
+  background: linear-gradient(140deg, #6fc6a0, #4a9070);
+  border-radius: 6px 6px 4px 4px;
+  transition: background .6s;
+}
+body[data-action="organize"] .dcs-body-mini { background: linear-gradient(140deg, #f4d4a8, #d4954a); }
+body[data-action="rest"]     .dcs-body-mini { background: linear-gradient(140deg, #6fc6a0, #4a9070); }
+body[data-action="work"]     .dcs-body-mini { background: linear-gradient(140deg, #6a7eb8, #4a6098); }
+body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg, #a78ad4, #7a5ab0); }
+.dcs-info {
+  display: flex; flex-direction: column; gap: 0;
+  min-width: 0; overflow: hidden;
+}
+.dcs-name {
+  font-size: 10.5px; font-weight: 700; color: var(--text-primary);
+  white-space: nowrap;
+}
+.dcs-status {
+  font-size: 9px; color: var(--text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dcs-hp-bar {
+  height: 2px; border-radius: 1px;
+  background: rgba(255,255,255,.08);
+  width: 40px; overflow: hidden;
+}
+.dcs-hp-fill {
+  height: 100%; border-radius: 1px;
+  transition: width .5s, background .5s;
+}
+.dcs-hp-fill.good   { background: var(--mint); }
+.dcs-hp-fill.warn   { background: var(--gold); }
+.dcs-hp-fill.danger { background: var(--coral); }
+
+/* ── 面板空状态 ── */
+.panel-empty {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+  color: var(--text-muted);
+  gap: 6px;
+  text-align: center;
+}
+.panel-empty .pe-icon { font-size: 32px; opacity: .5; }
+.panel-empty .pe-text { font-size: 12px; }
+
+/* ── 场景迷你标题(左上角轻量提示) ── */
+.scene-mini-title {
+  position: absolute;
+  left: 18px; top: 18px;
+  z-index: 20;
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  background: rgba(20,14,10,.75);
+  border: 1px solid rgba(255,255,255,.06);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  font-size: 11px; font-weight: 600;
+  color: var(--text-primary);
+  pointer-events: none;
+  transition: opacity .8s;
+}
+.scene-mini-title span:first-child { font-size: 14px; }
+
+/* ── Dock 响应式 ── */
+@media (max-width: 720px) {
+  .bottom-dock { height: 44px; padding: 0 8px; gap: 0; }
+  .dock-btn { width: 38px; height: 36px; }
+  .dock-btn .db-icon { font-size: 15px; }
+  .dock-btn .db-label { font-size: 7px; }
+  .dock-sep { margin: 0 2px; }
+  .dock-char-strip { padding: 0 6px; gap: 4px; }
+  .dock-panel { max-height: 320px; border-radius: 10px 10px 0 0; }
+  .dock-panels { padding: 0 8px 6px; }
+}
+
+/* ── drill-down 详情抽屉 ── */
+.drawer-mask {
+  position: fixed; inset: 0;
+  z-index: 200;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(30,14,8,.5);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  opacity: 0; pointer-events: none;
+  transition: opacity .25s var(--ease-out);
+}
+.drawer-mask.open { opacity: 1; pointer-events: auto; }
+.drawer {
+  width: min(680px, 92vw);
+  max-height: 84vh;
+  overflow-y: auto;
+  background: linear-gradient(168deg, #2f2118 0%, #241813 100%);
+  border: 1px solid rgba(226,176,74,.25);
+  border-radius: 16px;
+  box-shadow: 0 30px 80px rgba(0,0,0,.6);
+  padding: 18px 20px 22px;
+  transform: translateY(16px) scale(.98);
+  opacity: 0;
+  transition: transform .28s var(--ease-out), opacity .28s var(--ease-out);
+}
+.drawer-mask.open .drawer { transform: translateY(0) scale(1); opacity: 1; }
+.drawer-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 14px; padding-bottom: 10px;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+}
+.drawer-title {
+  font-size: 14px; font-weight: 700; color: var(--text-primary);
+  display: flex; align-items: center; gap: 8px;
+}
+.drawer-close {
+  width: 28px; height: 28px; flex-shrink: 0;
+  border: none; border-radius: 8px; cursor: pointer;
+  background: rgba(255,255,255,.06); color: var(--text-secondary);
+  font-size: 18px; line-height: 1;
+  transition: background .2s;
+}
+.drawer-close:hover { background: rgba(232,130,110,.25); color: var(--text-primary); }
+.drawer-sub {
+  font-size: 10px; color: var(--text-muted);
+  margin: -8px 0 14px; line-height: 1.5;
+}
+/* 双泳道 */
+.lane-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 560px) { .lane-grid { grid-template-columns: 1fr; } }
+.lane-col {
+  border-radius: 12px; padding: 12px;
+  background: rgba(255,255,255,.03);
+  border: 1px solid rgba(255,255,255,.06);
+}
+.lane-col.supervisor { border-top: 2px solid var(--gold); }
+.lane-col.agent { border-top: 2px solid var(--mint); }
+.lane-col-head {
+  font-size: 11px; font-weight: 700; color: var(--text-primary);
+  display: flex; align-items: center; gap: 6px; margin-bottom: 4px;
+}
+.lane-col-tag { font-size: 8px; color: var(--text-muted); font-weight: 600; }
+.lane-metric {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 10.5px; color: var(--text-secondary); padding: 3px 0;
+}
+.lane-metric b { color: var(--text-primary); font-size: 13px; font-variant-numeric: tabular-nums; }
+.lane-active {
+  margin-top: 8px; padding: 8px; border-radius: 8px;
+  background: rgba(0,0,0,.2); font-size: 10px; color: var(--text-secondary);
+}
+.lane-active .la-title { color: var(--text-primary); font-weight: 600; font-size: 11px; }
+/* 因果链 / 通用区块 */
+.drawer-section { margin-bottom: 14px; }
+.drawer-section-label {
+  font-size: 10px; font-weight: 700; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: .05em; margin-bottom: 6px;
+}
+.prov-chain { display: grid; gap: 0; }
+.prov-node {
+  position: relative; padding: 8px 10px 8px 22px;
+  border-left: 2px solid rgba(226,176,74,.3);
+}
+.prov-node::before {
+  content: ''; position: absolute; left: -5px; top: 12px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--gold); box-shadow: 0 0 6px var(--gold-g);
+}
+.prov-node-label { font-size: 10px; font-weight: 700; color: var(--accent-yellow); }
+.prov-node-body { font-size: 10.5px; color: var(--text-secondary); margin-top: 2px; line-height: 1.5; }
+.health-row {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 11px; color: var(--text-secondary);
+  padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,.04);
+}
+.health-row .hr-val { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+.drill-link {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 9.5px; font-weight: 700; cursor: pointer;
+  color: var(--accent-yellow);
+  padding: 4px 10px; border-radius: 999px;
+  background: rgba(226,176,74,.12);
+  border: 1px solid rgba(226,176,74,.25);
+  transition: background .2s;
+}
+.drill-link:hover { background: rgba(226,176,74,.24); }
 </style>
 </head>
 <body data-scene="idle" data-action="rest" data-has-errors="false" data-exec-window="true">
@@ -1921,7 +2833,7 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
       <div class="fl-base"></div>
     </div>
 
-    <!-- 角色: 义子 -->
+    <!-- 角色: 西子(长发女) -->
     <section class="xizi" aria-hidden="true">
       <div class="xz-hair-back"></div>
       <div class="xz-hair"></div>
@@ -1943,87 +2855,174 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
       </div>
     </section>
 
+    <!-- 角色: 星子(短发男) -->
+    <section class="xingzi" aria-hidden="true">
+      <div class="xs-hair-back"></div>
+      <div class="xs-hair"></div>
+      <div class="xs-bangs"></div>
+      <div class="xs-head"></div>
+      <div class="xs-brow l"></div><div class="xs-brow r"></div>
+      <div class="xs-eye l"></div><div class="xs-eye r"></div>
+      <div class="xs-cheek l"></div><div class="xs-cheek r"></div>
+      <div class="xs-mouth"></div>
+      <div class="xs-shirt"></div>
+      <div class="xs-belt"></div>
+      <div class="xs-pants"></div>
+      <div class="xs-arm l"></div><div class="xs-arm r"></div>
+      <div class="xs-leg l"></div><div class="xs-leg r"></div>
+      <div class="xs-prop"></div>
+      <div class="thoughts">
+        <span class="bubble b1"></span>
+        <span class="bubble b2"></span>
+        <span class="bubble b3"></span>
+        <span class="glyph" id="glyphXingzi">·</span>
+      </div>
+    </section>
+
     <!-- 环境粒子 -->
     <div class="particles" id="particles" aria-hidden="true"></div>
 
-    <!-- 任务卡片(保留) -->
-    <div class="char-card" id="charCard">
-      <button class="char-toggle" id="charToggle" aria-label="收起任务卡" title="收起/展开">−</button>
-      <div class="char-avatar">
-        <div class="av-hair"></div>
-        <div class="av-head"></div>
-        <div class="av-eyes"><span class="av-eye"></span><span class="av-eye"></span></div>
-        <div class="av-mouth"></div>
-        <div class="av-body"></div>
+    <!-- 场景标题(轻量) -->
+    <div class="scene-mini-title" id="sceneMiniTitle">
+      <span id="sceneMiniIcon">🛋</span>
+      <span id="sceneMiniText">星子与西子的小屋</span>
+    </div>
+
+    <!-- ═══════════════════════════════════════════
+    底部菜单系统 —— 游戏风格 Dock + 滑出面板
+    默认隐藏, 鼠标触及下边缘自动弹出
+    ════════════════════════════════════════════ -->
+
+    <!-- 底部触发区 -->
+    <div class="bottom-trigger" id="bottomTrigger"></div>
+
+    <!-- 面板层(在 Dock 上方滑出) -->
+    <div class="dock-panels" id="dockPanels">
+
+      <!-- 📋 任务面板 -->
+      <div class="dock-panel" id="panelTasks">
+        <div class="panel-header">
+          <div class="panel-title"><span class="pt-icon">📋</span>任务看板</div>
+          <button class="panel-close" data-panel="tasks">×</button>
+        </div>
+        <div class="panel-body" id="panelTasksBody">
+        </div>
       </div>
-      <div class="char-info">
-        <div class="char-name">义子 <span class="ch-title" id="chTitle">初始替身</span></div>
-        <div class="char-lv">等级 <span class="lv-val" id="chLevel">1</span></div>
-        <div class="char-exp-wrap"><div class="char-exp-fill" id="chExpBar"></div></div>
-        <div class="char-exp-text"><span id="chExpText">0 次替身切换</span></div>
-        <div class="char-health"><span class="ch-hp" id="chHP">❤️ 100%</span><span id="chMood">✨ 完美</span></div>
+
+      <!-- 🧠 LM 输入面板 -->
+      <div class="dock-panel" id="panelLMInput">
+        <div class="panel-header">
+          <div class="panel-title"><span class="pt-icon">🧠</span>LM 输入监视器</div>
+          <button class="panel-close" data-panel="lminput">×</button>
+        </div>
+        <div class="panel-body" id="panelLMInputBody">
+        </div>
+      </div>
+
+      <!-- 📊 认知面板 -->
+      <div class="dock-panel" id="panelCognition">
+        <div class="panel-header">
+          <div class="panel-title"><span class="pt-icon">📊</span>认知状态 · Perception → Intent</div>
+          <button class="panel-close" data-panel="cognition">×</button>
+        </div>
+        <div class="panel-body" id="panelCognitionBody">
+        </div>
+      </div>
+
+      <!-- ⚙️ 队列面板 -->
+      <div class="dock-panel" id="panelQueue">
+        <div class="panel-header">
+          <div class="panel-title"><span class="pt-icon">⚙️</span>队列治理</div>
+          <button class="panel-close" data-panel="queue">×</button>
+        </div>
+        <div class="panel-body" id="panelQueueBody">
+        </div>
+      </div>
+
+      <!-- 📈 统计面板 -->
+      <div class="dock-panel" id="panelStats">
+        <div class="panel-header">
+          <div class="panel-title"><span class="pt-icon">📈</span>运行统计</div>
+          <button class="panel-close" data-panel="stats">×</button>
+        </div>
+        <div class="panel-body" id="panelStatsBody">
+        </div>
       </div>
     </div>
 
-    <!-- 状态面板开关 -->
-    <button class="status-toggle" id="statusToggle" aria-label="收起面板" title="收起/展开">−</button>
-
-    <!-- 状态面板(右上方) -->
-    <aside class="status" id="statusPanel" aria-live="polite">
-      <h1 id="sceneTitle">义子的小屋</h1>
-      <p class="status-summary" id="sceneSummary">正在连接监督者…</p>
-      <div class="queue-stack" id="queueStack">
-        <section class="queue-section">
-          <div class="section-head">
-            <div class="section-label">统计卡</div>
-          </div>
-          <div class="metrics" id="metrics"></div>
-        </section>
-        <section class="queue-section">
-          <div class="section-head">
-            <div class="section-label">监督者执行卡</div>
-          </div>
-          <div class="queue-slot" id="supervisorActive"></div>
-        </section>
-        <section class="queue-section">
-          <div class="section-head">
-            <div class="section-label">Agent 执行卡</div>
-          </div>
-          <div class="queue-slot" id="agentActive"></div>
-        </section>
-        <section class="queue-section">
-          <div class="section-head">
-            <div class="section-label">定时队列卡</div>
-            <div class="window-pill" id="windowPill">预设时间 00:00-06:00</div>
-          </div>
-          <div class="schedule" id="schedule" style="display:none;">
-            <div class="schedule-label">⏳ 下次定时审核</div>
-            <div class="schedule-countdown" id="countdown">—</div>
-          </div>
-          <div class="timed-list" id="timedQueue"></div>
-        </section>
-        <section class="queue-section">
-          <div class="section-head">
-            <div class="section-label">内生驱动治理投影列表</div>
-          </div>
-          <div class="queue-slot" id="candidateSlot"></div>
-        </section>
+    <!-- 底部 Dock 栏 -->
+    <nav class="bottom-dock" id="bottomDock">
+      <!-- 角色迷你状态 -->
+      <div class="dock-char-strip" id="dockCharStrip">
+        <div class="dcs-avatar">
+          <div class="dcs-hair"></div>
+          <div class="dcs-head"></div>
+          <div class="dcs-body-mini"></div>
+        </div>
+        <div class="dcs-info">
+          <div class="dcs-name" id="dcsName">西子</div>
+          <div class="dcs-status" id="dcsStatus">就绪</div>
+        </div>
+        <div class="dcs-hp-bar"><div class="dcs-hp-fill good" id="dcsHpFill" style="width:100%"></div></div>
       </div>
-    </aside>
 
-    <!-- 动作切换器(底部) -->
-    <div class="action-bar" id="actionBar">
-      <button class="action-btn" data-action="organize"><span class="ico">📚</span>整理</button>
-      <button class="action-btn" data-action="rest"><span class="ico">🛋</span>休息</button>
-      <button class="action-btn" data-action="work"><span class="ico">💻</span>工作</button>
-      <button class="action-btn" data-action="write"><span class="ico">✍️</span>任务审核</button>
+      <button class="dock-btn" data-panel="tasks" title="任务看板">
+        <span class="db-icon">📋</span>
+        <span class="db-label">任务</span>
+      </button>
+      <span class="dock-sep"></span>
+      <button class="dock-btn" data-panel="lminput" title="LM 输入">
+        <span class="db-icon">🧠</span>
+        <span class="db-label">LM输入</span>
+      </button>
+      <span class="dock-sep"></span>
+      <button class="dock-btn" data-panel="cognition" title="认知状态">
+        <span class="db-icon">📊</span>
+        <span class="db-label">认知</span>
+      </button>
+      <span class="dock-sep"></span>
+      <button class="dock-btn" data-panel="queue" title="队列治理">
+        <span class="db-icon">⚙️</span>
+        <span class="db-label">队列</span>
+      </button>
+      <span class="dock-sep"></span>
+      <button class="dock-btn" data-panel="stats" title="运行统计">
+        <span class="db-icon">📈</span>
+        <span class="db-label">统计</span>
+      </button>
+
+      <!-- 动作切换(紧凑) -->
+      <span class="dock-sep" style="margin-left:12px;"></span>
+      <button class="dock-btn" data-action-btn="rest" title="休息">
+        <span class="db-icon">🛋</span>
+      </button>
+      <button class="dock-btn" data-action-btn="work" title="工作">
+        <span class="db-icon">💻</span>
+      </button>
+      <button class="dock-btn" data-action-btn="organize" title="整理">
+        <span class="db-icon">📚</span>
+      </button>
+      <button class="dock-btn" data-action-btn="write" title="审核">
+        <span class="db-icon">✍️</span>
+      </button>
+    </nav>
+
+    <!-- drill-down 详情抽屉 -->
+    <div class="drawer-mask" id="detailDrawer">
+      <div class="drawer" id="detailDrawerCard">
+        <div class="drawer-head">
+          <div class="drawer-title" id="detailDrawerTitle">详情</div>
+          <button class="drawer-close" id="detailDrawerClose">×</button>
+        </div>
+        <div id="detailDrawerBody"></div>
+      </div>
     </div>
 
   </main>
 </div>
 <script>
 /*━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  VoidCube 监督者小屋  v4  ——  运行时
+  VoidCube 监督者小屋  v5  ——  底部菜单系统
   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━*/
 const $  = (s, el) => (el||document).querySelector(s);
 const $$ = (s, el) => [...(el||document).querySelectorAll(s)];
@@ -2040,94 +3039,88 @@ function updateRoomScale() {
   document.documentElement.style.setProperty('--room-scale', scale);
 }
 
-/* ── DOM ── */
+/* ── DOM refs ── */
 const els = {
   body: document.body,
-  title: $('#sceneTitle'),
-  summary: $('#sceneSummary'),
   glyph: $('#glyph'),
-  metrics: $('#metrics'),
-  queueStack: $('#queueStack'),
-  supervisorActive: $('#supervisorActive'),
-  agentActive: $('#agentActive'),
-  timedQueue: $('#timedQueue'),
-  candidateSlot: $('#candidateSlot'),
-  windowPill: $('#windowPill'),
+  glyphXingzi: $('#glyphXingzi'),
+  /* character switching */
+  activeChar: 'xizi',
   particles: $('#particles'),
-  actionBar: $('#actionBar'),
   wcHour: $('#wcHour'),
+  /* bottom dock */
+  dock: $('#bottomDock'),
+  trigger: $('#bottomTrigger'),
+  panels: $('#dockPanels'),
+  /* scene mini title */
+  sceneMiniIcon: $('#sceneMiniIcon'),
+  sceneMiniText: $('#sceneMiniText'),
+  /* dock char strip */
+  dcsName: $('#dcsName'),
+  dcsStatus: $('#dcsStatus'),
+  dcsHpFill: $('#dcsHpFill'),
+  /* panel bodies */
+  panelTasksBody: $('#panelTasksBody'),
+  panelLMInputBody: $('#panelLMInputBody'),
+  panelCognitionBody: $('#panelCognitionBody'),
+  panelQueueBody: $('#panelQueueBody'),
+  panelStatsBody: $('#panelStatsBody'),
+  /* drill-down drawer */
+  drawer: $('#detailDrawer'),
+  drawerCard: $('#detailDrawerCard'),
+  drawerTitle: $('#detailDrawerTitle'),
+  drawerClose: $('#detailDrawerClose'),
+  drawerBody: $('#detailDrawerBody'),
 };
 
 /* ── 场景 → 动作自动映射 ── */
 const SCENE_TO_ACTION = {
-  idle: 'rest',
-  planning: 'work',
-  drive: 'organize',
-  memory: 'organize',
-  maintenance: 'organize',
-  dispatch: 'write',
+  idle: 'rest', planning: 'work', drive: 'organize',
+  memory: 'organize', maintenance: 'organize', dispatch: 'write',
 };
 const GLYPHS = {
   idle: '·', planning: '!', drive: '✦', memory: 'λ',
   maintenance: '¶', dispatch: '⟩',
 };
-const EVENT_ICONS = {
-  endogenous_drive_evaluated: '🧠',
-  endogenous_drive_planned: '💡',
-  endogenous_drive_idle: '😴',
-  task_planned: '📋',
-  task_decided: '⚖️',
-  tasks_reviewed: '🔍',
-  tasks_planned: '📝',
-  execution_dispatched: '🚀',
-  self_learning_submitted: '📖',
-  self_learning_completed: '✅',
-  memory_compression: '💾',
-  task_decision: '⚖️',
+const SCENE_ICONS = {
+  idle: '🛋', planning: '💻', drive: '📚', memory: '🧠',
+  maintenance: '🔧', dispatch: '✍️',
 };
-const eventIcon = t => EVENT_ICONS[t] || '●';
 
-function taskDotClass(t) {
-  const identity = t.task_identity || {};
-  const f = String(identity.display_kind || t.task_family || t.governance_task_type || '');
-  if (f.includes('memory'))    return 'memory';
-  if (f.includes('learning'))  return 'learning';
-  if (f.includes('evolution') || f.includes('body')) return 'evolution';
-  return 'planning';
-}
-
-function timedQueueDotClass(t) {
-  return taskLane(t) === 'agent' ? 'agent' : 'supervisor';
-}
-
+/* ── 工具函数 ── */
 function taskLane(t) {
   return String(t.lane || '').trim() || (
     String(t.governance_task_type || '').trim() === 'self_learning' ||
     String(t.execution_kind || '').trim() === 'body_improvement'
-      ? 'agent'
-      : 'supervisor'
+      ? 'agent' : 'supervisor'
   );
 }
-
+function typeLabel(t) {
+  const identity = t.task_identity || {};
+  const displayKind = String(identity.display_kind || t.execution_kind || '').trim();
+  const governance = String(t.governance_task_type || '').trim();
+  const primary = displayKind || governance || String(t.task_family || '').trim();
+  const typeMap = {
+    self_learning: '自主学习', body_improvement: '替身改进',
+    memory_maintenance: '记忆维护', self_evolution: '通用演化',
+    general_self_evolution: '通用演化',
+  };
+  return typeMap[primary] || primary.replace(/_/g, ' ') || '任务';
+}
 function taskIdentityHint(t) {
   const identity = t.task_identity || {};
   const family = String(identity.task_family || t.task_family || '').trim();
   const displayKind = String(identity.display_kind || identity.execution_kind || '').trim();
-  if (family && displayKind && family !== displayKind) {
-    return '任务家族: ' + family + ' · 执行动作: ' + displayKind;
-  }
+  if (family && displayKind && family !== displayKind) return '任务家族: ' + family + ' · 执行动作: ' + displayKind;
   if (displayKind) return '任务类型: ' + displayKind;
   if (family) return '任务家族: ' + family;
   return '';
 }
-
 function governanceHint(t) {
   const preview = t.governance_preview || {};
   const direct = preview.lm_queue_review || null;
   const shadow = preview.lm_queue_shadow || null;
-  if (direct && direct.action) {
-    return '监督者已裁定: ' + String(direct.action) + ' · ' + String(direct.reason || '').slice(0, 80);
-  }
+  if (direct && direct.action) return '监督者已裁定: ' + String(direct.action) + ' · ' + String(direct.reason || '').slice(0, 80);
   if (shadow && shadow.action) {
     let extra = '';
     if (shadow.merge_into) extra = ' -> ' + String(shadow.merge_into).slice(0, 16);
@@ -2136,264 +3129,897 @@ function governanceHint(t) {
   }
   return '';
 }
+function statusLabel(s) {
+  const map = { planned:'待审核', approved:'待执行', running:'执行中', deferred:'已推迟', paused:'已暂停', completed:'已完成', failed:'失败', cancelled:'已取消', awaiting_review:'待审查', retry:'重试' };
+  return map[s] || s || '待定';
+}
+function rarityClass(task) {
+  const u = task.utility || 0;
+  if (u >= 0.85) return 'rarity-mythic';
+  if (u >= 0.70) return 'rarity-legendary';
+  if (u >= 0.55) return 'rarity-epic';
+  if (u >= 0.35) return 'rarity-rare';
+  if (u >= 0.15) return 'rarity-uncommon';
+  return 'rarity-common';
+}
+function tagClass(tag) {
+  if (/memory/i.test(tag)) return 'memory';
+  if (/learn/i.test(tag)) return 'learning';
+  if (/evolution|body/i.test(tag)) return 'evolution';
+  if (/truth/i.test(tag)) return 'truthfulness';
+  if (/creat/i.test(tag)) return 'creativity';
+  return '';
+}
+function scoreClass(v) { return v >= 0.7 ? 'high' : v >= 0.4 ? 'mid' : 'low'; }
+function hpPercent(state) { return Math.max(0, 100 - (state.error_count || 0) * 10); }
 
-/* ── 任务卡片渲染 ── */
-function renderCharCard(state) {
+/* ═══════════════════════════════════════════
+   底部 Dock 交互逻辑
+   ═══════════════════════════════════════════ */
+let dockVisible = false, dockHovered = false, panelOpen = null;
+let dockHideTimer = null;
+
+function showDock() {
+  if (!dockVisible) { dockVisible = true; els.dock.classList.add('visible'); }
+  if (dockHideTimer) { clearTimeout(dockHideTimer); dockHideTimer = null; }
+}
+function hideDock() {
+  if (dockHideTimer) clearTimeout(dockHideTimer);
+  dockHideTimer = setTimeout(() => {
+    if (!dockHovered && !panelOpen) {
+      dockVisible = false;
+      els.dock.classList.remove('visible');
+    }
+  }, 600);
+}
+
+// 底部触发区 hover
+if (els.trigger) {
+  els.trigger.addEventListener('mouseenter', showDock);
+  els.trigger.addEventListener('mouseleave', hideDock);
+}
+// Dock 自身 hover
+if (els.dock) {
+  els.dock.addEventListener('mouseenter', () => { dockHovered = true; showDock(); });
+  els.dock.addEventListener('mouseleave', () => { dockHovered = false; hideDock(); });
+}
+
+/* ── 面板切换 ── */
+function openPanel(name) {
+  if (panelOpen && panelOpen !== name) closePanel(panelOpen);
+  const panelId = 'panel' + name.charAt(0).toUpperCase() + name.slice(1).replace(/input$/i, 'Input');
+  const panel = document.getElementById(panelId);
+  if (!panel) return;
+  panel.classList.add('open');
+  panelOpen = name;
+  $$('.dock-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.panel === name);
+  });
+  showDock();
+  // 立即渲染该面板
+  if (lastState) {
+    if (name === 'tasks') renderTasksPanel(lastState);
+    if (name === 'lminput') renderLMInputPanel(lastState);
+    if (name === 'cognition') renderCognitionPanel(lastState);
+    if (name === 'queue') renderQueuePanel(lastState);
+    if (name === 'stats') renderStatsPanel(lastState);
+  }
+}
+function closePanel(name) {
+  const panelId = 'panel' + name.charAt(0).toUpperCase() + name.slice(1).replace(/input$/i, 'Input');
+  const panel = document.getElementById(panelId);
+  if (!panel) return;
+  panel.classList.remove('open');
+  if (panelOpen === name) panelOpen = null;
+  $$('.dock-btn').forEach(b => {
+    if (b.dataset.panel === name) b.classList.remove('active');
+  });
+}
+
+// Dock 按钮点击 → 切换面板
+if (els.dock) {
+  els.dock.addEventListener('click', e => {
+    const btn = e.target.closest('.dock-btn');
+    if (!btn) return;
+    // 动作按钮
+    if (btn.dataset.actionBtn) {
+      const a = btn.dataset.actionBtn;
+      setAction(a, false);
+      userPickedAction = { scene: '__manual__', action: a };
+      updateDockActionButtons();
+      return;
+    }
+    // 面板按钮
+    const panelName = btn.dataset.panel;
+    if (!panelName) return;
+    if (panelOpen === panelName) { closePanel(panelName); return; }
+    openPanel(panelName);
+  });
+}
+
+// 面板关闭按钮
+document.addEventListener('click', e => {
+  const closeBtn = e.target.closest('.panel-close');
+  if (closeBtn) {
+    const name = closeBtn.dataset.panel;
+    if (name) closePanel(name);
+  }
+});
+
+// 点击面板外区域关闭
+document.addEventListener('click', e => {
+  if (!panelOpen) return;
+  const panelId = 'panel' + panelOpen.charAt(0).toUpperCase() + panelOpen.slice(1).replace(/input$/i, 'Input');
+  const panel = document.getElementById(panelId);
+  if (!panel) return;
+  if (!panel.contains(e.target) && !e.target.closest('.bottom-dock')) {
+    closePanel(panelOpen);
+  }
+});
+
+/* ═══════════════════════════════════════════
+   drill-down 详情抽屉
+   ═══════════════════════════════════════════ */
+let drawerOpen = null;  // 当前抽屉类型: 'lanes' | 'provenance' | 'health' | null
+
+const DRAWER_META = {
+  lanes:      { icon: '🚦', title: '双泳道治理总览' },
+  provenance: { icon: '🔎', title: '内生驱动决策溯源' },
+  health:     { icon: '💗', title: '身体 / 记忆健康度' },
+};
+
+function openDrawer(type) {
+  if (!els.drawer || !DRAWER_META[type]) return;
+  drawerOpen = type;
+  const meta = DRAWER_META[type];
+  if (els.drawerTitle) els.drawerTitle.innerHTML = '<span>' + meta.icon + '</span>' + meta.title;
+  renderDrawer();
+  els.drawer.classList.add('open');
+}
+
+function closeDrawer() {
+  drawerOpen = null;
+  if (els.drawer) els.drawer.classList.remove('open');
+}
+
+function renderDrawer() {
+  if (!drawerOpen || !els.drawerBody) return;
+  const state = lastState || {};
+  if (drawerOpen === 'lanes') renderLanesDrawer(state);
+  else if (drawerOpen === 'provenance') renderProvenanceDrawer(state);
+  else if (drawerOpen === 'health') renderHealthDrawer(state);
+}
+
+// 抽屉关闭交互
+if (els.drawerClose) els.drawerClose.addEventListener('click', closeDrawer);
+if (els.drawer) {
+  els.drawer.addEventListener('click', e => {
+    if (e.target === els.drawer) closeDrawer();  // 点遮罩关闭
+  });
+}
+if (els.drawerCard) {
+  // 防止抽屉内点击冒泡到"点击面板外关闭"监听
+  els.drawerCard.addEventListener('click', e => e.stopPropagation());
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && drawerOpen) closeDrawer();
+});
+// 入口点击(事件委托): 任意带 data-drill 的元素
+document.addEventListener('click', e => {
+  const trigger = e.target.closest('[data-drill]');
+  if (!trigger) return;
+  e.stopPropagation();
+  openDrawer(trigger.dataset.drill);
+});
+
+function drillButton(type, label) {
+  return '<span class="drill-link" data-drill="' + type + '">🔬 ' + label + '</span>';
+}
+
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function pct(v) { return (v != null && !isNaN(v)) ? Math.round(v * 100) + '%' : '—'; }
+
+/* ── 🚦 双泳道治理总览 ── */
+function renderLanesDrawer(state) {
+  const layout = state.queue_layout || {};
+  const win = layout.window || {};
+  const timed = Array.isArray(layout.timed_queue) ? layout.timed_queue : [];
+  const cands = Array.isArray(layout.candidate_list) ? layout.candidate_list : [];
+
+  // 按 lane 归类定时队列
+  function isAgentLane(t) {
+    const lane = String((t || {}).lane || '').trim();
+    if (lane) return lane === 'agent';
+    const gov = String((t || {}).governance_task_type || '').trim();
+    const ek = String((t || {}).execution_kind || '').trim();
+    return gov === 'self_learning' || ek === 'body_improvement';
+  }
+  const supQueued = timed.filter(t => !isAgentLane(t));
+  const agtQueued = timed.filter(isAgentLane);
+  const supCand = cands.filter(c => !isAgentLane(c));
+  const agtCand = cands.filter(isAgentLane);
+
+  function activeBlock(task) {
+    if (!task) return '<div class="lane-active" style="color:var(--text-muted);">空闲 · 无活跃任务</div>';
+    return '<div class="lane-active"><div class="la-title">' + esc(String(task.title || '未命名').substring(0, 48)) +
+      '</div><div style="margin-top:3px;">状态: ' + esc(task.display_status || task.status || '—') + '</div></div>';
+  }
+  function laneCol(cls, icon, name, tag, active, queuedN, candN) {
+    return '<div class="lane-col ' + cls + '">' +
+      '<div class="lane-col-head">' + icon + ' ' + name + ' <span class="lane-col-tag">' + tag + '</span></div>' +
+      '<div class="lane-metric"><span>定时队列</span><b>' + queuedN + '</b></div>' +
+      '<div class="lane-metric"><span>待治理候选</span><b>' + candN + '</b></div>' +
+      activeBlock(active) + '</div>';
+  }
+
+  const winColor = win.open ? 'var(--mint)' : 'var(--gold)';
+  let html = '<div class="drawer-sub">监督者本体只处理自身维护(记忆 / 演化)。学习与替身改进委派给 API-A agent 执行。' +
+    '执行窗口: <span style="color:' + winColor + ';">' + esc(win.range || '00:00-06:00') + ' · ' + esc(win.status_text || '') + '</span></div>';
+  html += '<div class="lane-grid">' +
+    laneCol('supervisor', '🧠', '监督者自维护', 'API-B · 记忆/演化',
+      layout.supervisor_active, supQueued.length, supCand.length) +
+    laneCol('agent', '🤖', 'Agent 执行', 'API-A · 学习/替身改进',
+      layout.agent_active, agtQueued.length, agtCand.length) +
+    '</div>';
+  els.drawerBody.innerHTML = html;
+}
+
+/* ── 🔎 内生驱动决策溯源 ── */
+function renderProvenanceDrawer(state) {
+  const cog = state.cognition || {};
+  const p = cog.perception || {};
+  const wm = cog.world_model || {};
+  const needs = Array.isArray(cog.needs) ? cog.needs : [];
+  const intents = Array.isArray(cog.intents) ? cog.intents : [];
+  const policy = cog.adaptive_policy || {};
+  const cands = Array.isArray((state.queue_layout || {}).candidate_list)
+    ? state.queue_layout.candidate_list : [];
+
+  if (!Object.keys(p).length && !needs.length) {
+    els.drawerBody.innerHTML = '<div class="drawer-sub">认知状态尚未初始化。激活 Governor 模式后内生驱动会填充感知→意图链。</div>';
+    return;
+  }
+
+  let chain = '<div class="prov-chain">';
+  chain += '<div class="prov-node"><div class="prov-node-label">👁 感知 PERCEPTION</div><div class="prov-node-body">' +
+    '系统姿态 ' + esc(p.system_posture || '—') + ' · 活跃队列 ' + (p.active_queue_count || 0) +
+    ' · 近期错误 ' + (p.recent_errors || 0) + ' · 修正信号 ' + (p.correction_signals || 0) + '</div></div>';
+  chain += '<div class="prov-node"><div class="prov-node-label">🌍 世界模型 WORLD MODEL</div><div class="prov-node-body">' +
+    '队列健康 ' + esc(wm.queue_health || '—') + ' · 记忆压力 ' + pct(wm.memory_pressure) +
+    ' · 真实性压力 ' + pct(wm.truthfulness_pressure) + ' · 学习动量 ' + pct(wm.learning_momentum) + '</div></div>';
+  // needs
+  let needBody = needs.length
+    ? needs.map(n => '· ' + esc(n.need_type || 'unknown') + ' (强度 ' + pct(n.severity) + (n.rationale ? ', ' + esc(String(n.rationale).substring(0, 60)) : '') + ')').join('<br>')
+    : '无活跃需求(有判断地不行动)';
+  chain += '<div class="prov-node"><div class="prov-node-label">🎯 需求 NEEDS</div><div class="prov-node-body">' + needBody + '</div></div>';
+  // intents
+  let intentBody = intents.length
+    ? intents.map(i => '· ' + esc(i.intent_type || 'intent') + ' → ' + esc(i.output_channel || '—') + ' (' + esc(i.target_horizon || '—') + ')').join('<br>')
+    : '无活跃意图';
+  chain += '<div class="prov-node"><div class="prov-node-label">🧭 意图 INTENTS</div><div class="prov-node-body">' + intentBody + '</div></div>';
+  // policy
+  chain += '<div class="prov-node"><div class="prov-node-label">🎚 策略 POLICY</div><div class="prov-node-body">' +
+    '偏好焦点 ' + esc(policy.preferred_focus || '—') + ' · 候选预算 ' + (policy.candidate_budget != null ? policy.candidate_budget : '—') +
+    ' · 观察偏置 ' + pct(policy.observation_bias) + '</div></div>';
+  chain += '</div>';
+
+  // candidate provenance
+  let candHtml = '<div class="drawer-section-label">候选产出 (' + cands.length + ')</div>';
+  if (!cands.length) {
+    candHtml += '<div class="drawer-sub" style="margin:0;">当前无待治理候选。弱证据下空候选是正确行为。</div>';
+  } else {
+    candHtml += cands.slice(0, 6).map(c => {
+      const tags = Array.isArray(c.value_tags) ? c.value_tags.map(esc).join(' · ') : '';
+      return '<div class="lane-active" style="margin-top:6px;"><div class="la-title">' + esc(String(c.title || '未命名').substring(0, 52)) + '</div>' +
+        (c.rationale ? '<div style="margin-top:3px;">理由: ' + esc(String(c.rationale).substring(0, 120)) + '</div>' : '') +
+        (tags ? '<div style="margin-top:3px;color:var(--text-muted);">价值标签: ' + tags + '</div>' : '') + '</div>';
+    }).join('');
+  }
+
+  els.drawerBody.innerHTML =
+    '<div class="drawer-sub">回答"当前为什么这样判断 / 为什么产出(或不产出)这些任务"。链路: 感知 → 世界模型 → 需求 → 意图 → 策略 → 候选。</div>' +
+    '<div class="drawer-section">' + chain + '</div>' +
+    '<div class="drawer-section">' + candHtml + '</div>';
+}
+
+/* ── 💗 身体 / 记忆健康度 ── */
+function renderHealthDrawer(state) {
+  const bs = state.body_status || {};
+  const ts = state.tier1_stats || {};
+  const last = bs.last_switch_result || {};
+
+  function rows(title, arr) {
+    return '<div class="drawer-section"><div class="drawer-section-label">' + title + '</div>' +
+      arr.map(r => '<div class="health-row"><span>' + r[0] + '</span><span class="hr-val">' + r[1] + '</span></div>').join('') +
+      '</div>';
+  }
+
+  const bodyRows = [
+    ['活跃槽 (当前替身)', esc(bs.active_slot || '—')],
+    ['Shell 槽', esc(bs.shell_slot || '—')],
+    ['退役槽', esc(bs.retired_slot || '—')],
+    ['累计切换次数', (last.switch_count != null ? last.switch_count : 0)],
+    ['上次切换结果', esc(last.status || last.result || '—')],
+  ];
+  const memRows = [
+    ['Tier1 短期记忆条目', (ts.total_entries != null ? ts.total_entries : '—')],
+    ['压缩块', (ts.compressed_blocks != null ? ts.compressed_blocks : '—')],
+    ['记忆 LLM 健康', ts.llm_healthy ? '✅ 正常' : '⚠️ 异常 / 未知'],
+    ['记忆活跃', ts.memory_active ? '✅ 是' : '💤 否'],
+  ];
+
+  els.drawerBody.innerHTML =
+    '<div class="drawer-sub">替身 (身体) 改进由 API-A agent 执行;监督者只追踪槽位状态。记忆维护属监督者自维护范畴。</div>' +
+    rows('🔄 替身 / 身体', bodyRows) +
+    rows('💾 记忆 (API-B 侧)', memRows);
+}
+
+/* ═══════════════════════════════════════════
+   面板渲染函数
+   ═══════════════════════════════════════════ */
+
+/* ── 📋 任务面板 ── */
+function renderTasksPanel(state) {
+  const body = els.panelTasksBody;
+  if (!body) return;
+  body.replaceChildren();
+  const layout = state.queue_layout || {};
+
+  function addSection(label, task, emptyText) {
+    const sec = document.createElement('div');
+    sec.style.cssText = 'display:grid;gap:6px;';
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;padding:0 2px;';
+    hdr.textContent = label;
+    sec.append(hdr);
+    if (!task) {
+      const empty = document.createElement('div');
+      empty.className = 'game-card rarity-common';
+      empty.innerHTML = '<div class="game-card-sub" style="text-align:center;color:var(--text-muted);">' + emptyText + '</div>';
+      sec.append(empty);
+    } else {
+      sec.append(buildGameCard(task));
+    }
+    body.append(sec);
+  }
+
+  addSection('⚡ 监督者执行', layout.supervisor_active || null, '当前没有监督者任务');
+  addSection('🎨 Agent 执行', layout.agent_active || null, '当前没有创造类任务');
+
+  // 定时队列
+  const timedSec = document.createElement('div');
+  timedSec.style.cssText = 'display:grid;gap:6px;';
+  const timedHdr = document.createElement('div');
+  timedHdr.style.cssText = 'font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;padding:0 2px;display:flex;justify-content:space-between;';
+  const winInfo = layout.window || {};
+  const winColor = winInfo.open ? 'var(--mint)' : 'var(--gold)';
+  timedHdr.innerHTML = '⏳ 定时队列 <span style="font-size:9px;color:' + winColor + ';">' + (winInfo.range || '00:00-06:00') + ' · ' + (winInfo.status_text || '') + '</span>';
+  timedSec.append(timedHdr);
+  const timed = Array.isArray(layout.timed_queue) ? layout.timed_queue : [];
+  if (!timed.length) {
+    const empty = document.createElement('div');
+    empty.className = 'game-card rarity-common';
+    empty.innerHTML = '<div class="game-card-sub" style="text-align:center;color:var(--text-muted);">定时队列为空</div>';
+    timedSec.append(empty);
+  } else {
+    timed.slice(0, 8).forEach(t => timedSec.append(buildGameCard(t)));
+  }
+  body.append(timedSec);
+
+  // 内生驱动候选
+  const candSec = document.createElement('div');
+  candSec.style.cssText = 'display:grid;gap:6px;';
+  const candHdr = document.createElement('div');
+  candHdr.style.cssText = 'font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;padding:0 2px;';
+  candHdr.textContent = '💡 内生驱动候选';
+  candSec.append(candHdr);
+  const candidates = Array.isArray(layout.candidate_list) ? layout.candidate_list : [];
+  if (!candidates.length) {
+    const empty = document.createElement('div');
+    empty.className = 'game-card rarity-common';
+    empty.innerHTML = '<div class="game-card-sub" style="text-align:center;color:var(--text-muted);">当前没有待治理投影</div>';
+    candSec.append(empty);
+  } else {
+    candidates.forEach(c => candSec.append(buildGameCard(c, true)));
+  }
+  body.append(candSec);
+}
+
+function buildGameCard(task, isCandidate) {
+  const card = document.createElement('div');
+  card.className = 'game-card ' + (isCandidate ? rarityClass(task) : rarityClass(task));
+
+  const head = document.createElement('div');
+  head.className = 'game-card-head';
+  const title = document.createElement('div');
+  title.className = 'game-card-title';
+  title.textContent = (task.title || '未命名').substring(0, 64);
+  title.title = task.title || '';
+  const badge = document.createElement('span');
+  const st = task.display_status || task.status || 'queued';
+  badge.className = 'game-card-badge ' + (task.status || 'queued');
+  badge.textContent = statusLabel(st);
+  head.append(title, badge);
+  card.append(head);
+
+  // subtitle
+  const sub = document.createElement('div');
+  sub.className = 'game-card-sub';
+  const hints = [];
+  if (!isCandidate) {
+    const ih = taskIdentityHint(task);
+    if (ih) hints.push(ih);
+    const gh = governanceHint(task);
+    if (gh) hints.push(gh);
+  }
+  if (task.summary) hints.push(String(task.summary).substring(0, 100));
+  if (!hints.length) hints.push(isCandidate ? '等待监督者治理' : typeLabel(task));
+  sub.textContent = hints.join(' · ').substring(0, 160);
+  card.append(sub);
+
+  // meta row
+  const meta = document.createElement('div');
+  meta.className = 'game-card-meta';
+
+  const tags = document.createElement('div');
+  tags.className = 'game-card-tags';
+  const lane = taskLane(task);
+  const laneTag = document.createElement('span');
+  laneTag.className = 'game-card-tag ' + (lane === 'agent' ? 'creativity' : 'memory');
+  laneTag.textContent = lane === 'agent' ? 'API-A 创造' : '监督者治理';
+  tags.append(laneTag);
+  if (task.governance_task_type) {
+    const typeTag = document.createElement('span');
+    typeTag.className = 'game-card-tag ' + tagClass(task.governance_task_type);
+    typeTag.textContent = typeLabel(task);
+    tags.append(typeTag);
+  }
+  if (isCandidate && Array.isArray(task.value_tags)) {
+    task.value_tags.forEach(vt => {
+      const vtTag = document.createElement('span');
+      vtTag.className = 'game-card-tag ' + tagClass(vt);
+      vtTag.textContent = vt;
+      tags.append(vtTag);
+    });
+  }
+  meta.append(tags);
+
+  // utility score bar
+  if (task.utility != null) {
+    const scoreWrap = document.createElement('div');
+    scoreWrap.style.cssText = 'display:flex;align-items:center;gap:4px;flex-shrink:0;';
+    const pct = Math.round((task.utility || 0) * 100);
+    const bar = document.createElement('div');
+    bar.className = 'game-score-bar';
+    bar.style.width = '50px';
+    const fill = document.createElement('div');
+    fill.className = 'game-score-fill ' + scoreClass(task.utility);
+    fill.style.width = pct + '%';
+    bar.append(fill);
+    const label = document.createElement('span');
+    label.style.cssText = 'font-size:9.5px;font-weight:700;color:var(--text-secondary);font-variant-numeric:tabular-nums;';
+    label.textContent = pct + '%';
+    scoreWrap.append(bar, label);
+    meta.append(scoreWrap);
+  }
+
+  card.append(meta);
+  return card;
+}
+
+/* ── 🧠 LM 输入面板 ── */
+function renderLMInputPanel(state) {
+  const body = els.panelLMInputBody;
+  if (!body) return;
+  body.replaceChildren();
+
+  const lm = state.lm_input || {};
+  const mem = state.mem_usage || {};
+
+  // Token 统计
+  const tokSec = document.createElement('div');
+  tokSec.className = 'lm-section';
+  tokSec.innerHTML = '<div class="lm-section-label">📊 Token 用量</div>';
+  const stats = [
+    {icon:'📨', label:'总消耗', value:(mem.total_tokens||0).toLocaleString(), hl:false},
+    {icon:'📥', label:'Prompt', value:(mem.prompt_tokens||0).toLocaleString(), hl:false},
+    {icon:'📤', label:'Completion', value:(mem.completion_tokens||0).toLocaleString(), hl:false},
+    {icon:'🔢', label:'请求数', value:mem.request_count||0, hl:false},
+    {icon:'📐', label:'上下文', value:(mem.context_length||0).toLocaleString() + ' (' + (mem.context_percent||0) + '%)', hl:(mem.context_percent||0) > 80},
+  ];
+  stats.forEach(s => {
+    const row = document.createElement('div');
+    row.className = 'lm-stat-row';
+    const hlClass = s.hl ? ' highlight' : '';
+    row.innerHTML = '<span class="lm-stat-icon">' + s.icon + '</span><span class="lm-stat-label">' + s.label + '</span><span class="lm-stat-value' + hlClass + '">' + s.value + '</span>';
+    tokSec.append(row);
+  });
+  body.append(tokSec);
+
+  // LM 调用信息
+  if (lm.last_call_at || lm.prompt_estimate) {
+    const callSec = document.createElement('div');
+    callSec.className = 'lm-section';
+    callSec.innerHTML = '<div class="lm-section-label">🧠 最近 LM 调用</div>';
+    const info = [
+      {icon:'🕐', label:'最近调用', value: lm.last_call_at ? new Date(lm.last_call_at).toLocaleTimeString() : '—'},
+      {icon:'📝', label:'Prompt 预估', value: lm.prompt_estimate ? (lm.prompt_estimate + ' 字符') : '—'},
+      {icon:'🔗', label:'证据节点', value: (lm.evidence_node_count != null) ? lm.evidence_node_count : '—'},
+      {icon:'🎯', label:'任务提案', value: (lm.proposal_count != null) ? lm.proposal_count : '—'},
+      {icon:'⚙️', label:'生成状态', value: lm.generation_enabled ? '✅ 已启用' : '⏸ 已禁用'},
+    ];
+    info.forEach(s => {
+      const row = document.createElement('div');
+      row.className = 'lm-stat-row';
+      row.innerHTML = '<span class="lm-stat-icon">' + s.icon + '</span><span class="lm-stat-label">' + s.label + '</span><span class="lm-stat-value">' + s.value + '</span>';
+      callSec.append(row);
+    });
+    body.append(callSec);
+  }
+
+  // 证据节点列表
+  const evNodes = lm.recent_evidence_nodes || [];
+  if (evNodes.length) {
+    const evSec = document.createElement('div');
+    evSec.className = 'lm-section';
+    evSec.innerHTML = '<div class="lm-section-label">📎 最近证据节点 (' + evNodes.length + ')</div>';
+    const list = document.createElement('div');
+    list.className = 'lm-evidence-list';
+    evNodes.slice(0, 20).forEach(ev => {
+      const item = document.createElement('div');
+      item.className = 'lm-evidence-item';
+      const nodeText = typeof ev === 'string' ? ev : (ev.node || ev.title || ev.summary || JSON.stringify(ev).substring(0, 120));
+      const nodeLabel = typeof ev === 'object' && ev.node ? String(ev.node) : 'evidence';
+      item.innerHTML = '<span class="ei-node">' + nodeLabel + '</span> ' + String(nodeText).substring(0, 140);
+      list.append(item);
+    });
+    evSec.append(list);
+    body.append(evSec);
+  }
+
+  // Prompt 预览
+  if (lm.prompt_preview) {
+    const prevSec = document.createElement('div');
+    prevSec.className = 'lm-section';
+    prevSec.innerHTML = '<div class="lm-section-label">📄 Prompt 预览</div>';
+    const pre = document.createElement('div');
+    pre.className = 'lm-prompt-preview';
+    pre.textContent = String(lm.prompt_preview).substring(0, 2000);
+    prevSec.append(pre);
+    body.append(prevSec);
+  }
+
+  // 空状态
+  if (!mem.total_tokens && !lm.last_call_at && !evNodes.length) {
+    body.replaceChildren();
+    const empty = document.createElement('div');
+    empty.className = 'panel-empty';
+    empty.innerHTML = '<div class="pe-icon">🧠</div><div class="pe-text">LM 尚未产生调用记录</div><div style="font-size:10px;color:var(--text-muted);">激活 Governor 模式并启用 LM 任务生成后会出现数据</div>';
+    body.append(empty);
+  }
+}
+
+/* ── 📊 认知面板 ── */
+function renderCognitionPanel(state) {
+  const body = els.panelCognitionBody;
+  if (!body) return;
+  body.replaceChildren();
+
+  const drill = document.createElement('div');
+  drill.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:6px;';
+  drill.innerHTML = drillButton('provenance', '决策溯源');
+  body.append(drill);
+
+  const cog = state.cognition || {};
+  const perception = cog.perception || {};
+  const worldModel = cog.world_model || {};
+  const needs = Array.isArray(cog.needs) ? cog.needs : [];
+  const intents = Array.isArray(cog.intents) ? cog.intents : [];
+  const signals = Array.isArray(cog.signals) ? cog.signals : [];
+  const policy = cog.adaptive_policy || {};
+
+  const flow = document.createElement('div');
+  flow.className = 'cog-flow';
+
+  // Perception
+  const percStep = document.createElement('div');
+  percStep.className = 'cog-step';
+  percStep.innerHTML = '<div class="cog-step-label">👁 感知</div><div class="cog-step-content"><div class="cog-step-title">' +
+    '姿势: ' + (perception.system_posture || '—') + ' · 队列: ' + (perception.active_queue_count || 0) + ' · 错误: ' + (perception.recent_errors || 0) +
+    '</div><div class="cog-step-detail">' +
+    '学习质量: ' + (perception.learning_quality != null ? Math.round(perception.learning_quality) + '%' : '—') +
+    ' · 修正信号: ' + (perception.correction_signals || 0) +
+    ' · 闲置: ' + ((perception.idle_seconds || {}).user_idle || '—') + 's' +
+    '</div></div>';
+  flow.append(percStep);
+
+  // World Model
+  const wmStep = document.createElement('div');
+  wmStep.className = 'cog-step';
+  wmStep.innerHTML = '<div class="cog-step-label">🌍 世界模型</div><div class="cog-step-content"><div class="cog-step-title">' +
+    '队列健康: ' + (worldModel.queue_health || '—') + ' · 记忆压力: ' + (worldModel.memory_pressure != null ? Math.round(worldModel.memory_pressure * 100) + '%' : '—') +
+    '</div><div class="cog-step-detail">' +
+    '真实压力: ' + (worldModel.truthfulness_pressure != null ? Math.round(worldModel.truthfulness_pressure * 100) + '%' : '—') +
+    ' · 学习动量: ' + (worldModel.learning_momentum != null ? Math.round(worldModel.learning_momentum * 100) + '%' : '—') +
+    ' · 自信: ' + (worldModel.self_confidence != null ? Math.round(worldModel.self_confidence * 100) + '%' : '—') +
+    '</div></div>';
+  flow.append(wmStep);
+
+  // Needs
+  const needStep = document.createElement('div');
+  needStep.className = 'cog-step';
+  let needHtml = '<div class="cog-step-label">🎯 需求</div><div class="cog-step-content">';
+  if (!needs.length) {
+    needHtml += '<div class="cog-step-detail">无活跃需求</div>';
+  } else {
+    needs.forEach(n => {
+      const sev = n.severity > 0.7 ? 'severity-high' : n.severity > 0.4 ? 'severity-mid' : 'severity-low';
+      needHtml += '<span class="cog-need-tag ' + sev + '">' + (n.need_type || 'unknown') + ' ' + Math.round((n.severity||0)*100) + '%</span>';
+    });
+  }
+  needHtml += '</div>';
+  needStep.innerHTML = needHtml;
+  flow.append(needStep);
+
+  // Intents
+  const intentStep = document.createElement('div');
+  intentStep.className = 'cog-step';
+  let intentHtml = '<div class="cog-step-label">🧭 意图</div><div class="cog-step-content">';
+  if (!intents.length) {
+    intentHtml += '<div class="cog-step-detail">无活跃意图</div>';
+  } else {
+    intents.forEach(i => {
+      intentHtml += '<div class="cog-step-title" style="font-size:10.5px;">📌 ' + (i.intent_type || 'intent') + ' → ' + (i.output_channel || '—') + ' (' + (i.target_horizon || '—') + ')</div>';
+    });
+  }
+  intentHtml += '</div>';
+  intentStep.innerHTML = intentHtml;
+  flow.append(intentStep);
+
+  // Signals
+  if (signals.length) {
+    const sigStep = document.createElement('div');
+    sigStep.className = 'cog-step';
+    sigStep.innerHTML = '<div class="cog-step-label">📡 信号</div><div class="cog-step-content">' +
+      signals.slice(0, 3).map(s => '<div class="cog-step-detail">' + (s.signal_type || 'signal') + ': ' + String(s.message || '').substring(0, 100) + '</div>').join('') +
+      '</div>';
+    flow.append(sigStep);
+  }
+
+  // Adaptive Policy
+  if (Object.keys(policy).length) {
+    const polStep = document.createElement('div');
+    polStep.className = 'cog-step';
+    polStep.innerHTML = '<div class="cog-step-label">🎚 策略</div><div class="cog-step-content"><div class="cog-step-detail">' +
+      '学习偏置: ' + (policy.learning_expansion_bias != null ? Math.round(policy.learning_expansion_bias * 100) + '%' : '—') +
+      ' · 真实偏置: ' + (policy.truthfulness_bias != null ? Math.round(policy.truthfulness_bias * 100) + '%' : '—') +
+      ' · 预算: ' + (policy.candidate_budget || '—') +
+      ' · 焦点: ' + (policy.preferred_focus || '—') +
+      '</div></div>';
+    flow.append(polStep);
+  }
+
+  body.append(flow);
+
+  if (!Object.keys(perception).length && !needs.length) {
+    body.replaceChildren();
+    const empty = document.createElement('div');
+    empty.className = 'panel-empty';
+    empty.innerHTML = '<div class="pe-icon">📊</div><div class="pe-text">认知状态尚未初始化</div><div style="font-size:10px;color:var(--text-muted);">激活 Governor 模式后内生驱动会填充认知层</div>';
+    body.append(empty);
+  }
+}
+
+/* ── ⚙️ 队列面板 ── */
+function renderQueuePanel(state) {
+  const body = els.panelQueueBody;
+  if (!body) return;
+  body.replaceChildren();
+
+  const layout = state.queue_layout || {};
+  const m = state.metrics || {};
+
+  const drill = document.createElement('div');
+  drill.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:6px;';
+  drill.innerHTML = drillButton('lanes', '双泳道总览');
+  body.append(drill);
+
+  // 统计摘要
+  const summary = document.createElement('div');
+  summary.style.cssText = 'display:flex;gap:12px;flex-wrap:wrap;padding:4px 0;margin-bottom:8px;';
+  [
+    {label:'总数', value: m.queue_total || 0, color:'var(--text-primary)'},
+    {label:'学习中', value: m.learning_total || 0, color:'var(--mint)'},
+    {label:'维护中', value: m.maintenance_total || 0, color:'var(--gold)'},
+    {label:'运行中', value: m.running_count || 0, color:'var(--accent-blue)'},
+    {label:'候选', value: m.drive_candidates || 0, color:'var(--plum)'},
+    {label:'错误', value: m.error_count || 0, color:(m.error_count||0) > 0 ? 'var(--coral)' : 'var(--text-muted)'},
+  ].forEach(s => {
+    const chip = document.createElement('div');
+    chip.style.cssText = 'text-align:center;padding:6px 10px;border-radius:8px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05);min-width:50px;';
+    chip.innerHTML = '<div style="font-size:18px;font-weight:700;color:' + s.color + ';">' + s.value + '</div><div style="font-size:9px;color:var(--text-muted);">' + s.label + '</div>';
+    summary.append(chip);
+  });
+  body.append(summary);
+
+  // 定时队列
+  const timedSec = document.createElement('div');
+  timedSec.style.cssText = 'display:grid;gap:6px;';
+  timedSec.innerHTML = '<div class="lm-section-label">⏳ 定时队列</div>';
+  const timed = Array.isArray(layout.timed_queue) ? layout.timed_queue : [];
+  if (!timed.length) {
+    timedSec.innerHTML += '<div class="game-card-sub" style="text-align:center;color:var(--text-muted);padding:12px;">队列为空</div>';
+  } else {
+    timed.forEach(t => timedSec.append(buildGameCard(t)));
+  }
+  body.append(timedSec);
+
+  // 全部候选
+  const candidates = Array.isArray(layout.candidate_list) ? layout.candidate_list : [];
+  if (candidates.length) {
+    const candSec = document.createElement('div');
+    candSec.style.cssText = 'display:grid;gap:6px;';
+    candSec.innerHTML = '<div class="lm-section-label">💡 内生驱动候选 (' + candidates.length + ')</div>';
+    candidates.forEach(c => candSec.append(buildGameCard(c, true)));
+    body.append(candSec);
+  }
+}
+
+/* ── 📈 统计面板 ── */
+function renderStatsPanel(state) {
+  const body = els.panelStatsBody;
+  if (!body) return;
+  body.replaceChildren();
+
+  const bs = state.body_status || {};
+  const ts = state.tier1_stats || {};
+  const mem = state.mem_usage || {};
+  const gov = state.governor_mode || {};
+
+  const drill = document.createElement('div');
+  drill.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:6px;';
+  drill.innerHTML = drillButton('health', '健康度详情');
+  body.append(drill);
+
+  // 替身状态
+  const bodySec = document.createElement('div');
+  bodySec.className = 'lm-section';
+  bodySec.innerHTML = '<div class="lm-section-label">🔄 替身状态</div>';
+  [
+    {icon:'🟢', label:'活跃槽', value: bs.active_slot || '—'},
+    {icon:'🐚', label:'Shell 槽', value: bs.shell_slot || '—'},
+    {icon:'📦', label:'退役槽', value: bs.retired_slot || '—'},
+    {icon:'🔄', label:'切换次数', value: (bs.last_switch_result || {}).switch_count || 0},
+  ].forEach(s => {
+    const row = document.createElement('div');
+    row.className = 'lm-stat-row';
+    row.innerHTML = '<span class="lm-stat-icon">' + s.icon + '</span><span class="lm-stat-label">' + s.label + '</span><span class="lm-stat-value">' + s.value + '</span>';
+    bodySec.append(row);
+  });
+  body.append(bodySec);
+
+  // 记忆统计
+  const memSec = document.createElement('div');
+  memSec.className = 'lm-section';
+  memSec.innerHTML = '<div class="lm-section-label">💾 记忆统计</div>';
+  [
+    {icon:'📊', label:'Tier1 条目', value: ts.total_entries || '—'},
+    {icon:'📦', label:'压缩块', value: ts.compressed_blocks || '—'},
+    {icon:'✅', label:'LLM 健康', value: ts.llm_healthy ? '✅ 正常' : '⚠️ 异常'},
+    {icon:'🧠', label:'记忆活跃', value: ts.memory_active ? '✅ 是' : '💤 否'},
+    {icon:'📐', label:'上下文用量', value: (mem.context_percent || 0) + '% (' + (mem.total_tokens || 0).toLocaleString() + ' tokens)'},
+  ].forEach(s => {
+    const row = document.createElement('div');
+    row.className = 'lm-stat-row';
+    row.innerHTML = '<span class="lm-stat-icon">' + s.icon + '</span><span class="lm-stat-label">' + s.label + '</span><span class="lm-stat-value">' + s.value + '</span>';
+    memSec.append(row);
+  });
+  body.append(memSec);
+
+  // 治理状态
+  const govSec = document.createElement('div');
+  govSec.className = 'lm-section';
+  govSec.innerHTML = '<div class="lm-section-label">⚙️ 治理状态</div>';
+  [
+    {icon:'🔮', label:'Governor', value: gov.active ? '✅ 已激活' : '⏸ 未激活'},
+    {icon:'🪟', label:'执行窗口', value: state.in_execution_window ? '✅ 开启' : '🌙 关闭'},
+    {icon:'👥', label:'活跃会话', value: state.active_sessions || 0},
+    {icon:'📡', label:'驱动可用', value: state.drive_available ? '✅' : '⚠️ 不可用'},
+    {icon:'📋', label:'活跃执行', value: (state.active_executions || []).length || 0},
+  ].forEach(s => {
+    const row = document.createElement('div');
+    row.className = 'lm-stat-row';
+    row.innerHTML = '<span class="lm-stat-icon">' + s.icon + '</span><span class="lm-stat-label">' + s.label + '</span><span class="lm-stat-value">' + s.value + '</span>';
+    govSec.append(row);
+  });
+  body.append(govSec);
+}
+
+/* ── Dock 角色迷你状态更新 ── */
+function updateDockCharStrip(state) {
   const bs = state.body_status || {};
   const last = bs.last_switch_result || {};
   const switchCount = (typeof last.switch_count === 'number') ? last.switch_count : 0;
   const lv = Math.max(1, switchCount + 1);
-  const progress = switchCount > 0 ? Math.round((switchCount % 1 || 0.5) * 100) : 0;
-  $('#chLevel').textContent = lv;
-  $('#chExpBar').style.width = progress + '%';
-  $('#chExpText').textContent = switchCount + ' 次替身切换';
-  const titles = ['初始替身', '觉醒替身', '熟练替身', '精英替身', '传奇替身', '虚空替身', '不朽替身'];
-  const ti = Math.min(Math.floor((lv - 1) / 3), titles.length - 1);
-  $('#chTitle').textContent = titles[ti];
-  const errors = state.error_count || 0;
-  const hp = Math.max(0, 100 - errors * 10);
-  const hpEl = $('#chHP');
-  hpEl.textContent = '❤️ ' + hp + '%';
-  hpEl.className = 'ch-hp' + (hp < 30 ? ' danger' : hp < 60 ? ' warn' : '');
-  const moods = [
-    {min: 0,  label: '疲惫',  emoji: '😣'},
-    {min: 30, label: '低落',  emoji: '😕'},
-    {min: 50, label: '普通',  emoji: '🙂'},
-    {min: 70, label: '愉快',  emoji: '😄'},
-    {min: 90, label: '完美',  emoji: '✨'},
-  ];
-  let mood = moods[0];
-  for (let i = moods.length - 1; i >= 0; i--) { if (hp >= moods[i].min) { mood = moods[i]; break; } }
-  $('#chMood').textContent = mood.emoji + ' ' + mood.label;
+  if (els.dcsName) {
+    const slot2 = (state.body_status || {}).active_slot || '';
+    const charName = String(slot2).toUpperCase().includes('A') ? '星子' : '西子';
+    els.dcsName.textContent = charName + ' Lv.' + lv;
+  }
+  const hp = hpPercent(state);
+  if (els.dcsHpFill) {
+    els.dcsHpFill.style.width = hp + '%';
+    els.dcsHpFill.className = 'dcs-hp-fill ' + (hp < 30 ? 'danger' : hp < 60 ? 'warn' : 'good');
+  }
+  if (els.dcsStatus) {
+    els.dcsStatus.textContent = (state.summary || '就绪').substring(0, 30);
+  }
 }
 
-function typeLabel(t) {
-  const identity = t.task_identity || {};
-  const displayKind = String(identity.display_kind || t.execution_kind || '').trim();
-  const governance = String(t.governance_task_type || '').trim();
-  const primary = displayKind || governance || String(t.task_family || '').trim();
-  const typeMap = {
-    self_learning: '自主学习',
-    body_improvement: '替身改进',
-    memory_maintenance: '记忆维护',
-    self_evolution: '通用演化',
-    general_self_evolution: '通用演化',
-  };
-  return typeMap[primary] || primary.replace(/_/g, ' ') || '任务';
+/* ── 场景迷你标题 ── */
+function updateSceneMiniTitle(state) {
+  const scene = state.scene || 'idle';
+  if (els.sceneMiniIcon) els.sceneMiniIcon.textContent = SCENE_ICONS[scene] || '🛋';
+  if (els.sceneMiniText) els.sceneMiniText.textContent = state.title || '星子与西子的小屋';
 }
 
-function buildQueueCard(task, emptyText) {
-  const card = document.createElement('div');
-  if (!task) {
-    card.className = 'queue-card empty';
-    const text = document.createElement('div');
-    text.className = 'queue-empty-text';
-    text.textContent = emptyText;
-    card.append(text);
-    return card;
-  }
-
-  const lane = taskLane(task);
-  card.className = 'queue-card ' + lane;
-  const head = document.createElement('div');
-  head.className = 'queue-card-head';
-  const title = document.createElement('div');
-  title.className = 'queue-card-title';
-  title.textContent = (task.title || '未命名任务').substring(0, 60);
-  const badge = document.createElement('span');
-  badge.className = 'task-badge ' + (task.status || 'queued');
-  badge.textContent = task.display_status || task.status || '待定';
-  head.append(title, badge);
-
-  const sub = document.createElement('div');
-  sub.className = 'queue-card-subtitle';
-  const hints = [];
-  const identityHint = taskIdentityHint(task);
-  if (identityHint) hints.push(identityHint);
-  const hint = governanceHint(task);
-  if (hint) hints.push(hint);
-  if (!hints.length) hints.push(typeLabel(task));
-  sub.textContent = hints.join(' · ').substring(0, 140);
-
-  const meta = document.createElement('div');
-  meta.className = 'queue-card-meta';
-  const tag = document.createElement('span');
-  tag.className = 'queue-tag';
-  tag.textContent = lane === 'agent' ? 'API-A 创造通道' : '监督者治理通道';
-  meta.append(tag);
-
-  card.append(head, sub, meta);
-  return card;
-}
-
-function renderQueueLayout(layout, schedule) {
-  const q = layout || {};
-  const windowInfo = q.window || {};
-  els.supervisorActive.replaceChildren(
-    buildQueueCard(q.supervisor_active || null, '当前没有监督者任务')
-  );
-  els.agentActive.replaceChildren(
-    buildQueueCard(q.agent_active || null, '当前没有创造类任务')
-  );
-
-  els.timedQueue.replaceChildren();
-  const timed = Array.isArray(q.timed_queue) ? q.timed_queue : [];
-  if (!timed.length) {
-    const empty = document.createElement('div');
-    empty.className = 'queue-card empty';
-    const text = document.createElement('div');
-    text.className = 'queue-empty-text';
-    text.textContent = '定时队列为空';
-    empty.append(text);
-    els.timedQueue.append(empty);
-  } else {
-    timed.forEach(task => {
-      const row = document.createElement('div');
-      row.className = 'timed-item ' + taskLane(task);
-      const dot = document.createElement('span');
-      dot.className = 'task-dot ' + timedQueueDotClass(task);
-      const text = document.createElement('div');
-      text.className = 'timed-item-text';
-      const title = document.createElement('span');
-      title.className = 'timed-item-title';
-      title.textContent = (task.title || '未命名任务').substring(0, 54);
-      const subtitle = document.createElement('span');
-      subtitle.className = 'timed-item-subtitle';
-      const laneLabel = taskLane(task) === 'agent' ? 'API-A 创造类任务' : '监督者任务';
-      subtitle.textContent = (task.display_status || task.status || '待定') + ' · ' + laneLabel + ' · ' + typeLabel(task);
-      text.append(title, subtitle);
-      const badge = document.createElement('span');
-      badge.className = 'task-badge ' + (task.status || 'queued');
-      badge.textContent = task.display_status || task.status || '待定';
-      row.append(dot, text, badge);
-      els.timedQueue.append(row);
-    });
-  }
-
-  els.candidateSlot.replaceChildren();
-  const candidates = Array.isArray(q.candidate_list) ? q.candidate_list : [];
-  if (!candidates.length) {
-    const empty = document.createElement('div');
-    empty.className = 'candidate-card empty';
-    const text = document.createElement('div');
-    text.className = 'queue-empty-text';
-    text.textContent = '当前没有待治理投影';
-    empty.append(text);
-    els.candidateSlot.append(empty);
-  } else {
-    candidates.forEach(candidate => {
-      const card = document.createElement('div');
-      card.className = 'candidate-card';
-      const head = document.createElement('div');
-      head.className = 'candidate-card-head';
-      const title = document.createElement('div');
-      title.className = 'queue-card-title';
-      title.textContent = (candidate.title || '治理投影').substring(0, 60);
-      const utility = document.createElement('div');
-      utility.className = 'candidate-utility';
-      utility.textContent = Math.round((candidate.utility || 0) * 100) + '%';
-      head.append(title, utility);
-      const tags = document.createElement('div');
-      tags.className = 'candidate-tags';
-      const parts = [];
-      if (Array.isArray(candidate.value_tags) && candidate.value_tags.length) {
-        parts.push(candidate.value_tags.join(' · '));
-      }
-      if (candidate.display_status) {
-        parts.push(candidate.display_status);
-      }
-      tags.textContent = parts.join(' · ') || '等待监督者治理';
-      card.append(head, tags);
-      els.candidateSlot.append(card);
-    });
-  }
-
-  if (els.windowPill) {
-    const open = !!windowInfo.open;
-    els.windowPill.className = 'window-pill ' + (open ? 'open' : 'closed');
-    els.windowPill.textContent = '预设时间 ' + (windowInfo.range || '00:00-06:00') + ' · ' + (windowInfo.status_text || '');
-  }
-
-  renderSchedule(schedule);
-}
-
-/* ── 指标 ── */
-function renderMetrics(state) {
-  els.metrics.replaceChildren();
-  const m = state.metrics || {};
-  const lr = m.learning_results || {};
-  function add(cls, v, l) {
-    const d = document.createElement('div');
-    d.className = 'metric ' + cls;
-    const a = document.createElement('div');
-    a.className = 'metric-value';
-    a.textContent = v;
-    const b = document.createElement('div');
-    b.className = 'metric-label';
-    b.textContent = l;
-    d.append(a, b);
-    els.metrics.append(d);
-  }
-  add('ok',   m.queue_total || 0,     '总数');
-  add('ok',   m.learning_total || 0,  '学习');
-  add('ok',   m.maintenance_total || 0, '维护');
-  add((m.error_count || 0) > 0 ? 'error' : 'ok', m.error_count || 0, '错误');
-  add('ok', (lr.completed || 0) + '/' + (lr.failed || 0), '完成/失败');
-  add(m.slot_overview ? 'ok' : '', m.slot_overview || '—', '运行/编辑');
-  add((state.queue_layout || {}).window?.open ? 'ok' : 'warn', ((state.queue_layout || {}).window?.status_text) || '关闭', '窗口');
-}
-
-/* ── 倒计时 ── */
+/* ── 倒计时(静默) ── */
 let countdownTimer = null, nextReviewAt = null;
-function formatCountdown(s) {
-  if (s <= 0) return '即将';
-  const m = Math.floor(s / 60), r = Math.floor(s % 60);
-  if (m > 0) return m + '分' + (r < 10 ? '0' : '') + r + '秒';
-  return r + '秒';
-}
 function renderSchedule(sch) {
-  const el = $('#schedule'), cd = $('#countdown');
-  if (!el || !cd) return;
-  const nxt = sch.next_review_at || sch.next_drive_at;
-  if (!nxt) { el.style.display = 'none'; nextReviewAt = null; return; }
-  nextReviewAt = nxt; el.style.display = 'block';
-  function tick() {
-    if (!nextReviewAt) { cd.textContent = '—'; return; }
-    const d = new Date(nextReviewAt);
-    if (isNaN(d.getTime())) { cd.textContent = '—'; return; }
-    const rem = Math.max(0, (d.getTime() - Date.now()) / 1000);
-    cd.textContent = formatCountdown(rem);
-    cd.style.color = rem <= 10 ? 'var(--coral)' : '';
-  }
-  tick();
   if (countdownTimer) clearInterval(countdownTimer);
-  countdownTimer = setInterval(tick, 1000);
+  const nxt = sch.next_review_at || sch.next_drive_at;
+  if (!nxt) { nextReviewAt = null; return; }
+  nextReviewAt = nxt;
+  countdownTimer = setInterval(() => {}, 30000);
 }
 
-/* ── 应用状态 ── */
-let userPickedAction = null;  // 用户手动选择的 action(锁定直到下一轮场景变化可解锁)
+/* ── 应用状态(主入口) ── */
+let userPickedAction = null;
+let lastState = null;
 
 function applyState(state) {
+  lastState = state;
   const scene = state.scene || 'idle';
   const prevScene = els.body.dataset.scene;
   els.body.dataset.scene = scene;
   els.glyph.textContent = GLYPHS[scene] || '·';
-  els.title.textContent = state.title || '义子的小屋';
-  els.summary.textContent = state.summary || '';
+  if (els.glyphXingzi) els.glyphXingzi.textContent = GLYPHS[scene] || '·';
   els.body.dataset.hasErrors = ((state.error_count || 0) > 0) ? 'true' : 'false';
   els.body.dataset.execWindow = (state.in_execution_window !== false) ? 'true' : 'false';
 
-  // 自动动作: 仅当用户未手动选择时, 跟随场景
+  // 槽位决定角色: A→星子(男), B→西子(女)
+  const slot = (state.body_status || {}).active_slot || '';
+  const newChar = String(slot).toUpperCase().includes('A') ? 'xingzi' : 'xizi';
+  if (els.activeChar !== newChar) {
+    els.activeChar = newChar;
+    els.body.dataset.character = newChar;
+  }
+
+  // 自动动作
   if (!userPickedAction || userPickedAction.scene !== scene) {
     const action = SCENE_TO_ACTION[scene] || 'rest';
-    setAction(action, /*silent*/ true);
+    setAction(action, true);
     userPickedAction = { scene, action };
   }
-  updateActionButtons();
+  updateDockActionButtons();
 
-  renderCharCard(state);
-  renderMetrics(state);
-  renderQueueLayout(state.queue_layout || {}, state.schedule || {});
+  updateSceneMiniTitle(state);
+  updateDockCharStrip(state);
+
+  // 渲染已打开的面板
+  if (panelOpen === 'tasks') renderTasksPanel(state);
+  if (panelOpen === 'lminput') renderLMInputPanel(state);
+  if (panelOpen === 'cognition') renderCognitionPanel(state);
+  if (panelOpen === 'queue') renderQueuePanel(state);
+  if (panelOpen === 'stats') renderStatsPanel(state);
+
+  // 抽屉打开时随状态刷新
+  if (drawerOpen) renderDrawer();
+
+  renderSchedule(state.schedule || {});
 
   if (scene !== prevScene) spawnParticles(scene, 12);
 }
@@ -2402,46 +4028,10 @@ function setAction(action, silent) {
   els.body.dataset.action = action;
   if (!silent) spawnParticles(action, 8);
 }
-function updateActionButtons() {
-  $$('.action-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.action === els.body.dataset.action);
-  });
-}
 
-/* ── 动作按钮绑定 ── */
-els.actionBar.addEventListener('click', e => {
-  const btn = e.target.closest('.action-btn');
-  if (!btn) return;
-  const a = btn.dataset.action;
-  setAction(a, false);
-  // 解锁"用户选择", 之后会一直跟随用户直到下次 applyState 触发
-  userPickedAction = { scene: '__manual__', action: a };
-  updateActionButtons();
-});
-
-/* ── 任务卡片收起/展开 ── */
-const charCard = $('#charCard');
-const charToggleBtn = $('#charToggle');
-if (charCard && charToggleBtn) {
-  charToggleBtn.addEventListener('click', e => {
-    e.stopPropagation();
-    const collapsed = charCard.classList.toggle('collapsed');
-    charToggleBtn.textContent = collapsed ? '+' : '−';
-    charToggleBtn.setAttribute('aria-label', collapsed ? '展开任务卡' : '收起任务卡');
-    charToggleBtn.setAttribute('title', collapsed ? '展开任务卡' : '收起任务卡');
-  });
-}
-
-/* ── 状态面板收起/展开 ── */
-const statusPanel = $('#statusPanel');
-const statusToggleBtn = $('#statusToggle');
-if (statusPanel && statusToggleBtn) {
-  statusToggleBtn.addEventListener('click', e => {
-    e.stopPropagation();
-    const collapsed = statusPanel.classList.toggle('collapsed');
-    statusToggleBtn.textContent = collapsed ? '+' : '−';
-    statusToggleBtn.setAttribute('aria-label', collapsed ? '展开面板' : '收起面板');
-    statusToggleBtn.setAttribute('title', collapsed ? '展开面板' : '收起面板');
+function updateDockActionButtons() {
+  $$('.dock-btn[data-action-btn]').forEach(b => {
+    b.classList.toggle('active', b.dataset.actionBtn === els.body.dataset.action);
   });
 }
 
@@ -2480,14 +4070,9 @@ async function refresh() {
     applyState(await r.json());
   } catch (e) {
     els.body.dataset.scene = 'idle';
-    els.title.textContent = '义子的小屋 · 等待中';
-    els.summary.textContent = '尚未连接到监督者。';
+    if (els.sceneMiniText) els.sceneMiniText.textContent = '义子的小屋 · 等待中';
     els.glyph.textContent = '·';
-    els.metrics.replaceChildren();
-    els.supervisorActive.replaceChildren();
-    els.agentActive.replaceChildren();
-    els.timedQueue.replaceChildren();
-    els.candidateSlot.replaceChildren();
+    if (els.glyphXingzi) els.glyphXingzi.textContent = '·';
   }
 }
 
@@ -2510,7 +4095,7 @@ if ('EventSource' in window) {
 }
 
 ambientParticles();
-updateActionButtons();
+updateDockActionButtons();
 
 /* ── 钟表时/分针同步 ── */
 function syncClock() {
@@ -2818,6 +4403,118 @@ class SupervisorUIMixin:
             in_execution_window=in_execution_window,
             memory_active=tier1_stats.get("memory_active", False),
         )
+
+        # ── LM Input info (for 🧠 panel) ──
+        lm_input: Dict[str, Any] = {
+            "generation_enabled": bool(
+                getattr(self.config, "endogenous_drive_lm_task_generation_enabled", False)
+            ),
+        }
+        # Extract recent LM call metadata from drive history / cognition state
+        try:
+            cog_snapshot = self._load_endogenous_cognition_state()
+            proposal_cog = cog_snapshot.get("proposal_cognition") or {}
+            lm_state = proposal_cog.get("lm_reasoning_state") or {}
+            if lm_state.get("last_call_at"):
+                lm_input["last_call_at"] = lm_state["last_call_at"]
+            if lm_state.get("prompt_chars"):
+                lm_input["prompt_estimate"] = lm_state["prompt_chars"]
+            if lm_state.get("evidence_node_count"):
+                lm_input["evidence_node_count"] = lm_state["evidence_node_count"]
+            if lm_state.get("proposal_count") is not None:
+                lm_input["proposal_count"] = lm_state["proposal_count"]
+            # Recent evidence nodes from uncertainty ledger
+            ledger = cog_snapshot.get("uncertainty_ledger") or {}
+            recent_nodes = ledger.get("recent_nodes") or []
+            if recent_nodes:
+                lm_input["recent_evidence_nodes"] = [
+                    {"node": n.get("node_id", ""), "title": n.get("title", ""), "summary": n.get("summary", "")}
+                    for n in recent_nodes[:20]
+                ]
+            # Prompt preview (if available)
+            strategy = cog_snapshot.get("strategy_memory") or {}
+            last_prompt = strategy.get("last_prompt_preview") or ""
+            if last_prompt:
+                lm_input["prompt_preview"] = str(last_prompt)[:2000]
+        except Exception:
+            pass
+
+        # ── Cognition state (for 📊 panel) ──
+        cognition: Dict[str, Any] = {}
+        try:
+            cog_snapshot = self._load_endogenous_cognition_state()
+            perception = cog_snapshot.get("perception") or {}
+            world_model = cog_snapshot.get("world_model") or {}
+            # Build perception summary
+            cognition["perception"] = {
+                "system_posture": perception.get("system_posture", "balanced"),
+                "active_queue_count": perception.get("active_queue_count", 0),
+                "recent_errors": perception.get("recent_errors", 0),
+                "learning_quality": perception.get("learning_quality", 0),
+                "correction_signals": perception.get("correction_signals", 0),
+                "idle_seconds": perception.get("idle_seconds", {}),
+            }
+            # Build world model summary
+            cognition["world_model"] = {
+                "queue_health": world_model.get("queue_health", "unknown"),
+                "memory_pressure": world_model.get("memory_pressure", 0),
+                "truthfulness_pressure": world_model.get("truthfulness_pressure", 0),
+                "learning_momentum": world_model.get("learning_momentum", 0),
+                "body_upgrade_readiness": world_model.get("body_upgrade_readiness", 0),
+                "self_confidence": world_model.get("self_confidence", 0),
+            }
+            # Needs
+            raw_needs = cog_snapshot.get("needs") or []
+            cognition["needs"] = [
+                {
+                    "need_type": n.get("need_type", "unknown"),
+                    "severity": n.get("severity", 0),
+                    "urgency": n.get("urgency", 0),
+                    "confidence": n.get("confidence", 0),
+                    "rationale": str(n.get("rationale", ""))[:200],
+                }
+                for n in raw_needs[:8]
+            ]
+            # Intents
+            raw_intents = cog_snapshot.get("intents") or []
+            cognition["intents"] = [
+                {
+                    "intent_type": i.get("intent_type", "unknown"),
+                    "priority": i.get("priority", 0),
+                    "output_channel": i.get("output_channel", "task_candidates"),
+                    "target_horizon": i.get("target_horizon", "immediate"),
+                    "rationale": str(i.get("rationale", ""))[:150],
+                }
+                for i in raw_intents[:6]
+            ]
+            # Signals
+            raw_signals = cog_snapshot.get("signals") or []
+            cognition["signals"] = [
+                {
+                    "signal_type": s.get("signal_type", "unknown"),
+                    "priority": s.get("priority", 0),
+                    "message": str(s.get("message", ""))[:200],
+                }
+                for s in raw_signals[:5]
+            ]
+            # Adaptive policy
+            raw_policy = cog_snapshot.get("adaptive_policy") or {}
+            cognition["adaptive_policy"] = {
+                "learning_expansion_bias": raw_policy.get("learning_expansion_bias", 0),
+                "truthfulness_bias": raw_policy.get("truthfulness_bias", 0),
+                "memory_continuity_bias": raw_policy.get("memory_continuity_bias", 0),
+                "queue_hygiene_bias": raw_policy.get("queue_hygiene_bias", 0),
+                "body_growth_bias": raw_policy.get("body_growth_bias", 0),
+                "observation_bias": raw_policy.get("observation_bias", 0),
+                "candidate_throttle": raw_policy.get("candidate_throttle", 1.0),
+                "candidate_budget": raw_policy.get("candidate_budget", 3),
+                "exploratory_learning_quota": raw_policy.get("exploratory_learning_quota", 0),
+                "body_growth_quota": raw_policy.get("body_growth_quota", 0),
+                "preferred_focus": raw_policy.get("preferred_focus", "balanced"),
+            }
+        except Exception:
+            pass
+
         return {
             "status": "ok",
             "scene": scene,
@@ -2838,6 +4535,8 @@ class SupervisorUIMixin:
             "in_execution_window": in_execution_window,
             "active_sessions": int(activity.get("active_sessions") or 0),
             "timeline": await self._recent_supervisor_observation_timeline(limit=10),
+            "lm_input": lm_input,
+            "cognition": cognition,
             "governor_mode": self._governor_mode_status(),
             "active_executions": [
                 self._serialize_self_evolution_task(task)
@@ -3242,7 +4941,7 @@ class SupervisorUIMixin:
             if "memory" in rfamily:
                 return (
                     "maintenance",
-                    f"义子正在整理记忆{error_note}",
+                    f"正在整理记忆{error_note}",
                     f"「{rtitle}」记忆维护任务正在执行。",
                 )
             # For learning / body-upgrade running tasks, the supervisor
@@ -3250,7 +4949,7 @@ class SupervisorUIMixin:
             # `body_switch`, which are Agent / Executor scenes).
             return (
                 "dispatch",
-                f"义子已派发任务{error_note}",
+                f"已派发任务{error_note}",
                 f"「{rtitle}」已派发，代理或执行器正在运行，监督者等待结果。",
             )
 
@@ -3266,12 +4965,12 @@ class SupervisorUIMixin:
             if "memory" in str(lp.get("task_family") or ""):
                 return (
                     "maintenance",
-                    f"义子正在整理记忆书架{error_note}",
+                    f"正在整理记忆书架{error_note}",
                     f"「{lp.get('title', '维护任务')}」已进入监督者执行位，等待处理。",
                 )
             return (
                 "planning",
-                f"义子正在安排治理事务{error_note}",
+                f"正在安排治理事务{error_note}",
                 f"「{lp.get('title', '监督者任务')}」已进入监督者执行位，等待处理。",
             )
 
@@ -3279,7 +4978,7 @@ class SupervisorUIMixin:
         if memory_active:
             return (
                 "memory",
-                f"义子正在整理记忆{error_note}",
+                f"正在整理记忆{error_note}",
                 "记忆模型正在执行压缩规则：衰减→桥接→升级→清退。",
             )
 
@@ -3290,7 +4989,7 @@ class SupervisorUIMixin:
             utility_pct = int((first.get("utility") or 0) * 100)
             return (
                 "drive",
-                f"义子发现值得优先处理的事{error_note}",
+                f"发现值得优先处理的事{error_note}",
                 f"「{first.get('title', '治理投影')}」从核心价值中浮现 [{value_tags}]，价值度 {utility_pct}%，等待治理审查。",
             )
 
@@ -3300,7 +4999,7 @@ class SupervisorUIMixin:
             mp = maintenance_pending[0]
             return (
                 "maintenance",
-                f"义子正在整理记忆书架{error_note}",
+                f"正在整理记忆书架{error_note}",
                 f"「{mp.get('title', '维护任务')}」长期连续性正在被守护。",
             )
 
@@ -3308,7 +5007,7 @@ class SupervisorUIMixin:
         if not drive_available:
             return (
                 "idle",
-                "义子望着窗外",
+                "望着窗外",
                 "网关无法访问，房间显示本地监督者状态——信号恢复后内生驱动将继续。",
             )
 
@@ -3316,7 +5015,7 @@ class SupervisorUIMixin:
         window_mood = "执行窗口已开启，系统处于安静状态。" if in_execution_window else "执行窗口外，系统正在休息。"
         return (
             "idle",
-            f"义子在窗边休息{error_note}",
+            f"在窗边休息{error_note}",
             f"没有待处理的工作。{window_mood}核心价值保持警觉但平静。",
         )
 
