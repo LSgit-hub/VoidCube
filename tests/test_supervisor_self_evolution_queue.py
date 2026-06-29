@@ -617,9 +617,17 @@ async def test_evaluate_endogenous_drive_exposes_cognition_state(tmp_path):
         f"drift={cognition['proposal_cognition']['proposal_drift_memory']['drift_state']}; "
         f"projections={cognition['proposal_cognition']['current_candidates']['count']}."
     )
+    assert "summary" not in cognition["proposal_cognition"]["meta_cognition_profile"]
+    assert "summary" not in cognition["proposal_cognition"]["self_iteration_hypotheses"]
+    assert "summary" not in cognition["proposal_cognition"]["self_iteration_trend_memory"]
+    assert "summary" not in cognition["proposal_cognition"]["switch_self_regulation_memory"]
+    assert "summary" not in cognition["proposal_cognition"]["post_task_effect_memory"]
+    assert "summary" not in cognition["proposal_cognition"]["cognitive_assessment_memory"]
+    assert "summary" not in cognition["proposal_cognition"]["proposal_drift_memory"]
+    assert "summary" not in cognition["proposal_cognition"]["recent_reference_alignment"]
     assert cognition["proposal_cognition"]["proposal_drift_memory"]["drift_state"] == "correcting"
     assert cognition["proposal_cognition"]["lm_trace"]["charter_core_mission"]
-    assert cognition["proposal_cognition"]["lm_trace"]["top_priority_task_type"] == "observation"
+    assert "top_priority_task_type" not in cognition["proposal_cognition"]["lm_trace"]
     assert cognition["proposal_cognition"]["current_candidates"]["count"] >= 1
     assert cognition["attention_agenda"]["active_count"] >= 1
     assert cognition["attention_agenda"]["entries"][0]["topic"]
@@ -1351,7 +1359,7 @@ async def test_endogenous_cognition_state_persists_to_runtime_file(tmp_path):
     assert snapshot["state"]["self_model"]["adaptive_policy"]["preferred_focus"] == result["cognition_state"]["self_model"]["adaptive_policy"]["preferred_focus"]
     assert "task_type_priors" not in snapshot["state"]["proposal_cognition"]
     assert snapshot["state"]["proposal_cognition"]["lm_trace"]["charter_core_mission"] == "Evolve through evidence-backed structured proposals."
-    assert snapshot["state"]["proposal_cognition"]["lm_trace"]["top_priority_task_type"] == "review"
+    assert "top_priority_task_type" not in snapshot["state"]["proposal_cognition"]["lm_trace"]
     assert snapshot["state"]["proposal_cognition"]["current_candidates"]["count"] >= 1
 
 
@@ -8772,6 +8780,46 @@ async def test_single_recovery_outcome_does_not_immediately_flip_primary_need_ou
     history = supervisor._endogenous_drive_history_default()
     history["outcomes"] = [
         {
+            "title": "Retry self-learning H",
+            "event_type": "decision",
+            "status": "retry",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.20,
+        },
+        {
+            "title": "Deferred self-learning G",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.24,
+        },
+        {
+            "title": "Recovered self-learning F",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.83,
+        },
+        {
+            "title": "Recovered self-learning E",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.79,
+        },
+        {
+            "title": "Recovered self-learning D",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.74,
+        },
+        {
             "title": "Failed self-learning A",
             "event_type": "decision",
             "status": "failed",
@@ -9032,6 +9080,822 @@ async def test_two_self_learning_recoveries_can_clear_historical_underdelivery(
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_mixed_recovery_history_does_not_let_memory_need_override_observation_when_historical_underdelivery_still_dominates(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Failed self-learning A",
+            "event_type": "decision",
+            "status": "failed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.22,
+        },
+        {
+            "title": "Deferred self-learning B",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.28,
+        },
+        {
+            "title": "Awaiting review self-learning C",
+            "event_type": "decision",
+            "status": "awaiting_review",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.31,
+        },
+        {
+            "title": "Recovered self-learning D",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.74,
+        },
+        {
+            "title": "Recovered self-learning E",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.79,
+        },
+        {
+            "title": "Recovered memory maintenance F",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "memory_maintenance",
+            "governance_task_type": "memory_maintenance",
+            "quality_score": 0.81,
+        },
+        {
+            "title": "Retried queue item G",
+            "event_type": "decision",
+            "status": "retry",
+            "task_family": "general_self_evolution",
+            "governance_task_type": "self_evolution",
+            "quality_score": 0.20,
+        },
+        {
+            "title": "Deferred self-learning H",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.21,
+        },
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [
+                {
+                    "title": "Recent learning",
+                    "quality_score": 0.46,
+                    "completed_at": "2026-06-28T00:00:00+00:00",
+                }
+            ],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    assert result["deliberation"]["reflection"]["dominant_constraint"] == "historical_underdelivery"
+    assert result["deliberation"]["adaptive_policy"]["candidate_budget"] == 1
+    assert result["deliberation"]["adaptive_policy"]["observation_bias"] >= 0.72
+    assert result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == "observe_before_acting"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_self_learning_recovery_then_block_again_keeps_preferred_focus_aligned_with_observation(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Failed self-learning A",
+            "event_type": "decision",
+            "status": "failed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.22,
+        },
+        {
+            "title": "Deferred self-learning B",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.28,
+        },
+        {
+            "title": "Awaiting review self-learning C",
+            "event_type": "decision",
+            "status": "awaiting_review",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.31,
+        },
+        {
+            "title": "Recovered self-learning D",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.74,
+        },
+        {
+            "title": "Recovered self-learning E",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.79,
+        },
+        {
+            "title": "Recovered memory maintenance F",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "memory_maintenance",
+            "governance_task_type": "memory_maintenance",
+            "quality_score": 0.83,
+        },
+        {
+            "title": "Deferred self-learning G",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.24,
+        },
+        {
+            "title": "Retry self-learning H",
+            "event_type": "decision",
+            "status": "retry",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.20,
+        },
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [
+                {
+                    "title": "Recent learning",
+                    "quality_score": 0.46,
+                    "completed_at": "2026-06-28T00:00:00+00:00",
+                }
+            ],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    assert result["deliberation"]["reflection"]["dominant_constraint"] == "historical_underdelivery"
+    assert result["deliberation"]["adaptive_policy"]["observation_bias"] >= 0.72
+    assert result["deliberation"]["adaptive_policy"]["preferred_focus"] == "observation"
+    assert result["deliberation"]["adaptive_policy"]["candidate_budget"] == 1
+    assert result["deliberation"]["adaptive_policy"]["exploratory_learning_quota"] == 0
+    assert result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == "observe_before_acting"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_recent_self_learning_relapse_reenters_historical_underdelivery_after_recovery_chain(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Retry self-learning H",
+            "event_type": "decision",
+            "status": "retry",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.20,
+        },
+        {
+            "title": "Deferred self-learning G",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.24,
+        },
+        {
+            "title": "Recovered self-learning F",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.83,
+        },
+        {
+            "title": "Recovered self-learning E",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.79,
+        },
+        {
+            "title": "Recovered self-learning D",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.74,
+        },
+        {
+            "title": "Failed self-learning A",
+            "event_type": "decision",
+            "status": "failed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.22,
+        },
+        {
+            "title": "Deferred self-learning B",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.28,
+        },
+        {
+            "title": "Awaiting review self-learning C",
+            "event_type": "decision",
+            "status": "awaiting_review",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.31,
+        },
+        {
+            "title": "Recovered memory maintenance I",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "memory_maintenance",
+            "governance_task_type": "memory_maintenance",
+            "quality_score": 0.84,
+        },
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [
+                {
+                    "title": "Recent learning",
+                    "quality_score": 0.46,
+                    "completed_at": "2026-06-28T00:00:00+00:00",
+                }
+            ],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    assert result["deliberation"]["reflection"]["dominant_constraint"] == "historical_underdelivery"
+    assert "recent_relapse_drag_count=2" in result["deliberation"]["reflection"]["source_evidence"]
+    assert result["deliberation"]["adaptive_policy"]["preferred_focus"] == "observation"
+    assert result["deliberation"]["adaptive_policy"]["observation_bias"] >= 0.68
+    assert result["deliberation"]["adaptive_policy"]["exploratory_learning_quota"] == 0
+    assert result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == "observe_before_acting"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_recorded_at_normalization_keeps_historical_underdelivery_stable_across_outcome_orderings(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+
+    newest_first = [
+        {
+            "title": "Retry self-learning H",
+            "event_type": "decision",
+            "status": "retry",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.20,
+            "recorded_at": "2026-06-28T08:00:00+00:00",
+        },
+        {
+            "title": "Deferred self-learning G",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.24,
+            "recorded_at": "2026-06-28T07:00:00+00:00",
+        },
+        {
+            "title": "Recovered self-learning F",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.83,
+            "recorded_at": "2026-06-28T06:00:00+00:00",
+        },
+        {
+            "title": "Recovered self-learning E",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.79,
+            "recorded_at": "2026-06-28T05:00:00+00:00",
+        },
+        {
+            "title": "Recovered self-learning D",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.74,
+            "recorded_at": "2026-06-28T04:00:00+00:00",
+        },
+        {
+            "title": "Failed self-learning A",
+            "event_type": "decision",
+            "status": "failed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.22,
+            "recorded_at": "2026-06-28T03:00:00+00:00",
+        },
+        {
+            "title": "Deferred self-learning B",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.28,
+            "recorded_at": "2026-06-28T02:00:00+00:00",
+        },
+        {
+            "title": "Awaiting review self-learning C",
+            "event_type": "decision",
+            "status": "awaiting_review",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.31,
+            "recorded_at": "2026-06-28T01:00:00+00:00",
+        },
+        {
+            "title": "Recovered memory maintenance I",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "memory_maintenance",
+            "governance_task_type": "memory_maintenance",
+            "quality_score": 0.84,
+            "recorded_at": "2026-06-28T00:30:00+00:00",
+        },
+    ]
+    scrambled_same_facts = [
+        newest_first[5],
+        newest_first[6],
+        newest_first[7],
+        newest_first[4],
+        newest_first[3],
+        newest_first[2],
+        newest_first[1],
+        newest_first[0],
+        newest_first[8],
+    ]
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [
+                {
+                    "title": "Recent learning",
+                    "quality_score": 0.46,
+                    "completed_at": "2026-06-28T00:00:00+00:00",
+                }
+            ],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    first_history = supervisor._endogenous_drive_history_default()
+    first_history["outcomes"] = newest_first
+    supervisor._persist_endogenous_drive_history(first_history)
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        first = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    second_history = supervisor._endogenous_drive_history_default()
+    second_history["outcomes"] = scrambled_same_facts
+    supervisor._persist_endogenous_drive_history(second_history)
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        second = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    assert first["deliberation"]["reflection"]["dominant_constraint"] == "historical_underdelivery"
+    assert second["deliberation"]["reflection"]["dominant_constraint"] == "historical_underdelivery"
+    assert first["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == "observe_before_acting"
+    assert second["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == "observe_before_acting"
+    assert first["deliberation"]["adaptive_policy"]["preferred_focus"] == "observation"
+    assert second["deliberation"]["adaptive_policy"]["preferred_focus"] == "observation"
+    assert first["deliberation"]["reflection"]["source_evidence"] == second["deliberation"]["reflection"]["source_evidence"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_legacy_history_without_timestamps_stays_conservative_across_orderings(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+
+    newest_first = [
+        {
+            "title": "Retry self-learning H",
+            "event_type": "decision",
+            "status": "retry",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.20,
+        },
+        {
+            "title": "Deferred self-learning G",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.24,
+        },
+        {
+            "title": "Recovered self-learning F",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.83,
+        },
+        {
+            "title": "Recovered self-learning E",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.79,
+        },
+        {
+            "title": "Recovered self-learning D",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.74,
+        },
+        {
+            "title": "Failed self-learning A",
+            "event_type": "decision",
+            "status": "failed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.22,
+        },
+        {
+            "title": "Deferred self-learning B",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.28,
+        },
+        {
+            "title": "Awaiting review self-learning C",
+            "event_type": "decision",
+            "status": "awaiting_review",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.31,
+        },
+        {
+            "title": "Recovered memory maintenance I",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "memory_maintenance",
+            "governance_task_type": "memory_maintenance",
+            "quality_score": 0.84,
+        },
+    ]
+    recovery_front_loaded = [
+        newest_first[2],
+        newest_first[3],
+        newest_first[4],
+        newest_first[0],
+        newest_first[1],
+        newest_first[5],
+        newest_first[6],
+        newest_first[7],
+        newest_first[8],
+    ]
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [
+                {
+                    "title": "Recent learning",
+                    "quality_score": 0.46,
+                    "completed_at": "2026-06-28T00:00:00+00:00",
+                }
+            ],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    first_history = supervisor._endogenous_drive_history_default()
+    first_history["outcomes"] = newest_first
+    supervisor._persist_endogenous_drive_history(first_history)
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        first = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    second_history = supervisor._endogenous_drive_history_default()
+    second_history["outcomes"] = recovery_front_loaded
+    supervisor._persist_endogenous_drive_history(second_history)
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        second = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    assert first["deliberation"]["reflection"]["dominant_constraint"] == "historical_underdelivery"
+    assert second["deliberation"]["reflection"]["dominant_constraint"] == "historical_underdelivery"
+    assert first["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == "observe_before_acting"
+    assert second["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == "observe_before_acting"
+    assert first["deliberation"]["adaptive_policy"]["preferred_focus"] == "observation"
+    assert second["deliberation"]["adaptive_policy"]["preferred_focus"] == "observation"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_recent_relapse_retightens_candidate_budget_in_longer_mixed_history(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Retry self-learning H",
+            "event_type": "decision",
+            "status": "retry",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.20,
+        },
+        {
+            "title": "Deferred self-learning G",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.24,
+        },
+        {
+            "title": "Recovered self-learning F",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.83,
+        },
+        {
+            "title": "Recovered self-learning E",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.79,
+        },
+        {
+            "title": "Recovered self-learning D",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.74,
+        },
+        {
+            "title": "Recovered self-learning M",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.77,
+        },
+        {
+            "title": "Failed self-learning A",
+            "event_type": "decision",
+            "status": "failed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.22,
+        },
+        {
+            "title": "Deferred self-learning B",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.28,
+        },
+        {
+            "title": "Awaiting review self-learning C",
+            "event_type": "decision",
+            "status": "awaiting_review",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.31,
+        },
+        {
+            "title": "Recovered memory maintenance I",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "memory_maintenance",
+            "governance_task_type": "memory_maintenance",
+            "quality_score": 0.84,
+        },
+        {
+            "title": "Retried queue item K",
+            "event_type": "decision",
+            "status": "retry",
+            "task_family": "general_self_evolution",
+            "governance_task_type": "self_evolution",
+            "quality_score": 0.20,
+        },
+        {
+            "title": "Deferred queue item L",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "general_self_evolution",
+            "governance_task_type": "self_evolution",
+            "quality_score": 0.21,
+        },
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [
+                {
+                    "title": "Recent learning",
+                    "quality_score": 0.46,
+                    "completed_at": "2026-06-28T00:00:00+00:00",
+                }
+            ],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    assert result["deliberation"]["reflection"]["dominant_constraint"] == "historical_underdelivery"
+    assert "recent_relapse_drag_count=2" in result["deliberation"]["reflection"]["source_evidence"]
+    assert result["deliberation"]["adaptive_policy"]["preferred_focus"] == "observation"
+    assert result["deliberation"]["adaptive_policy"]["candidate_budget"] == 1
+    assert result["deliberation"]["adaptive_policy"]["exploratory_learning_quota"] == 0
+    assert result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == "observe_before_acting"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_memory_success_does_not_reopen_candidate_budget_while_self_learning_underdelivery_persists(
     tmp_path,
 ):
@@ -9245,6 +10109,87 @@ async def test_observation_mode_does_not_revive_filtered_learning_fallback_when_
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_observation_mode_does_not_fall_back_to_memory_maintenance_when_observe_before_acting_is_primary(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Failed self-learning A",
+            "event_type": "decision",
+            "status": "failed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.22,
+        },
+        {
+            "title": "Deferred self-learning B",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.28,
+        },
+        {
+            "title": "Awaiting review self-learning C",
+            "event_type": "decision",
+            "status": "awaiting_review",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.31,
+        },
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [
+                {
+                    "title": "Recent learning",
+                    "quality_score": 0.46,
+                    "completed_at": "2026-06-28T00:00:00+00:00",
+                }
+            ],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "general_self_evolution": {"eligible_for_planning": False, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_evolution": {"eligible_for_planning": False, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    assert result["deliberation"]["reflection"]["dominant_constraint"] == "historical_underdelivery"
+    assert result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == "observe_before_acting"
+    assert result["cognition_state"]["judgement_core"]["primary_intent"]["intent_type"] == "observe_before_acting"
+    assert result["deliberation"]["adaptive_policy"]["preferred_focus"] == "observation"
+    assert result["deliberation"]["adaptive_policy"]["candidate_budget"] == 1
+    assert result["deliberation"]["adaptive_policy"]["exploratory_learning_quota"] == 0
+    assert result["candidates"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_queue_hygiene_candidate_path_does_not_crash_when_self_learning_is_disabled(
     tmp_path,
 ):
@@ -9440,6 +10385,839 @@ async def test_truthfulness_candidate_survives_budget_trimming_when_truthfulness
         for candidate in result["candidates"]
     ]
     assert candidate_kinds == ["truthfulness_review"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_weak_truthfulness_signal_does_not_materialize_truthfulness_candidate_before_review_threshold(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "SL A",
+            "event_type": "decision",
+            "status": "failed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.22,
+        },
+        {
+            "title": "SL B",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.28,
+        },
+        {
+            "title": "SL C",
+            "event_type": "decision",
+            "status": "awaiting_review",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.31,
+        },
+        {
+            "title": "Q A",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "general_self_evolution",
+            "governance_task_type": "self_evolution",
+            "quality_score": 0.20,
+        },
+        {
+            "title": "Q B",
+            "event_type": "decision",
+            "status": "awaiting_review",
+            "task_family": "general_self_evolution",
+            "governance_task_type": "self_evolution",
+            "quality_score": 0.20,
+        },
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {
+                "active_sessions": 0,
+                "counts": {"error_count": 0, "uncertainty_high_count": 1},
+            },
+            "completed_learning_tasks": [
+                {
+                    "title": "Recent learning",
+                    "quality_score": 0.46,
+                    "completed_at": "2026-06-28T00:00:00+00:00",
+                }
+            ],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    assert result["deliberation"]["perception"]["correction_signals"] == 1
+    assert result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == "observe_before_acting"
+    assert result["cognition_state"]["judgement_core"]["primary_intent"]["intent_type"] == "observe_before_acting"
+    candidate_kinds = [
+        str(
+            dict(dict(candidate.get("metadata") or {}).get("score_breakdown") or {}).get(
+                "candidate_kind"
+            )
+            or ""
+        ).strip()
+        for candidate in result["candidates"]
+    ]
+    assert "truthfulness_review" not in candidate_kinds
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_truthfulness_candidate_materializes_once_review_threshold_is_reached_under_observation_pressure(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "SL A",
+            "event_type": "decision",
+            "status": "failed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.22,
+        },
+        {
+            "title": "SL B",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.28,
+        },
+        {
+            "title": "SL C",
+            "event_type": "decision",
+            "status": "awaiting_review",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.31,
+        },
+        {
+            "title": "Q A",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "general_self_evolution",
+            "governance_task_type": "self_evolution",
+            "quality_score": 0.20,
+        },
+        {
+            "title": "Q B",
+            "event_type": "decision",
+            "status": "awaiting_review",
+            "task_family": "general_self_evolution",
+            "governance_task_type": "self_evolution",
+            "quality_score": 0.20,
+        },
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {
+                "active_sessions": 0,
+                "counts": {"error_count": 2, "uncertainty_high_count": 1},
+            },
+            "completed_learning_tasks": [
+                {
+                    "title": "Recent learning",
+                    "quality_score": 0.46,
+                    "completed_at": "2026-06-28T00:00:00+00:00",
+                }
+            ],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    assert result["deliberation"]["perception"]["correction_signals"] == 3
+    candidate_kinds = [
+        str(
+            dict(dict(candidate.get("metadata") or {}).get("score_breakdown") or {}).get(
+                "candidate_kind"
+            )
+            or ""
+        ).strip()
+        for candidate in result["candidates"]
+    ]
+    assert "truthfulness_review" in candidate_kinds
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_drive_posture_signal_keeps_observation_intent_link_when_truthfulness_is_primary_need(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "SL A",
+            "event_type": "decision",
+            "status": "failed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.22,
+        },
+        {
+            "title": "SL B",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.28,
+        },
+        {
+            "title": "SL C",
+            "event_type": "decision",
+            "status": "awaiting_review",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.31,
+        },
+        {
+            "title": "Q A",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "general_self_evolution",
+            "governance_task_type": "self_evolution",
+            "quality_score": 0.20,
+        },
+        {
+            "title": "Q B",
+            "event_type": "decision",
+            "status": "awaiting_review",
+            "task_family": "general_self_evolution",
+            "governance_task_type": "self_evolution",
+            "quality_score": 0.20,
+        },
+        {
+            "title": "Q C",
+            "event_type": "decision",
+            "status": "retry",
+            "task_family": "general_self_evolution",
+            "governance_task_type": "self_evolution",
+            "quality_score": 0.20,
+        },
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {
+                "active_sessions": 0,
+                "counts": {"error_count": 4, "uncertainty_high_count": 1},
+            },
+            "completed_learning_tasks": [
+                {
+                    "title": "Recent learning",
+                    "quality_score": 0.46,
+                    "completed_at": "2026-06-28T00:00:00+00:00",
+                }
+            ],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    assert result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == "repair_truthfulness"
+    assert result["cognition_state"]["judgement_core"]["primary_intent"]["intent_type"] == "review_truthfulness_signals"
+    observe_signal = next(
+        signal
+        for signal in result["deliberation"]["signals"]
+        if signal["signal_type"] == "drive_posture_signal"
+    )
+    assert observe_signal["source_needs"] == ["observe_before_acting"]
+    assert observe_signal["related_intent"] == "observe_before_acting"
+    assert observe_signal["payload"]["preferred_focus"] == "truthfulness"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_queue_hygiene_candidate_survives_budget_trimming_when_observation_mode_and_queue_review_signal_are_active(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Q A",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "general_self_evolution",
+            "governance_task_type": "self_evolution",
+            "quality_score": 0.20,
+        },
+        {
+            "title": "Q B",
+            "event_type": "decision",
+            "status": "awaiting_review",
+            "task_family": "general_self_evolution",
+            "governance_task_type": "self_evolution",
+            "quality_score": 0.20,
+        },
+        {
+            "title": "Q C",
+            "event_type": "decision",
+            "status": "retry",
+            "task_family": "general_self_evolution",
+            "governance_task_type": "self_evolution",
+            "quality_score": 0.20,
+        },
+        {
+            "title": "Q D",
+            "event_type": "decision",
+            "status": "paused",
+            "task_family": "general_self_evolution",
+            "governance_task_type": "self_evolution",
+            "quality_score": 0.20,
+        },
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Queue hygiene debt A",
+            "summary": "Review deferred self-evolution work.",
+            "governance_task_type": "self_evolution",
+            "task_family": "general_self_evolution",
+            "execution_kind": "general_self_evolution",
+        }
+    )
+    queued_task_id = planned["tasks"][0]["task_id"]
+    supervisor._self_evolution_queue.update_status(
+        queued_task_id,
+        status="deferred",
+        actor="test",
+        reason="probe queue review signal",
+    )
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    assert result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == "observe_before_acting"
+    assert result["cognition_state"]["judgement_core"]["primary_intent"]["intent_type"] == "observe_before_acting"
+    assert result["deliberation"]["adaptive_policy"]["preferred_focus"] == "observation"
+    assert result["deliberation"]["adaptive_policy"]["candidate_budget"] == 1
+    assert any(
+        signal["signal_type"] == "governance_review_suggestion"
+        and signal.get("related_intent") == "review_queue_hygiene"
+        for signal in result["deliberation"]["signals"]
+    )
+    candidate_kinds = [
+        str(
+            dict(dict(candidate.get("metadata") or {}).get("score_breakdown") or {}).get(
+                "candidate_kind"
+            )
+            or ""
+        ).strip()
+        for candidate in result["candidates"]
+    ]
+    assert candidate_kinds == ["queue_hygiene_review"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_weak_queue_debt_does_not_materialize_queue_hygiene_candidate_before_review_signal_threshold(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "SL A",
+            "event_type": "decision",
+            "status": "failed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.22,
+        },
+        {
+            "title": "SL B",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.28,
+        },
+        {
+            "title": "SL C",
+            "event_type": "decision",
+            "status": "awaiting_review",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.31,
+        },
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
+            "completed_learning_tasks": [
+                {
+                    "title": "Recent learning",
+                    "quality_score": 0.46,
+                    "completed_at": "2026-06-28T00:00:00+00:00",
+                }
+            ],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "pending_review_count": 0,
+            "stale_queue_count": 0,
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    assert result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == "observe_before_acting"
+    assert result["cognition_state"]["judgement_core"]["primary_intent"]["intent_type"] == "observe_before_acting"
+    assert not any(
+        signal["signal_type"] == "governance_review_suggestion"
+        for signal in result["deliberation"]["signals"]
+    )
+    candidate_kinds = [
+        str(
+            dict(dict(candidate.get("metadata") or {}).get("score_breakdown") or {}).get(
+                "candidate_kind"
+            )
+            or ""
+        ).strip()
+        for candidate in result["candidates"]
+    ]
+    assert "queue_hygiene_review" not in candidate_kinds
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_queue_hygiene_candidate_materializes_once_real_queue_debt_exists_under_observation_pressure(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "SL A",
+            "event_type": "decision",
+            "status": "failed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.22,
+        },
+        {
+            "title": "SL B",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.28,
+        },
+        {
+            "title": "SL C",
+            "event_type": "decision",
+            "status": "awaiting_review",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.31,
+        },
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Queue review debt A",
+            "summary": "Review deferred self-evolution work.",
+            "governance_task_type": "self_evolution",
+            "task_family": "general_self_evolution",
+            "execution_kind": "general_self_evolution",
+        }
+    )
+    queued_task_id = planned["tasks"][0]["task_id"]
+    supervisor._self_evolution_queue.update_status(
+        queued_task_id,
+        status="deferred",
+        actor="test",
+        reason="probe queue review debt",
+    )
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
+            "completed_learning_tasks": [
+                {
+                    "title": "Recent learning",
+                    "quality_score": 0.46,
+                    "completed_at": "2026-06-28T00:00:00+00:00",
+                }
+            ],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    assert any(
+        signal["signal_type"] == "governance_review_suggestion"
+        for signal in result["deliberation"]["signals"]
+    )
+    candidate_kinds = [
+        str(
+            dict(dict(candidate.get("metadata") or {}).get("score_breakdown") or {}).get(
+                "candidate_kind"
+            )
+            or ""
+        ).strip()
+        for candidate in result["candidates"]
+    ]
+    assert "queue_hygiene_review" in candidate_kinds
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_observation_mode_prefers_candidate_with_stronger_drive_judgement_when_truthfulness_and_queue_review_both_exist(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    engine = supervisor._endogenous_drive_engine
+
+    candidate_truthfulness = EndogenousTaskCandidate(
+        stable_key="truthfulness:review_correction_signals",
+        title="Review grounding drift",
+        summary="Truthfulness review",
+        priority="high",
+        governance_task_type="self_learning",
+        task_family="self_learning",
+        execution_kind=None,
+        value_tags=["truthfulness"],
+        utility=0.72,
+        metadata={
+            "score_breakdown": {"candidate_kind": "truthfulness_review"},
+            "drive_judgement": {
+                "intent": {"priority": 0.91},
+                "needs": [{"need_type": "repair_truthfulness", "severity": 0.88, "urgency": 0.84}],
+            },
+        },
+    )
+    candidate_queue = EndogenousTaskCandidate(
+        stable_key="continuity:queue_hygiene_review",
+        title="Review self-evolution queue hygiene",
+        summary="Queue hygiene review",
+        priority="normal",
+        governance_task_type="self_evolution",
+        task_family="general_self_evolution",
+        execution_kind="general_self_evolution",
+        value_tags=["continuity", "truthfulness"],
+        utility=0.95,
+        metadata={
+            "score_breakdown": {"candidate_kind": "queue_hygiene_review"},
+            "drive_judgement": {
+                "intent": {"priority": 0.54},
+                "needs": [{"need_type": "clear_governance_backlog", "severity": 0.56, "urgency": 0.48}],
+            },
+        },
+    )
+
+    selected = engine._apply_adaptive_candidate_budget(
+        [candidate_queue, candidate_truthfulness],
+        adaptive_policy=DriveAdaptivePolicy(
+            learning_expansion_bias=0.5,
+            truthfulness_bias=0.5,
+            memory_continuity_bias=0.5,
+            queue_hygiene_bias=0.5,
+            body_growth_bias=0.5,
+            observation_bias=0.75,
+            candidate_throttle=0.0,
+            candidate_budget=1,
+            exploratory_learning_quota=2,
+            body_growth_quota=1,
+            preferred_focus="observation",
+            rationale="test",
+        ),
+    )
+
+    assert [candidate.stable_key for candidate in selected] == ["truthfulness:review_correction_signals"]
+
+
+@pytest.mark.unit
+def test_observation_mode_tie_break_is_stable_across_input_order_when_truthfulness_and_queue_review_are_equally_scored():
+    from systems.supervisor.endogenous_drive import EndogenousDriveEngine
+
+    engine = EndogenousDriveEngine()
+
+    candidate_truthfulness = EndogenousTaskCandidate(
+        stable_key="truthfulness:review_correction_signals",
+        title="Review grounding drift",
+        summary="Truthfulness review",
+        priority="normal",
+        governance_task_type="self_learning",
+        task_family="self_learning",
+        execution_kind=None,
+        value_tags=["truthfulness"],
+        utility=0.8,
+        metadata={
+            "score_breakdown": {"candidate_kind": "truthfulness_review"},
+            "drive_judgement": {
+                "intent": {"priority": 0.7},
+                "needs": [{"need_type": "repair_truthfulness", "severity": 0.7, "urgency": 0.7}],
+            },
+        },
+    )
+    candidate_queue = EndogenousTaskCandidate(
+        stable_key="continuity:queue_hygiene_review",
+        title="Review self-evolution queue hygiene",
+        summary="Queue hygiene review",
+        priority="normal",
+        governance_task_type="self_evolution",
+        task_family="general_self_evolution",
+        execution_kind="general_self_evolution",
+        value_tags=["continuity", "truthfulness"],
+        utility=0.8,
+        metadata={
+            "score_breakdown": {"candidate_kind": "queue_hygiene_review"},
+            "drive_judgement": {
+                "intent": {"priority": 0.7},
+                "needs": [{"need_type": "clear_governance_backlog", "severity": 0.7, "urgency": 0.7}],
+            },
+        },
+    )
+    adaptive_policy = DriveAdaptivePolicy(
+        learning_expansion_bias=0.5,
+        truthfulness_bias=0.5,
+        memory_continuity_bias=0.5,
+        queue_hygiene_bias=0.5,
+        body_growth_bias=0.5,
+        observation_bias=0.75,
+        candidate_throttle=0.0,
+        candidate_budget=1,
+        exploratory_learning_quota=2,
+        body_growth_quota=1,
+        preferred_focus="observation",
+        rationale="test",
+    )
+
+    forward = engine._apply_adaptive_candidate_budget(
+        [candidate_truthfulness, candidate_queue],
+        adaptive_policy=adaptive_policy,
+    )
+    reversed_order = engine._apply_adaptive_candidate_budget(
+        [candidate_queue, candidate_truthfulness],
+        adaptive_policy=adaptive_policy,
+    )
+
+    assert [candidate.stable_key for candidate in forward] == [
+        "truthfulness:review_correction_signals"
+    ]
+    assert [candidate.stable_key for candidate in reversed_order] == [
+        "truthfulness:review_correction_signals"
+    ]
+
+
+@pytest.mark.unit
+def test_observation_mode_keeps_monotonic_switch_when_queue_review_becomes_slightly_stronger():
+    from systems.supervisor.endogenous_drive import EndogenousDriveEngine
+
+    engine = EndogenousDriveEngine()
+    adaptive_policy = DriveAdaptivePolicy(
+        learning_expansion_bias=0.5,
+        truthfulness_bias=0.5,
+        memory_continuity_bias=0.5,
+        queue_hygiene_bias=0.5,
+        body_growth_bias=0.5,
+        observation_bias=0.75,
+        candidate_throttle=0.0,
+        candidate_budget=1,
+        exploratory_learning_quota=2,
+        body_growth_quota=1,
+        preferred_focus="observation",
+        rationale="test",
+    )
+
+    candidate_truthfulness = EndogenousTaskCandidate(
+        stable_key="truthfulness:review_correction_signals",
+        title="Review grounding drift",
+        summary="Truthfulness review",
+        priority="normal",
+        governance_task_type="self_learning",
+        task_family="self_learning",
+        execution_kind=None,
+        value_tags=["truthfulness"],
+        utility=0.8,
+        metadata={
+            "score_breakdown": {"candidate_kind": "truthfulness_review"},
+            "drive_judgement": {
+                "intent": {"priority": 0.70},
+                "needs": [{"need_type": "repair_truthfulness", "severity": 0.70, "urgency": 0.70}],
+            },
+        },
+    )
+    candidate_queue = EndogenousTaskCandidate(
+        stable_key="continuity:queue_hygiene_review",
+        title="Review self-evolution queue hygiene",
+        summary="Queue hygiene review",
+        priority="normal",
+        governance_task_type="self_evolution",
+        task_family="general_self_evolution",
+        execution_kind="general_self_evolution",
+        value_tags=["continuity", "truthfulness"],
+        utility=0.8,
+        metadata={
+            "score_breakdown": {"candidate_kind": "queue_hygiene_review"},
+            "drive_judgement": {
+                "intent": {"priority": 0.71},
+                "needs": [{"need_type": "clear_governance_backlog", "severity": 0.71, "urgency": 0.70}],
+            },
+        },
+    )
+
+    selected = engine._apply_adaptive_candidate_budget(
+        [candidate_truthfulness, candidate_queue],
+        adaptive_policy=adaptive_policy,
+    )
+
+    assert [candidate.stable_key for candidate in selected] == ["continuity:queue_hygiene_review"]
 
 
 @pytest.mark.asyncio

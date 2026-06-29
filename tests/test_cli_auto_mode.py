@@ -445,7 +445,7 @@ def test_refresh_gateway_cli_presence_registers_session_and_scene(monkeypatch):
     )
     monkeypatch.setattr(
         "cli._push_cli_agent_scene",
-        lambda scene, *, session_id=None, task_id=None, execution_kind=None, subagent_summary=None: scenes.append(
+        lambda scene, *, session_id=None, task_id=None, execution_kind=None, subagent_summary=None, agent_role=None: scenes.append(
             (scene, session_id, task_id, execution_kind, subagent_summary)
         ) or True,
     )
@@ -494,7 +494,7 @@ def test_refresh_gateway_cli_presence_retries_quickly_after_register_failure(mon
     monkeypatch.setattr("cli._register_with_gateway", lambda *args, **kwargs: False)
     monkeypatch.setattr(
         "cli._push_cli_agent_scene",
-        lambda scene, *, session_id=None, task_id=None, execution_kind=None, subagent_summary=None: scenes.append(
+        lambda scene, *, session_id=None, task_id=None, execution_kind=None, subagent_summary=None, agent_role=None: scenes.append(
             (scene, session_id, task_id, execution_kind, subagent_summary)
         ) or True,
     )
@@ -910,7 +910,7 @@ def test_auto_command_marks_cli_agent_surface_active(monkeypatch):
     def fake_cprint(*args, **kwargs):
         del args, kwargs
 
-    def fake_push(scene, *, session_id=None, task_id=None, execution_kind=None, subagent_summary=None):
+    def fake_push(scene, *, session_id=None, task_id=None, execution_kind=None, subagent_summary=None, agent_role=None):
         pushed.append(
             {
                 "scene": scene,
@@ -1063,7 +1063,7 @@ def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
         del kwargs
         printed.append(" ".join(str(arg) for arg in args))
 
-    def fake_push(scene, *, session_id=None, task_id=None, execution_kind=None, subagent_summary=None):
+    def fake_push(scene, *, session_id=None, task_id=None, execution_kind=None, subagent_summary=None, agent_role=None):
         pushed.append(
             {
                 "scene": scene,

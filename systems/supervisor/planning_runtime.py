@@ -126,7 +126,6 @@ class PlanningRuntimeMixin:
                         "status": None,
                         "model_role": None,
                         "charter_core_mission": None,
-                        "top_priority_task_type": None,
                         "proposal_count": 0,
                     },
                     "proposal_drift_memory": {
@@ -1339,13 +1338,6 @@ class PlanningRuntimeMixin:
                 "model_role": str(lm_reasoning_state.get("model_role") or "").strip() or None,
                 "charter_core_mission": str(
                     dict(lm_reasoning_state.get("charter") or {}).get("core_mission") or ""
-                ).strip()
-                or None,
-                "top_priority_task_type": str(
-                    dict(lm_reasoning_state.get("task_type_priors") or {}).get(
-                        "top_priority_task_type"
-                    )
-                    or ""
                 ).strip()
                 or None,
                 "proposal_count": max(0, int(lm_reasoning_state.get("proposal_count") or 0)),

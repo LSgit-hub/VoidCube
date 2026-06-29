@@ -852,8 +852,16 @@ def _push_cli_agent_scene(
     task_id: str | None = None,
     execution_kind: str | None = None,
     subagent_summary: Dict[str, Any] | None = None,
+    agent_role: str | None = None,
 ) -> None:
-    """Best-effort: report the current CLI AUTO executor scene to Gateway."""
+    """Best-effort: report the current CLI AUTO executor scene to Gateway.
+
+    ``agent_role`` tags which gateway agent lane this report belongs to:
+    "supervisor_task" (this CLI is executing supervisor tasks / learning /
+    body improvement) vs "user_chat" (main CLI interacting with the user).
+    The gateway uses it to keep the two reporters' subagent views separate;
+    when omitted the gateway falls back to a scene heuristic.
+    """
     import json as _json
 
     normalized_scene = str(scene or "").strip().lower()
@@ -867,6 +875,9 @@ def _push_cli_agent_scene(
             metadata["task_id"] = task_id
         if execution_kind:
             metadata["execution_kind"] = execution_kind
+        normalized_role = str(agent_role or "").strip().lower()
+        if normalized_role in ("supervisor_task", "user_chat"):
+            metadata["agent_role"] = normalized_role
         if isinstance(subagent_summary, dict):
             foreground_count = max(0, int(subagent_summary.get("foreground_count") or 0))
             background_count = max(0, int(subagent_summary.get("background_count") or 0))
@@ -3001,6 +3012,7 @@ class VoidcubeCLI:
             session_id=getattr(self, "session_id", None),
             task_id=task_id,
             execution_kind=execution_kind,
+            agent_role="supervisor_task",
         )
 
         # ── Notify Gateway that agent is starting work ──
@@ -3192,12 +3204,16 @@ class VoidcubeCLI:
 
         scene, task_id, execution_kind = self._current_gateway_presence_snapshot()
         subagent_summary = self._get_subagent_observability_snapshot()
+        # Tag the gateway agent lane: this CLI is a supervisor-task executor when
+        # in AUTO mode, otherwise it's the main CLI interacting with the user.
+        agent_role = "supervisor_task" if getattr(self, "_auto_mode_active", False) else "user_chat"
         scene_pushed = _push_cli_agent_scene(
             scene,
             session_id=session_id,
             task_id=task_id,
             execution_kind=execution_kind,
             subagent_summary=subagent_summary,
+            agent_role=agent_role,
         )
         if registered and scene_pushed:
             self._last_gateway_presence_refresh_at = now

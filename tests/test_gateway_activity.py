@@ -711,3 +711,118 @@ def test_gateway_executor_route_updates_execute_activity_even_when_upstream_fail
     assert activity["recent_metadata"]["self_evolution_execute"]["task_id"] == "task-exec-1"
     assert activity["recent_metadata"]["self_evolution_execute"]["task_identity"]["display_kind"] == "body_switch"
     assert activity["recent_metadata"]["self_evolution_execute"]["task_identity"]["requested_kind"] == "body_switch"
+
+
+def _post_agent_scene(client, session_id, metadata):
+    return client.post(
+        "/admin/activity/touch",
+        json={
+            "activity_kind": "agent_scene",
+            "source_service": "cli_agent",
+            "session_id": session_id,
+            "metadata": metadata,
+        },
+    )
+
+
+def test_gateway_agent_lanes_keep_supervisor_and_user_chat_separate():
+    """A user_chat report must not overwrite the supervisor_task lane."""
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+
+    # supervisor-task executor reports its subagents
+    resp = _post_agent_scene(
+        client,
+        "supervisor-session",
+        {
+            "scene": "learning",
+            "task_id": "learn-9",
+            "execution_kind": "self_learning",
+            "agent_role": "supervisor_task",
+            "subagent_foreground_count": 3,
+            "subagent_focus_tool": "read_file",
+        },
+    )
+    assert resp.status_code == 200
+
+    # main CLI user-chat executor reports afterwards (would overwrite top-level)
+    resp = _post_agent_scene(
+        client,
+        "user-session",
+        {
+            "scene": "executing",
+            "agent_role": "user_chat",
+            "subagent_foreground_count": 1,
+            "subagent_focus_tool": "grep",
+        },
+    )
+    assert resp.status_code == 200
+
+    lanes = client.get("/admin/scenes").json()["scenes"]["agent"]["lanes"]
+    # supervisor_task lane is preserved, NOT overwritten by the later user_chat push
+    assert lanes["supervisor_task"]["scene"] == "learning"
+    assert lanes["supervisor_task"]["subagent_foreground_count"] == 3
+    assert lanes["supervisor_task"]["subagent_focus_tool"] == "read_file"
+    assert lanes["supervisor_task"]["session_id"] == "supervisor-session"
+    # user_chat lane holds its own data
+    assert lanes["user_chat"]["scene"] == "executing"
+    assert lanes["user_chat"]["subagent_foreground_count"] == 1
+
+
+def test_gateway_agent_lane_scene_heuristic_fallback_without_role():
+    """Older reporters without agent_role still route by scene heuristic."""
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+
+    _post_agent_scene(
+        client,
+        "legacy-session",
+        {
+            "scene": "code_editing",
+            "task_id": "body-1",
+            "subagent_foreground_count": 2,
+        },
+    )
+    lanes = client.get("/admin/scenes").json()["scenes"]["agent"]["lanes"]
+    assert lanes["supervisor_task"]["scene"] == "code_editing"
+    assert lanes["supervisor_task"]["subagent_foreground_count"] == 2
+    assert lanes["user_chat"]["scene"] == "idle"
+
+
+def test_gateway_agent_idle_clears_only_that_sessions_lane():
+    """An idle push clears the lane the session owned, leaving the other intact."""
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+
+    _post_agent_scene(
+        client,
+        "supervisor-session",
+        {
+            "scene": "learning",
+            "agent_role": "supervisor_task",
+            "subagent_foreground_count": 3,
+        },
+    )
+    _post_agent_scene(
+        client,
+        "user-session",
+        {
+            "scene": "executing",
+            "agent_role": "user_chat",
+            "subagent_foreground_count": 1,
+        },
+    )
+
+    # supervisor session goes idle -> only supervisor_task lane is cleared
+    _post_agent_scene(
+        client,
+        "supervisor-session",
+        {"scene": "idle", "agent_role": "supervisor_task"},
+    )
+
+    lanes = client.get("/admin/scenes").json()["scenes"]["agent"]["lanes"]
+    assert lanes["supervisor_task"]["scene"] == "idle"
+    assert lanes["supervisor_task"]["subagent_foreground_count"] == 0
+    # user_chat lane untouched by the supervisor session's idle
+    assert lanes["user_chat"]["scene"] == "executing"
+    assert lanes["user_chat"]["subagent_foreground_count"] == 1

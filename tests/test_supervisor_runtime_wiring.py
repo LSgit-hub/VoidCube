@@ -764,7 +764,7 @@ async def test_supervisor_room_state_candidate_list_deduplicates_timed_queue_by_
 
     assert layout["timed_queue"][0]["title"] == "Existing timed queue task"
     assert [item["title"] for item in layout["candidate_list"]] == ["Unique scheduled candidate"]
-    assert layout["candidate_list"][0]["display_status"] == "等待监督者 LM 裁定"
+    assert layout["candidate_list"][0]["display_status"] == "等待监督者治理"
 
 
 @pytest.mark.asyncio

@@ -644,6 +644,7 @@ class EndogenousDriveEngine:
             for item in list(drive_history.get("outcomes") or [])
             if isinstance(item, dict)
         ]
+        historical_outcomes = self._normalize_historical_outcomes(historical_outcomes)
         recent_learning_count = len(completed_learning_tasks[:3])
 
         quality_values: List[float] = []
@@ -726,34 +727,16 @@ class EndogenousDriveEngine:
             for item in historical_outcomes
             if _historical_family(item) == "self_learning"
         ][:12]
-        historical_scope = "global"
-        scoped_historical_outcomes = recent_historical_outcomes
-        if len(recent_self_learning_outcomes) >= 3:
-            historical_scope = "self_learning"
-            scoped_historical_outcomes = recent_self_learning_outcomes
-
-        historical_completed = 0
-        historical_failed = 0
-        historical_blocked = 0
-        for item in scoped_historical_outcomes:
-            status = str(item.get("status") or "").strip().lower()
-            if status == "completed":
-                historical_completed += 1
-            elif status in {"failed", "cancelled"}:
-                historical_failed += 1
-            elif status in {"approved", "deferred", "paused", "awaiting_review", "retry"}:
-                historical_blocked += 1
-        historical_total = historical_completed + historical_failed + historical_blocked
-        historical_success_ratio = (
-            historical_completed / historical_total
-            if historical_total > 0
-            else 0.5
+        historical_pressure = self._summarize_historical_pressure(
+            recent_historical_outcomes=recent_historical_outcomes,
+            recent_self_learning_outcomes=recent_self_learning_outcomes,
         )
-        historical_drag_ratio = (
-            (historical_failed + historical_blocked) / historical_total
-            if historical_total > 0
-            else 0.0
-        )
+        historical_scope = str(historical_pressure["scope"] or "global")
+        historical_total = int(historical_pressure["total"] or 0)
+        historical_success_ratio = float(historical_pressure["success_ratio"] or 0.5)
+        historical_drag_ratio = float(historical_pressure["drag_ratio"] or 0.0)
+        recent_relapse_drag_count = int(historical_pressure["recent_relapse_drag_count"] or 0)
+        recent_relapse_drag_ratio = float(historical_pressure["recent_relapse_drag_ratio"] or 0.0)
         autonomy_readiness = self._clamp01(
             world_model.self_confidence * 0.34
             + world_model.learning_momentum * 0.24
@@ -763,13 +746,11 @@ class EndogenousDriveEngine:
             - queue_blockage_pressure * 0.24
             - repeated_drive_pressure * 0.12
             - historical_drag_ratio * 0.16
+            - recent_relapse_drag_ratio * 0.06
             - (0.08 if body_growth_blocked else 0.0)
         )
-
-        historical_underdelivery_active = (
-            historical_total >= 3
-            and historical_drag_ratio >= 0.6
-            and historical_success_ratio <= 0.34
+        historical_underdelivery_active = bool(
+            historical_pressure.get("underdelivery_active")
         )
 
         dominant_constraint = "none"
@@ -819,6 +800,8 @@ class EndogenousDriveEngine:
                 f"historical_outcomes={historical_total}",
                 f"historical_success_ratio={historical_success_ratio:.2f}",
                 f"historical_drag_ratio={historical_drag_ratio:.2f}",
+                f"recent_relapse_drag_count={recent_relapse_drag_count}",
+                f"recent_relapse_drag_ratio={recent_relapse_drag_ratio:.2f}",
             ],
         )
 
@@ -840,6 +823,25 @@ class EndogenousDriveEngine:
             for item in list(drive_history.get("outcomes") or [])
             if isinstance(item, dict)
         ]
+        historical_outcomes = self._normalize_historical_outcomes(historical_outcomes)
+        recent_historical_outcomes = historical_outcomes[:12]
+
+        def _historical_family(item: Dict[str, Any]) -> str:
+            return str(
+                item.get("task_family")
+                or item.get("governance_task_type")
+                or ""
+            ).strip().lower()
+
+        recent_self_learning_outcomes = [
+            item
+            for item in historical_outcomes
+            if _historical_family(item) == "self_learning"
+        ][:12]
+        historical_pressure = self._summarize_historical_pressure(
+            recent_historical_outcomes=recent_historical_outcomes,
+            recent_self_learning_outcomes=recent_self_learning_outcomes,
+        )
 
         stats: Dict[str, Dict[str, int]] = {}
         for item in historical_outcomes[:18]:
@@ -889,31 +891,10 @@ class EndogenousDriveEngine:
             else 0.0
         )
 
-        self_learning_bucket = dict(stats.get("self_learning") or {})
-        scoped_historical_scope = "global"
-        scoped_historical_completed = historical_completed
-        scoped_historical_failed = historical_failed
-        scoped_historical_dragging = historical_dragging
-        self_learning_total = (
-            int(self_learning_bucket.get("completed") or 0)
-            + int(self_learning_bucket.get("failed") or 0)
-            + int(self_learning_bucket.get("dragging") or 0)
-        )
-        if self_learning_total >= 3:
-            scoped_historical_scope = "self_learning"
-            scoped_historical_completed = int(self_learning_bucket.get("completed") or 0)
-            scoped_historical_failed = int(self_learning_bucket.get("failed") or 0)
-            scoped_historical_dragging = int(self_learning_bucket.get("dragging") or 0)
-        scoped_historical_total = (
-            scoped_historical_completed
-            + scoped_historical_failed
-            + scoped_historical_dragging
-        )
-        scoped_historical_drag_ratio = (
-            (scoped_historical_failed + scoped_historical_dragging) / scoped_historical_total
-            if scoped_historical_total > 0
-            else 0.0
-        )
+        scoped_historical_scope = str(historical_pressure["scope"] or "global")
+        scoped_historical_drag_ratio = float(historical_pressure["drag_ratio"] or 0.0)
+        recent_relapse_drag_count = int(historical_pressure["recent_relapse_drag_count"] or 0)
+        recent_relapse_drag_ratio = float(historical_pressure["recent_relapse_drag_ratio"] or 0.0)
 
         learning_success = _family_success(["self_learning"], default=0.55)
         queue_success = _family_success(["general_self_evolution", "self_evolution"], default=0.45)
@@ -1107,6 +1088,7 @@ class EndogenousDriveEngine:
             + unresolved_observation_pressure * 0.36
             - observation_recovery_signal * 0.18
             + agenda_drag_pressure * 0.12
+            + recent_relapse_drag_ratio * 0.08
         )
         candidate_throttle = self._clamp01(
             0.18
@@ -1119,6 +1101,7 @@ class EndogenousDriveEngine:
             + unresolved_observation_pressure * 0.34
             + agenda_drag_pressure * 0.1
             - observation_recovery_signal * 0.1
+            + recent_relapse_drag_ratio * 0.12
             + float(policy.get("dynamic_candidate_throttle_boost") or 0.0)
         )
         observation_bias = self._clamp01(
@@ -1135,12 +1118,24 @@ class EndogenousDriveEngine:
         }
         preferred_focus = max(focus_candidates.items(), key=lambda item: item[1])[0]
         if (
+            reflection.dominant_constraint == "historical_underdelivery"
+            and observation_bias >= 0.72
+            and preferred_focus == "memory_continuity"
+        ):
+            preferred_focus = "observation"
+        if (
             scoped_historical_drag_ratio >= 0.66
             and (
                 preferred_focus == "observation"
                 or reflection.autonomy_readiness <= 0.18
                 or observation_bias >= 0.58
             )
+        ):
+            candidate_budget = 1
+        elif (
+            reflection.dominant_constraint == "historical_underdelivery"
+            and recent_relapse_drag_ratio >= 0.66
+            and recent_relapse_drag_count >= 2
         ):
             candidate_budget = 1
         elif candidate_throttle >= 0.72:
@@ -1206,6 +1201,8 @@ class EndogenousDriveEngine:
                 f"historical_drag_scope={scoped_historical_scope}",
                 f"historical_drag_ratio={historical_drag_ratio:.2f}",
                 f"scoped_historical_drag_ratio={scoped_historical_drag_ratio:.2f}",
+                f"recent_relapse_drag_count={recent_relapse_drag_count}",
+                f"recent_relapse_drag_ratio={recent_relapse_drag_ratio:.2f}",
                 f"queue_blockage_pressure={reflection.queue_blockage_pressure:.2f}",
                 f"autonomy_readiness={reflection.autonomy_readiness:.2f}",
                 f"context_key={context_key}",
@@ -1434,6 +1431,10 @@ class EndogenousDriveEngine:
             observation_constraint_bonus = 0.0
             if reflection.dominant_constraint == "historical_underdelivery":
                 observation_constraint_bonus += 0.08
+                if adaptive_policy.observation_bias >= 0.72:
+                    observation_constraint_bonus += 0.06
+                if int(adaptive_policy.candidate_budget) <= 1:
+                    observation_constraint_bonus += 0.04
             if adaptive_policy.preferred_focus == "observation":
                 observation_constraint_bonus += 0.06
             needs.append(
@@ -1644,7 +1645,7 @@ class EndogenousDriveEngine:
                 and (
                     perception.pending_review_count > 0
                     or perception.stale_queue_count > 0
-                    or queue_need.severity >= 0.28
+                    or perception.active_queue_count > 0
                 )
             ):
                 signals.append(
@@ -1782,8 +1783,8 @@ class EndogenousDriveEngine:
                     else []
                 ),
                 related_intent=(
-                    "observe_before_acting"
-                    if adaptive_policy.preferred_focus == "observation"
+                    observe_intent.intent_type
+                    if observe_need is not None and observe_intent is not None
                     else None
                 ),
                 payload={
@@ -1992,23 +1993,59 @@ class EndogenousDriveEngine:
             return "body_growth"
         return None
 
+    def _candidate_selection_priority(self, candidate: EndogenousTaskCandidate) -> float:
+        metadata = dict(candidate.metadata or {})
+        drive_judgement = dict(metadata.get("drive_judgement") or {})
+        intent = dict(drive_judgement.get("intent") or {})
+        intent_priority = intent.get("priority")
+        if isinstance(intent_priority, (int, float)):
+            return self._clamp01(float(intent_priority))
+
+        linked_needs = drive_judgement.get("needs")
+        if isinstance(linked_needs, list):
+            samples: List[float] = []
+            for need in linked_needs:
+                if not isinstance(need, dict):
+                    continue
+                for field_name in ("severity", "urgency"):
+                    value = need.get(field_name)
+                    if isinstance(value, (int, float)):
+                        samples.append(float(value))
+            if samples:
+                return self._clamp01(max(samples))
+
+        return float(candidate.utility)
+
     def _budget_priority_for_candidate(
         self,
         candidate: EndogenousTaskCandidate,
         *,
         adaptive_policy: DriveAdaptivePolicy,
-    ) -> tuple[int, float]:
+    ) -> tuple[int, float, float, str]:
         candidate_kind = self._candidate_kind_of(candidate)
         preferred_focus = str(adaptive_policy.preferred_focus or "").strip().lower()
         aligned_kinds: Dict[str, set[str]] = {
             "truthfulness": {"truthfulness_review"},
             "queue_hygiene": {"queue_hygiene_review"},
             "memory_continuity": {"memory_maintenance"},
+            "observation": {"truthfulness_review", "queue_hygiene_review"},
+        }
+        observation_tie_break = {
+            "truthfulness_review": 0,
+            "queue_hygiene_review": 1,
         }
         rank = 1
         if candidate_kind in aligned_kinds.get(preferred_focus, set()):
             rank = 0
-        return rank, -float(candidate.utility)
+        kind_tie_break = candidate_kind
+        if preferred_focus == "observation":
+            kind_tie_break = f"{observation_tie_break.get(candidate_kind, 9)}:{candidate_kind}"
+        return (
+            rank,
+            -self._candidate_selection_priority(candidate),
+            -float(candidate.utility),
+            kind_tie_break,
+        )
 
     def _apply_adaptive_candidate_budget(
         self,
@@ -2046,7 +2083,6 @@ class EndogenousDriveEngine:
             if observation_mode and candidate_kind not in {
                 "truthfulness_review",
                 "queue_hygiene_review",
-                "memory_maintenance",
             }:
                 continue
             group = self._adaptive_group_for_candidate(candidate)
@@ -2170,7 +2206,11 @@ class EndogenousDriveEngine:
 
         recent_errors = perception.recent_errors
         uncertainty_count = perception.uncertainty_count
-        if perception.correction_signals > 0 and self_learning_plan.get("eligible_for_planning") and "truthfulness:review_correction_signals" not in existing_keys:
+        if (
+            perception.correction_signals >= 3
+            and self_learning_plan.get("eligible_for_planning")
+            and "truthfulness:review_correction_signals" not in existing_keys
+        ):
             truth_intent = intents_by_kind.get("truthfulness_review")
             candidates.append(
                 self._build_scored_candidate(
@@ -2493,7 +2533,15 @@ class EndogenousDriveEngine:
                             )
                         )
 
-        if self_evolution_plan.get("eligible_for_planning") and "continuity:queue_hygiene_review" not in existing_keys:
+        if (
+            self_evolution_plan.get("eligible_for_planning")
+            and "continuity:queue_hygiene_review" not in existing_keys
+            and (
+                perception.pending_review_count > 0
+                or perception.stale_queue_count > 0
+                or perception.active_queue_count > 0
+            )
+        ):
             queue_intent = intents_by_kind.get("queue_hygiene_review")
             candidates.append(
                 self._build_scored_candidate(
@@ -5102,7 +5150,6 @@ class EndogenousDriveEngine:
                 "compatible_projection_bias": str(
                     meta_cognition_profile.get("compatible_projection_bias") or ""
                 ).strip(),
-                "summary": str(meta_cognition_profile.get("summary") or "").strip(),
                 "priority_signals": [
                     str(item).strip()
                     for item in list(meta_cognition_profile.get("priority_signals") or [])[:6]
@@ -5117,7 +5164,6 @@ class EndogenousDriveEngine:
                 "top_target_domain": str(
                     self_iteration_hypotheses.get("top_target_domain") or ""
                 ).strip(),
-                "summary": str(self_iteration_hypotheses.get("summary") or "").strip(),
                 "hypotheses": [
                     {
                         "target_domain": str(item.get("target_domain") or "").strip(),
@@ -5175,7 +5221,6 @@ class EndogenousDriveEngine:
                     )[:4]
                     if str(item).strip()
                 ],
-                "summary": str(self_iteration_trend_memory.get("summary") or "").strip(),
             },
             "switch_self_regulation_memory": {
                 "available": bool(switch_self_regulation_memory.get("available")),
@@ -5200,7 +5245,6 @@ class EndogenousDriveEngine:
                     ),
                     4,
                 ),
-                "summary": str(switch_self_regulation_memory.get("summary") or "").strip(),
             },
             "post_task_effect_memory": {
                 "available": bool(post_task_effect_memory.get("available")),
@@ -5226,7 +5270,6 @@ class EndogenousDriveEngine:
                 "dominant_target_effect": str(
                     post_task_effect_memory.get("dominant_target_effect") or ""
                 ).strip(),
-                "summary": str(post_task_effect_memory.get("summary") or "").strip(),
             },
             "cognitive_assessment_memory": {
                 "available": bool(cognitive_assessment_memory.get("available")),
@@ -5261,7 +5304,6 @@ class EndogenousDriveEngine:
                     )[:4]
                     if str(item).strip()
                 ],
-                "summary": str(cognitive_assessment_memory.get("summary") or "").strip(),
             },
             "proposal_drift_memory": {
                 "available": bool(proposal_drift_memory.get("available")),
@@ -5290,7 +5332,6 @@ class EndogenousDriveEngine:
                 "dominant_posture_conflict_reason": str(
                     proposal_drift_memory.get("dominant_posture_conflict_reason") or ""
                 ).strip(),
-                "summary": str(proposal_drift_memory.get("summary") or "").strip(),
             },
             "recent_reference_alignment": {
                 "available": bool(recent_reference_alignment.get("available")),
@@ -5304,7 +5345,6 @@ class EndogenousDriveEngine:
                     0,
                     int(recent_reference_alignment.get("weak_or_partial_count") or 0),
                 ),
-                "summary": str(recent_reference_alignment.get("summary") or "").strip(),
             },
             "cognitive_posture": {
                 "name": str(cognitive_posture.get("name") or "").strip(),
@@ -8730,6 +8770,141 @@ class EndogenousDriveEngine:
             return max(0.0, min(1.0, float(value)))
         except (TypeError, ValueError):
             return 0.0
+
+    def _summarize_historical_pressure(
+        self,
+        *,
+        recent_historical_outcomes: List[Dict[str, Any]],
+        recent_self_learning_outcomes: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        scoped_outcomes = list(recent_historical_outcomes)
+        scope = "global"
+        if len(recent_self_learning_outcomes) >= 3:
+            scope = "self_learning"
+            scoped_outcomes = list(recent_self_learning_outcomes)
+
+        completed = 0
+        failed = 0
+        blocked = 0
+        for item in scoped_outcomes:
+            status = str(item.get("status") or "").strip().lower()
+            if status == "completed":
+                completed += 1
+            elif status in {"failed", "cancelled"}:
+                failed += 1
+            elif status in {"approved", "deferred", "paused", "awaiting_review", "retry"}:
+                blocked += 1
+        total = completed + failed + blocked
+        success_ratio = completed / total if total > 0 else 0.5
+        drag_ratio = (failed + blocked) / total if total > 0 else 0.0
+        has_temporal_markers = any(
+            item.get("recorded_at")
+            or item.get("completed_at")
+            or item.get("updated_at")
+            or item.get("created_at")
+            for item in recent_self_learning_outcomes
+        )
+
+        def _status_counts(window: List[Dict[str, Any]]) -> tuple[int, int]:
+            drag_count = 0
+            completed_count = 0
+            for item in window:
+                status = str(item.get("status") or "").strip().lower()
+                if status == "completed":
+                    completed_count += 1
+                elif status in {
+                    "failed",
+                    "cancelled",
+                    "approved",
+                    "deferred",
+                    "paused",
+                    "awaiting_review",
+                    "retry",
+                }:
+                    drag_count += 1
+            return drag_count, completed_count
+
+        relapse_drag_count = 0
+        relapse_drag_ratio = 0.0
+        relapse_windows = [
+            (
+                list(recent_self_learning_outcomes[:3]),
+                list(recent_self_learning_outcomes[3:6]),
+            ),
+            (
+                list(recent_self_learning_outcomes[-3:]),
+                list(recent_self_learning_outcomes[-6:-3]),
+            ),
+        ]
+        for relapse_window, recovery_context in relapse_windows:
+            if len(relapse_window) < 3:
+                continue
+            drag_count, completed_count = _status_counts(relapse_window)
+            _, recovery_completed_count = _status_counts(recovery_context)
+            if (
+                drag_count >= 2
+                and completed_count >= 1
+                and recovery_completed_count >= 1
+            ):
+                ratio = drag_count / len(relapse_window)
+                if ratio > relapse_drag_ratio:
+                    relapse_drag_ratio = ratio
+                    relapse_drag_count = drag_count
+
+        underdelivery_active = (
+            total >= 3
+            and (
+                (drag_ratio >= 0.6 and success_ratio <= 0.34)
+                or (
+                    len(recent_self_learning_outcomes) >= 5
+                    and relapse_drag_count >= 2
+                    and relapse_drag_ratio >= 0.66
+                )
+                or (
+                    not has_temporal_markers
+                    and len(recent_self_learning_outcomes) >= 7
+                    and completed >= 3
+                    and drag_ratio >= 0.6
+                )
+            )
+        )
+
+        return {
+            "scope": scope,
+            "scoped_outcomes": scoped_outcomes,
+            "total": total,
+            "success_ratio": success_ratio,
+            "drag_ratio": drag_ratio,
+            "has_temporal_markers": has_temporal_markers,
+            "recent_relapse_drag_count": relapse_drag_count,
+            "recent_relapse_drag_ratio": relapse_drag_ratio,
+            "underdelivery_active": underdelivery_active,
+        }
+
+    def _normalize_historical_outcomes(
+        self,
+        outcomes: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        indexed_rows: List[tuple[int, datetime, Dict[str, Any]]] = []
+        fallback_rows: List[tuple[int, Dict[str, Any]]] = []
+        for index, item in enumerate(outcomes):
+            row = dict(item)
+            parsed = self._parse_timestamp(
+                row.get("recorded_at")
+                or row.get("completed_at")
+                or row.get("updated_at")
+                or row.get("created_at")
+            )
+            if parsed is None:
+                fallback_rows.append((index, row))
+            else:
+                indexed_rows.append((index, parsed, row))
+        if not indexed_rows:
+            return [row for _, row in fallback_rows]
+        indexed_rows.sort(key=lambda item: (item[1], -item[0]), reverse=True)
+        ordered = [row for _, _, row in indexed_rows]
+        ordered.extend(row for _, row in fallback_rows)
+        return ordered
 
     def _normalize_strategy_memory(self, raw: Any) -> Dict[str, Any]:
         source = dict(raw or {}) if isinstance(raw, dict) else {}

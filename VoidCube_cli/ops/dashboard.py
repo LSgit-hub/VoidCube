@@ -348,6 +348,14 @@ def fetch_scenes_aggregated(force_refresh: bool = True) -> Dict[str, Any]:
 
 def _format_segment_line(seg: Dict[str, str], state: Dict[str, Any]) -> str:
     info = state.get(seg["key"]) or {}
+    # The minimal ops dashboard is the supervisor-task observer: for the agent
+    # segment read the supervisor_task lane so its view is never overwritten by
+    # the main CLI's user-chat subagents. Fall back to the top-level slot when
+    # an older gateway doesn't expose lanes yet.
+    if seg["key"] == "agent":
+        lane = ((info.get("lanes") or {}).get("supervisor_task")) if isinstance(info, dict) else None
+        if isinstance(lane, dict) and lane:
+            info = lane
     scene = str(info.get("scene") or "idle")
     label = SCENE_LABEL.get(scene, scene)
     reachable = bool(info.get("reachable"))

@@ -82,6 +82,10 @@ class InternalGateway:
         self._services: Dict[str, ServiceInfo] = {}
         self._routes: Dict[str, RouteEntry] = {}
         self._active_cli_session_id: str | None = None
+        # Maps a reporting CLI session_id to the agent lane it last wrote
+        # ("supervisor_task" | "user_chat"), so an idle push from that session
+        # clears the correct lane instead of leaving stale subagent counts.
+        self._agent_session_lane: Dict[str, str] = {}
         self._governor_mode_active: bool = False
         self._request_counter = 0
         # Tier 1 memory service URL (lazy-resolved from registered services)
@@ -152,6 +156,16 @@ class InternalGateway:
                 "source_service": None,
                 "reachable": False,
                 "last_fetched_at": None,
+                # Per-role lanes (additive; top-level above stays last-writer-wins
+                # for backward compat with the status bar and existing tests).
+                # supervisor_task = API-A CLI executing supervisor tasks (learning/
+                # body improvement); user_chat = main CLI interacting with the user.
+                # The minimal ops dashboard reads the supervisor_task lane so its
+                # subagent view is never overwritten by user-chat subagents.
+                "lanes": {
+                    "supervisor_task": self._empty_agent_lane(),
+                    "user_chat": self._empty_agent_lane(),
+                },
             },
             "executor": {
                 "scene": "idle",
@@ -319,6 +333,96 @@ class InternalGateway:
             payload["executor_access_policy"] = self._build_executor_access_policy()
         return payload
 
+    @staticmethod
+    def _empty_agent_lane() -> Dict[str, Any]:
+        """A blank per-role agent lane (subagent counts zeroed, scene idle)."""
+        return {
+            "scene": "idle",
+            "scene_task_id": None,
+            "execution_kind": None,
+            "subagent_foreground_count": 0,
+            "subagent_background_count": 0,
+            "subagent_total_count": 0,
+            "subagent_focus_task_id": None,
+            "subagent_focus_tool": None,
+            "subagent_focus_preview": None,
+            "session_id": None,
+            "reachable": False,
+            "last_fetched_at": None,
+        }
+
+    @staticmethod
+    def _resolve_agent_lane(agent_role: Any, scene: str) -> str:
+        """Decide which lane an agent_scene report belongs to.
+
+        Prefers the explicit ``agent_role`` tag from the reporter; falls back to
+        a scene heuristic for older reporters that don't send it yet
+        (learning/code_editing => supervisor_task, executing => user_chat).
+        Defaults to user_chat when nothing is decisive.
+        """
+        role = str(agent_role or "").strip().lower()
+        if role in ("supervisor_task", "user_chat"):
+            return role
+        if scene in ("learning", "code_editing"):
+            return "supervisor_task"
+        return "user_chat"
+
+    def _update_agent_lane(
+        self,
+        *,
+        session_id: Optional[str],
+        agent_role: Any,
+        scene: str,
+        metadata: Dict[str, Any],
+        now: datetime,
+    ) -> None:
+        """Route an agent_scene report into its per-role lane (additive).
+
+        Keeps the two reporters (supervisor-task CLI vs user-chat CLI) from
+        overwriting each other's subagent view. The top-level ``agent`` slot is
+        written separately and left as last-writer-wins for backward compat.
+        """
+        lanes = self._scenes_cache["agent"].setdefault(
+            "lanes",
+            {
+                "supervisor_task": self._empty_agent_lane(),
+                "user_chat": self._empty_agent_lane(),
+            },
+        )
+        sid = str(session_id or "").strip()
+
+        # An idle report clears whichever lane this session last owned, so stale
+        # subagent counts don't linger after the session goes quiet.
+        if scene == "idle":
+            owned = self._agent_session_lane.get(sid) if sid else None
+            if owned and owned in lanes:
+                blank = self._empty_agent_lane()
+                blank["last_fetched_at"] = now.isoformat()
+                blank["session_id"] = sid or None
+                lanes[owned] = blank
+            return
+
+        lane_key = self._resolve_agent_lane(agent_role, scene)
+        fg = max(0, int(metadata.get("subagent_foreground_count") or 0))
+        bg = max(0, int(metadata.get("subagent_background_count") or 0))
+        total = max(fg + bg, int(metadata.get("subagent_total_count") or 0))
+        lanes[lane_key] = {
+            "scene": scene,
+            "scene_task_id": metadata.get("task_id"),
+            "execution_kind": metadata.get("execution_kind"),
+            "subagent_foreground_count": fg,
+            "subagent_background_count": bg,
+            "subagent_total_count": total,
+            "subagent_focus_task_id": metadata.get("subagent_focus_task_id"),
+            "subagent_focus_tool": metadata.get("subagent_focus_tool"),
+            "subagent_focus_preview": metadata.get("subagent_focus_preview"),
+            "session_id": sid or None,
+            "reachable": True,
+            "last_fetched_at": now.isoformat(),
+        }
+        if sid:
+            self._agent_session_lane[sid] = lane_key
+
     def _build_activity_snapshot(self) -> Dict[str, Any]:
         return {
             "last_user_request_at": (
@@ -454,6 +558,15 @@ class InternalGateway:
                 cache["source_service"] = source_service or (activity_metadata or {}).get("source_service")
                 cache["reachable"] = True
                 cache["last_fetched_at"] = now.isoformat()
+            # Additive per-role lane routing (does not affect the top-level slot
+            # above). Runs for idle too, so a session's lane gets cleared.
+            self._update_agent_lane(
+                session_id=session_id,
+                agent_role=(activity_metadata or {}).get("agent_role"),
+                scene=scene,
+                metadata=dict(activity_metadata or {}),
+                now=now,
+            )
         elif normalized == "agent_work":
             self._activity_state["last_agent_work_at"] = now
             self._activity_state["agent_work_count"] += 1
