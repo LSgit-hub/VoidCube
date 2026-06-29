@@ -447,7 +447,17 @@ Agent (API-A, AUTO 模式下)
 
 监督者的内生驱动器不应再被理解为单纯的“候选任务生成器”，而应被理解为**认知核心 + 治理输出中枢**。它依然保留“延续、真实、创造”三类核心价值观，但这些价值观首先进入的是感知、世界模型、need、intent、meta-governance 等认知层；**候选任务只是其中一条兼容输出投影**。当前实现已经接入 `context layers + cognition charter + evidence packet + alignment feedback` 这条 LM 参与判断链，但程序仍负责输入裁剪、协议约束、风险护栏、一致性校验和最终落地边界。无 LLM 时自动降级为确定性文本提取或历史启发式生成。
 
-但目标基线应再前进一步：**监督者不应只是“用 LLM 生成内容”，还应逐步升级为“由 LM 参与治理任务列表本身”。**
+当前 runtime 前台已经优先围绕主判断层组织，而不是围绕任务候选组织。主视图应以 `cognition_state` 为中心：
+
+- `judgement_core`
+- `attention_agenda`
+- `uncertainty_ledger`
+- `observation_program`
+- `meta_governance`
+
+`proposal_cognition` 在当前基线里应被理解为**辅助观察与追踪层**，不是第二套并列主结构。它可以保留 `lm_trace`、`assessment_trace`、`cognitive_evolution_trace`、`self_iteration_focus` 这类辅助材料，但不应重新长回“顶层 LM 原始状态包 + 大量兼容摘要并排外露”的旧形态。
+
+下一步目标不是把系统重新拉回“候选中心”，而是继续让 LM 参与**治理任务列表本身**。
 
 也就是说，LM 参与下的监督者目标不是不停地产生任务扔进列表，而是结合长期记忆、最近任务结果、队列状态和用户服务优先级，去决定：
 
@@ -1126,7 +1136,7 @@ Mem 灵魂层的三个内部角色共享同一 API-B 能力链：
 | 角色                               | 职责                                                | 约束                                                               |
 | -------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------- |
 | **Memory Core**（记忆核心）            | 长期记忆写入/检索、身份连续性维护、演化谱系保存、学习成果与身体升级进展存储            | 不能直接批准 probe/active/rollback                                     |
-| **Governor Engine**（治理引擎）        | 内生驱动执行认知评估、形成治理输出、管理任务列表、整理记忆判断替身进展、裁决身体切换 | 当前实现已接入 LM 参与的认知判断链，但仍以确定性协议负责输入裁剪、状态迁移、风险护栏与最终把关；创造类输出当前兼容投影为学习/改进任务 |
+| **Governor Engine**（治理引擎）        | 内生驱动执行认知评估、形成治理输出、管理任务列表、整理记忆判断替身进展、裁决身体切换 | 当前实现前台已以 `judgement_core / attention_agenda / uncertainty_ledger / observation_program / meta_governance` 作为主判断结构；任务候选只保留为兼容投影，但内部仍存在一定 candidate-heavy 实现体量，程序继续负责输入裁剪、状态迁移、风险护栏与最终把关 |
 | **Governance Audit Store**（审计存储） | 每条裁决的 decision\_id、观察窗口记录、回滚原因追溯                  | 不可篡改                                                             |
 
 ### 13.3 记忆压缩双层体系
@@ -1155,9 +1165,31 @@ Mem 灵魂层的三个内部角色共享同一 API-B 能力链：
 | Gateway 用户请求       | ✅ 正常服务          | ❌ 返回 503             |
 | CLI 输入             | ✅ 正常            | ❌ 仅 /auto-q          |
 
-### 13.5 内生驱动器的核心价值观与兼容投影
+### 13.5 内生驱动器的核心价值观、主判断结构与兼容投影
 
-监督者内生驱动器将"延续、真实、创造"三类核心价值观先映射为认知判断与治理动作，再在当前阶段兼容投影为可审计治理投影：
+监督者内生驱动器将"延续、真实、创造"三类核心价值观先映射为认知判断与治理动作。当前基线下，runtime 前台应先看主判断结构，再看兼容投影：
+
+```text
+cognition_state
+  ├── judgement_core
+  ├── attention_agenda
+  ├── uncertainty_ledger
+  ├── observation_program
+  └── meta_governance
+
+proposal_cognition（辅助观察与追踪层，不是第二套主系统）
+  ├── lm_trace
+  ├── assessment_trace
+  ├── cognitive_evolution_trace
+  └── self_iteration_focus
+
+compatible projections
+  ├── task_candidates
+  ├── compatible_projection_bias
+  └── task_type_priors
+```
+
+也就是说，`task_candidates` 以及相关 `task_type` 语义只是当前实现中的兼容投影，不是内生驱动的本体定义。其真正判断主线仍然是下面这条：
 
 ```
 Mem 中长期记忆 + 网关活动快照（7 个时间戳 + 错误/不确定性计数 + 活跃会话数）
@@ -1180,6 +1212,11 @@ Mem 中长期记忆 + 网关活动快照（7 个时间戳 + 错误/不确定性�
 - **`body_improvement`**：只在学习证据达到阈值后出现，把学习结果落实为 shell worktree 上的实际代码改进
 
 也就是说，进入任务列表供 Agent 在 AUTO 模式下遍历执行的，不只是单一的探索学习，而是"先学习、后改进"这条创造类兼容链路。其余判断优先在监督者内部完成；队列卫生、错误复核和候选清退本身，未来可以由 LM 监督者先提出治理动作，再交由程序护栏落地。
+
+当前实现状态应明确区分为两层：
+
+- 已经收敛的部分：runtime 前台主线已不再把 `top_priority_task_type` 这类字段当核心视图，主判断结构已经前移到 `cognition_state`
+- 仍待继续收薄的部分：内部仍保留一定 `candidate-heavy` 评分、裁剪与兼容语义残留，因此后续演进仍应优先防止“兼容投影重新反客为主”
 
 内生驱动器不产出身体切换任务。身体切换由监督者在整理记忆后内生判断替身进展，直接裁决交由执行器执行。
 

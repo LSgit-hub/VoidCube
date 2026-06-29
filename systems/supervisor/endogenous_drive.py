@@ -1247,6 +1247,10 @@ class EndogenousDriveEngine:
         self_evolution_plan: Dict[str, Any],
     ) -> List[DriveNeed]:
         needs: List[DriveNeed] = []
+        truthfulness_review_active = (
+            self_learning_plan.get("eligible_for_planning")
+            and perception.correction_signals >= 3
+        )
         if memory_plan.get("eligible_for_planning"):
             memory_constraint_penalty = 0.0
             if reflection.dominant_constraint == "historical_underdelivery":
@@ -1282,18 +1286,29 @@ class EndogenousDriveEngine:
                 )
             )
         if self_learning_plan.get("eligible_for_planning") and perception.correction_signals > 0:
+            truthfulness_priority_bonus = 0.0
+            if truthfulness_review_active:
+                truthfulness_priority_bonus += 0.08
+                if adaptive_policy.preferred_focus == "truthfulness":
+                    truthfulness_priority_bonus += 0.04
             needs.append(
                 DriveNeed(
                     need_type="repair_truthfulness",
                     severity=self._clamp01(
                         world_model.truthfulness_pressure
                         + adaptive_policy.truthfulness_bias * 0.16
+                        + truthfulness_priority_bonus
                     ),
                     urgency=self._clamp01(
                         world_model.truthfulness_pressure
                         + adaptive_policy.truthfulness_bias * 0.12
+                        + truthfulness_priority_bonus * 0.9
                     ),
-                    confidence=self._clamp01(0.72 + adaptive_policy.truthfulness_bias * 0.24),
+                    confidence=self._clamp01(
+                        0.72
+                        + adaptive_policy.truthfulness_bias * 0.24
+                        + truthfulness_priority_bonus * 0.45
+                    ),
                     rationale="Recent errors and uncertainty signals indicate truthfulness debt that should be surfaced and reviewed.",
                     source_evidence=[
                         f"correction_signals={perception.correction_signals}",
@@ -1309,6 +1324,8 @@ class EndogenousDriveEngine:
                 learning_constraint_penalty += 0.14
             if adaptive_policy.preferred_focus == "observation":
                 learning_constraint_penalty += 0.08
+            if truthfulness_review_active and adaptive_policy.preferred_focus == "truthfulness":
+                learning_constraint_penalty += 0.06
             needs.append(
                 DriveNeed(
                     need_type="expand_learning_frontier",
