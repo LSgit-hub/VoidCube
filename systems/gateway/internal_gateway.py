@@ -423,6 +423,22 @@ class InternalGateway:
         if sid:
             self._agent_session_lane[sid] = lane_key
 
+    def _clear_agent_session_lane(self, session_id: Optional[str]) -> None:
+        """Drop a session from the lane map and blank the lane it owned.
+
+        Called when a session is deleted or reaped, so a departed session's
+        subagent counts don't linger in its lane and the map doesn't leak.
+        """
+        sid = str(session_id or "").strip()
+        if not sid:
+            return
+        owned = self._agent_session_lane.pop(sid, None)
+        if not owned:
+            return
+        lanes = (self._scenes_cache.get("agent") or {}).get("lanes")
+        if isinstance(lanes, dict) and owned in lanes:
+            lanes[owned] = self._empty_agent_lane()
+
     def _build_activity_snapshot(self) -> Dict[str, Any]:
         return {
             "last_user_request_at": (
@@ -1354,6 +1370,7 @@ class InternalGateway:
         for sid in stale:
             if sid == self._active_cli_session_id:
                 self._active_cli_session_id = None
+            self._clear_agent_session_lane(sid)
             del self._agent_session_cache[sid]
 
     # ── Tier 1 Conversation Recording ──────────────────────────────
@@ -1671,6 +1688,7 @@ class InternalGateway:
             raise HTTPException(status_code=404, detail="Session not found")
         if session_id == self._active_cli_session_id:
             self._active_cli_session_id = None
+        self._clear_agent_session_lane(session_id)
         del self._agent_session_cache[session_id]
         logger.info(f"Session deleted: {session_id}")
         return {"status": "deleted"}

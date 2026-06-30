@@ -826,3 +826,33 @@ def test_gateway_agent_idle_clears_only_that_sessions_lane():
     # user_chat lane untouched by the supervisor session's idle
     assert lanes["user_chat"]["scene"] == "executing"
     assert lanes["user_chat"]["subagent_foreground_count"] == 1
+
+
+def test_gateway_deleting_session_clears_its_agent_lane():
+    """Deleting a session blanks the lane it owned and drops it from the map."""
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+
+    client.post(
+        "/v1/sessions/register",
+        json={"session_id": "sup-1", "model": "m", "provider": "p", "source": "cli"},
+    )
+    _post_agent_scene(
+        client,
+        "sup-1",
+        {
+            "scene": "learning",
+            "agent_role": "supervisor_task",
+            "subagent_foreground_count": 4,
+        },
+    )
+    lanes = client.get("/admin/scenes").json()["scenes"]["agent"]["lanes"]
+    assert lanes["supervisor_task"]["subagent_foreground_count"] == 4
+
+    resp = client.request("DELETE", "/v1/sessions/sup-1")
+    assert resp.status_code == 200
+
+    lanes = client.get("/admin/scenes").json()["scenes"]["agent"]["lanes"]
+    assert lanes["supervisor_task"]["scene"] == "idle"
+    assert lanes["supervisor_task"]["subagent_foreground_count"] == 0
+    assert gateway._agent_session_lane.get("sup-1") is None

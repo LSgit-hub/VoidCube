@@ -1257,6 +1257,16 @@ class EndogenousDriveEngine:
                 memory_constraint_penalty += 0.08
             if adaptive_policy.preferred_focus == "observation":
                 memory_constraint_penalty += 0.06
+            if (
+                reflection.dominant_constraint == "none"
+                and adaptive_policy.preferred_focus == "memory_continuity"
+                and perception.pending_review_count <= 0
+                and perception.stale_queue_count <= 0
+                and perception.active_queue_count <= 0
+                and perception.correction_signals < 3
+                and reflection.learning_yield_state in {"mixed", "strong"}
+            ):
+                memory_constraint_penalty += 0.05
             needs.append(
                 DriveNeed(
                     need_type="stabilize_memory_continuity",

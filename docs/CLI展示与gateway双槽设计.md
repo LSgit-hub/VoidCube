@@ -37,7 +37,7 @@
 ## 3. 组件分工目标
 
 | 组件 | 角色 | 应显示 |
-|---|---|---|
+| --- | --- | --- |
 | 主 CLI 自身的子代理展示 | 主 CLI 与用户交互时的子代理 | 本进程 user_chat 子代理（本地 manager，已隔离） |
 | 最小 CLI（`VoidCube_cli/ops/dashboard.py`） | 监督者任务（学习 / 改造）专用观测面 | 仅 supervisor_task 子代理，不掺入用户交互子代理 |
 | Web 小屋（`systems/supervisor/ui_runtime.py`） | 监督者认知核心总览 | 双泳道治理 / 决策溯源 / 健康度（已完成 drill-down） |
@@ -45,6 +45,8 @@
 收敛判据：最小 CLI 在“主 CLI 正与用户交互 + 监督者任务同时在跑子代理”时，仍只显示监督者任务那一套，不被用户交互子代理覆盖或混入。
 
 ## 4. gateway 双槽设计
+
+> **前提澄清：两个 lane 都属于 API-A。** gateway 的 `agent` scene 槽位专属 API-A。双槽拆的是「同一个 API-A 的两种工作模式」：`supervisor_task`（执行监督者 / API-B 派来的学习、改造任务）与 `user_chat`（与用户交互）。`supervisor_task` 这个名字指**任务来源**是监督者，**执行者仍是 API-A**，不是 API-B。API-B（`supervisor` 槽位）只负责产出任务与自维护，干活的两种模式都是 API-A。两个 lane 互不覆盖。
 
 核心思路：**additive 双槽，top-level 保持不变以零破坏现有可观测性。**
 
