@@ -103,7 +103,6 @@ class EndogenousTaskCandidate:
 class DrivePerceptionSnapshot:
     user_mode: str
     governor_mode_active: bool
-    in_execution_window: bool
     system_posture: str
     active_sessions: int
     recent_errors: int
@@ -214,7 +213,6 @@ class DriveDeliberationReport:
             "perception": {
                 "user_mode": self.perception.user_mode,
                 "governor_mode_active": self.perception.governor_mode_active,
-                "in_execution_window": self.perception.in_execution_window,
                 "system_posture": self.perception.system_posture,
                 "active_sessions": self.perception.active_sessions,
                 "recent_errors": self.perception.recent_errors,
@@ -556,7 +554,6 @@ class EndogenousDriveEngine:
         return DrivePerceptionSnapshot(
             user_mode=user_mode,
             governor_mode_active=governor_mode_active,
-            in_execution_window=bool(checks.get("in_execution_window", False)),
             system_posture=system_posture,
             active_sessions=active_sessions,
             recent_errors=recent_errors,
@@ -601,12 +598,10 @@ class EndogenousDriveEngine:
         )
         memory_pressure = self._clamp01(
             0.25
-            + (0.15 if perception.in_execution_window else 0.0)
             + min(perception.stale_queue_count, 3) * 0.08
         )
         self_confidence = self._clamp01(
             0.55
-            + (0.1 if perception.in_execution_window else 0.0)
             + (0.08 if perception.governor_mode_active else 0.0)
             - min(perception.active_sessions, 3) * 0.08
             - min(perception.pending_review_count, 3) * 0.04
@@ -1287,9 +1282,8 @@ class EndogenousDriveEngine:
                         + adaptive_policy.memory_continuity_bias * 0.22
                         - memory_constraint_penalty * 0.32
                     ),
-                    rationale="Memory continuity work remains a standing supervisory obligation during viable execution windows.",
+                    rationale="Memory continuity work remains a standing supervisory obligation under whole-day execution.",
                     source_evidence=[
-                        f"in_execution_window={perception.in_execution_window}",
                         f"memory_idle={perception.checks.get('has_memory_idle', False)}",
                         f"memory_continuity_bias={adaptive_policy.memory_continuity_bias:.2f}",
                     ],
@@ -9054,9 +9048,8 @@ class EndogenousDriveEngine:
             for name in ("user", "agent", "memory")
         ]
         avg_idle_coverage = sum(coverage) / len(coverage) if coverage else 0.0
-        checks = dict(idle_window.get("checks") or {})
-        execution_window_bonus = 0.1 if checks.get("in_execution_window") else 0.0
-        return round(self._clamp01(0.72 + avg_idle_coverage * 0.18 + execution_window_bonus), 4)
+        # Whole-day execution (baseline §6): no time-of-day window bonus anymore.
+        return round(self._clamp01(0.72 + avg_idle_coverage * 0.18), 4)
 
     def _idle_learning_urgency(
         self,

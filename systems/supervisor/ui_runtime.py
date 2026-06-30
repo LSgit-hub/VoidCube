@@ -3357,7 +3357,7 @@ function renderLanesDrawer(state) {
 
   const winColor = win.open ? 'var(--mint)' : 'var(--gold)';
   let html = '<div class="drawer-sub">监督者本体只处理自身维护(记忆 / 演化)。学习与替身改进委派给 API-A agent 执行。' +
-    '执行窗口: <span style="color:' + winColor + ';">' + esc(win.range || '00:00-06:00') + ' · ' + esc(win.status_text || '') + '</span></div>';
+    '执行模式: <span style="color:' + winColor + ';">' + esc(win.range || '全天候') + ' · ' + esc(win.status_text || '') + '</span></div>';
   html += '<div class="lane-grid">' +
     laneCol('supervisor', '🧠', '监督者自维护', 'API-B · 记忆/演化',
       layout.supervisor_active, supQueued.length, supCand.length) +
@@ -3925,7 +3925,7 @@ function renderStatsPanel(state) {
   govSec.innerHTML = '<div class="lm-section-label">⚙️ 治理状态</div>';
   [
     {icon:'🔮', label:'Governor', value: gov.active ? '✅ 已激活' : '⏸ 未激活'},
-    {icon:'🪟', label:'执行窗口', value: state.in_execution_window ? '✅ 开启' : '🌙 关闭'},
+    {icon:'🌐', label:'执行模式', value: '全天候'},
     {icon:'👥', label:'活跃会话', value: state.active_sessions || 0},
     {icon:'📡', label:'驱动可用', value: state.drive_available ? '✅' : '⚠️ 不可用'},
     {icon:'📋', label:'活跃执行', value: (state.active_executions || []).length || 0},
@@ -3988,7 +3988,8 @@ function applyState(state) {
   els.glyph.textContent = GLYPHS[scene] || '·';
   if (els.glyphXingzi) els.glyphXingzi.textContent = GLYPHS[scene] || '·';
   els.body.dataset.hasErrors = ((state.error_count || 0) > 0) ? 'true' : 'false';
-  els.body.dataset.execWindow = (state.in_execution_window !== false) ? 'true' : 'false';
+  // Whole-day execution (baseline §6): room theme stays in active/day state.
+  els.body.dataset.execWindow = 'true';
 
   // 槽位决定角色: A→星子(男), B→西子(女)
   const slot = (state.body_status || {}).active_slot || '';
@@ -4328,7 +4329,11 @@ class SupervisorUIMixin:
         counts = dict(activity.get("counts") or {})
         checks = dict(idle_snapshot.get("checks") or {})
         error_count = int(counts.get("error_count") or 0)
-        in_execution_window = bool(checks.get("in_execution_window", True))
+        # Whole-day execution (baseline §6): there is no longer a time-of-day
+        # execution window. Pinned to True so the room theme stays in its
+        # "active/day" state and downstream window panels read as always-on.
+        # The parameter is retained through the render chain for compatibility.
+        in_execution_window = True
 
         # ── Body status (direct from registry snapshot, not task queue) ──
         body_status: Dict[str, Any] = {}
@@ -4712,14 +4717,10 @@ class SupervisorUIMixin:
 
         return {
             "window": {
-                "label": "预设时间",
-                "range": "00:00-06:00",
-                "open": bool(in_execution_window),
-                "status_text": (
-                    "限时自动执行中"
-                    if in_execution_window
-                    else "等待窗口或手动触发"
-                ),
+                "label": "执行模式",
+                "range": "全天候",
+                "open": True,
+                "status_text": "全天候自动执行中",
             },
             "supervisor_active": (
                 {
@@ -4797,22 +4798,24 @@ class SupervisorUIMixin:
                 result = dict(stats_data)
                 result["rules"] = rules_data.get("rules", {})
                 result["llm_healthy"] = rules_data.get("llm_healthy", False)
-                # Compute memory_active: any rule ran in the last 2 cycles
+                result["effective_activity_at"] = rules_data.get("effective_activity_at")
+                result["llm_health_checked_at"] = rules_data.get("llm_health_checked_at")
+                # P0-4 健康信号: memory_active reflects REAL write work in the last
+                # 2 cycles (effective_activity_at), not merely "a rule ran"
+                # (last_run, which advances even on no-op cycles). A degraded /
+                # idle / broken pipeline no longer shows "记忆活跃 ✅".
                 from datetime import datetime, timedelta, timezone
                 recent = datetime.now(timezone.utc) - timedelta(seconds=7200)
                 memory_active = False
-                for rule_name, rule_info in result.get("rules", {}).items():
-                    last_run = rule_info.get("last_run")
-                    if last_run:
-                        try:
-                            t = datetime.fromisoformat(last_run)
-                            if t.tzinfo is None:
-                                t = t.replace(tzinfo=timezone.utc)
-                            if t > recent:
-                                memory_active = True
-                                break
-                        except Exception:
-                            pass
+                eff = rules_data.get("effective_activity_at")
+                if eff:
+                    try:
+                        t = datetime.fromisoformat(eff)
+                        if t.tzinfo is None:
+                            t = t.replace(tzinfo=timezone.utc)
+                        memory_active = t > recent
+                    except Exception:
+                        memory_active = False
                 result["memory_active"] = memory_active
                 return result
         except Exception:
@@ -5012,7 +5015,7 @@ class SupervisorUIMixin:
             )
 
         # 6. Truly idle
-        window_mood = "执行窗口已开启，系统处于安静状态。" if in_execution_window else "执行窗口外，系统正在休息。"
+        window_mood = "全天候自动执行已就绪，系统处于安静状态。"
         return (
             "idle",
             f"在窗边休息{error_note}",

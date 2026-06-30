@@ -824,6 +824,123 @@ class PlanningRuntimeMixin:
             regulation["last_reason"] = "; ".join(reasons[:6])
         return regulation
 
+    def _release_cleared_historical_observation_carryover(
+        self,
+        *,
+        persisted_self_regulation: Dict[str, Any],
+        cognitive_self_regulation: Dict[str, Any],
+        deliberation: Dict[str, Any],
+        lm_reasoning_state: Dict[str, Any],
+        drive_history: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        adjusted = dict(cognitive_self_regulation or {})
+        reflection = dict(deliberation.get("reflection") or {})
+        perception = dict(deliberation.get("perception") or {})
+
+        if str(reflection.get("dominant_constraint") or "").strip().lower() != "none":
+            return adjusted
+        if float(reflection.get("queue_blockage_pressure") or 0.0) >= 0.18:
+            return adjusted
+        if str(reflection.get("learning_yield_state") or "").strip().lower() not in {"mixed", "strong"}:
+            return adjusted
+        if max(0, int(perception.get("active_queue_count") or 0)) > 0:
+            return adjusted
+        if max(0, int(perception.get("stale_queue_count") or 0)) > 0:
+            return adjusted
+        if max(0, int(perception.get("pending_review_count") or 0)) > 0:
+            return adjusted
+        if max(0, int(perception.get("correction_signals") or 0)) >= 3:
+            return adjusted
+
+        posture_profile = self._current_active_cognitive_posture_profile(
+            lm_reasoning_state=lm_reasoning_state,
+            history_snapshot=drive_history,
+            deliberation=deliberation,
+        )
+        if str(posture_profile.get("name") or "").strip().lower() != "observe_first":
+            return adjusted
+
+        persisted_observation = float(
+            persisted_self_regulation.get("dynamic_observation_bias_boost") or 0.0
+        )
+        persisted_throttle = float(
+            persisted_self_regulation.get("dynamic_candidate_throttle_boost") or 0.0
+        )
+        persisted_learning_suppression = float(
+            persisted_self_regulation.get("dynamic_learning_expansion_suppression") or 0.0
+        )
+        if max(
+            persisted_observation,
+            persisted_throttle,
+            persisted_learning_suppression,
+        ) < 0.08:
+            return adjusted
+
+        proposal_drift_memory = dict(lm_reasoning_state.get("proposal_drift_memory") or {})
+        recent_reference_alignment = dict(
+            lm_reasoning_state.get("recent_reference_alignment") or {}
+        )
+        evidence_basis = dict(lm_reasoning_state.get("evidence_basis") or {})
+
+        drift_state = str(proposal_drift_memory.get("drift_state") or "").strip().lower()
+        drift_average_score = self._clamp_endogenous_ratio(
+            proposal_drift_memory.get("average_score") or 0.0
+        )
+        reference_alignment_score = self._clamp_endogenous_ratio(
+            recent_reference_alignment.get("average_alignment_score") or 0.0
+        )
+        weak_reference_count = max(
+            0,
+            int(recent_reference_alignment.get("weak_or_partial_count") or 0),
+        )
+        readiness_score = self._clamp_endogenous_ratio(
+            evidence_basis.get("self_iteration_readiness_score") or 0.0
+        )
+        weak_channel_count = len(
+            [
+                str(item).strip()
+                for item in list(evidence_basis.get("weak_or_missing_channels") or [])[:6]
+                if str(item).strip()
+            ]
+        )
+        if drift_state != "correcting":
+            return adjusted
+        if drift_average_score < 0.42:
+            return adjusted
+        if reference_alignment_score < 0.58:
+            return adjusted
+        if weak_reference_count > 1:
+            return adjusted
+        if readiness_score < 0.48:
+            return adjusted
+        if weak_channel_count > 1:
+            return adjusted
+
+        observation_boost = float(
+            cognitive_self_regulation.get("dynamic_observation_bias_boost") or 0.0
+        )
+        throttle_boost = float(
+            cognitive_self_regulation.get("dynamic_candidate_throttle_boost") or 0.0
+        )
+        learning_suppression = float(
+            cognitive_self_regulation.get("dynamic_learning_expansion_suppression") or 0.0
+        )
+        if max(observation_boost, throttle_boost, learning_suppression) < 0.12:
+            return adjusted
+
+        # Historical underdelivery is already cleared here, so do not let a
+        # fresh corrective pass restack observation/throttle pressure on top
+        # of decaying persisted guard carryover.
+        adjusted["dynamic_observation_bias_boost"] = 0.0
+        adjusted["dynamic_candidate_throttle_boost"] = 0.0
+        adjusted["dynamic_learning_expansion_suppression"] = 0.0
+        reason = str(adjusted.get("last_reason") or "").strip()
+        release_reason = "cleared_historical_window_releases_composite_observation_carryover"
+        adjusted["last_reason"] = (
+            f"{reason}; {release_reason}" if reason else release_reason
+        )
+        return adjusted
+
     def _resolve_cognitive_posture_profile(
         self,
         policy: Dict[str, Any],
@@ -4220,21 +4337,10 @@ class PlanningRuntimeMixin:
         return max(300, review_interval)
 
     def _next_execution_window_start(self, now: datetime) -> datetime:
-        service_cfg = self.config.service_runtime
-        start_hour = int(getattr(service_cfg, "execution_window_start_hour", 0) or 0)
-        end_hour = int(getattr(service_cfg, "execution_window_end_hour", 24) or 24)
-
-        candidate = now.replace(
-            hour=start_hour,
-            minute=0,
-            second=0,
-            microsecond=0,
-        )
-        if start_hour <= now.hour < end_hour:
-            return now
-        if now < candidate:
-            return candidate
-        return candidate + timedelta(days=1)
+        # Whole-day execution (baseline §6): there is no longer a time-of-day
+        # window, so the "next window start" is simply now. Kept as a method so
+        # existing callers / scheduling code paths remain stable.
+        return now
 
     def _align_scheduled_for(self, when: datetime) -> datetime:
         slot_seconds = self._schedule_slot_interval_seconds()
@@ -4250,21 +4356,10 @@ class PlanningRuntimeMixin:
         return base + timedelta(seconds=(slot_seconds - remainder))
 
     def _scheduled_for_within_window(self, when: datetime) -> datetime:
-        service_cfg = self.config.service_runtime
-        start_hour = int(getattr(service_cfg, "execution_window_start_hour", 0) or 0)
-        end_hour = int(getattr(service_cfg, "execution_window_end_hour", 24) or 24)
-
-        if start_hour <= when.hour < end_hour:
-            return when
-        normalized = self._next_execution_window_start(when)
-        if normalized == when:
-            return when
-        return normalized.replace(
-            hour=start_hour,
-            minute=0,
-            second=0,
-            microsecond=0,
-        )
+        # Whole-day execution (baseline §6): no window clamping — any time is a
+        # valid scheduling slot. Kept as an identity pass-through so callers and
+        # tests that reference it stay stable.
+        return when
 
     def _occupied_scheduled_for_tokens(self) -> set[str]:
         terminal = {"completed", "failed", "cancelled"}
@@ -4625,18 +4720,6 @@ class PlanningRuntimeMixin:
         user_idle_threshold = int(request.get("user_idle_seconds", 600))
         memory_idle_threshold = int(request.get("memory_idle_seconds", 600))
         workflow_idle_threshold = int(request.get("workflow_idle_seconds", 600))
-        execution_window_start_hour = int(
-            request.get(
-                "execution_window_start_hour",
-                getattr(service_cfg, "execution_window_start_hour", 0),
-            )
-        )
-        execution_window_end_hour = int(
-            request.get(
-                "execution_window_end_hour",
-                getattr(service_cfg, "execution_window_end_hour", 24),
-            )
-        )
         requested_task_profile = self._idle_window_request_profile(request)
         requested_governance_task_type = str(requested_task_profile["governance_task_type"])
         requested_task_family = str(requested_task_profile["task_family"])
@@ -4728,40 +4811,45 @@ class PlanningRuntimeMixin:
             or self_evolution_idle_seconds >= workflow_idle_threshold
         )
 
-        in_execution_window = execution_window_start_hour <= now.hour < execution_window_end_hour
+        # Whole-day automatic execution (baseline §6): the time-of-day
+        # execution window and the "wait for the user to be idle" gate have
+        # been removed. Supervisor self-evolution runs on isolated subagents
+        # editing shell-slot code, so it does not disturb the user's CLI.
+        # User activity is now a SOFT signal (it down-weights candidate utility
+        # in the cognition layer via active_sessions) rather than a hard gate.
+        # `in_execution_window` is kept as a constant True for backward compat
+        # with downstream readers / UI that still look the key up; it no longer
+        # gates anything. The remaining has_*_idle checks below are retained as
+        # anti-self-collision concurrency guards (don't double-dispatch the same
+        # subsystem's in-flight work) — they are NOT "wait for the user" gates.
+        in_execution_window = True
         governance_task_type_decisions = {
             "user": {
                 "eligible_for_planning": True,
                 "eligible_for_execution": True,
             },
             "self_learning": {
-                "eligible_for_planning": has_user_idle,
+                "eligible_for_planning": True,
                 "eligible_for_execution": (
-                    has_user_idle
-                    and has_agent_idle
+                    has_agent_idle
                     and has_memory_idle
                     and has_self_learning_idle
                     and has_self_evolution_plan_idle
                 ),
             },
             "memory_maintenance": {
-                "eligible_for_planning": has_user_idle,
+                "eligible_for_planning": True,
                 "eligible_for_execution": (
-                    in_execution_window
-                    and has_user_idle
-                    and has_agent_idle
+                    has_agent_idle
                     and has_memory_idle
                 ),
             },
             "self_evolution": {
                 "eligible_for_planning": (
-                    has_user_idle
-                    and has_self_evolution_plan_idle
+                    has_self_evolution_plan_idle
                 ),
                 "eligible_for_execution": (
-                    in_execution_window
-                    and has_user_idle
-                    and has_agent_idle
+                    has_agent_idle
                     and has_memory_idle
                     and has_self_evolution_plan_idle
                     and has_self_evolution_execute_idle
@@ -4823,8 +4911,6 @@ class PlanningRuntimeMixin:
                 "user_idle_seconds": user_idle_threshold,
                 "memory_idle_seconds": memory_idle_threshold,
                 "workflow_idle_seconds": workflow_idle_threshold,
-                "execution_window_start_hour": execution_window_start_hour,
-                "execution_window_end_hour": execution_window_end_hour,
             },
             "checks": {
                 "has_user_idle": has_user_idle,
@@ -5001,6 +5087,13 @@ class PlanningRuntimeMixin:
             drive_history=idle_window["drive_history"],
             lm_reasoning_state=lm_reasoning_state,
             deliberation=deliberation.to_dict(),
+        )
+        cognitive_self_regulation = self._release_cleared_historical_observation_carryover(
+            persisted_self_regulation=self_regulation,
+            cognitive_self_regulation=cognitive_self_regulation,
+            deliberation=deliberation.to_dict(),
+            lm_reasoning_state=lm_reasoning_state,
+            drive_history=idle_window["drive_history"],
         )
         combined_self_regulation = dict(self_regulation)
         for key in (
@@ -5590,14 +5683,22 @@ class PlanningRuntimeMixin:
         return dict(active or {}) if isinstance(active, dict) else {}
 
     async def _recover_orphaned_agent_pull_tasks(self) -> int:
-        active_executor = {}
-        active_session_id = ""
+        # P0-3 恢复保守化: distinguish "gateway said there is no active executor"
+        # from "we could not reach the gateway". On a fetch FAILURE the active
+        # executor is unknown, so treating active_session_id as "" would make
+        # owner==active False for every running task and recover them all →
+        # mass false recovery → double execution. When uncertain, skip entirely.
         try:
             active_executor = await self._fetch_gateway_active_cli_executor()
-            active_session_id = str(active_executor.get("session_id") or "").strip()
-        except Exception:
-            active_executor = {}
-            active_session_id = ""
+        except Exception as exc:
+            logger.warning(
+                "Skipping orphaned-task recovery: could not determine active CLI "
+                "executor from gateway (%s). Conservative no-op to avoid mass "
+                "false recovery.",
+                exc,
+            )
+            return 0
+        active_session_id = str(active_executor.get("session_id") or "").strip()
 
         recovered = 0
         for task in self._self_evolution_queue.list_tasks(status="running"):

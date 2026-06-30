@@ -224,6 +224,7 @@ class InternalGateway:
         self.app.add_api_route("/v1/tasks", self.get_approved_tasks, methods=["GET"])
         self.app.add_api_route("/v1/tasks/{task_id}/decision", self.decide_task, methods=["POST"])
         self.app.add_api_route("/v1/tasks/{task_id}/complete", self.complete_task, methods=["POST"])
+        self.app.add_api_route("/v1/body/improvement-report", self.forward_improvement_report, methods=["POST"])
         self.app.add_api_route("/admin/traces/{trace_id}", self.get_trace, methods=["GET"])
 
     async def health_check(self):
@@ -1567,10 +1568,76 @@ class InternalGateway:
                 source_service="gateway",
                 metadata={"task_id": task_id, "decision": decision},
             )
+            # P0-2 成果回流: on successful completion, flow the agent's finding
+            # text into Mem Tier1 so learning/improvement output is not stranded
+            # in the CLI conversation history. Best-effort: a Mem write failure
+            # must never turn a successful task writeback into an error.
+            if decision == "completed":
+                final_response = str(data.get("final_response") or "").strip()
+                session_id = str(data.get("session_id") or "").strip()
+                if final_response and session_id:
+                    try:
+                        await self._record_turn_to_tier1(
+                            session_id,
+                            "agent",
+                            final_response,
+                            metadata={
+                                "task_id": task_id,
+                                "source": "auto_task_finding",
+                                "execution_kind": str(
+                                    (data.get("context") or {}).get("execution_kind") or ""
+                                ),
+                            },
+                        )
+                    except Exception as mem_exc:
+                        logger.warning(f"Tier1 finding record failed for task {task_id}: {mem_exc}")
             return result
         except Exception as e:
             logger.error(f"Failed to forward task decision: {e}")
             raise HTTPException(status_code=502, detail=f"Failed to forward task decision: {e}")
+
+    async def forward_improvement_report(self, request: Request):
+        """Forward an Agent's body-improvement report to the supervisor.
+
+        P0-2 成果回流 (body path): the CLI cannot reach the supervisor directly
+        (it only knows the gateway), and the generic /api/{prefix} proxy would
+        double the route prefix. So, mirroring _forward_task_decision, the
+        gateway resolves a healthy supervisor and forwards to its
+        /body/improvement-report endpoint for health scoring.
+        """
+        supervisor_service = None
+        all_supervisors = [s for s in self._services.values() if s.service_type == "supervisor"]
+        for service in all_supervisors:
+            if service.healthy:
+                supervisor_service = service
+                break
+        if not supervisor_service:
+            raise HTTPException(status_code=503, detail="Supervisor unavailable for improvement report")
+
+        try:
+            body = await request.body()
+            report = json.loads(body.decode("utf-8")) if body else {}
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid JSON")
+
+        url = f"{supervisor_service.address}/body/improvement-report"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=report, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    if resp.status != 200:
+                        raise HTTPException(status_code=resp.status, detail=f"Supervisor returned {resp.status}")
+                    result = await resp.json()
+            self._touch_activity(
+                "self_evolution",
+                source_service="gateway",
+                metadata={"task_id": report.get("task_id"), "slot_id": report.get("slot_id")},
+            )
+            return result
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to forward improvement report: {e}")
+            raise HTTPException(status_code=502, detail=f"Failed to forward improvement report: {e}")
 
     async def chat_completions_proxy(self, request: Request):
         self._evict_stale_sessions()

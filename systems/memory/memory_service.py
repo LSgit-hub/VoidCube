@@ -359,9 +359,12 @@ class MemoryService:
         # Rule execution tracking
         self._last_rule_run: Dict[str, str] = {}
         self._rule_run_counts: Dict[str, int] = {}
-        # LLM status (verified once at startup)
+        # P0-4 健康信号: last cycle that did real write work (not just "ran").
+        self._last_effective_activity_at: Optional[str] = None
+        # LLM status (re-verified each compression cycle, recovers after outage)
         self._llm_healthy: bool = False
         self._llm_model: str = ""
+        self._last_llm_health_check_at: Optional[str] = None
         self._setup_database()
         self._setup_routes()
 
@@ -840,6 +843,15 @@ class MemoryService:
         while True:
             await asyncio.sleep(self.config.compression_interval)
             try:
+                # P0-4 健康信号 (4-3.1): re-probe LLM each cycle so health recovers
+                # after a transient outage / late key configuration, instead of
+                # being frozen at the startup result until a restart.
+                await self._check_llm_health()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.debug("Periodic LLM health re-check skipped", exc_info=True)
+            try:
                 # ── Tier 1 decay + Tier 2 bridge + Lifecycle ─────
                 await self._run_all_rules_internal()
             except asyncio.CancelledError:
@@ -857,15 +869,40 @@ class MemoryService:
             ("lifecycle_escalation", self._apply_compression_lifecycle),
             ("purge_expired", self._purge_expired_memories),
         ]
+        effective_work = 0
         for rule_name, rule_fn in rules:
             try:
                 result = await rule_fn()
                 results[rule_name] = result
                 self._last_rule_run[rule_name] = now
                 self._rule_run_counts[rule_name] = self._rule_run_counts.get(rule_name, 0) + 1
+                effective_work += self._rule_effective_count(result)
             except Exception as exc:
                 results[rule_name] = {"error": str(exc)}
+        # P0-4 健康信号: only stamp the "effective activity" marker when a rule
+        # actually wrote/changed rows this cycle. A no-op cycle (no candidates,
+        # nothing to decay) advances last_run but NOT this marker, so the UI no
+        # longer shows "记忆活跃 ✅" while the pipeline is idle or broken.
+        if effective_work > 0:
+            self._last_effective_activity_at = now
+        results["_effective_work"] = effective_work
         return results
+
+    @staticmethod
+    def _rule_effective_count(result: Any) -> int:
+        """Number of rows a rule actually wrote/changed, across rule return shapes."""
+        if isinstance(result, int):
+            return max(0, result)
+        if isinstance(result, dict):
+            if "error" in result:
+                return 0
+            total = 0
+            for key in ("escalated", "purged", "turns_processed", "deleted", "updated_count"):
+                val = result.get(key)
+                if isinstance(val, int):
+                    total += max(0, val)
+            return total
+        return 0
 
     async def run_all_rules(self, request: dict = None):
         """Execute all five memory compression rules (public API for supervisor).
@@ -892,12 +929,22 @@ class MemoryService:
             },
             "compression_interval": self.config.compression_interval,
             "tier1_retention_days": self.config.tier1_retention_days,
+            # P0-4 健康信号: last cycle that performed real write work, and the
+            # last time LLM health was actually probed. UI computes memory_active
+            # from effective_activity_at (not last_run) so no-op cycles don't
+            # masquerade as "记忆活跃".
+            "effective_activity_at": self._last_effective_activity_at,
             "llm_healthy": self._llm_healthy,
             "llm_model": self._llm_model,
+            "llm_health_checked_at": self._last_llm_health_check_at,
         }
 
-    async def _tier1_decay_cycle(self) -> None:
-        """Apply exponential decay to Tier 1 turn relevance scores."""
+    async def _tier1_decay_cycle(self) -> int:
+        """Apply exponential decay to Tier 1 turn relevance scores.
+
+        Returns the number of turns actually updated, so the caller can tell a
+        real maintenance write apart from a no-op cycle (P0-4 健康信号).
+        """
         conn = sqlite3.connect(str(self._db_path))
         rate = self.config.tier1_decay_rate
         cur = conn.execute(
@@ -910,9 +957,15 @@ class MemoryService:
         conn.close()
         if updated:
             logger.debug("Tier 1 decay applied to %d turns (rate=%.3f)", updated, rate)
+        return int(updated or 0)
 
-    async def _tier2_bridge_cycle(self) -> None:
-        """Auto-trigger Tier 1→Tier 2 compression for expired turns."""
+    async def _tier2_bridge_cycle(self) -> int:
+        """Auto-trigger Tier 1→Tier 2 compression for expired turns.
+
+        Returns the number of turns actually processed into Tier 2 (0 on a
+        no-candidate no-op), so the caller can distinguish real compression
+        work from an idle cycle (P0-4 健康信号).
+        """
         conn = sqlite3.connect(str(self._db_path))
         cutoff = (
             datetime.now() - timedelta(days=self.config.tier1_retention_days)
@@ -929,7 +982,7 @@ class MemoryService:
             ).fetchone()[0]
             conn.close()
             if candidate == 0:
-                return
+                return 0
         else:
             conn.close()
         # Run compression with small batch
@@ -947,8 +1000,10 @@ class MemoryService:
                     result.get("turns_processed", 0),
                     result.get("events_generated", 0),
                 )
+                return int(result.get("turns_processed", 0) or 0)
         except Exception:
             logger.debug("Tier 2 bridge cycle skipped", exc_info=True)
+        return 0
 
     async def health_check(self):
         return {"status": "healthy", "service": "memory-service"}
@@ -1632,12 +1687,15 @@ class MemoryService:
         }
 
     async def _check_llm_health(self) -> bool:
-        """Verify LLM connectivity once at startup — simple ping, no periodic loop.
+        """Verify LLM connectivity. Probed at startup and re-probed each
+        compression cycle so health can recover after a transient outage or a
+        late-configured key (P0-4 健康信号, 4-3.1).
 
         Reads from the same ``memory.llm.*`` config as the rest of Mem via
         ``_resolve_mem_llm_client``.  When no key is configured the
         service runs in fully-degraded mode (no LLM features).
         """
+        self._last_llm_health_check_at = datetime.now().isoformat()
         client, model = self._resolve_mem_llm_client()
         if client is None:
             self._llm_healthy = False

@@ -337,11 +337,6 @@ class SupervisorServiceRuntimeConfig(BaseModel):
     body_improvement_editable_dirs: list[str] = ["skills/", "tools/", "agent/", "prompts/"]
     body_improvement_forbidden_patterns: list[str] = ["**/credential*", "**/.env*", "systems/**"]
     body_improvement_max_files: int = 5
-    # Execution window: self_evolution / body_upgrade tasks only auto-execute
-    # during [execution_window_start_hour, execution_window_end_hour).
-    # Baseline default: 0–6. Automatic execution outside this window stays queued.
-    execution_window_start_hour: int = 0
-    execution_window_end_hour: int = 6
     # Interval in seconds for the structured 4-layer memory maintenance loop
     # (Event→Scene→Arc→Epoch compression via MemoryMaintenanceEngine).
     # Runs in Memory Mode independently of the task queue.  0 = disabled.

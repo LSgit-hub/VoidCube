@@ -1078,6 +1078,59 @@ def _git_repo_root() -> Optional[str]:
     return None
 
 
+def _git_head_commit(worktree_path: str) -> str:
+    """Return the current HEAD commit hash of a worktree, or '' on failure.
+
+    Used by AUTO body_improvement to capture a baseline before the agent edits
+    so the post-run diff can be attributed to this task (P0-2 成果回流).
+    """
+    import subprocess
+    if not worktree_path:
+        return ""
+    try:
+        result = subprocess.run(
+            ["git", "-C", worktree_path, "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _git_improvement_diff(worktree_path: str, baseline_head: str) -> Optional[Dict[str, Any]]:
+    """Compare a worktree's current HEAD against a captured baseline.
+
+    Returns {commit_hash, changed_files, diff_summary} when the agent committed
+    new work (HEAD moved), or None when nothing was committed. Best-effort:
+    any git failure returns None rather than raising.
+    """
+    import subprocess
+    if not worktree_path or not baseline_head:
+        return None
+    try:
+        head_now = _git_head_commit(worktree_path)
+        if not head_now or head_now == baseline_head:
+            return None
+        names = subprocess.run(
+            ["git", "-C", worktree_path, "diff", "--name-only", f"{baseline_head}..{head_now}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        changed_files = [ln.strip() for ln in (names.stdout or "").splitlines() if ln.strip()]
+        stat = subprocess.run(
+            ["git", "-C", worktree_path, "diff", "--stat", f"{baseline_head}..{head_now}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return {
+            "commit_hash": head_now,
+            "changed_files": changed_files,
+            "diff_summary": (stat.stdout or "").strip()[:4000],
+        }
+    except Exception:
+        return None
+
+
 def _path_is_within_root(path: Path, root: Path) -> bool:
     """Return True when a resolved path stays within the expected root."""
     try:
@@ -2887,9 +2940,15 @@ class VoidcubeCLI:
                     payload = _json.dumps({
                         "decision": decision,
                         "reason": reason,
+                        # P0-2 成果回流: carry the agent's finding text + session so
+                        # the gateway can record it to Mem Tier1 on completion.
+                        # Truncated to keep the writeback payload bounded.
+                        "final_response": str(turn_result.get("response") or "")[:4000],
+                        "session_id": str(getattr(self, "session_id", "") or ""),
                         "context": {
                             "source": "cli_agent_pull",
                             "elapsed_s": int(elapsed),
+                            "execution_kind": execution_kind,
                             "failed": bool(turn_result.get("failed")),
                             "partial": bool(turn_result.get("partial")),
                             "interrupted": bool(turn_result.get("interrupted")),
@@ -2908,6 +2967,15 @@ class VoidcubeCLI:
                         tone="error" if decision == "failed" else "success",
                         stage="writeback",
                     )
+                    # P0-2 成果回流: for a completed body_improvement task, attribute
+                    # the committed diff and submit a report so the supervisor can
+                    # score the shell slot's health. Best-effort and gated on an
+                    # actual commit (HEAD moved); a missing commit just skips this.
+                    if decision == "completed" and execution_kind == "body_improvement":
+                        self._submit_body_improvement_report(
+                            current, task_id, gateway_base,
+                            improvement_description=str(turn_result.get("response") or "")[:4000],
+                        )
                 except Exception:
                     pass  # Best-effort — supervisor will handle retry
                 _push_cli_agent_scene("idle", session_id=getattr(self, "session_id", None))
@@ -3045,6 +3113,16 @@ class VoidcubeCLI:
                 or constraints.get("target_worktree")
                 or ""
             ).strip()
+            # P0-2 成果回流: capture the shell worktree HEAD before the agent edits
+            # so the completion branch can attribute the committed diff to this
+            # task and submit a body-improvement report for health scoring.
+            self._current_auto_task["_baseline_head"] = _git_head_commit(worktree_path)
+            self._current_auto_task["_improvement_worktree"] = worktree_path
+            self._current_auto_task["_improvement_slot_id"] = str(
+                constraints.get("target_slot_id")
+                or constraints.get("target_slot")
+                or ""
+            ).strip()
             editable_dirs = constraints.get("editable_dirs") or []
             forbidden_patterns = constraints.get("forbidden_patterns") or []
             max_files = constraints.get("max_files_changed")
@@ -3137,6 +3215,74 @@ class VoidcubeCLI:
             self._current_auto_task = None
             self._current_auto_task_started_at = 0
             self._last_agent_turn_result = None
+
+    def _submit_body_improvement_report(
+        self,
+        task: Dict[str, Any],
+        task_id: str,
+        gateway_base: str,
+        *,
+        improvement_description: str,
+    ) -> None:
+        """Submit a body-improvement report for a completed AUTO task.
+
+        Attributes the worktree commit made during this task (HEAD moved off the
+        baseline captured at dispatch) and POSTs a report so the supervisor can
+        score the shell slot's health. Best-effort: no commit, missing context,
+        or a transport error just skips reporting — it never disturbs the
+        already-completed decision writeback (P0-2 成果回流, body path).
+        """
+        import json as _json
+        import urllib.request as _req
+
+        worktree_path = str(task.get("_improvement_worktree") or "").strip()
+        baseline_head = str(task.get("_baseline_head") or "").strip()
+        slot_id = str(task.get("_improvement_slot_id") or "").strip()
+        if not worktree_path or not baseline_head or not slot_id:
+            return
+        diff = _git_improvement_diff(worktree_path, baseline_head)
+        if not diff or not diff.get("changed_files"):
+            # Agent did not commit — nothing to score. Surface for visibility.
+            self._append_auto_execution_event(
+                f"任务 {task_id[:8]} 未检测到替身提交，跳过改进报告",
+                tone="warn",
+                stage="improvement_report_skipped",
+            )
+            return
+        learning_refs = []
+        evidence = task.get("evidence") or {}
+        if isinstance(evidence, dict) and evidence.get("learning_refs"):
+            learning_refs = evidence.get("learning_refs") or []
+        report = {
+            "slot_id": slot_id,
+            "task_id": task_id,
+            "commit_hash": diff["commit_hash"],
+            "diff_summary": diff["diff_summary"],
+            "changed_files": diff["changed_files"],
+            "learning_refs": learning_refs,
+            "improvement_description": improvement_description,
+        }
+        try:
+            r = _req.Request(
+                f"{gateway_base}/v1/body/improvement-report",
+                data=_json.dumps(report).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            _req.urlopen(r, timeout=15)
+            self._append_auto_execution_event(
+                f"任务 {task_id[:8]} 改进报告已提交（{len(diff['changed_files'])} 文件）",
+                tone="success",
+                stage="improvement_report",
+            )
+        except Exception:
+            # Report submission failure must not fail the task; supervisor can
+            # still re-derive health from git lineage later.
+            self._append_auto_execution_event(
+                f"任务 {task_id[:8]} 改进报告提交失败",
+                tone="error",
+                stage="improvement_report_failed",
+            )
 
     def _trigger_auto_mode_cycle(self, *, focus: str = "") -> Dict[str, Any] | None:
         """Run one synchronous supervisor auto-cycle for immediate AUTO responsiveness."""
@@ -10385,6 +10531,10 @@ class VoidcubeCLI:
                 "partial": bool(result.get("partial")) if result else False,
                 "interrupted": bool(result.get("interrupted")) if result else False,
                 "error": str(result.get("error", "") or "") if result else "No result returned",
+                # Preserve the agent's finding text so the AUTO writeback can flow
+                # it back to Mem Tier1 (P0-2 成果回流). Without this it is discarded
+                # here and the learning/improvement output never leaves the CLI.
+                "response": str(response or ""),
             }
             if getattr(self, "_auto_mode_active", False) and getattr(self, "_current_auto_task", None):
                 if self._last_agent_turn_result["failed"] or self._last_agent_turn_result["partial"]:
@@ -10549,6 +10699,7 @@ class VoidcubeCLI:
                 "partial": False,
                 "interrupted": False,
                 "error": str(e),
+                "response": "",
             }
             print(f"Error: {e}")
             return None

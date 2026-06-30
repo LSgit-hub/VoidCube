@@ -856,3 +856,193 @@ def test_gateway_deleting_session_clears_its_agent_lane():
     assert lanes["supervisor_task"]["scene"] == "idle"
     assert lanes["supervisor_task"]["subagent_foreground_count"] == 0
     assert gateway._agent_session_lane.get("sup-1") is None
+
+
+def _register_supervisor(gateway, address="http://127.0.0.1:6002"):
+    gateway._services["supervisor-1"] = ServiceInfo(
+        service_id="supervisor-1",
+        service_name="supervisor",
+        service_type="supervisor",
+        address=address,
+        health_endpoint=f"{address}/health",
+        registered_at=datetime.now(),
+        last_health_check=datetime.now(),
+        healthy=True,
+    )
+
+
+def test_completed_task_writeback_records_finding_to_tier1(monkeypatch):
+    # P0-2 成果回流: a completed AUTO task carrying final_response + session_id
+    # must trigger a Tier1 turn write so the agent's finding leaves the CLI.
+    gateway = InternalGateway(GatewayConfig())
+    _register_supervisor(gateway)
+    client = TestClient(gateway.app)
+
+    recorded = {}
+
+    async def _fake_record(session_id, speaker, text, metadata=None):
+        recorded["session_id"] = session_id
+        recorded["speaker"] = speaker
+        recorded["text"] = text
+        recorded["metadata"] = metadata or {}
+
+    monkeypatch.setattr(gateway, "_record_turn_to_tier1", _fake_record)
+
+    class _FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {"status": "completed"}
+
+    class _FakeSession:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, json=None, timeout=None):
+            return _FakeResponse()
+
+    monkeypatch.setattr("systems.gateway.internal_gateway.aiohttp.ClientSession", _FakeSession)
+
+    response = client.post(
+        "/v1/tasks/learn-42/complete",
+        json={
+            "decision": "completed",
+            "reason": "done",
+            "final_response": "Findings: X improves Y.",
+            "session_id": "cli-session-9",
+            "context": {"source": "cli_agent_pull", "execution_kind": "self_learning"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert recorded["session_id"] == "cli-session-9"
+    assert recorded["speaker"] == "agent"
+    assert recorded["text"] == "Findings: X improves Y."
+    assert recorded["metadata"]["task_id"] == "learn-42"
+    assert recorded["metadata"]["execution_kind"] == "self_learning"
+
+
+def test_failed_task_writeback_does_not_record_finding(monkeypatch):
+    # A non-completed decision must never write a Tier1 finding.
+    gateway = InternalGateway(GatewayConfig())
+    _register_supervisor(gateway)
+    client = TestClient(gateway.app)
+
+    called = {"n": 0}
+
+    async def _fake_record(*args, **kwargs):
+        called["n"] += 1
+
+    monkeypatch.setattr(gateway, "_record_turn_to_tier1", _fake_record)
+
+    class _FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {"status": "failed"}
+
+    class _FakeSession:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, json=None, timeout=None):
+            return _FakeResponse()
+
+    monkeypatch.setattr("systems.gateway.internal_gateway.aiohttp.ClientSession", _FakeSession)
+
+    response = client.post(
+        "/v1/tasks/learn-43/decision",
+        json={
+            "decision": "failed",
+            "final_response": "partial junk",
+            "session_id": "cli-session-9",
+        },
+    )
+    assert response.status_code == 200
+    assert called["n"] == 0
+
+
+def test_improvement_report_forwards_to_supervisor(monkeypatch):
+    # P0-2 成果回流 (body path): the gateway forwards an Agent improvement report
+    # to the supervisor's /body/improvement-report endpoint.
+    gateway = InternalGateway(GatewayConfig())
+    _register_supervisor(gateway)
+    client = TestClient(gateway.app)
+
+    captured = {}
+
+    class _FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {"status": "reviewed", "score_delta": 12}
+
+    class _FakeSession:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, json=None, timeout=None):
+            captured["url"] = url
+            captured["json"] = json
+            return _FakeResponse()
+
+    monkeypatch.setattr("systems.gateway.internal_gateway.aiohttp.ClientSession", _FakeSession)
+
+    report = {
+        "slot_id": "slot-B",
+        "task_id": "imp-7",
+        "commit_hash": "abc123",
+        "diff_summary": "skills/foo.py | 3 +-",
+        "changed_files": ["skills/foo.py"],
+        "improvement_description": "Improved foo handling.",
+    }
+    response = client.post("/v1/body/improvement-report", json=report)
+
+    assert response.status_code == 200
+    assert response.json()["score_delta"] == 12
+    assert captured["url"].endswith("/body/improvement-report")
+    assert captured["json"]["slot_id"] == "slot-B"
+    assert captured["json"]["commit_hash"] == "abc123"
+
+
+def test_improvement_report_503_when_no_supervisor():
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+    response = client.post("/v1/body/improvement-report", json={"slot_id": "slot-B"})
+    assert response.status_code == 503
