@@ -3281,7 +3281,20 @@ class PlanningRuntimeMixin:
                 recorded_at=recorded_at,
                 status="recommended",
             )
-        if entries_seed:
+        active_targets = {
+            str(entry.get("target") or "").strip().lower()
+            for entry in entries_seed
+            if str(entry.get("target") or "").strip()
+        }
+        changed = bool(entries_seed)
+        if self._resolve_cleared_endogenous_observation_targets(
+            history,
+            active_targets=active_targets,
+            context_key=context_key,
+            recorded_at=recorded_at,
+        ):
+            changed = True
+        if changed:
             self._persist_endogenous_drive_history(history)
 
         refreshed_strategy_memory = self._normalize_endogenous_strategy_memory(
@@ -3701,6 +3714,44 @@ class PlanningRuntimeMixin:
         bucket["last_context_key"] = (
             str(context_key or "").strip().lower() or bucket.get("last_context_key")
         )
+
+    def _resolve_cleared_endogenous_observation_targets(
+        self,
+        history: Dict[str, Any],
+        *,
+        active_targets: set[str],
+        context_key: Optional[str],
+        recorded_at: str,
+    ) -> bool:
+        strategy_memory = self._normalize_endogenous_strategy_memory(
+            history.get("strategy_memory")
+        )
+        history["strategy_memory"] = strategy_memory
+        observation_stats = dict(strategy_memory.get("observation_target_stats") or {})
+        changed = False
+
+        for target, stats in observation_stats.items():
+            target_name = str(target or "").strip().lower()
+            if not target_name or target_name in active_targets:
+                continue
+            bucket = dict(stats or {})
+            recommended = max(0, int(bucket.get("recommended") or 0))
+            resolved = max(0, int(bucket.get("resolved") or 0))
+            last_status = str(bucket.get("last_status") or "").strip().lower()
+            if recommended <= resolved or last_status == "resolved":
+                continue
+            self._record_endogenous_observation_memory(
+                history,
+                target=target_name,
+                priority=bucket.get("last_priority") or 0.0,
+                risk=bucket.get("last_risk") or 0.0,
+                context_key=context_key,
+                recorded_at=recorded_at,
+                status="resolved",
+            )
+            changed = True
+
+        return changed
 
     def _strategy_meta_governance_bucket(
         self,

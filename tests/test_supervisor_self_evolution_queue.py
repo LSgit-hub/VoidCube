@@ -4387,6 +4387,220 @@ async def test_mixed_multicycle_writeback_and_context_switch_do_not_lock_primary
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+@pytest.mark.stability_longcycle
+async def test_accumulated_focus_context_and_observation_stats_do_not_block_learning_and_truthfulness_retake_and_can_resolve_stale_observation_targets(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Recovered self-learning A",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.72,
+        },
+        {
+            "title": "Recovered self-learning B",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.77,
+        },
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    def _build_idle_window(
+        *,
+        quality_score: float,
+        error_count: int = 0,
+        uncertainty_count: int = 0,
+    ) -> dict:
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {
+                "active_sessions": 0,
+                "counts": {
+                    "error_count": error_count,
+                    "uncertainty_high_count": uncertainty_count,
+                },
+            },
+            "completed_learning_tasks": [
+                {
+                    "title": "Recent learning",
+                    "quality_score": quality_score,
+                    "completed_at": "2026-06-28T00:00:00+00:00",
+                }
+            ],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    async def stable_growth_idle_window(_request=None):
+        return _build_idle_window(quality_score=0.88)
+
+    async def degrading_idle_window(_request=None):
+        return _build_idle_window(quality_score=0.2, error_count=1, uncertainty_count=1)
+
+    async def strained_truthfulness_idle_window(_request=None):
+        return _build_idle_window(quality_score=0.46, error_count=3, uncertainty_count=1)
+
+    sequence = [
+        (stable_growth_idle_window, "completed"),
+        (degrading_idle_window, "failed"),
+        (strained_truthfulness_idle_window, "completed"),
+        (stable_growth_idle_window, "completed"),
+        (degrading_idle_window, "failed"),
+        (strained_truthfulness_idle_window, "completed"),
+        (stable_growth_idle_window, "completed"),
+        (degrading_idle_window, "failed"),
+    ]
+
+    wrote_back_cycles = 0
+    observed_focuses: set[str] = set()
+    observed_primary_needs: set[str] = set()
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        for idle_window_fn, outcome_status in sequence:
+            supervisor.evaluate_idle_window = idle_window_fn  # type: ignore[method-assign]
+            cycle = await _plan_and_write_back_endogenous_cycle(
+                supervisor,
+                outcome_status=outcome_status,
+                reason=f"longcycle accumulation {outcome_status}",
+                allow_empty_candidates=True,
+            )
+            observed_focuses.add(cycle["deliberation"]["adaptive_policy"]["preferred_focus"])
+            observed_primary_needs.add(
+                cycle["cognition_state"]["judgement_core"]["primary_need"]["need_type"]
+            )
+            if not cycle.get("writeback_skipped"):
+                wrote_back_cycles += 1
+
+    assert wrote_back_cycles >= 5
+    assert "truthfulness" in observed_focuses
+    assert "repair_truthfulness" in observed_primary_needs
+    assert "expand_learning_frontier" in observed_primary_needs
+
+    accumulated_history = supervisor._load_endogenous_drive_history()
+    strategy_memory = accumulated_history["strategy_memory"]
+    focus_stats = strategy_memory["focus_stats"]
+    contextual_focus_stats = strategy_memory["contextual_focus_stats"]
+    observation_stats = strategy_memory["observation_target_stats"]
+
+    assert focus_stats.get("truthfulness", {}).get("judged", 0) >= 1
+    assert len(focus_stats) >= 2
+    assert len(contextual_focus_stats) >= 2
+    assert observation_stats.get("truthfulness", {}).get("seen", 0) >= 1
+    assert len(observation_stats) >= 2
+
+    accumulated_regulation = supervisor._load_endogenous_self_regulation()
+
+    def _make_replay_supervisor(name: str) -> Supervisor:
+        replay_root = tmp_path / name
+        replay_root.mkdir()
+        replay = _make_supervisor(replay_root)
+        replay._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+        replay._persist_endogenous_drive_history(json.loads(json.dumps(accumulated_history)))
+        replay._get_endogenous_self_regulation_path().write_text(
+            json.dumps(accumulated_regulation),
+            encoding="utf-8",
+        )
+        return replay
+
+    learning_supervisor = _make_replay_supervisor("learning_replay")
+    truthfulness_supervisor = _make_replay_supervisor("truthfulness_replay")
+    memory_supervisor = _make_replay_supervisor("memory_replay")
+
+    async def recovered_learning_idle_window(_request=None):
+        return _build_idle_window(quality_score=0.9)
+
+    async def memory_queue_idle_window(_request=None):
+        return _build_idle_window(quality_score=0.46)
+
+    planned = await memory_supervisor.plan_self_evolution_task(
+        {
+            "title": "Queue debt probe",
+            "summary": "probe",
+        }
+    )
+    memory_task_id = planned["tasks"][0]["task_id"]
+    memory_supervisor._self_evolution_queue.update_status(
+        memory_task_id,
+        status="deferred",
+        reason="probe",
+    )
+
+    learning_supervisor.evaluate_idle_window = recovered_learning_idle_window  # type: ignore[method-assign]
+    truthfulness_supervisor.evaluate_idle_window = strained_truthfulness_idle_window  # type: ignore[method-assign]
+    memory_supervisor.evaluate_idle_window = memory_queue_idle_window  # type: ignore[method-assign]
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        learning_result = await learning_supervisor.evaluate_endogenous_drive({"record_activity": False})
+        truthfulness_result = await truthfulness_supervisor.evaluate_endogenous_drive(
+            {"record_activity": False}
+        )
+        memory_result = await memory_supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    memory_history_after_replay = memory_supervisor._load_endogenous_drive_history()
+    memory_observation_stats = memory_history_after_replay["strategy_memory"]["observation_target_stats"]
+
+    assert learning_result["deliberation"]["reflection"]["dominant_constraint"] == "none"
+    assert learning_result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == (
+        "expand_learning_frontier"
+    )
+    assert learning_result["deliberation"]["adaptive_policy"]["preferred_focus"] in {
+        "learning_expansion",
+        "memory_continuity",
+        "body_growth",
+    }
+    assert learning_result["deliberation"]["adaptive_policy"]["preferred_focus"] not in {
+        "observation",
+        "truthfulness",
+    }
+
+    assert truthfulness_result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == (
+        "repair_truthfulness"
+    )
+    assert truthfulness_result["deliberation"]["adaptive_policy"]["preferred_focus"] == "truthfulness"
+    assert (
+        truthfulness_result["deliberation"]["adaptive_policy"]["truthfulness_bias"]
+        > truthfulness_result["deliberation"]["adaptive_policy"]["memory_continuity_bias"]
+    )
+
+    assert memory_result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] != (
+        "repair_truthfulness"
+    )
+    assert memory_result["deliberation"]["adaptive_policy"]["preferred_focus"] != "truthfulness"
+    assert (
+        memory_result["deliberation"]["adaptive_policy"]["memory_continuity_bias"]
+        > memory_result["deliberation"]["adaptive_policy"]["truthfulness_bias"]
+    )
+    assert memory_observation_stats.get("truthfulness", {}).get("resolved", 0) >= 1
+    assert memory_observation_stats.get("weak_learning_yield", {}).get("resolved", 0) >= 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_meta_governance_switches_toward_observe_when_uncertainty_pressure_rises(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
