@@ -200,7 +200,6 @@ class TestCLIExecutorCanonicalPath:
         memory_maintenance = AsyncMock()
         memory_maintenance.trigger_memory_compression = AsyncMock(return_value={"status": "ok"})
         facade = VoidCubeExecutionFacade(
-            agent_lifecycle=Mock(),
             watch_window=Mock(),
             body_lifecycle=Mock(),
             body_upgrade=body_upgrade,
@@ -360,6 +359,13 @@ class TestEndogenousDriveErrorBridge:
         assert breakdown["candidate_kind"] == "memory_maintenance"
         assert "dimensions" in breakdown
         assert "penalties" in breakdown
+        assert "stable_key" not in queue_item
+        assert "value_tags" not in queue_item
+        assert "utility" not in queue_item
+        assert queue_item["rationale"]
+        assert queue_item["metadata"]["endogenous_drive_key"] == memory_candidate.stable_key
+        assert queue_item["metadata"]["core_values"] == memory_candidate.value_tags
+        assert queue_item["metadata"]["utility"] == memory_candidate.utility
         assert endogenous_evidence["score_breakdown"]["utility"] == memory_candidate.utility
 
     def test_candidates_include_drive_judgement_layers(self):
@@ -541,7 +547,7 @@ class TestEndogenousDriveErrorBridge:
         assert report["adaptive_policy"]["observation_bias"] > 0.5
         assert any(need["need_type"] == "observe_before_acting" for need in report["needs"])
 
-    def test_adaptive_policy_throttles_exploratory_learning_after_historical_underdelivery(self):
+    def test_adaptive_policy_suppresses_exploratory_learning_after_historical_underdelivery(self):
         engine = EndogenousDriveEngine()
         base_idle = {
             "checks": {"in_execution_window": True, "has_user_idle": True},
@@ -590,12 +596,18 @@ class TestEndogenousDriveErrorBridge:
             existing_drive_keys=set(),
             max_candidates=5,
         )
-        throttled_learning = next(
-            c for c in throttled_candidates if c.metadata.get("learning_branch") == "exploratory"
-        )
+        throttled_report = engine.build_deliberation_report(
+            idle_window=throttled_idle,
+        ).to_dict()
+        throttled_kinds = {
+            c.metadata["score_breakdown"]["candidate_kind"]
+            for c in throttled_candidates
+        }
 
-        assert throttled_learning.utility < healthy_learning.utility
-        assert throttled_learning.metadata["score_breakdown"]["adaptive_factor"] < 1.0
+        assert healthy_learning.utility > 0
+        assert "exploratory_learning" not in throttled_kinds
+        assert throttled_report["adaptive_policy"]["candidate_budget"] == 1
+        assert throttled_report["adaptive_policy"]["exploratory_learning_quota"] == 0
 
     def test_adaptive_policy_budget_reduces_total_candidates_under_high_throttle(self):
         engine = EndogenousDriveEngine()
@@ -958,7 +970,11 @@ class TestEndogenousDriveErrorBridge:
             max_candidates=5,
         )
 
-        assert report["adaptive_policy"]["preferred_focus"] in {"observation", "queue_hygiene"}
+        assert report["adaptive_policy"]["preferred_focus"] in {
+            "observation",
+            "queue_hygiene",
+            "truthfulness",
+        }
         assert report["adaptive_policy"]["observation_bias"] >= 0.58
         assert candidates
         candidate_kinds = {

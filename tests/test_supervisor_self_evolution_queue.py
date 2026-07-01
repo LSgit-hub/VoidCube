@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from systems.supervisor.supervisor import Supervisor, SupervisorConfig, SupervisorExecutionConfig
 from systems.supervisor.endogenous_drive import (
     EndogenousTaskCandidate,
+    EndogenousDriveEngine,
     DriveAdaptivePolicy,
     DrivePerceptionSnapshot,
     DriveReflection,
@@ -31,6 +32,22 @@ def _make_supervisor_config(tmp_path: Path) -> SupervisorConfig:
 
 def _make_supervisor(tmp_path: Path) -> Supervisor:
     return Supervisor(_make_supervisor_config(tmp_path))
+
+
+def _seed_current_lm_reasoning_state(
+    supervisor: Supervisor,
+    state: dict,
+) -> None:
+    supervisor.config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={"endogenous_drive_lm_task_generation_enabled": True}
+            )
+        }
+    )
+    supervisor._endogenous_drive_engine.config = supervisor.config
+    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = dict(state)
+    supervisor._endogenous_drive_engine._llm_task_proposals = lambda **_: []  # type: ignore[method-assign]
 
 
 class _FakeLLMClient:
@@ -204,14 +221,15 @@ async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_dupli
     timeline = supervisor._recent_supervisor_ui_activity(limit=10)
 
     assert first["status"] == "planned"
-    assert first["planned"] == 4
+    assert first["planned"] == 3
     assert second["status"] == "idle"
-    assert queued["count"] == 4
+    assert queued["count"] == 3
     tasks_by_key = {
         task["metadata"]["endogenous_drive_key"]: task for task in queued["tasks"]
     }
     assert "continuity:memory_maintenance_sweep" in tasks_by_key
     assert "truthfulness:review_correction_signals" in tasks_by_key
+    assert "continuity:queue_hygiene_review" not in tasks_by_key
     assert any(task["governance_task_type"] == "self_learning" for task in queued["tasks"])
     scheduled_tokens = [task.get("scheduled_for") for task in queued["tasks"]]
     assert all(isinstance(token, str) and token for token in scheduled_tokens)
@@ -223,7 +241,7 @@ async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_dupli
     assert memory_task["execution_kind"] == "memory_maintenance"
     assert memory_task["evidence"]["endogenous_drive"]["core_values"] == ["continuity"]
     event_types = [event["event_type"] for event in timeline]
-    assert "endogenous_drive_evaluated" in event_types
+    assert "endogenous_drive_evaluated" not in event_types
     assert "endogenous_drive_planned" in event_types
     assert "endogenous_drive_idle" in event_types
 
@@ -405,6 +423,103 @@ async def test_endogenous_drive_evaluation_persists_judgement_history(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_endogenous_drive_preview_evaluation_does_not_persist_runtime_state(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {
+                "active_sessions": 0,
+                "counts": {"error_count": 2, "uncertainty_high_count": 1},
+            },
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    result = await supervisor.evaluate_endogenous_drive(
+        {"record_activity": False, "persist_evaluation": False}
+    )
+    history = supervisor._load_endogenous_drive_history()
+    governance_events = supervisor._load_endogenous_governance_events()
+    cognition_snapshot = supervisor._load_endogenous_cognition_state()
+
+    assert result["candidates"]
+    assert result["cognition_state"]["identity"]["role"] == "endogenous_supervisory_core"
+    assert history["judgements"] == []
+    assert history["strategy_memory"]["focus_stats"] == {}
+    assert governance_events["events"] == []
+    assert cognition_snapshot["state"]["status"] == "uninitialized"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_persistent_evaluation_rolls_back_history_when_later_persist_fails(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {
+                "active_sessions": 0,
+                "counts": {"error_count": 2, "uncertainty_high_count": 1},
+            },
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    def fail_cognition_persist(_state):
+        raise RuntimeError("cognition persist failed")
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor._persist_endogenous_cognition_state = fail_cognition_persist  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="cognition persist failed"):
+        await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    history = supervisor._load_endogenous_drive_history()
+    governance_events = supervisor._load_endogenous_governance_events()
+
+    assert history["judgements"] == []
+    assert history["strategy_memory"]["focus_stats"] == {}
+    assert governance_events["events"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_evaluate_endogenous_drive_exposes_non_task_signals(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
@@ -578,42 +693,45 @@ async def test_endogenous_drive_preserves_truthfulness_channel_under_observe_bef
 async def test_evaluate_endogenous_drive_exposes_cognition_state(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = {
-        "status": "completed",
-        "model_role": "governance_reasoner",
-        "proposal_count": 2,
-        "charter": {
-            "core_mission": "Use evidence and self-understanding to propose structured self-iteration work.",
-            "task_generation_policy": [
-                "Prefer observation when evidence is weak.",
-            ],
+    _seed_current_lm_reasoning_state(
+        supervisor,
+        {
+            "status": "completed",
+            "model_role": "governance_reasoner",
+            "proposal_count": 2,
+            "charter": {
+                "core_mission": "Use evidence and self-understanding to propose structured self-iteration work.",
+                "task_generation_policy": [
+                    "Prefer observation when evidence is weak.",
+                ],
+            },
+            "task_type_priors": {
+                "top_priority_task_type": "observation",
+                "top_priority_score": 0.81,
+                "priors": [
+                    {
+                        "task_type": "observation",
+                        "score": 0.81,
+                        "reasons": ["evidence gaps remain active"],
+                    }
+                ],
+            },
+            "proposal_drift_memory": {
+                "available": True,
+                "average_score": 0.46,
+                "drift_state": "correcting",
+                "quality_counts": {"strong": 0, "partial": 1, "weak": 1},
+                "summary": "Recent proposal alignment is correcting.",
+            },
+            "recent_reference_alignment": {
+                "available": True,
+                "average_alignment_score": 0.62,
+                "weak_or_partial_count": 2,
+                "summary": "Reference alignment is not yet stable.",
+            },
+            "summary": "LM cognition status=completed.",
         },
-        "task_type_priors": {
-            "top_priority_task_type": "observation",
-            "top_priority_score": 0.81,
-            "priors": [
-                {
-                    "task_type": "observation",
-                    "score": 0.81,
-                    "reasons": ["evidence gaps remain active"],
-                }
-            ],
-        },
-        "proposal_drift_memory": {
-            "available": True,
-            "average_score": 0.46,
-            "drift_state": "correcting",
-            "quality_counts": {"strong": 0, "partial": 1, "weak": 1},
-            "summary": "Recent proposal alignment is correcting.",
-        },
-        "recent_reference_alignment": {
-            "available": True,
-            "average_alignment_score": 0.62,
-            "weak_or_partial_count": 2,
-            "summary": "Reference alignment is not yet stable.",
-        },
-        "summary": "LM cognition status=completed.",
-    }
+    )
 
     async def fake_idle_window(_request=None):
         return {
@@ -683,16 +801,22 @@ async def test_evaluate_endogenous_drive_exposes_cognition_state(tmp_path):
     assert cognition["proposal_cognition"]["summary"] == (
         f"posture={cognition['proposal_cognition']['active_cognitive_posture_profile']['name']}; "
         f"drift={cognition['proposal_cognition']['proposal_drift_memory']['drift_state']}; "
-        f"projections={cognition['proposal_cognition']['current_candidates']['count']}."
+        f"candidate_count={cognition['proposal_cognition']['current_candidates']['count']}."
     )
     assert "summary" not in cognition["proposal_cognition"]["meta_cognition_profile"]
-    assert "summary" not in cognition["proposal_cognition"]["self_iteration_hypotheses"]
-    assert "summary" not in cognition["proposal_cognition"]["self_iteration_trend_memory"]
-    assert "summary" not in cognition["proposal_cognition"]["switch_self_regulation_memory"]
-    assert "summary" not in cognition["proposal_cognition"]["post_task_effect_memory"]
-    assert "summary" not in cognition["proposal_cognition"]["cognitive_assessment_memory"]
+    auxiliary_memory = cognition["proposal_cognition"]["auxiliary_memory"]
+    for folded_key in (
+        "self_iteration_hypotheses",
+        "self_iteration_trend_memory",
+        "switch_self_regulation_memory",
+        "post_task_effect_memory",
+        "cognitive_assessment_memory",
+    ):
+        assert folded_key not in cognition["proposal_cognition"]
+        assert "summary" not in auxiliary_memory[folded_key]
     assert "summary" not in cognition["proposal_cognition"]["proposal_drift_memory"]
     assert "summary" not in cognition["proposal_cognition"]["recent_reference_alignment"]
+    assert "compatible_projection_bias" not in cognition["proposal_cognition"]["meta_cognition_profile"]
     assert cognition["proposal_cognition"]["proposal_drift_memory"]["drift_state"] == "correcting"
     assert cognition["proposal_cognition"]["lm_trace"]["charter_core_mission"]
     assert "top_priority_task_type" not in cognition["proposal_cognition"]["lm_trace"]
@@ -1332,35 +1456,38 @@ async def test_endogenous_governance_events_persist_to_runtime_file(tmp_path):
 async def test_endogenous_cognition_state_persists_to_runtime_file(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = {
-        "status": "completed",
-        "model_role": "governance_reasoner",
-        "proposal_count": 1,
-        "charter": {
-            "core_mission": "Evolve through evidence-backed structured proposals.",
+    _seed_current_lm_reasoning_state(
+        supervisor,
+        {
+            "status": "completed",
+            "model_role": "governance_reasoner",
+            "proposal_count": 1,
+            "charter": {
+                "core_mission": "Evolve through evidence-backed structured proposals.",
+            },
+            "task_type_priors": {
+                "top_priority_task_type": "review",
+                "top_priority_score": 0.73,
+                "priors": [
+                    {"task_type": "review", "score": 0.73, "reasons": ["truthfulness pressure is elevated"]}
+                ],
+            },
+            "proposal_drift_memory": {
+                "available": True,
+                "average_score": 0.58,
+                "drift_state": "stable",
+                "quality_counts": {"strong": 1, "partial": 0, "weak": 0},
+                "summary": "Recent proposal alignment is stable.",
+            },
+            "recent_reference_alignment": {
+                "available": True,
+                "average_alignment_score": 0.78,
+                "weak_or_partial_count": 0,
+                "summary": "Reference alignment is stable.",
+            },
+            "summary": "LM cognition status=completed.",
         },
-        "task_type_priors": {
-            "top_priority_task_type": "review",
-            "top_priority_score": 0.73,
-            "priors": [
-                {"task_type": "review", "score": 0.73, "reasons": ["truthfulness pressure is elevated"]}
-            ],
-        },
-        "proposal_drift_memory": {
-            "available": True,
-            "average_score": 0.58,
-            "drift_state": "stable",
-            "quality_counts": {"strong": 1, "partial": 0, "weak": 0},
-            "summary": "Recent proposal alignment is stable.",
-        },
-        "recent_reference_alignment": {
-            "available": True,
-            "average_alignment_score": 0.78,
-            "weak_or_partial_count": 0,
-            "summary": "Reference alignment is stable.",
-        },
-        "summary": "LM cognition status=completed.",
-    }
+    )
 
     async def fake_idle_window(_request=None):
         return {
@@ -1463,43 +1590,46 @@ async def test_cognitive_self_regulation_tightens_adaptive_policy_when_lm_drift_
         },
     ]
     supervisor._persist_endogenous_drive_history(history)
-    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = {
-        "status": "completed",
-        "model_role": "governance_reasoner",
-        "proposal_count": 2,
-        "task_type_priors": {
-            "top_priority_task_type": "observation",
-            "top_priority_score": 0.84,
-            "priors": [
-                {"task_type": "observation", "score": 0.84, "reasons": ["evidence gaps remain active"]},
-            ],
+    _seed_current_lm_reasoning_state(
+        supervisor,
+        {
+            "status": "completed",
+            "model_role": "governance_reasoner",
+            "proposal_count": 2,
+            "task_type_priors": {
+                "top_priority_task_type": "observation",
+                "top_priority_score": 0.84,
+                "priors": [
+                    {"task_type": "observation", "score": 0.84, "reasons": ["evidence gaps remain active"]},
+                ],
+            },
+            "proposal_drift_memory": {
+                "available": True,
+                "average_score": 0.36,
+                "drift_state": "drifting",
+                "quality_counts": {"strong": 0, "partial": 0, "weak": 2},
+                "summary": "Recent proposal alignment is drifting.",
+            },
+            "recent_reference_alignment": {
+                "available": True,
+                "average_alignment_score": 0.42,
+                "weak_or_partial_count": 3,
+                "summary": "Reference alignment is weak.",
+            },
+            "evidence_basis": {
+                "self_iteration_readiness_score": 0.34,
+                "self_understanding_gaps": [
+                    "missing_external_research_support",
+                    "reference_alignment_is_unstable",
+                ],
+                "weak_or_missing_channels": [
+                    "external_research",
+                    "shell_body_profile",
+                ],
+            },
+            "summary": "LM cognition status=completed.",
         },
-        "proposal_drift_memory": {
-            "available": True,
-            "average_score": 0.36,
-            "drift_state": "drifting",
-            "quality_counts": {"strong": 0, "partial": 0, "weak": 2},
-            "summary": "Recent proposal alignment is drifting.",
-        },
-        "recent_reference_alignment": {
-            "available": True,
-            "average_alignment_score": 0.42,
-            "weak_or_partial_count": 3,
-            "summary": "Reference alignment is weak.",
-        },
-        "evidence_basis": {
-            "self_iteration_readiness_score": 0.34,
-            "self_understanding_gaps": [
-                "missing_external_research_support",
-                "reference_alignment_is_unstable",
-            ],
-            "weak_or_missing_channels": [
-                "external_research",
-                "shell_body_profile",
-            ],
-        },
-        "summary": "LM cognition status=completed.",
-    }
+    )
 
     async def fake_idle_window(_request=None):
         return {
@@ -1589,37 +1719,40 @@ async def test_cognitive_self_regulation_stays_light_when_lm_alignment_and_evide
         }
     ]
     supervisor._persist_endogenous_drive_history(history)
-    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = {
-        "status": "completed",
-        "model_role": "governance_reasoner",
-        "proposal_count": 1,
-        "task_type_priors": {
-            "top_priority_task_type": "learning",
-            "top_priority_score": 0.78,
-            "priors": [
-                {"task_type": "learning", "score": 0.78, "reasons": ["evidence quality is strong"]},
-            ],
+    _seed_current_lm_reasoning_state(
+        supervisor,
+        {
+            "status": "completed",
+            "model_role": "governance_reasoner",
+            "proposal_count": 1,
+            "task_type_priors": {
+                "top_priority_task_type": "learning",
+                "top_priority_score": 0.78,
+                "priors": [
+                    {"task_type": "learning", "score": 0.78, "reasons": ["evidence quality is strong"]},
+                ],
+            },
+            "proposal_drift_memory": {
+                "available": True,
+                "average_score": 0.82,
+                "drift_state": "stable",
+                "quality_counts": {"strong": 1, "partial": 0, "weak": 0},
+                "summary": "Recent proposal alignment is stable.",
+            },
+            "recent_reference_alignment": {
+                "available": True,
+                "average_alignment_score": 0.86,
+                "weak_or_partial_count": 0,
+                "summary": "Reference alignment is strong.",
+            },
+            "evidence_basis": {
+                "self_iteration_readiness_score": 0.81,
+                "self_understanding_gaps": [],
+                "weak_or_missing_channels": [],
+            },
+            "summary": "LM cognition status=completed.",
         },
-        "proposal_drift_memory": {
-            "available": True,
-            "average_score": 0.82,
-            "drift_state": "stable",
-            "quality_counts": {"strong": 1, "partial": 0, "weak": 0},
-            "summary": "Recent proposal alignment is stable.",
-        },
-        "recent_reference_alignment": {
-            "available": True,
-            "average_alignment_score": 0.86,
-            "weak_or_partial_count": 0,
-            "summary": "Reference alignment is strong.",
-        },
-        "evidence_basis": {
-            "self_iteration_readiness_score": 0.81,
-            "self_understanding_gaps": [],
-            "weak_or_missing_channels": [],
-        },
-        "summary": "LM cognition status=completed.",
-    }
+    )
 
     async def fake_idle_window(_request=None):
         return {
@@ -1915,25 +2048,28 @@ async def test_cognitive_self_regulation_uses_charter_control_policy_thresholds(
         }
     ]
     supervisor._persist_endogenous_drive_history(history)
-    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = {
-        "status": "completed",
-        "proposal_drift_memory": {
-            "available": True,
-            "average_score": 0.74,
-            "drift_state": "stable",
-            "quality_counts": {"strong": 1, "partial": 0, "weak": 0},
+    _seed_current_lm_reasoning_state(
+        supervisor,
+        {
+            "status": "completed",
+            "proposal_drift_memory": {
+                "available": True,
+                "average_score": 0.74,
+                "drift_state": "stable",
+                "quality_counts": {"strong": 1, "partial": 0, "weak": 0},
+            },
+            "recent_reference_alignment": {
+                "available": True,
+                "average_alignment_score": 0.84,
+                "weak_or_partial_count": 0,
+            },
+            "evidence_basis": {
+                "self_iteration_readiness_score": 0.8,
+                "self_understanding_gaps": [],
+                "weak_or_missing_channels": [],
+            },
         },
-        "recent_reference_alignment": {
-            "available": True,
-            "average_alignment_score": 0.84,
-            "weak_or_partial_count": 0,
-        },
-        "evidence_basis": {
-            "self_iteration_readiness_score": 0.8,
-            "self_understanding_gaps": [],
-            "weak_or_missing_channels": [],
-        },
-    }
+    )
 
     async def fake_idle_window(_request=None):
         return {
@@ -2023,25 +2159,28 @@ async def test_cognitive_posture_profile_observe_first_amplifies_observation_bia
         }
     ]
     supervisor._persist_endogenous_drive_history(history)
-    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = {
-        "status": "completed",
-        "proposal_drift_memory": {
-            "available": True,
-            "average_score": 0.46,
-            "drift_state": "correcting",
-            "quality_counts": {"strong": 0, "partial": 1, "weak": 0},
+    _seed_current_lm_reasoning_state(
+        supervisor,
+        {
+            "status": "completed",
+            "proposal_drift_memory": {
+                "available": True,
+                "average_score": 0.46,
+                "drift_state": "correcting",
+                "quality_counts": {"strong": 0, "partial": 1, "weak": 0},
+            },
+            "recent_reference_alignment": {
+                "available": True,
+                "average_alignment_score": 0.6,
+                "weak_or_partial_count": 1,
+            },
+            "evidence_basis": {
+                "self_iteration_readiness_score": 0.5,
+                "self_understanding_gaps": ["reference_alignment_is_unstable"],
+                "weak_or_missing_channels": ["external_research"],
+            },
         },
-        "recent_reference_alignment": {
-            "available": True,
-            "average_alignment_score": 0.6,
-            "weak_or_partial_count": 1,
-        },
-        "evidence_basis": {
-            "self_iteration_readiness_score": 0.5,
-            "self_understanding_gaps": ["reference_alignment_is_unstable"],
-            "weak_or_missing_channels": ["external_research"],
-        },
-    }
+    )
 
     async def fake_idle_window(_request=None):
         return {
@@ -2125,25 +2264,28 @@ async def test_cognitive_posture_profile_truthfulness_first_amplifies_truthfulne
         }
     ]
     supervisor._persist_endogenous_drive_history(history)
-    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = {
-        "status": "completed",
-        "proposal_drift_memory": {
-            "available": True,
-            "average_score": 0.52,
-            "drift_state": "stable",
-            "quality_counts": {"strong": 0, "partial": 1, "weak": 0},
+    _seed_current_lm_reasoning_state(
+        supervisor,
+        {
+            "status": "completed",
+            "proposal_drift_memory": {
+                "available": True,
+                "average_score": 0.52,
+                "drift_state": "stable",
+                "quality_counts": {"strong": 0, "partial": 1, "weak": 0},
+            },
+            "recent_reference_alignment": {
+                "available": True,
+                "average_alignment_score": 0.58,
+                "weak_or_partial_count": 2,
+            },
+            "evidence_basis": {
+                "self_iteration_readiness_score": 0.66,
+                "self_understanding_gaps": [],
+                "weak_or_missing_channels": ["external_research"],
+            },
         },
-        "recent_reference_alignment": {
-            "available": True,
-            "average_alignment_score": 0.58,
-            "weak_or_partial_count": 2,
-        },
-        "evidence_basis": {
-            "self_iteration_readiness_score": 0.66,
-            "self_understanding_gaps": [],
-            "weak_or_missing_channels": ["external_research"],
-        },
-    }
+    )
 
     async def fake_idle_window(_request=None):
         return {
@@ -2210,12 +2352,15 @@ async def test_cognitive_posture_profile_auto_switches_to_conservative_under_ser
     config.service_runtime.endogenous_drive_cognition_charter.cognitive_control_policy.posture_selection_mode = "auto"
     supervisor = Supervisor(config)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = {
-        "status": "completed",
-        "proposal_drift_memory": {"available": True, "average_score": 0.78, "drift_state": "stable"},
-        "recent_reference_alignment": {"available": True, "average_alignment_score": 0.82, "weak_or_partial_count": 0},
-        "evidence_basis": {"self_iteration_readiness_score": 0.76, "self_understanding_gaps": [], "weak_or_missing_channels": []},
-    }
+    _seed_current_lm_reasoning_state(
+        supervisor,
+        {
+            "status": "completed",
+            "proposal_drift_memory": {"available": True, "average_score": 0.78, "drift_state": "stable"},
+            "recent_reference_alignment": {"available": True, "average_alignment_score": 0.82, "weak_or_partial_count": 0},
+            "evidence_basis": {"self_iteration_readiness_score": 0.76, "self_understanding_gaps": [], "weak_or_missing_channels": []},
+        },
+    )
 
     async def fake_idle_window(_request=None):
         return {
@@ -2271,16 +2416,19 @@ async def test_cognitive_posture_profile_auto_switches_to_evidence_repair_first_
     config.service_runtime.endogenous_drive_cognition_charter.cognitive_control_policy.posture_selection_mode = "auto"
     supervisor = Supervisor(config)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = {
-        "status": "completed",
-        "proposal_drift_memory": {"available": True, "average_score": 0.62, "drift_state": "stable"},
-        "recent_reference_alignment": {"available": True, "average_alignment_score": 0.55, "weak_or_partial_count": 3},
-        "evidence_basis": {
-            "self_iteration_readiness_score": 0.64,
-            "self_understanding_gaps": ["reference_alignment_is_unstable"],
-            "weak_or_missing_channels": ["external_research", "shell_body_profile", "recent_learning"],
+    _seed_current_lm_reasoning_state(
+        supervisor,
+        {
+            "status": "completed",
+            "proposal_drift_memory": {"available": True, "average_score": 0.62, "drift_state": "stable"},
+            "recent_reference_alignment": {"available": True, "average_alignment_score": 0.55, "weak_or_partial_count": 3},
+            "evidence_basis": {
+                "self_iteration_readiness_score": 0.64,
+                "self_understanding_gaps": ["reference_alignment_is_unstable"],
+                "weak_or_missing_channels": ["external_research", "shell_body_profile", "recent_learning"],
+            },
         },
-    }
+    )
 
     async def fake_idle_window(_request=None):
         return {
@@ -2329,12 +2477,15 @@ async def test_cognitive_posture_profile_auto_switches_to_truthfulness_first_whe
     config.service_runtime.endogenous_drive_cognition_charter.cognitive_control_policy.posture_selection_mode = "auto"
     supervisor = Supervisor(config)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = {
-        "status": "completed",
-        "proposal_drift_memory": {"available": True, "average_score": 0.7, "drift_state": "stable"},
-        "recent_reference_alignment": {"available": True, "average_alignment_score": 0.78, "weak_or_partial_count": 0},
-        "evidence_basis": {"self_iteration_readiness_score": 0.7, "self_understanding_gaps": [], "weak_or_missing_channels": []},
-    }
+    _seed_current_lm_reasoning_state(
+        supervisor,
+        {
+            "status": "completed",
+            "proposal_drift_memory": {"available": True, "average_score": 0.7, "drift_state": "stable"},
+            "recent_reference_alignment": {"available": True, "average_alignment_score": 0.78, "weak_or_partial_count": 0},
+            "evidence_basis": {"self_iteration_readiness_score": 0.7, "self_understanding_gaps": [], "weak_or_missing_channels": []},
+        },
+    )
 
     async def fake_idle_window(_request=None):
         return {
@@ -2384,21 +2535,24 @@ async def test_cognitive_posture_profile_auto_switches_to_observe_first_when_exp
     config.service_runtime.endogenous_drive_cognition_charter.cognitive_control_policy.auto_explanation_repair_missing_threshold = 2
     supervisor = Supervisor(config)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = {
-        "status": "completed",
-        "proposal_drift_memory": {
-            "available": True,
-            "average_score": 0.63,
-            "drift_state": "stable",
-            "quality_counts": {"strong": 1, "partial": 0, "weak": 0},
-            "missing_posture_alignment_count": 2,
-            "missing_priority_basis_count": 2,
-            "posture_alignment_health": "missing",
-            "priority_basis_health": "missing",
+    _seed_current_lm_reasoning_state(
+        supervisor,
+        {
+            "status": "completed",
+            "proposal_drift_memory": {
+                "available": True,
+                "average_score": 0.63,
+                "drift_state": "stable",
+                "quality_counts": {"strong": 1, "partial": 0, "weak": 0},
+                "missing_posture_alignment_count": 2,
+                "missing_priority_basis_count": 2,
+                "posture_alignment_health": "missing",
+                "priority_basis_health": "missing",
+            },
+            "recent_reference_alignment": {"available": True, "average_alignment_score": 0.82, "weak_or_partial_count": 0},
+            "evidence_basis": {"self_iteration_readiness_score": 0.73, "self_understanding_gaps": [], "weak_or_missing_channels": []},
         },
-        "recent_reference_alignment": {"available": True, "average_alignment_score": 0.82, "weak_or_partial_count": 0},
-        "evidence_basis": {"self_iteration_readiness_score": 0.73, "self_understanding_gaps": [], "weak_or_missing_channels": []},
-    }
+    )
 
     async def fake_idle_window(_request=None):
         return {
@@ -2437,22 +2591,25 @@ async def test_cognitive_posture_profile_auto_switches_to_truthfulness_first_whe
     config.service_runtime.endogenous_drive_cognition_charter.cognitive_control_policy.posture_selection_mode = "auto"
     supervisor = Supervisor(config)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = {
-        "status": "completed",
-        "proposal_drift_memory": {
-            "available": True,
-            "average_score": 0.58,
-            "drift_state": "stable",
-            "quality_counts": {"strong": 0, "partial": 1, "weak": 0},
-            "missing_posture_alignment_count": 0,
-            "missing_priority_basis_count": 0,
-            "posture_alignment_health": "inconsistent",
-            "priority_basis_health": "strong",
-            "dominant_posture_conflict_reason": "reference_alignment_is_weak",
+    _seed_current_lm_reasoning_state(
+        supervisor,
+        {
+            "status": "completed",
+            "proposal_drift_memory": {
+                "available": True,
+                "average_score": 0.58,
+                "drift_state": "stable",
+                "quality_counts": {"strong": 0, "partial": 1, "weak": 0},
+                "missing_posture_alignment_count": 0,
+                "missing_priority_basis_count": 0,
+                "posture_alignment_health": "inconsistent",
+                "priority_basis_health": "strong",
+                "dominant_posture_conflict_reason": "reference_alignment_is_weak",
+            },
+            "recent_reference_alignment": {"available": True, "average_alignment_score": 0.77, "weak_or_partial_count": 0},
+            "evidence_basis": {"self_iteration_readiness_score": 0.72, "self_understanding_gaps": [], "weak_or_missing_channels": []},
         },
-        "recent_reference_alignment": {"available": True, "average_alignment_score": 0.77, "weak_or_partial_count": 0},
-        "evidence_basis": {"self_iteration_readiness_score": 0.72, "self_understanding_gaps": [], "weak_or_missing_channels": []},
-    }
+    )
 
     async def fake_idle_window(_request=None):
         return {
@@ -2511,30 +2668,33 @@ async def test_cognitive_self_regulation_tightens_when_proposal_explanations_are
         }
     ]
     supervisor._persist_endogenous_drive_history(history)
-    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = {
-        "status": "completed",
-        "proposal_drift_memory": {
-            "available": True,
-            "average_score": 0.44,
-            "drift_state": "stable",
-            "quality_counts": {"strong": 0, "partial": 1, "weak": 0},
-            "missing_posture_alignment_count": 0,
-            "missing_priority_basis_count": 0,
-            "posture_alignment_health": "inconsistent",
-            "priority_basis_health": "inconsistent",
-            "dominant_posture_conflict_reason": "task_shape_conflicts_with_current_cognitive_posture",
+    _seed_current_lm_reasoning_state(
+        supervisor,
+        {
+            "status": "completed",
+            "proposal_drift_memory": {
+                "available": True,
+                "average_score": 0.44,
+                "drift_state": "stable",
+                "quality_counts": {"strong": 0, "partial": 1, "weak": 0},
+                "missing_posture_alignment_count": 0,
+                "missing_priority_basis_count": 0,
+                "posture_alignment_health": "inconsistent",
+                "priority_basis_health": "inconsistent",
+                "dominant_posture_conflict_reason": "task_shape_conflicts_with_current_cognitive_posture",
+            },
+            "recent_reference_alignment": {
+                "available": True,
+                "average_alignment_score": 0.71,
+                "weak_or_partial_count": 0,
+            },
+            "evidence_basis": {
+                "self_iteration_readiness_score": 0.66,
+                "self_understanding_gaps": [],
+                "weak_or_missing_channels": [],
+            },
         },
-        "recent_reference_alignment": {
-            "available": True,
-            "average_alignment_score": 0.71,
-            "weak_or_partial_count": 0,
-        },
-        "evidence_basis": {
-            "self_iteration_readiness_score": 0.66,
-            "self_understanding_gaps": [],
-            "weak_or_missing_channels": [],
-        },
-    }
+    )
 
     async def fake_idle_window(_request=None):
         return {
@@ -3613,7 +3773,7 @@ async def test_strategy_memory_observation_history_does_not_reenter_observation_
         result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     assert result["deliberation"]["reflection"]["dominant_constraint"] == "none"
-    assert result["deliberation"]["adaptive_policy"]["preferred_focus"] == "observation"
+    assert result["deliberation"]["adaptive_policy"]["preferred_focus"] != "observation"
     assert result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == "expand_learning_frontier"
 
 
@@ -3929,25 +4089,28 @@ async def test_observe_first_posture_strategy_memory_and_persistent_self_regulat
         encoding="utf-8",
     )
 
-    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = {
-        "status": "completed",
-        "proposal_drift_memory": {
-            "available": True,
-            "average_score": 0.46,
-            "drift_state": "correcting",
-            "quality_counts": {"strong": 0, "partial": 1, "weak": 0},
+    _seed_current_lm_reasoning_state(
+        supervisor,
+        {
+            "status": "completed",
+            "proposal_drift_memory": {
+                "available": True,
+                "average_score": 0.46,
+                "drift_state": "correcting",
+                "quality_counts": {"strong": 0, "partial": 1, "weak": 0},
+            },
+            "recent_reference_alignment": {
+                "available": True,
+                "average_alignment_score": 0.6,
+                "weak_or_partial_count": 1,
+            },
+            "evidence_basis": {
+                "self_iteration_readiness_score": 0.5,
+                "self_understanding_gaps": ["reference_alignment_is_unstable"],
+                "weak_or_missing_channels": ["external_research"],
+            },
         },
-        "recent_reference_alignment": {
-            "available": True,
-            "average_alignment_score": 0.6,
-            "weak_or_partial_count": 1,
-        },
-        "evidence_basis": {
-            "self_iteration_readiness_score": 0.5,
-            "self_understanding_gaps": ["reference_alignment_is_unstable"],
-            "weak_or_missing_channels": ["external_research"],
-        },
-    }
+    )
 
     async def fake_idle_window(_request=None):
         return {
@@ -4354,7 +4517,10 @@ async def test_mixed_multicycle_writeback_and_context_switch_do_not_lock_primary
                 supervisor,
                 outcome_status=outcome_status,
                 reason=f"mixed cycle {outcome_status}",
+                allow_empty_candidates=True,
             )
+            if cycle.get("writeback_skipped"):
+                continue
             observed_contexts.add(
                 next(
                     item.split("=", 1)[1]
@@ -4587,10 +4753,11 @@ async def test_accumulated_focus_context_and_observation_stats_do_not_block_lear
         > truthfulness_result["deliberation"]["adaptive_policy"]["memory_continuity_bias"]
     )
 
-    assert memory_result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] != (
-        "repair_truthfulness"
+    assert memory_result["deliberation"]["reflection"]["dominant_constraint"] == "none"
+    assert memory_result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == (
+        "stabilize_memory_continuity"
     )
-    assert memory_result["deliberation"]["adaptive_policy"]["preferred_focus"] != "truthfulness"
+    assert memory_result["deliberation"]["adaptive_policy"]["preferred_focus"] == "memory_continuity"
     assert (
         memory_result["deliberation"]["adaptive_policy"]["memory_continuity_bias"]
         > memory_result["deliberation"]["adaptive_policy"]["truthfulness_bias"]
@@ -5047,9 +5214,154 @@ async def test_run_endogenous_drive_cycle_observation_posture_defers_non_stabili
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_run_endogenous_drive_cycle_only_judges_candidates_kept_after_runtime_gate(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    evaluation_requests = []
+
+    def drive_judgement(preferred_focus: str) -> dict:
+        return {
+            "perception": {
+                "user_mode": "idle_window",
+                "system_posture": "stable",
+            },
+            "reflection": {
+                "dominant_constraint": "historical_underdelivery",
+            },
+            "adaptive_policy": {
+                "preferred_focus": preferred_focus,
+            },
+            "needs": [
+                {
+                    "need_type": f"{preferred_focus}_need",
+                    "severity": 0.7,
+                    "confidence": 0.8,
+                }
+            ],
+        }
+
+    async def fake_evaluate_endogenous_drive(request=None):
+        evaluation_requests.append(dict(request or {}))
+        deliberation = {
+            "perception": {
+                "user_mode": "idle_window",
+                "system_posture": "stable",
+            },
+            "reflection": {
+                "dominant_constraint": "historical_underdelivery",
+            },
+            "adaptive_policy": {
+                "preferred_focus": "observation",
+            },
+            "signals": [
+                {
+                    "signal_type": "drive_posture_signal",
+                    "payload": {
+                        "preferred_focus": "observation",
+                        "candidate_budget": 1,
+                    },
+                }
+            ],
+        }
+        return {
+            "status": "evaluated",
+            "idle_window": {
+                "task_family_decisions": {
+                    "self_learning": {
+                        "eligible_for_planning": True,
+                        "eligible_for_execution": True,
+                    },
+                },
+                "governance_task_type_decisions": {
+                    "self_learning": {
+                        "eligible_for_planning": True,
+                        "eligible_for_execution": True,
+                    },
+                },
+                "decisions": {
+                    "eligible_for_planning": True,
+                    "eligible_for_execution": True,
+                },
+            },
+            "deliberation": deliberation,
+            "drive_posture": deliberation["signals"][0],
+            "governance_channels": {},
+            "governance_event_stream": {"events": []},
+            "self_regulation": {},
+            "candidates": [
+                {
+                    "title": "Review correction signals",
+                    "summary": "Stability-first task",
+                    "source": "endogenous_drive",
+                    "priority": "high",
+                    "governance_task_type": "self_learning",
+                    "task_family": "self_learning",
+                    "execution_kind": None,
+                    "metadata": {
+                        "endogenous_drive_key": "truthfulness:review_correction_signals",
+                        "drive_judgement": drive_judgement("truthfulness"),
+                        "score_breakdown": {"candidate_kind": "truthfulness_review"},
+                    },
+                    "evidence": {"endogenous_drive": {}},
+                    "constraints": {},
+                },
+                {
+                    "title": "Explore new learning direction",
+                    "summary": "Expansion task",
+                    "source": "endogenous_drive",
+                    "priority": "normal",
+                    "governance_task_type": "self_learning",
+                    "task_family": "self_learning",
+                    "execution_kind": None,
+                    "metadata": {
+                        "endogenous_drive_key": "creativity:idle_learning:test",
+                        "drive_judgement": drive_judgement("learning_expansion"),
+                        "score_breakdown": {"candidate_kind": "exploratory_learning"},
+                    },
+                    "evidence": {"endogenous_drive": {}},
+                    "constraints": {},
+                },
+            ],
+        }
+
+    supervisor.evaluate_endogenous_drive = fake_evaluate_endogenous_drive  # type: ignore[method-assign]
+
+    cycle = await supervisor._run_endogenous_drive_cycle()
+    history = supervisor._load_endogenous_drive_history()
+    focus_stats = history["strategy_memory"]["focus_stats"]
+    judgement_keys = {
+        judgement.get("candidate_key")
+        for judgement in history["judgements"]
+    }
+
+    assert evaluation_requests == [
+        {"record_activity": False, "persist_evaluation": False}
+    ]
+    assert cycle["planned"] == 1
+    assert focus_stats["truthfulness"]["judged"] == 1
+    assert "learning_expansion" not in focus_stats
+    assert "truthfulness:review_correction_signals" in judgement_keys
+    assert "creativity:idle_learning:test" not in judgement_keys
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_endogenous_drive_lm_task_generation_is_disabled_by_default(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = {
+        "status": "completed",
+        "proposal_count": 2,
+        "proposal_drift_memory": {
+            "available": True,
+            "average_score": 0.1,
+            "drift_state": "drifting",
+            "posture_alignment_health": "missing",
+            "priority_basis_health": "missing",
+            "missing_posture_alignment_count": 3,
+            "missing_priority_basis_count": 3,
+        },
+    }
 
     async def fake_idle_window(_request=None):
         return {
@@ -5080,6 +5392,9 @@ async def test_endogenous_drive_lm_task_generation_is_disabled_by_default(tmp_pa
         not bool(dict(candidate.get("metadata") or {}).get("llm_task_generated"))
         for candidate in result["candidates"]
     )
+    reason = str(result["cognitive_self_regulation"].get("last_reason") or "")
+    assert "proposal_drift_is_active" not in reason
+    assert "proposal_explanation_memory_is_missing" not in reason
 
 
 @pytest.mark.asyncio
@@ -5266,6 +5581,119 @@ async def test_endogenous_drive_can_materialize_llm_task_proposals_from_evidence
     assert "quality" in lm_candidates[0]["constraints"]["cognitive_alignment"]
     assert "summary" in lm_candidates[0]["evidence"]["cognitive_alignment"]
     assert "primary_evidence_or_agenda_binding_is_missing" in lm_candidates[0]["metadata"]["supervisor_advisory"]["advisory_reasons"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_reuses_lm_proposals_when_cognitive_self_regulation_recomputes_candidates(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor.config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={
+                    "endogenous_drive_lm_task_generation_enabled": True,
+                    "endogenous_drive_lm_task_max_candidates": 1,
+                }
+            )
+        }
+    )
+    supervisor._endogenous_drive_engine.config = supervisor.config
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Weak previous proposal",
+            "status": "deferred",
+            "cognitive_alignment": {
+                "score": 0.31,
+                "quality": "weak",
+                "top_priority_task_type": "observation",
+                "reasons": ["reference_alignment_is_weak"],
+            },
+            "reference_alignment": {
+                "alignment_score": 0.36,
+                "alignment_quality": "weak",
+                "missing_evidence_nodes": ["external_research"],
+            },
+        }
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {
+                "active_sessions": 0,
+                "counts": {"error_count": 1, "uncertainty_high_count": 1},
+            },
+            "completed_learning_tasks": [],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient(
+        {
+            "proposals": [
+                {
+                    "title": "Review weak reference grounding",
+                    "summary": "Audit recent weak reference alignment before new learning.",
+                    "candidate_kind": "truthfulness_review",
+                    "task_type": "review",
+                    "rationale": "Recent reference alignment is weak.",
+                    "evidence_summary": ["weak reference alignment"],
+                    "confidence": 0.74,
+                    "risk_level": "medium",
+                    "evidence_level": "moderate",
+                    "observation_required": True,
+                    "execution_mode": "review_then_queue",
+                    "blocking_factors": [],
+                    "referenced_evidence_nodes": ["reference_alignment"],
+                    "referenced_agenda_nodes": ["repair_truthfulness"],
+                    "posture_alignment": ["review before expansion"],
+                    "priority_basis": ["reference grounding remains weak"],
+                }
+            ]
+        }
+    )
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    task_generation_calls = [
+        call for call in fake_client.calls
+        if isinstance(call.get("user_payload"), dict)
+        and "task_generation" in dict(call.get("user_payload") or {})
+    ]
+    assert len(task_generation_calls) == 1
+    assert len(fake_client.calls) <= 2
+    assert any(
+        float(result["cognitive_self_regulation"].get(key) or 0.0) > 0.0
+        for key in (
+            "dynamic_candidate_throttle_boost",
+            "dynamic_observation_bias_boost",
+            "dynamic_truthfulness_bias_boost",
+            "dynamic_learning_expansion_suppression",
+        )
+    )
+    assert any(
+        dict(candidate.get("metadata") or {}).get("llm_task_generated")
+        for candidate in result["candidates"]
+    )
 
 
 @pytest.mark.asyncio
@@ -5480,7 +5908,7 @@ def test_prompt_packet_priority_order_follows_charter_attention_policy():
 
 
 @pytest.mark.unit
-def test_prompt_packet_prefers_context_layers_and_drops_duplicate_cognitive_summaries():
+def test_prompt_packet_prefers_context_layers_and_keeps_compact_cognitive_memory():
     from systems.supervisor.endogenous_drive_prompts import _prompt_facing_evidence_packet
 
     compact = _prompt_facing_evidence_packet(
@@ -5502,6 +5930,7 @@ def test_prompt_packet_prefers_context_layers_and_drops_duplicate_cognitive_summ
             "meta_cognition_profile": {
                 "dominant_failure_mode": "grounding_instability",
                 "stay_or_switch_bias": "stay",
+                "compatible_projection_bias": "review",
                 "priority_signals": ["reference alignment remains weak"],
                 "summary": "meta summary",
             },
@@ -5540,11 +5969,13 @@ def test_prompt_packet_prefers_context_layers_and_drops_duplicate_cognitive_summ
     assert "long_tail_context" in compact
     assert "meta_cognition_profile" in compact
     assert compact["meta_cognition_profile"]["dominant_failure_mode"] == "grounding_instability"
-    assert "cognitive_assessment_memory" not in compact
-    assert "self_iteration_trend_memory" not in compact
-    assert "switch_self_regulation_memory" not in compact
-    assert "post_task_effect_memory" not in compact
-    assert "proposal_drift_memory" not in compact
+    assert "compatible_projection_bias" not in compact["meta_cognition_profile"]
+    assert compact["cognitive_assessment_memory"]["dominant_constraint"] == "old duplicate constraint"
+    assert compact["self_iteration_trend_memory"]["trend_state"] == "locked"
+    assert compact["switch_self_regulation_memory"]["preferred_switch_bias"] == "stay"
+    assert compact["post_task_effect_memory"]["effect_direction"] == "mixed"
+    assert compact["proposal_drift_memory"]["drift_state"] == "correcting"
+    assert "entries" not in compact["proposal_drift_memory"]
     assert "cognitive_evolution_draft" not in compact
 
 
@@ -6128,21 +6559,24 @@ async def test_endogenous_drive_builds_cognitive_feedback_memory_and_applies_att
 async def test_run_endogenous_drive_cycle_exposes_cognitive_feedback_memory(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = {
-        "status": "completed",
-        "cognitive_feedback_memory": {
-            "available": True,
-            "average_quality_score": 0.42,
-            "average_reference_alignment_score": 0.36,
-            "average_cognitive_alignment_score": 0.44,
-            "confidence_feedback_direction": "weak",
-            "reference_feedback_direction": "weak",
-            "freshness_feedback_direction": "strong",
-            "self_relevance_feedback_direction": "strong",
-            "long_tail_signal_bias": "compress",
-            "summary": "Recent cognitive outcomes suggest reference repair pressure.",
+    _seed_current_lm_reasoning_state(
+        supervisor,
+        {
+            "status": "completed",
+            "cognitive_feedback_memory": {
+                "available": True,
+                "average_quality_score": 0.42,
+                "average_reference_alignment_score": 0.36,
+                "average_cognitive_alignment_score": 0.44,
+                "confidence_feedback_direction": "weak",
+                "reference_feedback_direction": "weak",
+                "freshness_feedback_direction": "strong",
+                "self_relevance_feedback_direction": "strong",
+                "long_tail_signal_bias": "compress",
+                "summary": "Recent cognitive outcomes suggest reference repair pressure.",
+            },
         },
-    }
+    )
 
     async def fake_idle_window(_request=None):
         return {
@@ -6239,23 +6673,26 @@ async def test_endogenous_drive_builds_cognitive_strategy_delta(tmp_path):
 async def test_run_endogenous_drive_cycle_exposes_cognitive_strategy_delta(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = {
-        "status": "completed",
-        "cognitive_strategy_delta": {
-            "available": True,
-            "recommended_changes": [
-                {
-                    "target": "evidence_attention_policy.conflict_weight",
-                    "direction": "increase",
-                    "current_value": 0.14,
-                    "suggested_value": 0.19,
-                    "delta": 0.05,
-                    "reason": "reference alignment remains weak, so conflict-sensitive evidence should be weighted more heavily.",
-                }
-            ],
-            "summary": "Recent cognitive feedback suggests adjusting 1 evidence-attention parameters.",
+    _seed_current_lm_reasoning_state(
+        supervisor,
+        {
+            "status": "completed",
+            "cognitive_strategy_delta": {
+                "available": True,
+                "recommended_changes": [
+                    {
+                        "target": "evidence_attention_policy.conflict_weight",
+                        "direction": "increase",
+                        "current_value": 0.14,
+                        "suggested_value": 0.19,
+                        "delta": 0.05,
+                        "reason": "reference alignment remains weak, so conflict-sensitive evidence should be weighted more heavily.",
+                    }
+                ],
+                "summary": "Recent cognitive feedback suggests adjusting 1 evidence-attention parameters.",
+            },
         },
-    }
+    )
 
     async def fake_idle_window(_request=None):
         return {
@@ -6403,60 +6840,63 @@ async def test_endogenous_drive_builds_cognitive_evolution_draft(tmp_path):
 async def test_run_endogenous_drive_cycle_exposes_cognitive_evolution_draft(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = {
-        "status": "completed",
-        "cognitive_evolution_draft": {
-            "available": True,
-            "mission_pressure": {
-                "core_mission": "evidence-driven self-iteration under governance constraints",
-                "dominant_failure_mode": "grounding_instability",
-                "top_self_iteration_domain": "grounding",
-                "reference_feedback_direction": "weak",
-                "confidence_feedback_direction": "weak",
-                "trend_state": "locked",
-                "effect_direction": "mixed",
-                "summary": "Mission pressure remains centered on grounding repair.",
-            },
-            "attention_policy_delta": {
+    _seed_current_lm_reasoning_state(
+        supervisor,
+        {
+            "status": "completed",
+            "cognitive_evolution_draft": {
                 "available": True,
-                "recommended_changes": [
-                    {
-                        "target": "evidence_attention_policy.conflict_weight",
-                        "direction": "increase",
-                        "current_value": 0.14,
-                        "suggested_value": 0.19,
-                        "delta": 0.05,
-                        "reason": "reference alignment remains weak, so conflict-sensitive evidence should be weighted more heavily.",
-                    }
-                ],
-                "summary": "Recent cognitive feedback suggests adjusting 1 evidence-attention parameters.",
+                "mission_pressure": {
+                    "core_mission": "evidence-driven self-iteration under governance constraints",
+                    "dominant_failure_mode": "grounding_instability",
+                    "top_self_iteration_domain": "grounding",
+                    "reference_feedback_direction": "weak",
+                    "confidence_feedback_direction": "weak",
+                    "trend_state": "locked",
+                    "effect_direction": "mixed",
+                    "summary": "Mission pressure remains centered on grounding repair.",
+                },
+                "attention_policy_delta": {
+                    "available": True,
+                    "recommended_changes": [
+                        {
+                            "target": "evidence_attention_policy.conflict_weight",
+                            "direction": "increase",
+                            "current_value": 0.14,
+                            "suggested_value": 0.19,
+                            "delta": 0.05,
+                            "reason": "reference alignment remains weak, so conflict-sensitive evidence should be weighted more heavily.",
+                        }
+                    ],
+                    "summary": "Recent cognitive feedback suggests adjusting 1 evidence-attention parameters.",
+                },
+                "charter_delta": {
+                    "available": True,
+                    "recommended_changes": [
+                        {
+                            "target": "prompt_output_requirements",
+                            "direction": "strengthen",
+                            "priority": "high",
+                            "reason": "reference alignment remains weak, so proposals should bind evidence and agenda nodes more explicitly.",
+                            "suggested_additions": [
+                                "提案必须明确列出关键 evidence / agenda 绑定关系，避免引用漂移。"
+                            ],
+                        }
+                    ],
+                    "summary": "Recent cognition suggests clarifying charter focus, output requirements, or self-iteration guardrails.",
+                },
+                "evidence_basis": {
+                    "reference_alignment_score": 0.34,
+                    "cognitive_alignment_score": 0.41,
+                    "quality_score": 0.33,
+                    "trend_state": "locked",
+                    "effect_direction": "mixed",
+                    "dominant_failure_mode": "grounding_instability",
+                },
+                "summary": "Cognitive evolution draft proposes 1 attention-policy adjustments and 1 charter-level adjustments.",
             },
-            "charter_delta": {
-                "available": True,
-                "recommended_changes": [
-                    {
-                        "target": "prompt_output_requirements",
-                        "direction": "strengthen",
-                        "priority": "high",
-                        "reason": "reference alignment remains weak, so proposals should bind evidence and agenda nodes more explicitly.",
-                        "suggested_additions": [
-                            "提案必须明确列出关键 evidence / agenda 绑定关系，避免引用漂移。"
-                        ],
-                    }
-                ],
-                "summary": "Recent cognition suggests clarifying charter focus, output requirements, or self-iteration guardrails.",
-            },
-            "evidence_basis": {
-                "reference_alignment_score": 0.34,
-                "cognitive_alignment_score": 0.41,
-                "quality_score": 0.33,
-                "trend_state": "locked",
-                "effect_direction": "mixed",
-                "dominant_failure_mode": "grounding_instability",
-            },
-            "summary": "Cognitive evolution draft proposes 1 attention-policy adjustments and 1 charter-level adjustments.",
         },
-    }
+    )
 
     async def fake_idle_window(_request=None):
         return {
@@ -8506,40 +8946,43 @@ async def test_runtime_cognition_exposes_posture_reasoning_memory(tmp_path):
         }
     ]
     supervisor._persist_endogenous_drive_history(history)
-    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = {
-        "status": "completed",
-        "model_role": "governance_reasoner",
-        "proposal_count": 1,
-        "task_type_priors": {
-            "top_priority_task_type": "review",
-            "top_priority_score": 0.68,
-            "priors": [
-                {"task_type": "review", "score": 0.68, "reasons": ["truthfulness pressure is elevated"]},
-            ],
+    _seed_current_lm_reasoning_state(
+        supervisor,
+        {
+            "status": "completed",
+            "model_role": "governance_reasoner",
+            "proposal_count": 1,
+            "task_type_priors": {
+                "top_priority_task_type": "review",
+                "top_priority_score": 0.68,
+                "priors": [
+                    {"task_type": "review", "score": 0.68, "reasons": ["truthfulness pressure is elevated"]},
+                ],
+            },
+            "proposal_drift_memory": {
+                "available": True,
+                "average_score": 0.36,
+                "drift_state": "drifting",
+                "quality_counts": {"strong": 0, "partial": 0, "weak": 1},
+                "common_posture_alignment": [
+                    "claims improvement is acceptable under observe_first",
+                ],
+                "common_priority_basis": [
+                    "push execution despite unresolved evidence gaps",
+                ],
+                "posture_alignment_health": "inconsistent",
+                "priority_basis_health": "inconsistent",
+                "summary": "Recent proposal alignment is drifting.",
+            },
+            "recent_reference_alignment": {
+                "available": True,
+                "average_alignment_score": 0.52,
+                "weak_or_partial_count": 1,
+                "summary": "Reference alignment is not yet stable.",
+            },
+            "summary": "LM cognition status=completed.",
         },
-        "proposal_drift_memory": {
-            "available": True,
-            "average_score": 0.36,
-            "drift_state": "drifting",
-            "quality_counts": {"strong": 0, "partial": 0, "weak": 1},
-            "common_posture_alignment": [
-                "claims improvement is acceptable under observe_first",
-            ],
-            "common_priority_basis": [
-                "push execution despite unresolved evidence gaps",
-            ],
-            "posture_alignment_health": "inconsistent",
-            "priority_basis_health": "inconsistent",
-            "summary": "Recent proposal alignment is drifting.",
-        },
-        "recent_reference_alignment": {
-            "available": True,
-            "average_alignment_score": 0.52,
-            "weak_or_partial_count": 1,
-            "summary": "Reference alignment is not yet stable.",
-        },
-        "summary": "LM cognition status=completed.",
-    }
+    )
 
     async def fake_idle_window(_request=None):
         return {
@@ -9041,7 +9484,7 @@ async def test_run_endogenous_drive_cycle_exposes_stay_switch_trend_memory(tmp_p
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
-    trend_memory = result["cognition_state"]["proposal_cognition"]["self_iteration_trend_memory"]
+    trend_memory = result["cognition_state"]["proposal_cognition"]["auxiliary_memory"]["self_iteration_trend_memory"]
     assert trend_memory["available"] is True
     assert "stay" in trend_memory["common_stay_or_switch"]
     assert "switch" in trend_memory["common_stay_or_switch"]
@@ -9099,6 +9542,7 @@ async def test_run_endogenous_drive_cycle_exposes_cognitive_assessment_memory(tm
         result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     proposal_cognition = result["cognition_state"]["proposal_cognition"]
+    assert "cognitive_assessment_memory" not in proposal_cognition
     assert proposal_cognition["assessment_trace"]["available"] is True
     assert proposal_cognition["assessment_trace"]["dominant_constraint"] == (
         "weak self structure grounding"
@@ -9130,7 +9574,10 @@ async def test_run_endogenous_drive_cycle_falls_back_to_history_reference_alignm
         }
     ]
     supervisor._persist_endogenous_drive_history(history)
-    supervisor._endogenous_drive_engine._latest_lm_task_generation_context = {}
+    _seed_current_lm_reasoning_state(
+        supervisor,
+        {},
+    )
 
     async def fake_idle_window(_request=None):
         return {
@@ -9231,7 +9678,7 @@ async def test_run_endogenous_drive_cycle_exposes_self_iteration_trend_memory(tm
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
-    trend_memory = result["cognition_state"]["proposal_cognition"]["self_iteration_trend_memory"]
+    trend_memory = result["cognition_state"]["proposal_cognition"]["auxiliary_memory"]["self_iteration_trend_memory"]
     assert trend_memory["available"] is True
     assert trend_memory["dominant_target"] == "grounding"
     assert trend_memory["trend_state"] == "locked"
@@ -9295,7 +9742,7 @@ async def test_run_endogenous_drive_cycle_exposes_switch_self_regulation_memory(
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
-    switch_memory = result["cognition_state"]["proposal_cognition"]["switch_self_regulation_memory"]
+    switch_memory = result["cognition_state"]["proposal_cognition"]["auxiliary_memory"]["switch_self_regulation_memory"]
     assert switch_memory["available"] is True
     assert switch_memory["preferred_switch_bias"] == "switch"
     assert switch_memory["average_switch_quality"] == 0.82
@@ -9361,7 +9808,7 @@ async def test_run_endogenous_drive_cycle_exposes_post_task_effect_memory(tmp_pa
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
-    effect_memory = result["cognition_state"]["proposal_cognition"]["post_task_effect_memory"]
+    effect_memory = result["cognition_state"]["proposal_cognition"]["auxiliary_memory"]["post_task_effect_memory"]
     assert effect_memory["available"] is True
     assert effect_memory["effect_direction"] == "mixed"
     assert effect_memory["average_quality_score"] == 0.55
@@ -9595,7 +10042,11 @@ def test_meta_cognition_profile_does_not_let_task_prior_override_review_judgemen
     assert profile["current_judgement"] == "review should dominate until grounding is repaired"
     assert profile["top_self_iteration_domain"] == "grounding"
     assert profile["governance_posture"] == "review"
-    assert "compatible_projection_bias:learning" not in list(profile["priority_signals"] or [])
+    assert "compatible_projection_bias" not in profile
+    assert not any(
+        str(item).startswith("compatible_projection_bias:")
+        for item in list(profile["priority_signals"] or [])
+    )
 
 
 @pytest.mark.unit
@@ -9704,7 +10155,6 @@ def test_detect_needs_sorts_primary_need_by_strength_instead_of_append_order():
         perception=DrivePerceptionSnapshot(
             user_mode="idle_window",
             governor_mode_active=False,
-            in_execution_window=True,
             system_posture="stable",
             active_sessions=0,
             recent_errors=4,
@@ -9719,7 +10169,7 @@ def test_detect_needs_sorts_primary_need_by_strength_instead_of_append_order():
             queued_body_improvement_count=0,
             stale_queue_count=0,
             pending_review_count=0,
-            checks={"has_memory_idle": True},
+            checks={"has_memory_idle": True, "in_execution_window": True},
             idle_seconds={"user": 1200, "agent": 1200, "memory": 1200},
         ),
         world_model=DriveWorldModel(
@@ -9779,7 +10229,6 @@ def test_detect_needs_prefers_observe_before_learning_when_historical_underdeliv
         perception=DrivePerceptionSnapshot(
             user_mode="idle_window",
             governor_mode_active=False,
-            in_execution_window=True,
             system_posture="stable",
             active_sessions=0,
             recent_errors=1,
@@ -9794,7 +10243,7 @@ def test_detect_needs_prefers_observe_before_learning_when_historical_underdeliv
             queued_body_improvement_count=0,
             stale_queue_count=0,
             pending_review_count=0,
-            checks={"has_memory_idle": True},
+            checks={"has_memory_idle": True, "in_execution_window": True},
             idle_seconds={"user": 900, "agent": 900, "memory": 900},
         ),
         world_model=DriveWorldModel(
@@ -9853,7 +10302,6 @@ def test_detect_needs_does_not_let_memory_continuity_override_observation_under_
         perception=DrivePerceptionSnapshot(
             user_mode="idle_window",
             governor_mode_active=False,
-            in_execution_window=True,
             system_posture="stable",
             active_sessions=0,
             recent_errors=1,
@@ -9868,7 +10316,7 @@ def test_detect_needs_does_not_let_memory_continuity_override_observation_under_
             queued_body_improvement_count=0,
             stale_queue_count=0,
             pending_review_count=0,
-            checks={"has_memory_idle": True},
+            checks={"has_memory_idle": True, "in_execution_window": True},
             idle_seconds={"user": 900, "agent": 900, "memory": 900},
         ),
         world_model=DriveWorldModel(
@@ -9927,7 +10375,6 @@ def test_detect_needs_keeps_memory_continuity_primary_before_observation_gate_tr
         perception=DrivePerceptionSnapshot(
             user_mode="idle_window",
             governor_mode_active=False,
-            in_execution_window=True,
             system_posture="stable",
             active_sessions=0,
             recent_errors=1,
@@ -9942,7 +10389,7 @@ def test_detect_needs_keeps_memory_continuity_primary_before_observation_gate_tr
             queued_body_improvement_count=0,
             stale_queue_count=0,
             pending_review_count=0,
-            checks={"has_memory_idle": True},
+            checks={"has_memory_idle": True, "in_execution_window": True},
             idle_seconds={"user": 900, "agent": 900, "memory": 900},
         ),
         world_model=DriveWorldModel(
@@ -10001,7 +10448,6 @@ def test_detect_needs_enters_observation_when_historical_underdelivery_and_obser
         perception=DrivePerceptionSnapshot(
             user_mode="idle_window",
             governor_mode_active=False,
-            in_execution_window=True,
             system_posture="stable",
             active_sessions=0,
             recent_errors=1,
@@ -10016,7 +10462,7 @@ def test_detect_needs_enters_observation_when_historical_underdelivery_and_obser
             queued_body_improvement_count=0,
             stale_queue_count=0,
             pending_review_count=0,
-            checks={"has_memory_idle": True},
+            checks={"has_memory_idle": True, "in_execution_window": True},
             idle_seconds={"user": 900, "agent": 900, "memory": 900},
         ),
         world_model=DriveWorldModel(
@@ -10077,7 +10523,6 @@ def test_detect_needs_keeps_historical_underdelivery_boundary_deterministic_for_
             perception=DrivePerceptionSnapshot(
                 user_mode="idle_window",
                 governor_mode_active=False,
-                in_execution_window=True,
                 system_posture="stable",
                 active_sessions=0,
                 recent_errors=1,
@@ -10092,7 +10537,7 @@ def test_detect_needs_keeps_historical_underdelivery_boundary_deterministic_for_
                 queued_body_improvement_count=0,
                 stale_queue_count=0,
                 pending_review_count=0,
-                checks={"has_memory_idle": True},
+                checks={"has_memory_idle": True, "in_execution_window": True},
                 idle_seconds={"user": 900, "agent": 900, "memory": 900},
             ),
             world_model=DriveWorldModel(
@@ -10157,7 +10602,6 @@ def test_detect_needs_crosses_from_memory_to_observation_monotonically_near_hist
             perception=DrivePerceptionSnapshot(
                 user_mode="idle_window",
                 governor_mode_active=False,
-                in_execution_window=True,
                 system_posture="stable",
                 active_sessions=0,
                 recent_errors=1,
@@ -10172,7 +10616,7 @@ def test_detect_needs_crosses_from_memory_to_observation_monotonically_near_hist
                 queued_body_improvement_count=0,
                 stale_queue_count=0,
                 pending_review_count=0,
-                checks={"has_memory_idle": True},
+                checks={"has_memory_idle": True, "in_execution_window": True},
                 idle_seconds={"user": 900, "agent": 900, "memory": 900},
             ),
             world_model=DriveWorldModel(
@@ -11885,6 +12329,179 @@ async def test_recent_relapse_retightens_candidate_budget_in_longer_mixed_histor
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_recent_completed_sequence_releases_observation_after_long_dirty_status_history(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Recovered self-learning 5",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.84,
+            "recorded_at": "2026-06-28T12:00:00+00:00",
+        },
+        {
+            "title": "Recovered self-learning 4",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.80,
+            "recorded_at": "2026-06-28T11:00:00+00:00",
+        },
+        {
+            "title": "Recovered self-learning 3",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.78,
+            "recorded_at": "2026-06-28T10:00:00+00:00",
+        },
+        {
+            "title": "Recovered self-learning 2",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.76,
+            "recorded_at": "2026-06-28T09:00:00+00:00",
+        },
+        {
+            "title": "Recovered self-learning 1",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.74,
+            "recorded_at": "2026-06-28T08:00:00+00:00",
+        },
+        {
+            "title": "Paused self-learning old",
+            "event_type": "decision",
+            "status": "paused",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.24,
+            "recorded_at": "2026-06-28T07:00:00+00:00",
+        },
+        {
+            "title": "Retry self-learning old",
+            "event_type": "decision",
+            "status": "retry",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.22,
+            "recorded_at": "2026-06-28T06:00:00+00:00",
+        },
+        {
+            "title": "Awaiting review self-learning old",
+            "event_type": "decision",
+            "status": "awaiting_review",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.28,
+            "recorded_at": "2026-06-28T05:00:00+00:00",
+        },
+        {
+            "title": "Deferred self-learning old",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.26,
+            "recorded_at": "2026-06-28T04:00:00+00:00",
+        },
+        {
+            "title": "Failed self-learning old",
+            "event_type": "decision",
+            "status": "failed",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.20,
+            "recorded_at": "2026-06-28T03:00:00+00:00",
+        },
+        {
+            "title": "Completed queue hygiene",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "general_self_evolution",
+            "governance_task_type": "self_evolution",
+            "quality_score": 0.70,
+            "recorded_at": "2026-06-28T02:00:00+00:00",
+        },
+        {
+            "title": "Deferred queue hygiene",
+            "event_type": "decision",
+            "status": "deferred",
+            "task_family": "general_self_evolution",
+            "governance_task_type": "self_evolution",
+            "quality_score": 0.30,
+            "recorded_at": "2026-06-28T01:00:00+00:00",
+        },
+    ]
+    history["strategy_memory"] = {
+        "focus_stats": {
+            "observation": {"judged": 8, "completed": 2, "failed": 1, "dragging": 5},
+            "learning_expansion": {"judged": 7, "completed": 5, "failed": 1, "dragging": 1},
+        },
+        "contextual_focus_stats": {
+            "idle_window|stable|none": {
+                "learning_expansion": {"judged": 5, "completed": 4, "failed": 0, "dragging": 1},
+            }
+        },
+    }
+    supervisor._persist_endogenous_drive_history(history)
+
+    async def fake_idle_window(_request=None):
+        return {
+            "checks": {
+                "has_user_idle": True,
+                "has_agent_idle": True,
+                "has_memory_idle": True,
+                "in_execution_window": True,
+            },
+            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "completed_learning_tasks": [
+                {
+                    "title": "Recent recovered learning",
+                    "quality_score": 0.78,
+                    "completed_at": "2026-06-28T12:00:00+00:00",
+                }
+            ],
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
+            },
+        }
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    assert result["deliberation"]["reflection"]["dominant_constraint"] != "historical_underdelivery"
+    assert result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] != "observe_before_acting"
+    assert result["deliberation"]["adaptive_policy"]["preferred_focus"] != "observation"
+    assert result["deliberation"]["adaptive_policy"]["candidate_budget"] >= 2
+    assert result["deliberation"]["reflection"]["source_evidence"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_memory_success_does_not_reopen_candidate_budget_while_self_learning_underdelivery_persists(
     tmp_path,
 ):
@@ -13209,6 +13826,177 @@ def test_observation_mode_keeps_monotonic_switch_when_queue_review_becomes_sligh
     assert [candidate.stable_key for candidate in selected] == ["continuity:queue_hygiene_review"]
 
 
+@pytest.mark.unit
+def test_runtime_observation_gate_does_not_reopen_memory_maintenance_fallback(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    kept, deferred = supervisor._gate_endogenous_candidates_by_posture(
+        candidate_items=[
+            {
+                "title": "Maintain memory",
+                "stable_key": "memory:maintenance",
+                "metadata": {"score_breakdown": {"candidate_kind": "memory_maintenance"}},
+            },
+            {
+                "title": "Review truthfulness",
+                "stable_key": "truthfulness:review_correction_signals",
+                "metadata": {"score_breakdown": {"candidate_kind": "truthfulness_review"}},
+            },
+        ],
+        drive_posture={
+            "payload": {
+                "preferred_focus": "observation",
+                "candidate_budget": 2,
+            }
+        },
+    )
+
+    kept_kinds = [
+        dict(dict(item.get("metadata") or {}).get("score_breakdown") or {}).get(
+            "candidate_kind"
+        )
+        for item in kept
+    ]
+    deferred_kinds = [item.get("candidate_kind") for item in deferred]
+
+    assert kept_kinds == ["truthfulness_review"]
+    assert deferred_kinds == ["memory_maintenance"]
+
+
+@pytest.mark.unit
+def test_recent_completed_static_governance_candidates_are_not_recreated_immediately():
+    engine = EndogenousDriveEngine()
+    now = datetime.now(timezone.utc)
+    idle = {
+        "checks": {"in_execution_window": True, "has_user_idle": True},
+        "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+        "activity": {
+            "active_sessions": 0,
+            "counts": {},
+        },
+        "queued_tasks": [
+            {
+                "title": "Recent memory sweep",
+                "status": "completed",
+                "governance_task_type": "memory_maintenance",
+                "task_family": "memory_maintenance",
+                "execution_kind": "memory_maintenance",
+                "updated_at": (now - timedelta(hours=1)).isoformat(),
+                "metadata": {
+                    "endogenous_drive_key": "continuity:memory_maintenance_sweep",
+                },
+            },
+            {
+                "title": "Recent queue hygiene review",
+                "status": "completed",
+                "governance_task_type": "self_evolution",
+                "task_family": "general_self_evolution",
+                "execution_kind": "general_self_evolution",
+                "updated_at": (now - timedelta(hours=1)).isoformat(),
+                "metadata": {
+                    "endogenous_drive_key": "continuity:queue_hygiene_review",
+                },
+            },
+            {
+                "title": "Pending review debt",
+                "status": "deferred",
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+                "execution_kind": None,
+                "updated_at": now.isoformat(),
+                "metadata": {"endogenous_drive_key": "truthfulness:review_correction_signals"},
+            },
+        ],
+        "task_family_decisions": {
+            "memory_maintenance": {"eligible_for_planning": True},
+            "self_learning": {"eligible_for_planning": False},
+            "general_self_evolution": {"eligible_for_planning": True},
+        },
+        "governance_task_type_decisions": {
+            "memory_maintenance": {"eligible_for_planning": True},
+            "self_learning": {"eligible_for_planning": False},
+            "self_evolution": {"eligible_for_planning": True},
+        },
+    }
+
+    candidates = engine.generate_candidates(
+        idle_window=idle,
+        existing_drive_keys=set(),
+        max_candidates=5,
+    )
+    candidate_keys = {candidate.stable_key for candidate in candidates}
+
+    assert "continuity:memory_maintenance_sweep" not in candidate_keys
+    assert "continuity:queue_hygiene_review" not in candidate_keys
+
+
+@pytest.mark.unit
+def test_static_governance_candidates_reopen_after_completion_cooldown():
+    engine = EndogenousDriveEngine()
+    now = datetime.now(timezone.utc)
+    idle = {
+        "checks": {"in_execution_window": True, "has_user_idle": True},
+        "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+        "activity": {
+            "active_sessions": 0,
+            "counts": {},
+        },
+        "queued_tasks": [
+            {
+                "title": "Old memory sweep",
+                "status": "completed",
+                "governance_task_type": "memory_maintenance",
+                "task_family": "memory_maintenance",
+                "execution_kind": "memory_maintenance",
+                "updated_at": (now - timedelta(hours=18)).isoformat(),
+                "metadata": {
+                    "endogenous_drive_key": "continuity:memory_maintenance_sweep",
+                },
+            },
+            {
+                "title": "Old queue hygiene review",
+                "status": "completed",
+                "governance_task_type": "self_evolution",
+                "task_family": "general_self_evolution",
+                "execution_kind": "general_self_evolution",
+                "updated_at": (now - timedelta(hours=18)).isoformat(),
+                "metadata": {
+                    "endogenous_drive_key": "continuity:queue_hygiene_review",
+                },
+            },
+            {
+                "title": "Pending review debt",
+                "status": "deferred",
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+                "execution_kind": None,
+                "updated_at": now.isoformat(),
+                "metadata": {"endogenous_drive_key": "truthfulness:review_correction_signals"},
+            },
+        ],
+        "task_family_decisions": {
+            "memory_maintenance": {"eligible_for_planning": True},
+            "self_learning": {"eligible_for_planning": False},
+            "general_self_evolution": {"eligible_for_planning": True},
+        },
+        "governance_task_type_decisions": {
+            "memory_maintenance": {"eligible_for_planning": True},
+            "self_learning": {"eligible_for_planning": False},
+            "self_evolution": {"eligible_for_planning": True},
+        },
+    }
+
+    candidates = engine.generate_candidates(
+        idle_window=idle,
+        existing_drive_keys=set(),
+        max_candidates=5,
+    )
+    candidate_keys = {candidate.stable_key for candidate in candidates}
+
+    assert "continuity:memory_maintenance_sweep" in candidate_keys
+    assert "continuity:queue_hygiene_review" in candidate_keys
+
+
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_proposal_drift_memory_biases_program_task_type_priors_toward_observation_and_review(tmp_path):
@@ -13397,6 +14185,7 @@ async def test_endogenous_drive_schedule_allocator_skips_occupied_slots(tmp_path
                 "title": "Generated candidate A",
                 "metadata": {"endogenous_drive_key": "candidate-a"},
             },
+            "not-a-candidate",
             {
                 "title": "Generated candidate B",
                 "metadata": {"endogenous_drive_key": "candidate-b"},

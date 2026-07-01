@@ -3412,9 +3412,12 @@ function renderProvenanceDrawer(state) {
     candHtml += '<div class="drawer-sub" style="margin:0;">当前无待治理候选。弱证据下空候选是正确行为。</div>';
   } else {
     candHtml += cands.slice(0, 6).map(c => {
-      const tags = Array.isArray(c.value_tags) ? c.value_tags.map(esc).join(' · ') : '';
+      const meta = c && c.metadata ? c.metadata : {};
+      const rawTags = Array.isArray(meta.core_values) ? meta.core_values : (Array.isArray(c.value_tags) ? c.value_tags : []);
+      const rationale = c.rationale || meta.rationale || '';
+      const tags = rawTags.map(esc).join(' · ');
       return '<div class="lane-active" style="margin-top:6px;"><div class="la-title">' + esc(String(c.title || '未命名').substring(0, 52)) + '</div>' +
-        (c.rationale ? '<div style="margin-top:3px;">理由: ' + esc(String(c.rationale).substring(0, 120)) + '</div>' : '') +
+        (rationale ? '<div style="margin-top:3px;">理由: ' + esc(String(rationale).substring(0, 120)) + '</div>' : '') +
         (tags ? '<div style="margin-top:3px;color:var(--text-muted);">价值标签: ' + tags + '</div>' : '') + '</div>';
     }).join('');
   }
@@ -3577,8 +3580,10 @@ function buildGameCard(task, isCandidate) {
     typeTag.textContent = typeLabel(task);
     tags.append(typeTag);
   }
-  if (isCandidate && Array.isArray(task.value_tags)) {
-    task.value_tags.forEach(vt => {
+  const taskMeta = task && task.metadata ? task.metadata : {};
+  const candidateTags = Array.isArray(taskMeta.core_values) ? taskMeta.core_values : (Array.isArray(task.value_tags) ? task.value_tags : []);
+  if (isCandidate && candidateTags.length) {
+    candidateTags.forEach(vt => {
       const vtTag = document.createElement('span');
       vtTag.className = 'game-card-tag ' + tagClass(vt);
       vtTag.textContent = vt;
@@ -4314,7 +4319,7 @@ class SupervisorUIMixin:
         ):
             try:
                 evaluation = await self.evaluate_endogenous_drive(
-                    {"record_activity": False}
+                    {"record_activity": False, "persist_evaluation": False}
                 )
                 fallback_candidates = evaluation.get("candidates") if isinstance(evaluation, dict) else None
                 if isinstance(fallback_candidates, list):
@@ -4988,8 +4993,9 @@ class SupervisorUIMixin:
         # 3. Endogenous drive active
         if drive_candidates:
             first = drive_candidates[0]
-            value_tags = ", ".join(first.get("value_tags") or [])
-            utility_pct = int((first.get("utility") or 0) * 100)
+            metadata = dict(first.get("metadata") or {})
+            value_tags = ", ".join(metadata.get("core_values") or first.get("value_tags") or [])
+            utility_pct = int((metadata.get("utility") or first.get("utility") or 0) * 100)
             return (
                 "drive",
                 f"发现值得优先处理的事{error_note}",

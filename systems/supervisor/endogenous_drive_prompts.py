@@ -129,6 +129,12 @@ def build_endogenous_task_generation_payload(
     decision_core = dict(prompt_packet.get("decision_core") or {})
     supporting_detail = dict(prompt_packet.get("supporting_detail") or {})
     long_tail_context = dict(prompt_packet.get("long_tail_context") or {})
+    graph_brief = {
+        "evidence_graph": dict(prompt_packet.get("evidence_graph") or {}),
+        "agenda_graph": dict(prompt_packet.get("agenda_graph") or {}),
+    }
+    memory_brief = _build_prompt_memory_brief(prompt_packet)
+    evidence_brief = _build_prompt_evidence_brief(prompt_packet)
     reasoning_focus_block = _render_principles_block(
         charter.get("task_generation_focus"),
         fallback=(
@@ -143,6 +149,17 @@ def build_endogenous_task_generation_payload(
             "- 证据不足时允许返回空 proposals。"
         ),
     )
+    brief_sections = ""
+    for title, value, limit in (
+        ("graph_brief", graph_brief, 3200),
+        ("memory_brief", memory_brief, 2600),
+        ("evidence_brief", evidence_brief, 2600),
+    ):
+        if _has_prompt_brief_content(value):
+            brief_sections += (
+                f"【{title}】\n"
+                f"{json.dumps(value, ensure_ascii=False, default=str)[:limit]}\n\n"
+            )
     compact_packet_text = json.dumps(prompt_packet, ensure_ascii=False, default=str)
     return (
         "基于以下证据包，生成结构化任务提案。\n\n"
@@ -184,6 +201,7 @@ def build_endogenous_task_generation_payload(
         f"{json.dumps(supporting_detail, ensure_ascii=False, default=str)[:2200]}\n\n"
         "【long_tail_context】\n"
         f"{json.dumps(long_tail_context, ensure_ascii=False, default=str)[:1600]}\n\n"
+        f"{brief_sections}"
         "【本轮输出附加要求】\n"
         f"{output_requirements_block}\n\n"
         "在生成 proposals 之前，你必须先给出一层 `cognitive_assessment`，"
@@ -278,7 +296,6 @@ def _render_cognitive_briefing(packet: Dict[str, Any]) -> str:
     compatible_projection_bias = str(
         decision_core.get("compatible_projection_bias")
         or task_type_priors.get("top_priority_task_type")
-        or meta_cognition_profile.get("compatible_projection_bias")
         or "unknown"
     ).strip()
     governance_posture = str(
@@ -415,6 +432,52 @@ def _render_cognitive_briefing(packet: Dict[str, Any]) -> str:
         )
         lines.insert(7, projection_line)
     return "\n".join(lines)
+
+
+def _build_prompt_memory_brief(packet: Dict[str, Any]) -> Dict[str, Any]:
+    brief: Dict[str, Any] = {}
+    for key in (
+        "recent_reference_alignment",
+        "proposal_drift_memory",
+        "self_iteration_trend_memory",
+        "switch_self_regulation_memory",
+        "post_task_effect_memory",
+        "cognitive_assessment_memory",
+        "task_type_priors",
+        "evidence_credibility_summary",
+    ):
+        value = packet.get(key)
+        if value:
+            brief[key] = value
+    return brief
+
+
+def _build_prompt_evidence_brief(packet: Dict[str, Any]) -> Dict[str, Any]:
+    brief: Dict[str, Any] = {}
+    for key in (
+        "recent_learning_evidence",
+        "external_research_evidence",
+        "shell_body_profile",
+        "research_digest",
+    ):
+        value = packet.get(key)
+        if value:
+            brief[key] = value
+    return brief
+
+
+def _has_prompt_brief_content(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(_has_prompt_brief_content(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_prompt_brief_content(item) for item in value)
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, bool):
+        return value
+    return True
 
 
 def _prompt_facing_evidence_packet(
@@ -621,9 +684,6 @@ def _prompt_facing_evidence_packet(
                 meta_cognition_profile.get("governance_posture")
                 or meta_cognition_profile.get("recommended_task_posture")
                 or ""
-            ).strip(),
-            "compatible_projection_bias": str(
-                meta_cognition_profile.get("compatible_projection_bias") or ""
             ).strip(),
             "priority_signals": [
                 str(item).strip()
@@ -909,17 +969,24 @@ def _prompt_facing_evidence_packet(
                     or meta_cognition_profile.get("recommended_task_posture")
                     or ""
                 ).strip()[:80],
-                "compatible_projection_bias": str(
-                    meta_cognition_profile.get("compatible_projection_bias") or ""
-                ).strip()[:60],
                 "priority_signals": list(meta_cognition_profile.get("priority_signals") or [])[:3],
                 "summary": str(meta_cognition_profile.get("summary") or "").strip()[:180],
             }
         grounding_focus = dict(packet.get("grounding_focus") or {})
         if grounding_focus:
             packet["grounding_focus"] = {
+                "primary_evidence_nodes": list(
+                    grounding_focus.get("primary_evidence_nodes") or []
+                )[:3],
+                "primary_agenda_nodes": list(
+                    grounding_focus.get("primary_agenda_nodes") or []
+                )[:3],
                 "recommended_directions": list(
                     grounding_focus.get("recommended_directions") or []
+                )[:3],
+                "grounding_gaps": list(grounding_focus.get("grounding_gaps") or [])[:4],
+                "weak_or_missing_channels": list(
+                    grounding_focus.get("weak_or_missing_channels") or []
                 )[:3],
                 "summary": str(grounding_focus.get("summary") or "").strip()[:180],
                 "guidance": str(grounding_focus.get("guidance") or "").strip()[:160],
@@ -927,7 +994,24 @@ def _prompt_facing_evidence_packet(
         self_iteration_hypotheses = dict(packet.get("self_iteration_hypotheses") or {})
         if self_iteration_hypotheses:
             packet["self_iteration_hypotheses"] = {
-                "target_readiness": self_iteration_hypotheses.get("target_readiness"),
+                "top_target_domain": str(
+                    self_iteration_hypotheses.get("top_target_domain") or ""
+                ).strip()[:80],
+                "dominant_hypothesis": str(
+                    self_iteration_hypotheses.get("dominant_hypothesis") or ""
+                ).strip()[:180],
+                "hypotheses": [
+                    {
+                        "target_domain": str(item.get("target_domain") or "").strip()[:80],
+                        "hypothesis": str(item.get("hypothesis") or "").strip()[:180],
+                        "suggested_task_types": list(
+                            item.get("suggested_task_types") or []
+                        )[:3],
+                    }
+                    for item in list(self_iteration_hypotheses.get("hypotheses") or [])[:2]
+                    if isinstance(item, dict)
+                    and str(item.get("hypothesis") or "").strip()
+                ],
                 "summary": str(self_iteration_hypotheses.get("summary") or "").strip()[:180],
                 "guidance": str(self_iteration_hypotheses.get("guidance") or "").strip()[:160],
             }
@@ -938,11 +1022,128 @@ def _prompt_facing_evidence_packet(
                 "top_priority_score": task_type_priors.get("top_priority_score"),
                 "summary": str(task_type_priors.get("summary") or "").strip()[:160],
             }
-        packet.pop("cognitive_assessment_memory", None)
-        packet.pop("self_iteration_trend_memory", None)
-        packet.pop("switch_self_regulation_memory", None)
-        packet.pop("post_task_effect_memory", None)
-        packet.pop("proposal_drift_memory", None)
+        recent_reference_alignment = dict(packet.get("recent_reference_alignment") or {})
+        if recent_reference_alignment:
+            packet["recent_reference_alignment"] = {
+                "available": bool(recent_reference_alignment.get("available")),
+                "average_alignment_score": recent_reference_alignment.get(
+                    "average_alignment_score"
+                ),
+                "weak_or_partial_count": recent_reference_alignment.get(
+                    "weak_or_partial_count"
+                ),
+                "recent_entries": list(
+                    recent_reference_alignment.get("recent_entries") or []
+                )[:2],
+                "summary": str(recent_reference_alignment.get("summary") or "").strip()[:180],
+            }
+        cognitive_assessment_memory = dict(packet.get("cognitive_assessment_memory") or {})
+        if cognitive_assessment_memory:
+            packet["cognitive_assessment_memory"] = {
+                "dominant_constraint": str(
+                    cognitive_assessment_memory.get("dominant_constraint") or ""
+                ).strip()[:140],
+                "common_current_judgements": list(
+                    cognitive_assessment_memory.get("common_current_judgements") or []
+                )[:2],
+                "common_why_not_improvement_now": list(
+                    cognitive_assessment_memory.get("common_why_not_improvement_now") or []
+                )[:2],
+                "common_grounding_gaps": list(
+                    cognitive_assessment_memory.get("common_grounding_gaps") or []
+                )[:3],
+                "summary": str(cognitive_assessment_memory.get("summary") or "").strip()[:180],
+            }
+        self_iteration_trend_memory = dict(packet.get("self_iteration_trend_memory") or {})
+        if self_iteration_trend_memory:
+            packet["self_iteration_trend_memory"] = {
+                "dominant_target": str(
+                    self_iteration_trend_memory.get("dominant_target") or ""
+                ).strip()[:80],
+                "trend_state": str(
+                    self_iteration_trend_memory.get("trend_state") or ""
+                ).strip()[:40],
+                "target_stability": str(
+                    self_iteration_trend_memory.get("target_stability") or ""
+                ).strip()[:40],
+                "common_targets": list(
+                    self_iteration_trend_memory.get("common_targets") or []
+                )[:3],
+                "common_hypotheses": list(
+                    self_iteration_trend_memory.get("common_hypotheses") or []
+                )[:3],
+                "summary": str(self_iteration_trend_memory.get("summary") or "").strip()[:180],
+            }
+        switch_self_regulation_memory = dict(packet.get("switch_self_regulation_memory") or {})
+        if switch_self_regulation_memory:
+            packet["switch_self_regulation_memory"] = {
+                "preferred_switch_bias": str(
+                    switch_self_regulation_memory.get("preferred_switch_bias") or ""
+                ).strip()[:40],
+                "switch_effectiveness": str(
+                    switch_self_regulation_memory.get("switch_effectiveness") or ""
+                ).strip()[:40],
+                "stay_effectiveness": str(
+                    switch_self_regulation_memory.get("stay_effectiveness") or ""
+                ).strip()[:40],
+                "average_switch_quality": switch_self_regulation_memory.get(
+                    "average_switch_quality"
+                ),
+                "average_stay_quality": switch_self_regulation_memory.get(
+                    "average_stay_quality"
+                ),
+                "summary": str(switch_self_regulation_memory.get("summary") or "").strip()[:180],
+            }
+        post_task_effect_memory = dict(packet.get("post_task_effect_memory") or {})
+        if post_task_effect_memory:
+            packet["post_task_effect_memory"] = {
+                "effect_direction": str(
+                    post_task_effect_memory.get("effect_direction") or ""
+                ).strip()[:40],
+                "average_quality_score": post_task_effect_memory.get("average_quality_score"),
+                "average_cognitive_alignment_score": post_task_effect_memory.get(
+                    "average_cognitive_alignment_score"
+                ),
+                "average_reference_alignment_score": post_task_effect_memory.get(
+                    "average_reference_alignment_score"
+                ),
+                "dominant_target_effect": str(
+                    post_task_effect_memory.get("dominant_target_effect") or ""
+                ).strip()[:120],
+                "summary": str(post_task_effect_memory.get("summary") or "").strip()[:180],
+            }
+        proposal_drift_memory = dict(packet.get("proposal_drift_memory") or {})
+        if proposal_drift_memory:
+            packet["proposal_drift_memory"] = {
+                "available": proposal_drift_memory.get("available"),
+                "average_score": proposal_drift_memory.get("average_score"),
+                "drift_state": proposal_drift_memory.get("drift_state"),
+                "quality_counts": dict(proposal_drift_memory.get("quality_counts") or {}),
+                "common_posture_alignment": list(
+                    proposal_drift_memory.get("common_posture_alignment") or []
+                )[:3],
+                "common_priority_basis": list(
+                    proposal_drift_memory.get("common_priority_basis") or []
+                )[:3],
+                "recent_entries": [
+                    {
+                        "title": str(row.get("title") or "").strip()[:120],
+                        "quality": row.get("quality"),
+                        "score": row.get("score"),
+                        "top_priority_task_type": row.get("top_priority_task_type"),
+                        "reasons": list(row.get("reasons") or [])[:2],
+                    }
+                    for row in list(proposal_drift_memory.get("recent_entries") or [])[:2]
+                    if isinstance(row, dict)
+                ],
+                "posture_alignment_health": proposal_drift_memory.get(
+                    "posture_alignment_health"
+                ),
+                "priority_basis_health": proposal_drift_memory.get(
+                    "priority_basis_health"
+                ),
+                "summary": str(proposal_drift_memory.get("summary") or "").strip()[:180],
+            }
     memory_context = str(packet.get("memory_context") or "")
     if memory_context:
         packet["memory_context"] = memory_context[:600]
@@ -1660,9 +1861,6 @@ def _apply_prompt_trim_stage(packet: Dict[str, Any], *, stage_name: str) -> Dict
                     or meta_cognition_profile.get("recommended_task_posture")
                     or ""
                 )[:80],
-                "compatible_projection_bias": str(
-                    meta_cognition_profile.get("compatible_projection_bias") or ""
-                )[:60],
                 "priority_signals": list(meta_cognition_profile.get("priority_signals") or [])[:4],
                 "summary": str(meta_cognition_profile.get("summary") or "")[:220],
             }

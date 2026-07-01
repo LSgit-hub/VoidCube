@@ -45,6 +45,8 @@ _LM_TASK_TYPES = {"observation", "review", "learning", "maintenance", "improveme
 _LM_RISK_LEVELS = {"low", "medium", "high"}
 _LM_EVIDENCE_LEVELS = {"weak", "moderate", "strong"}
 _LM_EXECUTION_MODES = {"observe_only", "review_then_queue", "guarded_execution"}
+_STATIC_GOVERNANCE_CANDIDATE_COOLDOWN_HOURS = 12
+TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +64,28 @@ class EndogenousTaskCandidate:
     evidence: Dict[str, Any] = field(default_factory=dict)
     constraints: Dict[str, Any] = field(default_factory=dict)
 
+    def rationale(self) -> str:
+        metadata = dict(self.metadata or {})
+        for key in ("rationale", "llm_task_rationale", "llm_rationale"):
+            text = str(metadata.get(key) or "").strip()
+            if text:
+                return text
+        judgement = dict(metadata.get("drive_judgement") or {})
+        for source_key in ("intent", "adaptive_policy", "reflection"):
+            source = dict(judgement.get(source_key) or {})
+            text = str(source.get("rationale") or "").strip()
+            if text:
+                return text
+        for need in list(judgement.get("needs") or []):
+            if not isinstance(need, dict):
+                continue
+            text = str(need.get("rationale") or "").strip()
+            if text:
+                return text
+        return self.summary
+
     def to_queue_item(self) -> Dict[str, Any]:
+        rationale = self.rationale()
         metadata: Dict[str, Any] = {
             "source": "endogenous_drive",
             "endogenous_drive_key": self.stable_key,
@@ -70,13 +93,17 @@ class EndogenousTaskCandidate:
             "utility": self.utility,
             "governance_task_type": self.governance_task_type,
             "task_family": self.task_family,
+            "rationale": rationale,
         }
         metadata.update(dict(self.metadata))
+        if not str(metadata.get("rationale") or "").strip():
+            metadata["rationale"] = rationale
         if self.execution_kind is not None:
             metadata["execution_kind"] = self.execution_kind
         return {
             "title": self.title,
             "summary": self.summary,
+            "rationale": rationale,
             "source": "endogenous_drive",
             "priority": self.priority,
             "governance_task_type": self.governance_task_type,
@@ -322,9 +349,13 @@ class EndogenousDriveEngine:
     def __init__(self, config: Any | None = None) -> None:
         self.config = config
         self._latest_lm_task_generation_context: Dict[str, Any] = {}
+        self._latest_lm_task_generation_proposals: List[Dict[str, Any]] = []
 
     def get_latest_lm_task_generation_context(self) -> Dict[str, Any]:
         return dict(self._latest_lm_task_generation_context or {})
+
+    def get_latest_lm_task_generation_proposals(self) -> List[Dict[str, Any]]:
+        return [dict(item) for item in self._latest_lm_task_generation_proposals]
 
     def resolve_cognitive_posture_state(
         self,
@@ -393,9 +424,18 @@ class EndogenousDriveEngine:
         idle_window: Dict[str, Any],
         existing_drive_keys: Iterable[str],
         max_candidates: int = 3,
+        deliberation_report: DriveDeliberationReport | None = None,
+        lm_proposals_override: Optional[List[Dict[str, Any]]] = None,
+        skip_auxiliary_lm: bool = False,
     ) -> List[EndogenousTaskCandidate]:
         existing_keys = set(existing_drive_keys)
-        candidates = self._candidate_stream(idle_window, existing_keys=existing_keys)
+        candidates = self._candidate_stream(
+            idle_window,
+            existing_keys=existing_keys,
+            deliberation_report=deliberation_report,
+            lm_proposals_override=lm_proposals_override,
+            skip_auxiliary_lm=skip_auxiliary_lm,
+        )
         candidates.sort(key=lambda candidate: candidate.utility, reverse=True)
         return candidates[:max(max_candidates, 0)]
 
@@ -887,7 +927,11 @@ class EndogenousDriveEngine:
         )
 
         scoped_historical_scope = str(historical_pressure["scope"] or "global")
+        scoped_historical_total = int(historical_pressure["total"] or 0)
         scoped_historical_drag_ratio = float(historical_pressure["drag_ratio"] or 0.0)
+        historical_has_temporal_markers = bool(
+            historical_pressure.get("has_temporal_markers")
+        )
         recent_relapse_drag_count = int(historical_pressure["recent_relapse_drag_count"] or 0)
         recent_relapse_drag_ratio = float(historical_pressure["recent_relapse_drag_ratio"] or 0.0)
 
@@ -1061,6 +1105,26 @@ class EndogenousDriveEngine:
             + (focus_effectiveness["body_growth"] - 0.42) * 0.14
             - unresolved_observation_pressure * 0.08
         )
+        historical_observation_pressure = 0.0
+        historical_order_uncertain = (
+            reflection.dominant_constraint == "historical_underdelivery"
+            and not historical_has_temporal_markers
+            and scoped_historical_total >= 7
+            and scoped_historical_drag_ratio >= 0.6
+        )
+        if reflection.dominant_constraint == "historical_underdelivery":
+            historical_observation_pressure = self._clamp01(
+                0.1
+                + max(0.0, scoped_historical_drag_ratio - 0.55) * 0.45
+                + max(0.0, 0.42 - reflection.autonomy_readiness) * 0.4
+                + (
+                    0.06
+                    if recent_relapse_drag_count >= 2
+                    and recent_relapse_drag_ratio >= 0.66
+                    else 0.0
+                )
+                + (0.08 if historical_order_uncertain else 0.0)
+            )
         observation_bias = self._clamp01(
             0.3
             + reflection.queue_blockage_pressure * 0.28
@@ -1084,6 +1148,7 @@ class EndogenousDriveEngine:
             - observation_recovery_signal * 0.18
             + agenda_drag_pressure * 0.12
             + recent_relapse_drag_ratio * 0.08
+            + historical_observation_pressure
         )
         candidate_throttle = self._clamp01(
             0.18
@@ -1113,11 +1178,52 @@ class EndogenousDriveEngine:
         }
         preferred_focus = max(focus_candidates.items(), key=lambda item: item[1])[0]
         if (
+            reflection.dominant_constraint == "none"
+            and 0 < perception.correction_signals < TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD
+            and truthfulness_bias >= memory_continuity_bias - 0.02
+            and observation_bias < 0.68
+            and candidate_throttle < 0.65
+        ):
+            preferred_focus = "truthfulness"
+        if (
+            reflection.dominant_constraint == "historical_underdelivery"
+            and preferred_focus == "truthfulness"
+            and observation_bias >= truthfulness_bias - 0.12
+        ):
+            preferred_focus = "observation"
+        if (
+            reflection.dominant_constraint == "historical_underdelivery"
+            and preferred_focus == "memory_continuity"
+            and not self._has_truthfulness_review_signal(perception)
+            and reflection.autonomy_readiness < 0.4
+            and observation_bias >= 0.56
+            and memory_continuity_bias <= observation_bias + 0.1
+        ):
+            preferred_focus = "observation"
+        if (
+            self._has_memory_queue_recovery_window(
+                perception=perception,
+                reflection=reflection,
+            )
+            and preferred_focus == "observation"
+            and memory_continuity_bias >= max(0.6, truthfulness_bias - 0.02)
+            and observation_bias <= memory_continuity_bias + 0.05
+        ):
+            preferred_focus = "memory_continuity"
+        if (
             reflection.dominant_constraint == "historical_underdelivery"
             and observation_bias >= 0.72
             and preferred_focus == "memory_continuity"
         ):
             preferred_focus = "observation"
+        if (
+            historical_order_uncertain
+            and preferred_focus == "memory_continuity"
+            and observation_bias >= 0.64
+        ):
+            preferred_focus = "observation"
+        if self._has_truthfulness_review_signal(perception):
+            preferred_focus = "truthfulness"
         if (
             scoped_historical_drag_ratio >= 0.66
             and (
@@ -1126,6 +1232,8 @@ class EndogenousDriveEngine:
                 or observation_bias >= 0.58
             )
         ):
+            candidate_budget = 1
+        elif historical_order_uncertain:
             candidate_budget = 1
         elif (
             reflection.dominant_constraint == "historical_underdelivery"
@@ -1195,6 +1303,8 @@ class EndogenousDriveEngine:
                 f"memory_success={memory_success:.2f}",
                 f"historical_drag_scope={scoped_historical_scope}",
                 f"historical_drag_ratio={historical_drag_ratio:.2f}",
+                f"historical_has_temporal_markers={historical_has_temporal_markers}",
+                f"historical_order_uncertain={historical_order_uncertain}",
                 f"scoped_historical_drag_ratio={scoped_historical_drag_ratio:.2f}",
                 f"recent_relapse_drag_count={recent_relapse_drag_count}",
                 f"recent_relapse_drag_ratio={recent_relapse_drag_ratio:.2f}",
@@ -1204,6 +1314,7 @@ class EndogenousDriveEngine:
                 f"observation_recovery_advantage={observation_recovery_advantage:.2f}",
                 f"unresolved_observation_pressure={unresolved_observation_pressure:.2f}",
                 f"observation_recovery_signal={observation_recovery_signal:.2f}",
+                f"historical_observation_pressure={historical_observation_pressure:.2f}",
                 f"agenda_drag_pressure={agenda_drag_pressure:.2f}",
                 f"agenda_resolution_signal={agenda_resolution_signal:.2f}",
                 f"dynamic_candidate_throttle_boost={float(policy.get('dynamic_candidate_throttle_boost') or 0.0):.2f}",
@@ -1230,6 +1341,61 @@ class EndogenousDriveEngine:
         )
         return f"{user_mode}|{system_posture}|{dominant_constraint}"
 
+    def _has_memory_queue_recovery_window(
+        self,
+        *,
+        perception: DrivePerceptionSnapshot,
+        reflection: DriveReflection,
+    ) -> bool:
+        return (
+            reflection.dominant_constraint == "none"
+            and not self._has_truthfulness_review_signal(perception)
+            and perception.pending_review_count > 0
+            and perception.stale_queue_count <= 0
+            and perception.active_queue_count <= 1
+            and reflection.queue_blockage_pressure <= 0.22
+            and reflection.learning_yield_state in {"mixed", "strong"}
+        )
+
+    def _has_truthfulness_review_signal(
+        self,
+        perception: DrivePerceptionSnapshot,
+    ) -> bool:
+        return perception.correction_signals >= TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD
+
+    def _has_queue_hygiene_review_signal(
+        self,
+        perception: DrivePerceptionSnapshot,
+    ) -> bool:
+        return (
+            perception.pending_review_count > 0
+            or perception.stale_queue_count > 0
+            or perception.active_queue_count > 3
+        )
+
+    def _has_historical_queue_hygiene_review_signal(
+        self,
+        drive_context: Dict[str, Any],
+    ) -> bool:
+        drive_history = dict(drive_context.get("drive_history") or {})
+        dragging = 0
+        for item in list(drive_history.get("outcomes") or [])[:12]:
+            if not isinstance(item, dict):
+                continue
+            family = str(
+                item.get("task_family")
+                or item.get("governance_task_type")
+                or ""
+            ).strip().lower()
+            if family not in {"general_self_evolution", "self_evolution"}:
+                continue
+            status = str(item.get("status") or "").strip().lower()
+            if status in {"approved", "deferred", "paused", "awaiting_review", "retry"}:
+                dragging += 1
+            if dragging >= 2:
+                return True
+        return False
+
     def _detect_needs(
         self,
         *,
@@ -1244,10 +1410,15 @@ class EndogenousDriveEngine:
         needs: List[DriveNeed] = []
         truthfulness_review_active = (
             self_learning_plan.get("eligible_for_planning")
-            and perception.correction_signals >= 3
+            and self._has_truthfulness_review_signal(perception)
+        )
+        memory_queue_recovery_window = self._has_memory_queue_recovery_window(
+            perception=perception,
+            reflection=reflection,
         )
         if memory_plan.get("eligible_for_planning"):
             memory_constraint_penalty = 0.0
+            memory_recovery_bonus = 0.0
             if reflection.dominant_constraint == "historical_underdelivery":
                 memory_constraint_penalty += 0.08
             if adaptive_policy.preferred_focus == "observation":
@@ -1258,10 +1429,12 @@ class EndogenousDriveEngine:
                 and perception.pending_review_count <= 0
                 and perception.stale_queue_count <= 0
                 and perception.active_queue_count <= 0
-                and perception.correction_signals < 3
+                and not self._has_truthfulness_review_signal(perception)
                 and reflection.learning_yield_state in {"mixed", "strong"}
             ):
                 memory_constraint_penalty += 0.05
+            if memory_queue_recovery_window:
+                memory_recovery_bonus += 0.12
             needs.append(
                 DriveNeed(
                     need_type="stabilize_memory_continuity",
@@ -1270,22 +1443,26 @@ class EndogenousDriveEngine:
                         + 0.08
                         + adaptive_policy.memory_continuity_bias * 0.22
                         - memory_constraint_penalty
+                        + memory_recovery_bonus
                     ),
                     urgency=self._clamp01(
                         world_model.memory_pressure
                         + 0.1
                         + adaptive_policy.memory_continuity_bias * 0.18
                         - memory_constraint_penalty * 0.82
+                        + memory_recovery_bonus * 0.84
                     ),
                     confidence=self._clamp01(
                         0.68
                         + adaptive_policy.memory_continuity_bias * 0.22
                         - memory_constraint_penalty * 0.32
+                        + memory_recovery_bonus * 0.18
                     ),
                     rationale="Memory continuity work remains a standing supervisory obligation under whole-day execution.",
                     source_evidence=[
                         f"memory_idle={perception.checks.get('has_memory_idle', False)}",
                         f"memory_continuity_bias={adaptive_policy.memory_continuity_bias:.2f}",
+                        f"memory_recovery_bonus={memory_recovery_bonus:.2f}",
                     ],
                 )
             )
@@ -1330,6 +1507,8 @@ class EndogenousDriveEngine:
                 learning_constraint_penalty += 0.08
             if truthfulness_review_active and adaptive_policy.preferred_focus == "truthfulness":
                 learning_constraint_penalty += 0.06
+            if memory_queue_recovery_window:
+                learning_constraint_penalty += 0.14
             needs.append(
                 DriveNeed(
                     need_type="expand_learning_frontier",
@@ -1367,6 +1546,7 @@ class EndogenousDriveEngine:
                         f"queue_blockage_state={reflection.queue_blockage_state}",
                         f"learning_expansion_bias={adaptive_policy.learning_expansion_bias:.2f}",
                         f"candidate_throttle={adaptive_policy.candidate_throttle:.2f}",
+                        f"learning_constraint_penalty={learning_constraint_penalty:.2f}",
                     ],
                 )
             )
@@ -1408,9 +1588,10 @@ class EndogenousDriveEngine:
                 )
             )
         if self_evolution_plan.get("eligible_for_planning"):
+            queue_review_active = self._has_queue_hygiene_review_signal(perception)
             queue_need_score = self._clamp01(
                 0.2
-                + min(perception.active_queue_count, 5) * 0.08
+                + (min(perception.active_queue_count, 5) * 0.08 if queue_review_active else 0.0)
                 + min(perception.stale_queue_count + perception.pending_review_count, 4) * 0.08
                 + reflection.queue_blockage_pressure * 0.18
                 + adaptive_policy.queue_hygiene_bias * 0.16
@@ -1458,6 +1639,20 @@ class EndogenousDriveEngine:
                     observation_constraint_bonus += 0.04
             if adaptive_policy.preferred_focus == "observation":
                 observation_constraint_bonus += 0.06
+            observation_release_penalty = 0.0
+            if (
+                memory_queue_recovery_window
+                and adaptive_policy.memory_continuity_bias
+                >= max(0.58, adaptive_policy.truthfulness_bias - 0.02)
+            ):
+                observation_release_penalty += 0.08
+                if adaptive_policy.preferred_focus == "observation":
+                    observation_release_penalty += 0.04
+                if (
+                    adaptive_policy.observation_bias
+                    <= adaptive_policy.memory_continuity_bias + 0.04
+                ):
+                    observation_release_penalty += 0.04
             needs.append(
                 DriveNeed(
                     need_type="observe_before_acting",
@@ -1467,6 +1662,7 @@ class EndogenousDriveEngine:
                         + max(0.0, 0.5 - reflection.autonomy_readiness) * 0.45
                         + adaptive_policy.observation_bias * 0.18
                         + observation_constraint_bonus
+                        - observation_release_penalty
                     ),
                     urgency=self._clamp01(
                         0.28
@@ -1474,14 +1670,20 @@ class EndogenousDriveEngine:
                         + max(0.0, 0.45 - reflection.autonomy_readiness) * 0.4
                         + adaptive_policy.observation_bias * 0.14
                         + observation_constraint_bonus * 0.85
+                        - observation_release_penalty * 0.82
                     ),
-                    confidence=self._clamp01(0.62 + adaptive_policy.observation_bias * 0.28),
+                    confidence=self._clamp01(
+                        0.62
+                        + adaptive_policy.observation_bias * 0.28
+                        - observation_release_penalty * 0.32
+                    ),
                     rationale="The drive should slow itself down and observe when repeated output is meeting blockage or autonomy readiness is not yet strong enough.",
                     source_evidence=[
                         f"queue_blockage_pressure={reflection.queue_blockage_pressure:.2f}",
                         f"autonomy_readiness={reflection.autonomy_readiness:.2f}",
                         f"dominant_constraint={reflection.dominant_constraint}",
                         f"observation_bias={adaptive_policy.observation_bias:.2f}",
+                        f"observation_release_penalty={observation_release_penalty:.2f}",
                     ],
                 )
             )
@@ -1689,7 +1891,10 @@ class EndogenousDriveEngine:
 
         truthfulness_need = need_lookup.get("repair_truthfulness")
         truthfulness_intent = intent_lookup.get("review_truthfulness_signals")
-        if truthfulness_need is not None and perception.correction_signals >= 3:
+        if (
+            truthfulness_need is not None
+            and self._has_truthfulness_review_signal(perception)
+        ):
             signals.append(
                 DriveSignal(
                     signal_type="observation_signal",
@@ -1796,7 +2001,7 @@ class EndogenousDriveEngine:
             DriveSignal(
                 signal_type="drive_posture_signal",
                 priority=self._clamp01(0.4 + adaptive_policy.candidate_throttle * 0.3),
-                message="The endogenous drive has selected a current governance posture and compatibility budget for this cycle.",
+                message="The endogenous drive has selected a current governance posture and candidate budget for this cycle.",
                 rationale=adaptive_policy.rationale,
                 source_needs=(
                     [observe_need.need_type]
@@ -2122,7 +2327,13 @@ class EndogenousDriveEngine:
         return selected
 
     def _candidate_stream(
-        self, idle_window: Dict[str, Any], *, existing_keys: set[str] = None
+        self,
+        idle_window: Dict[str, Any],
+        *,
+        existing_keys: set[str] = None,
+        deliberation_report: DriveDeliberationReport | None = None,
+        lm_proposals_override: Optional[List[Dict[str, Any]]] = None,
+        skip_auxiliary_lm: bool = False,
     ) -> List[EndogenousTaskCandidate]:
         if existing_keys is None:
             existing_keys = set()
@@ -2148,7 +2359,9 @@ class EndogenousDriveEngine:
             decisions_by_family,
             decisions_by_governance,
         )
-        deliberation = self.build_deliberation_report(idle_window=idle_window)
+        deliberation = deliberation_report or self.build_deliberation_report(
+            idle_window=idle_window
+        )
         perception = deliberation.perception
         world_model = deliberation.world_model
         reflection = deliberation.reflection
@@ -2169,9 +2382,17 @@ class EndogenousDriveEngine:
             memory_plan=memory_plan,
             self_learning_plan=self_learning_plan,
             self_evolution_plan=self_evolution_plan,
+            proposals_override=lm_proposals_override,
         )
         candidates: List[EndogenousTaskCandidate] = []
-        if memory_plan.get("eligible_for_planning") and "continuity:memory_maintenance_sweep" not in existing_keys:
+        if (
+            memory_plan.get("eligible_for_planning")
+            and "continuity:memory_maintenance_sweep" not in existing_keys
+            and not self._has_recent_static_governance_completion(
+                drive_context,
+                stable_key="continuity:memory_maintenance_sweep",
+            )
+        ):
             memory_intent = intents_by_kind.get("memory_maintenance")
             candidates.append(
                 self._build_scored_candidate(
@@ -2228,7 +2449,7 @@ class EndogenousDriveEngine:
         recent_errors = perception.recent_errors
         uncertainty_count = perception.uncertainty_count
         if (
-            perception.correction_signals >= 3
+            self._has_truthfulness_review_signal(perception)
             and self_learning_plan.get("eligible_for_planning")
             and "truthfulness:review_correction_signals" not in existing_keys
         ):
@@ -2241,7 +2462,7 @@ class EndogenousDriveEngine:
                         "Turn recent errors or high-uncertainty answers into a bounded "
                         "self-learning follow-up instead of letting them remain invisible."
                     ),
-                    priority="high" if perception.correction_signals >= 3 else "normal",
+                    priority="high",
                     governance_task_type="self_learning",
                     task_family="self_learning",
                     execution_kind=None,
@@ -2309,12 +2530,14 @@ class EndogenousDriveEngine:
             topic_source = "none"
 
             governor_active = idle_window.get("governor_mode_active", False)
-            llm_topics = self._llm_generate_learning_topics(
-                activity,
-                max_topics=4,
-                governor_mode=governor_active,
-                drive_context=drive_context,
-            )
+            llm_topics = []
+            if not skip_auxiliary_lm:
+                llm_topics = self._llm_generate_learning_topics(
+                    activity,
+                    max_topics=4,
+                    governor_mode=governor_active,
+                    drive_context=drive_context,
+                )
             if llm_topics:
                 topics = llm_topics
                 topic_source = "llm"
@@ -2557,10 +2780,13 @@ class EndogenousDriveEngine:
         if (
             self_evolution_plan.get("eligible_for_planning")
             and "continuity:queue_hygiene_review" not in existing_keys
+            and not self._has_recent_static_governance_completion(
+                drive_context,
+                stable_key="continuity:queue_hygiene_review",
+            )
             and (
-                perception.pending_review_count > 0
-                or perception.stale_queue_count > 0
-                or perception.active_queue_count > 0
+                self._has_queue_hygiene_review_signal(perception)
+                or self._has_historical_queue_hygiene_review_signal(drive_context)
             )
         ):
             queue_intent = intents_by_kind.get("queue_hygiene_review")
@@ -2820,6 +3046,7 @@ class EndogenousDriveEngine:
         memory_plan: Dict[str, Any],
         self_learning_plan: Dict[str, Any],
         self_evolution_plan: Dict[str, Any],
+        proposals_override: Optional[List[Dict[str, Any]]] = None,
     ) -> List[EndogenousTaskCandidate]:
         service_runtime = getattr(self.config, "service_runtime", None)
         if service_runtime is None:
@@ -2835,7 +3062,10 @@ class EndogenousDriveEngine:
             self_learning_plan=self_learning_plan,
             self_evolution_plan=self_evolution_plan,
         )
-        proposals = self._generate_lm_task_proposals(evidence_packet=evidence_packet)
+        if proposals_override is None:
+            proposals = self._generate_lm_task_proposals(evidence_packet=evidence_packet)
+        else:
+            proposals = [dict(item) for item in proposals_override if isinstance(item, dict)]
         if not proposals:
             return []
         return self._materialize_lm_task_proposals(
@@ -3221,8 +3451,7 @@ class EndogenousDriveEngine:
                 or ""
             ).strip(),
             "compatible_projection_bias": str(
-                meta_cognition_profile.get("compatible_projection_bias")
-                or task_type_priors.get("top_priority_task_type")
+                task_type_priors.get("top_priority_task_type")
                 or ""
             ).strip(),
             "compatible_projection_score": round(
@@ -4462,6 +4691,7 @@ class EndogenousDriveEngine:
         )
         core_mission = str(cognition_charter.get("core_mission") or "").strip()
         if not core_mission or max_candidates <= 0:
+            self._latest_lm_task_generation_proposals = []
             self._latest_lm_task_generation_context = self._build_lm_task_generation_context_snapshot(
                 evidence_packet=evidence_packet,
                 cognition_charter=cognition_charter,
@@ -4482,6 +4712,7 @@ class EndogenousDriveEngine:
 
             llm_client, _ = resolve_mem_llm_client(role=role)
             if llm_client is None:
+                self._latest_lm_task_generation_proposals = []
                 self._latest_lm_task_generation_context = self._build_lm_task_generation_context_snapshot(
                     evidence_packet=evidence_packet,
                     cognition_charter=cognition_charter,
@@ -4494,6 +4725,7 @@ class EndogenousDriveEngine:
                 )
                 return []
         except Exception as exc:
+            self._latest_lm_task_generation_proposals = []
             self._latest_lm_task_generation_context = self._build_lm_task_generation_context_snapshot(
                 evidence_packet=evidence_packet,
                 cognition_charter=cognition_charter,
@@ -4522,6 +4754,7 @@ class EndogenousDriveEngine:
                 task="scholar.revision",
             )
         except Exception as exc:
+            self._latest_lm_task_generation_proposals = []
             self._latest_lm_task_generation_context = self._build_lm_task_generation_context_snapshot(
                 evidence_packet=evidence_packet,
                 cognition_charter=cognition_charter,
@@ -4534,6 +4767,7 @@ class EndogenousDriveEngine:
             )
             return []
         if not isinstance(result, dict):
+            self._latest_lm_task_generation_proposals = []
             self._latest_lm_task_generation_context = self._build_lm_task_generation_context_snapshot(
                 evidence_packet=evidence_packet,
                 cognition_charter=cognition_charter,
@@ -4550,6 +4784,7 @@ class EndogenousDriveEngine:
         )
         proposals = result.get("proposals")
         if not isinstance(proposals, list):
+            self._latest_lm_task_generation_proposals = []
             self._latest_lm_task_generation_context = self._build_lm_task_generation_context_snapshot(
                 evidence_packet=evidence_packet,
                 cognition_charter=cognition_charter,
@@ -4563,6 +4798,7 @@ class EndogenousDriveEngine:
             )
             return []
         normalized_proposals = [dict(item) for item in proposals if isinstance(item, dict)]
+        self._latest_lm_task_generation_proposals = [dict(item) for item in normalized_proposals]
         self._latest_lm_task_generation_context = self._build_lm_task_generation_context_snapshot(
             evidence_packet=evidence_packet,
             cognition_charter=cognition_charter,
@@ -4880,7 +5116,10 @@ class EndogenousDriveEngine:
             )
             truthfulness_threshold = max(
                 1,
-                int(policy.get("auto_truthfulness_correction_signal_threshold") or 3),
+                int(
+                    policy.get("auto_truthfulness_correction_signal_threshold")
+                    or TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD
+                ),
             )
             evidence_threshold = max(
                 1,
@@ -5167,9 +5406,6 @@ class EndogenousDriveEngine:
                     meta_cognition_profile.get("governance_posture")
                     or meta_cognition_profile.get("recommended_task_posture")
                     or ""
-                ).strip(),
-                "compatible_projection_bias": str(
-                    meta_cognition_profile.get("compatible_projection_bias") or ""
                 ).strip(),
                 "priority_signals": [
                     str(item).strip()
@@ -5592,12 +5828,6 @@ class EndogenousDriveEngine:
             f"recent_effect_direction:{recent_effect_direction}" if recent_effect_direction else "",
             f"dominant_failure_mode:{dominant_failure_mode}" if dominant_failure_mode else "",
         ]
-        if (
-            has_substantive_profile
-            and top_task_type
-            and top_task_type in {"observation", "review"}
-        ):
-            priority_signals.append(f"compatible_projection_bias:{top_task_type}")
         priority_signals = [item for item in priority_signals if item]
 
         if not has_substantive_profile:
@@ -5618,7 +5848,6 @@ class EndogenousDriveEngine:
             "recent_effect_direction": recent_effect_direction or None,
             "dominant_failure_mode": dominant_failure_mode or None,
             "governance_posture": governance_posture,
-            "compatible_projection_bias": top_task_type or None,
             "priority_signals": priority_signals[:6],
             "summary": (
                 "Unified meta-cognition indicates "
@@ -7790,7 +8019,7 @@ class EndogenousDriveEngine:
                 "Current self-iteration should likely focus on "
                 f"{str(top_hypothesis.get('target_domain') or 'unknown').strip() or 'unknown'}; "
                 f"dominant hypothesis={str(top_hypothesis.get('hypothesis') or '').strip() or 'unknown'}; "
-                f"current compatible projection bias={top_priority_task_type or 'unknown'} ({top_priority_score:.2f})."
+                f"current task-type hint={top_priority_task_type or 'unknown'} ({top_priority_score:.2f})."
             ),
         }
 
@@ -8293,7 +8522,7 @@ class EndogenousDriveEngine:
             "drift_state": drift_state or "stable",
             "summary": (
                 f"Program-side governance priors currently lean toward {top['task_type']} "
-                f"as the safest compatible task projection (score={float(top['score']):.2f}); "
+                f"as the safest task-type hint (score={float(top['score']):.2f}); "
                 f"proposal drift state is {drift_state or 'stable'}."
             ),
         }
@@ -9080,6 +9309,44 @@ class EndogenousDriveEngine:
             + min(stale_queue_count + pending_review_count, 3) * 0.08
         )
         return round(self._clamp01(urgency), 4)
+
+    def _has_recent_static_governance_completion(
+        self,
+        drive_context: Dict[str, Any],
+        *,
+        stable_key: str,
+    ) -> bool:
+        key = str(stable_key or "").strip()
+        if not key:
+            return False
+        now = datetime.now(timezone.utc)
+        for task in list(drive_context.get("queued_tasks") or []):
+            if not isinstance(task, dict):
+                continue
+            status = str(task.get("status") or "").strip().lower()
+            if status != "completed":
+                continue
+            metadata = dict(task.get("metadata") or {})
+            evidence = dict(task.get("evidence") or {})
+            task_key = str(
+                metadata.get("endogenous_drive_key")
+                or evidence.get("endogenous_drive_key")
+                or ""
+            ).strip()
+            if task_key != key:
+                continue
+            completed_at = (
+                metadata.get("completed_at")
+                or task.get("updated_at")
+                or task.get("created_at")
+            )
+            if self._within_cooldown(
+                completed_at,
+                now=now,
+                cooldown_hours=_STATIC_GOVERNANCE_CANDIDATE_COOLDOWN_HOURS,
+            ):
+                return True
+        return False
 
     def _filter_learning_topics(
         self,
