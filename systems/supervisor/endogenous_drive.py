@@ -428,7 +428,6 @@ class EndogenousDriveEngine:
         max_candidates: int = 3,
         deliberation_report: DriveDeliberationReport | None = None,
         lm_proposals_override: Optional[List[Dict[str, Any]]] = None,
-        skip_auxiliary_lm: bool = False,
     ) -> List[EndogenousTaskCandidate]:
         existing_keys = set(existing_drive_keys)
         candidates = self._candidate_stream(
@@ -436,7 +435,6 @@ class EndogenousDriveEngine:
             existing_keys=existing_keys,
             deliberation_report=deliberation_report,
             lm_proposals_override=lm_proposals_override,
-            skip_auxiliary_lm=skip_auxiliary_lm,
         )
         candidates.sort(key=lambda candidate: candidate.utility, reverse=True)
         return candidates[:max(max_candidates, 0)]
@@ -2163,7 +2161,7 @@ class EndogenousDriveEngine:
             if adaptive_policy.preferred_focus == "truthfulness":
                 factor += 0.08
             return factor
-        if candidate_kind in {"exploratory_learning", "shell_baseline_learning", "generic_learning_fallback"}:
+        if candidate_kind in {"exploratory_learning", "shell_baseline_learning"}:
             factor = (
                 0.82
                 + adaptive_policy.learning_expansion_bias * 0.3
@@ -2214,7 +2212,6 @@ class EndogenousDriveEngine:
         if candidate_kind in {
             "exploratory_learning",
             "shell_baseline_learning",
-            "generic_learning_fallback",
         }:
             return "exploratory_learning"
         if candidate_kind == "body_improvement":
@@ -2335,7 +2332,6 @@ class EndogenousDriveEngine:
         existing_keys: set[str] = None,
         deliberation_report: DriveDeliberationReport | None = None,
         lm_proposals_override: Optional[List[Dict[str, Any]]] = None,
-        skip_auxiliary_lm: bool = False,
     ) -> List[EndogenousTaskCandidate]:
         if existing_keys is None:
             existing_keys = set()
@@ -2518,48 +2514,20 @@ class EndogenousDriveEngine:
             shell_slot_id = str(shell_slot_meta.get("slot_id") or "shell").strip()
             shell_worktree = str(shell_slot_meta.get("worktree_path") or "").strip()
             baseline_key = f"creativity:self_learning:shell_baseline:{shell_slot_id or 'shell'}"
-            baseline_added = False
             has_learning_history = perception.has_learning_history
             learning_intent = intents_by_kind.get("exploratory_learning")
             shell_baseline_intent = intents_by_kind.get("shell_baseline_learning")
 
-            # Three-tier fallback chain for learning topics, matching the
-            # architectural baseline §3.4 "LLM 优先 + 启发式降级" pattern:
-            #   Tier 1: LLM-generated topics from compressed memory context
-            #   Tier 2: Recent compressed memories from Mem (local, no LLM)
-            #   Tier 3: Mechanical extraction from activity metadata
             topics: list[dict] = []
-            topic_source = "none"
 
             governor_active = idle_window.get("governor_mode_active", False)
-            llm_topics = []
-            if not skip_auxiliary_lm:
-                llm_topics = self._llm_generate_learning_topics(
-                    activity,
-                    max_topics=4,
-                    governor_mode=governor_active,
-                    drive_context=drive_context,
-                )
-            if llm_topics:
-                topics = llm_topics
-                topic_source = "llm"
+            mechanical_topic = self._extract_learning_topic(activity)
+            if mechanical_topic:
+                topics = [{"title": mechanical_topic, "summary": (
+                    f"Use idle capacity to research '{mechanical_topic}' — the most recent "
+                    f"user-discussed topic that may benefit from deeper investigation."
+                )}]
 
-            if not topics:
-                mem_topics = self._mem_extract_learning_topics(activity, max_topics=4)
-                if mem_topics:
-                    topics = mem_topics
-                    topic_source = "mem_compressed"
-
-            if not topics:
-                mechanical_topic = self._extract_learning_topic(activity)
-                if mechanical_topic:
-                    topics = [{"title": mechanical_topic, "summary": (
-                        f"Use idle capacity to research '{mechanical_topic}' — the most recent "
-                        f"user-discussed topic that may benefit from deeper investigation."
-                    )}]
-                    topic_source = "activity_metadata"
-
-            had_raw_topics = bool(topics)
             topics = self._filter_learning_topics(
                 topics,
                 drive_context=drive_context,
@@ -2599,7 +2567,6 @@ class EndogenousDriveEngine:
                     )
                 )
                 existing_keys.add(baseline_key)
-                baseline_added = True
 
             generated_count = 0
             for topic in topics:
@@ -2620,23 +2587,15 @@ class EndogenousDriveEngine:
                         value_tags=["creativity"],
                         candidate_kind="exploratory_learning",
                         score_inputs={
-                            "core_value_strength": {
-                                "llm": 0.76,
-                                "mem_compressed": 0.69,
-                                "activity_metadata": 0.64,
-                            }.get(topic_source, 0.62),
+                            "core_value_strength": 0.64,
                             "urgency": self._idle_learning_urgency(
                                 active_sessions=active_sessions,
-                                topic_source=topic_source,
+                                topic_source="activity_metadata",
                                 governor_mode=governor_active,
                             ),
                             "novelty": float(topic.get("novelty_score") or 0.6),
                             "specificity": float(topic.get("specificity_score") or 0.55),
-                            "execution_readiness": {
-                                "llm": 0.84,
-                                "mem_compressed": 0.72,
-                                "activity_metadata": 0.66,
-                            }.get(topic_source, 0.62),
+                            "execution_readiness": 0.66,
                             "queue_pressure_penalty": self._queue_pressure_penalty(
                                 drive_context,
                                 governance_task_type="self_learning",
@@ -2673,9 +2632,9 @@ class EndogenousDriveEngine:
                             "active_sessions": active_sessions,
                             "trigger": "idle_capacity",
                             "learning_topic": topic["title"],
-                            "topic_source": topic_source,
+                            "topic_source": "activity_metadata",
                             "learning_branch": "exploratory",
-                            "llm_generated": topic_source == "llm",
+                            "llm_generated": False,
                             "novelty_score": topic.get("novelty_score"),
                             "specificity_score": topic.get("specificity_score"),
                         },
@@ -2689,95 +2648,6 @@ class EndogenousDriveEngine:
                 generated_count += 1
                 if generated_count >= 2:
                     break
-
-            # Final fallback: completely static topic when even Tier 3 found
-            # nothing.  This is the only path that yields a generic task and
-            # exists so the creativity candidate is never silently dropped.
-            if generated_count == 0 and not had_raw_topics:
-                topic_key = baseline_key if shell_worktree else "creativity:idle_learning:fallback"
-                if topic_key not in existing_keys:
-                    if shell_worktree:
-                        candidates.append(
-                            self._build_shell_baseline_learning_candidate(
-                                stable_key=topic_key,
-                                active_sessions=active_sessions,
-                                shell_slot_id=shell_slot_id,
-                                shell_worktree=shell_worktree,
-                                trigger="idle_capacity",
-                                drive_context=drive_context,
-                                bootstrap=False,
-                                adaptive_policy=adaptive_policy,
-                            )
-                        )
-                    else:
-                        candidates.append(
-                            self._build_scored_candidate(
-                                stable_key=topic_key,
-                                title="Explore one unresolved learning thread",
-                                summary=(
-                                    "Use idle capacity to identify one evidence-backed learning direction, "
-                                    "gather external references, and record why that thread matters for "
-                                    "future self-improvement."
-                                ),
-                                priority="normal",
-                                governance_task_type="self_learning",
-                                task_family="self_learning",
-                                execution_kind=None,
-                                value_tags=["creativity"],
-                                candidate_kind="generic_learning_fallback",
-                                score_inputs={
-                                    "core_value_strength": 0.56,
-                                    "urgency": self._idle_learning_urgency(
-                                        active_sessions=active_sessions,
-                                        topic_source="generic_fallback",
-                                        governor_mode=governor_active,
-                                    ),
-                                    "novelty": 0.2,
-                                    "specificity": 0.22,
-                                    "execution_readiness": 0.48,
-                                    "queue_pressure_penalty": self._queue_pressure_penalty(
-                                        drive_context,
-                                        governance_task_type="self_learning",
-                                        task_family="self_learning",
-                                    ),
-                                    "repetition_penalty": 0.18,
-                                    "adaptive_factor": self._adaptive_factor_for_candidate(
-                                        candidate_kind="generic_learning_fallback",
-                                        adaptive_policy=adaptive_policy,
-                                    ),
-                                },
-                                metadata={
-                                    "learning_branch": "exploratory",
-                                    "self_learning_mode": "no_dependency_exploration",
-                                    **(
-                                        {
-                                            "drive_judgement": self._intent_metadata(
-                                                intent=learning_intent,
-                                                needs=needs,
-                                                perception=perception,
-                                                world_model=world_model,
-                                                reflection=reflection,
-                                                adaptive_policy=adaptive_policy,
-                                            )
-                                        }
-                                        if learning_intent is not None
-                                        else {}
-                                    ),
-                                },
-                                evidence={
-                                    "active_sessions": active_sessions,
-                                    "trigger": "idle_capacity",
-                                    "learning_topic": "",
-                                    "topic_source": "generic_exploration_fallback",
-                                    "learning_branch": "exploratory",
-                                    "llm_generated": False,
-                                },
-                                constraints={
-                                    "execution_policy": "learn_only",
-                                    "must_not_modify_active_body": True,
-                                },
-                            )
-                        )
 
         if (
             self_evolution_plan.get("eligible_for_planning")
@@ -2841,119 +2711,6 @@ class EndogenousDriveEngine:
                     },
                 )
             )
-
-        if self_evolution_plan.get("eligible_for_planning"):
-            learning_quality = perception.learning_quality
-            if (learning_quality >= float(policy.get("body_improvement_min_quality", 60.0) or 60.0)
-                and shell_slot_meta
-                and not self._has_recent_body_improvement(
-                    drive_context,
-                    shell_slot_meta=shell_slot_meta,
-                    cooldown_hours=int(policy.get("body_improvement_cooldown_hours", 12) or 12),
-                )):
-
-                improvement = self._generate_body_improvement_direction(
-                    idle_window,
-                    learning_quality,
-                    shell_slot_meta,
-                )
-                if improvement:
-                    body_intent = intents_by_kind.get("body_improvement")
-                    task_key = f"body_improvement:{_stable_key_for_topic(improvement['title'])}"
-                    if task_key not in existing_keys:
-                        candidates.append(
-                            self._build_scored_candidate(
-                                stable_key=task_key,
-                                title=f"Improve shell body: {improvement['title']}",
-                                summary=improvement.get("summary", improvement["title"]),
-                                priority="high" if learning_quality >= 80 else "normal",
-                                governance_task_type="self_evolution",
-                                task_family="body_upgrade",
-                                execution_kind="body_improvement",
-                                value_tags=["creativity", "continuity"],
-                                candidate_kind="body_improvement",
-                                score_inputs={
-                                    "core_value_strength": 0.86,
-                                    "urgency": self._clamp01(
-                                        0.42
-                                        + max(0.0, learning_quality - 60.0) / 40.0 * 0.4
-                                        + (0.12 if improvement.get("source") != "fallback" else 0.0)
-                                    ),
-                                    "novelty": {
-                                        "llm": 0.78,
-                                        "history": 0.64,
-                                        "git_diff": 0.7,
-                                        "fallback": 0.42,
-                                    }.get(str(improvement.get("source") or "fallback"), 0.5),
-                                    "specificity": (
-                                        0.84
-                                        if str(improvement.get("diff_summary") or "").strip()
-                                        else {
-                                            "llm": 0.78,
-                                            "history": 0.72,
-                                            "git_diff": 0.75,
-                                            "fallback": 0.55,
-                                        }.get(str(improvement.get("source") or "fallback"), 0.6)
-                                    ),
-                                    "execution_readiness": self._clamp01(
-                                        0.92
-                                        - min(len(drive_context.get("queued_learning_titles") or []), 3) * 0.08
-                                    ),
-                                    "queue_pressure_penalty": self._clamp01(
-                                        self._queue_pressure_penalty(
-                                            drive_context,
-                                            governance_task_type="self_evolution",
-                                            task_family="body_upgrade",
-                                            execution_kind="body_improvement",
-                                        )
-                                        + min(len(drive_context.get("queued_learning_titles") or []), 3) * 0.04
-                                    ),
-                                    "adaptive_factor": self._adaptive_factor_for_candidate(
-                                        candidate_kind="body_improvement",
-                                        adaptive_policy=adaptive_policy,
-                                    ),
-                                },
-                                metadata=(
-                                    {
-                                        "drive_judgement": self._intent_metadata(
-                                            intent=body_intent,
-                                            needs=needs,
-                                            perception=perception,
-                                            world_model=world_model,
-                                            reflection=reflection,
-                                            adaptive_policy=adaptive_policy,
-                                        )
-                                    }
-                    if body_intent is not None
-                                    else None
-                                ),
-                                constraints={
-                                    "execution_policy": "improve_shell_body",
-                                    "target_slot": "shell",
-                                    "target_slot_id": shell_slot_meta.get("slot_id"),
-                                    "worktree_path": shell_slot_meta.get("worktree_path"),
-                                    "must_commit": True,
-                                    "evolution_boundary_check": True,
-                                    "max_files_changed": int(policy.get("body_improvement_max_files", 5) or 5),
-                                    "editable_dirs": list(
-                                        policy.get("body_improvement_editable_dirs")
-                                        or ["skills/", "tools/", "agent/", "prompts/"]
-                                    ),
-                                    "forbidden_patterns": list(
-                                        policy.get("body_improvement_forbidden_patterns")
-                                        or ["**/credential*", "**/.env*", "systems/**"]
-                                    ),
-                                },
-                                evidence={
-                                    "learning_quality_score": learning_quality,
-                                    "shell_slot_id": shell_slot_meta.get("slot_id"),
-                                    "worktree_path": shell_slot_meta.get("worktree_path"),
-                                    "git_diff_summary": improvement.get("diff_summary", ""),
-                                    "source": improvement.get("source", "fallback"),
-                                    "recent_learning_topics": drive_context["recent_learning_titles"][:3],
-                                },
-                            )
-                        )
 
         if lm_candidates:
             candidates = self._merge_lm_led_candidate_stream(
@@ -3236,32 +2993,7 @@ class EndogenousDriveEngine:
             proposal_drift_memory=proposal_drift_memory,
             task_type_priors=task_type_priors,
         )
-        memory_context = self._fetch_memory_context(deep=True)
         queue_state_snapshot = self._build_queue_state_snapshot(drive_context)
-        cognitive_feedback_memory = self._build_cognitive_feedback_memory(drive_context)
-        evidence_attention = self._build_evidence_attention_summary(
-            cognition_charter=cognition_charter,
-            cognitive_feedback_memory=cognitive_feedback_memory,
-            recent_learning_evidence=recent_learning_evidence,
-            external_research_evidence=external_research_evidence,
-            shell_body_profile=shell_body_profile,
-            evidence_graph=evidence_graph,
-            agenda_graph=agenda_graph,
-            recent_reference_alignment=recent_reference_alignment,
-        )
-        cognitive_strategy_delta = self._build_cognitive_strategy_delta(
-            cognition_charter=cognition_charter,
-            cognitive_feedback_memory=cognitive_feedback_memory,
-        )
-        cognitive_evolution_draft = self._build_cognitive_evolution_draft(
-            cognition_charter=cognition_charter,
-            cognitive_feedback_memory=cognitive_feedback_memory,
-            cognitive_strategy_delta=cognitive_strategy_delta,
-            meta_cognition_profile=meta_cognition_profile,
-            recent_reference_alignment=recent_reference_alignment,
-            self_iteration_trend_memory=self_iteration_trend_memory,
-            post_task_effect_memory=post_task_effect_memory,
-        )
         context_layers = self._build_lm_context_layers(
             cognition_charter=cognition_charter,
             cognitive_posture=cognitive_posture,
@@ -3277,11 +3009,9 @@ class EndogenousDriveEngine:
             post_task_effect_memory=post_task_effect_memory,
             recent_reference_alignment=recent_reference_alignment,
             queue_state_snapshot=queue_state_snapshot,
-            evidence_attention=evidence_attention,
             recent_learning_evidence=recent_learning_evidence,
             external_research_evidence=external_research_evidence,
             evidence_channels=evidence_channels,
-            memory_context=memory_context,
             recent_learning_titles=list(drive_context.get("recent_learning_titles") or [])[:8],
         )
         return {
@@ -3306,10 +3036,6 @@ class EndogenousDriveEngine:
             "self_iteration_hypotheses": self_iteration_hypotheses,
             "meta_cognition_profile": meta_cognition_profile,
             "queue_state_snapshot": queue_state_snapshot,
-            "cognitive_feedback_memory": cognitive_feedback_memory,
-            "evidence_attention": evidence_attention,
-            "cognitive_strategy_delta": cognitive_strategy_delta,
-            "cognitive_evolution_draft": cognitive_evolution_draft,
             "self_model_snapshot": self_model_snapshot,
             "evidence_credibility_summary": evidence_credibility_summary,
             "task_type_priors": task_type_priors,
@@ -3326,7 +3052,6 @@ class EndogenousDriveEngine:
             "self_iteration_trend_memory": self_iteration_trend_memory,
             "switch_self_regulation_memory": switch_self_regulation_memory,
             "post_task_effect_memory": post_task_effect_memory,
-            "memory_context": memory_context,
             "recent_learning_titles": list(drive_context.get("recent_learning_titles") or [])[:8],
             "recent_learning_evidence": recent_learning_evidence,
             "external_research_evidence": external_research_evidence,
@@ -3405,11 +3130,9 @@ class EndogenousDriveEngine:
         post_task_effect_memory: Dict[str, Any],
         recent_reference_alignment: Dict[str, Any],
         queue_state_snapshot: Dict[str, Any],
-        evidence_attention: Dict[str, Any],
         recent_learning_evidence: List[Dict[str, Any]],
         external_research_evidence: List[Dict[str, Any]],
         evidence_channels: Dict[str, Any],
-        memory_context: str,
         recent_learning_titles: List[str],
     ) -> Dict[str, Dict[str, Any]]:
         layering_policy = self._resolve_cognitive_context_layering_policy(
@@ -3488,20 +3211,12 @@ class EndogenousDriveEngine:
             ).strip(),
             "primary_evidence_nodes": [
                 str(item).strip()
-                for item in list(
-                    evidence_attention.get("decision_core_topics")
-                    or grounding_focus.get("primary_evidence_nodes")
-                    or []
-                )[:3]
+                for item in list(grounding_focus.get("primary_evidence_nodes") or [])[:3]
                 if str(item).strip()
             ],
             "primary_agenda_nodes": [
                 str(item).strip()
-                for item in list(
-                    evidence_attention.get("decision_core_agenda_nodes")
-                    or grounding_focus.get("primary_agenda_nodes")
-                    or []
-                )[:3]
+                for item in list(grounding_focus.get("primary_agenda_nodes") or [])[:3]
                 if str(item).strip()
             ],
             "queue_state_summary": str(queue_state_snapshot.get("summary") or "").strip(),
@@ -3525,11 +3240,7 @@ class EndogenousDriveEngine:
         supporting_detail = {
             "grounding_gaps": [
                 str(item).strip()
-                for item in list(
-                    evidence_attention.get("supporting_topics")
-                    or grounding_focus.get("grounding_gaps")
-                    or []
-                )[:4]
+                for item in list(grounding_focus.get("grounding_gaps") or [])[:4]
                 if str(item).strip()
             ],
             "contradictory_topics": [
@@ -3606,24 +3317,15 @@ class EndogenousDriveEngine:
                     "title": str(item.get("title") or "").strip(),
                     "quality_score": item.get("quality_score"),
                 }
-                for item in list(
-                    evidence_attention.get("long_tail_learning_items")
-                    or recent_learning_evidence
-                    or []
-                )[:2]
+                for item in list(recent_learning_evidence or [])[:2]
                 if isinstance(item, dict) and str(item.get("title") or "").strip()
             ],
             "external_research_titles": [
                 str(item.get("title") or "").strip()
-                for item in list(
-                    evidence_attention.get("long_tail_research_items")
-                    or external_research_evidence
-                    or []
-                )[:3]
+                for item in list(external_research_evidence or [])[:3]
                 if isinstance(item, dict) and str(item.get("title") or "").strip()
             ],
             "evidence_channels": channel_rows,
-            "memory_context_preview": str(memory_context or "").strip()[:220],
             "summary": (
                 "Long-tail context: "
                 f"learning_titles={len(list(recent_learning_titles or []))}; "
@@ -3660,7 +3362,6 @@ class EndogenousDriveEngine:
             "recent_learning_evidence": long_tail_context.get("recent_learning_evidence"),
             "external_research_titles": long_tail_context.get("external_research_titles"),
             "evidence_channels": long_tail_context.get("evidence_channels"),
-            "memory_context_preview": long_tail_context.get("memory_context_preview"),
             "long_tail_summary": long_tail_context.get("summary"),
         }
         return {
@@ -3683,696 +3384,6 @@ class EndogenousDriveEngine:
                 summary_output_key="summary",
             ),
         }
-
-    def _build_evidence_attention_summary(
-        self,
-        *,
-        cognition_charter: Dict[str, Any],
-        cognitive_feedback_memory: Dict[str, Any],
-        recent_learning_evidence: List[Dict[str, Any]],
-        external_research_evidence: List[Dict[str, Any]],
-        shell_body_profile: Dict[str, Any],
-        evidence_graph: Dict[str, Any],
-        agenda_graph: Dict[str, Any],
-        recent_reference_alignment: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        policy = self._resolve_evidence_attention_policy(
-            cognition_charter,
-            cognitive_feedback_memory=cognitive_feedback_memory,
-        )
-        if not bool(policy.get("enabled", True)):
-            return {}
-
-        ranked_topics = self._rank_evidence_attention_topics(
-            policy=policy,
-            evidence_graph=evidence_graph,
-            agenda_graph=agenda_graph,
-            recent_reference_alignment=recent_reference_alignment,
-        )
-        ranked_agenda_nodes = self._rank_evidence_attention_agenda_nodes(
-            policy=policy,
-            agenda_graph=agenda_graph,
-            recent_learning_evidence=recent_learning_evidence,
-            external_research_evidence=external_research_evidence,
-            shell_body_profile=shell_body_profile,
-            recent_reference_alignment=recent_reference_alignment,
-        )
-        ranked_learning_items = self._rank_evidence_attention_items(
-            policy=policy,
-            items=recent_learning_evidence,
-            agenda_graph=agenda_graph,
-            recent_reference_alignment=recent_reference_alignment,
-            channel_name="recent_learning",
-        )
-        ranked_research_items = self._rank_evidence_attention_items(
-            policy=policy,
-            items=external_research_evidence,
-            agenda_graph=agenda_graph,
-            recent_reference_alignment=recent_reference_alignment,
-            channel_name="external_research",
-        )
-        if shell_body_profile:
-            body_items = self._rank_evidence_attention_items(
-                policy=policy,
-                items=[shell_body_profile],
-                agenda_graph=agenda_graph,
-                recent_reference_alignment=recent_reference_alignment,
-                channel_name="shell_body_profile",
-            )
-        else:
-            body_items = []
-        return {
-            "decision_core_topics": [
-                str(item.get("topic") or "").strip()
-                for item in ranked_topics[: max(1, int(policy.get("decision_core_topic_limit") or 3))]
-                if str(item.get("topic") or "").strip()
-            ],
-            "decision_core_agenda_nodes": [
-                str(item.get("agenda_node") or "").strip()
-                for item in ranked_agenda_nodes[: max(1, int(policy.get("decision_core_topic_limit") or 3))]
-                if str(item.get("agenda_node") or "").strip()
-            ],
-            "supporting_topics": [
-                str(item.get("topic") or "").strip()
-                for item in ranked_topics[
-                    max(0, int(policy.get("decision_core_topic_limit") or 3)) :
-                    max(
-                        0,
-                        int(policy.get("decision_core_topic_limit") or 3)
-                        + int(policy.get("supporting_item_limit") or 4),
-                    )
-                ]
-                if str(item.get("topic") or "").strip()
-            ],
-            "long_tail_learning_items": [
-                dict(item)
-                for item in ranked_learning_items[: max(1, int(policy.get("long_tail_item_limit") or 3))]
-                if isinstance(item, dict)
-            ],
-            "long_tail_research_items": [
-                dict(item)
-                for item in ranked_research_items[: max(1, int(policy.get("long_tail_item_limit") or 3))]
-                if isinstance(item, dict)
-            ],
-            "body_attention_items": [
-                dict(item)
-                for item in body_items[:1]
-                if isinstance(item, dict)
-            ],
-            "top_topic_scores": [
-                {
-                    "topic": str(item.get("topic") or "").strip(),
-                    "attention_score": round(
-                        self._clamp01(float(item.get("attention_score") or 0.0)),
-                        4,
-                    ),
-                }
-                for item in ranked_topics[:4]
-                if str(item.get("topic") or "").strip()
-            ],
-        }
-
-    def _resolve_evidence_attention_policy(
-        self,
-        cognition_charter: Dict[str, Any],
-        *,
-        cognitive_feedback_memory: Dict[str, Any] | None = None,
-    ) -> Dict[str, Any]:
-        raw_policy = dict(cognition_charter.get("evidence_attention_policy") or {})
-        resolved = {
-            "enabled": bool(raw_policy.get("enabled", True)),
-            "confidence_weight": float(raw_policy.get("confidence_weight") or 0.3),
-            "novelty_weight": float(raw_policy.get("novelty_weight") or 0.08),
-            "freshness_weight": float(raw_policy.get("freshness_weight") or 0.14),
-            "agenda_relevance_weight": float(raw_policy.get("agenda_relevance_weight") or 0.24),
-            "conflict_weight": float(raw_policy.get("conflict_weight") or 0.14),
-            "self_relevance_weight": float(raw_policy.get("self_relevance_weight") or 0.1),
-            "decision_core_topic_limit": max(1, int(raw_policy.get("decision_core_topic_limit") or 3)),
-            "supporting_item_limit": max(1, int(raw_policy.get("supporting_item_limit") or 4)),
-            "long_tail_item_limit": max(1, int(raw_policy.get("long_tail_item_limit") or 3)),
-        }
-        return self._apply_cognitive_feedback_to_evidence_attention_policy(
-            resolved,
-            cognition_charter=cognition_charter,
-            cognitive_feedback_memory=cognitive_feedback_memory or {},
-        )
-
-    def _apply_cognitive_feedback_to_evidence_attention_policy(
-        self,
-        policy: Dict[str, Any],
-        *,
-        cognition_charter: Dict[str, Any],
-        cognitive_feedback_memory: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        feedback_policy = self._resolve_cognitive_feedback_policy(cognition_charter)
-        if not bool(feedback_policy.get("enabled", True)):
-            return policy
-        if not bool(cognitive_feedback_memory.get("available")):
-            return policy
-
-        adjusted = dict(policy)
-        adaptation_strength = self._clamp01(
-            float(feedback_policy.get("adaptation_strength") or 0.22)
-        )
-        if cognitive_feedback_memory.get("reference_feedback_direction") == "weak":
-            adjusted["conflict_weight"] = self._clamp01(
-                float(adjusted.get("conflict_weight") or 0.0)
-                + float(feedback_policy.get("conflict_weight_step") or 0.0) * adaptation_strength
-            )
-            adjusted["agenda_relevance_weight"] = self._clamp01(
-                float(adjusted.get("agenda_relevance_weight") or 0.0)
-                + float(feedback_policy.get("agenda_relevance_weight_step") or 0.0) * adaptation_strength
-            )
-        if cognitive_feedback_memory.get("freshness_feedback_direction") == "weak":
-            adjusted["freshness_weight"] = self._clamp01(
-                float(adjusted.get("freshness_weight") or 0.0)
-                + float(feedback_policy.get("freshness_weight_step") or 0.0) * adaptation_strength
-            )
-        if cognitive_feedback_memory.get("confidence_feedback_direction") == "weak":
-            adjusted["confidence_weight"] = self._clamp01(
-                float(adjusted.get("confidence_weight") or 0.0)
-                + float(feedback_policy.get("confidence_weight_step") or 0.0) * adaptation_strength
-            )
-        if cognitive_feedback_memory.get("self_relevance_feedback_direction") == "strong":
-            adjusted["self_relevance_weight"] = self._clamp01(
-                float(adjusted.get("self_relevance_weight") or 0.0)
-                + float(feedback_policy.get("self_relevance_weight_step") or 0.0) * adaptation_strength
-            )
-        if cognitive_feedback_memory.get("long_tail_signal_bias") == "compress":
-            adjusted["long_tail_item_limit"] = max(
-                1,
-                int(adjusted.get("long_tail_item_limit") or 3) - 1,
-            )
-        return adjusted
-
-    def _resolve_cognitive_feedback_policy(
-        self,
-        cognition_charter: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        raw_policy = dict(cognition_charter.get("cognitive_feedback_policy") or {})
-        return {
-            "enabled": bool(raw_policy.get("enabled", True)),
-            "adaptation_strength": float(raw_policy.get("adaptation_strength") or 0.22),
-            "confidence_weight_step": float(raw_policy.get("confidence_weight_step") or 0.08),
-            "freshness_weight_step": float(raw_policy.get("freshness_weight_step") or 0.06),
-            "agenda_relevance_weight_step": float(raw_policy.get("agenda_relevance_weight_step") or 0.1),
-            "conflict_weight_step": float(raw_policy.get("conflict_weight_step") or 0.08),
-            "self_relevance_weight_step": float(raw_policy.get("self_relevance_weight_step") or 0.06),
-        }
-
-    def _build_cognitive_feedback_memory(
-        self,
-        drive_context: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        drive_history = dict(drive_context.get("drive_history") or {})
-        outcomes = [
-            dict(item)
-            for item in list(drive_history.get("outcomes") or [])
-            if isinstance(item, dict)
-        ]
-        if not outcomes:
-            return {
-                "available": False,
-                "summary": "No cognitive feedback memory is available yet.",
-            }
-
-        quality_scores: List[float] = []
-        reference_scores: List[float] = []
-        cognitive_scores: List[float] = []
-        freshness_scores: List[float] = []
-        self_relevance_scores: List[float] = []
-
-        for outcome in outcomes[:12]:
-            quality_scores.append(self._clamp01(float(outcome.get("quality_score") or 0.0)))
-            metadata = dict(outcome.get("metadata") or {})
-            evidence = dict(outcome.get("evidence") or {})
-            reference_alignment = outcome.get("reference_alignment")
-            if not isinstance(reference_alignment, dict):
-                reference_alignment = metadata.get("reference_alignment")
-            if not isinstance(reference_alignment, dict):
-                reference_alignment = evidence.get("reference_alignment")
-            reference_scores.append(
-                self._clamp01((reference_alignment or {}).get("alignment_score") or 0.0)
-            )
-            cognitive_alignment = outcome.get("cognitive_alignment")
-            if not isinstance(cognitive_alignment, dict):
-                cognitive_alignment = metadata.get("cognitive_alignment")
-            if not isinstance(cognitive_alignment, dict):
-                cognitive_alignment = evidence.get("cognitive_alignment")
-            cognitive_scores.append(
-                self._clamp01((cognitive_alignment or {}).get("score") or 0.0)
-            )
-            assessment = outcome.get("llm_cognitive_assessment")
-            if not isinstance(assessment, dict):
-                assessment = metadata.get("llm_cognitive_assessment")
-            if not isinstance(assessment, dict):
-                assessment = evidence.get("llm_cognitive_assessment")
-            normalized = self._normalize_lm_cognitive_assessment(assessment)
-            freshness_scores.append(
-                1.0
-                if list(normalized.get("primary_grounding_gaps") or [])
-                else 0.4
-            )
-            self_relevance_scores.append(
-                1.0
-                if str(normalized.get("self_iteration_target") or "").strip() in {"grounding", "self_model"}
-                else 0.35
-            )
-
-        def _avg(values: List[float]) -> float:
-            if not values:
-                return 0.0
-            return self._clamp01(sum(values) / len(values))
-
-        average_quality = _avg(quality_scores)
-        average_reference = _avg(reference_scores)
-        average_cognitive = _avg(cognitive_scores)
-        average_freshness_signal = _avg(freshness_scores)
-        average_self_relevance_signal = _avg(self_relevance_scores)
-
-        return {
-            "available": True,
-            "average_quality_score": round(average_quality, 4),
-            "average_reference_alignment_score": round(average_reference, 4),
-            "average_cognitive_alignment_score": round(average_cognitive, 4),
-            "average_freshness_signal": round(average_freshness_signal, 4),
-            "average_self_relevance_signal": round(average_self_relevance_signal, 4),
-            "confidence_feedback_direction": "weak" if average_quality < 0.55 else "strong",
-            "reference_feedback_direction": "weak" if average_reference < 0.58 else "strong",
-            "freshness_feedback_direction": "weak" if average_freshness_signal < 0.55 else "strong",
-            "self_relevance_feedback_direction": "strong" if average_self_relevance_signal >= 0.6 else "weak",
-            "long_tail_signal_bias": "compress" if average_reference < 0.5 and average_quality < 0.55 else "keep",
-            "summary": (
-                "Recent cognitive outcomes suggest "
-                f"quality={average_quality:.2f}, reference={average_reference:.2f}, "
-                f"cognitive={average_cognitive:.2f}."
-            ),
-        }
-
-    def _build_cognitive_strategy_delta(
-        self,
-        *,
-        cognition_charter: Dict[str, Any],
-        cognitive_feedback_memory: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        delta_policy = self._resolve_cognitive_strategy_delta_policy(cognition_charter)
-        if not bool(delta_policy.get("enabled", True)):
-            return {
-                "available": False,
-                "summary": "Cognitive strategy delta suggestions are disabled.",
-            }
-        if not bool(cognitive_feedback_memory.get("available")):
-            return {
-                "available": False,
-                "summary": "No cognitive feedback memory is available to propose strategy deltas.",
-            }
-
-        base_policy = self._resolve_evidence_attention_policy(
-            cognition_charter,
-            cognitive_feedback_memory={},
-        )
-        adjusted_policy = self._resolve_evidence_attention_policy(
-            cognition_charter,
-            cognitive_feedback_memory=cognitive_feedback_memory,
-        )
-        proposal_threshold = self._clamp01(
-            float(delta_policy.get("proposal_threshold") or 0.015)
-        )
-        max_changes = max(
-            1,
-            int(delta_policy.get("max_recommended_changes") or 6),
-        )
-        change_rows: List[Dict[str, Any]] = []
-        for key in (
-            "confidence_weight",
-            "freshness_weight",
-            "agenda_relevance_weight",
-            "conflict_weight",
-            "self_relevance_weight",
-        ):
-            before = float(base_policy.get(key) or 0.0)
-            after = float(adjusted_policy.get(key) or 0.0)
-            delta_value = round(after - before, 4)
-            if abs(delta_value) < proposal_threshold:
-                continue
-            direction = "increase" if delta_value > 0 else "decrease"
-            reason = self._strategy_delta_reason_for_key(
-                key=key,
-                cognitive_feedback_memory=cognitive_feedback_memory,
-            )
-            change_rows.append(
-                {
-                    "target": f"evidence_attention_policy.{key}",
-                    "direction": direction,
-                    "current_value": round(before, 4),
-                    "suggested_value": round(after, 4),
-                    "delta": delta_value,
-                    "reason": reason,
-                }
-            )
-        for key in ("long_tail_item_limit",):
-            before = int(base_policy.get(key) or 0)
-            after = int(adjusted_policy.get(key) or 0)
-            delta_value = after - before
-            if delta_value == 0:
-                continue
-            direction = "increase" if delta_value > 0 else "decrease"
-            reason = self._strategy_delta_reason_for_key(
-                key=key,
-                cognitive_feedback_memory=cognitive_feedback_memory,
-            )
-            change_rows.append(
-                {
-                    "target": f"evidence_attention_policy.{key}",
-                    "direction": direction,
-                    "current_value": before,
-                    "suggested_value": after,
-                    "delta": delta_value,
-                    "reason": reason,
-                }
-            )
-        change_rows = sorted(
-            change_rows,
-            key=lambda item: abs(float(item.get("delta") or 0.0)),
-            reverse=True,
-        )[:max_changes]
-        if not change_rows:
-            return {
-                "available": False,
-                "summary": "Recent cognitive feedback does not yet justify a strategy delta proposal.",
-            }
-        return {
-            "available": True,
-            "recommended_changes": change_rows,
-            "summary": (
-                "Recent cognitive feedback suggests adjusting "
-                f"{len(change_rows)} evidence-attention parameters."
-            ),
-        }
-
-    def _build_cognitive_evolution_draft(
-        self,
-        *,
-        cognition_charter: Dict[str, Any],
-        cognitive_feedback_memory: Dict[str, Any],
-        cognitive_strategy_delta: Dict[str, Any],
-        meta_cognition_profile: Dict[str, Any],
-        recent_reference_alignment: Dict[str, Any],
-        self_iteration_trend_memory: Dict[str, Any],
-        post_task_effect_memory: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        mission_pressure = self._cognitive_evolution_mission_pressure(
-            cognition_charter=cognition_charter,
-            cognitive_feedback_memory=cognitive_feedback_memory,
-            meta_cognition_profile=meta_cognition_profile,
-            self_iteration_trend_memory=self_iteration_trend_memory,
-            post_task_effect_memory=post_task_effect_memory,
-        )
-        attention_policy_delta = self._build_attention_policy_delta(
-            cognitive_strategy_delta=cognitive_strategy_delta,
-        )
-        charter_delta = self._build_charter_delta(
-            cognitive_feedback_memory=cognitive_feedback_memory,
-            meta_cognition_profile=meta_cognition_profile,
-            recent_reference_alignment=recent_reference_alignment,
-            self_iteration_trend_memory=self_iteration_trend_memory,
-            post_task_effect_memory=post_task_effect_memory,
-        )
-        evidence_basis = self._build_cognitive_evolution_evidence_basis(
-            cognitive_feedback_memory=cognitive_feedback_memory,
-            recent_reference_alignment=recent_reference_alignment,
-            self_iteration_trend_memory=self_iteration_trend_memory,
-            post_task_effect_memory=post_task_effect_memory,
-            meta_cognition_profile=meta_cognition_profile,
-        )
-        available = bool(attention_policy_delta.get("available")) or bool(
-            charter_delta.get("available")
-        )
-        if not available:
-            return {
-                "available": False,
-                "mission_pressure": mission_pressure,
-                "attention_policy_delta": attention_policy_delta,
-                "charter_delta": charter_delta,
-                "evidence_basis": evidence_basis,
-                "summary": "Current cognitive feedback is not yet strong enough to justify an evolution draft.",
-            }
-        attention_count = len(
-            list(attention_policy_delta.get("recommended_changes") or [])
-        )
-        charter_count = len(list(charter_delta.get("recommended_changes") or []))
-        return {
-            "available": True,
-            "mission_pressure": mission_pressure,
-            "attention_policy_delta": attention_policy_delta,
-            "charter_delta": charter_delta,
-            "evidence_basis": evidence_basis,
-            "summary": (
-                "Cognitive evolution draft proposes "
-                f"{attention_count} attention-policy adjustments and "
-                f"{charter_count} charter-level adjustments."
-            ),
-        }
-
-    def _build_attention_policy_delta(
-        self,
-        *,
-        cognitive_strategy_delta: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        recommended_changes = [
-            dict(item)
-            for item in list(cognitive_strategy_delta.get("recommended_changes") or [])
-            if isinstance(item, dict) and str(item.get("target") or "").strip()
-        ]
-        if not recommended_changes:
-            return {
-                "available": False,
-                "recommended_changes": [],
-                "summary": "No attention-policy adjustments are currently recommended.",
-            }
-        return {
-            "available": True,
-            "recommended_changes": recommended_changes[:6],
-            "summary": str(cognitive_strategy_delta.get("summary") or "").strip(),
-        }
-
-    def _build_charter_delta(
-        self,
-        *,
-        cognitive_feedback_memory: Dict[str, Any],
-        meta_cognition_profile: Dict[str, Any],
-        recent_reference_alignment: Dict[str, Any],
-        self_iteration_trend_memory: Dict[str, Any],
-        post_task_effect_memory: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        recommended_changes: List[Dict[str, Any]] = []
-        if (
-            str(cognitive_feedback_memory.get("reference_feedback_direction") or "").strip()
-            == "weak"
-            or float(recent_reference_alignment.get("average_alignment_score") or 0.0) < 0.58
-        ):
-            recommended_changes.append(
-                {
-                    "target": "prompt_output_requirements",
-                    "direction": "strengthen",
-                    "priority": "high",
-                    "reason": "reference alignment remains weak, so proposals should bind evidence and agenda nodes more explicitly.",
-                    "suggested_additions": [
-                        "提案必须明确列出关键 evidence / agenda 绑定关系，避免引用漂移。",
-                        "当 reference alignment 偏弱时，优先输出 review / observation / learning，而不是跳到 improvement。",
-                    ],
-                }
-            )
-        if (
-            str(meta_cognition_profile.get("dominant_failure_mode") or "").strip()
-            in {"grounding_instability", "weak self structure grounding"}
-            or str(meta_cognition_profile.get("top_self_iteration_domain") or "").strip()
-            == "grounding"
-        ):
-            recommended_changes.append(
-                {
-                    "target": "task_generation_focus",
-                    "direction": "strengthen",
-                    "priority": "high",
-                    "reason": "grounding remains the dominant failure mode, so task generation should keep prioritizing evidence repair before aggressive self-iteration.",
-                    "suggested_additions": [
-                        "当 grounding gap 未闭合时，优先提出修复证据链、核对引用和补足自身理解的任务。",
-                        "只有在 grounding 压力明显下降后，才提高 improvement 类任务优先级。",
-                    ],
-                }
-            )
-        if (
-            str(post_task_effect_memory.get("effect_direction") or "").strip() == "mixed"
-            or str(self_iteration_trend_memory.get("trend_state") or "").strip()
-            in {"locked", "stalled"}
-        ):
-            recommended_changes.append(
-                {
-                    "target": "self_iteration_guardrails",
-                    "direction": "clarify",
-                    "priority": "medium",
-                    "reason": "recent self-iteration effects are mixed, so the charter should better distinguish when to keep iterating and when to pause for evidence repair.",
-                    "suggested_additions": [
-                        "当近期自我迭代结果呈 mixed 或 stalled 时，应优先追加诊断型任务而不是连续放大同一路径。",
-                        "若收益方向不稳定，应允许显式返回空 proposals 或低风险 review 任务。",
-                    ],
-                }
-            )
-        if not recommended_changes:
-            return {
-                "available": False,
-                "recommended_changes": [],
-                "summary": "No charter-level adjustments are currently recommended.",
-            }
-        return {
-            "available": True,
-            "recommended_changes": recommended_changes[:4],
-            "summary": (
-                "Recent cognition suggests clarifying charter focus, output requirements, "
-                "or self-iteration guardrails."
-            ),
-        }
-
-    def _build_cognitive_evolution_evidence_basis(
-        self,
-        *,
-        cognitive_feedback_memory: Dict[str, Any],
-        recent_reference_alignment: Dict[str, Any],
-        self_iteration_trend_memory: Dict[str, Any],
-        post_task_effect_memory: Dict[str, Any],
-        meta_cognition_profile: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        return {
-            "reference_alignment_score": round(
-                self._clamp01(
-                    float(recent_reference_alignment.get("average_alignment_score") or 0.0)
-                ),
-                4,
-            ),
-            "cognitive_alignment_score": round(
-                self._clamp01(
-                    float(
-                        cognitive_feedback_memory.get("average_cognitive_alignment_score")
-                        or 0.0
-                    )
-                ),
-                4,
-            ),
-            "quality_score": round(
-                self._clamp01(
-                    float(cognitive_feedback_memory.get("average_quality_score") or 0.0)
-                ),
-                4,
-            ),
-            "trend_state": str(self_iteration_trend_memory.get("trend_state") or "").strip(),
-            "effect_direction": str(post_task_effect_memory.get("effect_direction") or "").strip(),
-            "dominant_failure_mode": str(
-                meta_cognition_profile.get("dominant_failure_mode") or ""
-            ).strip(),
-        }
-
-    def _cognitive_evolution_mission_pressure(
-        self,
-        *,
-        cognition_charter: Dict[str, Any],
-        cognitive_feedback_memory: Dict[str, Any],
-        meta_cognition_profile: Dict[str, Any],
-        self_iteration_trend_memory: Dict[str, Any],
-        post_task_effect_memory: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        core_mission = str(cognition_charter.get("core_mission") or "").strip()
-        if not core_mission:
-            core_mission = "Maintain evidence-grounded self-iteration under governance constraints."
-        return {
-            "core_mission": core_mission,
-            "dominant_failure_mode": str(
-                meta_cognition_profile.get("dominant_failure_mode") or ""
-            ).strip(),
-            "top_self_iteration_domain": str(
-                meta_cognition_profile.get("top_self_iteration_domain") or ""
-            ).strip(),
-            "reference_feedback_direction": str(
-                cognitive_feedback_memory.get("reference_feedback_direction") or ""
-            ).strip(),
-            "confidence_feedback_direction": str(
-                cognitive_feedback_memory.get("confidence_feedback_direction") or ""
-            ).strip(),
-            "trend_state": str(self_iteration_trend_memory.get("trend_state") or "").strip(),
-            "effect_direction": str(post_task_effect_memory.get("effect_direction") or "").strip(),
-            "summary": (
-                "Mission pressure currently centers on "
-                f"{str(meta_cognition_profile.get('top_self_iteration_domain') or 'unknown').strip() or 'unknown'} "
-                "under ongoing evidence and outcome feedback."
-            ),
-        }
-
-    def _resolve_cognitive_strategy_delta_policy(
-        self,
-        cognition_charter: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        raw_policy = dict(cognition_charter.get("cognitive_strategy_delta_policy") or {})
-        return {
-            "enabled": bool(raw_policy.get("enabled", True)),
-            "proposal_threshold": float(raw_policy.get("proposal_threshold") or 0.015),
-            "max_recommended_changes": max(
-                1,
-                int(raw_policy.get("max_recommended_changes") or 6),
-            ),
-        }
-
-    def _strategy_delta_reason_for_key(
-        self,
-        *,
-        key: str,
-        cognitive_feedback_memory: Dict[str, Any],
-    ) -> str:
-        if key == "conflict_weight":
-            return (
-                "reference alignment remains weak, so conflict-sensitive evidence should be weighted more heavily."
-            )
-        if key == "agenda_relevance_weight":
-            return (
-                "recent outcomes suggest agenda binding should be emphasized more strongly."
-            )
-        if key == "freshness_weight":
-            return (
-                "recent feedback suggests stale or weakly refreshed evidence is hurting cognition quality."
-            )
-        if key == "confidence_weight":
-            return (
-                "recent outcomes suggest evidence confidence should play a stronger role in attention allocation."
-            )
-        if key == "self_relevance_weight":
-            return (
-                "recent self-iteration outcomes suggest self-referential evidence is especially informative."
-            )
-        if key == "long_tail_item_limit":
-            bias = str(cognitive_feedback_memory.get("long_tail_signal_bias") or "").strip()
-            if bias == "compress":
-                return "recent weak outcomes suggest compressing long-tail context to reduce distraction."
-            return "recent outcomes suggest expanding long-tail context to capture more weak signals."
-        return "recent cognitive feedback suggests this parameter should be adjusted."
-
-    def _reference_alignment_terms(
-        self,
-        recent_reference_alignment: Dict[str, Any],
-    ) -> set[str]:
-        terms: set[str] = set()
-        for key in ("primary_missing_evidence_node", "primary_missing_agenda_node"):
-            value = str(recent_reference_alignment.get(key) or "").strip().lower()
-            if value:
-                terms.add(value)
-        for entry in list(recent_reference_alignment.get("recent_entries") or [])[:4]:
-            if not isinstance(entry, dict):
-                continue
-            for node in (
-                list(entry.get("missing_evidence_nodes") or [])[:3]
-                + list(entry.get("missing_agenda_nodes") or [])[:3]
-            ):
-                value = str(node).strip().lower()
-                if value:
-                    terms.add(value)
-        return terms
 
     def _reference_alignment_gap_labels(
         self,
@@ -4403,241 +3414,6 @@ class EndogenousDriveEngine:
                 if label and label not in labels:
                     labels.append(label)
         return labels
-
-    def _rank_evidence_attention_topics(
-        self,
-        *,
-        policy: Dict[str, Any],
-        evidence_graph: Dict[str, Any],
-        agenda_graph: Dict[str, Any],
-        recent_reference_alignment: Dict[str, Any],
-    ) -> List[Dict[str, Any]]:
-        agenda_nodes = {
-            str(item.get("gap") or "").strip()
-            for item in list(agenda_graph.get("unresolved_gaps") or [])[:8]
-            if isinstance(item, dict) and str(item.get("gap") or "").strip()
-        }
-        focus = str(agenda_graph.get("focus") or "").strip()
-        if focus:
-            agenda_nodes.add(focus)
-        missing_nodes = self._reference_alignment_terms(recent_reference_alignment)
-        ranked: List[Dict[str, Any]] = []
-        for row in list(evidence_graph.get("nodes") or [])[:16]:
-            if not isinstance(row, dict):
-                continue
-            topic = str(row.get("topic") or "").strip()
-            if not topic:
-                continue
-            confidence = self._clamp01(float(row.get("avg_confidence") or 0.0))
-            novelty = self._clamp01(0.2 + min(len(topic.split("_")), 4) * 0.1)
-            agenda_relevance = 1.0 if topic in agenda_nodes else 0.3 if "self" in topic else 0.0
-            conflict_signal = self._clamp01(float(row.get("contradict_count") or 0.0) * 0.35)
-            freshness = 1.0 if topic in missing_nodes else 0.45
-            self_relevance = 1.0 if topic.startswith("self_") or topic in {"self_structure", "body_state"} else 0.0
-            score = (
-                confidence * float(policy.get("confidence_weight") or 0.0)
-                + novelty * float(policy.get("novelty_weight") or 0.0)
-                + freshness * float(policy.get("freshness_weight") or 0.0)
-                + agenda_relevance * float(policy.get("agenda_relevance_weight") or 0.0)
-                + conflict_signal * float(policy.get("conflict_weight") or 0.0)
-                + self_relevance * float(policy.get("self_relevance_weight") or 0.0)
-            )
-            ranked.append(
-                {
-                    **dict(row),
-                    "attention_score": round(self._clamp01(score), 4),
-                }
-            )
-        ranked.sort(
-            key=lambda item: (
-                -float(item.get("attention_score") or 0.0),
-                -float(item.get("avg_confidence") or 0.0),
-                str(item.get("topic") or "").strip(),
-            )
-        )
-        return ranked
-
-    def _rank_evidence_attention_agenda_nodes(
-        self,
-        *,
-        policy: Dict[str, Any],
-        agenda_graph: Dict[str, Any],
-        recent_learning_evidence: List[Dict[str, Any]],
-        external_research_evidence: List[Dict[str, Any]],
-        shell_body_profile: Dict[str, Any],
-        recent_reference_alignment: Dict[str, Any],
-    ) -> List[Dict[str, Any]]:
-        evidence_texts = [
-            " ".join(
-                [
-                    str(item.get("title") or item.get("slot_id") or "").strip(),
-                    str(item.get("summary") or "").strip(),
-                    " ".join(str(v).strip() for v in list(item.get("evidence_summary") or []) if str(v).strip()),
-                ]
-            ).lower()
-            for item in (
-                list(recent_learning_evidence or [])[:6]
-                + list(external_research_evidence or [])[:8]
-                + ([shell_body_profile] if shell_body_profile else [])
-            )
-            if isinstance(item, dict)
-        ]
-        reference_terms = self._reference_alignment_terms(recent_reference_alignment)
-
-        candidates: List[Dict[str, Any]] = []
-        focus = str(agenda_graph.get("focus") or "").strip()
-        if focus:
-            candidates.append(
-                {
-                    "agenda_node": f"focus:{focus}",
-                    "priority": float(agenda_graph.get("focus_confidence") or 0.0),
-                    "source": "focus",
-                }
-            )
-        for item in list(agenda_graph.get("unresolved_gaps") or [])[:8]:
-            if not isinstance(item, dict):
-                continue
-            gap = str(item.get("gap") or "").strip()
-            if gap:
-                candidates.append(
-                    {
-                        "agenda_node": gap,
-                        "priority": float(item.get("priority") or 0.0),
-                        "source": "gap",
-                    }
-                )
-        for item in list(agenda_graph.get("recommended_directions") or [])[:8]:
-            if not isinstance(item, dict):
-                continue
-            direction = str(item.get("direction") or "").strip()
-            if direction:
-                candidates.append(
-                    {
-                        "agenda_node": direction,
-                        "priority": float(item.get("priority") or 0.0),
-                        "source": "direction",
-                    }
-                )
-
-        synthetic_nodes = set()
-        for text in evidence_texts:
-            for token in ("focus:learning_expansion", "focus:truthfulness", "focus:memory_continuity"):
-                if token in text and token not in synthetic_nodes:
-                    synthetic_nodes.add(token)
-                    candidates.append(
-                        {
-                            "agenda_node": token,
-                            "priority": 0.74,
-                            "source": "evidence_focus",
-                        }
-                    )
-
-        ranked: List[Dict[str, Any]] = []
-        for item in candidates:
-            node = str(item.get("agenda_node") or "").strip()
-            if not node:
-                continue
-            node_text = node.lower()
-            evidence_match = 1.0 if any(node_text in text for text in evidence_texts) else 0.0
-            token_match = 0.0
-            node_tokens = [
-                token
-                for token in re.findall(r"[a-zA-Z0-9_]+", node_text)
-                if len(token) >= 4
-            ]
-            if node_tokens and any(any(token in text for token in node_tokens) for text in evidence_texts):
-                token_match = 0.65
-            reference_match = 1.0 if node_text in reference_terms else 0.0
-            priority = self._clamp01(float(item.get("priority") or 0.0))
-            score = self._clamp01(
-                priority * float(policy.get("agenda_relevance_weight") or 0.0)
-                + evidence_match * float(policy.get("confidence_weight") or 0.0)
-                + token_match * float(policy.get("freshness_weight") or 0.0)
-                + reference_match * float(policy.get("conflict_weight") or 0.0)
-            )
-            ranked.append(
-                {
-                    **dict(item),
-                    "attention_score": round(score, 4),
-                }
-            )
-        ranked.sort(
-            key=lambda item: (
-                -float(item.get("attention_score") or 0.0),
-                -float(item.get("priority") or 0.0),
-                str(item.get("agenda_node") or "").strip(),
-            )
-        )
-        return ranked
-
-    def _rank_evidence_attention_items(
-        self,
-        *,
-        policy: Dict[str, Any],
-        items: List[Dict[str, Any]],
-        agenda_graph: Dict[str, Any],
-        recent_reference_alignment: Dict[str, Any],
-        channel_name: str,
-    ) -> List[Dict[str, Any]]:
-        focus = str(agenda_graph.get("focus") or "").strip().lower()
-        agenda_terms = {
-            focus,
-            *{
-                str(item.get("gap") or "").strip().lower()
-                for item in list(agenda_graph.get("unresolved_gaps") or [])[:8]
-                if isinstance(item, dict) and str(item.get("gap") or "").strip()
-            },
-        }
-        missing_terms = self._reference_alignment_terms(recent_reference_alignment)
-        ranked: List[Dict[str, Any]] = []
-        for item in items[:16]:
-            if not isinstance(item, dict):
-                continue
-            title = str(item.get("title") or item.get("slot_id") or "").strip()
-            summary = str(item.get("summary") or "").strip()
-            text = f"{title} {summary}".lower()
-            confidence = self._clamp01(
-                float(item.get("confidence_score") or item.get("source_reliability") or 0.0)
-            )
-            novelty = self._clamp01(float(item.get("novelty_score") or 0.0))
-            freshness = self._evidence_item_freshness_score(item)
-            agenda_relevance = 1.0 if any(term and term in text for term in agenda_terms) else 0.0
-            conflict_signal = 1.0 if any(term and term in text for term in missing_terms) else 0.0
-            self_relevance = 1.0 if channel_name in {"recent_learning", "shell_body_profile"} else 0.0
-            score = (
-                confidence * float(policy.get("confidence_weight") or 0.0)
-                + novelty * float(policy.get("novelty_weight") or 0.0)
-                + freshness * float(policy.get("freshness_weight") or 0.0)
-                + agenda_relevance * float(policy.get("agenda_relevance_weight") or 0.0)
-                + conflict_signal * float(policy.get("conflict_weight") or 0.0)
-                + self_relevance * float(policy.get("self_relevance_weight") or 0.0)
-            )
-            ranked.append(
-                {
-                    **dict(item),
-                    "attention_score": round(self._clamp01(score), 4),
-                }
-            )
-        ranked.sort(
-            key=lambda item: (
-                -float(item.get("attention_score") or 0.0),
-                -float(item.get("confidence_score") or item.get("source_reliability") or 0.0),
-                str(item.get("title") or item.get("slot_id") or "").strip(),
-            )
-        )
-        return ranked
-
-    def _evidence_item_freshness_score(self, item: Dict[str, Any]) -> float:
-        timestamp = item.get("published_at") or item.get("completed_at")
-        parsed = self._parse_timestamp(timestamp)
-        if parsed is None:
-            return 0.35
-        age_days = max(0, (datetime.now(timezone.utc) - parsed).days)
-        if age_days <= 14:
-            return 1.0
-        if age_days <= 90:
-            return 0.7
-        return 0.3
 
     def _resolve_cognitive_context_layering_policy(
         self,
@@ -4677,7 +3453,6 @@ class EndogenousDriveEngine:
                 "recent_learning_evidence",
                 "external_research_titles",
                 "evidence_channels",
-                "memory_context_preview",
                 "long_tail_summary",
             ],
         }
@@ -4964,7 +3739,6 @@ class EndogenousDriveEngine:
                 "recent_learning_evidence",
                 "external_research_titles",
                 "evidence_channels",
-                "memory_context_preview",
                 "long_tail_summary",
             ]
         cognition_charter["context_layering_policy"] = context_layering_policy
@@ -5012,7 +3786,6 @@ class EndogenousDriveEngine:
                 "queued_body_improvement_titles",
                 "queued_tasks",
                 "shell_slot",
-                "memory_context",
             ]
         if not list(prompt_attention_policy.get("structure_keys") or []):
             prompt_attention_policy["structure_keys"] = [
@@ -5030,53 +3803,6 @@ class EndogenousDriveEngine:
                 "activity_tail_compaction",
             ]
         cognition_charter["prompt_attention_policy"] = prompt_attention_policy
-        evidence_attention_policy = dict(cognition_charter.get("evidence_attention_policy") or {})
-        if "enabled" not in evidence_attention_policy:
-            evidence_attention_policy["enabled"] = True
-        for key, fallback in (
-            ("confidence_weight", 0.3),
-            ("novelty_weight", 0.08),
-            ("freshness_weight", 0.14),
-            ("agenda_relevance_weight", 0.24),
-            ("conflict_weight", 0.14),
-            ("self_relevance_weight", 0.1),
-        ):
-            if evidence_attention_policy.get(key) is None:
-                evidence_attention_policy[key] = fallback
-        for key, fallback in (
-            ("decision_core_topic_limit", 3),
-            ("supporting_item_limit", 4),
-            ("long_tail_item_limit", 3),
-        ):
-            if not int(evidence_attention_policy.get(key) or 0):
-                evidence_attention_policy[key] = fallback
-        cognition_charter["evidence_attention_policy"] = evidence_attention_policy
-        cognitive_feedback_policy = dict(cognition_charter.get("cognitive_feedback_policy") or {})
-        if "enabled" not in cognitive_feedback_policy:
-            cognitive_feedback_policy["enabled"] = True
-        for key, fallback in (
-            ("adaptation_strength", 0.22),
-            ("confidence_weight_step", 0.08),
-            ("freshness_weight_step", 0.06),
-            ("agenda_relevance_weight_step", 0.1),
-            ("conflict_weight_step", 0.08),
-            ("self_relevance_weight_step", 0.06),
-        ):
-            if cognitive_feedback_policy.get(key) is None:
-                cognitive_feedback_policy[key] = fallback
-        cognition_charter["cognitive_feedback_policy"] = cognitive_feedback_policy
-        cognitive_strategy_delta_policy = dict(
-            cognition_charter.get("cognitive_strategy_delta_policy") or {}
-        )
-        if "enabled" not in cognitive_strategy_delta_policy:
-            cognitive_strategy_delta_policy["enabled"] = True
-        if cognitive_strategy_delta_policy.get("proposal_threshold") is None:
-            cognitive_strategy_delta_policy["proposal_threshold"] = 0.015
-        if not int(cognitive_strategy_delta_policy.get("max_recommended_changes") or 0):
-            cognitive_strategy_delta_policy["max_recommended_changes"] = 6
-        cognition_charter["cognitive_strategy_delta_policy"] = (
-            cognitive_strategy_delta_policy
-        )
         return cognition_charter
 
     def _resolve_cognitive_posture_from_policy(
@@ -9412,10 +8138,7 @@ class EndogenousDriveEngine:
         governor_mode: bool,
     ) -> float:
         base = {
-            "llm": 0.58,
-            "mem_compressed": 0.48,
             "activity_metadata": 0.42,
-            "generic_fallback": 0.3,
             "shell_baseline_bootstrap": 0.55,
             "shell_baseline_fallback": 0.4,
         }.get(topic_source, 0.4)
@@ -9699,253 +8422,6 @@ class EndogenousDriveEngine:
 
         return ""
 
-    def _llm_generate_learning_topics(
-        self,
-        activity: Dict[str, Any],
-        max_topics: int = 3,
-        governor_mode: bool = False,
-        drive_context: Optional[Dict[str, Any]] = None,
-    ) -> List[Dict[str, str]]:
-        """Use LLM to generate intelligent learning topics from memory context.
-
-        Unlike _extract_learning_topic (mechanical string slicing), this reads
-        the compressed memory state and recent activity to produce genuinely
-        useful research directions grounded in the system's actual history.
-
-        LLM credentials are resolved by ``memai.model_config.resolve_mem_llm_client`` —
-        the canonical source of truth shared with ``MemoryService`` and the
-        Tier1→Tier2 bridge.  Whatever the user configured via the CLI
-        ``/api`` command (which writes to ``memory.llm.*``) is what runs
-        here; there is no separate supervisor-side model config.
-
-        Returns list of {"title": ..., "summary": ...} dicts.
-        Falls back to empty list if LLM is unavailable.
-        """
-        try:
-            from memai.model_config import resolve_mem_llm_client
-
-            client, _ = resolve_mem_llm_client(role="default")
-            if client is None:
-                return []
-
-            # ── Fetch real memory context from memory_service ──
-            # In governor mode, fetch deeper context (scenes + epochs too)
-            memory_context = self._fetch_memory_context(deep=governor_mode)
-
-            recent = dict(activity.get("recent_metadata") or {})
-            user_req = str(recent.get("user_request", {}).get("text", ""))[:500]
-            agent_resp = str(recent.get("agent_work", {}).get("summary", ""))[:500]
-            errors = int(activity.get("counts", {}).get("error_count", 0))
-            uncertainty = int(activity.get("counts", {}).get("uncertainty_high_count", 0))
-            history_context = self._format_learning_history_context(drive_context or {})
-
-            if governor_mode:
-                # Auto/Governor mode: user requests are blocked — rely on
-                # compressed memory as the primary context for topic generation.
-                prompt = (
-                    f"系统处于全自动 Governor Mode。用户请求已被封锁，"
-                    f"你需要完全基于压缩长期记忆自主规划学习方向。\n\n"
-                    f"【系统状态】错误={errors}  高不确定性={uncertainty}\n\n"
-                    f"【压缩记忆上下文 — 历史弧线、场景和事件摘要】\n"
-                    f"{memory_context if memory_context else '(暂无压缩记忆，请基于系统错误和不确定性生成)'}\n\n"
-                    f"{history_context}\n\n"
-                    f"生成 {max_topics} 个有实质价值的学习方向。优先考虑：\n"
-                    f"1. 记忆中提到但未解决的架构问题或技术债务\n"
-                    f"2. 反复出现的错误模式或不确定性问题\n"
-                    f"3. 记忆显示的代码改进机会\n"
-                    f"4. 可执行的、可验证的具体研究主题\n"
-                    f"5. 避免重复最近已完成或当前队列里已经存在的学习方向\n"
-                    f"输出JSON数组: [{{\"title\": \"...\", \"summary\": \"...\"}}]"
-                )
-                system_prompt = (
-                    "你是 VoidCube 的内生驱动器。系统处于全自动模式，"
-                    "用户不在线。你需要完全基于压缩长期记忆中的历史讨论、"
-                    "未解决问题和架构决策来生成有意义的学习方向。"
-                    "你的输出将直接决定 Agent 的研究方向——请确保每个主题"
-                    "都是具体的、可操作的、基于记忆上下文而非凭空想象的。"
-                )
-            else:
-                prompt = (
-                    f"基于以下 VoidCube 系统状态和长期记忆，生成 {max_topics} 个值得探索的学习方向。\n\n"
-                    f"【最近用户请求】{user_req if user_req else '无'}\n"
-                    f"【最近 Agent 响应】{agent_resp if agent_resp else '无'}\n"
-                    f"【系统错误】{errors}  【高不确定性】{uncertainty}\n\n"
-                    f"【压缩记忆上下文 — 最近的活跃弧线和场景】\n"
-                    f"{memory_context if memory_context else '(暂无压缩记忆)'}\n\n"
-                    f"{history_context}\n\n"
-                    f"基于以上所有信息生成学习方向。不要泛泛而谈——"
-                    f"基于记忆中的实际问题、未解决的疑问、代码改进机会来生成。"
-                    f"避免重复最近已完成或当前队列里已经存在的学习任务。"
-                    f"输出JSON数组: [{{\"title\": \"...\", \"summary\": \"...\"}}]"
-                )
-                system_prompt = (
-                    "你是 VoidCube 的内生驱动器。你有权访问系统的压缩长期记忆。"
-                    "基于记忆中的实际问题、架构讨论、代码改进机会和未解决的疑问，"
-                    "生成有实质价值的学习方向——具体的、可操作的、基于真实上下文。"
-                )
-            result = client.complete_json(
-                system_prompt=system_prompt,
-                user_payload={"context": prompt},
-                task="extractor.events",
-            )
-            if isinstance(result, list) and len(result) > 0:
-                topics = []
-                for item in result[:max_topics]:
-                    if isinstance(item, dict):
-                        title = str(item.get("title", "")).strip()
-                        summary = str(item.get("summary", "")).strip()
-                        if title:
-                            topics.append({"title": title, "summary": summary or title})
-                if topics:
-                    return topics
-            return []
-        except Exception:
-            return []
-
-    def _format_learning_history_context(self, drive_context: Dict[str, Any]) -> str:
-        recent_learning_titles = list(drive_context.get("recent_learning_titles") or [])
-        queued_learning_titles = list(drive_context.get("queued_learning_titles") or [])
-        queued_body_improvement_titles = list(drive_context.get("queued_body_improvement_titles") or [])
-        lines = []
-        if recent_learning_titles:
-            lines.append("【最近已完成的学习主题】")
-            lines.extend(f"- {title}" for title in recent_learning_titles[:5])
-        if queued_learning_titles:
-            lines.append("【当前队列中的学习任务】")
-            lines.extend(f"- {title}" for title in queued_learning_titles[:5])
-        if queued_body_improvement_titles:
-            lines.append("【当前队列中的替身改进任务】")
-            lines.extend(f"- {title}" for title in queued_body_improvement_titles[:3])
-        return "\n".join(lines)
-
-    def _fetch_memory_context(self, deep: bool = False) -> str:
-        """Fetch recent compressed memory summaries from memory_service for LLM context.
-
-        In deep mode (governor/auto mode): fetches arcs + scenes + epochs with
-        larger limits to provide richer context when user interaction is absent.
-        """
-        try:
-            import urllib.request, json as _json
-            memory_url = self._resolve_memory_url()
-            if not memory_url:
-                return ""
-            lines = []
-            if deep:
-                # Governor mode: fetch arcs, scenes, and epochs for deep context
-                for mem_type, limit in [("arc", 8), ("scene", 5), ("epoch", 3)]:
-                    req = _json.dumps({
-                        "memory_type": mem_type, "limit": limit,
-                        "include_superseded": False,
-                    }).encode()
-                    resp = urllib.request.urlopen(
-                        urllib.request.Request(
-                            f"{memory_url}/compressed/search",
-                            data=req, headers={"Content-Type": "application/json"},
-                        ), timeout=3,
-                    )
-                    data = _json.loads(resp.read())
-                    for r in data.get("results", []):
-                        lines.append(
-                            f"- [{r.get('memory_type', '?')}] {r.get('title', '')}: "
-                            f"{r.get('summary', '')[:200]}"
-                        )
-            else:
-                req = _json.dumps({
-                    "memory_type": "arc", "limit": 5, "include_superseded": False,
-                }).encode()
-                resp = urllib.request.urlopen(
-                    urllib.request.Request(
-                        f"{memory_url}/compressed/search",
-                        data=req, headers={"Content-Type": "application/json"},
-                    ), timeout=3,
-                )
-                data = _json.loads(resp.read())
-                for r in data.get("results", [])[:5]:
-                    lines.append(
-                        f"- [{r.get('memory_type', '?')}] {r.get('title', '')}: "
-                        f"{r.get('summary', '')[:200]}"
-                    )
-            return "\n".join(lines) if lines else ""
-        except Exception:
-            return ""
-
-    def _mem_extract_learning_topics(
-        self, activity: Dict[str, Any], max_topics: int = 3
-    ) -> List[Dict[str, str]]:
-        """Tier-2 fallback: pull learning topics from Mem compressed memories.
-
-        This is the local path that does NOT require an LLM API key — it
-        reads `compressed_memories` rows (Arc / Scene / Epoch summaries) and
-        turns each row's title + summary into a self-learning topic candidate.
-        The architectural baseline §3.4 "LLM 优先 + 启发式降级" pattern
-        applies here: when the LLM path is unavailable, structured compressed
-        memory is still meaningful enough to drive a learning task.
-
-        The HTTP call goes through the same gateway-resolved memory URL that
-        `_fetch_memory_context` uses, keeping with baseline §4.2
-        (gateway as the internal entry point).
-        """
-        try:
-            import urllib.request, json as _json
-            memory_url = self._resolve_memory_url()
-            if not memory_url:
-                return []
-            req = _json.dumps({
-                "memory_type": "arc",
-                "limit": max_topics,
-                "include_superseded": False,
-            }).encode()
-            resp = urllib.request.urlopen(
-                urllib.request.Request(
-                    f"{memory_url}/compressed/search",
-                    data=req,
-                    headers={"Content-Type": "application/json"},
-                ),
-                timeout=3,
-            )
-            data = _json.loads(resp.read())
-            results = data.get("results", [])
-        except Exception:
-            return []
-
-        topics: List[Dict[str, str]] = []
-        for r in results:
-            title = str(r.get("title", "")).strip()
-            summary = str(r.get("summary", "")).strip()
-            if not title:
-                continue
-            # Trim long titles but keep them human-readable
-            if len(title) > 80:
-                title = title[:77] + "..."
-            topics.append({
-                "title": title,
-                "summary": (
-                    f"Use idle capacity to revisit memory arc '{title}' — "
-                    f"{summary[:240]}" if summary else
-                    f"Use idle capacity to revisit memory arc '{title}' and "
-                    f"check whether new evidence requires follow-up."
-                ),
-            })
-            if len(topics) >= max_topics:
-                break
-        return topics
-
-    @staticmethod
-    def _resolve_memory_url() -> str | None:
-        """Resolve memory service URL via gateway service discovery."""
-        try:
-            import urllib.request, json as _json
-            resp = urllib.request.urlopen(
-                "http://127.0.0.1:6000/admin/services", timeout=2,
-            )
-            services = _json.loads(resp.read()).get("services", {})
-            for svc in services.values():
-                if svc.get("service_type") == "memory":
-                    return svc.get("address")
-        except Exception:
-            pass
-        return None
-
     def _build_shell_baseline_learning_candidate(
         self,
         *,
@@ -10081,191 +8557,7 @@ class EndogenousDriveEngine:
                 return shell_slot
         except Exception:
             pass
-
-        try:
-            import urllib.request, json as _json
-            memory_url = self._resolve_memory_url()
-            if not memory_url:
-                return None
-            resp = urllib.request.urlopen(
-                f"{memory_url}/body/shell/slot",
-                timeout=3,
-            )
-            data = _json.loads(resp.read())
-            if data.get("slot_id"):
-                return data
-        except Exception:
-            pass
-
         return None
-
-    def _generate_body_improvement_direction(
-        self,
-        idle_window: Dict[str, Any],
-        learning_quality: float,
-        shell_slot_meta: Dict[str, Any],
-    ) -> Optional[Dict[str, str]]:
-        activity = dict(idle_window.get("activity") or {})
-
-        llm_direction = self._llm_generate_improvement_direction(
-            activity,
-            learning_quality,
-            shell_slot_meta,
-        )
-        if llm_direction:
-            llm_direction["source"] = "llm"
-            return llm_direction
-
-        history_direction = self._generate_improvement_from_history(
-            idle_window,
-            shell_slot_meta,
-        )
-        if history_direction:
-            history_direction["source"] = "history"
-            return history_direction
-
-        git_direction = self._generate_improvement_from_git_diff(
-            shell_slot_meta,
-        )
-        if git_direction:
-            git_direction["source"] = "git_diff"
-            return git_direction
-
-        fallback_direction = {
-            "title": "General code quality improvement",
-            "summary": (
-                "Apply recent learning findings to improve the shell body's code quality. "
-                "Focus on fixing identified issues, improving documentation, and enhancing "
-                "code maintainability within the allowed evolution boundaries."
-            ),
-            "diff_summary": "",
-            "source": "fallback",
-        }
-        return fallback_direction
-
-    def _llm_generate_improvement_direction(
-        self,
-        activity: Dict[str, Any],
-        learning_quality: float,
-        shell_slot_meta: Dict[str, Any],
-    ) -> Optional[Dict[str, str]]:
-        try:
-            from memai.model_config import resolve_mem_llm_client
-            client, _ = resolve_mem_llm_client(role="default")
-            if client is None:
-                return None
-
-            memory_context = self._fetch_memory_context()
-            recent = dict(activity.get("recent_metadata") or {})
-            user_req = str(recent.get("user_request", {}).get("text", ""))[:500]
-            agent_resp = str(recent.get("agent_work", {}).get("summary", ""))[:500]
-
-            prompt = (
-                f"基于以下信息，为替身 Agent 的代码改进生成一个具体方向。\n\n"
-                f"【学习质量评分】{learning_quality:.1f}/100\n"
-                f"【替身槽位】{shell_slot_meta.get('slot_id', '?')}\n"
-                f"【替身工作树路径】{shell_slot_meta.get('worktree_path', '?')}\n"
-                f"【最近用户请求】{user_req if user_req else '无'}\n"
-                f"【最近 Agent 响应】{agent_resp if agent_resp else '无'}\n\n"
-                f"【压缩记忆上下文】\n{memory_context if memory_context else '(暂无)'}\n\n"
-                f"分析学习成果和记忆中的问题，提出一个具体的代码改进方向。"
-                f"改进方向应该是：\n"
-                f"- 基于实际学习成果\n"
-                f"- 在允许的演化边界内（agent/, skills/, tools/, presets/）\n"
-                f"- 可操作且有明确目标\n"
-                f"输出JSON: {{\"title\": \"...\", \"summary\": \"...\", \"diff_summary\": \"...\"}}"
-            )
-
-            result = client.complete_json(
-                system_prompt=(
-                    "你是代码改进专家。基于学习成果和系统状态，"
-                    "为替身 Agent 提出具体、可操作的代码改进方向。"
-                    "只关注 agent/、skills/、tools/、presets/ 目录内的改进。"
-                ),
-                user_payload={"task": prompt},
-                task="scholar.revision",
-            )
-
-            if isinstance(result, dict):
-                title = str(result.get("title", "")).strip()
-                summary = str(result.get("summary", "")).strip()
-                if title:
-                    return {
-                        "title": title,
-                        "summary": summary or title,
-                        "diff_summary": str(result.get("diff_summary", "")),
-                    }
-        except Exception:
-            pass
-        return None
-
-    def _generate_improvement_from_history(
-        self,
-        idle_window: Dict[str, Any],
-        shell_slot_meta: Dict[str, Any],
-    ) -> Optional[Dict[str, str]]:
-        try:
-            learning_tasks = idle_window.get("completed_learning_tasks", [])
-            if not learning_tasks:
-                return None
-
-            recent_tasks = sorted(
-                learning_tasks,
-                key=lambda t: t.get("completed_at", ""),
-                reverse=True,
-            )[:3]
-
-            topics = []
-            for task in recent_tasks:
-                title = str(task.get("title", "") or task.get("topic", ""))
-                if title:
-                    topics.append(title)
-
-            if topics:
-                return {
-                    "title": "Apply recent learning: " + ", ".join(topics[:2]),
-                    "summary": (
-                        f"Apply recent learning findings to improve the shell body. "
-                        f"Recent learning topics: {', '.join(topics)}. "
-                        f"Focus on implementing improvements based on these research results."
-                    ),
-                    "diff_summary": "",
-                }
-        except Exception:
-            pass
-        return None
-
-    def _generate_improvement_from_git_diff(
-        self,
-        shell_slot_meta: Dict[str, Any],
-    ) -> Optional[Dict[str, str]]:
-        try:
-            worktree_path = shell_slot_meta.get("worktree_path")
-            if not worktree_path:
-                return None
-
-            import subprocess
-            result = subprocess.run(
-                ["git", "status", "--short"],
-                cwd=worktree_path,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                changed_count = len(result.stdout.strip().splitlines())
-                return {
-                    "title": f"Review {changed_count} pending changes",
-                    "summary": (
-                        f"The shell body worktree has {changed_count} files with pending changes. "
-                        f"Review these changes and apply appropriate improvements based on learning findings."
-                    ),
-                    "diff_summary": result.stdout[:500],
-                }
-        except Exception:
-            pass
-        return None
-
 
 def _stable_key_for_topic(topic: str) -> str:
     """Generate a stable dedup key from a learning topic string.

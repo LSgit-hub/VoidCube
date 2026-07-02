@@ -327,10 +327,7 @@ class TestEndogenousDriveErrorBridge:
         )
         assert truth.utility > exploratory.utility
         assert truth.metadata["score_breakdown"]["candidate_kind"] == "truthfulness_review"
-        assert exploratory.metadata["score_breakdown"]["candidate_kind"] in {
-            "exploratory_learning",
-            "generic_learning_fallback",
-        }
+        assert exploratory.metadata["score_breakdown"]["candidate_kind"] == "exploratory_learning"
 
     def test_candidates_include_score_breakdown_for_auditable_ranking(self):
         engine = EndogenousDriveEngine()

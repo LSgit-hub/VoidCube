@@ -55,6 +55,34 @@ async def test_supervisor_idle_window_allows_planning_and_execution_when_gateway
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_supervisor_idle_window_compares_gateway_naive_timestamps_as_utc(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    async def fake_snapshot():
+        return {
+            "last_user_request_at": "2026-05-25T00:00:00",
+            "last_agent_work_at": "2026-05-25T00:00:00",
+            "last_memory_task_at": "2026-05-25T00:00:00",
+            "last_self_evolution_activity_at": "2026-05-25T00:00:00",
+            "counts": {},
+            "active_sessions": 0,
+        }
+
+    supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
+
+    result = await supervisor.evaluate_idle_window(
+        {
+            "now": "2026-05-25T08:15:00+08:00",
+        }
+    )
+
+    assert result["idle_seconds"]["user"] == 900.0
+    assert result["idle_seconds"]["agent"] == 900.0
+    assert result["idle_seconds"]["memory"] == 900.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_supervisor_idle_window_blocks_execution_when_recent_user_activity_exists(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 

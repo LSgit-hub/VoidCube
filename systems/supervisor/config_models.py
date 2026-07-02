@@ -139,7 +139,6 @@ class EndogenousDriveCognitiveContextLayeringPolicyConfig(BaseModel):
         "recent_learning_evidence",
         "external_research_titles",
         "evidence_channels",
-        "memory_context_preview",
         "long_tail_summary",
     ]
 
@@ -186,7 +185,6 @@ class EndogenousDrivePromptAttentionPolicyConfig(BaseModel):
         "queued_body_improvement_titles",
         "queued_tasks",
         "shell_slot",
-        "memory_context",
     ]
     structure_keys: list[str] = [
         "decision_core",
@@ -201,35 +199,6 @@ class EndogenousDrivePromptAttentionPolicyConfig(BaseModel):
         "evidence_tail_compaction",
         "activity_tail_compaction",
     ]
-
-
-class EndogenousDriveEvidenceAttentionPolicyConfig(BaseModel):
-    enabled: bool = True
-    confidence_weight: float = 0.3
-    novelty_weight: float = 0.08
-    freshness_weight: float = 0.14
-    agenda_relevance_weight: float = 0.24
-    conflict_weight: float = 0.14
-    self_relevance_weight: float = 0.1
-    decision_core_topic_limit: int = 3
-    supporting_item_limit: int = 4
-    long_tail_item_limit: int = 3
-
-
-class EndogenousDriveCognitiveFeedbackPolicyConfig(BaseModel):
-    enabled: bool = True
-    adaptation_strength: float = 0.22
-    confidence_weight_step: float = 0.08
-    freshness_weight_step: float = 0.06
-    agenda_relevance_weight_step: float = 0.1
-    conflict_weight_step: float = 0.08
-    self_relevance_weight_step: float = 0.06
-
-
-class EndogenousDriveCognitiveStrategyDeltaPolicyConfig(BaseModel):
-    enabled: bool = True
-    proposal_threshold: float = 0.015
-    max_recommended_changes: int = 6
 
 
 class EndogenousDriveCognitionCharterConfig(BaseModel):
@@ -274,15 +243,6 @@ class EndogenousDriveCognitionCharterConfig(BaseModel):
     )
     prompt_attention_policy: EndogenousDrivePromptAttentionPolicyConfig = Field(
         default_factory=EndogenousDrivePromptAttentionPolicyConfig
-    )
-    evidence_attention_policy: EndogenousDriveEvidenceAttentionPolicyConfig = Field(
-        default_factory=EndogenousDriveEvidenceAttentionPolicyConfig
-    )
-    cognitive_feedback_policy: EndogenousDriveCognitiveFeedbackPolicyConfig = Field(
-        default_factory=EndogenousDriveCognitiveFeedbackPolicyConfig
-    )
-    cognitive_strategy_delta_policy: EndogenousDriveCognitiveStrategyDeltaPolicyConfig = Field(
-        default_factory=EndogenousDriveCognitiveStrategyDeltaPolicyConfig
     )
     cognitive_control_policy: EndogenousDriveCognitiveControlPolicyConfig = Field(
         default_factory=EndogenousDriveCognitiveControlPolicyConfig

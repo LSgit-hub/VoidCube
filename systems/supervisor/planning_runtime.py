@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import json
 import uuid
@@ -193,18 +194,6 @@ class PlanningRuntimeMixin:
                             "missing_posture_alignment_count": 0,
                             "missing_priority_basis_count": 0,
                             "entry_count": 0,
-                        },
-                        "cognitive_evolution_trace": {
-                            "feedback_available": False,
-                            "feedback_reference_direction": None,
-                            "feedback_long_tail_bias": None,
-                            "strategy_delta_available": False,
-                            "strategy_delta_count": 0,
-                            "primary_strategy_delta_target": None,
-                            "evolution_draft_available": False,
-                            "evolution_failure_mode": None,
-                            "evolution_attention_delta_count": 0,
-                            "evolution_charter_delta_count": 0,
                         },
                     },
                 },
@@ -1525,15 +1514,6 @@ class PlanningRuntimeMixin:
         cognitive_assessment_memory = dict(
             lm_reasoning_state.get("cognitive_assessment_memory") or {}
         )
-        cognitive_feedback_memory = dict(
-            lm_reasoning_state.get("cognitive_feedback_memory") or {}
-        )
-        cognitive_strategy_delta = dict(
-            lm_reasoning_state.get("cognitive_strategy_delta") or {}
-        )
-        cognitive_evolution_draft = dict(
-            lm_reasoning_state.get("cognitive_evolution_draft") or {}
-        )
         if not cognitive_assessment_memory:
             cognitive_assessment_memory = self._build_recent_lm_cognitive_assessment_summary(
                 history_snapshot=history_snapshot,
@@ -1648,9 +1628,6 @@ class PlanningRuntimeMixin:
             proposal_drift_memory=proposal_drift_memory,
             recent_cognitive_alignment=recent_cognitive_alignment,
             cognitive_assessment_memory=cognitive_assessment_memory,
-            cognitive_feedback_memory=cognitive_feedback_memory,
-            cognitive_strategy_delta=cognitive_strategy_delta,
-            cognitive_evolution_draft=cognitive_evolution_draft,
             self_iteration_hypotheses=self_iteration_hypotheses,
             self_iteration_trend_memory=self_iteration_trend_memory,
             switch_self_regulation_memory=switch_self_regulation_memory,
@@ -1745,9 +1722,6 @@ class PlanningRuntimeMixin:
         proposal_drift_memory: Dict[str, Any],
         recent_cognitive_alignment: Dict[str, Any],
         cognitive_assessment_memory: Dict[str, Any],
-        cognitive_feedback_memory: Dict[str, Any],
-        cognitive_strategy_delta: Dict[str, Any],
-        cognitive_evolution_draft: Dict[str, Any],
         self_iteration_hypotheses: Dict[str, Any],
         self_iteration_trend_memory: Dict[str, Any],
         switch_self_regulation_memory: Dict[str, Any],
@@ -1765,30 +1739,6 @@ class PlanningRuntimeMixin:
                 *(_stored_count(item, key) for key in primary_keys),
                 _nonempty_count(item.get(legacy_key)),
             )
-
-        def _change_targets(values: Any, *, limit: int) -> list[str]:
-            return [
-                str(item.get("target") or "").strip()
-                for item in list(values or [])[:limit]
-                if isinstance(item, dict) and str(item.get("target") or "").strip()
-            ]
-
-        strategy_delta_targets = _change_targets(
-            cognitive_strategy_delta.get("recommended_changes"),
-            limit=6,
-        )
-        attention_delta_targets = _change_targets(
-            dict(cognitive_evolution_draft.get("attention_policy_delta") or {}).get(
-                "recommended_changes"
-            ),
-            limit=6,
-        )
-        charter_delta_targets = _change_targets(
-            dict(cognitive_evolution_draft.get("charter_delta") or {}).get(
-                "recommended_changes"
-            ),
-            limit=4,
-        )
 
         return {
             "recent_reference_alignment": {
@@ -1900,32 +1850,6 @@ class PlanningRuntimeMixin:
                     recent_cognitive_alignment,
                     "entry_count",
                 ),
-            },
-            "cognitive_evolution_trace": {
-                "feedback_available": bool(cognitive_feedback_memory.get("available")),
-                "feedback_reference_direction": str(
-                    cognitive_feedback_memory.get("reference_feedback_direction") or ""
-                ).strip()
-                or None,
-                "feedback_long_tail_bias": str(
-                    cognitive_feedback_memory.get("long_tail_signal_bias") or ""
-                ).strip()
-                or None,
-                "strategy_delta_available": bool(cognitive_strategy_delta.get("available")),
-                "strategy_delta_count": len(strategy_delta_targets),
-                "primary_strategy_delta_target": (
-                    strategy_delta_targets[0] if strategy_delta_targets else None
-                ),
-                "evolution_draft_available": bool(cognitive_evolution_draft.get("available")),
-                "evolution_failure_mode": str(
-                    dict(cognitive_evolution_draft.get("mission_pressure") or {}).get(
-                        "dominant_failure_mode"
-                    )
-                    or ""
-                ).strip()
-                or None,
-                "evolution_attention_delta_count": len(attention_delta_targets),
-                "evolution_charter_delta_count": len(charter_delta_targets),
             },
             "cognitive_assessment_memory": {
                 "available": bool(cognitive_assessment_memory.get("available")),
@@ -5026,7 +4950,12 @@ class PlanningRuntimeMixin:
         if shell_meta is None:
             return None
 
-        payload = shell_meta.model_dump(mode="json")
+        try:
+            payload = shell_meta.model_dump(mode="json")
+        except Exception:
+            return None
+        if not isinstance(payload, dict):
+            return None
         slot_id = str(payload.get("slot_id") or "").strip()
         if not slot_id:
             return payload
@@ -5034,7 +4963,10 @@ class PlanningRuntimeMixin:
         from pathlib import Path
 
         repaired = False
-        expected_root = registry.slot_root(slot_id)
+        try:
+            expected_root = registry.slot_root(slot_id)
+        except Exception:
+            return payload
         for field_name, leaf in (
             ("worktree_path", "worktree"),
             ("runtime_path", "runtime"),
@@ -5167,7 +5099,8 @@ class PlanningRuntimeMixin:
             return None
         try:
             parsed = datetime.fromisoformat(value)
-            # Normalize to naive UTC for safe comparison with datetime.now()
+            # Gateway activity timestamps are naive UTC; keep comparisons in
+            # that same clock domain to avoid local-time skew.
             if parsed.tzinfo is not None:
                 from datetime import timezone
                 parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
@@ -5196,10 +5129,13 @@ class PlanningRuntimeMixin:
         if isinstance(now_override, str):
             try:
                 now = datetime.fromisoformat(now_override)
+                if now.tzinfo is not None:
+                    from datetime import timezone
+                    now = now.astimezone(timezone.utc).replace(tzinfo=None)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=f"Invalid now override: {exc}")
         else:
-            now = datetime.now()
+            now = datetime.utcnow()
 
         service_cfg = self.config.service_runtime
         user_idle_threshold = int(request.get("user_idle_seconds", 600))
@@ -5647,7 +5583,6 @@ class PlanningRuntimeMixin:
                 max_candidates=max_candidates,
                 deliberation_report=deliberation,
                 lm_proposals_override=_lm_proposals_for_second_candidate_pass(),
-                skip_auxiliary_lm=True,
             )
             queue_items = _candidate_queue_items(candidates)
 
@@ -6283,6 +6218,13 @@ class PlanningRuntimeMixin:
             )
             recovered += 1
         return recovered
+
+    def _get_self_evolution_cycle_lock(self) -> asyncio.Lock:
+        lock = getattr(self, "_self_evolution_cycle_lock", None)
+        if lock is None:
+            lock = asyncio.Lock()
+            setattr(self, "_self_evolution_cycle_lock", lock)
+        return lock
 
     def _build_self_evolution_execution_request(
         self,
@@ -7212,30 +7154,50 @@ class PlanningRuntimeMixin:
         result = await self._execution_facade.execute_self_evolution_request(payload)
 
         # ── Failure recovery: clear dispatched flag so the task can be ──
-        # retried on the next cycle.  Only explicit error statuses trigger
-        # retry; everything else (including None / unknown) is treated as
-        # success to avoid false-positive retries on mock or partial results.
+        # retried on the next cycle.  Only explicit success statuses close the
+        # task; empty or unknown statuses mean the executor did not confirm
+        # completion.
         result_status = result.get("status") if isinstance(result, dict) else None
+        normalized_result_status = (
+            str(result_status).strip().lower() if result_status is not None else ""
+        )
         _ERROR_STATUSES = frozenset({"error", "failed", "timeout", "unreachable"})
-        is_failure = isinstance(result_status, str) and result_status in _ERROR_STATUSES
+        _SUCCESS_STATUSES = frozenset(
+            {
+                "ok",
+                "success",
+                "executed",
+                "completed",
+                "complete",
+                "compressed",
+                "already_compressed",
+                "upgrade_executed",
+                "learn_only_completed",
+                "formal_self_evolution_executed",
+                "formal_self_evolution_recorded",
+            }
+        )
+        is_failure = (
+            normalized_result_status in _ERROR_STATUSES
+            or normalized_result_status not in _SUCCESS_STATUSES
+        )
         if is_failure:
             failure_count = int(task_metadata.get("execution_failure_count") or 0) + 1
             task_governance_type = self._task_governance_type(task)
             # memory_maintenance tasks are handled by the supervisor's internal
             # memory service (baseline §3.4). Agent pull paths only see
-            # Agent-executable autonomous tasks, so on failure we route these
-            # tasks back to deferred/failed rather than approved, keeping the
-            # queue free of internal-only entries that would otherwise be
-            # invisible to the Agent poll filter.
+            # Agent-executable autonomous tasks, so retry keeps the task
+            # approved for the supervisor dispatcher instead of pushing it
+            # through Agent poll.
             if task_governance_type == "memory_maintenance":
                 if failure_count < max_retries:
                     self._update_task_status(
                         task.task_id,
-                        status="deferred",
+                        status="approved",
                         actor="supervisor_memory_service",
                         reason=(
                             f"Memory-maintenance dispatch failed "
-                            f"({failure_count}/{max_retries}); deferred so the "
+                            f"({failure_count}/{max_retries}); approved so the "
                             f"supervisor's next cycle can re-dispatch. "
                             f"executor_status={str(result_status)[:60]}"
                         ),
@@ -7352,6 +7314,22 @@ class PlanningRuntimeMixin:
         return result
 
     async def _run_self_evolution_cycle(self) -> Dict[str, Any]:
+        cycle_lock = self._get_self_evolution_cycle_lock()
+        if cycle_lock.locked():
+            logger.info("Skipping self-evolution cycle because another cycle is already running.")
+            return {
+                "reviewed": 0,
+                "dispatched": [],
+                "recovered_orphaned": 0,
+                "governance_consumption": {"count": 0, "consumed": []},
+                "alignment_consumption": {"count": 0, "consumed": []},
+                "truthfulness_consumption": {"count": 0, "consumed": []},
+                "skipped": "cycle_already_running",
+            }
+        async with cycle_lock:
+            return await self._run_self_evolution_cycle_locked()
+
+    async def _run_self_evolution_cycle_locked(self) -> Dict[str, Any]:
         recovered_orphaned = await self._recover_orphaned_agent_pull_tasks()
         governance_consumption = self._consume_endogenous_governance_review_events()
         alignment_consumption = self._consume_endogenous_alignment_events()
@@ -7363,7 +7341,7 @@ class PlanningRuntimeMixin:
         for task in self._self_evolution_queue.list_tasks():
             if task.status != "running":
                 continue
-            started = task.metadata.get("executed_at")
+            started = task.metadata.get("executed_at") or task.metadata.get("execution_started_at")
             if started:
                 try:
                     t = datetime.fromisoformat(str(started))

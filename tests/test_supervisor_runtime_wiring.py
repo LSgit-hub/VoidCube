@@ -944,6 +944,67 @@ async def test_supervisor_self_evolution_cycle_dispatches_approved_formal_task(t
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_dispatch_unknown_executor_status_retries_instead_of_completing(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    class UnknownStatusFacade:
+        async def execute_self_evolution_request(self, _payload):
+            return {"status": "accepted"}
+
+    supervisor._execution_facade = UnknownStatusFacade()
+
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Do not complete on unknown executor status",
+            "metadata": {
+                "execution_kind": "body_switch",
+                "target_slot_id": "slot-B",
+            },
+            "evidence": {
+                "probe_report_ref": "probe-reports/slot-B/latest.json",
+                "git_lineage": {
+                    "candidate_commit": "bbb222",
+                    "rollback_commit": "aaa111",
+                    "changed_files": ["agent/stream_handler.py"],
+                },
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+
+    supervisor.evaluate_idle_window = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "decisions": {
+                "eligible_for_planning": True,
+                "eligible_for_execution": True,
+            },
+            "task_family_decisions": {
+                "body_switch": {
+                    "eligible_for_planning": True,
+                    "eligible_for_execution": True,
+                }
+            },
+            "governance_task_type_decisions": {
+                "self_evolution": {
+                    "eligible_for_planning": True,
+                    "eligible_for_execution": True,
+                }
+            },
+        }
+    )
+
+    cycle = await supervisor._run_self_evolution_cycle()
+    queued = await supervisor.get_self_evolution_task(task_id)
+
+    assert cycle["dispatched"] == [{"task_id": task_id, "status": "accepted"}]
+    assert queued["status"] == "approved"
+    assert queued["metadata"]["execution_failed"] is True
+    assert queued["metadata"]["execution_failure_count"] == 1
+    assert queued["metadata"]["execution_result"]["status"] == "accepted"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_supervisor_periodic_self_evolution_review_runtime_invokes_cycle(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._health_check_task = None
@@ -1018,6 +1079,36 @@ async def test_supervisor_periodic_endogenous_drive_runtime_invokes_cycle(tmp_pa
     supervisor._self_evolution_review_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._self_evolution_review_task
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_immediate_endogenous_drive_logs_and_survives_exception(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._run_endogenous_drive_cycle = AsyncMock(  # type: ignore[method-assign]
+        side_effect=RuntimeError("transient immediate drive failure")
+    )
+
+    with patch("systems.supervisor.service_runtime.asyncio.sleep", new=AsyncMock()):
+        await supervisor._run_immediate_endogenous_drive_once()
+
+    supervisor._run_endogenous_drive_cycle.assert_awaited_once_with()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_start_governor_mode_renotifies_gateway_when_already_active(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._service_runtime.governor_mode_active = True
+    supervisor._notify_gateway_governor_mode = AsyncMock()  # type: ignore[method-assign]
+    supervisor._run_self_evolution_cycle = AsyncMock()  # type: ignore[method-assign]
+    supervisor._run_endogenous_drive_cycle = AsyncMock()  # type: ignore[method-assign]
+
+    await supervisor._start_governor_mode()
+
+    supervisor._notify_gateway_governor_mode.assert_awaited_once_with(active=True)  # type: ignore[attr-defined]
+    assert supervisor._self_evolution_review_task is None
+    assert supervisor._endogenous_drive_task is None
 
 
 @pytest.mark.unit

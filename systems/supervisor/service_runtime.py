@@ -278,6 +278,7 @@ class ServiceRuntimeMixin:
         Idempotent — if Governor Mode is already active this is a no-op.
         """
         if self._service_runtime.governor_mode_active:
+            await self._notify_gateway_governor_mode(active=True)
             return
         self._service_runtime.governor_mode_active = True
         await self._notify_gateway_governor_mode(active=True)
@@ -333,13 +334,19 @@ class ServiceRuntimeMixin:
             logger.info("Governor Mode: drive loop started (interval=%ds)", runtime_config.endogenous_drive_interval)
 
             # ── Immediate first-run: fire the first cycle without waiting for the interval ──
-            async def _immediate_first_drive():
-                await asyncio.sleep(2)  # short grace for gateway notification
-                await self._run_endogenous_drive_cycle()
-            asyncio.create_task(_immediate_first_drive())
+            asyncio.create_task(self._run_immediate_endogenous_drive_once())
         else:
             self._endogenous_drive_task = None
             logger.info("Governor Mode: drive loop disabled (endogenous_drive_enabled=False)")
+
+    async def _run_immediate_endogenous_drive_once(self) -> None:
+        await asyncio.sleep(2)  # short grace for gateway notification
+        try:
+            await self._run_endogenous_drive_cycle()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(f"Immediate endogenous-drive cycle failed: {exc}")
 
     async def _stop_governor_mode(self) -> None:
         """Exit Governor Mode: stop review and drive loops immediately.

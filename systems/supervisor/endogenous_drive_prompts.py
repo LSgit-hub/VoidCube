@@ -601,9 +601,6 @@ def _prompt_facing_evidence_packet(
                 for item in list(long_tail_context.get("evidence_channels") or [])[:4]
                 if isinstance(item, dict) and str(item.get("channel") or "").strip()
             ],
-            "memory_context_preview": str(
-                long_tail_context.get("memory_context_preview") or ""
-            ).strip()[:220],
             "summary": str(long_tail_context.get("summary") or "").strip()[:220],
         }
 
@@ -855,7 +852,6 @@ def _prompt_facing_evidence_packet(
         packet.get(key) for key in ("decision_core", "supporting_detail", "long_tail_context")
     )
     if has_context_layers:
-        packet.pop("cognitive_evolution_draft", None)
         meta_cognition_profile = dict(packet.get("meta_cognition_profile") or {})
         if meta_cognition_profile:
             packet["meta_cognition_profile"] = {
@@ -981,9 +977,6 @@ def _prompt_facing_evidence_packet(
             packet["proposal_drift_memory"] = _compact_proposal_drift_memory(
                 proposal_drift_memory
             )
-    memory_context = str(packet.get("memory_context") or "")
-    if memory_context:
-        packet["memory_context"] = memory_context[:600]
     packet = _ensure_prompt_packet_budget(
         packet,
         max_chars=max(1000, int(prompt_attention_policy.get("max_chars") or 11500)),
@@ -1810,7 +1803,6 @@ def _resolve_prompt_attention_policy(
             "queued_body_improvement_titles",
             "queued_tasks",
             "shell_slot",
-            "memory_context",
         ],
         "structure_keys": [
             str(item).strip()
@@ -1876,7 +1868,6 @@ def _apply_prompt_trim_stage(packet: Dict[str, Any], *, stage_name: str) -> Dict
                 "recent_learning_titles": list(long_tail_context.get("recent_learning_titles") or [])[:4],
                 "external_research_titles": list(long_tail_context.get("external_research_titles") or [])[:3],
                 "evidence_channels": list(long_tail_context.get("evidence_channels") or [])[:3],
-                "memory_context_preview": str(long_tail_context.get("memory_context_preview") or "")[:180],
                 "summary": str(long_tail_context.get("summary") or "")[:220],
             }
         queue_state_snapshot = dict(trimmed.get("queue_state_snapshot") or {})
@@ -1911,9 +1902,6 @@ def _apply_prompt_trim_stage(packet: Dict[str, Any], *, stage_name: str) -> Dict
                 "priority_signals": list(meta_cognition_profile.get("priority_signals") or [])[:4],
                 "summary": str(meta_cognition_profile.get("summary") or "")[:220],
             }
-        if "memory_context" in trimmed:
-            memory_context = str(trimmed.get("memory_context") or "")
-            trimmed["memory_context"] = memory_context[:240]
         return trimmed
     if stage == "graph_compaction":
         agenda_graph = dict(trimmed.get("agenda_graph") or {})

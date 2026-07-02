@@ -455,15 +455,19 @@ async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_dupli
     timeline = supervisor._recent_supervisor_ui_activity(limit=10)
 
     assert first["status"] == "planned"
-    assert first["planned"] == 3
+    assert first["planned"] == 2
     assert second["status"] == "idle"
-    assert queued["count"] == 3
+    assert queued["count"] == 2
     tasks_by_key = {
         task["metadata"]["endogenous_drive_key"]: task for task in queued["tasks"]
     }
     assert "continuity:memory_maintenance_sweep" in tasks_by_key
     assert "truthfulness:review_correction_signals" in tasks_by_key
     assert "continuity:queue_hygiene_review" not in tasks_by_key
+    assert not any(
+        str(key).startswith("creativity:idle_learning:")
+        for key in tasks_by_key
+    )
     assert any(task["governance_task_type"] == "self_learning" for task in queued["tasks"])
     scheduled_tokens = [task.get("scheduled_for") for task in queued["tasks"]]
     assert all(isinstance(token, str) and token for token in scheduled_tokens)
@@ -1043,7 +1047,6 @@ async def test_evaluate_endogenous_drive_exposes_cognition_state(tmp_path):
     for folded_key in (
         "recent_reference_alignment",
         "proposal_drift_memory",
-        "cognitive_evolution_trace",
         "self_iteration_hypotheses",
         "self_iteration_trend_memory",
         "switch_self_regulation_memory",
@@ -1876,8 +1879,6 @@ async def test_endogenous_cognition_state_persists_to_runtime_file(tmp_path):
     assert "proposal_drift_memory" in snapshot["state"]["proposal_cognition"]["auxiliary_memory"]
     assert "recent_cognitive_alignment" not in snapshot["state"]["proposal_cognition"]
     assert "recent_cognitive_alignment" in snapshot["state"]["proposal_cognition"]["auxiliary_memory"]
-    assert "cognitive_evolution_trace" not in snapshot["state"]["proposal_cognition"]
-    assert "cognitive_evolution_trace" in snapshot["state"]["proposal_cognition"]["auxiliary_memory"]
     assert snapshot["state"]["proposal_cognition"]["lm_trace"]["charter_core_mission"] == "Evolve through evidence-backed structured proposals."
     assert "top_priority_task_type" not in snapshot["state"]["proposal_cognition"]["lm_trace"]
     assert snapshot["state"]["proposal_cognition"]["current_candidates"]["count"] >= 1
@@ -2263,96 +2264,6 @@ def test_cognition_charter_prompt_attention_policy_can_be_overridden_from_env(mo
         "graph_compaction",
         "primary_context_compaction",
     ]
-
-
-@pytest.mark.unit
-def test_cognition_charter_evidence_attention_policy_can_be_overridden_from_env(monkeypatch):
-    monkeypatch.setenv(
-        "SUPERVISOR_ENDOGENOUS_DRIVE_EVIDENCE_ATTENTION_ENABLED",
-        "true",
-    )
-    monkeypatch.setenv(
-        "SUPERVISOR_ENDOGENOUS_DRIVE_EVIDENCE_ATTENTION_CONFIDENCE_WEIGHT",
-        "0.41",
-    )
-    monkeypatch.setenv(
-        "SUPERVISOR_ENDOGENOUS_DRIVE_EVIDENCE_ATTENTION_AGENDA_RELEVANCE_WEIGHT",
-        "0.33",
-    )
-    monkeypatch.setenv(
-        "SUPERVISOR_ENDOGENOUS_DRIVE_EVIDENCE_ATTENTION_DECISION_CORE_TOPIC_LIMIT",
-        "2",
-    )
-    monkeypatch.setenv(
-        "SUPERVISOR_ENDOGENOUS_DRIVE_EVIDENCE_ATTENTION_LONG_TAIL_ITEM_LIMIT",
-        "1",
-    )
-
-    config = load_config_from_env()
-    policy = (
-        config.supervisor.service_runtime.endogenous_drive_cognition_charter.evidence_attention_policy
-    )
-
-    assert policy.enabled is True
-    assert policy.confidence_weight == 0.41
-    assert policy.agenda_relevance_weight == 0.33
-    assert policy.decision_core_topic_limit == 2
-    assert policy.long_tail_item_limit == 1
-
-
-@pytest.mark.unit
-def test_cognition_charter_cognitive_feedback_policy_can_be_overridden_from_env(monkeypatch):
-    monkeypatch.setenv(
-        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_FEEDBACK_ENABLED",
-        "true",
-    )
-    monkeypatch.setenv(
-        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_FEEDBACK_ADAPTATION_STRENGTH",
-        "0.37",
-    )
-    monkeypatch.setenv(
-        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_FEEDBACK_CONFLICT_WEIGHT_STEP",
-        "0.12",
-    )
-    monkeypatch.setenv(
-        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_FEEDBACK_SELF_RELEVANCE_WEIGHT_STEP",
-        "0.09",
-    )
-
-    config = load_config_from_env()
-    policy = (
-        config.supervisor.service_runtime.endogenous_drive_cognition_charter.cognitive_feedback_policy
-    )
-
-    assert policy.enabled is True
-    assert policy.adaptation_strength == 0.37
-    assert policy.conflict_weight_step == 0.12
-    assert policy.self_relevance_weight_step == 0.09
-
-
-@pytest.mark.unit
-def test_cognition_charter_cognitive_strategy_delta_policy_can_be_overridden_from_env(monkeypatch):
-    monkeypatch.setenv(
-        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_STRATEGY_DELTA_ENABLED",
-        "true",
-    )
-    monkeypatch.setenv(
-        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_STRATEGY_DELTA_PROPOSAL_THRESHOLD",
-        "0.07",
-    )
-    monkeypatch.setenv(
-        "SUPERVISOR_ENDOGENOUS_DRIVE_COGNITIVE_STRATEGY_DELTA_MAX_RECOMMENDED_CHANGES",
-        "4",
-    )
-
-    config = load_config_from_env()
-    policy = (
-        config.supervisor.service_runtime.endogenous_drive_cognition_charter.cognitive_strategy_delta_policy
-    )
-
-    assert policy.enabled is True
-    assert policy.proposal_threshold == 0.07
-    assert policy.max_recommended_changes == 4
 
 
 @pytest.mark.asyncio
@@ -6720,7 +6631,6 @@ async def test_prompt_packet_budget_preserves_queue_state_snapshot_under_large_c
             "recent_learning_titles": ["Learning A", "Learning B"],
             "external_research_titles": ["Research A", "Research B"],
             "evidence_channels": [{"channel": "recent_learning", "evidence_strength": "weak", "item_count": 6}],
-            "memory_context_preview": "memory preview",
             "summary": "Long tail summary",
         },
         "queued_tasks": [
@@ -6751,7 +6661,6 @@ async def test_prompt_packet_budget_preserves_queue_state_snapshot_under_large_c
             {"title": f"Research {idx}", "summary": "y" * 400, "source": "test"}
             for idx in range(12)
         ],
-        "memory_context": "z" * 5000,
         "evidence_channels": {
             "channels": [
                 {
@@ -6902,10 +6811,6 @@ def test_prompt_packet_prefers_context_layers_and_keeps_compact_cognitive_memory
                 "drift_state": "correcting",
                 "summary": "drift summary",
             },
-            "cognitive_evolution_draft": {
-                "available": True,
-                "summary": "draft summary",
-            },
         },
         cognition_charter={},
     )
@@ -6939,7 +6844,6 @@ def test_prompt_packet_prefers_context_layers_and_keeps_compact_cognitive_memory
     assert compact["post_task_effect_memory"]["effect_direction"] == "mixed"
     assert compact["proposal_drift_memory"]["drift_state"] == "correcting"
     assert "entries" not in compact["proposal_drift_memory"]
-    assert "cognitive_evolution_draft" not in compact
 
 
 @pytest.mark.unit
@@ -7339,15 +7243,9 @@ async def test_endogenous_drive_context_layers_follow_charter_layering_policy(tm
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_endogenous_drive_evidence_attention_policy_changes_context_promotion(tmp_path):
+async def test_endogenous_drive_lm_evidence_packet_stays_on_slim_default_path(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    policy = supervisor.config.service_runtime.endogenous_drive_cognition_charter.evidence_attention_policy
-    policy.decision_core_topic_limit = 2
-    policy.long_tail_item_limit = 1
-    policy.agenda_relevance_weight = 0.55
-    policy.conflict_weight = 0.22
-    policy.self_relevance_weight = 0.02
 
     history = supervisor._endogenous_drive_history_default()
     supervisor._persist_endogenous_drive_history(history)
@@ -7426,99 +7324,19 @@ async def test_endogenous_drive_evidence_attention_policy_changes_context_promot
         self_evolution_plan={},
     )
 
-    assert "evidence_attention" in evidence_packet
-    assert len(evidence_packet["decision_core"]["primary_evidence_nodes"]) <= 2
-    assert "learning_expansion" in " ".join(evidence_packet["decision_core"]["primary_agenda_nodes"]).lower()
-    assert len(evidence_packet["long_tail_context"]["external_research_titles"]) == 1
-    assert evidence_packet["long_tail_context"]["external_research_titles"][0].startswith(
-        "Learning expansion repair"
-    )
+    assert "evidence_attention" not in evidence_packet
+    assert "cognitive_feedback_memory" not in evidence_packet
+    assert "cognitive_strategy_delta" not in evidence_packet
+    assert "cognitive_evolution_draft" not in evidence_packet
+    assert "memory_context" not in evidence_packet
+    assert "decision_core" in evidence_packet
+    assert "supporting_detail" in evidence_packet
+    assert "long_tail_context" in evidence_packet
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_endogenous_drive_builds_cognitive_feedback_memory_and_applies_attention_feedback(tmp_path):
-    supervisor = _make_supervisor(tmp_path)
-    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
-    history["outcomes"] = [
-        {
-            "title": "Weak reference outcome",
-            "event_type": "planned",
-            "quality_score": 0.31,
-            "cognitive_alignment": {"score": 0.42},
-            "reference_alignment": {"alignment_score": 0.28},
-            "llm_cognitive_assessment": {
-                "primary_grounding_gaps": ["missing_evidence:self_structure"],
-                "self_iteration_target": "grounding",
-            },
-        },
-        {
-            "title": "Another weak reference outcome",
-            "event_type": "planned",
-            "quality_score": 0.34,
-            "cognitive_alignment": {"score": 0.4},
-            "reference_alignment": {"alignment_score": 0.35},
-            "llm_cognitive_assessment": {
-                "primary_grounding_gaps": ["missing_agenda:focus:learning_expansion"],
-                "self_iteration_target": "grounding",
-            },
-        },
-    ]
-    supervisor._persist_endogenous_drive_history(history)
-
-    async def fake_idle_window(_request=None):
-        return {
-            "checks": {
-                "has_user_idle": True,
-                "has_agent_idle": True,
-                "has_memory_idle": True,
-                "in_execution_window": True,
-            },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
-            "activity": {"active_sessions": 0, "counts": {}},
-            "completed_learning_tasks": [],
-            "task_family_decisions": {
-                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
-                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
-                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
-            },
-            "governance_task_type_decisions": {
-                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
-                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
-                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
-            },
-        }
-
-    idle_window = await fake_idle_window()
-    idle_window["drive_history"] = supervisor._history_for_endogenous_drive(
-        supervisor._load_endogenous_drive_history()
-    )
-    drive_context = supervisor._endogenous_drive_engine._build_drive_context(idle_window)
-    feedback_memory = supervisor._endogenous_drive_engine._build_cognitive_feedback_memory(
-        drive_context
-    )
-
-    assert feedback_memory["available"] is True
-    assert feedback_memory["reference_feedback_direction"] == "weak"
-    assert feedback_memory["long_tail_signal_bias"] == "compress"
-
-    charter = supervisor._endogenous_drive_engine._resolve_endogenous_cognition_charter(
-        supervisor.config.service_runtime
-    )
-    adjusted_policy = supervisor._endogenous_drive_engine._resolve_evidence_attention_policy(
-        charter,
-        cognitive_feedback_memory=feedback_memory,
-    )
-
-    assert adjusted_policy["conflict_weight"] > charter["evidence_attention_policy"]["conflict_weight"]
-    assert adjusted_policy["agenda_relevance_weight"] > charter["evidence_attention_policy"]["agenda_relevance_weight"]
-    assert adjusted_policy["long_tail_item_limit"] < charter["evidence_attention_policy"]["long_tail_item_limit"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.unit
-async def test_run_endogenous_drive_cycle_exposes_cognitive_feedback_memory(tmp_path):
+async def test_run_endogenous_drive_cycle_does_not_expose_cognitive_feedback_trace(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     _seed_current_lm_reasoning_state(
@@ -7568,73 +7386,12 @@ async def test_run_endogenous_drive_cycle_exposes_cognitive_feedback_memory(tmp_
 
     proposal_cognition = result["cognition_state"]["proposal_cognition"]
     assert "cognitive_evolution_trace" not in proposal_cognition
-    feedback_trace = proposal_cognition["auxiliary_memory"]["cognitive_evolution_trace"]
-    assert feedback_trace["feedback_available"] is True
-    assert feedback_trace["feedback_reference_direction"] == "weak"
-    assert feedback_trace["feedback_long_tail_bias"] == "compress"
+    assert "cognitive_evolution_trace" not in proposal_cognition["auxiliary_memory"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_endogenous_drive_builds_cognitive_strategy_delta(tmp_path):
-    supervisor = _make_supervisor(tmp_path)
-    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
-    history["outcomes"] = [
-        {
-            "title": "Weak reference outcome",
-            "event_type": "planned",
-            "quality_score": 0.31,
-            "cognitive_alignment": {"score": 0.42},
-            "reference_alignment": {"alignment_score": 0.28},
-            "llm_cognitive_assessment": {
-                "primary_grounding_gaps": ["missing_evidence:self_structure"],
-                "self_iteration_target": "grounding",
-            },
-        },
-        {
-            "title": "Another weak reference outcome",
-            "event_type": "planned",
-            "quality_score": 0.34,
-            "cognitive_alignment": {"score": 0.4},
-            "reference_alignment": {"alignment_score": 0.35},
-            "llm_cognitive_assessment": {
-                "primary_grounding_gaps": ["missing_agenda:focus:learning_expansion"],
-                "self_iteration_target": "grounding",
-            },
-        },
-    ]
-    supervisor._persist_endogenous_drive_history(history)
-
-    idle_window = {
-        "drive_history": supervisor._history_for_endogenous_drive(
-            supervisor._load_endogenous_drive_history()
-        )
-    }
-    drive_context = supervisor._endogenous_drive_engine._build_drive_context(idle_window)
-    feedback_memory = supervisor._endogenous_drive_engine._build_cognitive_feedback_memory(
-        drive_context
-    )
-    charter = supervisor._endogenous_drive_engine._resolve_endogenous_cognition_charter(
-        supervisor.config.service_runtime
-    )
-    delta = supervisor._endogenous_drive_engine._build_cognitive_strategy_delta(
-        cognition_charter=charter,
-        cognitive_feedback_memory=feedback_memory,
-    )
-
-    assert delta["available"] is True
-    assert delta["recommended_changes"]
-    assert any(
-        change["target"] == "evidence_attention_policy.conflict_weight"
-        for change in delta["recommended_changes"]
-    )
-    assert delta["summary"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.unit
-async def test_run_endogenous_drive_cycle_exposes_cognitive_strategy_delta(tmp_path):
+async def test_run_endogenous_drive_cycle_does_not_expose_cognitive_strategy_delta_trace(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     _seed_current_lm_reasoning_state(
@@ -7686,125 +7443,12 @@ async def test_run_endogenous_drive_cycle_exposes_cognitive_strategy_delta(tmp_p
 
     proposal_cognition = result["cognition_state"]["proposal_cognition"]
     assert "cognitive_evolution_trace" not in proposal_cognition
-    trace = proposal_cognition["auxiliary_memory"]["cognitive_evolution_trace"]
-    assert trace["strategy_delta_available"] is True
-    assert trace["strategy_delta_count"] == 1
-    assert trace["primary_strategy_delta_target"] == "evidence_attention_policy.conflict_weight"
-    assert "strategy_delta_targets" not in trace
+    assert "cognitive_evolution_trace" not in proposal_cognition["auxiliary_memory"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_endogenous_drive_builds_cognitive_evolution_draft(tmp_path):
-    supervisor = _make_supervisor(tmp_path)
-    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    history = supervisor._endogenous_drive_history_default()
-    history["outcomes"] = [
-        {
-            "title": "Weak reference outcome",
-            "event_type": "planned",
-            "quality_score": 0.31,
-            "cognitive_alignment": {"score": 0.42},
-            "reference_alignment": {"alignment_score": 0.28},
-            "llm_cognitive_assessment": {
-                "current_judgement": "review should dominate until grounding is repaired",
-                "dominant_constraint": "weak self structure grounding",
-                "self_iteration_target": "grounding",
-                "self_iteration_hypothesis": "repair evidence-to-agenda grounding first",
-            },
-        },
-        {
-            "title": "Another weak reference outcome",
-            "event_type": "planned",
-            "quality_score": 0.34,
-            "cognitive_alignment": {"score": 0.4},
-            "reference_alignment": {"alignment_score": 0.35},
-            "llm_cognitive_assessment": {
-                "current_judgement": "stay cautious while grounding gaps remain",
-                "dominant_constraint": "grounding instability",
-                "primary_grounding_gaps": ["missing_agenda:focus:learning_expansion"],
-                "self_iteration_target": "grounding",
-                "self_iteration_hypothesis": "repair evidence-to-agenda grounding first",
-            },
-        },
-    ]
-    supervisor._persist_endogenous_drive_history(history)
-
-    idle_window = {
-        "drive_history": supervisor._history_for_endogenous_drive(
-            supervisor._load_endogenous_drive_history()
-        )
-    }
-    drive_context = supervisor._endogenous_drive_engine._build_drive_context(idle_window)
-    feedback_memory = supervisor._endogenous_drive_engine._build_cognitive_feedback_memory(
-        drive_context
-    )
-    charter = supervisor._endogenous_drive_engine._resolve_endogenous_cognition_charter(
-        supervisor.config.service_runtime
-    )
-    strategy_delta = supervisor._endogenous_drive_engine._build_cognitive_strategy_delta(
-        cognition_charter=charter,
-        cognitive_feedback_memory=feedback_memory,
-    )
-    reference_alignment = supervisor._endogenous_drive_engine._build_recent_reference_alignment(
-        drive_context
-    )
-    cognitive_assessment_memory = supervisor._endogenous_drive_engine._build_cognitive_assessment_memory(
-        drive_context
-    )
-    self_iteration_trend_memory = supervisor._endogenous_drive_engine._build_self_iteration_trend_memory(
-        drive_context
-    )
-    switch_self_regulation_memory = supervisor._endogenous_drive_engine._build_switch_self_regulation_memory(
-        drive_context
-    )
-    post_task_effect_memory = supervisor._endogenous_drive_engine._build_post_task_effect_memory(
-        drive_context
-    )
-    meta_cognition_profile = supervisor._endogenous_drive_engine._build_meta_cognition_profile(
-        grounding_focus={
-            "grounding_gaps": ["missing_evidence:self_structure"],
-            "weak_or_missing_channels": ["recent_learning"],
-        },
-        self_iteration_hypotheses={
-            "top_self_iteration_domain": "grounding",
-            "top_self_iteration_hypothesis": "repair evidence-to-agenda grounding first",
-        },
-        cognitive_assessment_memory=cognitive_assessment_memory,
-        self_iteration_trend_memory=self_iteration_trend_memory,
-        switch_self_regulation_memory=switch_self_regulation_memory,
-        post_task_effect_memory=post_task_effect_memory,
-        proposal_drift_memory={"available": False},
-        task_type_priors={
-            "top_priority_task_type": "review",
-            "top_priority_score": 0.74,
-            "priors": [],
-        },
-    )
-    draft = supervisor._endogenous_drive_engine._build_cognitive_evolution_draft(
-        cognition_charter=charter,
-        cognitive_feedback_memory=feedback_memory,
-        cognitive_strategy_delta=strategy_delta,
-        meta_cognition_profile=meta_cognition_profile,
-        recent_reference_alignment=reference_alignment,
-        self_iteration_trend_memory=self_iteration_trend_memory,
-        post_task_effect_memory=post_task_effect_memory,
-    )
-
-    assert draft["available"] is True
-    assert draft["attention_policy_delta"]["available"] is True
-    assert draft["charter_delta"]["available"] is True
-    assert any(
-        change["target"] == "prompt_output_requirements"
-        for change in draft["charter_delta"]["recommended_changes"]
-    )
-    assert draft["evidence_basis"]["reference_alignment_score"] < 0.58
-    assert draft["summary"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.unit
-async def test_run_endogenous_drive_cycle_exposes_cognitive_evolution_draft(tmp_path):
+async def test_run_endogenous_drive_cycle_does_not_expose_cognitive_evolution_draft_trace(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     _seed_current_lm_reasoning_state(
@@ -7893,11 +7537,7 @@ async def test_run_endogenous_drive_cycle_exposes_cognitive_evolution_draft(tmp_
 
     proposal_cognition = result["cognition_state"]["proposal_cognition"]
     assert "cognitive_evolution_trace" not in proposal_cognition
-    trace = proposal_cognition["auxiliary_memory"]["cognitive_evolution_trace"]
-    assert trace["evolution_draft_available"] is True
-    assert trace["evolution_failure_mode"] == "grounding_instability"
-    assert trace["evolution_attention_delta_count"] == 1
-    assert trace["evolution_charter_delta_count"] == 1
+    assert "cognitive_evolution_trace" not in proposal_cognition["auxiliary_memory"]
 
 
 @pytest.mark.asyncio
@@ -16091,6 +15731,36 @@ def test_static_governance_candidates_reopen_after_completion_cooldown():
     assert "continuity:queue_hygiene_review" in candidate_keys
 
 
+@pytest.mark.unit
+def test_generate_candidates_allows_empty_when_default_path_has_no_evidence():
+    engine = EndogenousDriveEngine()
+    idle = {
+        "checks": {"in_execution_window": True, "has_user_idle": True},
+        "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+        "activity": {"active_sessions": 0, "counts": {}},
+        "completed_learning_tasks": [],
+        "queued_tasks": [],
+        "task_family_decisions": {
+            "memory_maintenance": {"eligible_for_planning": False},
+            "self_learning": {"eligible_for_planning": True},
+            "general_self_evolution": {"eligible_for_planning": False},
+        },
+        "governance_task_type_decisions": {
+            "memory_maintenance": {"eligible_for_planning": False},
+            "self_learning": {"eligible_for_planning": True},
+            "self_evolution": {"eligible_for_planning": False},
+        },
+    }
+
+    candidates = engine.generate_candidates(
+        idle_window=idle,
+        existing_drive_keys=set(),
+        max_candidates=3,
+    )
+
+    assert candidates == []
+
+
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_proposal_drift_memory_biases_program_task_type_priors_toward_observation_and_review(tmp_path):
@@ -17630,3 +17300,79 @@ async def test_recovery_skipped_when_gateway_active_executor_fetch_fails(tmp_pat
     assert recovered == 0
     assert updated["status"] == "running"
     assert updated["metadata"].get("recovered_from_orphaned_running") is not True
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_run_self_evolution_cycle_skips_when_cycle_already_running(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.review_self_evolution_tasks = AsyncMock(  # type: ignore[method-assign]
+        return_value={"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": []}
+    )
+
+    lock = supervisor._get_self_evolution_cycle_lock()
+    await lock.acquire()
+    try:
+        result = await supervisor._run_self_evolution_cycle()
+    finally:
+        lock.release()
+
+    assert result["skipped"] == "cycle_already_running"
+    supervisor.review_self_evolution_tasks.assert_not_awaited()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_run_self_evolution_cycle_times_out_agent_pull_execution_started_at(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Timeout stale agent-pull task",
+            "summary": "Agent-pull running tasks use execution_started_at",
+            "task_type": "self_learning",
+            "source": "endogenous_drive",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+    supervisor._self_evolution_queue.update_status(
+        task_id,
+        status="approved",
+        actor="test",
+        reason="ready",
+    )
+    supervisor._self_evolution_queue.update_status(
+        task_id,
+        status="running",
+        actor="cli_agent",
+        reason="Agent pulled task for execution in AUTO mode.",
+        context={"session_id": "live-cli-session"},
+    )
+    started_at = (datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat()
+    supervisor._self_evolution_queue.update_metadata(
+        task_id,
+        metadata={
+            "owner_session_id": "live-cli-session",
+            "execution_source": "cli_agent_pull",
+            "execution_started_at": started_at,
+        },
+    )
+
+    supervisor._fetch_gateway_active_cli_executor = AsyncMock(  # type: ignore[method-assign]
+        return_value={"session_id": "live-cli-session", "scene": "execution"}
+    )
+    supervisor.review_self_evolution_tasks = AsyncMock(  # type: ignore[method-assign]
+        return_value={"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": []}
+    )
+
+    result = await supervisor._run_self_evolution_cycle()
+    updated = await supervisor.get_self_evolution_task(task_id)
+
+    assert result["recovered_orphaned"] == 0
+    assert updated["status"] == "failed"
+    assert updated["decision_history"][-1]["status"] == "failed"
+    assert "timeout" in updated["decision_history"][-1]["reason"]
