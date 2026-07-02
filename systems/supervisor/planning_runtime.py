@@ -123,23 +123,13 @@ class PlanningRuntimeMixin:
                 "self_model": {},
                 "governance": {},
                 "proposal_cognition": {
-                    "summary": "posture=unknown; drift=unknown; candidate_count=0.",
+                    "summary": "posture=unknown; drift=unknown.",
                     "lm_trace": {
                         "available": False,
                         "status": None,
                         "model_role": None,
                         "charter_core_mission": None,
                         "proposal_count": 0,
-                    },
-                    "proposal_drift_memory": {
-                        "available": False,
-                        "average_score": 0.0,
-                        "drift_state": "unknown",
-                        "quality_counts": {},
-                        "common_posture_alignment": [],
-                        "common_priority_basis": [],
-                        "posture_alignment_health": "",
-                        "priority_basis_health": "",
                     },
                     "recent_reference_alignment": {
                         "available": False,
@@ -150,18 +140,19 @@ class PlanningRuntimeMixin:
                         "available": False,
                         "average_score": 0.0,
                         "quality_counts": {},
-                        "dominant_top_priority_task_type": None,
-                        "common_reasons": [],
-                        "entries": [],
+                        "dominant_task_shape": None,
+                        "reason_count": 0,
+                        "posture_alignment_signal_count": 0,
+                        "priority_basis_signal_count": 0,
+                        "missing_posture_alignment_count": 0,
+                        "missing_priority_basis_count": 0,
+                        "entry_count": 0,
                     },
                     "current_candidates": {
                         "count": 0,
                         "lm_generated_count": 0,
-                        "task_type_counts": {},
-                        "quality_counts": {},
                         "average_cognitive_alignment_score": 0.0,
                         "average_reference_alignment_score": 0.0,
-                        "entries": [],
                     },
                     "cognitive_control_policy": {},
                     "active_cognitive_posture_profile": {},
@@ -196,7 +187,21 @@ class PlanningRuntimeMixin:
                         "evolution_attention_delta_count": 0,
                         "evolution_charter_delta_count": 0,
                     },
-                    "auxiliary_memory": {},
+                    "auxiliary_memory": {
+                        "proposal_drift_memory": {
+                            "available": False,
+                            "average_score": 0.0,
+                            "drift_state": "unknown",
+                            "quality_counts": {},
+                            "posture_alignment_signal_count": 0,
+                            "priority_basis_signal_count": 0,
+                            "missing_posture_alignment_count": 0,
+                            "missing_priority_basis_count": 0,
+                            "posture_alignment_health": "",
+                            "priority_basis_health": "",
+                            "dominant_posture_conflict_reason": None,
+                        },
+                    },
                 },
                 "attention_agenda": {
                     "summary": "No endogenous agenda has been formed yet.",
@@ -222,7 +227,13 @@ class PlanningRuntimeMixin:
                     "drivers": [],
                     "guardrails": [],
                     "stability": "unknown",
-                    "entries": [],
+                    "context": {
+                        "preferred_focus": None,
+                        "corrective_mode": None,
+                        "observation_target": None,
+                        "agenda_topic": None,
+                        "uncertainty_domain": None,
+                    },
                 },
                 "strategy_memory": {
                     "focus_stats": {},
@@ -461,8 +472,62 @@ class PlanningRuntimeMixin:
     def _trim_endogenous_governance_events(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
         trimmed = dict(snapshot or {})
         trimmed["version"] = 1
-        trimmed["events"] = list(trimmed.get("events") or [])[: self._ENDOGENOUS_GOVERNANCE_EVENT_LIMIT]
+        events: list[Dict[str, Any]] = []
+        seen_event_ids: set[str] = set()
+        seen_unconsumed_event_keys: set[str] = set()
+        for item in list(trimmed.get("events") or []):
+            if not isinstance(item, dict):
+                continue
+            row = dict(item)
+            event_id = str(row.get("event_id") or "").strip()
+            if event_id:
+                if event_id in seen_event_ids:
+                    continue
+                seen_event_ids.add(event_id)
+            semantic_key = self._endogenous_governance_event_semantic_key(row)
+            if semantic_key:
+                if semantic_key in seen_unconsumed_event_keys:
+                    continue
+                seen_unconsumed_event_keys.add(semantic_key)
+            events.append(row)
+            if len(events) >= self._ENDOGENOUS_GOVERNANCE_EVENT_LIMIT:
+                break
+        trimmed["events"] = events
         return trimmed
+
+    def _endogenous_governance_event_semantic_key(
+        self,
+        event: Dict[str, Any],
+    ) -> Optional[str]:
+        if not str(event.get("event_id") or "").strip():
+            return None
+        if event.get("consumed_at"):
+            return None
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            payload = {}
+        try:
+            payload_key = json.dumps(
+                payload,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            )
+        except TypeError:
+            payload_key = str(payload)
+        parts = (
+            str(event.get("event_type") or "").strip().lower(),
+            str(event.get("channel") or "").strip().lower(),
+            str(event.get("context_key") or "").strip().lower(),
+            str(event.get("preferred_focus") or "").strip().lower(),
+            str(event.get("message") or "").strip(),
+            str(event.get("rationale") or "").strip(),
+            payload_key,
+        )
+        if not any(parts):
+            return None
+        return "\x1f".join(parts)
 
     def _persist_endogenous_drive_history(self, snapshot: Dict[str, Any]) -> None:
         path = self._get_endogenous_drive_history_path()
@@ -1174,7 +1239,6 @@ class PlanningRuntimeMixin:
         attention_agenda = self._build_endogenous_attention_agenda(
             deliberation=deliberation,
             governance_channels=governance_channels,
-            candidate_items=candidate_items,
             strategy_memory=strategy_memory,
         )
         uncertainty_ledger = self._build_endogenous_uncertainty_ledger(
@@ -1268,7 +1332,6 @@ class PlanningRuntimeMixin:
                 "posture": drive_posture,
                 "preferred_focus": adaptive_policy.get("preferred_focus"),
                 "dominant_constraint": reflection.get("dominant_constraint"),
-                "candidate_count": len(candidate_items),
                 "channel_counts": channel_counts,
                 "channels": dict(governance_channels),
             },
@@ -1420,12 +1483,33 @@ class PlanningRuntimeMixin:
         deliberation: Optional[Dict[str, Any]] = None,
         lm_reasoning_state: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        # This block is an auxiliary observation/tracking layer.  The main drive
+        # judgement stays in judgement_core, attention_agenda, and meta_governance.
         if lm_reasoning_state is None:
             lm_reasoning_state = self._lm_reasoning_state_for_current_cycle()
         else:
             lm_reasoning_state = dict(lm_reasoning_state)
 
         task_type_priors = dict(lm_reasoning_state.get("task_type_priors") or {})
+        if not task_type_priors:
+            task_shape_hint = dict(lm_reasoning_state.get("task_shape_hint") or {})
+            shape = str(task_shape_hint.get("shape") or "").strip()
+            alternatives = [
+                {
+                    "task_type": str(item.get("task_type") or item.get("shape") or "").strip(),
+                    "score": item.get("score"),
+                    "reasons": list(item.get("reasons") or [])[:3],
+                }
+                for item in list(task_shape_hint.get("alternatives") or [])[:5]
+                if isinstance(item, dict)
+                and str(item.get("task_type") or item.get("shape") or "").strip()
+            ]
+            if shape or alternatives:
+                task_type_priors = {
+                    "top_priority_task_type": shape,
+                    "top_priority_score": task_shape_hint.get("score"),
+                    "priors": alternatives,
+                }
         meta_cognition_profile = dict(
             lm_reasoning_state.get("meta_cognition_profile") or {}
         )
@@ -1475,35 +1559,73 @@ class PlanningRuntimeMixin:
         self_iteration_hypotheses = dict(
             lm_reasoning_state.get("self_iteration_hypotheses") or {}
         )
-        if not self_iteration_hypotheses:
-            common_hypotheses = [
+        def _legacy_texts(values: Any, *, limit: int = 4) -> list[str]:
+            raw_values = [values] if isinstance(values, str) else list(values or [])
+            return [
                 str(item).strip()
-                for item in list(
-                    cognitive_assessment_memory.get("common_self_iteration_hypotheses")
-                    or self_iteration_trend_memory.get("common_hypotheses")
-                    or []
-                )[:3]
+                for item in raw_values[:limit]
                 if str(item).strip()
             ]
+
+        def _dominant_text(
+            mapping: Dict[str, Any],
+            primary_key: str,
+            legacy_key: str,
+            *,
+            limit: int = 4,
+        ) -> str:
+            primary = str(mapping.get(primary_key) or "").strip()
+            if primary:
+                return primary
+            legacy_values = _legacy_texts(mapping.get(legacy_key), limit=limit)
+            return legacy_values[0] if legacy_values else ""
+
+        def _signal_count(
+            mapping: Dict[str, Any],
+            primary_keys: tuple[str, ...],
+            legacy_key: str,
+            *,
+            limit: int = 4,
+        ) -> int:
+            for key in primary_keys:
+                value = mapping.get(key)
+                if value is None:
+                    continue
+                try:
+                    return max(0, int(value or 0))
+                except (TypeError, ValueError):
+                    continue
+            return len(_legacy_texts(mapping.get(legacy_key), limit=limit))
+
+        if not self_iteration_hypotheses:
+            dominant_hypothesis = str(
+                cognitive_assessment_memory.get("self_iteration_hypothesis")
+                or self_iteration_trend_memory.get("dominant_hypothesis")
+                or ""
+            ).strip()
+            legacy_hypotheses = _legacy_texts(
+                cognitive_assessment_memory.get("common_self_iteration_hypotheses")
+                or self_iteration_trend_memory.get("common_hypotheses"),
+                limit=3,
+            )
+            if not dominant_hypothesis and legacy_hypotheses:
+                dominant_hypothesis = legacy_hypotheses[0]
+            hypothesis_count = max(
+                1 if dominant_hypothesis else 0,
+                max(0, int(cognitive_assessment_memory.get("self_iteration_hypothesis_count") or 0)),
+                max(0, int(self_iteration_trend_memory.get("hypothesis_count") or 0)),
+                len(legacy_hypotheses),
+            )
             self_iteration_hypotheses = {
-                "available": bool(common_hypotheses),
-                "dominant_hypothesis": common_hypotheses[0] if common_hypotheses else "",
+                "available": bool(dominant_hypothesis),
+                "dominant_hypothesis": dominant_hypothesis,
                 "top_target_domain": str(
                     meta_cognition_profile.get("top_self_iteration_domain")
                     or self_iteration_trend_memory.get("dominant_target")
+                    or cognitive_assessment_memory.get("self_iteration_target")
                     or ""
                 ).strip(),
-                "hypotheses": [
-                    {
-                        "target_domain": str(
-                            meta_cognition_profile.get("top_self_iteration_domain") or ""
-                        ).strip(),
-                        "hypothesis": hypothesis,
-                        "priority": 0.0,
-                        "suggested_task_types": [],
-                    }
-                    for hypothesis in common_hypotheses
-                ],
+                "hypothesis_count": hypothesis_count,
             }
         recent_cognitive_alignment = self._build_recent_cognitive_alignment_summary(
             history_snapshot=history_snapshot,
@@ -1517,6 +1639,7 @@ class PlanningRuntimeMixin:
             deliberation=deliberation,
         )
         compact_memory = self._compact_endogenous_proposal_memory(
+            proposal_drift_memory=proposal_drift_memory,
             cognitive_assessment_memory=cognitive_assessment_memory,
             self_iteration_hypotheses=self_iteration_hypotheses,
             self_iteration_trend_memory=self_iteration_trend_memory,
@@ -1528,8 +1651,19 @@ class PlanningRuntimeMixin:
         posture_name = str(active_cognitive_posture_profile.get("name") or "").strip() or "unknown"
         summary = (
             f"posture={posture_name}; "
-            f"drift={drift_state}; "
-            f"candidate_count={int(current_candidates.get('count') or 0)}."
+            f"drift={drift_state}."
+        )
+        current_judgement = str(
+            _dominant_text(
+                cognitive_assessment_memory,
+                "current_judgement",
+                "common_current_judgements",
+            )
+        ).strip()
+        why_not_improvement_now_count = _signal_count(
+            cognitive_assessment_memory,
+            ("why_not_improvement_now_count",),
+            "common_why_not_improvement_now",
         )
 
         return {
@@ -1581,33 +1715,6 @@ class PlanningRuntimeMixin:
                     or None,
                 },
             },
-            "proposal_drift_memory": {
-                "available": bool(proposal_drift_memory.get("available")),
-                "average_score": round(
-                    self._clamp_endogenous_ratio(
-                        proposal_drift_memory.get("average_score") or 0.0
-                    ),
-                    4,
-                ),
-                "drift_state": drift_state,
-                "quality_counts": dict(proposal_drift_memory.get("quality_counts") or {}),
-                "common_posture_alignment": [
-                    str(item).strip()
-                    for item in list(proposal_drift_memory.get("common_posture_alignment") or [])[:4]
-                    if str(item).strip()
-                ],
-                "common_priority_basis": [
-                    str(item).strip()
-                    for item in list(proposal_drift_memory.get("common_priority_basis") or [])[:4]
-                    if str(item).strip()
-                ],
-                "posture_alignment_health": str(
-                    proposal_drift_memory.get("posture_alignment_health") or ""
-                ).strip(),
-                "priority_basis_health": str(
-                    proposal_drift_memory.get("priority_basis_health") or ""
-                ).strip(),
-            },
             "recent_reference_alignment": {
                 "available": bool(recent_reference_alignment.get("available")),
                 "average_alignment_score": round(
@@ -1620,6 +1727,26 @@ class PlanningRuntimeMixin:
                     0,
                     int(recent_reference_alignment.get("weak_or_partial_count") or 0),
                 ),
+                "entry_count": max(
+                    0,
+                    int(recent_reference_alignment.get("entry_count") or 0),
+                ),
+                "primary_missing_evidence_node": str(
+                    recent_reference_alignment.get("primary_missing_evidence_node") or ""
+                ).strip()
+                or None,
+                "primary_missing_agenda_node": str(
+                    recent_reference_alignment.get("primary_missing_agenda_node") or ""
+                ).strip()
+                or None,
+                "missing_evidence_node_count": max(
+                    0,
+                    int(recent_reference_alignment.get("missing_evidence_node_count") or 0),
+                ),
+                "missing_agenda_node_count": max(
+                    0,
+                    int(recent_reference_alignment.get("missing_agenda_node_count") or 0),
+                ),
             },
             "assessment_trace": {
                 "available": bool(cognitive_assessment_memory.get("available")),
@@ -1627,20 +1754,8 @@ class PlanningRuntimeMixin:
                     cognitive_assessment_memory.get("dominant_constraint") or ""
                 ).strip()
                 or None,
-                "current_judgement": str(
-                    list(cognitive_assessment_memory.get("common_current_judgements") or [None])[0]
-                    or ""
-                ).strip()
-                or None,
-                "why_not_improvement_now_count": len(
-                    [
-                        str(item).strip()
-                        for item in list(
-                            cognitive_assessment_memory.get("common_why_not_improvement_now") or []
-                        )[:4]
-                        if str(item).strip()
-                    ]
-                ),
+                "current_judgement": current_judgement or None,
+                "why_not_improvement_now_count": why_not_improvement_now_count,
             },
             "cognitive_evolution_trace": {
                 "feedback_available": bool(cognitive_feedback_memory.get("available")),
@@ -1706,39 +1821,101 @@ class PlanningRuntimeMixin:
     def _compact_endogenous_proposal_memory(
         self,
         *,
+        proposal_drift_memory: Dict[str, Any],
         cognitive_assessment_memory: Dict[str, Any],
         self_iteration_hypotheses: Dict[str, Any],
         self_iteration_trend_memory: Dict[str, Any],
         switch_self_regulation_memory: Dict[str, Any],
         post_task_effect_memory: Dict[str, Any],
     ) -> Dict[str, Dict[str, Any]]:
+        def _nonempty_count(values: Any) -> int:
+            raw_values = [values] if isinstance(values, str) else list(values or [])
+            return sum(1 for item in raw_values if str(item).strip())
+
+        def _stored_count(item: Dict[str, Any], key: str) -> int:
+            return max(0, int(item.get(key) or 0))
+
+        def _signal_count(item: Dict[str, Any], primary_keys: tuple[str, ...], legacy_key: str) -> int:
+            return max(
+                *(_stored_count(item, key) for key in primary_keys),
+                _nonempty_count(item.get(legacy_key)),
+            )
+
         return {
+            "proposal_drift_memory": {
+                "available": bool(proposal_drift_memory.get("available")),
+                "average_score": round(
+                    self._clamp_endogenous_ratio(
+                        proposal_drift_memory.get("average_score") or 0.0
+                    ),
+                    4,
+                ),
+                "drift_state": str(
+                    proposal_drift_memory.get("drift_state") or ""
+                ).strip(),
+                "quality_counts": dict(proposal_drift_memory.get("quality_counts") or {}),
+                "posture_alignment_signal_count": _stored_count(
+                    proposal_drift_memory,
+                    "posture_alignment_signal_count",
+                ),
+                "priority_basis_signal_count": _stored_count(
+                    proposal_drift_memory,
+                    "priority_basis_signal_count",
+                ),
+                "missing_posture_alignment_count": _stored_count(
+                    proposal_drift_memory,
+                    "missing_posture_alignment_count",
+                ),
+                "missing_priority_basis_count": _stored_count(
+                    proposal_drift_memory,
+                    "missing_priority_basis_count",
+                ),
+                "posture_alignment_health": str(
+                    proposal_drift_memory.get("posture_alignment_health") or ""
+                ).strip(),
+                "priority_basis_health": str(
+                    proposal_drift_memory.get("priority_basis_health") or ""
+                ).strip(),
+                "dominant_posture_conflict_reason": str(
+                    proposal_drift_memory.get("dominant_posture_conflict_reason") or ""
+                ).strip()
+                or None,
+            },
             "cognitive_assessment_memory": {
                 "available": bool(cognitive_assessment_memory.get("available")),
                 "dominant_constraint": str(
                     cognitive_assessment_memory.get("dominant_constraint") or ""
                 ).strip(),
-                "common_current_judgements": [
-                    str(item).strip()
-                    for item in list(
-                        cognitive_assessment_memory.get("common_current_judgements") or []
-                    )[:4]
-                    if str(item).strip()
-                ],
-                "common_self_iteration_targets": [
-                    str(item).strip()
-                    for item in list(
-                        cognitive_assessment_memory.get("common_self_iteration_targets") or []
-                    )[:4]
-                    if str(item).strip()
-                ],
-                "common_self_iteration_hypotheses": [
-                    str(item).strip()
-                    for item in list(
-                        cognitive_assessment_memory.get("common_self_iteration_hypotheses") or []
-                    )[:4]
-                    if str(item).strip()
-                ],
+                "current_judgement_count": max(
+                    _signal_count(
+                        cognitive_assessment_memory,
+                        ("current_judgement_count",),
+                        "common_current_judgements",
+                    ),
+                    1 if str(cognitive_assessment_memory.get("current_judgement") or "").strip() else 0,
+                ),
+                "self_iteration_target_count": max(
+                    _signal_count(
+                        cognitive_assessment_memory,
+                        ("self_iteration_target_count", "target_count"),
+                        "common_self_iteration_targets",
+                    ),
+                    1
+                    if str(cognitive_assessment_memory.get("self_iteration_target") or "").strip()
+                    else 0,
+                ),
+                "self_iteration_hypothesis_count": max(
+                    _signal_count(
+                        cognitive_assessment_memory,
+                        ("self_iteration_hypothesis_count", "hypothesis_count"),
+                        "common_self_iteration_hypotheses",
+                    ),
+                    1
+                    if str(
+                        cognitive_assessment_memory.get("self_iteration_hypothesis") or ""
+                    ).strip()
+                    else 0,
+                ),
             },
             "self_iteration_hypotheses": {
                 "available": bool(self_iteration_hypotheses.get("available")),
@@ -1748,23 +1925,12 @@ class PlanningRuntimeMixin:
                 "top_target_domain": str(
                     self_iteration_hypotheses.get("top_target_domain") or ""
                 ).strip(),
-                "hypotheses": [
-                    {
-                        "target_domain": str(item.get("target_domain") or "").strip(),
-                        "hypothesis": str(item.get("hypothesis") or "").strip(),
-                        "priority": round(
-                            self._clamp_endogenous_ratio(item.get("priority") or 0.0),
-                            4,
-                        ),
-                        "suggested_task_types": [
-                            str(row).strip()
-                            for row in list(item.get("suggested_task_types") or [])[:3]
-                            if str(row).strip()
-                        ],
-                    }
-                    for item in list(self_iteration_hypotheses.get("hypotheses") or [])[:3]
-                    if isinstance(item, dict) and str(item.get("hypothesis") or "").strip()
-                ],
+                "hypothesis_count": max(
+                    _stored_count(self_iteration_hypotheses, "hypothesis_count"),
+                    1
+                    if str(self_iteration_hypotheses.get("dominant_hypothesis") or "").strip()
+                    else 0,
+                ),
             },
             "self_iteration_trend_memory": {
                 "available": bool(self_iteration_trend_memory.get("available")),
@@ -1777,30 +1943,48 @@ class PlanningRuntimeMixin:
                 "target_stability": str(
                     self_iteration_trend_memory.get("target_stability") or ""
                 ).strip(),
-                "common_targets": [
-                    str(item).strip()
-                    for item in list(self_iteration_trend_memory.get("common_targets") or [])[:4]
-                    if str(item).strip()
-                ],
-                "common_hypotheses": [
-                    str(item).strip()
-                    for item in list(self_iteration_trend_memory.get("common_hypotheses") or [])[:4]
-                    if str(item).strip()
-                ],
-                "common_stay_or_switch": [
-                    str(item).strip()
-                    for item in list(
-                        self_iteration_trend_memory.get("common_stay_or_switch") or []
-                    )[:3]
-                    if str(item).strip()
-                ],
-                "common_switch_reasons": [
-                    str(item).strip()
-                    for item in list(
-                        self_iteration_trend_memory.get("common_switch_reasons") or []
-                    )[:4]
-                    if str(item).strip()
-                ],
+                "target_count": max(
+                    _signal_count(
+                        self_iteration_trend_memory,
+                        ("target_count", "target_signal_count"),
+                        "common_targets",
+                    ),
+                    1 if str(self_iteration_trend_memory.get("dominant_target") or "").strip() else 0,
+                ),
+                "hypothesis_count": max(
+                    _signal_count(
+                        self_iteration_trend_memory,
+                        ("hypothesis_count", "hypothesis_signal_count"),
+                        "common_hypotheses",
+                    ),
+                    1
+                    if str(self_iteration_trend_memory.get("dominant_hypothesis") or "").strip()
+                    else 0,
+                ),
+                "stay_or_switch_count": max(
+                    _signal_count(
+                        self_iteration_trend_memory,
+                        ("stay_or_switch_count", "stay_or_switch_signal_count"),
+                        "common_stay_or_switch",
+                    ),
+                    1
+                    if str(
+                        self_iteration_trend_memory.get("dominant_stay_or_switch") or ""
+                    ).strip()
+                    else 0,
+                ),
+                "switch_reason_count": max(
+                    _signal_count(
+                        self_iteration_trend_memory,
+                        ("switch_reason_count", "switch_reason_signal_count"),
+                        "common_switch_reasons",
+                    ),
+                    1
+                    if str(
+                        self_iteration_trend_memory.get("dominant_switch_reason") or ""
+                    ).strip()
+                    else 0,
+                ),
             },
             "switch_self_regulation_memory": {
                 "available": bool(switch_self_regulation_memory.get("available")),
@@ -1825,11 +2009,11 @@ class PlanningRuntimeMixin:
                     ),
                     4,
                 ),
-                "common_stay_or_switch": [
-                    str(item).strip()
-                    for item in list(switch_self_regulation_memory.get("common_stay_or_switch") or [])[:3]
-                    if str(item).strip()
-                ],
+                "stay_or_switch_count": _signal_count(
+                    switch_self_regulation_memory,
+                    ("stay_or_switch_count", "stay_or_switch_signal_count"),
+                    "common_stay_or_switch",
+                ),
             },
             "post_task_effect_memory": {
                 "available": bool(post_task_effect_memory.get("available")),
@@ -1873,7 +2057,11 @@ class PlanningRuntimeMixin:
             for item in list(history_snapshot.get("outcomes") or [])
             if isinstance(item, dict)
         ]
-        recent_entries: list[Dict[str, Any]] = []
+        entry_count = 0
+        score_total = 0.0
+        weak_or_partial_count = 0
+        missing_evidence_counts: Dict[str, int] = {}
+        missing_agenda_counts: Dict[str, int] = {}
 
         for outcome in outcomes[:12]:
             metadata = dict(outcome.get("metadata") or {})
@@ -1885,56 +2073,54 @@ class PlanningRuntimeMixin:
                 reference_alignment = evidence.get("reference_alignment")
             if not isinstance(reference_alignment, dict) or not reference_alignment:
                 continue
-
-            recent_entries.append(
-                {
-                    "title": str(outcome.get("title") or "").strip(),
-                    "alignment_quality": str(
-                        reference_alignment.get("alignment_quality") or ""
-                    ).strip(),
-                    "alignment_score": self._clamp_endogenous_ratio(
-                        reference_alignment.get("alignment_score") or 0.0
-                    ),
-                    "missing_evidence_nodes": [
-                        str(item).strip()
-                        for item in list(reference_alignment.get("missing_evidence_nodes") or [])[:4]
-                        if str(item).strip()
-                    ],
-                    "missing_agenda_nodes": [
-                        str(item).strip()
-                        for item in list(reference_alignment.get("missing_agenda_nodes") or [])[:4]
-                        if str(item).strip()
-                    ],
-                }
+            entry_count += 1
+            score_total += self._clamp_endogenous_ratio(
+                reference_alignment.get("alignment_score") or 0.0
             )
-            if len(recent_entries) >= 4:
+            quality = str(reference_alignment.get("alignment_quality") or "").strip().lower()
+            if quality in {"weak", "partial", "drifted"}:
+                weak_or_partial_count += 1
+            for node in list(reference_alignment.get("missing_evidence_nodes") or [])[:4]:
+                node_name = str(node).strip()
+                if node_name:
+                    missing_evidence_counts[node_name] = missing_evidence_counts.get(node_name, 0) + 1
+            for node in list(reference_alignment.get("missing_agenda_nodes") or [])[:4]:
+                node_name = str(node).strip()
+                if node_name:
+                    missing_agenda_counts[node_name] = missing_agenda_counts.get(node_name, 0) + 1
+            if entry_count >= 4:
                 break
 
-        if not recent_entries:
+        if entry_count <= 0:
             return {
                 "available": False,
                 "summary": "No recent reference alignment is available yet.",
             }
 
-        average_alignment_score = self._clamp_endogenous_ratio(
-            sum(float(item.get("alignment_score") or 0.0) for item in recent_entries)
-            / len(recent_entries)
-        )
-        weak_or_partial_count = sum(
-            1
-            for item in recent_entries
-            if str(item.get("alignment_quality") or "").strip().lower()
-            in {"weak", "partial", "drifted"}
-        )
+        def _dominant_key(counts: Dict[str, int]) -> str:
+            if not counts:
+                return ""
+            return sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))[0][0]
+
+        average_alignment_score = self._clamp_endogenous_ratio(score_total / entry_count)
+        missing_evidence_node_count = sum(missing_evidence_counts.values())
+        missing_agenda_node_count = sum(missing_agenda_counts.values())
         return {
             "available": True,
-            "recent_entries": recent_entries,
+            "entry_count": entry_count,
             "average_alignment_score": round(average_alignment_score, 4),
             "weak_or_partial_count": weak_or_partial_count,
+            "primary_missing_evidence_node": _dominant_key(missing_evidence_counts) or None,
+            "primary_missing_agenda_node": _dominant_key(missing_agenda_counts) or None,
+            "missing_evidence_node_count": missing_evidence_node_count,
+            "missing_agenda_node_count": missing_agenda_node_count,
             "summary": (
                 "Recent reference alignment from history remains available; "
+                f"entries={entry_count}; "
                 f"avg_alignment={average_alignment_score:.2f}; "
-                f"weak_or_partial={weak_or_partial_count}."
+                f"weak_or_partial={weak_or_partial_count}; "
+                f"missing_evidence={missing_evidence_node_count}; "
+                f"missing_agenda={missing_agenda_node_count}."
             ),
         }
 
@@ -1959,9 +2145,11 @@ class PlanningRuntimeMixin:
         current_judgement_counts: Dict[str, int] = {}
         dominant_constraint_counts: Dict[str, int] = {}
         why_not_improvement_counts: Dict[str, int] = {}
+        self_iteration_target_counts: Dict[str, int] = {}
+        self_iteration_hypothesis_counts: Dict[str, int] = {}
         stay_switch_counts: Dict[str, int] = {}
         switch_reason_counts: Dict[str, int] = {}
-        entries: list[Dict[str, Any]] = []
+        entry_count = 0
 
         for outcome in outcomes[:12]:
             metadata = dict(outcome.get("metadata") or {})
@@ -1983,6 +2171,12 @@ class PlanningRuntimeMixin:
             ]
             stay_or_switch = str(assessment.get("stay_or_switch") or "").strip().lower()
             switch_reason = str(assessment.get("switch_reason") or "").strip()
+            self_iteration_target = str(
+                assessment.get("self_iteration_target") or ""
+            ).strip()
+            self_iteration_hypothesis = str(
+                assessment.get("self_iteration_hypothesis") or ""
+            ).strip()
             if current_judgement:
                 current_judgement_counts[current_judgement] = (
                     current_judgement_counts.get(current_judgement, 0) + 1
@@ -1995,6 +2189,14 @@ class PlanningRuntimeMixin:
                 why_not_improvement_counts[item] = (
                     why_not_improvement_counts.get(item, 0) + 1
                 )
+            if self_iteration_target:
+                self_iteration_target_counts[self_iteration_target] = (
+                    self_iteration_target_counts.get(self_iteration_target, 0) + 1
+                )
+            if self_iteration_hypothesis:
+                self_iteration_hypothesis_counts[self_iteration_hypothesis] = (
+                    self_iteration_hypothesis_counts.get(self_iteration_hypothesis, 0) + 1
+                )
             if stay_or_switch in {"stay", "switch"}:
                 stay_switch_counts[stay_or_switch] = (
                     stay_switch_counts.get(stay_or_switch, 0) + 1
@@ -2003,24 +2205,20 @@ class PlanningRuntimeMixin:
                 switch_reason_counts[switch_reason] = (
                     switch_reason_counts.get(switch_reason, 0) + 1
                 )
-            entries.append(
-                {
-                    "title": str(outcome.get("title") or "").strip(),
-                    "current_judgement": current_judgement or None,
-                    "dominant_constraint": dominant_constraint or None,
-                    "stay_or_switch": stay_or_switch or None,
-                    "switch_reason": switch_reason or None,
-                    "why_not_improvement_now": why_not_improvement_now,
-                }
-            )
-            if len(entries) >= 4:
+            entry_count += 1
+            if entry_count >= 4:
                 break
 
-        if not entries:
+        if not entry_count:
             return {
                 "available": False,
                 "summary": "No recent LM cognitive-assessment memory is available yet.",
             }
+
+        def _dominant(counts: Dict[str, int]) -> str:
+            if not counts:
+                return ""
+            return sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))[0][0]
 
         dominant_constraint = ""
         if dominant_constraint_counts:
@@ -2031,45 +2229,19 @@ class PlanningRuntimeMixin:
         return {
             "available": True,
             "dominant_constraint": dominant_constraint or None,
-            "common_current_judgements": [
-                item
-                for item, _count in sorted(
-                    current_judgement_counts.items(),
-                    key=lambda pair: (-pair[1], pair[0]),
-                )[:4]
-            ],
-            "common_why_not_improvement_now": [
-                item
-                for item, _count in sorted(
-                    why_not_improvement_counts.items(),
-                    key=lambda pair: (-pair[1], pair[0]),
-                )[:4]
-            ],
-            "common_stay_or_switch": [
-                item
-                for item, _count in sorted(
-                    stay_switch_counts.items(),
-                    key=lambda pair: (-pair[1], pair[0]),
-                )[:2]
-            ],
-            "common_switch_reasons": [
-                item
-                for item, _count in sorted(
-                    switch_reason_counts.items(),
-                    key=lambda pair: (-pair[1], pair[0]),
-                )[:4]
-            ],
-            "common_self_iteration_targets": [
-                str(entry.get("self_iteration_target") or "").strip()
-                for entry in entries
-                if str(entry.get("self_iteration_target") or "").strip()
-            ][:4],
-            "common_self_iteration_hypotheses": [
-                str(entry.get("self_iteration_hypothesis") or "").strip()
-                for entry in entries
-                if str(entry.get("self_iteration_hypothesis") or "").strip()
-            ][:4],
-            "entries": entries,
+            "current_judgement": _dominant(current_judgement_counts) or None,
+            "current_judgement_count": len(current_judgement_counts),
+            "why_not_improvement_now": _dominant(why_not_improvement_counts) or None,
+            "why_not_improvement_now_count": len(why_not_improvement_counts),
+            "self_iteration_target": _dominant(self_iteration_target_counts) or None,
+            "self_iteration_target_count": len(self_iteration_target_counts),
+            "self_iteration_hypothesis": _dominant(self_iteration_hypothesis_counts) or None,
+            "self_iteration_hypothesis_count": len(self_iteration_hypothesis_counts),
+            "stay_or_switch": _dominant(stay_switch_counts) or None,
+            "stay_or_switch_count": len(stay_switch_counts),
+            "switch_reason": _dominant(switch_reason_counts) or None,
+            "switch_reason_count": len(switch_reason_counts),
+            "entry_count": entry_count,
             "summary": (
                 "Recent LM cognitive assessments remain available from history; "
                 f"dominant constraint={dominant_constraint or 'unknown'}."
@@ -2091,7 +2263,7 @@ class PlanningRuntimeMixin:
         stay_switch_counts: Dict[str, int] = {}
         switch_reason_counts: Dict[str, int] = {}
         recent_targets: list[str] = []
-        entries: list[Dict[str, Any]] = []
+        entry_count = 0
 
         for outcome in outcomes[:16]:
             metadata = dict(outcome.get("metadata") or {})
@@ -2122,39 +2294,31 @@ class PlanningRuntimeMixin:
                 switch_reason_counts[switch_reason] = (
                     switch_reason_counts.get(switch_reason, 0) + 1
                 )
-            entries.append(
-                {
-                    "title": str(outcome.get("title") or "").strip(),
-                    "self_iteration_target": target or None,
-                    "self_iteration_hypothesis": hypothesis or None,
-                    "stay_or_switch": stay_or_switch or None,
-                    "switch_reason": switch_reason or None,
-                }
-            )
-            if len(entries) >= 6:
+            entry_count += 1
+            if entry_count >= 6:
                 break
 
-        if not entries:
+        if not entry_count:
             return {
                 "available": False,
                 "summary": "No recent self-iteration trend memory is available yet.",
             }
 
-        common_targets = [
+        ranked_targets = [
             item
             for item, _count in sorted(
                 target_counts.items(),
                 key=lambda pair: (-pair[1], pair[0]),
             )[:4]
         ]
-        common_hypotheses = [
+        ranked_hypotheses = [
             item
             for item, _count in sorted(
                 hypothesis_counts.items(),
                 key=lambda pair: (-pair[1], pair[0]),
             )[:4]
         ]
-        dominant_target = common_targets[0] if common_targets else ""
+        dominant_target = ranked_targets[0] if ranked_targets else ""
         unique_recent_targets = {
             item for item in recent_targets[:4] if str(item or "").strip()
         }
@@ -2174,25 +2338,24 @@ class PlanningRuntimeMixin:
         return {
             "available": True,
             "dominant_target": dominant_target or None,
+            "dominant_hypothesis": ranked_hypotheses[0] if ranked_hypotheses else None,
             "trend_state": trend_state,
             "target_stability": target_stability,
-            "common_targets": common_targets,
-            "common_hypotheses": common_hypotheses,
-            "common_stay_or_switch": [
-                item
-                for item, _count in sorted(
-                    stay_switch_counts.items(),
-                    key=lambda pair: (-pair[1], pair[0]),
-                )[:2]
-            ],
-            "common_switch_reasons": [
-                item
-                for item, _count in sorted(
-                    switch_reason_counts.items(),
-                    key=lambda pair: (-pair[1], pair[0]),
-                )[:4]
-            ],
-            "entries": entries,
+            "target_count": len(target_counts),
+            "hypothesis_count": len(hypothesis_counts),
+            "dominant_stay_or_switch": (
+                sorted(stay_switch_counts.items(), key=lambda pair: (-pair[1], pair[0]))[0][0]
+                if stay_switch_counts
+                else None
+            ),
+            "stay_or_switch_count": len(stay_switch_counts),
+            "dominant_switch_reason": (
+                sorted(switch_reason_counts.items(), key=lambda pair: (-pair[1], pair[0]))[0][0]
+                if switch_reason_counts
+                else None
+            ),
+            "switch_reason_count": len(switch_reason_counts),
+            "entry_count": entry_count,
             "summary": (
                 "Recent self-iteration trend favors "
                 f"{dominant_target or 'unknown'}; trend_state={trend_state}; "
@@ -2400,50 +2563,57 @@ class PlanningRuntimeMixin:
         task_type_priors: Dict[str, Any],
         recent_reference_alignment: Dict[str, Any],
     ) -> Dict[str, Any]:
-        current_judgement = str(
-            (
-                list(cognitive_assessment_memory.get("common_current_judgements") or [None])[0]
-                if cognitive_assessment_memory.get("common_current_judgements")
-                else ""
+        def _first_text(mapping: Dict[str, Any], primary_key: str, legacy_key: str) -> str:
+            primary = str(mapping.get(primary_key) or "").strip()
+            if primary:
+                return primary
+            raw_legacy = mapping.get(legacy_key)
+            legacy_values = (
+                [raw_legacy] if isinstance(raw_legacy, str) else list(raw_legacy or [])
             )
-            or ""
+            return str(legacy_values[0] if legacy_values else "").strip()
+
+        current_judgement = str(
+            _first_text(
+                cognitive_assessment_memory,
+                "current_judgement",
+                "common_current_judgements",
+            )
         ).strip()
         dominant_constraint = str(
             cognitive_assessment_memory.get("dominant_constraint") or ""
         ).strip()
         top_self_iteration_domain = str(
-            (
-                list(cognitive_assessment_memory.get("common_self_iteration_targets") or [None])[0]
-                if cognitive_assessment_memory.get("common_self_iteration_targets")
-                else ""
+            _first_text(
+                cognitive_assessment_memory,
+                "self_iteration_target",
+                "common_self_iteration_targets",
             )
             or self_iteration_trend_memory.get("dominant_target")
             or ""
         ).strip()
         top_self_iteration_hypothesis = str(
-            (
-                list(
-                    cognitive_assessment_memory.get(
-                        "common_self_iteration_hypotheses"
-                    )
-                    or [None]
-                )[0]
-                if cognitive_assessment_memory.get("common_self_iteration_hypotheses")
-                else ""
+            _first_text(
+                cognitive_assessment_memory,
+                "self_iteration_hypothesis",
+                "common_self_iteration_hypotheses",
             )
             or (
-                list(self_iteration_trend_memory.get("common_hypotheses") or [None])[0]
-                if self_iteration_trend_memory.get("common_hypotheses")
-                else ""
+                _first_text(
+                    self_iteration_trend_memory,
+                    "dominant_hypothesis",
+                    "common_hypotheses",
+                )
             )
             or ""
         ).strip()
         stay_or_switch_bias = str(
-            (
-                list(self_iteration_trend_memory.get("common_stay_or_switch") or [None])[0]
-                if self_iteration_trend_memory.get("common_stay_or_switch")
-                else switch_self_regulation_memory.get("preferred_switch_bias")
+            _first_text(
+                self_iteration_trend_memory,
+                "dominant_stay_or_switch",
+                "common_stay_or_switch",
             )
+            or switch_self_regulation_memory.get("preferred_switch_bias")
             or ""
         ).strip()
         if stay_or_switch_bias == "balanced":
@@ -2488,17 +2658,17 @@ class PlanningRuntimeMixin:
             dominant_failure_mode = dominant_constraint
 
         top_task_type = str(task_type_priors.get("top_priority_task_type") or "").strip()
-        common_why_not_improvement_now = [
-            str(item).strip()
-            for item in list(cognitive_assessment_memory.get("common_why_not_improvement_now") or [])[:4]
-            if str(item).strip()
-        ]
+        why_not_improvement_now = _first_text(
+            cognitive_assessment_memory,
+            "why_not_improvement_now",
+            "common_why_not_improvement_now",
+        )
         governance_posture = "review"
         if grounding_pressure == "high":
             governance_posture = "observation_or_review"
         elif recent_effect_direction == "degrading":
             governance_posture = "review"
-        elif common_why_not_improvement_now:
+        elif why_not_improvement_now:
             governance_posture = "review"
         elif current_judgement and any(
             token in current_judgement.lower()
@@ -2587,7 +2757,8 @@ class PlanningRuntimeMixin:
             for item in list(history_snapshot.get("outcomes") or [])
             if isinstance(item, dict)
         ]
-        entries: list[Dict[str, Any]] = []
+        entry_count = 0
+        score_total = 0.0
         quality_counts: Dict[str, int] = {"strong": 0, "partial": 0, "weak": 0}
         reason_counts: Dict[str, int] = {}
         top_priority_counts: Dict[str, int] = {}
@@ -2611,12 +2782,12 @@ class PlanningRuntimeMixin:
             if quality not in quality_counts:
                 quality = "partial"
             quality_counts[quality] += 1
-            top_priority_task_type = str(
+            suggested_task_shape = str(
                 cognitive_alignment.get("top_priority_task_type") or ""
             ).strip().lower()
-            if top_priority_task_type:
-                top_priority_counts[top_priority_task_type] = (
-                    top_priority_counts.get(top_priority_task_type, 0) + 1
+            if suggested_task_shape:
+                top_priority_counts[suggested_task_shape] = (
+                    top_priority_counts.get(suggested_task_shape, 0) + 1
                 )
             reasons = [
                 str(reason).strip()
@@ -2655,69 +2826,36 @@ class PlanningRuntimeMixin:
                 missing_priority_basis_count += 1
             for reason in reasons:
                 reason_counts[reason] = reason_counts.get(reason, 0) + 1
-            entries.append(
-                {
-                    "title": str(outcome.get("title") or "").strip(),
-                    "quality": quality,
-                    "score": round(
-                        self._clamp_endogenous_ratio(
-                            cognitive_alignment.get("score") or 0.0
-                        ),
-                        4,
-                    ),
-                    "top_priority_task_type": top_priority_task_type or None,
-                    "reasons": reasons,
-                    "llm_posture_alignment": normalized_posture_alignment,
-                    "llm_priority_basis": normalized_priority_basis,
-                    "event_type": str(outcome.get("event_type") or "").strip(),
-                }
+            score_total += round(
+                self._clamp_endogenous_ratio(cognitive_alignment.get("score") or 0.0),
+                4,
             )
-            if len(entries) >= 4:
+            entry_count += 1
+            if entry_count >= 4:
                 break
 
-        if not entries:
+        if not entry_count:
             return {
                 "available": False,
                 "average_score": 0.0,
                 "quality_counts": {},
-                "dominant_top_priority_task_type": None,
+                "dominant_task_shape": None,
                 "summary": "No recent cognitive alignment feedback is available yet.",
-                "common_reasons": [],
-                "common_posture_alignment": [],
-                "common_priority_basis": [],
+                "reason_count": 0,
+                "posture_alignment_signal_count": 0,
+                "priority_basis_signal_count": 0,
                 "missing_posture_alignment_count": 0,
                 "missing_priority_basis_count": 0,
-                "entries": [],
+                "entry_count": 0,
             }
 
-        average_score = sum(float(item["score"]) for item in entries) / len(entries)
-        dominant_top_priority_task_type = None
+        average_score = score_total / entry_count
+        dominant_task_shape = None
         if top_priority_counts:
-            dominant_top_priority_task_type = max(
+            dominant_task_shape = max(
                 top_priority_counts.items(),
                 key=lambda item: (item[1], item[0]),
             )[0]
-        common_reasons = [
-            reason
-            for reason, _count in sorted(
-                reason_counts.items(),
-                key=lambda item: (-item[1], item[0]),
-            )[:5]
-        ]
-        common_posture_alignment = [
-            item
-            for item, _count in sorted(
-                posture_alignment_counts.items(),
-                key=lambda pair: (-pair[1], pair[0]),
-            )[:4]
-        ]
-        common_priority_basis = [
-            item
-            for item, _count in sorted(
-                priority_basis_counts.items(),
-                key=lambda pair: (-pair[1], pair[0]),
-            )[:4]
-        ]
         summary = (
             f"Recent cognitive alignment average={average_score:.2f}; "
             f"dominant quality="
@@ -2727,14 +2865,14 @@ class PlanningRuntimeMixin:
             "available": True,
             "average_score": round(self._clamp_endogenous_ratio(average_score), 4),
             "quality_counts": quality_counts,
-            "dominant_top_priority_task_type": dominant_top_priority_task_type,
+            "dominant_task_shape": dominant_task_shape,
             "summary": summary,
-            "common_reasons": common_reasons,
-            "common_posture_alignment": common_posture_alignment,
-            "common_priority_basis": common_priority_basis,
+            "reason_count": len(reason_counts),
+            "posture_alignment_signal_count": len(posture_alignment_counts),
+            "priority_basis_signal_count": len(priority_basis_counts),
             "missing_posture_alignment_count": missing_posture_alignment_count,
             "missing_priority_basis_count": missing_priority_basis_count,
-            "entries": entries,
+            "entry_count": entry_count,
         }
 
     def _build_current_candidate_cognition_summary(
@@ -2742,9 +2880,7 @@ class PlanningRuntimeMixin:
         *,
         candidate_items: list[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        entries: list[Dict[str, Any]] = []
-        task_type_counts: Dict[str, int] = {}
-        quality_counts: Dict[str, int] = {"strong": 0, "partial": 0, "weak": 0}
+        candidate_count = 0
         cognitive_scores: list[float] = []
         reference_scores: list[float] = []
         lm_generated_count = 0
@@ -2752,18 +2888,12 @@ class PlanningRuntimeMixin:
         for item in candidate_items:
             if not isinstance(item, dict):
                 continue
+            candidate_count += 1
             metadata = dict(item.get("metadata") or {})
             evidence = dict(item.get("evidence") or {})
             llm_generated = bool(metadata.get("llm_task_generated") or evidence.get("llm_generated"))
             if llm_generated:
                 lm_generated_count += 1
-            task_type = str(
-                metadata.get("llm_task_type")
-                or evidence.get("llm_task_type")
-                or ""
-            ).strip().lower()
-            if task_type:
-                task_type_counts[task_type] = task_type_counts.get(task_type, 0) + 1
             cognitive_alignment = metadata.get("cognitive_alignment")
             if not isinstance(cognitive_alignment, dict):
                 cognitive_alignment = evidence.get("cognitive_alignment")
@@ -2771,13 +2901,8 @@ class PlanningRuntimeMixin:
             if not isinstance(reference_alignment, dict):
                 reference_alignment = evidence.get("reference_alignment")
 
-            quality = None
             score = None
             if isinstance(cognitive_alignment, dict) and cognitive_alignment:
-                quality = str(cognitive_alignment.get("quality") or "partial").strip().lower()
-                if quality not in quality_counts:
-                    quality = "partial"
-                quality_counts[quality] += 1
                 score = round(
                     self._clamp_endogenous_ratio(cognitive_alignment.get("score") or 0.0),
                     4,
@@ -2793,18 +2918,6 @@ class PlanningRuntimeMixin:
                 )
                 reference_scores.append(reference_score)
 
-            entries.append(
-                {
-                    "title": str(item.get("title") or "").strip(),
-                    "stable_key": str(item.get("stable_key") or "").strip() or None,
-                    "llm_generated": llm_generated,
-                    "task_type": task_type or None,
-                    "cognitive_alignment_quality": quality,
-                    "cognitive_alignment_score": score,
-                    "reference_alignment_score": reference_score,
-                }
-            )
-
         average_cognitive_alignment_score = (
             sum(cognitive_scores) / len(cognitive_scores) if cognitive_scores else 0.0
         )
@@ -2812,12 +2925,8 @@ class PlanningRuntimeMixin:
             sum(reference_scores) / len(reference_scores) if reference_scores else 0.0
         )
         return {
-            "count": len(entries),
+            "count": candidate_count,
             "lm_generated_count": lm_generated_count,
-            "task_type_counts": task_type_counts,
-            "quality_counts": {
-                key: value for key, value in quality_counts.items() if value > 0
-            },
             "average_cognitive_alignment_score": round(
                 self._clamp_endogenous_ratio(average_cognitive_alignment_score),
                 4,
@@ -2826,7 +2935,6 @@ class PlanningRuntimeMixin:
                 self._clamp_endogenous_ratio(average_reference_alignment_score),
                 4,
             ),
-            "entries": entries[:8],
         }
 
     def _derive_endogenous_meta_governance_mode(
@@ -2987,21 +3095,18 @@ class PlanningRuntimeMixin:
             adaptive_policy=adaptive_policy,
             strategy_memory=strategy_memory,
         )
-        entries = [
-            {
-                "mode": meta_mode["mode"],
-                "confidence": meta_mode["confidence"],
-                "stability": meta_mode["stability"],
-                "drivers": list(meta_mode["drivers"]),
-                "guardrails": list(meta_mode["guardrails"]),
-                "preferred_focus": adaptive_policy.get("preferred_focus"),
-                "corrective_mode": correction_mode.get("mode"),
-                "observation_target": observation_program.get("highest_priority_target"),
-                "agenda_topic": attention_agenda.get("entries", [{}])[0].get("topic") if attention_agenda.get("entries") else None,
-                "uncertainty_domain": uncertainty_ledger.get("highest_risk_domain"),
-                "context_key": context_key,
-            }
-        ]
+        context = {
+            "preferred_focus": adaptive_policy.get("preferred_focus"),
+            "corrective_mode": correction_mode.get("mode"),
+            "observation_target": observation_program.get("highest_priority_target"),
+            "agenda_topic": (
+                attention_agenda.get("entries", [{}])[0].get("topic")
+                if attention_agenda.get("entries")
+                else None
+            ),
+            "uncertainty_domain": uncertainty_ledger.get("highest_risk_domain"),
+            "context_key": context_key,
+        }
         recorded_at = datetime.now(timezone.utc).isoformat()
         self._record_endogenous_meta_governance_memory(
             history,
@@ -3023,7 +3128,7 @@ class PlanningRuntimeMixin:
             "stability": meta_mode["stability"],
             "drivers": list(meta_mode["drivers"]),
             "guardrails": list(meta_mode["guardrails"]),
-            "entries": entries,
+            "context": context,
         }
 
     def _derive_endogenous_agenda_persistence_state(
@@ -3051,7 +3156,6 @@ class PlanningRuntimeMixin:
         *,
         deliberation: Dict[str, Any],
         governance_channels: Dict[str, Any],
-        candidate_items: list[Dict[str, Any]],
         strategy_memory: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         needs = [
@@ -3074,16 +3178,6 @@ class PlanningRuntimeMixin:
         preferred_focus = str(adaptive_policy.get("preferred_focus") or "").strip().lower()
         normalized_strategy_memory = self._normalize_endogenous_strategy_memory(strategy_memory)
         agenda_topic_stats = dict(normalized_strategy_memory.get("agenda_topic_stats") or {})
-
-        candidate_kind_counts: Dict[str, int] = {}
-        for item in candidate_items:
-            if not isinstance(item, dict):
-                continue
-            metadata = dict(item.get("metadata") or {})
-            score_breakdown = dict(metadata.get("score_breakdown") or {})
-            candidate_kind = str(score_breakdown.get("candidate_kind") or "").strip().lower()
-            if candidate_kind:
-                candidate_kind_counts[candidate_kind] = candidate_kind_counts.get(candidate_kind, 0) + 1
 
         perspective_map = {
             "stabilize_memory_continuity": "system_continuity",
@@ -3123,7 +3217,6 @@ class PlanningRuntimeMixin:
                 ),
                 None,
             )
-            candidate_kind = str((matching_intent or {}).get("candidate_kind") or "").strip().lower()
             agenda_priority = self._clamp_endogenous_ratio(
                 float(need.get("severity") or 0.0) * 0.45
                 + float(need.get("urgency") or 0.0) * 0.35
@@ -3166,8 +3259,6 @@ class PlanningRuntimeMixin:
                     "confidence": round(float(need.get("confidence") or 0.0), 4),
                     "target_horizon": (matching_intent or {}).get("target_horizon"),
                     "recommended_channel": (matching_intent or {}).get("output_channel"),
-                    "candidate_kind": candidate_kind or None,
-                    "candidate_count": candidate_kind_counts.get(candidate_kind, 0),
                     "supporting_signal": (matching_signal or {}).get("signal_type"),
                     "observation_required": observation_required,
                     "blocked_by": blocked_by,
@@ -4138,7 +4229,6 @@ class PlanningRuntimeMixin:
         agenda_entries = self._build_endogenous_attention_agenda(
             deliberation=deliberation,
             governance_channels=self._governance_channels_from_deliberation(deliberation),
-            candidate_items=candidate_items,
         ).get("entries") or []
         agenda_map = {
             str(item.get("topic") or "").strip().lower(): dict(item)
@@ -4331,7 +4421,7 @@ class PlanningRuntimeMixin:
         decision_id = str(latest_decision.get("decision_id") or "").strip()
         status = str(task.status or "").strip()
         history = self._load_endogenous_drive_history()
-        for existing in list(history.get("outcomes") or [])[:24]:
+        for existing in list(history.get("outcomes") or []):
             if not isinstance(existing, dict):
                 continue
             if (
@@ -5325,6 +5415,8 @@ class PlanningRuntimeMixin:
         return keys
 
     async def evaluate_endogenous_drive(self, request: dict | None = None):
+        """Evaluate the endogenous cognition state and queue-compatible projections."""
+
         request = request or {}
         idle_window_request = dict(request.get("idle_window") or {})
         idle_window_request.setdefault(
@@ -5748,7 +5840,24 @@ class PlanningRuntimeMixin:
             )
 
         if generated_events:
-            snapshot["events"] = generated_events + list(snapshot.get("events") or [])
+            existing_event_keys = {
+                semantic_key
+                for item in list(snapshot.get("events") or [])
+                if isinstance(item, dict)
+                for semantic_key in [self._endogenous_governance_event_semantic_key(item)]
+                if semantic_key
+            }
+            new_events: list[Dict[str, Any]] = []
+            for event in generated_events:
+                semantic_key = self._endogenous_governance_event_semantic_key(event)
+                if semantic_key and semantic_key in existing_event_keys:
+                    continue
+                if semantic_key:
+                    existing_event_keys.add(semantic_key)
+                new_events.append(event)
+            if not new_events:
+                return self._governance_events_for_runtime(snapshot)
+            snapshot["events"] = new_events + list(snapshot.get("events") or [])
             self._persist_endogenous_governance_events(snapshot)
         return self._governance_events_for_runtime(snapshot)
 

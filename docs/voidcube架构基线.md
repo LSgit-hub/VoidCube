@@ -455,7 +455,7 @@ Agent (API-A, AUTO 模式下)
 - `observation_program`
 - `meta_governance`
 
-`proposal_cognition` 在当前基线里应被理解为**辅助观察与追踪层**，不是第二套并列主结构。它可以保留 `lm_trace`、`assessment_trace`、`cognitive_evolution_trace`、`self_iteration_focus` 这类辅助材料，但不应重新长回“顶层 LM 原始状态包 + 大量兼容摘要并排外露”的旧形态。
+`proposal_cognition` 在当前基线里应被理解为**辅助观察与追踪层**，不是第二套并列主结构。它只应保留 `lm_trace`、`assessment_trace`、`cognitive_evolution_trace`、`self_iteration_focus` 以及少量状态/计数型纠偏信号；最新 LM generation context 也应保持 dominant/count 口径，不得重新长回“顶层 LM 原始状态包 + 大量兼容摘要/历史条目并排外露”的旧形态。
 
 下一步目标不是把系统重新拉回“候选中心”，而是继续让 LM 参与**治理任务列表本身**。
 
@@ -1192,8 +1192,7 @@ proposal_cognition（辅助观察与追踪层，不是第二套主系统）
 
 compatible projections
   ├── task_candidates
-  ├── compatible_projection_bias
-  └── task_type_priors
+  └── secondary_task_shape_hint
 ```
 
 也就是说，`task_candidates` 以及相关 `task_type` 语义只是当前实现中的兼容投影，不是内生驱动的本体定义。其真正判断主线仍然是下面这条：

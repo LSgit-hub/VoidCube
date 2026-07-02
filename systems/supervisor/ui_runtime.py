@@ -3645,7 +3645,7 @@ function renderLMInputPanel(state) {
   body.append(tokSec);
 
   // LM 调用信息
-  if (lm.last_call_at || lm.prompt_estimate) {
+  if (lm.last_call_at || lm.prompt_estimate || lm.status || lm.proposal_count != null) {
     const callSec = document.createElement('div');
     callSec.className = 'lm-section';
     callSec.innerHTML = '<div class="lm-section-label">🧠 最近 LM 调用</div>';
@@ -3654,6 +3654,8 @@ function renderLMInputPanel(state) {
       {icon:'📝', label:'Prompt 预估', value: lm.prompt_estimate ? (lm.prompt_estimate + ' 字符') : '—'},
       {icon:'🔗', label:'证据节点', value: (lm.evidence_node_count != null) ? lm.evidence_node_count : '—'},
       {icon:'🎯', label:'任务提案', value: (lm.proposal_count != null) ? lm.proposal_count : '—'},
+      {icon:'🧭', label:'状态', value: lm.status || '—'},
+      {icon:'🧩', label:'模型角色', value: lm.model_role || '—'},
       {icon:'⚙️', label:'生成状态', value: lm.generation_enabled ? '✅ 已启用' : '⏸ 已禁用'},
     ];
     info.forEach(s => {
@@ -3698,7 +3700,7 @@ function renderLMInputPanel(state) {
   }
 
   // 空状态
-  if (!mem.total_tokens && !lm.last_call_at && !evNodes.length) {
+  if (!mem.total_tokens && !lm.last_call_at && !lm.status && lm.proposal_count == null && !evNodes.length) {
     body.replaceChildren();
     const empty = document.createElement('div');
     empty.className = 'panel-empty';
@@ -4417,22 +4419,31 @@ class SupervisorUIMixin:
         # ── LM Input info (for 🧠 panel) ──
         lm_input: Dict[str, Any] = {
             "generation_enabled": bool(
-                getattr(self.config, "endogenous_drive_lm_task_generation_enabled", False)
+                getattr(
+                    getattr(self.config, "service_runtime", None),
+                    "endogenous_drive_lm_task_generation_enabled",
+                    False,
+                )
             ),
         }
+
+        def _loaded_cognition_state() -> Dict[str, Any]:
+            raw_snapshot = self._load_endogenous_cognition_state()
+            if isinstance(raw_snapshot.get("state"), dict):
+                return dict(raw_snapshot.get("state") or {})
+            return dict(raw_snapshot or {})
+
         # Extract recent LM call metadata from drive history / cognition state
         try:
-            cog_snapshot = self._load_endogenous_cognition_state()
+            cog_snapshot = _loaded_cognition_state()
             proposal_cog = cog_snapshot.get("proposal_cognition") or {}
-            lm_state = proposal_cog.get("lm_reasoning_state") or {}
-            if lm_state.get("last_call_at"):
-                lm_input["last_call_at"] = lm_state["last_call_at"]
-            if lm_state.get("prompt_chars"):
-                lm_input["prompt_estimate"] = lm_state["prompt_chars"]
-            if lm_state.get("evidence_node_count"):
-                lm_input["evidence_node_count"] = lm_state["evidence_node_count"]
-            if lm_state.get("proposal_count") is not None:
-                lm_input["proposal_count"] = lm_state["proposal_count"]
+            lm_trace = dict(proposal_cog.get("lm_trace") or {})
+            if lm_trace.get("status"):
+                lm_input["status"] = lm_trace["status"]
+            if lm_trace.get("model_role"):
+                lm_input["model_role"] = lm_trace["model_role"]
+            if lm_trace.get("proposal_count") is not None:
+                lm_input["proposal_count"] = lm_trace["proposal_count"]
             # Recent evidence nodes from uncertainty ledger
             ledger = cog_snapshot.get("uncertainty_ledger") or {}
             recent_nodes = ledger.get("recent_nodes") or []
@@ -4452,7 +4463,7 @@ class SupervisorUIMixin:
         # ── Cognition state (for 📊 panel) ──
         cognition: Dict[str, Any] = {}
         try:
-            cog_snapshot = self._load_endogenous_cognition_state()
+            cog_snapshot = _loaded_cognition_state()
             perception = cog_snapshot.get("perception") or {}
             world_model = cog_snapshot.get("world_model") or {}
             # Build perception summary

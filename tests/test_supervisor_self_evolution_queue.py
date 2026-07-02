@@ -60,6 +60,240 @@ class _FakeLLMClient:
         return self.response
 
 
+def _self_learning_outcome(
+    title: str,
+    status: str,
+    *,
+    quality_score: float,
+    recorded_at: str | None = None,
+    recorded_hour: int | None = None,
+) -> dict:
+    row = {
+        "title": title,
+        "event_type": "decision",
+        "status": status,
+        "task_family": "self_learning",
+        "governance_task_type": "self_learning",
+        "quality_score": quality_score,
+    }
+    if recorded_at is None and recorded_hour is not None:
+        recorded_at = f"2026-06-28T{recorded_hour:02d}:00:00+00:00"
+    if recorded_at:
+        row["recorded_at"] = recorded_at
+    return row
+
+
+def _endogenous_idle_window_payload(
+    *,
+    quality_score: float = 0.46,
+    completed_title: str = "Recent learning",
+    completed_at: str = "2026-06-28T00:00:00+00:00",
+    error_count: int = 0,
+    uncertainty_count: int = 0,
+    user_idle: int = 900,
+    agent_idle: int = 900,
+    memory_idle: int = 900,
+    memory_planning: bool = True,
+    memory_execution: bool = True,
+    self_learning_planning: bool = True,
+    self_learning_execution: bool = True,
+    self_evolution_planning: bool = True,
+    self_evolution_execution: bool = False,
+) -> dict:
+    return {
+        "checks": {
+            "has_user_idle": True,
+            "has_agent_idle": True,
+            "has_memory_idle": True,
+            "in_execution_window": True,
+        },
+        "idle_seconds": {
+            "user": user_idle,
+            "agent": agent_idle,
+            "memory": memory_idle,
+        },
+        "activity": {
+            "active_sessions": 0,
+            "counts": {
+                "error_count": error_count,
+                "uncertainty_high_count": uncertainty_count,
+            },
+        },
+        "completed_learning_tasks": [
+            {
+                "title": completed_title,
+                "quality_score": quality_score,
+                "completed_at": completed_at,
+            }
+        ],
+        "task_family_decisions": {
+            "memory_maintenance": {
+                "eligible_for_planning": memory_planning,
+                "eligible_for_execution": memory_execution,
+            },
+            "self_learning": {
+                "eligible_for_planning": self_learning_planning,
+                "eligible_for_execution": self_learning_execution,
+            },
+            "general_self_evolution": {
+                "eligible_for_planning": self_evolution_planning,
+                "eligible_for_execution": self_evolution_execution,
+            },
+        },
+        "governance_task_type_decisions": {
+            "memory_maintenance": {
+                "eligible_for_planning": memory_planning,
+                "eligible_for_execution": memory_execution,
+            },
+            "self_learning": {
+                "eligible_for_planning": self_learning_planning,
+                "eligible_for_execution": self_learning_execution,
+            },
+            "self_evolution": {
+                "eligible_for_planning": self_evolution_planning,
+                "eligible_for_execution": self_evolution_execution,
+            },
+        },
+    }
+
+
+def _drive_cycle_failure_replay_evaluation(
+    *,
+    context: str,
+    key: str,
+    focus: str,
+    self_regulation: dict | None = None,
+) -> dict:
+    user_mode, posture, constraint = context.split("|")
+    if focus not in {"truthfulness", "queue_hygiene"}:
+        raise AssertionError(f"Unsupported fake drive focus: {focus}")
+    truthfulness_focus = focus == "truthfulness"
+    candidate_kind = "truthfulness_review" if truthfulness_focus else "queue_hygiene_review"
+    governance_type = "self_learning" if truthfulness_focus else "self_evolution"
+    task_family = "self_learning" if truthfulness_focus else "general_self_evolution"
+    execution_kind = None if truthfulness_focus else "general_self_evolution"
+    need_type = "repair_truthfulness" if truthfulness_focus else "stabilize_memory_continuity"
+    intent_type = "review_truthfulness_signals" if truthfulness_focus else "review_queue_hygiene"
+    observation_target = "truthfulness" if truthfulness_focus else "queue_hygiene"
+    deliberation = {
+        "perception": {
+            "user_mode": user_mode,
+            "system_posture": posture,
+            "active_sessions": 0,
+            "correction_signals": 3 if truthfulness_focus else 0,
+            "active_queue_count": 0,
+        },
+        "reflection": {
+            "dominant_constraint": constraint,
+            "source_evidence": [f"context_key={context}"],
+        },
+        "adaptive_policy": {
+            "preferred_focus": focus,
+            "candidate_budget": 1,
+            "source_evidence": [f"context_key={context}"],
+        },
+        "needs": [
+            {
+                "need_type": need_type,
+                "severity": 0.78,
+                "confidence": 0.84,
+                "rationale": f"{focus} need",
+            }
+        ],
+        "intents": [
+            {
+                "intent_type": intent_type,
+                "source_needs": [need_type],
+                "output_channel": "task_candidate",
+                "candidate_kind": candidate_kind,
+                "rationale": f"{focus} intent",
+            }
+        ],
+        "signals": [
+            {
+                "signal_type": "drive_posture_signal",
+                "priority": 0.8,
+                "message": f"{focus} posture",
+                "rationale": f"{focus} posture",
+                "payload": {
+                    "preferred_focus": focus,
+                    "candidate_budget": 1,
+                },
+            },
+            {
+                "signal_type": "observation_signal",
+                "priority": 0.82,
+                "message": f"{focus} observation",
+                "rationale": f"{focus} observation",
+                "payload": {"observation_target": observation_target},
+            },
+        ],
+    }
+    governance_channels = {
+        "posture": deliberation["signals"][0],
+        "observation_requests": [deliberation["signals"][1]],
+        "governance_review_requests": [],
+        "truthfulness_alerts": [],
+        "autonomy_alignment_requests": [],
+    }
+    if truthfulness_focus:
+        governance_channels["truthfulness_alerts"] = [
+            {
+                "signal_type": "truthfulness_alert",
+                "priority": 0.82,
+                "message": "truthfulness observation",
+                "rationale": "truthfulness observation",
+                "payload": {"observation_target": "truthfulness"},
+            }
+        ]
+    else:
+        governance_channels["governance_review_requests"] = [
+            {
+                "signal_type": "governance_review_suggestion",
+                "priority": 0.7,
+                "message": "queue hygiene review",
+                "rationale": "queue context switched",
+                "payload": {"queue_health": "review"},
+            }
+        ]
+    return {
+        "status": "evaluated",
+        "idle_window": {
+            "checks": {"in_execution_window": True},
+            "task_family_decisions": {
+                task_family: {"eligible_for_planning": True, "eligible_for_execution": True},
+            },
+            "governance_task_type_decisions": {
+                governance_type: {"eligible_for_planning": True, "eligible_for_execution": True},
+            },
+        },
+        "deliberation": deliberation,
+        "drive_posture": deliberation["signals"][0],
+        "governance_channels": governance_channels,
+        "governance_event_stream": {"events": []},
+        "self_regulation": dict(self_regulation or {}),
+        "candidates": [
+            {
+                "title": f"{focus.title()} candidate",
+                "summary": f"{focus} candidate summary",
+                "rationale": f"{focus} candidate rationale",
+                "source": "endogenous_drive",
+                "priority": "high",
+                "governance_task_type": governance_type,
+                "task_family": task_family,
+                "execution_kind": execution_kind,
+                "metadata": {
+                    "endogenous_drive_key": key,
+                    "drive_judgement": deliberation,
+                    "score_breakdown": {"candidate_kind": candidate_kind},
+                },
+                "evidence": {"endogenous_drive": {}},
+                "constraints": {},
+            }
+        ],
+    }
+
+
 async def _plan_and_write_back_endogenous_cycle(
     supervisor: Supervisor,
     *,
@@ -796,16 +1030,18 @@ async def test_evaluate_endogenous_drive_exposes_cognition_state(tmp_path):
     assert "corrective_mode" in cognition["self_model"]
     assert cognition["governance"]["posture"]["signal_type"] == "drive_posture_signal"
     assert cognition["governance"]["channel_counts"]["observation_requests"] >= 1
+    assert "candidate_count" not in cognition["governance"]
     assert "task_type_priors" not in cognition["proposal_cognition"]
     assert cognition["proposal_cognition"]["active_cognitive_posture_profile"]["name"]
     assert cognition["proposal_cognition"]["summary"] == (
         f"posture={cognition['proposal_cognition']['active_cognitive_posture_profile']['name']}; "
-        f"drift={cognition['proposal_cognition']['proposal_drift_memory']['drift_state']}; "
-        f"candidate_count={cognition['proposal_cognition']['current_candidates']['count']}."
+        f"drift={cognition['proposal_cognition']['auxiliary_memory']['proposal_drift_memory']['drift_state']}."
     )
+    assert "current_count=" not in cognition["proposal_cognition"]["summary"]
     assert "summary" not in cognition["proposal_cognition"]["meta_cognition_profile"]
     auxiliary_memory = cognition["proposal_cognition"]["auxiliary_memory"]
     for folded_key in (
+        "proposal_drift_memory",
         "self_iteration_hypotheses",
         "self_iteration_trend_memory",
         "switch_self_regulation_memory",
@@ -814,21 +1050,27 @@ async def test_evaluate_endogenous_drive_exposes_cognition_state(tmp_path):
     ):
         assert folded_key not in cognition["proposal_cognition"]
         assert "summary" not in auxiliary_memory[folded_key]
-    assert "summary" not in cognition["proposal_cognition"]["proposal_drift_memory"]
     assert "summary" not in cognition["proposal_cognition"]["recent_reference_alignment"]
-    assert "compatible_projection_bias" not in cognition["proposal_cognition"]["meta_cognition_profile"]
-    assert cognition["proposal_cognition"]["proposal_drift_memory"]["drift_state"] == "correcting"
+    assert "secondary_task_shape_hint" not in cognition["proposal_cognition"]["meta_cognition_profile"]
+    assert auxiliary_memory["proposal_drift_memory"]["drift_state"] == "correcting"
     assert cognition["proposal_cognition"]["lm_trace"]["charter_core_mission"]
     assert "top_priority_task_type" not in cognition["proposal_cognition"]["lm_trace"]
     assert cognition["proposal_cognition"]["current_candidates"]["count"] >= 1
+    assert "entries" not in cognition["proposal_cognition"]["current_candidates"]
+    assert "task_type_counts" not in cognition["proposal_cognition"]["current_candidates"]
+    assert "quality_counts" not in cognition["proposal_cognition"]["current_candidates"]
     assert cognition["attention_agenda"]["active_count"] >= 1
     assert cognition["attention_agenda"]["entries"][0]["topic"]
+    assert "candidate_kind" not in cognition["attention_agenda"]["entries"][0]
+    assert "candidate_count" not in cognition["attention_agenda"]["entries"][0]
     assert cognition["uncertainty_ledger"]["active_count"] >= 1
     assert cognition["uncertainty_ledger"]["entries"][0]["hypothesis"]
     assert cognition["observation_program"]["active_count"] >= 1
     assert cognition["observation_program"]["entries"][0]["target"]
     assert cognition["meta_governance"]["mode"] in {"observe", "correct", "expand", "conserve"}
     assert cognition["meta_governance"]["confidence"] >= 0
+    assert "entries" not in cognition["meta_governance"]
+    assert "context" in cognition["meta_governance"]
     assert cognition["judgement_core"]["primary_need"]["need_type"]
     assert cognition["judgement_core"]["primary_intent"]["intent_type"]
     assert cognition["judgement_core"]["governance_outputs"]["preferred_focus"] == (
@@ -1021,6 +1263,80 @@ async def test_endogenous_drive_history_records_planned_and_decision_outcomes(tm
     assert history["strategy_memory"]["focus_stats"][preferred_focus]["dragging"] == 1
     assert history["strategy_memory"]["contextual_focus_stats"][context_key][preferred_focus]["judged"] >= 1
     assert history["strategy_memory"]["contextual_focus_stats"][context_key][preferred_focus]["dragging"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_endogenous_drive_outcome_dedup_scans_full_retained_history_window(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+
+    async def fake_idle_window(_request=None):
+        return _endogenous_idle_window_payload(error_count=2, uncertainty_count=1)
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    cycle = await supervisor._run_endogenous_drive_cycle()
+    task_id = cycle["tasks"][0]["task_id"]
+    task = supervisor._self_evolution_queue.get_task(task_id)
+    assert task is not None
+
+    await supervisor.decide_self_evolution_task(
+        task_id,
+        {
+            "decision": "defer",
+            "reason": "hold for later",
+        },
+    )
+    history = supervisor._load_endogenous_drive_history()
+    deferred_outcome = next(
+        outcome
+        for outcome in history["outcomes"]
+        if outcome.get("task_id") == task_id
+        and outcome.get("event_type") == "decision"
+        and outcome.get("status") == "deferred"
+    )
+    preferred_focus = str(deferred_outcome.get("preferred_focus") or "").strip()
+    context_key = str(deferred_outcome.get("context_key") or "").strip()
+    assert preferred_focus
+    assert context_key
+
+    filler = [
+        {
+            "outcome_id": f"filler-{index}",
+            "recorded_at": f"2026-06-28T00:{index:02d}:00+00:00",
+            "event_type": "decision",
+            "task_id": f"filler-task-{index}",
+            "decision_id": f"filler-decision-{index}",
+            "status": "completed",
+            "preferred_focus": "learning_expansion",
+            "context_key": "idle_window|stable|none",
+        }
+        for index in range(30)
+    ]
+    history["outcomes"] = filler + [deferred_outcome]
+    history["strategy_memory"]["focus_stats"][preferred_focus]["dragging"] = 1
+    history["strategy_memory"]["contextual_focus_stats"][context_key][preferred_focus]["dragging"] = 1
+    supervisor._persist_endogenous_drive_history(history)
+
+    task = supervisor._self_evolution_queue.get_task(task_id)
+    assert task is not None
+    supervisor._record_endogenous_drive_outcome(task, event_type="decision")
+
+    after = supervisor._load_endogenous_drive_history()
+    matching = [
+        outcome
+        for outcome in after["outcomes"]
+        if outcome.get("task_id") == task_id
+        and outcome.get("event_type") == "decision"
+        and outcome.get("status") == "deferred"
+    ]
+
+    assert len(matching) == 1
+    assert after["strategy_memory"]["focus_stats"][preferred_focus]["dragging"] == 1
+    assert (
+        after["strategy_memory"]["contextual_focus_stats"][context_key][preferred_focus]["dragging"]
+        == 1
+    )
 
 
 @pytest.mark.asyncio
@@ -1553,9 +1869,13 @@ async def test_endogenous_cognition_state_persists_to_runtime_file(tmp_path):
     assert snapshot["state"]["meta_governance"]["mode"] in {"observe", "correct", "expand", "conserve"}
     assert snapshot["state"]["self_model"]["adaptive_policy"]["preferred_focus"] == result["cognition_state"]["self_model"]["adaptive_policy"]["preferred_focus"]
     assert "task_type_priors" not in snapshot["state"]["proposal_cognition"]
+    assert "proposal_drift_memory" not in snapshot["state"]["proposal_cognition"]
+    assert "proposal_drift_memory" in snapshot["state"]["proposal_cognition"]["auxiliary_memory"]
     assert snapshot["state"]["proposal_cognition"]["lm_trace"]["charter_core_mission"] == "Evolve through evidence-backed structured proposals."
     assert "top_priority_task_type" not in snapshot["state"]["proposal_cognition"]["lm_trace"]
     assert snapshot["state"]["proposal_cognition"]["current_candidates"]["count"] >= 1
+    assert "task_type_counts" not in snapshot["state"]["proposal_cognition"]["current_candidates"]
+    assert "quality_counts" not in snapshot["state"]["proposal_cognition"]["current_candidates"]
 
 
 @pytest.mark.asyncio
@@ -2806,6 +3126,191 @@ async def test_run_self_evolution_cycle_consumes_alignment_events_into_self_regu
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_duplicate_governance_event_ids_are_deduped_before_consumption(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    events_snapshot = supervisor._endogenous_governance_events_default()
+    duplicated_event = {
+        "event_id": "evt-align-dup",
+        "event_type": "autonomy_alignment_request",
+        "channel": "autonomy_alignment_requests",
+        "recorded_at": "2026-06-28T00:00:00+00:00",
+        "context_key": "idle_window|stable|weak_learning_yield",
+        "preferred_focus": "observation",
+        "priority": 0.8,
+        "message": "Autonomous output should be aligned and throttled.",
+        "rationale": "weak readiness",
+        "payload": {"dominant_constraint": "weak_learning_yield"},
+    }
+    events_snapshot["events"] = [
+        dict(duplicated_event),
+        {
+            **dict(duplicated_event),
+            "recorded_at": "2026-06-28T00:01:00+00:00",
+            "message": "Duplicate alignment event should not double-count.",
+        },
+    ]
+    supervisor._persist_endogenous_governance_events(events_snapshot)
+
+    async def fake_review(request=None):
+        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "idle_window": {}}
+
+    supervisor.review_self_evolution_tasks = fake_review  # type: ignore[method-assign]
+    supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
+
+    result = await supervisor._run_self_evolution_cycle()
+    regulation = supervisor._load_endogenous_self_regulation()
+    updated_events = supervisor._load_endogenous_governance_events()
+
+    assert len(updated_events["events"]) == 1
+    assert result["alignment_consumption"]["count"] == 1
+    assert result["alignment_consumption"]["consumed"][0]["event_id"] == "evt-align-dup"
+    assert regulation["dynamic_candidate_throttle_boost"] == 0.08
+    assert regulation["dynamic_observation_bias_boost"] == 0.06
+    assert updated_events["events"][0]["consumed_action"] == "increase_self_regulation"
+
+
+@pytest.mark.unit
+def test_governance_events_without_event_ids_are_preserved_during_semantic_trim(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    events_snapshot = supervisor._endogenous_governance_events_default()
+    event_without_id = {
+        "event_type": "autonomy_alignment_request",
+        "channel": "autonomy_alignment_requests",
+        "recorded_at": "2026-06-28T00:00:00+00:00",
+        "context_key": "idle_window|stable|weak_learning_yield",
+        "preferred_focus": "observation",
+        "priority": 0.8,
+        "message": "Autonomous output should be aligned and throttled.",
+        "rationale": "weak readiness",
+        "payload": {"dominant_constraint": "weak_learning_yield"},
+    }
+    events_snapshot["events"] = [
+        dict(event_without_id),
+        {
+            **dict(event_without_id),
+            "recorded_at": "2026-06-28T00:01:00+00:00",
+        },
+    ]
+
+    supervisor._persist_endogenous_governance_events(events_snapshot)
+    updated_events = supervisor._load_endogenous_governance_events()["events"]
+
+    assert len(updated_events) == 2
+    assert all("event_id" not in item for item in updated_events)
+
+
+@pytest.mark.unit
+def test_repeated_governance_event_generation_keeps_unconsumed_semantic_events_stable(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    deliberation = {
+        "perception": {
+            "user_mode": "idle_window",
+            "system_posture": "strained",
+        },
+        "reflection": {
+            "dominant_constraint": "none",
+        },
+        "adaptive_policy": {
+            "preferred_focus": "truthfulness",
+        },
+    }
+    governance_channels = {
+        "truthfulness_alerts": [
+            {
+                "priority": 0.88,
+                "message": "Truthfulness pressure should suppress expansion.",
+                "rationale": "correction pressure",
+                "payload": {"observation_target": "truthfulness"},
+            }
+        ],
+        "autonomy_alignment_requests": [
+            {
+                "priority": 0.82,
+                "message": "Alignment should tighten before autonomous work.",
+                "rationale": "weak readiness",
+                "payload": {"dominant_constraint": "weak_learning_yield"},
+            }
+        ],
+        "posture": {
+            "priority": 0.73,
+            "message": "Drive posture should stay corrective.",
+            "rationale": "truthfulness pressure is active",
+            "payload": {"preferred_focus": "truthfulness"},
+        },
+    }
+
+    supervisor._record_endogenous_governance_events(
+        deliberation=deliberation,
+        governance_channels=governance_channels,
+        candidate_items=[],
+    )
+    first_events = supervisor._load_endogenous_governance_events()["events"]
+    first_ids = {
+        item.get("event_type"): item.get("event_id")
+        for item in first_events
+    }
+
+    supervisor._record_endogenous_governance_events(
+        deliberation=deliberation,
+        governance_channels=governance_channels,
+        candidate_items=[],
+    )
+    second_events = supervisor._load_endogenous_governance_events()["events"]
+    second_ids = {
+        item.get("event_type"): item.get("event_id")
+        for item in second_events
+    }
+
+    assert len(first_events) == 3
+    assert len(second_events) == 3
+    assert second_ids == first_ids
+
+    consumed_snapshot = supervisor._load_endogenous_governance_events()
+    for row in consumed_snapshot["events"]:
+        if row.get("event_type") in {
+            "autonomy_alignment_request",
+            "truthfulness_alert",
+        }:
+            row["consumed_at"] = "2026-06-28T00:10:00+00:00"
+            row["consumed_action"] = "test_consumed"
+    supervisor._persist_endogenous_governance_events(consumed_snapshot)
+
+    supervisor._record_endogenous_governance_events(
+        deliberation=deliberation,
+        governance_channels=governance_channels,
+        candidate_items=[],
+    )
+    final_events = supervisor._load_endogenous_governance_events()["events"]
+    alignment_events = [
+        item
+        for item in final_events
+        if item.get("event_type") == "autonomy_alignment_request"
+    ]
+    truthfulness_events = [
+        item
+        for item in final_events
+        if item.get("event_type") == "truthfulness_alert"
+    ]
+    posture_events = [
+        item
+        for item in final_events
+        if item.get("event_type") == "drive_posture"
+    ]
+
+    assert len(alignment_events) == 2
+    assert len(truthfulness_events) == 2
+    assert len(posture_events) == 1
+    assert sum(1 for item in alignment_events if not item.get("consumed_at")) == 1
+    assert sum(1 for item in truthfulness_events if not item.get("consumed_at")) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_run_self_evolution_cycle_consumes_truthfulness_alerts_into_corrective_mode(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
@@ -3148,6 +3653,71 @@ async def test_get_endogenous_governance_state_aggregates_cognition_events_and_r
     assert regulation_view["corrective_mode"]["mode"] in {"rest", "guarded", "corrective"}
     assert events_view["governance_event_stream"]["events"]
     assert cognition_view["cognition_state"]["governance"]["posture"]["signal_type"] == "drive_posture_signal"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_ui_state_reads_wrapped_cognition_state_lm_trace(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor.config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={"endogenous_drive_lm_task_generation_enabled": True}
+            )
+        }
+    )
+    supervisor._endogenous_drive_engine.config = supervisor.config
+    supervisor._latest_drive_candidate_snapshot = lambda: [{"title": "cached drive"}]  # type: ignore[method-assign]
+    supervisor._fetch_tier1_stats = AsyncMock(return_value={})  # type: ignore[method-assign]
+    supervisor._recent_supervisor_observation_timeline = AsyncMock(return_value=[])  # type: ignore[method-assign]
+
+    async def fake_idle_window(_request=None):
+        return _endogenous_idle_window_payload()
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    cognition_state = supervisor._endogenous_cognition_state_default()["state"]
+    cognition_state["perception"] = {
+        "system_posture": "strained",
+        "active_queue_count": 3,
+        "recent_errors": 1,
+        "learning_quality": 0.42,
+        "correction_signals": 2,
+    }
+    cognition_state["world_model"] = {
+        "queue_health": "dragging",
+        "memory_pressure": 0.3,
+        "truthfulness_pressure": 0.7,
+        "learning_momentum": 0.2,
+    }
+    cognition_state["proposal_cognition"]["lm_trace"] = {
+        "available": True,
+        "status": "completed",
+        "model_role": "endogenous_drive_task_generation",
+        "charter_core_mission": "Govern from evidence.",
+        "proposal_count": 2,
+    }
+    cognition_state["uncertainty_ledger"] = {
+        "recent_nodes": [
+            {
+                "node_id": "evidence:self_structure",
+                "title": "Self structure",
+                "summary": "Grounding still needs repair.",
+            }
+        ]
+    }
+    supervisor._persist_endogenous_cognition_state(cognition_state)
+
+    ui_state = await supervisor.get_supervisor_ui_state()
+
+    assert ui_state["lm_input"]["generation_enabled"] is True
+    assert ui_state["lm_input"]["status"] == "completed"
+    assert ui_state["lm_input"]["model_role"] == "endogenous_drive_task_generation"
+    assert ui_state["lm_input"]["proposal_count"] == 2
+    assert "prompt_estimate" not in ui_state["lm_input"]
+    assert ui_state["lm_input"]["recent_evidence_nodes"][0]["node"] == "evidence:self_structure"
+    assert ui_state["cognition"]["perception"]["system_posture"] == "strained"
+    assert ui_state["cognition"]["world_model"]["queue_health"] == "dragging"
 
 
 @pytest.mark.asyncio
@@ -5346,6 +5916,331 @@ async def test_run_endogenous_drive_cycle_only_judges_candidates_kept_after_runt
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_governance_consumption_survives_drive_plan_failure_and_context_switch_replans_once(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+
+    events_snapshot = supervisor._endogenous_governance_events_default()
+    events_snapshot["events"] = [
+        {
+            "event_id": "evt-align-switch",
+            "event_type": "autonomy_alignment_request",
+            "channel": "autonomy_alignment_requests",
+            "recorded_at": "2026-06-28T00:00:00+00:00",
+            "context_key": "idle_window|stable|weak_learning_yield",
+            "preferred_focus": "observation",
+            "priority": 0.82,
+            "message": "Alignment should tighten before autonomous work.",
+            "rationale": "weak readiness",
+            "payload": {"dominant_constraint": "weak_learning_yield"},
+        },
+        {
+            "event_id": "evt-truth-switch",
+            "event_type": "truthfulness_alert",
+            "channel": "truthfulness_alerts",
+            "recorded_at": "2026-06-28T00:01:00+00:00",
+            "context_key": "idle_window|strained|none",
+            "preferred_focus": "truthfulness",
+            "priority": 0.88,
+            "message": "Truthfulness pressure should suppress expansion.",
+            "rationale": "correction pressure",
+            "payload": {"observation_target": "truthfulness"},
+        },
+    ]
+    supervisor._persist_endogenous_governance_events(events_snapshot)
+
+    async def fake_review(_request=None):
+        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "idle_window": {}}
+
+    supervisor.review_self_evolution_tasks = fake_review  # type: ignore[method-assign]
+    supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
+    consumed = await supervisor._run_self_evolution_cycle()
+
+    consumed_events = supervisor._load_endogenous_governance_events()["events"]
+    consumed_actions = {item.get("event_id"): item.get("consumed_action") for item in consumed_events}
+    assert consumed["alignment_consumption"]["count"] == 1
+    assert consumed["truthfulness_consumption"]["count"] == 1
+    assert consumed_actions["evt-align-switch"] == "increase_self_regulation"
+    assert consumed_actions["evt-truth-switch"] == "increase_truthfulness_correction"
+    assert supervisor._load_endogenous_self_regulation()["dynamic_truthfulness_bias_boost"] > 0.0
+
+    current_self_regulation = supervisor._load_endogenous_self_regulation()
+    failing_eval = _drive_cycle_failure_replay_evaluation(
+        context="idle_window|stable|weak_learning_yield",
+        key="continuity:queue_hygiene_review",
+        focus="queue_hygiene",
+        self_regulation=current_self_regulation,
+    )
+    successful_eval = _drive_cycle_failure_replay_evaluation(
+        context="idle_window|strained|none",
+        key="truthfulness:review_correction_signals",
+        focus="truthfulness",
+        self_regulation=current_self_regulation,
+    )
+    original_plan = supervisor.plan_self_evolution_task
+
+    async def fake_evaluate_failed(_request=None):
+        return failing_eval
+
+    async def fail_plan(_request=None):
+        raise RuntimeError("plan failed after drive persistence")
+
+    supervisor.evaluate_endogenous_drive = fake_evaluate_failed  # type: ignore[method-assign]
+    supervisor.plan_self_evolution_task = fail_plan  # type: ignore[method-assign]
+    history_before_failure = supervisor._load_endogenous_drive_history()
+    events_before_failure = supervisor._load_endogenous_governance_events()
+    cognition_before_failure = supervisor._load_endogenous_cognition_state()
+
+    with pytest.raises(RuntimeError, match="plan failed after drive persistence"):
+        await supervisor._run_endogenous_drive_cycle()
+
+    history_after_failure = supervisor._load_endogenous_drive_history()
+    events_after_failure = supervisor._load_endogenous_governance_events()
+    cognition_after_failure = supervisor._load_endogenous_cognition_state()
+    assert history_after_failure["judgements"] == history_before_failure["judgements"]
+    assert history_after_failure["outcomes"] == history_before_failure["outcomes"]
+    assert history_after_failure["strategy_memory"]["focus_stats"] == (
+        history_before_failure["strategy_memory"]["focus_stats"]
+    )
+    assert events_after_failure["events"] == events_before_failure["events"]
+    assert cognition_after_failure["state"] == cognition_before_failure["state"]
+
+    async def fake_evaluate_success(_request=None):
+        return successful_eval
+
+    supervisor.evaluate_endogenous_drive = fake_evaluate_success  # type: ignore[method-assign]
+    supervisor.plan_self_evolution_task = original_plan  # type: ignore[method-assign]
+    result = await supervisor._run_endogenous_drive_cycle()
+
+    history = supervisor._load_endogenous_drive_history()
+    events_after_success = supervisor._load_endogenous_governance_events()["events"]
+    judgement_keys = [item.get("candidate_key") for item in history["judgements"]]
+
+    assert result["planned"] == 1
+    assert result["tasks"][0]["metadata"]["endogenous_drive_key"] == "truthfulness:review_correction_signals"
+    assert judgement_keys.count("truthfulness:review_correction_signals") == 1
+    assert "continuity:queue_hygiene_review" not in judgement_keys
+    assert history["strategy_memory"]["focus_stats"]["truthfulness"]["judged"] == 1
+    assert "queue_hygiene" not in history["strategy_memory"]["focus_stats"]
+    assert any(item.get("event_id") == "evt-align-switch" for item in events_after_success)
+    assert any(item.get("event_id") == "evt-truth-switch" for item in events_after_success)
+    assert any(item.get("event_type") == "truthfulness_alert" for item in events_after_success)
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+@pytest.mark.stability_longcycle
+async def test_repeated_governance_consumption_drive_failure_and_context_switch_remain_stable(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+
+    async def fake_review(_request=None):
+        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "idle_window": {}}
+
+    supervisor.review_self_evolution_tasks = fake_review  # type: ignore[method-assign]
+    supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
+
+    first_events = supervisor._endogenous_governance_events_default()
+    first_events["events"] = [
+        {
+            "event_id": "evt-align-cycle-a",
+            "event_type": "autonomy_alignment_request",
+            "channel": "autonomy_alignment_requests",
+            "recorded_at": "2026-06-28T00:00:00+00:00",
+            "context_key": "idle_window|stable|weak_learning_yield",
+            "preferred_focus": "observation",
+            "priority": 0.82,
+            "message": "Alignment should tighten before autonomous work.",
+            "rationale": "weak readiness",
+            "payload": {"dominant_constraint": "weak_learning_yield"},
+        },
+        {
+            "event_id": "evt-truth-cycle-a",
+            "event_type": "truthfulness_alert",
+            "channel": "truthfulness_alerts",
+            "recorded_at": "2026-06-28T00:01:00+00:00",
+            "context_key": "idle_window|strained|none",
+            "preferred_focus": "truthfulness",
+            "priority": 0.88,
+            "message": "Truthfulness pressure should suppress expansion.",
+            "rationale": "correction pressure",
+            "payload": {"observation_target": "truthfulness"},
+        },
+    ]
+    supervisor._persist_endogenous_governance_events(first_events)
+
+    first_consumed = await supervisor._run_self_evolution_cycle()
+    events_after_first_consumption = supervisor._load_endogenous_governance_events()["events"]
+    first_consumed_at = {
+        item.get("event_id"): item.get("consumed_at")
+        for item in events_after_first_consumption
+    }
+    assert first_consumed["alignment_consumption"]["count"] == 1
+    assert first_consumed["truthfulness_consumption"]["count"] == 1
+    assert first_consumed_at["evt-align-cycle-a"]
+    assert first_consumed_at["evt-truth-cycle-a"]
+
+    current_self_regulation = supervisor._load_endogenous_self_regulation()
+    first_failure_eval = _drive_cycle_failure_replay_evaluation(
+        context="idle_window|stable|weak_learning_yield",
+        key="continuity:queue_hygiene_failed_cycle_a",
+        focus="queue_hygiene",
+        self_regulation=current_self_regulation,
+    )
+    first_success_eval = _drive_cycle_failure_replay_evaluation(
+        context="idle_window|strained|none",
+        key="truthfulness:review_cycle_a",
+        focus="truthfulness",
+        self_regulation=current_self_regulation,
+    )
+    original_plan = supervisor.plan_self_evolution_task
+
+    async def fake_evaluate_first_failure(_request=None):
+        return first_failure_eval
+
+    async def fail_plan_first(_request=None):
+        raise RuntimeError("first drive plan failed")
+
+    supervisor.evaluate_endogenous_drive = fake_evaluate_first_failure  # type: ignore[method-assign]
+    supervisor.plan_self_evolution_task = fail_plan_first  # type: ignore[method-assign]
+    history_before_first_failure = supervisor._load_endogenous_drive_history()
+    events_before_first_failure = supervisor._load_endogenous_governance_events()
+
+    with pytest.raises(RuntimeError, match="first drive plan failed"):
+        await supervisor._run_endogenous_drive_cycle()
+
+    assert supervisor._load_endogenous_drive_history()["judgements"] == (
+        history_before_first_failure["judgements"]
+    )
+    assert supervisor._load_endogenous_governance_events()["events"] == (
+        events_before_first_failure["events"]
+    )
+
+    async def fake_evaluate_first_success(_request=None):
+        return first_success_eval
+
+    supervisor.evaluate_endogenous_drive = fake_evaluate_first_success  # type: ignore[method-assign]
+    supervisor.plan_self_evolution_task = original_plan  # type: ignore[method-assign]
+    first_drive_result = await supervisor._run_endogenous_drive_cycle()
+    assert first_drive_result["planned"] == 1
+
+    second_events = supervisor._load_endogenous_governance_events()
+    second_events["events"].extend(
+        [
+            {
+                "event_id": "evt-review-cycle-b",
+                "event_type": "governance_review_request",
+                "channel": "governance_review_requests",
+                "recorded_at": "2026-06-28T00:02:00+00:00",
+                "context_key": "idle_window|stable|queue_debt",
+                "preferred_focus": "queue_hygiene",
+                "priority": 0.79,
+                "message": "Queue hygiene should be reviewed after context switch.",
+                "rationale": "queue context switched",
+                "payload": {"queue_health": "review"},
+            },
+            {
+                "event_id": "evt-align-cycle-b",
+                "event_type": "autonomy_alignment_request",
+                "channel": "autonomy_alignment_requests",
+                "recorded_at": "2026-06-28T00:03:00+00:00",
+                "context_key": "idle_window|stable|queue_debt",
+                "preferred_focus": "queue_hygiene",
+                "priority": 0.81,
+                "message": "Context switch should keep self-regulation tight.",
+                "rationale": "queue context switched",
+                "payload": {"dominant_constraint": "queue_debt"},
+            },
+        ]
+    )
+    supervisor._persist_endogenous_governance_events(second_events)
+
+    second_consumed = await supervisor._run_self_evolution_cycle()
+    events_after_second_consumption = supervisor._load_endogenous_governance_events()["events"]
+    consumed_by_id = {item.get("event_id"): item for item in events_after_second_consumption}
+    assert second_consumed["governance_consumption"]["count"] == 1
+    assert second_consumed["alignment_consumption"]["count"] == 1
+    assert consumed_by_id["evt-align-cycle-a"]["consumed_at"] == first_consumed_at["evt-align-cycle-a"]
+    assert consumed_by_id["evt-truth-cycle-a"]["consumed_at"] == first_consumed_at["evt-truth-cycle-a"]
+    assert consumed_by_id["evt-review-cycle-b"]["consumed_action"] == "trigger_review_pass"
+    assert consumed_by_id["evt-align-cycle-b"]["consumed_action"] == "increase_self_regulation"
+
+    second_self_regulation = supervisor._load_endogenous_self_regulation()
+    second_failure_eval = _drive_cycle_failure_replay_evaluation(
+        context="idle_window|stable|queue_debt",
+        key="truthfulness:review_failed_cycle_b",
+        focus="truthfulness",
+        self_regulation=second_self_regulation,
+    )
+    second_success_eval = _drive_cycle_failure_replay_evaluation(
+        context="idle_window|stable|queue_debt",
+        key="continuity:queue_hygiene_cycle_b",
+        focus="queue_hygiene",
+        self_regulation=second_self_regulation,
+    )
+
+    async def fake_evaluate_second_failure(_request=None):
+        return second_failure_eval
+
+    async def fail_plan_second(_request=None):
+        raise RuntimeError("second drive plan failed")
+
+    supervisor.evaluate_endogenous_drive = fake_evaluate_second_failure  # type: ignore[method-assign]
+    supervisor.plan_self_evolution_task = fail_plan_second  # type: ignore[method-assign]
+    history_before_second_failure = supervisor._load_endogenous_drive_history()
+    events_before_second_failure = supervisor._load_endogenous_governance_events()
+    cognition_before_second_failure = supervisor._load_endogenous_cognition_state()
+
+    with pytest.raises(RuntimeError, match="second drive plan failed"):
+        await supervisor._run_endogenous_drive_cycle()
+
+    assert supervisor._load_endogenous_drive_history()["judgements"] == (
+        history_before_second_failure["judgements"]
+    )
+    assert supervisor._load_endogenous_governance_events()["events"] == (
+        events_before_second_failure["events"]
+    )
+    assert supervisor._load_endogenous_cognition_state()["state"] == (
+        cognition_before_second_failure["state"]
+    )
+
+    async def fake_evaluate_second_success(_request=None):
+        return second_success_eval
+
+    supervisor.evaluate_endogenous_drive = fake_evaluate_second_success  # type: ignore[method-assign]
+    supervisor.plan_self_evolution_task = original_plan  # type: ignore[method-assign]
+    second_drive_result = await supervisor._run_endogenous_drive_cycle()
+
+    history = supervisor._load_endogenous_drive_history()
+    judgement_keys = [item.get("candidate_key") for item in history["judgements"]]
+    focus_stats = history["strategy_memory"]["focus_stats"]
+    contextual_stats = history["strategy_memory"]["contextual_focus_stats"]
+    final_events = {
+        item.get("event_id"): item
+        for item in supervisor._load_endogenous_governance_events()["events"]
+    }
+
+    assert second_drive_result["planned"] == 1
+    assert judgement_keys.count("truthfulness:review_cycle_a") == 1
+    assert judgement_keys.count("continuity:queue_hygiene_cycle_b") == 1
+    assert "continuity:queue_hygiene_failed_cycle_a" not in judgement_keys
+    assert "truthfulness:review_failed_cycle_b" not in judgement_keys
+    assert focus_stats["truthfulness"]["judged"] == 1
+    assert focus_stats["queue_hygiene"]["judged"] == 1
+    assert contextual_stats["idle_window|strained|none"]["truthfulness"]["judged"] == 1
+    assert contextual_stats["idle_window|stable|queue_debt"]["queue_hygiene"]["judged"] == 1
+    assert final_events["evt-align-cycle-a"]["consumed_at"] == first_consumed_at["evt-align-cycle-a"]
+    assert final_events["evt-truth-cycle-a"]["consumed_at"] == first_consumed_at["evt-truth-cycle-a"]
+    assert final_events["evt-review-cycle-b"]["consumed_action"] == "trigger_review_pass"
+    assert final_events["evt-align-cycle-b"]["consumed_action"] == "increase_self_regulation"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_endogenous_drive_lm_task_generation_is_disabled_by_default(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
@@ -5792,8 +6687,8 @@ async def test_prompt_packet_budget_preserves_queue_state_snapshot_under_large_c
             "dominant_constraint": "weak self structure grounding",
             "grounding_pressure": "high",
             "governance_posture": "observation_or_review",
-            "compatible_projection_bias": "review",
-            "compatible_projection_score": 0.82,
+            "secondary_task_shape_hint": "review",
+            "secondary_task_shape_score": 0.82,
             "top_self_iteration_domain": "grounding",
             "primary_evidence_nodes": ["self_structure"],
             "primary_agenda_nodes": ["focus:learning_expansion"],
@@ -5930,7 +6825,7 @@ def test_prompt_packet_prefers_context_layers_and_keeps_compact_cognitive_memory
             "meta_cognition_profile": {
                 "dominant_failure_mode": "grounding_instability",
                 "stay_or_switch_bias": "stay",
-                "compatible_projection_bias": "review",
+                "secondary_task_shape_hint": "review",
                 "priority_signals": ["reference alignment remains weak"],
                 "summary": "meta summary",
             },
@@ -5941,7 +6836,14 @@ def test_prompt_packet_prefers_context_layers_and_keeps_compact_cognitive_memory
             },
             "self_iteration_trend_memory": {
                 "dominant_target": "grounding",
+                "dominant_hypothesis": "repair grounding",
+                "dominant_stay_or_switch": "stay",
+                "dominant_switch_reason": "grounding is still active",
                 "trend_state": "locked",
+                "target_count": 1,
+                "hypothesis_count": 1,
+                "stay_or_switch_count": 1,
+                "switch_reason_count": 1,
                 "summary": "trend summary",
             },
             "switch_self_regulation_memory": {
@@ -5951,6 +6853,39 @@ def test_prompt_packet_prefers_context_layers_and_keeps_compact_cognitive_memory
             "post_task_effect_memory": {
                 "effect_direction": "mixed",
                 "summary": "effect summary",
+            },
+            "self_iteration_hypotheses": {
+                "top_target_domain": "grounding",
+                "dominant_hypothesis": "repair grounding",
+                "hypothesis_count": 1,
+                "suggested_task_types": ["review"],
+                "hypotheses": [
+                    {
+                        "target_domain": "grounding",
+                        "hypothesis": "repair grounding",
+                        "priority": 0.7,
+                        "evidence": ["missing_evidence:self_structure"],
+                        "suggested_task_types": ["learning", "observation"],
+                    },
+                    {
+                        "target_domain": "expansion",
+                        "hypothesis": "legacy expansion should not amplify thin count",
+                        "priority": 0.6,
+                        "suggested_task_types": ["learning"],
+                    },
+                ],
+            },
+            "recent_reference_alignment": {
+                "available": True,
+                "average_alignment_score": 0.58,
+                "weak_or_partial_count": 1,
+                "recent_entries": [
+                    {
+                        "quality": "partial",
+                        "missing_evidence_nodes": ["self_structure"],
+                        "missing_agenda_nodes": ["focus:learning_expansion"],
+                    }
+                ],
             },
             "proposal_drift_memory": {
                 "drift_state": "correcting",
@@ -5969,9 +6904,26 @@ def test_prompt_packet_prefers_context_layers_and_keeps_compact_cognitive_memory
     assert "long_tail_context" in compact
     assert "meta_cognition_profile" in compact
     assert compact["meta_cognition_profile"]["dominant_failure_mode"] == "grounding_instability"
-    assert "compatible_projection_bias" not in compact["meta_cognition_profile"]
+    assert "secondary_task_shape_hint" not in compact["meta_cognition_profile"]
     assert compact["cognitive_assessment_memory"]["dominant_constraint"] == "old duplicate constraint"
+    assert compact["cognitive_assessment_memory"]["current_judgement"] == "older judgement"
+    assert "common_current_judgements" not in compact["cognitive_assessment_memory"]
     assert compact["self_iteration_trend_memory"]["trend_state"] == "locked"
+    assert compact["self_iteration_trend_memory"]["dominant_hypothesis"] == "repair grounding"
+    assert compact["self_iteration_trend_memory"]["stay_or_switch"] == "stay"
+    assert compact["self_iteration_trend_memory"]["switch_reason"] == "grounding is still active"
+    assert compact["self_iteration_trend_memory"]["target_signal_count"] == 1
+    assert compact["self_iteration_trend_memory"]["hypothesis_signal_count"] == 1
+    assert compact["self_iteration_trend_memory"]["stay_or_switch_signal_count"] == 1
+    assert compact["self_iteration_trend_memory"]["switch_reason_signal_count"] == 1
+    assert "common_targets" not in compact["self_iteration_trend_memory"]
+    assert "common_hypotheses" not in compact["self_iteration_trend_memory"]
+    assert compact["self_iteration_hypotheses"]["hypothesis_count"] == 1
+    assert compact["self_iteration_hypotheses"]["suggested_task_types"] == ["review"]
+    assert "hypotheses" not in compact["self_iteration_hypotheses"]
+    assert compact["recent_reference_alignment"]["entry_count"] == 1
+    assert compact["recent_reference_alignment"]["weak_or_partial_count"] == 1
+    assert "recent_entries" not in compact["recent_reference_alignment"]
     assert compact["switch_self_regulation_memory"]["preferred_switch_bias"] == "stay"
     assert compact["post_task_effect_memory"]["effect_direction"] == "mixed"
     assert compact["proposal_drift_memory"]["drift_state"] == "correcting"
@@ -5980,7 +6932,7 @@ def test_prompt_packet_prefers_context_layers_and_keeps_compact_cognitive_memory
 
 
 @pytest.mark.unit
-def test_cognitive_briefing_demotes_compatible_projection_bias_to_secondary_hint():
+def test_cognitive_briefing_renders_task_shape_hint_as_secondary_hint():
     from systems.supervisor.endogenous_drive_prompts import _render_cognitive_briefing
 
     briefing = _render_cognitive_briefing(
@@ -5990,8 +6942,8 @@ def test_cognitive_briefing_demotes_compatible_projection_bias_to_secondary_hint
                 "dominant_constraint": "weak grounding",
                 "grounding_pressure": "high",
                 "governance_posture": "observation_or_review",
-                "compatible_projection_bias": "review",
-                "compatible_projection_score": 0.82,
+                "secondary_task_shape_hint": "review",
+                "secondary_task_shape_score": 0.82,
                 "summary": "decision core summary",
             },
             "meta_cognition_profile": {
@@ -6008,8 +6960,7 @@ def test_cognitive_briefing_demotes_compatible_projection_bias_to_secondary_hint
         }
     )
 
-    assert "当前最强兼容执行投影偏向" not in briefing
-    assert "兼容投影提示: review (0.82)。仅作兼容参考，不得覆盖当前判断与治理姿态。" in briefing
+    assert "任务形态辅助提示: review (0.82)。仅作辅助参考，不得覆盖当前判断与治理姿态。" in briefing
     assert "当前建议治理姿态: observation_or_review" in briefing
 
 
@@ -6023,8 +6974,8 @@ def test_prompt_packet_trim_stage_order_follows_charter_attention_policy():
             "dominant_constraint": "y" * 400,
             "grounding_pressure": "high",
             "governance_posture": "review",
-            "compatible_projection_bias": "review",
-            "compatible_projection_score": 0.8,
+            "secondary_task_shape_hint": "review",
+            "secondary_task_shape_score": 0.8,
             "top_self_iteration_domain": "grounding",
             "primary_evidence_nodes": ["self_structure"] * 10,
             "primary_agenda_nodes": ["focus:learning_expansion"] * 10,
@@ -6943,8 +7894,8 @@ async def test_endogenous_drive_cognitive_briefing_prefers_context_layers(tmp_pa
                 "dominant_constraint": "weak self structure grounding",
                 "grounding_pressure": "high",
                 "governance_posture": "observation_or_review",
-                "compatible_projection_bias": "review",
-                "compatible_projection_score": 0.82,
+                "secondary_task_shape_hint": "review",
+                "secondary_task_shape_score": 0.82,
                 "top_self_iteration_domain": "grounding",
                 "top_self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
                 "primary_evidence_nodes": ["self_structure"],
@@ -7944,10 +8895,342 @@ async def test_endogenous_drive_passes_recent_reference_alignment_feedback_to_lm
     assert fake_client.calls
     payload = fake_client.calls[0]["user_payload"]["task_generation"]
     assert "recent_reference_alignment" in payload
-    assert "Review evidence drift" in payload
-    assert "\"alignment_quality\": \"partial\"" in payload
-    assert "\"missing_evidence_nodes\": [\"self_structure\"]" in payload
-    assert "\"missing_agenda_nodes\": [\"focus:learning_expansion\"]" in payload
+    assert "\"entry_count\": 1" in payload
+    assert "\"primary_missing_evidence_node\": \"self_structure\"" in payload
+    assert "\"primary_missing_agenda_node\": \"focus:learning_expansion\"" in payload
+    assert "\"recent_entries\":" not in payload
+    assert "\"missing_evidence_nodes\":" not in payload
+    assert "\"missing_agenda_nodes\":" not in payload
+
+
+@pytest.mark.unit
+def test_engine_recent_reference_alignment_summary_stays_thin(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Reference drift seed",
+            "reference_alignment": {
+                "alignment_quality": "partial",
+                "alignment_score": 0.58,
+                "missing_evidence_nodes": ["self_structure"],
+                "missing_agenda_nodes": ["focus:learning_expansion"],
+            },
+        }
+    ]
+    drive_context = {"drive_history": history}
+
+    summary = supervisor._endogenous_drive_engine._build_recent_reference_alignment(
+        drive_context
+    )
+
+    assert summary["available"] is True
+    assert summary["entry_count"] == 1
+    assert summary["average_alignment_score"] == 0.58
+    assert summary["weak_or_partial_count"] == 1
+    assert summary["primary_missing_evidence_node"] == "self_structure"
+    assert summary["primary_missing_agenda_node"] == "focus:learning_expansion"
+    assert summary["missing_evidence_node_count"] == 1
+    assert summary["missing_agenda_node_count"] == 1
+    assert "recent_entries" not in summary
+
+
+@pytest.mark.unit
+def test_engine_proposal_drift_memory_source_stays_thin(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Weak posture conflict",
+            "cognitive_alignment": {
+                "score": 0.34,
+                "quality": "weak",
+                "top_priority_task_type": "observation",
+                "reasons": ["posture_conflicts_with_observe_first"],
+            },
+            "llm_posture_alignment": ["pushes action before observation"],
+            "llm_priority_basis": ["weak channels still unresolved"],
+        },
+        {
+            "title": "Repair through observation",
+            "cognitive_alignment": {
+                "score": 0.72,
+                "quality": "strong",
+                "top_priority_task_type": "observation",
+                "reasons": ["matches_program_top_task_type_prior"],
+            },
+            "llm_posture_alignment": ["follows observe_first"],
+            "llm_priority_basis": ["evidence gaps dominate agenda"],
+        },
+    ]
+
+    summary = supervisor._endogenous_drive_engine._build_proposal_drift_memory(
+        {"drive_history": history}
+    )
+
+    assert summary["available"] is True
+    assert summary["average_score"] == 0.53
+    assert summary["drift_state"] == "correcting"
+    assert summary["quality_counts"] == {"strong": 1, "partial": 0, "weak": 1}
+    assert summary["posture_alignment_signal_count"] == 2
+    assert summary["priority_basis_signal_count"] == 2
+    assert summary["posture_alignment_health"] == "inconsistent"
+    assert summary["priority_basis_health"] == "inconsistent"
+    assert summary["dominant_posture_conflict_reason"] == "posture_conflicts_with_observe_first"
+    assert "recent_entries" not in summary
+    assert "entries" not in summary
+    assert "common_posture_alignment" not in summary
+    assert "common_priority_basis" not in summary
+
+
+@pytest.mark.unit
+def test_runtime_recent_cognitive_alignment_summary_source_stays_thin(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Weak posture conflict",
+            "event_type": "planned",
+            "cognitive_alignment": {
+                "score": 0.36,
+                "quality": "weak",
+                "top_priority_task_type": "review",
+                "reasons": ["task_shape_conflicts_with_current_cognitive_posture"],
+            },
+            "llm_posture_alignment": ["pushes action before observation"],
+            "llm_priority_basis": ["weak channels still unresolved"],
+        },
+        {
+            "title": "Partial repair",
+            "event_type": "planned",
+            "cognitive_alignment": {
+                "score": 0.64,
+                "quality": "partial",
+                "top_priority_task_type": "review",
+                "reasons": ["matches_program_top_task_type_prior"],
+            },
+            "llm_posture_alignment": ["keeps review bounded"],
+            "llm_priority_basis": ["truthfulness pressure is elevated"],
+        },
+    ]
+
+    summary = supervisor._build_recent_cognitive_alignment_summary(
+        history_snapshot=history
+    )
+
+    assert summary["available"] is True
+    assert summary["average_score"] == 0.5
+    assert summary["quality_counts"] == {"strong": 0, "partial": 1, "weak": 1}
+    assert summary["dominant_task_shape"] == "review"
+    assert summary["reason_count"] == 2
+    assert summary["posture_alignment_signal_count"] == 2
+    assert summary["priority_basis_signal_count"] == 2
+    assert summary["missing_posture_alignment_count"] == 0
+    assert summary["missing_priority_basis_count"] == 0
+    assert summary["entry_count"] == 2
+    assert "entries" not in summary
+    assert "common_reasons" not in summary
+    assert "common_posture_alignment" not in summary
+    assert "common_priority_basis" not in summary
+
+
+@pytest.mark.unit
+def test_engine_auxiliary_memory_sources_stay_thin(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Previous cognition",
+            "event_type": "planned",
+            "llm_cognitive_assessment": {
+                "current_judgement": "review should dominate until grounding is repaired",
+                "dominant_constraint": "weak self structure grounding",
+                "why_not_improvement_now": [
+                    "improvement would run ahead of self-understanding",
+                ],
+                "self_iteration_target": "grounding",
+                "self_iteration_hypothesis": "repair evidence-to-agenda grounding first",
+                "stay_or_switch": "stay",
+                "switch_reason": "grounding gaps still dominate",
+            },
+        }
+    ]
+    drive_context = {"drive_history": history}
+
+    assessment = supervisor._endogenous_drive_engine._build_cognitive_assessment_memory(
+        drive_context
+    )
+    trend = supervisor._endogenous_drive_engine._build_self_iteration_trend_memory(
+        drive_context
+    )
+
+    assert assessment["current_judgement"] == "review should dominate until grounding is repaired"
+    assert assessment["current_judgement_count"] == 1
+    assert assessment["why_not_improvement_now_count"] == 1
+    assert assessment["self_iteration_target"] == "grounding"
+    assert assessment["self_iteration_hypothesis_count"] == 1
+    assert assessment["entry_count"] == 1
+    assert "entries" not in assessment
+    assert "common_current_judgements" not in assessment
+    assert "common_self_iteration_hypotheses" not in assessment
+    assert trend["dominant_target"] == "grounding"
+    assert trend["dominant_hypothesis"] == "repair evidence-to-agenda grounding first"
+    assert trend["target_count"] == 1
+    assert trend["hypothesis_count"] == 1
+    assert trend["dominant_stay_or_switch"] == "stay"
+    assert trend["switch_reason_count"] == 1
+    assert "entries" not in trend
+    assert "common_targets" not in trend
+    assert "common_hypotheses" not in trend
+
+
+@pytest.mark.unit
+def test_runtime_auxiliary_memory_sources_stay_thin(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Previous cognition",
+            "event_type": "planned",
+            "llm_cognitive_assessment": {
+                "current_judgement": "review should dominate until grounding is repaired",
+                "dominant_constraint": "weak self structure grounding",
+                "why_not_improvement_now": [
+                    "improvement would run ahead of self-understanding",
+                ],
+                "self_iteration_target": "grounding",
+                "self_iteration_hypothesis": "repair evidence-to-agenda grounding first",
+                "stay_or_switch": "switch",
+                "switch_reason": "old target stopped improving",
+            },
+        }
+    ]
+
+    assessment = supervisor._build_recent_lm_cognitive_assessment_summary(
+        history_snapshot=history
+    )
+    trend = supervisor._build_recent_self_iteration_trend_summary(
+        history_snapshot=history
+    )
+
+    assert assessment["current_judgement"] == "review should dominate until grounding is repaired"
+    assert assessment["self_iteration_target"] == "grounding"
+    assert assessment["self_iteration_hypothesis"] == "repair evidence-to-agenda grounding first"
+    assert assessment["why_not_improvement_now_count"] == 1
+    assert assessment["entry_count"] == 1
+    assert "entries" not in assessment
+    assert "common_current_judgements" not in assessment
+    assert "common_self_iteration_targets" not in assessment
+    assert trend["dominant_target"] == "grounding"
+    assert trend["dominant_hypothesis"] == "repair evidence-to-agenda grounding first"
+    assert trend["dominant_stay_or_switch"] == "switch"
+    assert trend["dominant_switch_reason"] == "old target stopped improving"
+    assert trend["entry_count"] == 1
+    assert "entries" not in trend
+    assert "common_targets" not in trend
+    assert "common_stay_or_switch" not in trend
+
+
+@pytest.mark.unit
+def test_engine_post_task_effect_memory_source_stays_thin_and_ignores_planned(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Planned only",
+            "event_type": "planned",
+            "quality_score": 0.2,
+            "cognitive_alignment": {"score": 0.2},
+            "reference_alignment": {"alignment_score": 0.2},
+            "llm_cognitive_assessment": {"self_iteration_target": "grounding"},
+        },
+        {
+            "title": "Completed grounding task",
+            "event_type": "decision",
+            "quality_score": 0.8,
+            "cognitive_alignment": {"score": 0.7},
+            "reference_alignment": {"alignment_score": 0.72},
+            "llm_cognitive_assessment": {"self_iteration_target": "grounding"},
+        },
+    ]
+
+    effect = supervisor._endogenous_drive_engine._build_post_task_effect_memory(
+        {"drive_history": history}
+    )
+
+    assert effect["available"] is True
+    assert effect["effect_direction"] == "improving"
+    assert effect["average_quality_score"] == 0.8
+    assert effect["average_cognitive_alignment_score"] == 0.7
+    assert effect["average_reference_alignment_score"] == 0.72
+    assert effect["dominant_target_effect"] == "grounding:helped"
+    assert effect["entry_count"] == 1
+    assert "entries" not in effect
+
+
+@pytest.mark.unit
+def test_engine_self_iteration_hypotheses_use_thin_why_not_improvement_field(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    hypotheses = supervisor._endogenous_drive_engine._build_self_iteration_hypotheses(
+        self_model_snapshot={
+            "readiness": {"self_iteration_readiness_score": 0.76},
+            "self_understanding_gaps": [],
+        },
+        evidence_credibility_summary={"weak_or_missing_channels": []},
+        task_type_priors={"top_priority_task_type": "review", "top_priority_score": 0.72},
+        recent_reference_alignment={
+            "available": True,
+            "average_alignment_score": 0.82,
+            "weak_or_partial_count": 0,
+        },
+        proposal_drift_memory={"available": True, "drift_state": "stable"},
+        cognitive_assessment_memory={
+            "available": True,
+            "why_not_improvement_now": "improvement would outrun grounding",
+            "why_not_improvement_now_count": 1,
+        },
+        self_iteration_trend_memory={},
+        switch_self_regulation_memory={},
+        post_task_effect_memory={"effect_direction": "mixed"},
+        grounding_focus={"grounding_gaps": []},
+    )
+
+    readiness_hypothesis = next(
+        row
+        for row in hypotheses["hypotheses"]
+        if row["target_domain"] == "improvement_readiness"
+    )
+    assert readiness_hypothesis["evidence"] == ["improvement would outrun grounding"]
+    assert "common_why_not_improvement_now" not in hypotheses
+
+    legacy_hypotheses = supervisor._endogenous_drive_engine._build_self_iteration_hypotheses(
+        self_model_snapshot={
+            "readiness": {"self_iteration_readiness_score": 0.76},
+            "self_understanding_gaps": [],
+        },
+        evidence_credibility_summary={"weak_or_missing_channels": []},
+        task_type_priors={"top_priority_task_type": "review", "top_priority_score": 0.72},
+        recent_reference_alignment={
+            "available": True,
+            "average_alignment_score": 0.82,
+            "weak_or_partial_count": 0,
+        },
+        proposal_drift_memory={"available": True, "drift_state": "stable"},
+        cognitive_assessment_memory={
+            "available": True,
+            "common_why_not_improvement_now": "legacy improvement blocker",
+        },
+        self_iteration_trend_memory={},
+        switch_self_regulation_memory={},
+        post_task_effect_memory={"effect_direction": "mixed"},
+        grounding_focus={"grounding_gaps": []},
+    )
+    legacy_readiness_hypothesis = next(
+        row
+        for row in legacy_hypotheses["hypotheses"]
+        if row["target_domain"] == "improvement_readiness"
+    )
+    assert legacy_readiness_hypothesis["evidence"] == ["legacy improvement blocker"]
 
 
 @pytest.mark.asyncio
@@ -8117,6 +9400,9 @@ async def test_endogenous_drive_passes_cognitive_assessment_memory_to_lm(tmp_pat
     assert "review should dominate until grounding is repaired" in payload
     assert "weak self structure grounding" in payload
     assert "improvement would run ahead of self-understanding" in payload
+    assert "\"common_current_judgements\":" not in payload
+    assert "\"common_why_not_improvement_now\":" not in payload
+    assert "\"common_grounding_gaps\":" not in payload
 
 
 @pytest.mark.asyncio
@@ -8187,8 +9473,9 @@ async def test_endogenous_drive_passes_self_iteration_hypotheses_to_lm(tmp_path)
     assert "self_iteration_hypotheses" in payload
     assert "\"top_target_domain\"" in payload
     assert "\"dominant_hypothesis\"" in payload
-    assert "self_iteration_target" in payload
-    assert "self_iteration_hypothesis" in payload
+    assert "\"hypothesis_count\":" in payload
+    assert "\"top_evidence\":" in payload
+    assert "\"hypotheses\":" not in payload
 
 
 @pytest.mark.asyncio
@@ -8269,6 +9556,12 @@ async def test_endogenous_drive_passes_self_iteration_trend_memory_to_lm(tmp_pat
     assert "self_iteration_trend_memory" in payload
     assert "\"dominant_target\": \"grounding\"" in payload
     assert "\"trend_state\": \"locked\"" in payload
+    assert "\"target_signal_count\": 1" in payload
+    assert "\"hypothesis_signal_count\": 1" in payload
+    assert "\"common_targets\":" not in payload
+    assert "\"common_hypotheses\":" not in payload
+    assert "\"common_stay_or_switch\":" not in payload
+    assert "\"common_switch_reasons\":" not in payload
 
 
 @pytest.mark.asyncio
@@ -8563,8 +9856,7 @@ async def test_endogenous_drive_passes_cognitive_briefing_to_lm(tmp_path):
     assert "当前主失败模式:" in payload
     assert "当前建议治理姿态:" in payload
     assert "当前姿态:" in payload
-    assert "当前最强兼容执行投影偏向:" not in payload
-    assert "兼容投影提示:" in payload
+    assert "任务形态辅助提示:" in payload
     assert "当前主证据主题:" in payload
     assert "当前主议程主题:" in payload
     assert "当前 grounding 缺口:" in payload
@@ -8737,7 +10029,7 @@ async def test_endogenous_drive_passes_self_model_snapshot_to_lm(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_endogenous_drive_passes_evidence_credibility_and_task_type_priors_to_lm(tmp_path):
+async def test_endogenous_drive_passes_evidence_credibility_and_task_shape_hint_to_lm(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     supervisor.config = supervisor.config.model_copy(
@@ -8816,16 +10108,16 @@ async def test_endogenous_drive_passes_evidence_credibility_and_task_type_priors
     assert fake_client.calls
     payload = fake_client.calls[0]["user_payload"]["task_generation"]
     assert "evidence_credibility_summary" in payload
-    assert "task_type_priors" in payload
     assert "\"high_credibility_channels\":" in payload
     assert "\"weak_or_missing_channels\":" in payload
-    assert "\"top_priority_task_type\":" in payload
+    assert "\"task_type_priors\":" not in payload
+    assert "\"top_priority_task_type\":" not in payload
+    assert "\"secondary_task_shape_hint\":" in payload
     assert "\"task_type\": \"observation\"" in payload or "\"task_type\": \"review\"" in payload
     assert "\"recent_reference_alignment\":" in payload
     assert "\"alignment_score\": 0.43" in payload or "\"average_alignment_score\": 0.43" in payload
     assert "self_structure" in payload
-    assert "当前最强兼容执行投影偏向" not in payload
-    assert "兼容投影提示:" in payload
+    assert "任务形态辅助提示:" in payload
 
 
 @pytest.mark.asyncio
@@ -8911,11 +10203,18 @@ async def test_endogenous_drive_passes_proposal_drift_memory_to_lm(tmp_path):
     assert fake_client.calls
     payload = fake_client.calls[0]["user_payload"]["task_generation"]
     assert "proposal_drift_memory" in payload
-    assert "Misaligned improvement attempt" in payload
+    assert "Misaligned improvement attempt" not in payload
     assert "\"drift_state\": \"correcting\"" in payload or "\"drift_state\": \"drifting\"" in payload
     assert "\"quality_counts\":" in payload
-    assert "\"common_posture_alignment\":" in payload
-    assert "\"common_priority_basis\":" in payload
+    assert "\"posture_alignment_signal_count\":" in payload
+    assert "\"priority_basis_signal_count\":" in payload
+    proposal_drift_payload = payload.split('"proposal_drift_memory":', 1)[1].split(
+        '"recent_learning_evidence":',
+        1,
+    )[0]
+    assert "\"common_posture_alignment\":" not in payload
+    assert "\"common_priority_basis\":" not in payload
+    assert "\"recent_entries\":" not in proposal_drift_payload
     assert "\"posture_alignment_health\":" in payload
     assert "\"priority_basis_health\":" in payload
 
@@ -8964,12 +10263,10 @@ async def test_runtime_cognition_exposes_posture_reasoning_memory(tmp_path):
                 "average_score": 0.36,
                 "drift_state": "drifting",
                 "quality_counts": {"strong": 0, "partial": 0, "weak": 1},
-                "common_posture_alignment": [
-                    "claims improvement is acceptable under observe_first",
-                ],
-                "common_priority_basis": [
-                    "push execution despite unresolved evidence gaps",
-                ],
+                "posture_alignment_signal_count": 1,
+                "priority_basis_signal_count": 1,
+                "missing_posture_alignment_count": 0,
+                "missing_priority_basis_count": 0,
                 "posture_alignment_health": "inconsistent",
                 "priority_basis_health": "inconsistent",
                 "summary": "Recent proposal alignment is drifting.",
@@ -9037,17 +10334,16 @@ async def test_runtime_cognition_exposes_posture_reasoning_memory(tmp_path):
     supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     proposal_cognition = result["cognition_state"]["proposal_cognition"]
+    drift_memory = proposal_cognition["auxiliary_memory"]["proposal_drift_memory"]
 
-    assert proposal_cognition["proposal_drift_memory"]["common_posture_alignment"] == [
-        "claims improvement is acceptable under observe_first",
-    ]
-    assert proposal_cognition["proposal_drift_memory"]["common_priority_basis"] == [
-        "push execution despite unresolved evidence gaps",
-    ]
-    assert proposal_cognition["proposal_drift_memory"]["posture_alignment_health"] == "inconsistent"
-    assert proposal_cognition["recent_cognitive_alignment"]["common_posture_alignment"] == [
-        "claims improvement is acceptable under observe_first",
-    ]
+    assert "proposal_drift_memory" not in proposal_cognition
+    assert drift_memory["posture_alignment_signal_count"] == 1
+    assert drift_memory["priority_basis_signal_count"] == 1
+    assert "common_posture_alignment" not in drift_memory
+    assert "common_priority_basis" not in drift_memory
+    assert drift_memory["posture_alignment_health"] == "inconsistent"
+    assert proposal_cognition["recent_cognitive_alignment"]["posture_alignment_signal_count"] == 1
+    assert "common_posture_alignment" not in proposal_cognition["recent_cognitive_alignment"]
 
 
 @pytest.mark.asyncio
@@ -9125,6 +10421,27 @@ async def test_endogenous_drive_records_cognitive_posture_in_lm_generation_conte
     supervisor._endogenous_drive_engine.config = supervisor.config
     supervisor.config.service_runtime.endogenous_drive_cognition_charter.cognitive_control_policy.posture_selection_mode = "manual"
     supervisor.config.service_runtime.endogenous_drive_cognition_charter.cognitive_control_policy.active_posture_profile = "observe_first"
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Previous cognition",
+            "event_type": "planned",
+            "llm_cognitive_assessment": {
+                "current_judgement": "review should dominate until grounding is repaired",
+                "dominant_constraint": "weak self structure grounding",
+                "why_not_improvement_now": [
+                    "improvement would run ahead of self-understanding",
+                ],
+                "self_iteration_target": "grounding",
+                "self_iteration_hypothesis": (
+                    "repair evidence-to-agenda grounding before aggressive self-iteration"
+                ),
+                "stay_or_switch": "stay",
+                "switch_reason": "grounding gaps still dominate the agenda",
+            },
+        }
+    ]
+    supervisor._persist_endogenous_drive_history(history)
 
     async def fake_idle_window(_request=None):
         return {
@@ -9153,11 +10470,41 @@ async def test_endogenous_drive_records_cognitive_posture_in_lm_generation_conte
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
-        await supervisor.evaluate_endogenous_drive({"record_activity": False})
+        result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     state = supervisor._endogenous_drive_engine.get_latest_lm_task_generation_context()
     assert state["cognitive_posture"]["name"] == "observe_first"
     assert state["cognitive_posture"]["selection_mode"] == "manual"
+    assert "task_type_priors" not in state
+    assert "task_shape_hint" not in state
+    generation_trend_memory = state["self_iteration_trend_memory"]
+    assert generation_trend_memory["target_count"] == 1
+    assert generation_trend_memory["hypothesis_count"] == 1
+    assert generation_trend_memory["stay_or_switch_count"] == 1
+    assert generation_trend_memory["switch_reason_count"] == 1
+    assert "common_targets" not in generation_trend_memory
+    assert "common_hypotheses" not in generation_trend_memory
+    assert "common_stay_or_switch" not in generation_trend_memory
+    assert "common_switch_reasons" not in generation_trend_memory
+    assessment_memory = state["cognitive_assessment_memory"]
+    assert assessment_memory["current_judgement"] == (
+        "review should dominate until grounding is repaired"
+    )
+    assert assessment_memory["current_judgement_count"] == 1
+    assert assessment_memory["why_not_improvement_now_count"] == 1
+    assert "common_current_judgements" not in assessment_memory
+    assert "common_why_not_improvement_now" not in assessment_memory
+    assert "hypotheses" not in state["self_iteration_hypotheses"]
+    proposal_cognition = result["cognition_state"]["proposal_cognition"]
+    runtime_trend_memory = proposal_cognition["auxiliary_memory"]["self_iteration_trend_memory"]
+    assert runtime_trend_memory["target_count"] == 1
+    assert runtime_trend_memory["hypothesis_count"] == 1
+    assert runtime_trend_memory["stay_or_switch_count"] == 1
+    assert runtime_trend_memory["switch_reason_count"] == 1
+    assert proposal_cognition["assessment_trace"]["current_judgement"] == (
+        "review should dominate until grounding is repaired"
+    )
+    assert proposal_cognition["assessment_trace"]["why_not_improvement_now_count"] == 1
 
 
 @pytest.mark.asyncio
@@ -9409,7 +10756,7 @@ async def test_endogenous_drive_keeps_lm_candidates_empty_when_weak_context_retu
     state = supervisor._endogenous_drive_engine.get_latest_lm_task_generation_context()
     assert state["status"] == "completed"
     assert state["proposal_count"] == 0
-    assert state["raw_candidate_kinds"] == []
+    assert "raw_candidate_kinds" not in state
     assert state["cognitive_assessment"]["why_not_improvement_now"] == [
         "improvement would outrun current self-understanding",
     ]
@@ -9486,9 +10833,10 @@ async def test_run_endogenous_drive_cycle_exposes_stay_switch_trend_memory(tmp_p
 
     trend_memory = result["cognition_state"]["proposal_cognition"]["auxiliary_memory"]["self_iteration_trend_memory"]
     assert trend_memory["available"] is True
-    assert "stay" in trend_memory["common_stay_or_switch"]
-    assert "switch" in trend_memory["common_stay_or_switch"]
-    assert "grounding gaps still dominate the agenda" in trend_memory["common_switch_reasons"]
+    assert trend_memory["stay_or_switch_count"] == 2
+    assert trend_memory["switch_reason_count"] == 2
+    assert "common_stay_or_switch" not in trend_memory
+    assert "common_switch_reasons" not in trend_memory
 
 
 @pytest.mark.asyncio
@@ -9555,6 +10903,46 @@ async def test_run_endogenous_drive_cycle_exposes_cognitive_assessment_memory(tm
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_proposal_cognition_fallback_self_iteration_hypotheses_stays_thin(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        {
+            "title": "Fallback cognition",
+            "event_type": "planned",
+            "llm_cognitive_assessment": {
+                "current_judgement": "review should dominate until grounding is repaired",
+                "dominant_constraint": "weak self structure grounding",
+                "self_iteration_target": "grounding",
+                "self_iteration_hypothesis": "repair evidence-to-agenda grounding first",
+                "why_not_improvement_now": [
+                    "improvement would run ahead of self-understanding",
+                ],
+            },
+        }
+    ]
+    supervisor._persist_endogenous_drive_history(history)
+
+    result = supervisor._build_endogenous_proposal_cognition(
+        history_snapshot=history,
+        candidate_items=[],
+        lm_reasoning_state={},
+    )
+
+    hypotheses_memory = result["auxiliary_memory"]["self_iteration_hypotheses"]
+    assert hypotheses_memory["available"] is True
+    assert hypotheses_memory["dominant_hypothesis"] == (
+        "repair evidence-to-agenda grounding first"
+    )
+    assert hypotheses_memory["top_target_domain"] == "grounding"
+    assert hypotheses_memory["hypothesis_count"] == 1
+    assert "hypotheses" not in hypotheses_memory
+    assert "common_hypotheses" not in hypotheses_memory
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_run_endogenous_drive_cycle_falls_back_to_history_reference_alignment_without_lm_state(
     tmp_path,
 ):
@@ -9612,6 +11000,10 @@ async def test_run_endogenous_drive_cycle_falls_back_to_history_reference_alignm
     assert proposal_cognition["recent_reference_alignment"]["available"] is True
     assert proposal_cognition["recent_reference_alignment"]["average_alignment_score"] == 0.58
     assert proposal_cognition["recent_reference_alignment"]["weak_or_partial_count"] == 1
+    assert proposal_cognition["recent_reference_alignment"]["entry_count"] == 1
+    assert proposal_cognition["recent_reference_alignment"]["primary_missing_evidence_node"] == "self_structure"
+    assert proposal_cognition["recent_reference_alignment"]["primary_missing_agenda_node"] == "focus:learning_expansion"
+    assert "recent_entries" not in proposal_cognition["recent_reference_alignment"]
     assert proposal_cognition["meta_cognition_profile"]["grounding_pressure"] == "medium"
 
 
@@ -9683,6 +11075,10 @@ async def test_run_endogenous_drive_cycle_exposes_self_iteration_trend_memory(tm
     assert trend_memory["dominant_target"] == "grounding"
     assert trend_memory["trend_state"] == "locked"
     assert trend_memory["target_stability"] == "stable"
+    assert trend_memory["target_count"] == 1
+    assert trend_memory["hypothesis_count"] == 1
+    assert "common_targets" not in trend_memory
+    assert "common_hypotheses" not in trend_memory
 
 
 @pytest.mark.asyncio
@@ -9747,6 +11143,8 @@ async def test_run_endogenous_drive_cycle_exposes_switch_self_regulation_memory(
     assert switch_memory["preferred_switch_bias"] == "switch"
     assert switch_memory["average_switch_quality"] == 0.82
     assert switch_memory["average_stay_quality"] == 0.31
+    assert switch_memory["stay_or_switch_count"] == 0
+    assert "common_stay_or_switch" not in switch_memory
 
 
 @pytest.mark.asyncio
@@ -10042,11 +11440,114 @@ def test_meta_cognition_profile_does_not_let_task_prior_override_review_judgemen
     assert profile["current_judgement"] == "review should dominate until grounding is repaired"
     assert profile["top_self_iteration_domain"] == "grounding"
     assert profile["governance_posture"] == "review"
-    assert "compatible_projection_bias" not in profile
+    assert "secondary_task_shape_hint" not in profile
     assert not any(
-        str(item).startswith("compatible_projection_bias:")
+        str(item).startswith("secondary_task_shape_hint:")
         for item in list(profile["priority_signals"] or [])
     )
+
+
+@pytest.mark.unit
+def test_lm_generation_context_snapshot_reads_thin_memory_fields_without_common_lists():
+    from systems.supervisor.endogenous_drive import EndogenousDriveEngine
+
+    engine = EndogenousDriveEngine()
+    snapshot = engine._build_lm_task_generation_context_snapshot(
+        evidence_packet={
+            "task_type_priors": {
+                "top_priority_task_type": "review",
+                "top_priority_score": 0.72,
+                "priors": [],
+            },
+            "self_iteration_trend_memory": {
+                "available": True,
+                "dominant_target": "grounding",
+                "trend_state": "steady",
+                "target_stability": "stable",
+                "dominant_hypothesis": "repair evidence grounding before expansion",
+                "stay_or_switch": "stay",
+                "switch_reason": "grounding is still the active constraint",
+                "target_count": 3,
+                "hypothesis_count": 2,
+                "stay_or_switch_count": 2,
+                "switch_reason_count": 1,
+            },
+            "cognitive_assessment_memory": {
+                "available": True,
+                "dominant_constraint": "weak grounding",
+                "current_judgement": "review should remain primary",
+                "why_not_improvement_now": "improvement would outrun grounding",
+                "self_iteration_target": "grounding",
+                "self_iteration_hypothesis": "repair evidence grounding first",
+                "current_judgement_count": 4,
+                "why_not_improvement_now_count": 2,
+                "self_iteration_target_count": 3,
+                "self_iteration_hypothesis_count": 2,
+            },
+            "self_iteration_hypotheses": {
+                "available": True,
+                "dominant_hypothesis": "keep correction narrow",
+                "top_target_domain": "grounding",
+                "hypothesis_count": 2,
+                "top_priority": 0.84,
+                "suggested_task_types": ["review", "observation"],
+                "hypotheses": [
+                    {
+                        "target_domain": "legacy-expansion",
+                        "hypothesis": "legacy expansion should not become dominant",
+                        "priority": 0.33,
+                        "suggested_task_types": ["learning"],
+                    },
+                    {
+                        "target_domain": "legacy-memory",
+                        "hypothesis": "legacy memory detail should not amplify count",
+                        "priority": 0.31,
+                        "suggested_task_types": ["memory_maintenance"],
+                    },
+                    {
+                        "target_domain": "legacy-extra",
+                        "hypothesis": "legacy extra detail should stay fallback only",
+                        "priority": 0.29,
+                        "suggested_task_types": ["observation"],
+                    },
+                ],
+            },
+        },
+        cognition_charter={},
+        role="governance_reasoner",
+        max_candidates=1,
+        status="completed",
+        proposal_count=0,
+    )
+
+    trend_memory = snapshot["self_iteration_trend_memory"]
+    assert trend_memory["dominant_hypothesis"] == "repair evidence grounding before expansion"
+    assert trend_memory["dominant_stay_or_switch"] == "stay"
+    assert trend_memory["dominant_switch_reason"] == "grounding is still the active constraint"
+    assert trend_memory["target_count"] == 3
+    assert trend_memory["hypothesis_count"] == 2
+    assert trend_memory["stay_or_switch_count"] == 2
+    assert trend_memory["switch_reason_count"] == 1
+    assert "common_hypotheses" not in trend_memory
+
+    assessment_memory = snapshot["cognitive_assessment_memory"]
+    assert assessment_memory["current_judgement"] == "review should remain primary"
+    assert assessment_memory["why_not_improvement_now"] == "improvement would outrun grounding"
+    assert assessment_memory["self_iteration_target"] == "grounding"
+    assert assessment_memory["self_iteration_hypothesis"] == "repair evidence grounding first"
+    assert assessment_memory["current_judgement_count"] == 4
+    assert assessment_memory["why_not_improvement_now_count"] == 2
+    assert assessment_memory["self_iteration_target_count"] == 3
+    assert assessment_memory["self_iteration_hypothesis_count"] == 2
+    assert "common_current_judgements" not in assessment_memory
+
+    hypothesis_memory = snapshot["self_iteration_hypotheses"]
+    assert hypothesis_memory["dominant_hypothesis"] == "keep correction narrow"
+    assert hypothesis_memory["top_target_domain"] == "grounding"
+    assert hypothesis_memory["hypothesis_count"] == 2
+    assert hypothesis_memory["top_priority"] == 0.84
+    assert hypothesis_memory["suggested_task_types"] == ["review", "observation"]
+    assert "hypotheses" not in hypothesis_memory
 
 
 @pytest.mark.unit
@@ -10076,6 +11577,54 @@ def test_meta_cognition_profile_is_unavailable_without_real_signals():
         "available": False,
         "summary": "No unified meta-cognition profile is available yet.",
     }
+
+
+@pytest.mark.unit
+def test_meta_cognition_legacy_string_fallback_is_not_split_into_characters(tmp_path):
+    from systems.supervisor.endogenous_drive import EndogenousDriveEngine
+
+    engine = EndogenousDriveEngine()
+    profile = engine._build_meta_cognition_profile(
+        grounding_focus={"grounding_gaps": [], "contradictory_topics": []},
+        self_iteration_hypotheses={},
+        cognitive_assessment_memory={
+            "common_current_judgements": "review should remain primary",
+            "common_self_iteration_targets": "grounding",
+            "common_self_iteration_hypotheses": "repair grounding first",
+            "common_why_not_improvement_now": "improvement would outrun grounding",
+        },
+        self_iteration_trend_memory={"common_stay_or_switch": "stay"},
+        switch_self_regulation_memory={},
+        post_task_effect_memory={},
+        proposal_drift_memory={},
+        task_type_priors={},
+    )
+
+    assert profile["current_judgement"] == "review should remain primary"
+    assert profile["top_self_iteration_domain"] == "grounding"
+    assert profile["top_self_iteration_hypothesis"] == "repair grounding first"
+    assert profile["stay_or_switch_bias"] == "stay"
+
+    supervisor = _make_supervisor(tmp_path)
+    runtime_profile = supervisor._build_recent_meta_cognition_profile_summary(
+        cognitive_assessment_memory={
+            "common_current_judgements": "review should remain primary",
+            "common_self_iteration_targets": "grounding",
+            "common_self_iteration_hypotheses": "repair grounding first",
+            "common_why_not_improvement_now": "improvement would outrun grounding",
+        },
+        self_iteration_trend_memory={"common_stay_or_switch": "stay"},
+        switch_self_regulation_memory={},
+        post_task_effect_memory={},
+        proposal_drift_memory={},
+        task_type_priors={},
+        recent_reference_alignment={},
+    )
+
+    assert runtime_profile["current_judgement"] == "review should remain primary"
+    assert runtime_profile["top_self_iteration_domain"] == "grounding"
+    assert runtime_profile["top_self_iteration_hypothesis"] == "repair grounding first"
+    assert runtime_profile["stay_or_switch_bias"] == "stay"
 
 
 @pytest.mark.unit
@@ -12502,6 +14051,529 @@ async def test_recent_completed_sequence_releases_observation_after_long_dirty_s
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_recent_relapse_reenters_observation_after_recovery_despite_stale_strategy_and_decayed_self_regulation(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    history = supervisor._endogenous_drive_history_default()
+    history["outcomes"] = [
+        _self_learning_outcome(
+            title,
+            status,
+            quality_score=quality,
+            recorded_hour=hour,
+        )
+        for title, status, hour, quality in (
+            ("Retry self-learning after recovery", "retry", 12, 0.22),
+            ("Deferred self-learning after recovery", "deferred", 11, 0.24),
+            ("Completed self-learning during relapse window", "completed", 10, 0.72),
+            ("Recovered self-learning 3", "completed", 9, 0.82),
+            ("Recovered self-learning 2", "completed", 8, 0.80),
+            ("Recovered self-learning 1", "completed", 7, 0.78),
+            ("Paused self-learning old", "paused", 6, 0.30),
+            ("Awaiting review self-learning old", "awaiting_review", 5, 0.28),
+            ("Failed self-learning old", "failed", 4, 0.20),
+        )
+    ] + [
+        {
+            "title": "Completed queue hygiene old",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "general_self_evolution",
+            "governance_task_type": "self_evolution",
+            "quality_score": 0.70,
+            "recorded_at": "2026-06-28T03:00:00+00:00",
+        },
+    ]
+    history["strategy_memory"] = {
+        "focus_stats": {
+            "learning_expansion": {"judged": 12, "completed": 10, "failed": 1, "dragging": 1},
+            "observation": {"judged": 8, "completed": 7, "failed": 0, "dragging": 0},
+        },
+        "contextual_focus_stats": {
+            "idle_window|stable|none": {
+                "learning_expansion": {"judged": 8, "completed": 7, "failed": 0, "dragging": 1},
+                "observation": {"judged": 6, "completed": 6, "failed": 0, "dragging": 0},
+            }
+        },
+        "observation_target_stats": {
+            "historical_underdelivery": {
+                "seen": 10,
+                "recommended": 8,
+                "resolved": 8,
+                "stalled": 0,
+                "last_status": "resolved",
+            }
+        },
+    }
+    supervisor._persist_endogenous_drive_history(history)
+
+    regulation_snapshot = supervisor._endogenous_self_regulation_default()
+    regulation_snapshot["updated_at"] = (datetime.now(timezone.utc) - timedelta(hours=8)).isoformat()
+    regulation_snapshot["dynamic_candidate_throttle_boost"] = 0.28
+    regulation_snapshot["dynamic_observation_bias_boost"] = 0.24
+    regulation_snapshot["dynamic_learning_expansion_suppression"] = 0.18
+    regulation_snapshot["last_reason"] = "stale_observation_carryover"
+    supervisor._get_endogenous_self_regulation_path().write_text(
+        json.dumps(regulation_snapshot),
+        encoding="utf-8",
+    )
+
+    async def fake_idle_window(_request=None):
+        return _endogenous_idle_window_payload(
+            quality_score=0.72,
+            completed_title="Recent mixed recovery learning",
+            completed_at="2026-06-28T10:00:00+00:00",
+        )
+
+    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
+
+    source_evidence = result["deliberation"]["reflection"]["source_evidence"]
+    adaptive_policy = result["deliberation"]["adaptive_policy"]
+
+    assert result["deliberation"]["reflection"]["dominant_constraint"] == "historical_underdelivery"
+    assert "recent_relapse_drag_count=2" in source_evidence
+    assert "stale_observation_carryover" not in str(result["self_regulation"].get("last_reason") or "")
+    assert result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == "observe_before_acting"
+    assert adaptive_policy["preferred_focus"] == "observation"
+    assert adaptive_policy["candidate_budget"] == 1
+    assert adaptive_policy["exploratory_learning_quota"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+@pytest.mark.stability_longcycle
+async def test_alternating_recovery_and_relapse_reacts_under_continuous_strategy_writeback(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    def build_history_with_strategy(outcomes: list[dict], strategy_memory: dict) -> dict:
+        history = supervisor._endogenous_drive_history_default()
+        history["outcomes"] = outcomes
+        history["strategy_memory"] = json.loads(json.dumps(strategy_memory))
+        return history
+
+    def install_decayed_self_regulation() -> None:
+        regulation_snapshot = supervisor._endogenous_self_regulation_default()
+        regulation_snapshot["updated_at"] = (
+            datetime.now(timezone.utc) - timedelta(hours=7)
+        ).isoformat()
+        regulation_snapshot["dynamic_candidate_throttle_boost"] = 0.24
+        regulation_snapshot["dynamic_observation_bias_boost"] = 0.22
+        regulation_snapshot["dynamic_learning_expansion_suppression"] = 0.16
+        regulation_snapshot["last_reason"] = "old alternating-cycle guard"
+        supervisor._get_endogenous_self_regulation_path().write_text(
+            json.dumps(regulation_snapshot),
+            encoding="utf-8",
+        )
+
+    def idle_payload(*, quality: float, error_count: int = 0, uncertainty_count: int = 0) -> dict:
+        return _endogenous_idle_window_payload(
+            quality_score=quality,
+            completed_title="Recent alternating learning",
+            completed_at="2026-06-28T12:00:00+00:00",
+            error_count=error_count,
+            uncertainty_count=uncertainty_count,
+        )
+
+    async def stable_idle_window(_request=None):
+        return idle_payload(quality=0.84)
+
+    async def strained_idle_window(_request=None):
+        return idle_payload(quality=0.46, error_count=2, uncertainty_count=1)
+
+    writeback_sequence = [
+        (stable_idle_window, "completed"),
+        (strained_idle_window, "failed"),
+        (stable_idle_window, "completed"),
+        (strained_idle_window, "deferred"),
+        (stable_idle_window, "completed"),
+    ]
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        for idle_window_fn, status in writeback_sequence:
+            supervisor.evaluate_idle_window = idle_window_fn  # type: ignore[method-assign]
+            await _plan_and_write_back_endogenous_cycle(
+                supervisor,
+                outcome_status=status,
+                reason=f"alternating writeback {status}",
+                allow_empty_candidates=True,
+            )
+
+    accumulated_strategy = supervisor._load_endogenous_drive_history()["strategy_memory"]
+    focus_stats = accumulated_strategy["focus_stats"]
+    contextual_stats = accumulated_strategy["contextual_focus_stats"]
+    assert sum(bucket.get("judged", 0) for bucket in focus_stats.values()) >= 3
+    assert len(contextual_stats) >= 2
+
+    relapse_outcomes = [
+        _self_learning_outcome(
+            title,
+            status,
+            quality_score=quality,
+            recorded_hour=hour,
+        )
+        for title, status, hour, quality in (
+            ("Retry after recovery", "retry", 12, 0.22),
+            ("Deferred after recovery", "deferred", 11, 0.24),
+            ("Completed inside relapse window", "completed", 10, 0.72),
+            ("Recovered C", "completed", 9, 0.84),
+            ("Recovered B", "completed", 8, 0.80),
+            ("Recovered A", "completed", 7, 0.78),
+            ("Paused old", "paused", 6, 0.30),
+            ("Failed old", "failed", 5, 0.20),
+        )
+    ]
+    supervisor._persist_endogenous_drive_history(
+        build_history_with_strategy(relapse_outcomes, accumulated_strategy)
+    )
+    install_decayed_self_regulation()
+    supervisor.evaluate_idle_window = stable_idle_window  # type: ignore[method-assign]
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        relapse_result = await supervisor.evaluate_endogenous_drive(
+            {"record_activity": False, "persist_evaluation": False}
+        )
+
+    assert (
+        relapse_result["deliberation"]["reflection"]["dominant_constraint"]
+        == "historical_underdelivery"
+    )
+    assert "recent_relapse_drag_count=2" in relapse_result["deliberation"]["reflection"]["source_evidence"]
+    assert relapse_result["deliberation"]["adaptive_policy"]["preferred_focus"] == "observation"
+    assert relapse_result["deliberation"]["adaptive_policy"]["candidate_budget"] == 1
+    assert (
+        relapse_result["cognition_state"]["judgement_core"]["primary_need"]["need_type"]
+        == "observe_before_acting"
+    )
+
+    recovered_outcomes = [
+        _self_learning_outcome(
+            title,
+            status,
+            quality_score=quality,
+            recorded_hour=hour,
+        )
+        for title, status, hour, quality in (
+            ("Recovered final E", "completed", 12, 0.86),
+            ("Recovered final D", "completed", 11, 0.84),
+            ("Recovered final C", "completed", 10, 0.82),
+            ("Recovered final B", "completed", 9, 0.80),
+            ("Recovered final A", "completed", 8, 0.78),
+            ("Retry old", "retry", 7, 0.24),
+            ("Deferred old", "deferred", 6, 0.26),
+            ("Failed old", "failed", 5, 0.20),
+        )
+    ]
+    supervisor._persist_endogenous_drive_history(
+        build_history_with_strategy(recovered_outcomes, accumulated_strategy)
+    )
+    install_decayed_self_regulation()
+    supervisor.evaluate_idle_window = stable_idle_window  # type: ignore[method-assign]
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        recovered_result = await supervisor.evaluate_endogenous_drive(
+            {"record_activity": False, "persist_evaluation": False}
+        )
+
+    assert recovered_result["deliberation"]["reflection"]["dominant_constraint"] != (
+        "historical_underdelivery"
+    )
+    assert (
+        recovered_result["cognition_state"]["judgement_core"]["primary_need"]["need_type"]
+        != "observe_before_acting"
+    )
+    assert recovered_result["deliberation"]["adaptive_policy"]["preferred_focus"] != "observation"
+    assert recovered_result["deliberation"]["adaptive_policy"]["candidate_budget"] >= 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+@pytest.mark.stability_longcycle
+async def test_long_dirty_history_switches_between_relapse_tightening_and_recovery_release_under_same_strategy_memory(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    async def stable_idle_window(_request=None):
+        return _endogenous_idle_window_payload(
+            quality_score=0.84,
+            completed_title="Stable long-span learning",
+            completed_at="2026-06-29T12:00:00+00:00",
+        )
+
+    async def strained_idle_window(_request=None):
+        return _endogenous_idle_window_payload(
+            quality_score=0.38,
+            completed_title="Strained long-span learning",
+            completed_at="2026-06-29T12:00:00+00:00",
+            error_count=2,
+            uncertainty_count=1,
+        )
+
+    writeback_sequence = [
+        (stable_idle_window, "completed"),
+        (strained_idle_window, "failed"),
+        (stable_idle_window, "completed"),
+        (strained_idle_window, "deferred"),
+        (stable_idle_window, "completed"),
+        (stable_idle_window, "completed"),
+    ]
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        for idle_window_fn, status in writeback_sequence:
+            supervisor.evaluate_idle_window = idle_window_fn  # type: ignore[method-assign]
+            await _plan_and_write_back_endogenous_cycle(
+                supervisor,
+                outcome_status=status,
+                reason=f"long dirty history writeback {status}",
+                allow_empty_candidates=True,
+            )
+
+    accumulated_strategy = json.loads(
+        json.dumps(supervisor._load_endogenous_drive_history()["strategy_memory"])
+    )
+    assert accumulated_strategy["focus_stats"]
+    assert accumulated_strategy["contextual_focus_stats"]
+
+    def install_decayed_self_regulation() -> None:
+        regulation_snapshot = supervisor._endogenous_self_regulation_default()
+        regulation_snapshot["updated_at"] = (
+            datetime.now(timezone.utc) - timedelta(hours=9)
+        ).isoformat()
+        regulation_snapshot["dynamic_candidate_throttle_boost"] = 0.26
+        regulation_snapshot["dynamic_observation_bias_boost"] = 0.23
+        regulation_snapshot["dynamic_learning_expansion_suppression"] = 0.17
+        regulation_snapshot["last_reason"] = "old long-span carryover"
+        supervisor._get_endogenous_self_regulation_path().write_text(
+            json.dumps(regulation_snapshot),
+            encoding="utf-8",
+        )
+
+    def install_history(outcomes: list[dict]) -> None:
+        history = supervisor._endogenous_drive_history_default()
+        history["outcomes"] = json.loads(json.dumps(outcomes))
+        history["strategy_memory"] = json.loads(json.dumps(accumulated_strategy))
+        supervisor._persist_endogenous_drive_history(history)
+        install_decayed_self_regulation()
+
+    dirty_relapse_outcomes = [
+        _self_learning_outcome("Retry latest self-learning", "retry", quality_score=0.22, recorded_hour=23),
+        _self_learning_outcome("Deferred latest self-learning", "deferred", quality_score=0.24, recorded_hour=22),
+        _self_learning_outcome("Completed inside relapse window", "completed", quality_score=0.72, recorded_hour=21),
+        {
+            "title": "Planned-only observation should not count as recovery",
+            "event_type": "planned",
+            "status": "planned",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.88,
+            "recorded_at": "2026-06-29T20:00:00+00:00",
+        },
+        _self_learning_outcome("Recovered old C", "completed", quality_score=0.82, recorded_hour=19),
+        _self_learning_outcome("Recovered old B", "completed", quality_score=0.80, recorded_hour=18),
+        _self_learning_outcome("Recovered old A", "completed", quality_score=0.78, recorded_hour=17),
+        _self_learning_outcome("Paused old self-learning", "paused", quality_score=0.30, recorded_hour=16),
+        _self_learning_outcome("Failed old self-learning", "failed", quality_score=0.20, recorded_hour=15),
+        {
+            "title": "Completed memory cleanup old",
+            "event_type": "decision",
+            "status": "completed",
+            "task_family": "memory_maintenance",
+            "governance_task_type": "memory_maintenance",
+            "quality_score": 0.76,
+            "recorded_at": "2026-06-29T14:00:00+00:00",
+        },
+    ]
+    install_history(dirty_relapse_outcomes)
+    supervisor.evaluate_idle_window = stable_idle_window  # type: ignore[method-assign]
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        relapse_result = await supervisor.evaluate_endogenous_drive(
+            {"record_activity": False, "persist_evaluation": False}
+        )
+
+    assert relapse_result["deliberation"]["reflection"]["dominant_constraint"] == (
+        "historical_underdelivery"
+    )
+    assert "recent_relapse_drag_count=2" in relapse_result["deliberation"]["reflection"]["source_evidence"]
+    assert relapse_result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == (
+        "observe_before_acting"
+    )
+    assert relapse_result["deliberation"]["adaptive_policy"]["preferred_focus"] == "observation"
+    assert relapse_result["deliberation"]["adaptive_policy"]["candidate_budget"] == 1
+    assert relapse_result["cognition_state"]["meta_governance"]["mode"] in {"observe", "correct"}
+
+    recovered_outcomes = [
+        _self_learning_outcome("Recovered latest E", "completed", quality_score=0.88, recorded_hour=23),
+        _self_learning_outcome("Recovered latest D", "completed", quality_score=0.86, recorded_hour=22),
+        _self_learning_outcome("Recovered latest C", "completed", quality_score=0.84, recorded_hour=21),
+        _self_learning_outcome("Recovered latest B", "completed", quality_score=0.82, recorded_hour=20),
+        _self_learning_outcome("Recovered latest A", "completed", quality_score=0.80, recorded_hour=19),
+        {
+            "title": "Planned-only low quality should not re-tighten",
+            "event_type": "planned",
+            "status": "planned",
+            "task_family": "self_learning",
+            "governance_task_type": "self_learning",
+            "quality_score": 0.18,
+            "recorded_at": "2026-06-29T18:00:00+00:00",
+        },
+        _self_learning_outcome("Retry old self-learning", "retry", quality_score=0.24, recorded_hour=17),
+        _self_learning_outcome("Deferred old self-learning", "deferred", quality_score=0.26, recorded_hour=16),
+        _self_learning_outcome("Failed old self-learning", "failed", quality_score=0.20, recorded_hour=15),
+    ]
+    install_history(list(reversed(recovered_outcomes)))
+    supervisor.evaluate_idle_window = stable_idle_window  # type: ignore[method-assign]
+
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        recovered_result = await supervisor.evaluate_endogenous_drive(
+            {"record_activity": False, "persist_evaluation": False}
+        )
+
+    assert recovered_result["deliberation"]["reflection"]["dominant_constraint"] != (
+        "historical_underdelivery"
+    )
+    assert recovered_result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] != (
+        "observe_before_acting"
+    )
+    assert recovered_result["deliberation"]["adaptive_policy"]["preferred_focus"] != "observation"
+    assert recovered_result["deliberation"]["adaptive_policy"]["candidate_budget"] >= 2
+    assert recovered_result["cognition_state"]["meta_governance"]["mode"] != "observe"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+@pytest.mark.stability_longcycle
+async def test_writeback_history_replay_remains_time_ordered_when_outcomes_are_scrambled(
+    tmp_path,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    fake_client = _FakeLLMClient({"proposals": []})
+
+    async def stable_idle_window(_request=None):
+        return _endogenous_idle_window_payload(
+            quality_score=0.82,
+            completed_title="Stable writeback learning",
+            completed_at="2026-06-28T12:00:00+00:00",
+        )
+
+    async def strained_idle_window(_request=None):
+        return _endogenous_idle_window_payload(
+            quality_score=0.42,
+            completed_title="Strained writeback learning",
+            completed_at="2026-06-28T12:00:00+00:00",
+            error_count=1,
+            uncertainty_count=1,
+        )
+
+    writeback_sequence = [
+        (stable_idle_window, "completed"),
+        (stable_idle_window, "completed"),
+        (stable_idle_window, "completed"),
+        (strained_idle_window, "failed"),
+        (stable_idle_window, "completed"),
+        (strained_idle_window, "failed"),
+    ]
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        for idle_window_fn, status in writeback_sequence:
+            supervisor.evaluate_idle_window = idle_window_fn  # type: ignore[method-assign]
+            await _plan_and_write_back_endogenous_cycle(
+                supervisor,
+                outcome_status=status,
+                reason=f"time ordered writeback {status}",
+                allow_empty_candidates=True,
+            )
+
+    accumulated_history = supervisor._load_endogenous_drive_history()
+    terminal_outcomes = [
+        dict(item)
+        for item in list(accumulated_history.get("outcomes") or [])
+        if isinstance(item, dict)
+        and str(item.get("status") or "").strip().lower() in {"completed", "failed"}
+    ]
+    assert len(terminal_outcomes) >= 4
+
+    replay_outcomes = [
+        {
+            **dict(terminal_outcomes[3]),
+            "recorded_at": "2026-06-28T09:00:00+00:00",
+        },
+        {
+            **dict(terminal_outcomes[2]),
+            "recorded_at": "2026-06-28T10:00:00+00:00",
+        },
+        {
+            **dict(terminal_outcomes[1]),
+            "recorded_at": "2026-06-28T11:00:00+00:00",
+        },
+        {
+            **dict(terminal_outcomes[0]),
+            "recorded_at": "2026-06-28T12:00:00+00:00",
+        },
+    ]
+    scrambled_replay_outcomes = [
+        replay_outcomes[2],
+        replay_outcomes[0],
+        replay_outcomes[3],
+        replay_outcomes[1],
+    ]
+    replay_strategy = json.loads(json.dumps(accumulated_history["strategy_memory"]))
+
+    async def replay_idle_window(_request=None):
+        return _endogenous_idle_window_payload(
+            quality_score=0.76,
+            completed_title="Replay stable learning",
+            completed_at="2026-06-28T12:00:00+00:00",
+        )
+
+    def _install_replay_history(outcomes: list[dict]) -> None:
+        history = supervisor._endogenous_drive_history_default()
+        history["outcomes"] = json.loads(json.dumps(outcomes))
+        history["strategy_memory"] = json.loads(json.dumps(replay_strategy))
+        supervisor._persist_endogenous_drive_history(history)
+
+    supervisor.evaluate_idle_window = replay_idle_window  # type: ignore[method-assign]
+    _install_replay_history(replay_outcomes)
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        ordered_result = await supervisor.evaluate_endogenous_drive(
+            {"record_activity": False, "persist_evaluation": False}
+        )
+
+    _install_replay_history(scrambled_replay_outcomes)
+    with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
+        scrambled_result = await supervisor.evaluate_endogenous_drive(
+            {"record_activity": False, "persist_evaluation": False}
+        )
+
+    assert ordered_result["deliberation"]["reflection"]["source_evidence"] == (
+        scrambled_result["deliberation"]["reflection"]["source_evidence"]
+    )
+    assert ordered_result["deliberation"]["reflection"]["dominant_constraint"] == (
+        scrambled_result["deliberation"]["reflection"]["dominant_constraint"]
+    )
+    assert ordered_result["deliberation"]["adaptive_policy"]["preferred_focus"] == (
+        scrambled_result["deliberation"]["adaptive_policy"]["preferred_focus"]
+    )
+    assert ordered_result["deliberation"]["adaptive_policy"]["candidate_budget"] == (
+        scrambled_result["deliberation"]["adaptive_policy"]["candidate_budget"]
+    )
+    assert ordered_result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == (
+        scrambled_result["cognition_state"]["judgement_core"]["primary_need"]["need_type"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_memory_success_does_not_reopen_candidate_budget_while_self_learning_underdelivery_persists(
     tmp_path,
 ):
@@ -14061,10 +16133,12 @@ async def test_proposal_drift_memory_biases_program_task_type_priors_toward_obse
     if fake_client.calls and "task_generation" in fake_client.calls[0].get("user_payload", {}):
         prompt_payload = fake_client.calls[0]["user_payload"]["task_generation"]
         assert "\"drift_state\": \"drifting\"" in prompt_payload
-        assert "\"top_priority_task_type\": \"observation\"" in prompt_payload or "\"top_priority_task_type\": \"review\"" in prompt_payload
-        assert "proposal_drift_requires_more_observation" in prompt_payload or (
-            "review_can_help_correct_recent_proposal_drift" in prompt_payload
-        )
+        assert "\"top_priority_task_type\":" not in prompt_payload
+        assert "\"suggested_task_shape\":" not in prompt_payload
+        assert "\"posture_alignment_signal_count\":" in prompt_payload
+        assert "\"priority_basis_signal_count\":" in prompt_payload
+        assert "\"posture_alignment_health\":" in prompt_payload
+        assert "\"priority_basis_health\":" in prompt_payload
     else:
         idle_window = await fake_idle_window()
         idle_window["drive_history"] = supervisor._history_for_endogenous_drive(

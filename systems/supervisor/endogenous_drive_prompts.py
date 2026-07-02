@@ -268,7 +268,6 @@ def _render_cognitive_briefing(packet: Dict[str, Any]) -> str:
     grounding_focus = dict(packet.get("grounding_focus") or {})
     meta_cognition_profile = dict(packet.get("meta_cognition_profile") or {})
     cognitive_posture = dict(packet.get("cognitive_posture") or {})
-    task_type_priors = dict(packet.get("task_type_priors") or {})
     self_model_snapshot = dict(packet.get("self_model_snapshot") or {})
     evidence_credibility_summary = dict(packet.get("evidence_credibility_summary") or {})
     self_iteration_hypotheses = dict(packet.get("self_iteration_hypotheses") or {})
@@ -293,20 +292,17 @@ def _render_cognitive_briefing(packet: Dict[str, Any]) -> str:
         or meta_cognition_profile.get("dominant_constraint")
         or "unknown"
     ).strip()
-    compatible_projection_bias = str(
-        decision_core.get("compatible_projection_bias")
-        or task_type_priors.get("top_priority_task_type")
+    secondary_task_shape_hint = str(
+        decision_core.get("secondary_task_shape_hint")
         or "unknown"
     ).strip()
     governance_posture = str(
         decision_core.get("governance_posture")
         or meta_cognition_profile.get("governance_posture")
-        or compatible_projection_bias
+        or secondary_task_shape_hint
         or "unknown"
     ).strip()
-    compatible_projection_score = task_type_priors.get("top_priority_score")
-    if decision_core.get("compatible_projection_score") is not None:
-        compatible_projection_score = decision_core.get("compatible_projection_score")
+    secondary_task_shape_score = decision_core.get("secondary_task_shape_score")
     self_gaps = [
         str(item).strip()
         for item in list(
@@ -420,17 +416,17 @@ def _render_cognitive_briefing(packet: Dict[str, Any]) -> str:
         "- 先基于主证据主题与主议程主题做判断，再决定是否需要形成任务投影以及投影强度。",
         "- 如果 grounding 缺口或证据冲突明显，优先提出 observation / review / learning，而不是直接 improvement。",
     ]
-    if compatible_projection_bias and compatible_projection_bias != "unknown":
-        projection_line = (
-            f"- 兼容投影提示: {compatible_projection_bias}"
+    if secondary_task_shape_hint and secondary_task_shape_hint != "unknown":
+        task_shape_line = (
+            f"- 任务形态辅助提示: {secondary_task_shape_hint}"
             + (
-                f" ({float(compatible_projection_score):.2f})"
-                if isinstance(compatible_projection_score, (int, float))
+                f" ({float(secondary_task_shape_score):.2f})"
+                if isinstance(secondary_task_shape_score, (int, float))
                 else ""
             )
-            + "。仅作兼容参考，不得覆盖当前判断与治理姿态。"
+            + "。仅作辅助参考，不得覆盖当前判断与治理姿态。"
         )
-        lines.insert(7, projection_line)
+        lines.insert(7, task_shape_line)
     return "\n".join(lines)
 
 
@@ -443,7 +439,6 @@ def _build_prompt_memory_brief(packet: Dict[str, Any]) -> Dict[str, Any]:
         "switch_self_regulation_memory",
         "post_task_effect_memory",
         "cognitive_assessment_memory",
-        "task_type_priors",
         "evidence_credibility_summary",
     ):
         value = packet.get(key)
@@ -511,11 +506,11 @@ def _prompt_facing_evidence_packet(
                 decision_core.get("governance_posture")
                 or ""
             ).strip(),
-            "compatible_projection_bias": str(
-                decision_core.get("compatible_projection_bias")
+            "secondary_task_shape_hint": str(
+                decision_core.get("secondary_task_shape_hint")
                 or ""
             ).strip(),
-            "compatible_projection_score": decision_core.get("compatible_projection_score"),
+            "secondary_task_shape_score": decision_core.get("secondary_task_shape_score"),
             "top_self_iteration_domain": str(
                 decision_core.get("top_self_iteration_domain") or ""
             ).strip(),
@@ -694,67 +689,16 @@ def _prompt_facing_evidence_packet(
         }
     cognitive_assessment_memory = dict(packet.get("cognitive_assessment_memory") or {})
     if cognitive_assessment_memory:
-        packet["cognitive_assessment_memory"] = {
-            "dominant_constraint": str(
-                cognitive_assessment_memory.get("dominant_constraint") or ""
-            ).strip(),
-            "common_current_judgements": [
-                str(item).strip()
-                for item in list(
-                    cognitive_assessment_memory.get("common_current_judgements") or []
-                )[:3]
-                if str(item).strip()
-            ],
-            "common_why_not_improvement_now": [
-                str(item).strip()
-                for item in list(
-                    cognitive_assessment_memory.get("common_why_not_improvement_now") or []
-                )[:3]
-                if str(item).strip()
-            ],
-            "common_grounding_gaps": [
-                str(item).strip()
-                for item in list(
-                    cognitive_assessment_memory.get("common_grounding_gaps") or []
-                )[:4]
-                if str(item).strip()
-            ],
-            "summary": str(cognitive_assessment_memory.get("summary") or "").strip()[:220],
-        }
+        packet["cognitive_assessment_memory"] = _compact_cognitive_assessment_memory(
+            cognitive_assessment_memory,
+            summary_limit=220,
+        )
     self_iteration_trend_memory = dict(packet.get("self_iteration_trend_memory") or {})
     if self_iteration_trend_memory:
-        packet["self_iteration_trend_memory"] = {
-            "dominant_target": str(
-                self_iteration_trend_memory.get("dominant_target") or ""
-            ).strip(),
-            "trend_state": str(
-                self_iteration_trend_memory.get("trend_state") or ""
-            ).strip(),
-            "target_stability": str(
-                self_iteration_trend_memory.get("target_stability") or ""
-            ).strip(),
-            "common_targets": [
-                str(item).strip()
-                for item in list(self_iteration_trend_memory.get("common_targets") or [])[:4]
-                if str(item).strip()
-            ],
-            "common_hypotheses": [
-                str(item).strip()
-                for item in list(self_iteration_trend_memory.get("common_hypotheses") or [])[:4]
-                if str(item).strip()
-            ],
-            "common_stay_or_switch": [
-                str(item).strip()
-                for item in list(self_iteration_trend_memory.get("common_stay_or_switch") or [])[:2]
-                if str(item).strip()
-            ],
-            "common_switch_reasons": [
-                str(item).strip()
-                for item in list(self_iteration_trend_memory.get("common_switch_reasons") or [])[:4]
-                if str(item).strip()
-            ],
-            "summary": str(self_iteration_trend_memory.get("summary") or "").strip()[:220],
-        }
+        packet["self_iteration_trend_memory"] = _compact_self_iteration_trend_memory(
+            self_iteration_trend_memory,
+            summary_limit=220,
+        )
     switch_self_regulation_memory = dict(packet.get("switch_self_regulation_memory") or {})
     if switch_self_regulation_memory:
         packet["switch_self_regulation_memory"] = {
@@ -787,34 +731,11 @@ def _prompt_facing_evidence_packet(
         }
     self_iteration_hypotheses = dict(packet.get("self_iteration_hypotheses") or {})
     if self_iteration_hypotheses:
-        packet["self_iteration_hypotheses"] = {
-            "dominant_hypothesis": str(
-                self_iteration_hypotheses.get("dominant_hypothesis") or ""
-            ).strip(),
-            "top_target_domain": str(
-                self_iteration_hypotheses.get("top_target_domain") or ""
-            ).strip(),
-            "hypotheses": [
-                {
-                    "target_domain": str(item.get("target_domain") or "").strip(),
-                    "hypothesis": str(item.get("hypothesis") or "").strip(),
-                    "priority": item.get("priority"),
-                    "evidence": [
-                        str(row).strip()
-                        for row in list(item.get("evidence") or [])[:4]
-                        if str(row).strip()
-                    ],
-                    "suggested_task_types": [
-                        str(row).strip()
-                        for row in list(item.get("suggested_task_types") or [])[:3]
-                        if str(row).strip()
-                    ],
-                }
-                for item in list(self_iteration_hypotheses.get("hypotheses") or [])[:3]
-                if isinstance(item, dict) and str(item.get("hypothesis") or "").strip()
-            ],
-            "summary": str(self_iteration_hypotheses.get("summary") or "").strip()[:240],
-        }
+        packet["self_iteration_hypotheses"] = _compact_self_iteration_hypotheses(
+            self_iteration_hypotheses,
+            summary_limit=240,
+            guidance_limit=220,
+        )
     grounding_focus = _derive_grounding_focus(source_packet)
     if grounding_focus:
         packet["grounding_focus"] = grounding_focus
@@ -871,10 +792,10 @@ def _prompt_facing_evidence_packet(
 
     recent_reference_alignment = dict(packet.get("recent_reference_alignment") or {})
     if recent_reference_alignment:
-        recent_reference_alignment["recent_entries"] = list(
-            recent_reference_alignment.get("recent_entries") or []
-        )[:3]
-        packet["recent_reference_alignment"] = recent_reference_alignment
+        packet["recent_reference_alignment"] = _compact_recent_reference_alignment(
+            recent_reference_alignment,
+            summary_limit=220,
+        )
 
     if isinstance(packet.get("needs"), list):
         packet["needs"] = [
@@ -902,9 +823,7 @@ def _prompt_facing_evidence_packet(
         packet["evidence_credibility_summary"] = _compact_evidence_credibility_summary(
             evidence_credibility_summary
         )
-    task_type_priors = dict(packet.get("task_type_priors") or {})
-    if task_type_priors:
-        packet["task_type_priors"] = _compact_task_type_priors(task_type_priors)
+    packet.pop("task_type_priors", None)
     proposal_drift_memory = dict(packet.get("proposal_drift_memory") or {})
     if proposal_drift_memory:
         packet["proposal_drift_memory"] = _compact_proposal_drift_memory(proposal_drift_memory)
@@ -993,87 +912,32 @@ def _prompt_facing_evidence_packet(
             }
         self_iteration_hypotheses = dict(packet.get("self_iteration_hypotheses") or {})
         if self_iteration_hypotheses:
-            packet["self_iteration_hypotheses"] = {
-                "top_target_domain": str(
-                    self_iteration_hypotheses.get("top_target_domain") or ""
-                ).strip()[:80],
-                "dominant_hypothesis": str(
-                    self_iteration_hypotheses.get("dominant_hypothesis") or ""
-                ).strip()[:180],
-                "hypotheses": [
-                    {
-                        "target_domain": str(item.get("target_domain") or "").strip()[:80],
-                        "hypothesis": str(item.get("hypothesis") or "").strip()[:180],
-                        "suggested_task_types": list(
-                            item.get("suggested_task_types") or []
-                        )[:3],
-                    }
-                    for item in list(self_iteration_hypotheses.get("hypotheses") or [])[:2]
-                    if isinstance(item, dict)
-                    and str(item.get("hypothesis") or "").strip()
-                ],
-                "summary": str(self_iteration_hypotheses.get("summary") or "").strip()[:180],
-                "guidance": str(self_iteration_hypotheses.get("guidance") or "").strip()[:160],
-            }
-        task_type_priors = dict(packet.get("task_type_priors") or {})
-        if task_type_priors:
-            packet["task_type_priors"] = {
-                "top_priority_task_type": task_type_priors.get("top_priority_task_type"),
-                "top_priority_score": task_type_priors.get("top_priority_score"),
-                "summary": str(task_type_priors.get("summary") or "").strip()[:160],
-            }
+            packet["self_iteration_hypotheses"] = _compact_self_iteration_hypotheses(
+                self_iteration_hypotheses,
+                summary_limit=180,
+                guidance_limit=160,
+                text_limit=180,
+            )
         recent_reference_alignment = dict(packet.get("recent_reference_alignment") or {})
         if recent_reference_alignment:
-            packet["recent_reference_alignment"] = {
-                "available": bool(recent_reference_alignment.get("available")),
-                "average_alignment_score": recent_reference_alignment.get(
-                    "average_alignment_score"
-                ),
-                "weak_or_partial_count": recent_reference_alignment.get(
-                    "weak_or_partial_count"
-                ),
-                "recent_entries": list(
-                    recent_reference_alignment.get("recent_entries") or []
-                )[:2],
-                "summary": str(recent_reference_alignment.get("summary") or "").strip()[:180],
-            }
+            packet["recent_reference_alignment"] = _compact_recent_reference_alignment(
+                recent_reference_alignment,
+                summary_limit=180,
+            )
         cognitive_assessment_memory = dict(packet.get("cognitive_assessment_memory") or {})
         if cognitive_assessment_memory:
-            packet["cognitive_assessment_memory"] = {
-                "dominant_constraint": str(
-                    cognitive_assessment_memory.get("dominant_constraint") or ""
-                ).strip()[:140],
-                "common_current_judgements": list(
-                    cognitive_assessment_memory.get("common_current_judgements") or []
-                )[:2],
-                "common_why_not_improvement_now": list(
-                    cognitive_assessment_memory.get("common_why_not_improvement_now") or []
-                )[:2],
-                "common_grounding_gaps": list(
-                    cognitive_assessment_memory.get("common_grounding_gaps") or []
-                )[:3],
-                "summary": str(cognitive_assessment_memory.get("summary") or "").strip()[:180],
-            }
+            packet["cognitive_assessment_memory"] = _compact_cognitive_assessment_memory(
+                cognitive_assessment_memory,
+                summary_limit=180,
+                text_limit=140,
+            )
         self_iteration_trend_memory = dict(packet.get("self_iteration_trend_memory") or {})
         if self_iteration_trend_memory:
-            packet["self_iteration_trend_memory"] = {
-                "dominant_target": str(
-                    self_iteration_trend_memory.get("dominant_target") or ""
-                ).strip()[:80],
-                "trend_state": str(
-                    self_iteration_trend_memory.get("trend_state") or ""
-                ).strip()[:40],
-                "target_stability": str(
-                    self_iteration_trend_memory.get("target_stability") or ""
-                ).strip()[:40],
-                "common_targets": list(
-                    self_iteration_trend_memory.get("common_targets") or []
-                )[:3],
-                "common_hypotheses": list(
-                    self_iteration_trend_memory.get("common_hypotheses") or []
-                )[:3],
-                "summary": str(self_iteration_trend_memory.get("summary") or "").strip()[:180],
-            }
+            packet["self_iteration_trend_memory"] = _compact_self_iteration_trend_memory(
+                self_iteration_trend_memory,
+                summary_limit=180,
+                text_limit=80,
+            )
         switch_self_regulation_memory = dict(packet.get("switch_self_regulation_memory") or {})
         if switch_self_regulation_memory:
             packet["switch_self_regulation_memory"] = {
@@ -1114,36 +978,9 @@ def _prompt_facing_evidence_packet(
             }
         proposal_drift_memory = dict(packet.get("proposal_drift_memory") or {})
         if proposal_drift_memory:
-            packet["proposal_drift_memory"] = {
-                "available": proposal_drift_memory.get("available"),
-                "average_score": proposal_drift_memory.get("average_score"),
-                "drift_state": proposal_drift_memory.get("drift_state"),
-                "quality_counts": dict(proposal_drift_memory.get("quality_counts") or {}),
-                "common_posture_alignment": list(
-                    proposal_drift_memory.get("common_posture_alignment") or []
-                )[:3],
-                "common_priority_basis": list(
-                    proposal_drift_memory.get("common_priority_basis") or []
-                )[:3],
-                "recent_entries": [
-                    {
-                        "title": str(row.get("title") or "").strip()[:120],
-                        "quality": row.get("quality"),
-                        "score": row.get("score"),
-                        "top_priority_task_type": row.get("top_priority_task_type"),
-                        "reasons": list(row.get("reasons") or [])[:2],
-                    }
-                    for row in list(proposal_drift_memory.get("recent_entries") or [])[:2]
-                    if isinstance(row, dict)
-                ],
-                "posture_alignment_health": proposal_drift_memory.get(
-                    "posture_alignment_health"
-                ),
-                "priority_basis_health": proposal_drift_memory.get(
-                    "priority_basis_health"
-                ),
-                "summary": str(proposal_drift_memory.get("summary") or "").strip()[:180],
-            }
+            packet["proposal_drift_memory"] = _compact_proposal_drift_memory(
+                proposal_drift_memory
+            )
     memory_context = str(packet.get("memory_context") or "")
     if memory_context:
         packet["memory_context"] = memory_context[:600]
@@ -1473,23 +1310,6 @@ def _compact_evidence_credibility_summary(item: Dict[str, Any]) -> Dict[str, Any
     }
 
 
-def _compact_task_type_priors(item: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "top_priority_task_type": item.get("top_priority_task_type"),
-        "top_priority_score": item.get("top_priority_score"),
-        "priors": [
-            {
-                "task_type": row.get("task_type"),
-                "score": row.get("score"),
-                "reasons": list(row.get("reasons") or [])[:4],
-            }
-            for row in list(item.get("priors") or [])[:5]
-            if isinstance(row, dict)
-        ],
-        "summary": item.get("summary"),
-    }
-
-
 def _derive_queue_state_snapshot(packet: Dict[str, Any]) -> Dict[str, Any]:
     queued_tasks = [
         dict(item)
@@ -1593,21 +1413,32 @@ def _derive_grounding_focus(packet: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(item, dict) and str(item.get("direction") or "").strip()
     ]
 
-    recent_entries = [
-        dict(item)
-        for item in list(recent_reference_alignment.get("recent_entries") or [])[:3]
-        if isinstance(item, dict)
-    ]
     grounding_gaps = []
+    primary_missing_evidence_node = str(
+        recent_reference_alignment.get("primary_missing_evidence_node") or ""
+    ).strip()
+    primary_missing_agenda_node = str(
+        recent_reference_alignment.get("primary_missing_agenda_node") or ""
+    ).strip()
+    if primary_missing_evidence_node:
+        grounding_gaps.append(f"missing_evidence:{primary_missing_evidence_node}")
+    if primary_missing_agenda_node:
+        grounding_gaps.append(f"missing_agenda:{primary_missing_agenda_node}")
+    recent_entries = _legacy_reference_alignment_entries(
+        recent_reference_alignment,
+        limit=3,
+    )
     for entry in recent_entries:
         for node in list(entry.get("missing_evidence_nodes") or [])[:2]:
             text = str(node).strip()
-            if text:
-                grounding_gaps.append(f"missing_evidence:{text}")
+            label = f"missing_evidence:{text}" if text else ""
+            if label and label not in grounding_gaps:
+                grounding_gaps.append(label)
         for node in list(entry.get("missing_agenda_nodes") or [])[:2]:
             text = str(node).strip()
-            if text:
-                grounding_gaps.append(f"missing_agenda:{text}")
+            label = f"missing_agenda:{text}" if text else ""
+            if label and label not in grounding_gaps:
+                grounding_gaps.append(label)
     weak_or_missing_channels = [
         str(item).strip()
         for item in list(evidence_credibility_summary.get("weak_or_missing_channels") or [])[:4]
@@ -1643,30 +1474,247 @@ def _derive_grounding_focus(packet: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _first_text(values: Any, *, limit: int) -> str:
+    raw_values = [values] if isinstance(values, str) else list(values or [])
+    for item in raw_values:
+        text = str(item).strip()
+        if text:
+            return text[:limit]
+    return ""
+
+
+def _text_count(values: Any) -> int:
+    raw_values = [values] if isinstance(values, str) else list(values or [])
+    return sum(1 for item in raw_values if str(item).strip())
+
+
+def _safe_count(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _stored_count(item: Dict[str, Any], *keys: str) -> int:
+    return max(_safe_count(item.get(key)) for key in keys)
+
+
+def _legacy_reference_alignment_entries(item: Dict[str, Any], *, limit: int) -> list[Dict[str, Any]]:
+    return [
+        dict(row)
+        for row in list(item.get("recent_entries") or [])[:limit]
+        if isinstance(row, dict)
+    ]
+
+
+def _compact_cognitive_assessment_memory(
+    item: Dict[str, Any],
+    *,
+    summary_limit: int,
+    text_limit: int = 180,
+) -> Dict[str, Any]:
+    legacy_current_judgements = item.get("common_current_judgements") or []
+    legacy_why_not_improvement = item.get("common_why_not_improvement_now") or []
+    legacy_grounding_gaps = item.get("common_grounding_gaps") or []
+    current_judgement = str(item.get("current_judgement") or "").strip()[
+        :text_limit
+    ] or _first_text(legacy_current_judgements, limit=text_limit)
+    why_not_improvement_now = str(
+        item.get("why_not_improvement_now") or ""
+    ).strip()[:text_limit] or _first_text(legacy_why_not_improvement, limit=text_limit)
+    primary_grounding_gap = str(item.get("primary_grounding_gap") or "").strip()[
+        :text_limit
+    ] or _first_text(legacy_grounding_gaps, limit=text_limit)
+    return {
+        "dominant_constraint": str(item.get("dominant_constraint") or "").strip()[:text_limit],
+        "current_judgement": current_judgement,
+        "why_not_improvement_now": why_not_improvement_now,
+        "primary_grounding_gap": primary_grounding_gap,
+        "current_judgement_count": max(
+            _safe_count(item.get("current_judgement_count")),
+            _text_count(legacy_current_judgements),
+        ),
+        "why_not_improvement_now_count": max(
+            _safe_count(item.get("why_not_improvement_now_count")),
+            _text_count(legacy_why_not_improvement),
+        ),
+        "grounding_gap_count": max(
+            _safe_count(item.get("grounding_gap_count")),
+            _text_count(legacy_grounding_gaps),
+        ),
+        "summary": str(item.get("summary") or "").strip()[:summary_limit],
+    }
+
+
+def _compact_self_iteration_trend_memory(
+    item: Dict[str, Any],
+    *,
+    summary_limit: int,
+    text_limit: int = 120,
+) -> Dict[str, Any]:
+    legacy_targets = item.get("common_targets") or []
+    legacy_hypotheses = item.get("common_hypotheses") or []
+    legacy_stay_or_switch = item.get("common_stay_or_switch") or []
+    legacy_switch_reasons = item.get("common_switch_reasons") or []
+    dominant_hypothesis = str(item.get("dominant_hypothesis") or "").strip()[
+        : max(text_limit, 160)
+    ] or _first_text(legacy_hypotheses, limit=max(text_limit, 160))
+    stay_or_switch_value = (
+        str(item.get("dominant_stay_or_switch") or "").strip()[:40]
+        or str(item.get("stay_or_switch") or "").strip()[:40]
+        or _first_text(legacy_stay_or_switch, limit=40)
+    )
+    switch_reason = str(
+        item.get("dominant_switch_reason") or item.get("switch_reason") or ""
+    ).strip()[
+        : max(text_limit, 160)
+    ] or _first_text(legacy_switch_reasons, limit=max(text_limit, 160))
+    return {
+        "dominant_target": str(item.get("dominant_target") or "").strip()[:text_limit],
+        "trend_state": str(item.get("trend_state") or "").strip()[:40],
+        "target_stability": str(item.get("target_stability") or "").strip()[:40],
+        "dominant_hypothesis": dominant_hypothesis,
+        "stay_or_switch": stay_or_switch_value,
+        "switch_reason": switch_reason,
+        "target_signal_count": max(
+            _stored_count(item, "target_count", "target_signal_count"),
+            _text_count(legacy_targets),
+        ),
+        "hypothesis_signal_count": max(
+            _stored_count(item, "hypothesis_count", "hypothesis_signal_count"),
+            _text_count(legacy_hypotheses),
+        ),
+        "stay_or_switch_signal_count": max(
+            _stored_count(item, "stay_or_switch_count", "stay_or_switch_signal_count"),
+            _text_count(legacy_stay_or_switch),
+        ),
+        "switch_reason_signal_count": max(
+            _stored_count(item, "switch_reason_count", "switch_reason_signal_count"),
+            _text_count(legacy_switch_reasons),
+        ),
+        "summary": str(item.get("summary") or "").strip()[:summary_limit],
+    }
+
+
+def _compact_self_iteration_hypotheses(
+    item: Dict[str, Any],
+    *,
+    summary_limit: int,
+    guidance_limit: int,
+    text_limit: int = 180,
+) -> Dict[str, Any]:
+    hypotheses = [
+        dict(row)
+        for row in list(item.get("hypotheses") or [])
+        if isinstance(row, dict) and str(row.get("hypothesis") or "").strip()
+    ]
+    dominant_row = hypotheses[0] if hypotheses else {}
+    dominant_hypothesis = str(item.get("dominant_hypothesis") or "").strip()[
+        :text_limit
+    ] or str(dominant_row.get("hypothesis") or "").strip()[:text_limit]
+    top_target_domain = str(item.get("top_target_domain") or "").strip()[
+        :80
+    ] or str(dominant_row.get("target_domain") or "").strip()[:80]
+    stored_hypothesis_count = _safe_count(item.get("hypothesis_count"))
+    hypothesis_count = (
+        stored_hypothesis_count
+        if item.get("hypothesis_count") is not None
+        else len(hypotheses)
+    )
+    suggested_task_types = [
+        str(row).strip()
+        for row in list(
+            item.get("suggested_task_types")
+            or dominant_row.get("suggested_task_types")
+            or []
+        )[:3]
+        if str(row).strip()
+    ]
+    top_evidence = str(item.get("top_evidence") or "").strip()[
+        :text_limit
+    ] or _first_text(dominant_row.get("evidence") or [], limit=text_limit)
+    return {
+        "available": bool(item.get("available")) or bool(dominant_hypothesis),
+        "top_target_domain": top_target_domain,
+        "dominant_hypothesis": dominant_hypothesis,
+        "hypothesis_count": max(hypothesis_count, 1 if dominant_hypothesis else 0),
+        "top_priority": (
+            item.get("top_priority")
+            if item.get("top_priority") is not None
+            else dominant_row.get("priority")
+        ),
+        "top_evidence": top_evidence,
+        "suggested_task_types": suggested_task_types,
+        "summary": str(item.get("summary") or "").strip()[:summary_limit],
+        "guidance": str(item.get("guidance") or "").strip()[:guidance_limit],
+    }
+
+
+def _compact_recent_reference_alignment(
+    item: Dict[str, Any],
+    *,
+    summary_limit: int,
+    text_limit: int = 140,
+) -> Dict[str, Any]:
+    entries = _legacy_reference_alignment_entries(item, limit=12)
+    missing_evidence_nodes: list[str] = []
+    missing_agenda_nodes: list[str] = []
+    legacy_weak_or_partial_count = 0
+    for entry in entries:
+        quality = str(entry.get("quality") or "").strip().lower()
+        if quality in {"weak", "partial", "drifted"}:
+            legacy_weak_or_partial_count += 1
+        missing_evidence_nodes.extend(
+            str(node).strip()
+            for node in list(entry.get("missing_evidence_nodes") or [])
+            if str(node).strip()
+        )
+        missing_agenda_nodes.extend(
+            str(node).strip()
+            for node in list(entry.get("missing_agenda_nodes") or [])
+            if str(node).strip()
+        )
+    return {
+        "available": bool(item.get("available")) or bool(entries),
+        "average_alignment_score": item.get("average_alignment_score"),
+        "weak_or_partial_count": max(
+            _safe_count(item.get("weak_or_partial_count")),
+            legacy_weak_or_partial_count,
+        ),
+        "entry_count": max(len(entries), _safe_count(item.get("entry_count"))),
+        "primary_missing_evidence_node": str(
+            item.get("primary_missing_evidence_node") or ""
+        ).strip()[:text_limit]
+        or _first_text(missing_evidence_nodes, limit=text_limit),
+        "primary_missing_agenda_node": str(
+            item.get("primary_missing_agenda_node") or ""
+        ).strip()[:text_limit]
+        or _first_text(missing_agenda_nodes, limit=text_limit),
+        "missing_evidence_node_count": max(
+            _text_count(missing_evidence_nodes),
+            _safe_count(item.get("missing_evidence_node_count")),
+        ),
+        "missing_agenda_node_count": max(
+            _text_count(missing_agenda_nodes),
+            _safe_count(item.get("missing_agenda_node_count")),
+        ),
+        "summary": str(item.get("summary") or "").strip()[:summary_limit],
+    }
+
+
 def _compact_proposal_drift_memory(item: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "available": item.get("available"),
         "average_score": item.get("average_score"),
         "quality_counts": dict(item.get("quality_counts") or {}),
         "drift_state": item.get("drift_state"),
-        "common_posture_alignment": list(item.get("common_posture_alignment") or [])[:3],
-        "common_priority_basis": list(item.get("common_priority_basis") or [])[:3],
+        "posture_alignment_signal_count": item.get("posture_alignment_signal_count"),
+        "priority_basis_signal_count": item.get("priority_basis_signal_count"),
+        "missing_posture_alignment_count": item.get("missing_posture_alignment_count"),
+        "missing_priority_basis_count": item.get("missing_priority_basis_count"),
         "posture_alignment_health": item.get("posture_alignment_health"),
         "priority_basis_health": item.get("priority_basis_health"),
         "dominant_posture_conflict_reason": item.get("dominant_posture_conflict_reason"),
-        "recent_entries": [
-            {
-                "title": row.get("title"),
-                "quality": row.get("quality"),
-                "score": row.get("score"),
-                "top_priority_task_type": row.get("top_priority_task_type"),
-                "reasons": list(row.get("reasons") or [])[:4],
-                "llm_posture_alignment": list(row.get("llm_posture_alignment") or [])[:2],
-                "llm_priority_basis": list(row.get("llm_priority_basis") or [])[:2],
-            }
-            for row in list(item.get("recent_entries") or [])[:4]
-            if isinstance(row, dict)
-        ],
         "summary": item.get("summary"),
     }
 
@@ -1749,7 +1797,6 @@ def _resolve_prompt_attention_policy(
             "recent_learning_evidence",
             "external_research_evidence",
             "research_digest",
-            "task_type_priors",
             "shell_body_profile",
             "evidence_graph",
             "needs",
@@ -1800,11 +1847,11 @@ def _apply_prompt_trim_stage(packet: Dict[str, Any], *, stage_name: str) -> Dict
                     decision_core.get("governance_posture")
                     or ""
                 )[:80],
-                "compatible_projection_bias": str(
-                    decision_core.get("compatible_projection_bias")
+                "secondary_task_shape_hint": str(
+                    decision_core.get("secondary_task_shape_hint")
                     or ""
                 )[:60],
-                "compatible_projection_score": decision_core.get("compatible_projection_score"),
+                "secondary_task_shape_score": decision_core.get("secondary_task_shape_score"),
                 "top_self_iteration_domain": str(decision_core.get("top_self_iteration_domain") or "")[:80],
                 "primary_evidence_nodes": list(decision_core.get("primary_evidence_nodes") or [])[:3],
                 "primary_agenda_nodes": list(decision_core.get("primary_agenda_nodes") or [])[:3],
