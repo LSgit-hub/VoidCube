@@ -131,23 +131,6 @@ class PlanningRuntimeMixin:
                         "charter_core_mission": None,
                         "proposal_count": 0,
                     },
-                    "recent_reference_alignment": {
-                        "available": False,
-                        "average_alignment_score": 0.0,
-                        "weak_or_partial_count": 0,
-                    },
-                    "recent_cognitive_alignment": {
-                        "available": False,
-                        "average_score": 0.0,
-                        "quality_counts": {},
-                        "dominant_task_shape": None,
-                        "reason_count": 0,
-                        "posture_alignment_signal_count": 0,
-                        "priority_basis_signal_count": 0,
-                        "missing_posture_alignment_count": 0,
-                        "missing_priority_basis_count": 0,
-                        "entry_count": 0,
-                    },
                     "current_candidates": {
                         "count": 0,
                         "lm_generated_count": 0,
@@ -175,19 +158,17 @@ class PlanningRuntimeMixin:
                         "current_judgement": None,
                         "why_not_improvement_now_count": 0,
                     },
-                    "cognitive_evolution_trace": {
-                        "feedback_available": False,
-                        "feedback_reference_direction": None,
-                        "feedback_long_tail_bias": None,
-                        "strategy_delta_available": False,
-                        "strategy_delta_count": 0,
-                        "strategy_delta_targets": [],
-                        "evolution_draft_available": False,
-                        "evolution_failure_mode": None,
-                        "evolution_attention_delta_count": 0,
-                        "evolution_charter_delta_count": 0,
-                    },
                     "auxiliary_memory": {
+                        "recent_reference_alignment": {
+                            "available": False,
+                            "average_alignment_score": 0.0,
+                            "weak_or_partial_count": 0,
+                            "entry_count": 0,
+                            "primary_missing_evidence_node": None,
+                            "primary_missing_agenda_node": None,
+                            "missing_evidence_node_count": 0,
+                            "missing_agenda_node_count": 0,
+                        },
                         "proposal_drift_memory": {
                             "available": False,
                             "average_score": 0.0,
@@ -200,6 +181,30 @@ class PlanningRuntimeMixin:
                             "posture_alignment_health": "",
                             "priority_basis_health": "",
                             "dominant_posture_conflict_reason": None,
+                        },
+                        "recent_cognitive_alignment": {
+                            "available": False,
+                            "average_score": 0.0,
+                            "quality_counts": {},
+                            "dominant_task_shape": None,
+                            "reason_count": 0,
+                            "posture_alignment_signal_count": 0,
+                            "priority_basis_signal_count": 0,
+                            "missing_posture_alignment_count": 0,
+                            "missing_priority_basis_count": 0,
+                            "entry_count": 0,
+                        },
+                        "cognitive_evolution_trace": {
+                            "feedback_available": False,
+                            "feedback_reference_direction": None,
+                            "feedback_long_tail_bias": None,
+                            "strategy_delta_available": False,
+                            "strategy_delta_count": 0,
+                            "primary_strategy_delta_target": None,
+                            "evolution_draft_available": False,
+                            "evolution_failure_mode": None,
+                            "evolution_attention_delta_count": 0,
+                            "evolution_charter_delta_count": 0,
                         },
                     },
                 },
@@ -1639,8 +1644,13 @@ class PlanningRuntimeMixin:
             deliberation=deliberation,
         )
         compact_memory = self._compact_endogenous_proposal_memory(
+            recent_reference_alignment=recent_reference_alignment,
             proposal_drift_memory=proposal_drift_memory,
+            recent_cognitive_alignment=recent_cognitive_alignment,
             cognitive_assessment_memory=cognitive_assessment_memory,
+            cognitive_feedback_memory=cognitive_feedback_memory,
+            cognitive_strategy_delta=cognitive_strategy_delta,
+            cognitive_evolution_draft=cognitive_evolution_draft,
             self_iteration_hypotheses=self_iteration_hypotheses,
             self_iteration_trend_memory=self_iteration_trend_memory,
             switch_self_regulation_memory=switch_self_regulation_memory,
@@ -1715,39 +1725,6 @@ class PlanningRuntimeMixin:
                     or None,
                 },
             },
-            "recent_reference_alignment": {
-                "available": bool(recent_reference_alignment.get("available")),
-                "average_alignment_score": round(
-                    self._clamp_endogenous_ratio(
-                        recent_reference_alignment.get("average_alignment_score") or 0.0
-                    ),
-                    4,
-                ),
-                "weak_or_partial_count": max(
-                    0,
-                    int(recent_reference_alignment.get("weak_or_partial_count") or 0),
-                ),
-                "entry_count": max(
-                    0,
-                    int(recent_reference_alignment.get("entry_count") or 0),
-                ),
-                "primary_missing_evidence_node": str(
-                    recent_reference_alignment.get("primary_missing_evidence_node") or ""
-                ).strip()
-                or None,
-                "primary_missing_agenda_node": str(
-                    recent_reference_alignment.get("primary_missing_agenda_node") or ""
-                ).strip()
-                or None,
-                "missing_evidence_node_count": max(
-                    0,
-                    int(recent_reference_alignment.get("missing_evidence_node_count") or 0),
-                ),
-                "missing_agenda_node_count": max(
-                    0,
-                    int(recent_reference_alignment.get("missing_agenda_node_count") or 0),
-                ),
-            },
             "assessment_trace": {
                 "available": bool(cognitive_assessment_memory.get("available")),
                 "dominant_constraint": str(
@@ -1757,72 +1734,20 @@ class PlanningRuntimeMixin:
                 "current_judgement": current_judgement or None,
                 "why_not_improvement_now_count": why_not_improvement_now_count,
             },
-            "cognitive_evolution_trace": {
-                "feedback_available": bool(cognitive_feedback_memory.get("available")),
-                "feedback_reference_direction": str(
-                    cognitive_feedback_memory.get("reference_feedback_direction") or ""
-                ).strip()
-                or None,
-                "feedback_long_tail_bias": str(
-                    cognitive_feedback_memory.get("long_tail_signal_bias") or ""
-                ).strip()
-                or None,
-                "strategy_delta_available": bool(cognitive_strategy_delta.get("available")),
-                "strategy_delta_count": len(
-                    [
-                        item
-                        for item in list(cognitive_strategy_delta.get("recommended_changes") or [])[:6]
-                        if isinstance(item, dict) and str(item.get("target") or "").strip()
-                    ]
-                ),
-                "strategy_delta_targets": [
-                    str(item.get("target") or "").strip()
-                    for item in list(cognitive_strategy_delta.get("recommended_changes") or [])[:4]
-                    if isinstance(item, dict) and str(item.get("target") or "").strip()
-                ],
-                "evolution_draft_available": bool(cognitive_evolution_draft.get("available")),
-                "evolution_failure_mode": str(
-                    dict(cognitive_evolution_draft.get("mission_pressure") or {}).get(
-                        "dominant_failure_mode"
-                    )
-                    or ""
-                ).strip()
-                or None,
-                "evolution_attention_delta_count": len(
-                    [
-                        item
-                        for item in list(
-                            dict(cognitive_evolution_draft.get("attention_policy_delta") or {}).get(
-                                "recommended_changes"
-                            )
-                            or []
-                        )[:6]
-                        if isinstance(item, dict) and str(item.get("target") or "").strip()
-                    ]
-                ),
-                "evolution_charter_delta_count": len(
-                    [
-                        item
-                        for item in list(
-                            dict(cognitive_evolution_draft.get("charter_delta") or {}).get(
-                                "recommended_changes"
-                            )
-                            or []
-                        )[:4]
-                        if isinstance(item, dict) and str(item.get("target") or "").strip()
-                    ]
-                ),
-            },
             "auxiliary_memory": compact_memory,
-            "recent_cognitive_alignment": recent_cognitive_alignment,
             "current_candidates": current_candidates,
         }
 
     def _compact_endogenous_proposal_memory(
         self,
         *,
+        recent_reference_alignment: Dict[str, Any],
         proposal_drift_memory: Dict[str, Any],
+        recent_cognitive_alignment: Dict[str, Any],
         cognitive_assessment_memory: Dict[str, Any],
+        cognitive_feedback_memory: Dict[str, Any],
+        cognitive_strategy_delta: Dict[str, Any],
+        cognitive_evolution_draft: Dict[str, Any],
         self_iteration_hypotheses: Dict[str, Any],
         self_iteration_trend_memory: Dict[str, Any],
         switch_self_regulation_memory: Dict[str, Any],
@@ -1841,7 +1766,64 @@ class PlanningRuntimeMixin:
                 _nonempty_count(item.get(legacy_key)),
             )
 
+        def _change_targets(values: Any, *, limit: int) -> list[str]:
+            return [
+                str(item.get("target") or "").strip()
+                for item in list(values or [])[:limit]
+                if isinstance(item, dict) and str(item.get("target") or "").strip()
+            ]
+
+        strategy_delta_targets = _change_targets(
+            cognitive_strategy_delta.get("recommended_changes"),
+            limit=6,
+        )
+        attention_delta_targets = _change_targets(
+            dict(cognitive_evolution_draft.get("attention_policy_delta") or {}).get(
+                "recommended_changes"
+            ),
+            limit=6,
+        )
+        charter_delta_targets = _change_targets(
+            dict(cognitive_evolution_draft.get("charter_delta") or {}).get(
+                "recommended_changes"
+            ),
+            limit=4,
+        )
+
         return {
+            "recent_reference_alignment": {
+                "available": bool(recent_reference_alignment.get("available")),
+                "average_alignment_score": round(
+                    self._clamp_endogenous_ratio(
+                        recent_reference_alignment.get("average_alignment_score") or 0.0
+                    ),
+                    4,
+                ),
+                "weak_or_partial_count": _stored_count(
+                    recent_reference_alignment,
+                    "weak_or_partial_count",
+                ),
+                "entry_count": _stored_count(
+                    recent_reference_alignment,
+                    "entry_count",
+                ),
+                "primary_missing_evidence_node": str(
+                    recent_reference_alignment.get("primary_missing_evidence_node") or ""
+                ).strip()
+                or None,
+                "primary_missing_agenda_node": str(
+                    recent_reference_alignment.get("primary_missing_agenda_node") or ""
+                ).strip()
+                or None,
+                "missing_evidence_node_count": _stored_count(
+                    recent_reference_alignment,
+                    "missing_evidence_node_count",
+                ),
+                "missing_agenda_node_count": _stored_count(
+                    recent_reference_alignment,
+                    "missing_agenda_node_count",
+                ),
+            },
             "proposal_drift_memory": {
                 "available": bool(proposal_drift_memory.get("available")),
                 "average_score": round(
@@ -1880,6 +1862,70 @@ class PlanningRuntimeMixin:
                     proposal_drift_memory.get("dominant_posture_conflict_reason") or ""
                 ).strip()
                 or None,
+            },
+            "recent_cognitive_alignment": {
+                "available": bool(recent_cognitive_alignment.get("available")),
+                "average_score": round(
+                    self._clamp_endogenous_ratio(
+                        recent_cognitive_alignment.get("average_score") or 0.0
+                    ),
+                    4,
+                ),
+                "quality_counts": dict(recent_cognitive_alignment.get("quality_counts") or {}),
+                "dominant_task_shape": str(
+                    recent_cognitive_alignment.get("dominant_task_shape") or ""
+                ).strip()
+                or None,
+                "reason_count": _stored_count(
+                    recent_cognitive_alignment,
+                    "reason_count",
+                ),
+                "posture_alignment_signal_count": _stored_count(
+                    recent_cognitive_alignment,
+                    "posture_alignment_signal_count",
+                ),
+                "priority_basis_signal_count": _stored_count(
+                    recent_cognitive_alignment,
+                    "priority_basis_signal_count",
+                ),
+                "missing_posture_alignment_count": _stored_count(
+                    recent_cognitive_alignment,
+                    "missing_posture_alignment_count",
+                ),
+                "missing_priority_basis_count": _stored_count(
+                    recent_cognitive_alignment,
+                    "missing_priority_basis_count",
+                ),
+                "entry_count": _stored_count(
+                    recent_cognitive_alignment,
+                    "entry_count",
+                ),
+            },
+            "cognitive_evolution_trace": {
+                "feedback_available": bool(cognitive_feedback_memory.get("available")),
+                "feedback_reference_direction": str(
+                    cognitive_feedback_memory.get("reference_feedback_direction") or ""
+                ).strip()
+                or None,
+                "feedback_long_tail_bias": str(
+                    cognitive_feedback_memory.get("long_tail_signal_bias") or ""
+                ).strip()
+                or None,
+                "strategy_delta_available": bool(cognitive_strategy_delta.get("available")),
+                "strategy_delta_count": len(strategy_delta_targets),
+                "primary_strategy_delta_target": (
+                    strategy_delta_targets[0] if strategy_delta_targets else None
+                ),
+                "evolution_draft_available": bool(cognitive_evolution_draft.get("available")),
+                "evolution_failure_mode": str(
+                    dict(cognitive_evolution_draft.get("mission_pressure") or {}).get(
+                        "dominant_failure_mode"
+                    )
+                    or ""
+                ).strip()
+                or None,
+                "evolution_attention_delta_count": len(attention_delta_targets),
+                "evolution_charter_delta_count": len(charter_delta_targets),
             },
             "cognitive_assessment_memory": {
                 "available": bool(cognitive_assessment_memory.get("available")),

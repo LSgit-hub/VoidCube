@@ -1041,7 +1041,9 @@ async def test_evaluate_endogenous_drive_exposes_cognition_state(tmp_path):
     assert "summary" not in cognition["proposal_cognition"]["meta_cognition_profile"]
     auxiliary_memory = cognition["proposal_cognition"]["auxiliary_memory"]
     for folded_key in (
+        "recent_reference_alignment",
         "proposal_drift_memory",
+        "cognitive_evolution_trace",
         "self_iteration_hypotheses",
         "self_iteration_trend_memory",
         "switch_self_regulation_memory",
@@ -1050,7 +1052,6 @@ async def test_evaluate_endogenous_drive_exposes_cognition_state(tmp_path):
     ):
         assert folded_key not in cognition["proposal_cognition"]
         assert "summary" not in auxiliary_memory[folded_key]
-    assert "summary" not in cognition["proposal_cognition"]["recent_reference_alignment"]
     assert "secondary_task_shape_hint" not in cognition["proposal_cognition"]["meta_cognition_profile"]
     assert auxiliary_memory["proposal_drift_memory"]["drift_state"] == "correcting"
     assert cognition["proposal_cognition"]["lm_trace"]["charter_core_mission"]
@@ -1869,8 +1870,14 @@ async def test_endogenous_cognition_state_persists_to_runtime_file(tmp_path):
     assert snapshot["state"]["meta_governance"]["mode"] in {"observe", "correct", "expand", "conserve"}
     assert snapshot["state"]["self_model"]["adaptive_policy"]["preferred_focus"] == result["cognition_state"]["self_model"]["adaptive_policy"]["preferred_focus"]
     assert "task_type_priors" not in snapshot["state"]["proposal_cognition"]
+    assert "recent_reference_alignment" not in snapshot["state"]["proposal_cognition"]
+    assert "recent_reference_alignment" in snapshot["state"]["proposal_cognition"]["auxiliary_memory"]
     assert "proposal_drift_memory" not in snapshot["state"]["proposal_cognition"]
     assert "proposal_drift_memory" in snapshot["state"]["proposal_cognition"]["auxiliary_memory"]
+    assert "recent_cognitive_alignment" not in snapshot["state"]["proposal_cognition"]
+    assert "recent_cognitive_alignment" in snapshot["state"]["proposal_cognition"]["auxiliary_memory"]
+    assert "cognitive_evolution_trace" not in snapshot["state"]["proposal_cognition"]
+    assert "cognitive_evolution_trace" in snapshot["state"]["proposal_cognition"]["auxiliary_memory"]
     assert snapshot["state"]["proposal_cognition"]["lm_trace"]["charter_core_mission"] == "Evolve through evidence-backed structured proposals."
     assert "top_priority_task_type" not in snapshot["state"]["proposal_cognition"]["lm_trace"]
     assert snapshot["state"]["proposal_cognition"]["current_candidates"]["count"] >= 1
@@ -2015,7 +2022,11 @@ async def test_cognitive_self_regulation_tightens_adaptive_policy_when_lm_drift_
     assert adaptive_policy["preferred_focus"] == "observation"
     assert adaptive_policy["candidate_budget"] <= 2
     assert "proposal_drift_is_active" in str(regulation["last_reason"] or "")
-    assert proposal_cognition["recent_cognitive_alignment"]["average_score"] < 0.5
+    assert "recent_cognitive_alignment" not in proposal_cognition
+    assert (
+        proposal_cognition["auxiliary_memory"]["recent_cognitive_alignment"]["average_score"]
+        < 0.5
+    )
 
 
 @pytest.mark.asyncio
@@ -7555,7 +7566,9 @@ async def test_run_endogenous_drive_cycle_exposes_cognitive_feedback_memory(tmp_
     supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
-    feedback_trace = result["cognition_state"]["proposal_cognition"]["cognitive_evolution_trace"]
+    proposal_cognition = result["cognition_state"]["proposal_cognition"]
+    assert "cognitive_evolution_trace" not in proposal_cognition
+    feedback_trace = proposal_cognition["auxiliary_memory"]["cognitive_evolution_trace"]
     assert feedback_trace["feedback_available"] is True
     assert feedback_trace["feedback_reference_direction"] == "weak"
     assert feedback_trace["feedback_long_tail_bias"] == "compress"
@@ -7671,10 +7684,13 @@ async def test_run_endogenous_drive_cycle_exposes_cognitive_strategy_delta(tmp_p
     supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
-    trace = result["cognition_state"]["proposal_cognition"]["cognitive_evolution_trace"]
+    proposal_cognition = result["cognition_state"]["proposal_cognition"]
+    assert "cognitive_evolution_trace" not in proposal_cognition
+    trace = proposal_cognition["auxiliary_memory"]["cognitive_evolution_trace"]
     assert trace["strategy_delta_available"] is True
     assert trace["strategy_delta_count"] == 1
-    assert trace["strategy_delta_targets"][0] == "evidence_attention_policy.conflict_weight"
+    assert trace["primary_strategy_delta_target"] == "evidence_attention_policy.conflict_weight"
+    assert "strategy_delta_targets" not in trace
 
 
 @pytest.mark.asyncio
@@ -7875,7 +7891,9 @@ async def test_run_endogenous_drive_cycle_exposes_cognitive_evolution_draft(tmp_
     supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
-    trace = result["cognition_state"]["proposal_cognition"]["cognitive_evolution_trace"]
+    proposal_cognition = result["cognition_state"]["proposal_cognition"]
+    assert "cognitive_evolution_trace" not in proposal_cognition
+    trace = proposal_cognition["auxiliary_memory"]["cognitive_evolution_trace"]
     assert trace["evolution_draft_available"] is True
     assert trace["evolution_failure_mode"] == "grounding_instability"
     assert trace["evolution_attention_delta_count"] == 1
@@ -10342,8 +10360,10 @@ async def test_runtime_cognition_exposes_posture_reasoning_memory(tmp_path):
     assert "common_posture_alignment" not in drift_memory
     assert "common_priority_basis" not in drift_memory
     assert drift_memory["posture_alignment_health"] == "inconsistent"
-    assert proposal_cognition["recent_cognitive_alignment"]["posture_alignment_signal_count"] == 1
-    assert "common_posture_alignment" not in proposal_cognition["recent_cognitive_alignment"]
+    assert "recent_cognitive_alignment" not in proposal_cognition
+    recent_alignment = proposal_cognition["auxiliary_memory"]["recent_cognitive_alignment"]
+    assert recent_alignment["posture_alignment_signal_count"] == 1
+    assert "common_posture_alignment" not in recent_alignment
 
 
 @pytest.mark.asyncio
@@ -10997,13 +11017,15 @@ async def test_run_endogenous_drive_cycle_falls_back_to_history_reference_alignm
         result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     proposal_cognition = result["cognition_state"]["proposal_cognition"]
-    assert proposal_cognition["recent_reference_alignment"]["available"] is True
-    assert proposal_cognition["recent_reference_alignment"]["average_alignment_score"] == 0.58
-    assert proposal_cognition["recent_reference_alignment"]["weak_or_partial_count"] == 1
-    assert proposal_cognition["recent_reference_alignment"]["entry_count"] == 1
-    assert proposal_cognition["recent_reference_alignment"]["primary_missing_evidence_node"] == "self_structure"
-    assert proposal_cognition["recent_reference_alignment"]["primary_missing_agenda_node"] == "focus:learning_expansion"
-    assert "recent_entries" not in proposal_cognition["recent_reference_alignment"]
+    assert "recent_reference_alignment" not in proposal_cognition
+    reference_alignment = proposal_cognition["auxiliary_memory"]["recent_reference_alignment"]
+    assert reference_alignment["available"] is True
+    assert reference_alignment["average_alignment_score"] == 0.58
+    assert reference_alignment["weak_or_partial_count"] == 1
+    assert reference_alignment["entry_count"] == 1
+    assert reference_alignment["primary_missing_evidence_node"] == "self_structure"
+    assert reference_alignment["primary_missing_agenda_node"] == "focus:learning_expansion"
+    assert "recent_entries" not in reference_alignment
     assert proposal_cognition["meta_cognition_profile"]["grounding_pressure"] == "medium"
 
 
