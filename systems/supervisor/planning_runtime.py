@@ -5300,7 +5300,7 @@ class PlanningRuntimeMixin:
             or getattr(getattr(self, "_service_runtime", None), "governor_mode_active", False)
         )
         if governor_mode_active:
-            # With the supervisor AUTO gate active, self_learning and
+            # With the autonomous-chain gate active, self_learning and
             # memory_maintenance planning is no longer blocked on user-idle
             # style signals. Execution still follows its own runtime decision.
             governance_task_type_decisions["self_learning"]["eligible_for_planning"] = True
@@ -5358,7 +5358,7 @@ class PlanningRuntimeMixin:
             },
             "governance_task_type_decisions": governance_task_type_decisions,
             "task_family_decisions": task_family_decisions,
-            # Historical compatibility key: indicates the supervisor AUTO gate
+            # Historical compatibility key: indicates the autonomous-chain gate
             # is active, not that a separate legacy CLI mode owns execution.
             "governor_mode_active": governor_mode_active,
             "decisions": {
@@ -6085,26 +6085,26 @@ class PlanningRuntimeMixin:
                     )
                 return (
                     "approved",
-                    "Agent-pull body-improvement task approved for API-A execution. AUTO baseline keeps this path directly pull -> execute -> write back.",
+                    "Agent-pull body-improvement task approved for API-A autonomous execution. Autonomous-chain baseline keeps this path directly pull -> execute -> write back.",
                 )
             return (
                 "approved",
-                "Agent-pull self-learning task approved for API-A execution. AUTO baseline keeps this path directly pull -> execute -> write back.",
+                "Agent-pull self-learning task approved for API-A autonomous execution. Autonomous-chain baseline keeps this path directly pull -> execute -> write back.",
             )
 
-        # With the supervisor AUTO gate active, self_learning and
+        # With the autonomous-chain gate active, self_learning and
         # memory_maintenance can execute without waiting for user-idle style
         # signals. Other task families still follow their runtime decisions.
         if governor_mode_active:
             if task_type == "self_learning":
                 return (
                     "approved",
-                    "Supervisor AUTO gate active: self-learning task approved without waiting for idle-window signals. Learn-only constraints still apply.",
+                    "Autonomous-chain gate active: self-learning task approved without waiting for idle-window signals. Learn-only constraints still apply.",
                 )
             if task_type == "memory_maintenance":
                 return (
                     "approved",
-                    "Supervisor AUTO gate active: memory-maintenance task approved without waiting for idle-window signals.",
+                    "Autonomous-chain gate active: memory-maintenance task approved without waiting for idle-window signals.",
                 )
 
         decision = (
@@ -6263,8 +6263,8 @@ class PlanningRuntimeMixin:
                 status="approved",
                 actor="supervisor",
                 reason=(
-                    "Recovered orphaned AUTO agent-pull task because its owning CLI "
-                    "session is missing or stale."
+                    "Recovered orphaned agent-pull task because its owning autonomous "
+                    "executor session is missing or stale."
                 ),
                 context={
                     "recovered": True,
@@ -7353,10 +7353,10 @@ class PlanningRuntimeMixin:
             failure_count = int(task_metadata.get("execution_failure_count") or 0) + 1
             task_governance_type = self._task_governance_type(task)
             # memory_maintenance tasks are handled by the supervisor's internal
-            # memory service (baseline §3.4). Agent pull paths only see
-            # Agent-executable autonomous tasks, so retry keeps the task
+            # memory service (baseline §3.4). API-A pull paths only see
+            # autonomous-executor tasks, so retry keeps the task
             # approved for the supervisor dispatcher instead of pushing it
-            # through Agent poll.
+            # through the API-A autonomous executor poll.
             if task_governance_type == "memory_maintenance":
                 if failure_count < max_retries:
                     self._update_task_status(
@@ -7424,18 +7424,18 @@ class PlanningRuntimeMixin:
         # Success path — mark completed.  Reason text is split by execution
         # path so the audit trail is honest about WHO closed the task.  The
         # architectural baseline §3.4 says memory_maintenance is handled
-        # internally by the memory service (not by Agent pull), so its
+        # internally by the memory service (not by API-A autonomous pull), so its
         # reason reflects the supervisor's internal completion. Body
-        # upgrade / switch go through the executor body_lifecycle. Agent
-        # pull handles Agent-executable autonomous tasks separately, so this
+        # upgrade / switch go through the executor body_lifecycle. API-A
+        # pull handles autonomous-executor tasks separately, so this
         # success path is the supervisor's own.
         task_governance_type = self._task_governance_type(task)
         if task_governance_type == "memory_maintenance":
             actor = "supervisor_memory_service"
             completion_reason = (
                 "Memory-maintenance task completed by the supervisor's "
-                "internal memory service (baseline §3.4 — Agent pull only "
-                "sees Agent-executable autonomous tasks). "
+                "internal memory service (baseline §3.4 — API-A pull only "
+                "sees autonomous-executor tasks). "
                 f"executor_status={str(result_status)[:60] if result_status else 'ok'}"
             )
         elif task_governance_type == "self_evolution":
@@ -7553,7 +7553,7 @@ class PlanningRuntimeMixin:
             gov_type = self._task_governance_type(task)
             execution_kind = self._task_execution_kind(task)
             if gov_type == "self_learning" or execution_kind == "body_improvement":
-                # Agent-executable autonomous tasks are pulled by Agent via Gateway /v1/tasks API.
+                # Autonomous-executor tasks are pulled by API-A via Gateway /v1/tasks API.
                 continue
 
             if task.execution_request is None:
@@ -7588,8 +7588,8 @@ class PlanningRuntimeMixin:
 
             execution_kind = self._task_execution_kind(task)
             if self._task_governance_type(task) == "self_learning" or execution_kind == "body_improvement":
-                # Agent-executable autonomous tasks are pulled by Agent via Gateway /v1/tasks API.
-                # The supervisor only approves them; execution is Agent-initiated.
+                # Autonomous-executor tasks are pulled by API-A via Gateway /v1/tasks API.
+                # The supervisor only approves them; execution is API-A initiated.
                 continue
 
             if task.execution_request is None:

@@ -180,7 +180,7 @@ class ServiceRuntimeMixin:
         """Start baseline supervisor background tasks.
 
         This always starts the health-check loop. The review loop and
-        endogenous-drive loop remain behind the supervisor AUTO gate and are
+        endogenous-drive loop remain behind the autonomous-chain gate and are
         activated by _start_governor_mode().
         """
         runtime_config = self.config.service_runtime
@@ -225,7 +225,7 @@ class ServiceRuntimeMixin:
         # The memory service runs its own background compression loop via
         # its FastAPI lifespan.
 
-        # Supervisor AUTO loops are NOT started here — they are activated
+        # Autonomous-chain loops are NOT started here — they are activated
         # on demand via _start_governor_mode().
 
         # ── Structured memory maintenance loop (baseline background task) ──
@@ -273,10 +273,9 @@ class ServiceRuntimeMixin:
         self._service_runtime_started = True
 
     async def _start_governor_mode(self) -> None:
-        """Enable the supervisor AUTO lane and start review/drive loops.
+        """Enable the autonomous chain and start review/drive loops.
 
-        Idempotent — if the supervisor AUTO lane is already active this is a
-        no-op.
+        Idempotent — if the autonomous chain is already active this is a no-op.
         """
         if self._service_runtime.governor_mode_active:
             await self._notify_gateway_governor_mode(active=True)
@@ -304,7 +303,7 @@ class ServiceRuntimeMixin:
                     logger.warning(f"Self-evolution review loop iteration failed: {exc}")
 
         self._self_evolution_review_task = asyncio.create_task(self_evolution_review_loop())
-        logger.info("Supervisor AUTO lane: review loop started (interval=%ds)", runtime_config.self_evolution_review_interval)
+        logger.info("Autonomous chain: review loop started (interval=%ds)", runtime_config.self_evolution_review_interval)
 
         # ── Immediate first review after drive has had time to produce candidates ──
         async def _immediate_first_review():
@@ -332,13 +331,13 @@ class ServiceRuntimeMixin:
                         logger.warning(f"Endogenous-drive loop iteration failed: {exc}")
 
             self._endogenous_drive_task = asyncio.create_task(endogenous_drive_loop())
-            logger.info("Supervisor AUTO lane: drive loop started (interval=%ds)", runtime_config.endogenous_drive_interval)
+            logger.info("Autonomous chain: drive loop started (interval=%ds)", runtime_config.endogenous_drive_interval)
 
             # ── Immediate first-run: fire the first cycle without waiting for the interval ──
             asyncio.create_task(self._run_immediate_endogenous_drive_once())
         else:
             self._endogenous_drive_task = None
-            logger.info("Supervisor AUTO lane: drive loop disabled (endogenous_drive_enabled=False)")
+            logger.info("Autonomous chain: drive loop disabled (endogenous_drive_enabled=False)")
 
     async def _run_immediate_endogenous_drive_once(self) -> None:
         await asyncio.sleep(2)  # short grace for gateway notification
@@ -350,9 +349,9 @@ class ServiceRuntimeMixin:
             logger.warning(f"Immediate endogenous-drive cycle failed: {exc}")
 
     async def _stop_governor_mode(self) -> None:
-        """Stop the supervisor AUTO lane review/drive loops immediately.
+        """Stop the autonomous chain review/drive loops immediately.
 
-        Idempotent — if the supervisor AUTO lane is not active this is a no-op.
+        Idempotent — if the autonomous chain is not active this is a no-op.
         Does NOT stop the health-check loop.
         """
         if not self._service_runtime.governor_mode_active:
@@ -370,7 +369,7 @@ class ServiceRuntimeMixin:
             except asyncio.CancelledError:
                 pass
             except Exception as exc:
-                logger.warning(f"Supervisor AUTO lane task exited with error during deactivation: {exc}")
+                logger.warning(f"Autonomous chain task exited with error during deactivation: {exc}")
 
         await cancel_task(self._self_evolution_review_task)
         self._self_evolution_review_task = None
@@ -378,16 +377,16 @@ class ServiceRuntimeMixin:
         await cancel_task(self._endogenous_drive_task)
         self._endogenous_drive_task = None
 
-        logger.info("Supervisor AUTO lane stopped — baseline health-check loop still running")
+        logger.info("Autonomous chain stopped — baseline health-check loop still running")
 
     def _governor_mode_status(self) -> Dict[str, Any]:
-        """Return the current supervisor AUTO gate state.
+        """Return the current autonomous-chain gate state.
 
         The payload keeps the historical `governor_mode_active` key for
         compatibility with older clients and tests.
         """
         return {
-            # Historical compatibility key: this now means the supervisor AUTO
+            # Historical compatibility key: this now means the autonomous-chain
             # gate is active, not that a separate legacy mode owns the CLI.
             "governor_mode_active": self._service_runtime.governor_mode_active,
             "review_loop_running": (
@@ -402,7 +401,7 @@ class ServiceRuntimeMixin:
         }
 
     async def _notify_gateway_governor_mode(self, *, active: bool) -> None:
-        """Notify the gateway that the supervisor AUTO gate is active/inactive."""
+        """Notify the gateway that the autonomous-chain gate is active/inactive."""
         try:
             import aiohttp
             gateway_url = f"{self.config.execution.gateway_address}/admin/governor-mode"

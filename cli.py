@@ -854,11 +854,12 @@ def _push_cli_agent_scene(
     subagent_summary: Dict[str, Any] | None = None,
     agent_role: str | None = None,
 ) -> None:
-    """Best-effort: report the current CLI AUTO executor scene to Gateway.
+    """Best-effort: report the current API-A lane scene to Gateway.
 
     ``agent_role`` tags which gateway agent lane this report belongs to:
-    "supervisor_task" (this CLI is executing supervisor tasks / learning /
-    body improvement) vs "user_chat" (main CLI interacting with the user).
+    "supervisor_task" (the autonomous executor is running supervisor tasks /
+    learning / body improvement) vs "user_chat" (main CLI interacting with
+    the user).
     The gateway uses it to keep the two reporters' subagent views separate;
     when omitted the gateway falls back to a scene heuristic.
     """
@@ -2493,7 +2494,7 @@ class VoidcubeCLI:
             status_label = "待命拉单"
             status_style = "class:auto-panel-warn"
 
-        rows.append(("class:auto-panel-title", f"AUTO Execution Panel · 会话 {session_short}"))
+        rows.append(("class:auto-panel-title", f"Autonomous Executor · 会话 {session_short}"))
         rows.append((status_style, f"状态: {status_label}"))
         rows.append(self._build_auto_executor_lease_row(gateway_state, inner_width))
         task_id = str(focus_task.get("task_id") or "").strip()
@@ -2518,7 +2519,7 @@ class VoidcubeCLI:
                     (
                         "class:auto-panel-warn",
                         self._trim_status_bar_text(
-                            "队列: 当前 CLI 已认领该任务，等待进入首个模型或工具回合",
+                            "队列: 自主执行面已认领该任务，等待进入首个模型或工具回合",
                             inner_width,
                         ),
                     )
@@ -2530,7 +2531,7 @@ class VoidcubeCLI:
                     (
                         "class:auto-panel-info",
                         self._trim_status_bar_text(
-                            "队列: 当前 CLI 已完成执行，等待结果回写到任务链",
+                            "队列: 自主执行面已完成执行，等待结果回写到任务链",
                             inner_width,
                         ),
                     )
@@ -2540,7 +2541,7 @@ class VoidcubeCLI:
                     (
                         "class:auto-panel-warn",
                         self._trim_status_bar_text(
-                            "队列: 监督者已放行该任务，等待活跃 AUTO CLI 认领",
+                            "队列: 监督者已放行该任务，等待 API-A 自主执行面认领",
                             inner_width,
                         ),
                     )
@@ -2550,13 +2551,13 @@ class VoidcubeCLI:
                     (
                         "class:auto-panel-info",
                         self._trim_status_bar_text(
-                            "队列: 该任务已被其他 AUTO 执行体认领",
+                            "队列: 该任务已被其他 API-A 自主执行面认领",
                             inner_width,
                         ),
                     )
                 )
         else:
-            rows.append(("class:auto-panel-dim", "任务: 当前没有被接管的 AUTO 任务"))
+            rows.append(("class:auto-panel-dim", "任务: 当前没有被认领的自主任务"))
             reason_style, reason_text = self._resolve_auto_no_task_reason(supervisor_state)
             rows.append((reason_style, self._trim_status_bar_text(reason_text, inner_width)))
 
@@ -2564,15 +2565,15 @@ class VoidcubeCLI:
         if spinner_text:
             activity_text = f"执行流: {spinner_text}"
         elif focus_stage == "claimed_running" or getattr(self, "_agent_running", False):
-            activity_text = "执行流: 模型正在当前前台 CLI 中工作"
+            activity_text = "执行流: 模型正在 API-A 自主执行面中工作"
         elif focus_stage == "claimed_waiting_start":
-            activity_text = "执行流: 当前 CLI 已认领任务，等待进入首个模型或工具回合"
+            activity_text = "执行流: API-A 自主执行面已认领任务，等待进入首个模型或工具回合"
         elif focus_stage == "claimed_waiting_writeback":
-            activity_text = "执行流: 当前 CLI 已结束本轮执行，等待写回任务状态"
+            activity_text = "执行流: API-A 自主执行面已结束本轮执行，等待写回任务状态"
         elif focus_stage == "approved_waiting_claim":
-            activity_text = "执行流: 监督者已放行任务，等待活跃 AUTO CLI 认领"
+            activity_text = "执行流: 监督者已放行任务，等待 API-A 自主执行面认领"
         elif focus_stage == "running_elsewhere":
-            activity_text = "执行流: 任务正在其他 AUTO 执行体中运行"
+            activity_text = "执行流: 任务正在其他 API-A 自主执行面中运行"
         else:
             activity_text = "执行流: 等待监督者放行任务或等待下一轮拉单"
         rows.append(("class:auto-panel-text", self._trim_status_bar_text(activity_text, inner_width)))
@@ -2775,13 +2776,13 @@ class VoidcubeCLI:
         current_session_id = str(getattr(self, "session_id", "") or "").strip()
         active_session_id = str(active.get("session_id") or "").strip()
         if not active_session_id:
-            text = "Executor: no live AUTO CLI registered yet"
+            text = "Executor: no live API-A autonomous executor registered yet"
             return "class:auto-panel-warn", self._trim_status_bar_text(text, inner_width)
 
         lease_status = str(active.get("lease_status") or "").strip().lower()
         idle_seconds = int(active.get("idle_seconds") or 0)
         scene = str(active.get("scene") or "idle").strip() or "idle"
-        owner_label = "this CLI" if active_session_id == current_session_id else f"CLI {active_session_id[-8:]}"
+        owner_label = "this executor" if active_session_id == current_session_id else f"executor {active_session_id[-8:]}"
         if lease_status == "stale" or bool(active.get("is_stale")):
             text = f"Executor: {owner_label} stale ({idle_seconds}s idle, scene={scene})"
             return "class:auto-panel-bad", self._trim_status_bar_text(text, inner_width)
@@ -3189,12 +3190,12 @@ class VoidcubeCLI:
         return ok
 
     def _poll_auto_mode_workflow(self) -> None:
-        """Pull approved Agent-executable tasks from Gateway and execute them.
+        """Pull approved autonomous tasks from Gateway and execute them.
 
-        In AUTO mode, the CLI Agent actively pulls approved Agent-executable
-        tasks (`self_learning` + `body_improvement`) from the Supervisor's
-        task list via the Gateway and reports task lifecycle updates back
-        through the same Gateway surface.
+        With the autonomous chain enabled, the API-A autonomous executor pulls
+        approved tasks (`self_learning` + `body_improvement`) from the
+        Supervisor's task list via the Gateway and reports lifecycle updates
+        back through the same Gateway surface.
 
         Architecture baseline: §3.3, §3.5, §3.6, §7.3, §7.5.
         """
@@ -3230,7 +3231,7 @@ class VoidcubeCLI:
                         writeback_ok = self._post_auto_task_decision(
                             str(recovered_task.get("task_id") or ""),
                             decision="failed",
-                            reason="CLI Agent recovered the task but failed to re-enqueue it for execution.",
+                            reason="API-A autonomous executor recovered the task but failed to re-enqueue it for execution.",
                             context={
                                 "error": "recovered_prompt_enqueue_failed",
                                 "execution_kind": recovered_execution_kind,
@@ -3248,7 +3249,7 @@ class VoidcubeCLI:
                         return
                     return
 
-        # ── If an AUTO task was just completed, report it ──
+        # ── If an autonomous task was just completed, report it ──
         current = getattr(self, '_current_auto_task', None)
         if current is not None:
             task_id = current.get("task_id", "")
@@ -3265,16 +3266,16 @@ class VoidcubeCLI:
                 and turn_result is not None
                 and (not expected_run_id or observed_run_id == expected_run_id)
             ):
-                # Agent finished a queued AUTO turn — classify by the actual turn result.
+                # The autonomous executor finished a queued turn; classify by the actual result.
                 decision = "failed" if (
                     turn_result.get("failed")
                     or turn_result.get("partial")
                     or turn_result.get("interrupted")
                 ) else "completed"
                 reason = (
-                    f"AUTO {task_label} failed in CLI AUTO mode: {turn_result.get('error', 'unknown error')}"
+                    f"AUTO {task_label} failed in the API-A autonomous executor: {turn_result.get('error', 'unknown error')}"
                     if decision == "failed"
-                    else f"AUTO {task_label} completed by CLI Agent in AUTO mode."
+                    else f"AUTO {task_label} completed by the API-A autonomous executor."
                 )
                 writeback_ok = self._post_auto_task_decision(
                     task_id,
@@ -3322,7 +3323,7 @@ class VoidcubeCLI:
                 return
             return
 
-        # ── Pull next approved Agent-executable task from Gateway ──
+        # ── Pull next approved autonomous-executor task from Gateway ──
         try:
             tasks = []
             urls = (
@@ -3355,7 +3356,7 @@ class VoidcubeCLI:
             run_payload = _json.dumps({
                 "decision": "running",
                 "actor": "cli_agent",
-                "reason": "Agent pulled task for execution in AUTO mode.",
+                "reason": "API-A autonomous executor pulled task for execution.",
                 "context": {
                     "session_id": getattr(self, "session_id", None),
                     "source": "cli_agent_pull",
@@ -8065,12 +8066,12 @@ class VoidcubeCLI:
         return True
 
     def _handle_auto_command(self, cmd: str):
-        """Handle /auto [focus] — enable the supervisor AUTO lane.
+        """Handle /auto [focus] — enable the autonomous chain.
 
         Activates the endogenous drive and self-evolution review loops
         that run continuously at their configured intervals. The foreground
         CLI remains available for normal user interaction while AUTO is on.
-        Use /auto-q to stop the supervisor AUTO lane.
+        Use /auto-q to stop the autonomous chain.
 
         An optional focus area can be provided:
         /auto security, /auto performance, etc.
@@ -8080,7 +8081,7 @@ class VoidcubeCLI:
         parts = cmd.strip().split(maxsplit=1)
         focus = parts[1].strip() if len(parts) > 1 else ""
 
-        _cprint(f"  🧠 Activating supervisor AUTO lane...")
+        _cprint(f"  🧠 Activating autonomous chain...")
         if focus:
             _cprint(f"     Focus: {focus}")
 
@@ -8148,7 +8149,7 @@ class VoidcubeCLI:
                     self._auto_mode_active = True
                     self._ensure_auto_executor_session()
                     self._append_auto_execution_event(
-                        "AUTO 已激活，当前活跃 CLI 将承担默认执行",
+                        "自主链路已激活，API-A 自主执行面等待任务",
                         tone="success",
                         stage="auto_mode",
                     )
@@ -8162,7 +8163,7 @@ class VoidcubeCLI:
                         self._poll_auto_mode_workflow()
                     except Exception:
                         pass
-                    _cprint(f"  ✅ Supervisor AUTO lane [bold green]ACTIVE[/]")
+                    _cprint(f"  ✅ Autonomous chain [bold green]ACTIVE[/]")
                     _cprint(f"     Drive loop:  {'running' if resp.get('drive_loop_running') else 'stopped'}")
                     _cprint(f"     Review loop: {'running' if resp.get('review_loop_running') else 'stopped'}")
                     if not resp.get("endogenous_drive_enabled", True):
@@ -8177,10 +8178,10 @@ class VoidcubeCLI:
                         for line in self._format_supervisor_status_snapshot(snapshot)[:4]:
                             _cprint(f"     {line}")
                     _cprint(f"     Foreground CLI interaction remains available.")
-                    _cprint(f"     Use /auto-q to stop the supervisor AUTO lane.")
+                    _cprint(f"     Use /auto-q to stop the autonomous chain.")
                     _cprint(f"     Monitor: {supervisor_url}/ui")
                 else:
-                    _cprint(f"  ⚠️  Supervisor AUTO lane activation failed.")
+                    _cprint(f"  ⚠️  Autonomous chain activation failed.")
                     if not resp.get("endogenous_drive_enabled", True):
                         _cprint(f"     endogenous_drive_enabled is False in config.")
             except Exception:
@@ -8189,8 +8190,8 @@ class VoidcubeCLI:
         threading.Thread(target=_call_activate_governor, daemon=True, name="governor-activate").start()
 
     def _handle_auto_q_command(self):
-        """Handle /auto-q — stop the supervisor AUTO lane."""
-        _cprint(f"  🔄 Stopping supervisor AUTO lane...")
+        """Handle /auto-q — stop the autonomous chain."""
+        _cprint(f"  🔄 Stopping autonomous chain...")
 
         import threading, json as _json
 
@@ -8221,7 +8222,7 @@ class VoidcubeCLI:
             active = resp.get("governor_mode_active", True)
             if not active:
                 self._interrupt_current_auto_task(
-                    reason="AUTO mode exited by /auto-q; current task interrupted by user.",
+                    reason="Autonomous chain exited by /auto-q; current task interrupted by user.",
                     source="auto_q",
                     timeout=5,
                 )
@@ -8232,16 +8233,16 @@ class VoidcubeCLI:
                     agent_role="supervisor_task",
                 )
                 self._append_auto_execution_event("AUTO 已退出", tone="warn")
-                _cprint(f"  💤 Supervisor AUTO lane [bold]STOPPED[/].")
+                _cprint(f"  💤 Autonomous chain [bold]STOPPED[/].")
                 _cprint(f"     The baseline health-check loop remains running.")
-                _cprint(f"     Use /auto to restart the supervisor AUTO lane.")
+                _cprint(f"     Use /auto to restart the autonomous chain.")
             else:
-                _cprint(f"  ⚠️  Supervisor AUTO lane could not be stopped (still active).")
+                _cprint(f"  ⚠️  Autonomous chain could not be stopped (still active).")
 
         threading.Thread(target=_call_deactivate_governor, daemon=True, name="governor-deactivate").start()
 
     def _exit_auto_mode_fast(self) -> bool:
-        """Fast-path synchronous exit from AUTO mode — bypasses the message queue.
+        """Fast-path synchronous exit from the autonomous chain; bypasses the message queue.
 
         Called directly from the prompt_toolkit input handler so /auto-q takes
         effect immediately even when the agent is blocked on an LLM call.
@@ -8250,7 +8251,7 @@ class VoidcubeCLI:
         if not self._auto_mode_active:
             return True
 
-        _cprint(f"  🔄 Exiting AUTO mode (fast path)...")
+        _cprint(f"  🔄 Exiting autonomous chain (fast path)...")
 
         # 1. Interrupt the running agent so the process loop can resume
         if self._agent_running:
@@ -8259,7 +8260,7 @@ class VoidcubeCLI:
             except Exception:
                 pass
 
-        # 2. Synchronously stop the supervisor AUTO lane
+        # 2. Synchronously stop the autonomous chain
         import json as _json
         try:
             from VoidCube_cli.config import load_config
@@ -8282,7 +8283,7 @@ class VoidcubeCLI:
             resp = _json.loads(_req.urlopen(r, timeout=10).read())
             if not resp.get("governor_mode_active", True):
                 self._interrupt_current_auto_task(
-                    reason="AUTO mode exited via fast-path /auto-q; current task interrupted by user.",
+                    reason="Autonomous chain exited via fast-path /auto-q; current task interrupted by user.",
                     source="auto_q_fast_path",
                     timeout=5,
                 )
@@ -8293,19 +8294,19 @@ class VoidcubeCLI:
                     agent_role="supervisor_task",
                 )
                 self._append_auto_execution_event("AUTO 已退出", tone="warn")
-                _cprint(f"  💤 Supervisor AUTO lane [bold]STOPPED[/].")
+                _cprint(f"  💤 Autonomous chain [bold]STOPPED[/].")
                 _cprint(f"     The baseline health-check loop remains running.")
-                _cprint(f"     Use /auto to restart the supervisor AUTO lane.")
+                _cprint(f"     Use /auto to restart the autonomous chain.")
                 self._record_supervisor_ui_activity_safe("auto_mode_exit", scene="idle",
-                    summary="AUTO mode exited via fast-path /auto-q")
+                    summary="Autonomous chain exited via fast-path /auto-q")
                 return True
             else:
-                _cprint(f"  ⚠️  Supervisor AUTO lane could not be stopped (still active).")
+                _cprint(f"  ⚠️  Autonomous chain could not be stopped (still active).")
                 return False
         except Exception as exc:
             # Supervisor unreachable — still exit local auto mode to unblock the user
             self._interrupt_current_auto_task(
-                reason="AUTO mode exited locally while supervisor was unreachable; current task interrupted by user.",
+                reason="Autonomous chain exited locally while supervisor was unreachable; current task interrupted by user.",
                 source="auto_q_local_exit",
                 timeout=5,
             )
@@ -8317,21 +8318,21 @@ class VoidcubeCLI:
             )
             self._append_auto_execution_event("AUTO 本地已退出，但 supervisor 可能仍保持激活", tone="warn")
             _cprint(f"  ⚠️  Supervisor unreachable: {exc}")
-            _cprint(f"     Local AUTO mode deactivated (supervisor state may be stale).")
+            _cprint(f"     Local autonomous chain state deactivated (supervisor state may be stale).")
             _cprint(f"     Run /auto to re-enter when supervisor is available.")
             return True
 
     def _force_quit_auto_mode(self) -> bool:
-        """Emergency force-quit: triple-Ctrl+C in AUTO mode triggers safe exit.
+        """Emergency force-quit: triple-Ctrl+C in the autonomous chain triggers safe exit.
 
         Attempts every available path to exit cleanly:
         1. Interrupt the running agent (non-blocking)
-        2. Synchronously stop the supervisor AUTO lane (with short timeout)
-        3. Mark any in-progress AUTO task as interrupted via Gateway
+        2. Synchronously stop the autonomous chain (with short timeout)
+        3. Mark any in-progress autonomous task as interrupted via Gateway
         4. Unregister from Gateway session
         Returns True if cleanup was attempted (best-effort).
         """
-        _cprint(f"\n  🚨 FORCE QUIT AUTO MODE — attempting emergency cleanup...")
+        _cprint(f"\n  🚨 FORCE QUIT AUTONOMOUS CHAIN — attempting emergency cleanup...")
 
         # 1. Interrupt agent
         if self._agent_running:
@@ -8361,22 +8362,22 @@ class VoidcubeCLI:
                 method="POST",
             )
             _json.loads(_req.urlopen(r, timeout=5).read())
-            _cprint(f"  ✅ Supervisor AUTO lane stopped")
+            _cprint(f"  ✅ Autonomous chain stopped")
         except Exception as exc:
             _cprint(f"  ⚠️  Governor deactivation failed: {exc}")
 
-        # 3. Report any in-progress AUTO task as interrupted via Gateway
+        # 3. Report any in-progress autonomous task as interrupted via Gateway
         current = getattr(self, '_current_auto_task', None)
         if current is not None:
             task_id = str(current.get("task_id") or "")
             execution_kind = self._auto_task_execution_kind(current)
             task_label = self._auto_task_label(execution_kind)
             if self._interrupt_current_auto_task(
-                reason=f"AUTO mode force-quit — {task_label} interrupted by user.",
+                reason=f"Autonomous chain force-quit — {task_label} interrupted by user.",
                 source="force_quit",
                 timeout=5,
             ):
-                _cprint(f"  ✅ AUTO {task_label} {task_id[:8]}... marked interrupted")
+                _cprint(f"  ✅ Autonomous {task_label} {task_id[:8]}... marked interrupted")
             else:
                 _cprint(f"  ⚠️  Could not report task completion to Gateway")
 
@@ -8400,7 +8401,7 @@ class VoidcubeCLI:
             session_id=getattr(self, "session_id", None),
             agent_role="supervisor_task",
         )
-        _cprint(f"  🛡️  Force quit complete — supervisor AUTO lane stopped.")
+        _cprint(f"  🛡️  Force quit complete — autonomous chain stopped.")
         return True
 
     def _record_supervisor_ui_activity_safe(self, event_type: str, *, scene: str = "idle", summary: str = "") -> None:
@@ -11584,14 +11585,14 @@ class VoidcubeCLI:
                 payload = (text, images) if images else text
 
                 # Keep /auto-q as a fast-path exit while allowing the main CLI
-                # to remain usable during supervisor AUTO execution.
+                # to remain usable during autonomous-chain execution.
                 if self._auto_mode_active:
                     if text and _looks_like_slash_command(text):
                         _base = text.strip().lstrip("/").split()[0].lower()
                         if _base in ("auto-q", "auto-quit", "auto-stop"):
                             # ── FAST PATH: exit immediately, bypass queue ──
                             event.app.current_buffer.reset(append_to_history=True)
-                            _cprint(f"  🔓 退出 AUTO 模式...")
+                            _cprint(f"  🔓 退出自主链路...")
                             self._exit_auto_mode_fast()
                             event.app.invalidate()
                             return
@@ -11809,11 +11810,11 @@ class VoidcubeCLI:
 
         @kb.add('c-d')
         def handle_ctrl_d(event):
-            """Handle Ctrl+D — emergency force-quit in AUTO mode, clear input otherwise."""
+            """Handle Ctrl+D — force-quit the autonomous chain, or clear input otherwise."""
             if self._auto_mode_active:
-                # ── AUTO mode: Ctrl+D = emergency force-quit ──
+                # ── Autonomous chain: Ctrl+D = emergency force-quit ──
                 event.app.current_buffer.reset()
-                _cprint(f"\n  ⚡ Ctrl+D — 触发紧急强制退出 AUTO 模式...")
+                _cprint(f"\n  ⚡ Ctrl+D — 触发紧急强制退出自主链路...")
                 self._force_quit_auto_mode()
                 event.app.invalidate()
                 return

@@ -102,10 +102,11 @@ SERVICES: Dict[str, ServiceInfo] = {
         pid_file=str(PID_DIR / "memory.pid"),
         log_file=str(PID_DIR / "memory.log"),
     ),
-    # ── Embedded services (run inside supervisor, not as separate processes) ──
-    # Per architecture baseline §5, self-learning and executor are conceptual
-    # services.  They run embedded in the Supervisor rather than as
-    # standalone daemon processes.
+    # ── Embedded/compatibility surfaces (not standalone processes) ──
+    # Self-learning is now a legacy conclusion contract/store plus Supervisor
+    # payload builder, not an autonomous execution daemon. The autonomous chain
+    # executes learning tasks through the API-A pull path. The executor remains
+    # the conceptual body-switch execution surface, not a separate CLI mode.
 }
 
 

@@ -2,7 +2,7 @@
 
 `systems/` 目录的服务化目标架构已统一收口到：
 
-- [docs/architecture-integration.md](../docs/architecture-integration.md)
+- [docs/voidcube架构基线.md](../docs/voidcube架构基线.md)
 
 这份入口文件只保留两点说明：
 
@@ -18,12 +18,13 @@
 
 ## 2. 架构约束
 
-从当前版本开始，`systems/` 的目标方向以 `docs/architecture-integration.md` 为准，尤其是以下边界：
+从当前版本开始，`systems/` 的目标方向以 `docs/voidcube架构基线.md` 为准，尤其是以下边界：
 
 - 监督者是裁决者，不是长期执行器
 - Agent 保持无状态
 - 记忆服务承担长期持久化
-- 自学系统只研究，不直接上线
-- 自提升只在时间窗口内由裁决后放行
+- 不存在独立的“自学系统”运行服务；`self_learning` 任务由监督者生成，由 API-A 自主执行面 pull 执行，成果进入 Mem
+- 自主链路全天候运行，`AUTO` 只是当前临时启停门控，不是用户链路模式，也不等待旧时间窗口
+- 用户链路和自主链路必须互不抢占、互不覆盖；Web 监控只作为 API-B 观测面
 
 如果代码实现与该文档冲突，应优先按文档方向整理实现，而不是继续扩张旧职责。

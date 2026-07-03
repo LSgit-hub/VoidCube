@@ -329,7 +329,7 @@ def fetch_scenes_aggregated(force_refresh: bool = True) -> Dict[str, Any]:
 
 def _format_segment_line(seg: Dict[str, str], state: Dict[str, Any]) -> str:
     info = state.get(seg["key"]) or {}
-    # The minimal ops dashboard is the supervisor-task observer: for the agent
+    # The minimal ops dashboard observes the autonomous chain: for the API-A
     # segment read the supervisor_task lane so its view is never overwritten by
     # the main CLI's user-chat subagents. Fall back to the top-level slot when
     # an older gateway doesn't expose lanes yet.
@@ -467,8 +467,8 @@ def print_dashboard() -> None:
     else:
         print(f"  ╠══════════════════════════════════════════════════════════╣")
         print(f"  ║  ⚠ No agent instances registered                        ║")
-        print(f"  ║    Agents are launched by the supervisor when a task     ║")
-        print(f"  ║    is approved for execution on the current AUTO lane.   ║")
+        print(f"  ║    API-A autonomous executors appear when a supervisor   ║")
+        print(f"  ║    task is approved on the autonomous chain.             ║")
         print(f"  ║    Activity signals below are advisory context only.     ║")
 
     # ── Footer ──────────────────────────────────────────────────────

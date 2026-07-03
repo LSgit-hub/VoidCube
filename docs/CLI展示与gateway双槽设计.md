@@ -14,7 +14,7 @@
 - 内生驱动那几份：定义“监督者认知核心是什么”
 - 本文：定义“监控可观测性（CLI 展示 + gateway 聚合）怎么分工、怎么演进”
 
-> **2026-07 对齐说明**：本文只讨论可观测性分槽，不重新定义监督者运行模式。`AUTO` 当前只是监督者链路的临时启停门控，不限制主 CLI 输入；判断 `supervisor_task` lane 时应以“当前正在执行监督者任务”为准，而不是把整个主 CLI 会话理解成被 AUTO 接管。
+> **2026-07 对齐说明**：本文只讨论可观测性分槽，不重新定义监督者运行模式。`AUTO` 当前只是自主链路的临时启停门控，不限制主 CLI 输入；判断 `supervisor_task` lane 时应以“当前正在执行监督者任务”为准，而不是把整个主 CLI 会话理解成被 AUTO 接管。Web 小屋只作为 API-B 观测面，不成为用户聊天入口。
 
 ## 2. 子代理展示分层事实
 
@@ -41,8 +41,8 @@
 | 组件 | 角色 | 应显示 |
 | --- | --- | --- |
 | 主 CLI 自身的子代理展示 | 主 CLI 与用户交互时的子代理 | 本进程 user_chat 子代理（本地 manager，已隔离） |
-| 最小 CLI（`VoidCube_cli/ops/dashboard.py`） | 监督者任务（学习 / 改造）专用观测面 | 仅 supervisor_task 子代理，不掺入用户交互子代理 |
-| Web 小屋（`systems/supervisor/ui_runtime.py`） | 监督者认知核心总览 | 双泳道治理 / 决策溯源 / 健康度（已完成 drill-down） |
+| 最小 CLI（`VoidCube_cli/ops/dashboard.py`） | 自主链路中 API-A 子代理执行学习 / 改造任务的专用观测面 | 仅 supervisor_task 子代理，不掺入用户交互子代理 |
+| Web 小屋（`systems/supervisor/ui_runtime.py`） | API-B / 监督者认知核心总览 | 监督者动作、反馈、任务治理、记忆状态与自主任务回报；不展示用户聊天内容 |
 
 收敛判据：最小 CLI 在“主 CLI 正与用户交互 + 监督者任务同时在跑子代理”时，仍只显示监督者任务那一套，不被用户交互子代理覆盖或混入。
 
@@ -54,7 +54,7 @@
 
 ### 4.1 判别信号
 
-两个 reporter 的 scene 其实已不同（监督者任务报 `learning` / `code_editing`，用户交互报 `executing`），但监督者链路空档期也可能报 `executing`，所以 scene 不是 100% 可靠判别信号。需要 reporter 显式打标 `agent_role`，gateway 再以 scene 启发式作回退。
+两个 reporter 的 scene 其实已不同（监督者任务报 `learning` / `code_editing`，用户交互报 `executing`），但自主链路空档期也可能报 `executing`，所以 scene 不是 100% 可靠判别信号。需要 reporter 显式打标 `agent_role`，gateway 再以 scene 启发式作回退。
 
 ### 4.2 数据结构
 

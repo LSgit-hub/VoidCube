@@ -87,6 +87,12 @@ class VoidCubeExecutionService:
                 "self_learning": ["/self-learning/execute"],
                 "memory_maintenance": ["/memory/compress"],
             },
+            "compatibility_notes": {
+                "self_learning": (
+                    "legacy health advertisement only; autonomous self_learning "
+                    "tasks execute through the API-A pull path, not this executor"
+                ),
+            },
         }
 
     # ── Scene control (baseline §8.1) ──

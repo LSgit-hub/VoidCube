@@ -4972,7 +4972,7 @@ class SupervisorUIMixin:
             rfamily = str(r.get("task_family") or "")
             # Memory maintenance is the one case the supervisor is genuinely
             # "doing" the work itself (§3.4 — handled by supervisor's
-            # internal memory service, not by Agent pull).
+            # internal memory service, not by API-A autonomous pull).
             if "memory" in rfamily:
                 return (
                     "maintenance",

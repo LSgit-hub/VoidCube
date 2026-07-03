@@ -1,6 +1,6 @@
 """Tests for endogenous drive with real gateway activity data (T-05),
 CLI executor canonical path (T-07), configuration validation (T-08),
-self-learning service lifecycle (T-09), service runtime lifecycle (T-06),
+self-learning conclusion compatibility layer (T-09), service runtime lifecycle (T-06),
 and endogenous drive error bridge (S-05)."""
 
 from __future__ import annotations
@@ -1181,10 +1181,10 @@ class TestEndogenousDriveErrorBridge:
         assert not any(c.execution_kind == "body_improvement" for c in candidates)
 
 
-# ── T-09: Self-learning service lifecycle ───────────────────────────
+# ── T-09: Self-learning conclusion compatibility layer ─────────────
 
 class TestSelfLearningServiceLifecycle:
-    """Verify the complete self-learning service lifecycle (T-09)."""
+    """Verify the legacy self-learning conclusion compatibility layer (T-09)."""
 
     @pytest.mark.xfail(reason="LearningSession Pydantic validation — pre-existing schema issue")
     def test_create_topic_and_build_submission(self, tmp_path):

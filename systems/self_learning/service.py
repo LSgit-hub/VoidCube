@@ -20,7 +20,13 @@ from .models import (
 
 
 class SelfLearningService:
-    """Minimal learn-only service that never executes upgrades or switches."""
+    """Compatibility store for learning conclusions and supervisor payloads.
+
+    The name is retained for imports and older tests, but this class must not
+    be treated as an autonomous execution service. It persists historical
+    learning artifacts and builds Supervisor submissions; API-A autonomous
+    execution of `self_learning` tasks happens through the task pull path.
+    """
 
     def __init__(self, storage_root: str | Path) -> None:
         self.storage_root = Path(storage_root).resolve()
