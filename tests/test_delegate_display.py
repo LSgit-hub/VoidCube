@@ -16,6 +16,7 @@ if "psutil" not in sys.modules:
     sys.modules["psutil"] = types.SimpleNamespace()
 
 import run_agent
+from tools import delegate_tool
 
 
 def _build_minimal_agent(*, print_fn):
@@ -129,3 +130,70 @@ def test_delegate_task_falls_back_to_legacy_spinner_without_cli_print_fn(monkeyp
     assert captured["enable_display"] is False
     assert spinner_events == ["init", "start", "stop:delegate finished"]
     assert messages[-1]["tool_call_id"] == "tool-1"
+
+
+@pytest.mark.unit
+def test_delegate_task_validates_and_binds_declared_worktree(monkeypatch, tmp_path):
+    worktree = tmp_path / "slot-worktree"
+    worktree.mkdir()
+    captured: dict = {}
+
+    monkeypatch.setattr(delegate_tool, "_load_config", lambda: {"max_iterations": 3})
+    monkeypatch.setattr(delegate_tool, "_get_max_concurrent_children", lambda: 1)
+    monkeypatch.setattr(
+        delegate_tool,
+        "_resolve_delegation_credentials",
+        lambda _cfg, _parent: {
+            "model": None,
+            "provider": None,
+            "base_url": None,
+            "api_key": None,
+            "api_mode": None,
+        },
+    )
+
+    def fake_build_child_agent(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(close=lambda: None)
+
+    monkeypatch.setattr(delegate_tool, "_build_child_agent", fake_build_child_agent)
+    monkeypatch.setattr(
+        delegate_tool,
+        "_run_single_child",
+        lambda task_index, goal, child=None, parent_agent=None: {
+            "task_index": task_index,
+            "status": "completed",
+            "summary": "done",
+            "duration_seconds": 0,
+        },
+    )
+
+    parent = _build_minimal_agent(print_fn=None)
+    result = json.loads(
+        delegate_tool.delegate_task(
+            goal="inspect isolated slot",
+            parent_agent=parent,
+            enable_display=False,
+            worktree_path=str(worktree),
+        )
+    )
+
+    assert result["results"][0]["status"] == "completed"
+    assert captured["worktree_path"] == str(worktree.resolve())
+
+
+@pytest.mark.unit
+def test_delegate_task_rejects_missing_declared_worktree(tmp_path):
+    parent = _build_minimal_agent(print_fn=None)
+
+    result = json.loads(
+        delegate_tool.delegate_task(
+            goal="inspect isolated slot",
+            parent_agent=parent,
+            enable_display=False,
+            worktree_path=str(tmp_path / "missing"),
+        )
+    )
+
+    assert result["error"]
+    assert "worktree_path does not exist" in result["error"]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
 import sys
@@ -507,11 +508,15 @@ def test_gateway_task_decision_forwards_metadata_to_supervisor(monkeypatch):
         last_health_check=datetime.now(),
         healthy=True,
     )
+    gateway._agent_session_cache["cli-session-1"] = {"source": "cli", "last_used_at": datetime.now()}
     client = TestClient(gateway.app)
 
     captured = {}
 
     class _FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
         status = 200
 
         async def __aenter__(self):
@@ -521,7 +526,7 @@ def test_gateway_task_decision_forwards_metadata_to_supervisor(monkeypatch):
             return False
 
         async def json(self):
-            return {"status": "running"}
+            return self._payload
 
     class _FakeSession:
         def __init__(self, *args, **kwargs):
@@ -537,7 +542,16 @@ def test_gateway_task_decision_forwards_metadata_to_supervisor(monkeypatch):
             captured["url"] = url
             captured["json"] = json
             captured["timeout"] = timeout
-            return _FakeResponse()
+            return _FakeResponse({"status": "running"})
+
+        def get(self, url, timeout=None):
+            captured["get_url"] = url
+            return _FakeResponse({
+                "task_id": "learn-9",
+                "status": "approved",
+                "governance_task_type": "self_learning",
+                "metadata": {},
+            })
 
     monkeypatch.setattr("systems.gateway.internal_gateway.aiohttp.ClientSession", _FakeSession)
 
@@ -558,7 +572,7 @@ def test_gateway_task_decision_forwards_metadata_to_supervisor(monkeypatch):
     assert captured["json"]["metadata"]["execution_source"] == "cli_agent_pull"
 
 
-def test_gateway_memory_route_updates_memory_activity_even_when_upstream_fails():
+def test_gateway_memory_search_route_does_not_update_memory_activity_when_upstream_fails():
     gateway = InternalGateway(GatewayConfig())
     client = TestClient(gateway.app)
 
@@ -576,8 +590,153 @@ def test_gateway_memory_route_updates_memory_activity_even_when_upstream_fails()
     assert response.status_code in {500, 504}
 
     activity = client.get("/admin/activity").json()
+    assert activity["last_memory_task_at"] is None
+    assert activity["counts"]["memory_task_count"] == 0
+
+
+def test_gateway_memory_write_route_updates_memory_activity_even_when_upstream_fails():
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+
+    register_response = client.post(
+        "/register",
+        json={
+            "service_name": "memory-service",
+            "service_type": "memory",
+            "address": "http://127.0.0.1:65529",
+        },
+    )
+    assert register_response.status_code == 201
+
+    response = client.post(
+        "/api/mem/memories/write",
+        json={"namespace": "default", "content": "hello"},
+    )
+    assert response.status_code in {500, 504}
+
+    activity = client.get("/admin/activity").json()
     assert activity["last_memory_task_at"] is not None
     assert activity["counts"]["memory_task_count"] == 1
+
+
+def test_gateway_records_tier1_turn_with_single_atomic_memory_call(monkeypatch):
+    gateway = InternalGateway(GatewayConfig())
+    gateway._memory_service_url = "http://memory-service"
+    posted = []
+
+    class _FakeResponse:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeSession:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, json=None, timeout=None):
+            posted.append({"url": url, "json": json, "timeout": timeout})
+            return _FakeResponse()
+
+    monkeypatch.setattr("systems.gateway.internal_gateway.aiohttp.ClientSession", _FakeSession)
+
+    asyncio.run(
+        gateway._record_turn_to_tier1(
+            "session-atomic",
+            "user",
+            "hello",
+            metadata={"source": "test"},
+        )
+    )
+
+    assert len(posted) == 1
+    assert posted[0]["url"] == "http://memory-service/sessions/session-atomic/turns"
+    assert posted[0]["json"]["speaker"] == "user"
+    assert posted[0]["json"]["text"] == "hello"
+
+
+def test_gateway_tier1_write_failure_updates_activity_counter(monkeypatch):
+    gateway = InternalGateway(GatewayConfig())
+    gateway._memory_service_url = "http://memory-service"
+    client = TestClient(gateway.app)
+
+    class _FailingSession:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, json=None, timeout=None):
+            raise OSError("memory down")
+
+    monkeypatch.setattr("systems.gateway.internal_gateway.aiohttp.ClientSession", _FailingSession)
+
+    asyncio.run(
+        gateway._record_turn_to_tier1(
+            "session-fail",
+            "agent",
+            "finding",
+            metadata={"task_id": "task-fail"},
+        )
+    )
+
+    activity = client.get("/admin/activity").json()
+
+    assert activity["last_memory_write_failure_at"] is not None
+    assert activity["counts"]["memory_write_failure_count"] == 1
+    metadata = activity["recent_metadata"]["memory_write_failure"]
+    assert metadata["task_id"] == "task-fail"
+    assert metadata["speaker"] == "agent"
+    assert "memory down" in metadata["error"]
+
+
+def test_gateway_task_pull_preserves_supervisor_http_status(monkeypatch):
+    gateway = InternalGateway(GatewayConfig())
+    _register_supervisor(gateway)
+    client = TestClient(gateway.app)
+
+    class _FakeResponse:
+        status = 503
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {"detail": "supervisor temporarily unavailable"}
+
+    class _FakeSession:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, params=None, timeout=None):
+            return _FakeResponse()
+
+    monkeypatch.setattr("systems.gateway.internal_gateway.aiohttp.ClientSession", _FakeSession)
+
+    response = client.get("/v1/tasks?status=approved&task_type=self_learning")
+
+    assert response.status_code == 503
+    assert "Supervisor returned 503" in response.json()["detail"]
 
 
 def test_gateway_executor_registration_adds_standard_route_and_health_count():
@@ -849,6 +1008,11 @@ def test_gateway_deleting_session_clears_its_agent_lane():
     lanes = client.get("/admin/scenes").json()["scenes"]["agent"]["lanes"]
     assert lanes["supervisor_task"]["subagent_foreground_count"] == 4
 
+    session_info = client.get("/v1/sessions/sup-1").json()
+    assert session_info["lease_status"] == "healthy"
+    assert session_info["is_stale"] is False
+    assert session_info["stale_after_seconds"] == gateway._active_cli_stale_after_seconds
+
     resp = client.request("DELETE", "/v1/sessions/sup-1")
     assert resp.status_code == 200
 
@@ -876,6 +1040,7 @@ def test_completed_task_writeback_records_finding_to_tier1(monkeypatch):
     # must trigger a Tier1 turn write so the agent's finding leaves the CLI.
     gateway = InternalGateway(GatewayConfig())
     _register_supervisor(gateway)
+    gateway._agent_session_cache["cli-session-9"] = {"source": "cli", "last_used_at": datetime.now()}
     client = TestClient(gateway.app)
 
     recorded = {}
@@ -889,6 +1054,9 @@ def test_completed_task_writeback_records_finding_to_tier1(monkeypatch):
     monkeypatch.setattr(gateway, "_record_turn_to_tier1", _fake_record)
 
     class _FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
         status = 200
 
         async def __aenter__(self):
@@ -898,7 +1066,7 @@ def test_completed_task_writeback_records_finding_to_tier1(monkeypatch):
             return False
 
         async def json(self):
-            return {"status": "completed"}
+            return self._payload
 
     class _FakeSession:
         def __init__(self, *args, **kwargs):
@@ -911,7 +1079,18 @@ def test_completed_task_writeback_records_finding_to_tier1(monkeypatch):
             return False
 
         def post(self, url, json=None, timeout=None):
-            return _FakeResponse()
+            return _FakeResponse({"status": "completed"})
+
+        def get(self, url, timeout=None):
+            return _FakeResponse({
+                "task_id": "learn-42",
+                "status": "running",
+                "governance_task_type": "self_learning",
+                "metadata": {
+                    "owner_session_id": "cli-session-9",
+                    "execution_source": "cli_agent_pull",
+                },
+            })
 
     monkeypatch.setattr("systems.gateway.internal_gateway.aiohttp.ClientSession", _FakeSession)
 
@@ -938,6 +1117,7 @@ def test_failed_task_writeback_does_not_record_finding(monkeypatch):
     # A non-completed decision must never write a Tier1 finding.
     gateway = InternalGateway(GatewayConfig())
     _register_supervisor(gateway)
+    gateway._agent_session_cache["cli-session-9"] = {"source": "cli", "last_used_at": datetime.now()}
     client = TestClient(gateway.app)
 
     called = {"n": 0}
@@ -948,6 +1128,9 @@ def test_failed_task_writeback_does_not_record_finding(monkeypatch):
     monkeypatch.setattr(gateway, "_record_turn_to_tier1", _fake_record)
 
     class _FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
         status = 200
 
         async def __aenter__(self):
@@ -957,7 +1140,7 @@ def test_failed_task_writeback_does_not_record_finding(monkeypatch):
             return False
 
         async def json(self):
-            return {"status": "failed"}
+            return self._payload
 
     class _FakeSession:
         def __init__(self, *args, **kwargs):
@@ -970,7 +1153,18 @@ def test_failed_task_writeback_does_not_record_finding(monkeypatch):
             return False
 
         def post(self, url, json=None, timeout=None):
-            return _FakeResponse()
+            return _FakeResponse({"status": "failed"})
+
+        def get(self, url, timeout=None):
+            return _FakeResponse({
+                "task_id": "learn-43",
+                "status": "running",
+                "governance_task_type": "self_learning",
+                "metadata": {
+                    "owner_session_id": "cli-session-9",
+                    "execution_source": "cli_agent_pull",
+                },
+            })
 
     monkeypatch.setattr("systems.gateway.internal_gateway.aiohttp.ClientSession", _FakeSession)
 
@@ -984,6 +1178,64 @@ def test_failed_task_writeback_does_not_record_finding(monkeypatch):
     )
     assert response.status_code == 200
     assert called["n"] == 0
+
+
+def test_gateway_rejects_agent_pull_writeback_from_non_owner(monkeypatch):
+    gateway = InternalGateway(GatewayConfig())
+    _register_supervisor(gateway)
+    gateway._agent_session_cache["cli-session-wrong"] = {
+        "source": "cli",
+        "last_used_at": datetime.now(),
+    }
+    client = TestClient(gateway.app)
+    posted = {"called": False}
+
+    class _FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {
+                "task_id": "learn-44",
+                "status": "running",
+                "governance_task_type": "self_learning",
+                "metadata": {
+                    "owner_session_id": "cli-session-owner",
+                    "execution_source": "cli_agent_pull",
+                },
+            }
+
+    class _FakeSession:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, timeout=None):
+            return _FakeResponse()
+
+        def post(self, url, json=None, timeout=None):
+            posted["called"] = True
+            return _FakeResponse()
+
+    monkeypatch.setattr("systems.gateway.internal_gateway.aiohttp.ClientSession", _FakeSession)
+
+    response = client.post(
+        "/v1/tasks/learn-44/complete",
+        json={"decision": "completed", "session_id": "cli-session-wrong"},
+    )
+
+    assert response.status_code == 409
+    assert posted["called"] is False
 
 
 def test_improvement_report_forwards_to_supervisor(monkeypatch):

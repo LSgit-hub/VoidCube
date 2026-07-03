@@ -1,15 +1,20 @@
 import asyncio
 from contextlib import asynccontextmanager
+import hashlib
 import json
 import logging
 import os
-import sqlite3
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from systems.memory.tier1_to_tier2_bridge import (
+    _build_stable_cmem_ids,
+    _write_compressed_memories_to_db as _write_compressed_memories,
+    open_memory_sqlite,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("memory_service")
@@ -89,6 +94,7 @@ class Tier2CompressRequest(BaseModel):
     batch_size: int = 100
     min_relevance: float = 0.1
     dry_run: bool = False
+    force_oldest: bool = False
 
 
 class MemoryServiceConfig(BaseModel):
@@ -106,101 +112,6 @@ class MemoryServiceConfig(BaseModel):
     tier1_decay_rate: float = 0.99
     tier1_min_relevance: float = 0.1
     tier1_archive_keep_original: bool = True
-
-
-def _write_compressed_memories(conn, pipeline_result, now: str) -> int:
-    """Write Event/Scene/Arc/Epoch summaries from PipelineResult into SQLite.
-
-    Lifecycle fields:
-      - compression_level: 0=Event, 1=Scene, 2=Arc, 3=Epoch
-      - status: 'active' (superseded entries are handled by _apply_compression_lifecycle)
-      - weight: 1.0 for Events, 0.7 for Scenes, 0.4 for Arcs, 0.2 for Epochs
-    """
-    written = 0
-    # Write Events (level=0, base_weight=1.0)
-    for event in pipeline_result.events:
-        event_scene_id = event.parent_ids[0] if event.parent_ids else None
-        ek = event.event_kind.value if hasattr(event.event_kind, 'value') else str(event.event_kind)
-        conn.execute(
-            "INSERT OR REPLACE INTO compressed_memories "
-            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
-            "importance, confidence, topics, entities, source_turns, "
-            "parent_id, compressed_at, compression_level, status, weight, event_kind) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                event.id, "event", event.title, event.summary,
-                event.timespan_start.isoformat(), event.timespan_end.isoformat(),
-                event.importance, event.confidence,
-                json.dumps(event.topics), json.dumps(event.entities),
-                json.dumps(event.source_turns), event_scene_id, now,
-                0, "active", 1.0, ek,
-            ),
-        )
-        written += 1
-    # Write Scenes (level=1, base_weight=0.7)
-    for scene in pipeline_result.scenes:
-        scene_arc_id = scene.parent_ids[0] if scene.parent_ids else None
-        # Derive dominant event_kind from child events for this scene
-        child_kinds = [
-            e.event_kind.value if hasattr(e.event_kind, 'value') else str(e.event_kind)
-            for e in pipeline_result.events
-            if e.id in (scene.child_ids if hasattr(scene, 'child_ids') else [])
-        ]
-        scene_kind = max(set(child_kinds), key=child_kinds.count) if child_kinds else None
-        conn.execute(
-            "INSERT OR REPLACE INTO compressed_memories "
-            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
-            "importance, confidence, topics, entities, source_turns, "
-            "parent_id, compressed_at, compression_level, status, weight, event_kind) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                scene.id, "scene", scene.title, scene.summary,
-                scene.timespan_start.isoformat(), scene.timespan_end.isoformat(),
-                scene.importance, scene.confidence,
-                json.dumps(scene.topics), json.dumps(scene.entities),
-                json.dumps(scene.evidence_refs), scene_arc_id, now,
-                1, "active", 0.7, scene_kind,
-            ),
-        )
-        written += 1
-    # Write Arcs (level=2, base_weight=0.4, event_kind=NULL)
-    for arc in pipeline_result.arcs:
-        arc_epoch_id = arc.parent_ids[0] if arc.parent_ids else None
-        conn.execute(
-            "INSERT OR REPLACE INTO compressed_memories "
-            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
-            "importance, confidence, topics, entities, source_turns, "
-            "parent_id, compressed_at, compression_level, status, weight, event_kind) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                arc.id, "arc", arc.title, arc.summary,
-                arc.timespan_start.isoformat(), arc.timespan_end.isoformat(),
-                arc.importance, arc.confidence,
-                json.dumps(arc.topics), json.dumps(arc.entities),
-                json.dumps(arc.evidence_refs), arc_epoch_id, now,
-                2, "active", 0.4, None,
-            ),
-        )
-        written += 1
-    # Write Epochs (level=3, base_weight=0.2, event_kind=NULL)
-    for epoch in pipeline_result.epochs:
-        conn.execute(
-            "INSERT OR REPLACE INTO compressed_memories "
-            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
-            "importance, confidence, topics, entities, source_turns, "
-            "parent_id, compressed_at, compression_level, status, weight, event_kind) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                epoch.id, "epoch", epoch.title, epoch.summary,
-                epoch.timespan_start.isoformat(), epoch.timespan_end.isoformat(),
-                epoch.importance, epoch.confidence,
-                json.dumps(epoch.topics), json.dumps(epoch.entities),
-                json.dumps(epoch.evidence_refs), None, now,
-                3, "active", 0.2, None,
-            ),
-        )
-        written += 1
-    return written
 
 
 # ── Content-aware weight model (five dimensions) ─────────────────
@@ -370,7 +281,7 @@ class MemoryService:
 
     def _setup_database(self):
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(self._db_path))
+        conn = open_memory_sqlite(self._db_path)
         cursor = conn.cursor()
         
         cursor.execute('''
@@ -418,10 +329,12 @@ class MemoryService:
                 decay_factor REAL DEFAULT 0.01,
                 tags TEXT,
                 metadata TEXT,
+                dedup_key TEXT,
                 compressed_to_tier2 INTEGER DEFAULT 0,
                 FOREIGN KEY (session_id) REFERENCES sessions(session_id)
             )
         ''')
+        self._migrate_turns_schema(cursor)
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS turns_archive (
@@ -480,6 +393,8 @@ class MemoryService:
             "CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id)",
             "CREATE INDEX IF NOT EXISTS idx_turns_relevance ON turns(relevance_score)",
             "CREATE INDEX IF NOT EXISTS idx_turns_compressed ON turns(compressed_to_tier2)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_turns_session_dedup "
+            "ON turns(session_id, dedup_key) WHERE dedup_key IS NOT NULL",
             "CREATE INDEX IF NOT EXISTS idx_archive_timestamp ON turns_archive(timestamp)",
             "CREATE INDEX IF NOT EXISTS idx_archive_session ON turns_archive(session_id)",
             "CREATE INDEX IF NOT EXISTS idx_cmem_type ON compressed_memories(memory_type)",
@@ -492,6 +407,12 @@ class MemoryService:
         conn.commit()
         conn.close()
         logger.info(f"Memory database initialized at {self._db_path}")
+
+    @staticmethod
+    def _migrate_turns_schema(cursor) -> None:
+        existing = {row[1] for row in cursor.execute("PRAGMA table_info(turns)").fetchall()}
+        if "dedup_key" not in existing:
+            cursor.execute("ALTER TABLE turns ADD COLUMN dedup_key TEXT")
 
     @staticmethod
     def _migrate_compressed_memories_schema(cursor) -> None:
@@ -542,7 +463,7 @@ class MemoryService:
         (FinalSummary) entries are purged.
         """
         now = datetime.now()
-        conn = sqlite3.connect(str(self._db_path))
+        conn = open_memory_sqlite(self._db_path)
         escalated = 0
         purged = 0
 
@@ -551,7 +472,7 @@ class MemoryService:
             cutoff = (now - timedelta(days=max_age_days)).isoformat()
             rows = conn.execute(
                 "SELECT memory_id, title, summary, topics, entities, "
-                "timespan_start, timespan_end, importance, confidence "
+                "timespan_start, timespan_end, importance, confidence, source_turns "
                 "FROM compressed_memories "
                 "WHERE memory_type = ? AND compression_level = ? "
                 "AND status = 'active' AND compressed_at < ?",
@@ -560,7 +481,7 @@ class MemoryService:
 
             for row in rows:
                 mem_id, title, summary, topics_json, entities_json, \
-                    ts_start, ts_end, importance, confidence = row
+                    ts_start, ts_end, importance, confidence, source_turns_json = row
 
                 if level >= 4:
                     # Final level: LLM reviews before permanent deletion
@@ -601,9 +522,17 @@ class MemoryService:
                     topics=json.loads(topics_json) if topics_json else [],
                 )
 
-                parent_id = str(uuid.uuid4())
+                parent_id = str(
+                    uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"voidcube-memory-lifecycle:{mem_id}:{next_level}",
+                    )
+                )
+                source_turns = json.loads(source_turns_json) if source_turns_json else []
+                if not source_turns:
+                    source_turns = [mem_id]
                 conn.execute(
-                    "INSERT INTO compressed_memories "
+                    "INSERT OR REPLACE INTO compressed_memories "
                     "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
                     "importance, confidence, topics, entities, source_turns, "
                     "parent_id, compressed_at, compression_level, status, weight) "
@@ -613,8 +542,8 @@ class MemoryService:
                         ts_start, ts_end,
                         importance * 0.85, confidence * 0.9,
                         topics_json, entities_json,
-                        json.dumps([mem_id]),
-                        None, now.isoformat(), next_level, "active", next_weight,
+                        json.dumps(source_turns),
+                        mem_id, now.isoformat(), next_level, "active", next_weight,
                     ),
                 )
 
@@ -735,7 +664,7 @@ class MemoryService:
 
     async def _purge_expired_memories(self) -> int:
         """Hard-delete purged memories older than the audit retention period."""
-        conn = sqlite3.connect(str(self._db_path))
+        conn = open_memory_sqlite(self._db_path)
         cutoff = (datetime.now() - timedelta(days=90)).isoformat()
         # Only purge entries marked 'purged' for >90 days
         cursor = conn.execute(
@@ -857,7 +786,7 @@ class MemoryService:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.debug("Background compression skipped", exc_info=True)
+                logger.warning("Background compression loop failed", exc_info=True)
 
     async def _run_all_rules_internal(self) -> Dict[str, Any]:
         """Execute all five memory rules in correct order (internal, track execution)."""
@@ -878,6 +807,7 @@ class MemoryService:
                 self._rule_run_counts[rule_name] = self._rule_run_counts.get(rule_name, 0) + 1
                 effective_work += self._rule_effective_count(result)
             except Exception as exc:
+                logger.warning("Memory maintenance rule %s failed: %s", rule_name, exc, exc_info=True)
                 results[rule_name] = {"error": str(exc)}
         # P0-4 健康信号: only stamp the "effective activity" marker when a rule
         # actually wrote/changed rows this cycle. A no-op cycle (no candidates,
@@ -945,7 +875,7 @@ class MemoryService:
         Returns the number of turns actually updated, so the caller can tell a
         real maintenance write apart from a no-op cycle (P0-4 健康信号).
         """
-        conn = sqlite3.connect(str(self._db_path))
+        conn = open_memory_sqlite(self._db_path)
         rate = self.config.tier1_decay_rate
         cur = conn.execute(
             "UPDATE turns SET relevance_score = relevance_score * ? "
@@ -966,7 +896,7 @@ class MemoryService:
         no-candidate no-op), so the caller can distinguish real compression
         work from an idle cycle (P0-4 健康信号).
         """
-        conn = sqlite3.connect(str(self._db_path))
+        conn = open_memory_sqlite(self._db_path)
         cutoff = (
             datetime.now() - timedelta(days=self.config.tier1_retention_days)
         ).isoformat()
@@ -974,7 +904,8 @@ class MemoryService:
         total_active = conn.execute(
             "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0"
         ).fetchone()[0]
-        if total_active < self.config.tier1_max_turns:
+        force_oldest = total_active >= self.config.tier1_max_turns
+        if not force_oldest:
             # Only compress by age
             candidate = conn.execute(
                 "SELECT COUNT(*) FROM turns WHERE timestamp < ? AND compressed_to_tier2 = 0",
@@ -990,6 +921,7 @@ class MemoryService:
             retention_days=self.config.tier1_retention_days,
             batch_size=50,
             min_relevance=self.config.tier1_min_relevance,
+            force_oldest=force_oldest,
         )
         try:
             result = await self.tier2_compress(req)
@@ -1002,7 +934,7 @@ class MemoryService:
                 )
                 return int(result.get("turns_processed", 0) or 0)
         except Exception:
-            logger.debug("Tier 2 bridge cycle skipped", exc_info=True)
+            logger.warning("Tier 2 bridge cycle failed", exc_info=True)
         return 0
 
     async def health_check(self):
@@ -1083,7 +1015,7 @@ class MemoryService:
             raise HTTPException(status_code=500, detail=str(e))
 
     def _save_to_db(self, entry: MemoryEntry):
-        conn = sqlite3.connect(str(self._db_path))
+        conn = open_memory_sqlite(self._db_path)
         cursor = conn.cursor()
         
         cursor.execute('''
@@ -1110,7 +1042,7 @@ class MemoryService:
 
     async def read_memory(self, memory_id: str):
         try:
-            conn = sqlite3.connect(str(self._db_path))
+            conn = open_memory_sqlite(self._db_path)
             cursor = conn.cursor()
             
             cursor.execute('SELECT * FROM memories WHERE memory_id = ?', (memory_id,))
@@ -1149,7 +1081,7 @@ class MemoryService:
 
     async def update_memory(self, memory_id: str, request: dict):
         try:
-            conn = sqlite3.connect(str(self._db_path))
+            conn = open_memory_sqlite(self._db_path)
             cursor = conn.cursor()
             
             cursor.execute('SELECT * FROM memories WHERE memory_id = ?', (memory_id,))
@@ -1187,7 +1119,7 @@ class MemoryService:
 
     async def delete_memory(self, memory_id: str):
         try:
-            conn = sqlite3.connect(str(self._db_path))
+            conn = open_memory_sqlite(self._db_path)
             cursor = conn.cursor()
             
             cursor.execute('SELECT namespace FROM memories WHERE memory_id = ?', (memory_id,))
@@ -1225,7 +1157,7 @@ class MemoryService:
             min_score = query.get("min_score", 0.0)
             tags = query.get("tags", [])
             
-            conn = sqlite3.connect(str(self._db_path))
+            conn = open_memory_sqlite(self._db_path)
             cursor = conn.cursor()
             
             sql = "SELECT * FROM memories WHERE relevance_score >= ?"
@@ -1274,7 +1206,7 @@ class MemoryService:
 
     async def list_by_namespace(self, namespace: str):
         try:
-            conn = sqlite3.connect(str(self._db_path))
+            conn = open_memory_sqlite(self._db_path)
             cursor = conn.cursor()
             
             cursor.execute('SELECT * FROM memories WHERE namespace = ? ORDER BY created_at DESC', (namespace,))
@@ -1294,7 +1226,7 @@ class MemoryService:
             max_entries = request.get("max_entries", 100)
             target_size = request.get("target_size", 10000)
             
-            conn = sqlite3.connect(str(self._db_path))
+            conn = open_memory_sqlite(self._db_path)
             cursor = conn.cursor()
             
             cursor.execute('''
@@ -1315,7 +1247,8 @@ class MemoryService:
                 conn.close()
                 return {"status": "already_compressed", "size": len(combined_content)}
             
-            summary = await self._call_llm_for_summary(combined_content)
+            summary_result = await self._call_llm_for_summary(combined_content)
+            summary = summary_result["summary"]
             
             compressed_entry = MemoryEntry(
                 memory_id=str(uuid.uuid4()),
@@ -1324,7 +1257,12 @@ class MemoryService:
                 summary=summary[:100] + "..." if len(summary) > 100 else summary,
                 relevance_score=sum(e.relevance_score for e in entries) / len(entries),
                 created_at=datetime.now(),
-                decay_factor=0.005
+                decay_factor=0.005,
+                metadata={
+                    "summary_degraded": summary_result["degraded"],
+                    "summary_method": summary_result["method"],
+                    "summary_reason": summary_result.get("reason", ""),
+                },
             )
             
             self._save_to_db(compressed_entry)
@@ -1336,13 +1274,27 @@ class MemoryService:
             conn.close()
             
             logger.info(f"Memory compression completed for namespace {namespace}")
-            return {"status": "compressed", "compressed_entries": len(entries), "new_size": len(summary)}
+            return {
+                "status": "compressed",
+                "compressed_entries": len(entries),
+                "new_size": len(summary),
+                "summary_degraded": summary_result["degraded"],
+                "summary_method": summary_result["method"],
+            }
         
         except Exception as e:
             logger.error(f"Error compressing memories: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
-    async def _call_llm_for_summary(self, content: str) -> str:
+    def _fallback_summary_result(self, content: str, *, reason: str) -> Dict[str, Any]:
+        return {
+            "summary": content[:500] + ("..." if len(content) > 500 else ""),
+            "degraded": True,
+            "method": "truncation_fallback",
+            "reason": reason,
+        }
+
+    async def _call_llm_for_summary(self, content: str) -> Dict[str, Any]:
         """Summarise via MemAI LLM pipeline (API-B, baseline SS4.3, M-04).
 
         Goes through ``_resolve_mem_llm_client`` so the LLM (and its
@@ -1350,7 +1302,6 @@ class MemoryService:
         parallel config branch.
         """
         try:
-            from memai.llm_client import OpenAICompatibleLLMClient
             import asyncio as _asyncio
 
             prompt = (
@@ -1374,19 +1325,19 @@ class MemoryService:
 
             summary = await _asyncio.to_thread(_run_sync)
             if summary and len(summary) > 10:
-                return summary
-            return content[:500] + "..."
+                return {"summary": summary, "degraded": False, "method": "llm"}
+            return self._fallback_summary_result(content, reason="llm_returned_empty_summary")
 
         except Exception as e:
             logger.warning(f"LLM summarisation failed, using fallback: {e}")
-            return content[:500] + "..."
+            return self._fallback_summary_result(content, reason=str(e))
 
     async def apply_decay(self, request: dict):
         try:
             namespace = request.get("namespace")
             decay_factor = request.get("decay_factor", 0.01)
             
-            conn = sqlite3.connect(str(self._db_path))
+            conn = open_memory_sqlite(self._db_path)
             cursor = conn.cursor()
             
             if namespace:
@@ -1416,7 +1367,7 @@ class MemoryService:
 
     async def summarize_memory(self, memory_id: str, request: dict = None):
         try:
-            conn = sqlite3.connect(str(self._db_path))
+            conn = open_memory_sqlite(self._db_path)
             cursor = conn.cursor()
             
             cursor.execute('SELECT * FROM memories WHERE memory_id = ?', (memory_id,))
@@ -1427,15 +1378,29 @@ class MemoryService:
                 raise HTTPException(status_code=404, detail="Memory not found")
             
             entry = self._row_to_entry(row)
-            summary = await self._call_llm_for_summary(entry.content)
+            summary_result = await self._call_llm_for_summary(entry.content)
+            summary = summary_result["summary"]
             
             entry.summary = summary
             entry.updated_at = datetime.now()
+            entry.metadata = dict(entry.metadata or {})
+            entry.metadata.update(
+                {
+                    "summary_degraded": summary_result["degraded"],
+                    "summary_method": summary_result["method"],
+                    "summary_reason": summary_result.get("reason", ""),
+                }
+            )
             self._save_to_db(entry)
             conn.close()
             
             logger.info(f"Memory summarized: {memory_id}")
-            return {"summary": summary, "status": "summarized"}
+            return {
+                "summary": summary,
+                "status": "summarized",
+                "summary_degraded": summary_result["degraded"],
+                "summary_method": summary_result["method"],
+            }
         
         except HTTPException:
             raise
@@ -1449,7 +1414,7 @@ class MemoryService:
         """Create a new conversation session. Uses caller-provided ID if given."""
         session_id = request.session_id.strip() if request.session_id else str(uuid.uuid4())
         now = datetime.now().isoformat()
-        conn = sqlite3.connect(str(self._db_path))
+        conn = open_memory_sqlite(self._db_path)
         conn.execute(
             "INSERT OR IGNORE INTO sessions (session_id, created_at, updated_at, metadata) VALUES (?, ?, ?, ?)",
             (session_id, now, now, json.dumps(request.metadata)),
@@ -1461,7 +1426,7 @@ class MemoryService:
 
     async def list_sessions(self, limit: int = 50, offset: int = 0):
         """List all sessions ordered by creation time desc."""
-        conn = sqlite3.connect(str(self._db_path))
+        conn = open_memory_sqlite(self._db_path)
         rows = conn.execute(
             "SELECT s.session_id, s.created_at, s.updated_at, s.metadata, "
             "COUNT(t.turn_id) as turn_count "
@@ -1486,7 +1451,7 @@ class MemoryService:
 
     async def get_session(self, session_id: str):
         """Get a session with its turn count."""
-        conn = sqlite3.connect(str(self._db_path))
+        conn = open_memory_sqlite(self._db_path)
         row = conn.execute(
             "SELECT session_id, created_at, updated_at, metadata FROM sessions WHERE session_id = ?",
             (session_id,),
@@ -1506,22 +1471,69 @@ class MemoryService:
             "turn_count": turn_count,
         }
 
+    def _derive_turn_dedup_key(self, session_id: str, request: TurnCreate) -> Optional[str]:
+        metadata = dict(request.metadata or {})
+        for key in ("turn_dedup_key", "dedup_key", "idempotency_key"):
+            value = str(metadata.get(key) or "").strip()
+            if value:
+                return value
+
+        retry_identifiers = [
+            str(metadata.get(key) or "").strip()
+            for key in ("task_id", "trace_id", "request_id", "decision_id")
+        ]
+        retry_identifiers = [value for value in retry_identifiers if value]
+        if not retry_identifiers:
+            return None
+
+        payload = {
+            "session_id": session_id,
+            "speaker": request.speaker,
+            "text": request.text,
+            "retry_identifiers": retry_identifiers,
+        }
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return "auto_" + hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
     async def add_turn(self, session_id: str, request: TurnCreate):
         """Add a conversation turn to a session."""
-        conn = sqlite3.connect(str(self._db_path))
-        # Verify session exists
+        conn = open_memory_sqlite(self._db_path)
+        now = datetime.now().isoformat()
+        # Ensure session exists in the same DB transaction as the turn write.
         ses = conn.execute(
             "SELECT session_id FROM sessions WHERE session_id = ?", (session_id,)
         ).fetchone()
         if not ses:
-            conn.close()
-            raise HTTPException(status_code=404, detail="Session not found")
+            conn.execute(
+                "INSERT INTO sessions (session_id, created_at, updated_at, metadata) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    session_id,
+                    now,
+                    now,
+                    json.dumps({"source": "turn_auto_create"}),
+                ),
+            )
+        dedup_key = self._derive_turn_dedup_key(session_id, request)
+        if dedup_key:
+            existing = conn.execute(
+                "SELECT turn_id, timestamp FROM turns WHERE session_id = ? AND dedup_key = ?",
+                (session_id, dedup_key),
+            ).fetchone()
+            if existing:
+                conn.close()
+                return {
+                    "turn_id": existing[0],
+                    "session_id": session_id,
+                    "timestamp": existing[1],
+                    "status": "deduplicated",
+                    "dedup_key": dedup_key,
+                }
         turn_id = str(uuid.uuid4())
-        now = datetime.now().isoformat()
         conn.execute(
             "INSERT INTO turns (turn_id, session_id, speaker, text, timestamp, "
-            "relevance_score, decay_factor, tags, metadata, compressed_to_tier2) "
-            "VALUES (?, ?, ?, ?, ?, 1.0, 0.01, ?, ?, 0)",
+            "relevance_score, decay_factor, tags, metadata, dedup_key, compressed_to_tier2) "
+            "VALUES (?, ?, ?, ?, ?, 1.0, 0.01, ?, ?, ?, 0)",
             (
                 turn_id,
                 session_id,
@@ -1530,6 +1542,7 @@ class MemoryService:
                 now,
                 json.dumps([]),
                 json.dumps(request.metadata),
+                dedup_key,
             ),
         )
         conn.execute(
@@ -1539,11 +1552,14 @@ class MemoryService:
         conn.commit()
         conn.close()
         logger.debug("Turn %s added to session %s", turn_id, session_id)
-        return {"turn_id": turn_id, "session_id": session_id, "timestamp": now, "status": "created"}
+        response = {"turn_id": turn_id, "session_id": session_id, "timestamp": now, "status": "created"}
+        if dedup_key:
+            response["dedup_key"] = dedup_key
+        return response
 
     async def get_session_turns(self, session_id: str, limit: int = 200, offset: int = 0):
         """Get all turns for a session, ordered by timestamp."""
-        conn = sqlite3.connect(str(self._db_path))
+        conn = open_memory_sqlite(self._db_path)
         rows = conn.execute(
             "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
             "decay_factor, tags, metadata, compressed_to_tier2 "
@@ -1566,7 +1582,7 @@ class MemoryService:
         session_id: str = None, limit: int = 100, offset: int = 0,
     ):
         """Query turns by time range, speaker, or session."""
-        conn = sqlite3.connect(str(self._db_path))
+        conn = open_memory_sqlite(self._db_path)
         sql = "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, " \
               "decay_factor, tags, metadata, compressed_to_tier2 FROM turns WHERE 1=1"
         params: list = []
@@ -1593,7 +1609,7 @@ class MemoryService:
 
     async def get_turn(self, turn_id: str):
         """Get a single turn by ID."""
-        conn = sqlite3.connect(str(self._db_path))
+        conn = open_memory_sqlite(self._db_path)
         row = conn.execute(
             "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
             "decay_factor, tags, metadata, compressed_to_tier2 "
@@ -1624,7 +1640,7 @@ class MemoryService:
 
     async def timeline_view(self, request: TimelineQuery):
         """Get timeline view for a specific date with turn summaries."""
-        conn = sqlite3.connect(str(self._db_path))
+        conn = open_memory_sqlite(self._db_path)
         date_start = f"{request.date}T00:00:00"
         date_end = f"{request.date}T23:59:59"
         sql = "SELECT turn_id, session_id, speaker, text, timestamp FROM turns " \
@@ -1656,27 +1672,67 @@ class MemoryService:
     async def tier2_compress(self, request: Tier2CompressRequest = None):
         """Trigger Tier 1 → Tier 2 compression for turns older than retention window."""
         req = request or Tier2CompressRequest()
-        conn = sqlite3.connect(str(self._db_path))
+        conn = open_memory_sqlite(self._db_path)
         cutoff = (datetime.now() - timedelta(days=req.retention_days)).isoformat()
-        rows = conn.execute(
-            "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score "
-            "FROM turns WHERE timestamp < ? AND compressed_to_tier2 = 0 "
-            "AND relevance_score >= ? "
-            "ORDER BY timestamp ASC LIMIT ?",
-            (cutoff, req.min_relevance, req.batch_size),
-        ).fetchall()
+        low_relevance_fallback = False
+        if req.force_oldest:
+            rows = conn.execute(
+                "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score "
+                "FROM turns WHERE compressed_to_tier2 = 0 "
+                "AND relevance_score >= ? "
+                "ORDER BY timestamp ASC LIMIT ?",
+                (req.min_relevance, req.batch_size),
+            ).fetchall()
+            if not rows:
+                rows = conn.execute(
+                    "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score "
+                    "FROM turns WHERE compressed_to_tier2 = 0 "
+                    "ORDER BY timestamp ASC LIMIT ?",
+                    (req.batch_size,),
+                ).fetchall()
+                low_relevance_fallback = bool(rows)
+        else:
+            rows = conn.execute(
+                "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score "
+                "FROM turns WHERE timestamp < ? AND compressed_to_tier2 = 0 "
+                "AND relevance_score >= ? "
+                "ORDER BY timestamp ASC LIMIT ?",
+                (cutoff, req.min_relevance, req.batch_size),
+            ).fetchall()
+            if not rows:
+                rows = conn.execute(
+                    "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score "
+                    "FROM turns WHERE timestamp < ? AND compressed_to_tier2 = 0 "
+                    "ORDER BY timestamp ASC LIMIT ?",
+                    (cutoff, req.batch_size),
+                ).fetchall()
+                low_relevance_fallback = bool(rows)
         conn.close()
         if not rows:
-            return {"status": "no_candidates", "cutoff": cutoff}
+            return {"status": "no_candidates", "cutoff": cutoff, "force_oldest": req.force_oldest}
         if req.dry_run:
             return {
                 "status": "dry_run",
                 "candidate_count": len(rows),
                 "cutoff": cutoff,
+                "force_oldest": req.force_oldest,
+                "low_relevance_fallback": low_relevance_fallback,
                 "sample_turn_ids": [r[0] for r in rows[:5]],
             }
         # Convert to TranscriptTurn and feed into ChroniclePipeline
         result = await self._bridge_to_tier2(rows)
+        if not result.get("events"):
+            return {
+                "status": "no_events_generated",
+                "turns_processed": 0,
+                "candidate_count": len(rows),
+                "events_generated": 0,
+                "scenes_generated": 0,
+                "arcs_generated": 0,
+                "cutoff": cutoff,
+                "force_oldest": req.force_oldest,
+                "low_relevance_fallback": low_relevance_fallback,
+            }
         return {
             "status": "compressed",
             "turns_processed": len(rows),
@@ -1684,6 +1740,8 @@ class MemoryService:
             "scenes_generated": len(result.get("scenes", [])),
             "arcs_generated": len(result.get("arcs", [])),
             "cutoff": cutoff,
+            "force_oldest": req.force_oldest,
+            "low_relevance_fallback": low_relevance_fallback,
         }
 
     async def _check_llm_health(self) -> bool:
@@ -1845,48 +1903,69 @@ class MemoryService:
         result = await _asyncio.to_thread(pipeline.ingest, transcript_turns)
         # ... rest unchanged
 
+        if not getattr(result, "events", None):
+            logger.warning(
+                "Tier2 bridge produced no events for %d candidate turns; keeping turns "
+                "uncompressed in Tier1 to avoid data loss.",
+                len(rows),
+            )
+            return {
+                "events": [],
+                "scenes": [],
+                "arcs": [],
+                "epochs": [],
+                "profile_memories": [],
+                "skipped_reason": "no_events_generated",
+            }
+
         # Archive processed turns with back-references
+        stable_ids = _build_stable_cmem_ids(result)
         turn_to_events: Dict[str, list] = {}
         for event in result.events:
             for src_turn_id in event.source_turns:
-                turn_to_events.setdefault(src_turn_id, []).append(event.id)
+                turn_to_events.setdefault(src_turn_id, []).append(stable_ids.get(event.id, event.id))
 
         turn_to_scenes: Dict[str, list] = {}
         for scene in result.scenes:
             for ev_id in scene.child_ids:
+                stable_ev_id = stable_ids.get(ev_id, ev_id)
                 for turn_id, ev_ids in turn_to_events.items():
-                    if ev_id in ev_ids and turn_id not in turn_to_scenes:
-                        turn_to_scenes.setdefault(turn_id, []).append(scene.id)
+                    if stable_ev_id in ev_ids and turn_id not in turn_to_scenes:
+                        turn_to_scenes.setdefault(turn_id, []).append(stable_ids.get(scene.id, scene.id))
 
         now = datetime.now().isoformat()
-        conn = sqlite3.connect(str(self._db_path))
+        conn = open_memory_sqlite(self._db_path)
         try:
-            for r in rows:
-                turn_id, session_id, speaker, text, timestamp_str, relevance = r
-                event_ids = turn_to_events.get(turn_id, [])
-                scene_ids = turn_to_scenes.get(turn_id, [])
-                original_text = text if self.config.tier1_archive_keep_original else None
-                text_summary = text[:500] if len(text) > 500 else text
-                conn.execute(
-                    "INSERT OR REPLACE INTO turns_archive "
-                    "(turn_id, session_id, speaker, text_summary, original_text, "
-                    "timestamp, compressed_at, event_ids, scene_ids) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        turn_id, session_id, speaker, text_summary, original_text,
-                        timestamp_str, now,
-                        json.dumps(event_ids), json.dumps(scene_ids),
-                    ),
-                )
-                conn.execute(
-                    "UPDATE turns SET compressed_to_tier2 = 1 WHERE turn_id = ?",
-                    (turn_id,),
-                )
+            try:
+                for r in rows:
+                    turn_id, session_id, speaker, text, timestamp_str, relevance = r
+                    event_ids = turn_to_events.get(turn_id, [])
+                    scene_ids = turn_to_scenes.get(turn_id, [])
+                    original_text = text if self.config.tier1_archive_keep_original else None
+                    text_summary = text[:500] if len(text) > 500 else text
+                    conn.execute(
+                        "INSERT OR REPLACE INTO turns_archive "
+                        "(turn_id, session_id, speaker, text_summary, original_text, "
+                        "timestamp, compressed_at, event_ids, scene_ids) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            turn_id, session_id, speaker, text_summary, original_text,
+                            timestamp_str, now,
+                            json.dumps(event_ids), json.dumps(scene_ids),
+                        ),
+                    )
+                    conn.execute(
+                        "UPDATE turns SET compressed_to_tier2 = 1 WHERE turn_id = ?",
+                        (turn_id,),
+                    )
 
-            # ── Write compressed memories back to SQLite ─────────────
-            _write_compressed_memories(conn, result, now)
+                # ── Write compressed memories back to SQLite ─────────────
+                _write_compressed_memories(conn, result, now)
 
-            conn.commit()
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
         finally:
             conn.close()
 
@@ -1904,7 +1983,7 @@ class MemoryService:
 
     async def tier1_stats(self):
         """Return Tier 1 storage statistics."""
-        conn = sqlite3.connect(str(self._db_path))
+        conn = open_memory_sqlite(self._db_path)
         total_turns = conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0]
         active_turns = conn.execute(
             "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0"
@@ -1919,7 +1998,7 @@ class MemoryService:
         ).fetchone()[0]
         conn.close()
         # Query compressed memories stats
-        conn2 = sqlite3.connect(str(self._db_path))
+        conn2 = open_memory_sqlite(self._db_path)
         compressed_total = conn2.execute(
             "SELECT COUNT(*) FROM compressed_memories"
         ).fetchone()[0]
@@ -1960,7 +2039,7 @@ class MemoryService:
         Default: excludes superseded and purged entries, sorts by weight DESC.
         Pass include_superseded=true to see historical versions.
         """
-        conn = sqlite3.connect(str(self._db_path))
+        conn = open_memory_sqlite(self._db_path)
         memory_type = request.get("memory_type")  # "event"|"scene"|"arc"|"epoch"
         topic = request.get("topic")
         query_text = request.get("query", "")
@@ -2024,7 +2103,7 @@ class MemoryService:
 
     async def get_compressed(self, memory_id: str):
         """Get a single compressed memory by ID."""
-        conn = sqlite3.connect(str(self._db_path))
+        conn = open_memory_sqlite(self._db_path)
         row = conn.execute(
             "SELECT * FROM compressed_memories WHERE memory_id = ?", (memory_id,)
         ).fetchone()
@@ -2035,7 +2114,7 @@ class MemoryService:
 
     async def trace_compressed_by_turn(self, turn_id: str):
         """Find all compressed memories that reference a given turn_id."""
-        conn = sqlite3.connect(str(self._db_path))
+        conn = open_memory_sqlite(self._db_path)
         rows = conn.execute(
             "SELECT * FROM compressed_memories WHERE source_turns LIKE ?",
             (f"%{turn_id}%",),
@@ -2061,7 +2140,7 @@ class MemoryService:
 
     async def pin_memory(self, memory_id: str):
         """Pin a memory: lock weight at 1.0, immune to decay/escalation."""
-        conn = sqlite3.connect(str(self._db_path))
+        conn = open_memory_sqlite(self._db_path)
         cur = conn.execute(
             "UPDATE compressed_memories SET pinned = 1, hidden = 0, "
             "weight = 1.0 WHERE memory_id = ?",
@@ -2076,7 +2155,7 @@ class MemoryService:
 
     async def hide_memory(self, memory_id: str):
         """Hide a memory: weight = 0.0, excluded from default queries."""
-        conn = sqlite3.connect(str(self._db_path))
+        conn = open_memory_sqlite(self._db_path)
         cur = conn.execute(
             "UPDATE compressed_memories SET hidden = 1, pinned = 0, "
             "weight = 0.0 WHERE memory_id = ?",
@@ -2091,7 +2170,7 @@ class MemoryService:
 
     async def unpin_memory(self, memory_id: str):
         """Remove pin/hide: restore to normal dynamic weight."""
-        conn = sqlite3.connect(str(self._db_path))
+        conn = open_memory_sqlite(self._db_path)
         row = conn.execute(
             "SELECT memory_type, compression_level FROM compressed_memories "
             "WHERE memory_id = ?", (memory_id,),
@@ -2126,13 +2205,17 @@ class MemoryService:
             return {"results": [], "count": 0, "method": "none"}
 
         # Generate query embedding
-        query_embedding = await self._generate_embedding(query_text)
+        query_embedding, embedding_method = await self._generate_embedding(query_text)
         if query_embedding is None:
-            # Fallback to keyword search
-            return await self.search_compressed({"query": query_text, "limit": limit})
+            fallback = await self.search_compressed({"query": query_text, "limit": limit})
+            fallback["method"] = "keyword_fallback"
+            fallback["semantic_degraded"] = True
+            fallback["embedding_method"] = embedding_method
+            fallback["ignored_min_similarity"] = min_similarity
+            return fallback
 
         # Fetch active memories with embeddings, compute cosine similarity
-        conn = sqlite3.connect(str(self._db_path))
+        conn = open_memory_sqlite(self._db_path)
         rows = conn.execute(
             "SELECT * FROM compressed_memories WHERE status = 'active' AND hidden = 0 "
             "AND embedding IS NOT NULL LIMIT 500"
@@ -2159,24 +2242,26 @@ class MemoryService:
             "results": scored[:limit],
             "count": len(scored[:limit]),
             "method": "semantic",
+            "semantic_degraded": False,
+            "embedding_method": embedding_method,
         }
 
-    async def _generate_embedding(self, text: str) -> list[float] | None:
+    async def _generate_embedding(self, text: str) -> tuple[list[float] | None, str]:
         """Generate embedding vector via the configured Mem LLM.
 
         Routes through ``_resolve_mem_llm_client`` so the embedding model
         is whatever the user has selected in ``memory.llm.*`` (or the
-        legacy env fallback).  Falls back to a deterministic hash-based
-        pseudo-embedding when the LLM is unavailable.
+        legacy env fallback).  When the LLM is unavailable, callers should
+        degrade to keyword search instead of pretending hash vectors are
+        semantic embeddings.
         """
         try:
-            from memai.llm_client import OpenAICompatibleLLMClient
             import asyncio as _asyncio
 
-            def _run() -> list[float]:
+            def _run() -> tuple[list[float] | None, str]:
                 client, _ = self._resolve_mem_llm_client()
                 if client is None:
-                    raise ValueError("No Mem LLM configured")
+                    return None, "llm_unavailable"
                 # Use the embeddings endpoint if available, else fallback to completion
                 result = client.complete_json(
                     system_prompt="You are an embedding generator. Output JSON: {\"embedding\": [float, ...]}",
@@ -2186,12 +2271,11 @@ class MemoryService:
                 if isinstance(result, dict) and "embedding" in result:
                     emb = result["embedding"]
                     if isinstance(emb, list) and len(emb) > 0 and isinstance(emb[0], (int, float)):
-                        return [float(v) for v in emb[:256]]
-                # Fallback: hash-based pseudo-embedding (deterministic but not semantic)
-                return _hash_embedding(text)
+                        return [float(v) for v in emb[:256]], "llm"
+                return None, "llm_invalid_embedding"
             return await _asyncio.to_thread(_run)
         except Exception:
-            return _hash_embedding(text)
+            return None, "llm_error"
 
     async def register_with_gateway(self):
         import asyncio as _asyncio

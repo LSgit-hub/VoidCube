@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Optional
 
 from pydantic import BaseModel, Field
+from systems.runtime_thresholds import DEFAULT_IDLE_WINDOW_SECONDS
 
 
 class EndogenousDriveCognitiveControlPolicyConfig(BaseModel):
@@ -260,6 +261,10 @@ class SupervisorExecutionConfig(BaseModel):
 class SupervisorServiceRuntimeConfig(BaseModel):
     health_check_interval: int = 30
     self_evolution_review_interval: int = 300
+    self_evolution_dispatch_limit_per_cycle: int = 1
+    idle_window_user_seconds: int = DEFAULT_IDLE_WINDOW_SECONDS
+    idle_window_memory_seconds: int = DEFAULT_IDLE_WINDOW_SECONDS
+    idle_window_workflow_seconds: int = DEFAULT_IDLE_WINDOW_SECONDS
     # Deprecated: compression is now owned by MemoryService (baseline §3.4).
     # Kept for config-file compatibility; no longer read by the supervisor.
     memory_compression_interval: int = 3600

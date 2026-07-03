@@ -23,6 +23,7 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from tools.toolsets import TOOLSETS
@@ -122,7 +123,7 @@ def _build_child_system_prompt(
     return "\n".join(parts)
 
 
-def _resolve_workspace_hint(parent_agent) -> Optional[str]:
+def _resolve_workspace_hint(parent_agent, worktree_path: Optional[str] = None) -> Optional[str]:
     """Best-effort local workspace hint for child prompts.
 
     We only inject a path when we have a concrete absolute directory. This avoids
@@ -130,6 +131,7 @@ def _resolve_workspace_hint(parent_agent) -> Optional[str]:
     guessing `/workspace/...` for local repo tasks.
     """
     candidates = [
+        worktree_path,
         os.getenv("TERMINAL_CWD"),
         getattr(getattr(parent_agent, "_subdirectory_hints", None), "working_dir", None),
         getattr(parent_agent, "terminal_cwd", None),
@@ -145,6 +147,20 @@ def _resolve_workspace_hint(parent_agent) -> Optional[str]:
         if os.path.isabs(text) and os.path.isdir(text):
             return text
     return None
+
+
+def _resolve_declared_worktree_path(worktree_path: Optional[str]) -> Optional[str]:
+    if not worktree_path:
+        return None
+    try:
+        path = Path(str(worktree_path)).expanduser().resolve()
+    except Exception as exc:
+        raise ValueError(f"Invalid worktree_path for delegate_task: {exc}") from exc
+    if not path.is_dir():
+        raise ValueError(
+            f"delegate_task worktree_path does not exist or is not a directory: {path}"
+        )
+    return str(path)
 
 
 def _strip_blocked_tools(toolsets: List[str]) -> List[str]:
@@ -335,6 +351,7 @@ def _build_child_agent(
     # Display manager for rich CLI visualization
     display_manager=None,
     task_id: str = None,
+    worktree_path: Optional[str] = None,
 ):
     """
     Build a child AIAgent on the main thread (thread-safe construction).
@@ -374,7 +391,7 @@ def _build_child_agent(
     else:
         child_toolsets = _strip_blocked_tools(DEFAULT_TOOLSETS)
 
-    workspace_hint = _resolve_workspace_hint(parent_agent)
+    workspace_hint = _resolve_workspace_hint(parent_agent, worktree_path=worktree_path)
     child_prompt = _build_child_system_prompt(goal, context, workspace_path=workspace_hint)
     # Extract parent's API key so subagents inherit auth (e.g. Nous Portal).
     parent_api_key = getattr(parent_agent, "api_key", None)
@@ -462,6 +479,15 @@ def _build_child_agent(
         iteration_budget=None,  # fresh budget per subagent
     )
     child._print_fn = getattr(parent_agent, '_print_fn', None)
+    if worktree_path:
+        child.terminal_cwd = worktree_path
+        child.cwd = worktree_path
+        child._delegate_worktree_path = worktree_path
+        try:
+            from agent.subdirectory_hints import SubdirectoryHintTracker
+            child._subdirectory_hints = SubdirectoryHintTracker(working_dir=worktree_path)
+        except Exception:
+            logger.debug("Could not bind subagent directory hints to worktree", exc_info=True)
     # Set delegation depth so children can't spawn grandchildren
     child._delegate_depth = getattr(parent_agent, '_delegate_depth', 0) + 1
 
@@ -717,6 +743,7 @@ def delegate_task(
     parent_agent=None,
     # CLI display options
     enable_display: bool = True,
+    worktree_path: Optional[str] = None,
 ) -> str:
     """
     Spawn one or more child agents to handle delegated tasks.
@@ -762,6 +789,11 @@ def delegate_task(
     except ValueError as exc:
         return tool_error(str(exc))
 
+    try:
+        top_level_worktree = _resolve_declared_worktree_path(worktree_path)
+    except ValueError as exc:
+        return tool_error(str(exc))
+
     # Normalize to task list
     max_children = _get_max_concurrent_children()
     if tasks and isinstance(tasks, list):
@@ -786,6 +818,12 @@ def delegate_task(
     for i, task in enumerate(task_list):
         if not task.get("goal", "").strip():
             return tool_error(f"Task {i} is missing a 'goal'.")
+        try:
+            task["_resolved_worktree_path"] = _resolve_declared_worktree_path(
+                task.get("worktree_path") or top_level_worktree
+            )
+        except ValueError as exc:
+            return tool_error(f"Task {i} {exc}")
 
     overall_start = time.monotonic()
     results = []
@@ -793,6 +831,8 @@ def delegate_task(
     n_tasks = len(task_list)
     # Track goal labels for progress display (truncated for readability)
     task_labels = [t["goal"][:40] for t in task_list]
+
+    invocation_id = f"delegate-{int(time.time() * 1000)}-{os.getpid()}-{threading.get_ident()}"
 
     # Initialize display manager for rich CLI visualization
     display_manager = None
@@ -810,6 +850,12 @@ def delegate_task(
             logger.debug("SubagentDisplayManager not available, using legacy display")
             display_manager = None
     if parent_agent is not None:
+        managers = getattr(parent_agent, "_subagent_display_managers", None)
+        if managers is None:
+            managers = {}
+            parent_agent._subagent_display_managers = managers
+        if display_manager is not None:
+            managers[invocation_id] = display_manager
         parent_agent._subagent_display_manager = display_manager
 
     # Save parent tool names BEFORE any child construction mutates the global.
@@ -823,35 +869,77 @@ def delegate_task(
     # child build raises (otherwise _last_resolved_tool_names stays corrupted).
     children = []
     try:
-        for i, t in enumerate(task_list):
-            task_id = f"delegate-{int(time.time() * 1000)}-{i}"
-            
-            # Create task entry in display manager with goal before building agent
-            if display_manager:
-                display_manager.create_task(
+        try:
+            for i, t in enumerate(task_list):
+                task_id = f"{invocation_id}-{i}"
+
+                # Create task entry in display manager with goal before building agent
+                if display_manager:
+                    display_manager.create_task(
+                        task_id=task_id,
+                        goal=t["goal"],
+                        task_index=i,
+                        max_iterations=effective_max_iter,
+                    )
+
+                child = _build_child_agent(
+                    task_index=i, goal=t["goal"], context=t.get("context"),
+                    toolsets=t.get("toolsets") or toolsets, model=creds["model"],
+                    max_iterations=effective_max_iter, parent_agent=parent_agent,
+                    override_provider=creds["provider"], override_base_url=creds["base_url"],
+                    override_api_key=creds["api_key"],
+                    override_api_mode=creds["api_mode"],
+                    override_acp_command=t.get("acp_command") or acp_command,
+                    override_acp_args=t.get("acp_args") or acp_args,
+                    display_manager=display_manager,
                     task_id=task_id,
-                    goal=t["goal"],
-                    task_index=i,
-                    max_iterations=effective_max_iter,
+                    worktree_path=t.get("_resolved_worktree_path"),
                 )
-            
-            child = _build_child_agent(
-                task_index=i, goal=t["goal"], context=t.get("context"),
-                toolsets=t.get("toolsets") or toolsets, model=creds["model"],
-                max_iterations=effective_max_iter, parent_agent=parent_agent,
-                override_provider=creds["provider"], override_base_url=creds["base_url"],
-                override_api_key=creds["api_key"],
-                override_api_mode=creds["api_mode"],
-                override_acp_command=t.get("acp_command") or acp_command,
-                override_acp_args=t.get("acp_args") or acp_args,
-                display_manager=display_manager,
-                task_id=task_id,
-            )
-            # Override with correct parent tool names (before child construction mutated global)
-            child._delegate_saved_tool_names = _parent_tool_names
-            # Store task_id on child for display manager updates
-            child._delegate_task_id = task_id
-            children.append((i, t, child, task_id))
+                # Override with correct parent tool names (before child construction mutated global)
+                child._delegate_saved_tool_names = _parent_tool_names
+                # Store task_id on child for display manager updates
+                child._delegate_task_id = task_id
+                children.append((i, t, child, task_id))
+        except Exception as exc:
+            for _, _, child, task_id in children:
+                if display_manager:
+                    try:
+                        display_manager.on_complete(
+                            task_id,
+                            summary="",
+                            error=f"Delegated task cancelled during child setup: {exc}",
+                            exit_reason="error",
+                        )
+                    except Exception:
+                        logger.debug("Display manager build-failure cleanup failed", exc_info=True)
+                if hasattr(parent_agent, '_active_children'):
+                    try:
+                        lock = getattr(parent_agent, '_active_children_lock', None)
+                        if lock:
+                            with lock:
+                                if child in parent_agent._active_children:
+                                    parent_agent._active_children.remove(child)
+                        elif child in parent_agent._active_children:
+                            parent_agent._active_children.remove(child)
+                    except Exception:
+                        logger.debug("Could not remove child after build failure", exc_info=True)
+                try:
+                    if hasattr(child, 'close'):
+                        child.close()
+                except Exception:
+                    logger.debug("Failed to close child after build failure", exc_info=True)
+            if display_manager:
+                try:
+                    display_manager.stop()
+                except Exception:
+                    logger.debug("Display manager build-failure stop failed", exc_info=True)
+            if parent_agent is not None:
+                managers = getattr(parent_agent, "_subagent_display_managers", None)
+                if isinstance(managers, dict):
+                    managers.pop(invocation_id, None)
+                if getattr(parent_agent, "_subagent_display_manager", None) is display_manager:
+                    parent_agent._subagent_display_manager = None
+            return tool_error(f"Failed to build delegated child agents: {exc}")
     finally:
         # Authoritative restore: reset global to parent's tool names after all children built
         _model_tools._last_resolved_tool_names = _parent_tool_names
@@ -966,6 +1054,9 @@ def delegate_task(
                 logger.debug("Display manager cleanup failed: %s", e)
         if parent_agent is not None and getattr(parent_agent, "_subagent_display_manager", None) is display_manager:
             parent_agent._subagent_display_manager = None
+        managers = getattr(parent_agent, "_subagent_display_managers", None) if parent_agent is not None else None
+        if isinstance(managers, dict):
+            managers.pop(invocation_id, None)
 
     # Notify parent's memory provider of delegation outcomes
     if parent_agent and hasattr(parent_agent, '_memory_manager') and parent_agent._memory_manager:
@@ -1188,6 +1279,14 @@ DELEGATE_TASK_SCHEMA = {
                     "specific you are, the better the subagent performs."
                 ),
             },
+            "worktree_path": {
+                "type": "string",
+                "description": (
+                    "Optional existing worktree directory the subagent must use for "
+                    "local repository operations. The path is validated and bound "
+                    "to the child agent; delegate_task does not create or delete worktrees."
+                ),
+            },
             "toolsets": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -1207,6 +1306,10 @@ DELEGATE_TASK_SCHEMA = {
                     "properties": {
                         "goal": {"type": "string", "description": "Task goal"},
                         "context": {"type": "string", "description": "Task-specific context"},
+                        "worktree_path": {
+                            "type": "string",
+                            "description": "Existing worktree directory for this specific task.",
+                        },
                         "toolsets": {
                             "type": "array",
                             "items": {"type": "string"},
@@ -1278,6 +1381,7 @@ registry.register(
         max_iterations=args.get("max_iterations"),
         acp_command=args.get("acp_command"),
         acp_args=args.get("acp_args"),
+        worktree_path=args.get("worktree_path"),
         parent_agent=kw.get("parent_agent")),
     check_fn=check_delegate_requirements,
     emoji="🔀",

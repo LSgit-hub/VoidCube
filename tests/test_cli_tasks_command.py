@@ -64,6 +64,26 @@ def test_handle_tasks_command_prefers_active_subagent_display(monkeypatch):
     assert any("Subagent Panel" in line for line in rendered)
 
 
+def test_handle_tasks_command_renders_all_active_subagent_displays(monkeypatch):
+    rendered: list[str] = []
+    monkeypatch.setattr(cli, "ChatConsole", lambda: _FakeConsole(rendered))
+
+    app = cli.VoidcubeCLI.__new__(cli.VoidcubeCLI)
+    app.agent = SimpleNamespace(
+        _subagent_display_managers={
+            "a": SimpleNamespace(render_tasks_command=lambda: "Panel A"),
+            "b": SimpleNamespace(render_tasks_command=lambda: "Panel B"),
+        },
+        _subagent_display_manager=None,
+    )
+    app._background_tasks = {}
+    app._background_task_info = {}
+
+    app._handle_tasks_command()
+
+    assert any("Panel A" in line and "Panel B" in line for line in rendered)
+
+
 def test_handle_tasks_command_falls_back_to_background_summary(monkeypatch):
     rendered: list[str] = []
     monkeypatch.setattr(cli, "ChatConsole", lambda: _FakeConsole(rendered))

@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -23,14 +24,79 @@ from typing import Any, Dict, List, Optional, Sequence
 logger = logging.getLogger(__name__)
 
 
+def open_memory_sqlite(db_path: str | Path, *, timeout: float = 30.0) -> sqlite3.Connection:
+    conn = sqlite3.connect(str(db_path), timeout=timeout)
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        conn.execute("PRAGMA journal_mode = WAL")
+    except sqlite3.DatabaseError as exc:
+        logger.debug("SQLite WAL pragma was not applied for %s: %s", db_path, exc)
+    return conn
+
+
+def _iso_value(value: Any) -> str:
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value or "")
+
+
+def _stable_refs(item: Any, stable_ids: Dict[str, str] | None = None) -> list[str]:
+    stable_ids = stable_ids or {}
+    refs: list[str] = []
+    for attr in ("source_turns", "evidence_refs", "child_ids"):
+        values = getattr(item, attr, None)
+        if values:
+            refs.extend(stable_ids.get(str(value), str(value)) for value in values if str(value))
+    return sorted(set(refs))
+
+
+def _stable_compressed_memory_id(
+    memory_type: str,
+    item: Any,
+    stable_ids: Dict[str, str] | None = None,
+) -> str:
+    payload = {
+        "memory_type": memory_type,
+        "title": str(getattr(item, "title", "") or "").strip(),
+        "summary": str(getattr(item, "summary", "") or "").strip(),
+        "refs": _stable_refs(item, stable_ids),
+        "timespan_start": _iso_value(getattr(item, "timespan_start", "")),
+        "timespan_end": _iso_value(getattr(item, "timespan_end", "")),
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+    return f"{memory_type}_{digest}"
+
+
+def _build_stable_cmem_ids(pipeline_result) -> Dict[str, str]:
+    stable_ids: Dict[str, str] = {}
+    for memory_type, items in (
+        ("event", getattr(pipeline_result, "events", [])),
+        ("scene", getattr(pipeline_result, "scenes", [])),
+        ("arc", getattr(pipeline_result, "arcs", [])),
+        ("epoch", getattr(pipeline_result, "epochs", [])),
+    ):
+        for item in items:
+            original_id = str(getattr(item, "id", "") or "").strip()
+            if original_id:
+                stable_ids[original_id] = _stable_compressed_memory_id(
+                    memory_type,
+                    item,
+                    stable_ids,
+                )
+    return stable_ids
+
+
 def _write_compressed_memories_to_db(conn, pipeline_result, now: str) -> int:
     """Write Event/Scene/Arc/Epoch from PipelineResult into compressed_memories table.
 
     Lifecycle: Event(L0,w=1.0) → Scene(L1,w=0.7) → Arc(L2,w=0.4) → Epoch(L3,w=0.2).
     """
     written = 0
+    stable_ids = _build_stable_cmem_ids(pipeline_result)
     for event in pipeline_result.events:
-        parent_id = event.parent_ids[0] if event.parent_ids else None
+        parent_id = stable_ids.get(event.parent_ids[0], event.parent_ids[0]) if event.parent_ids else None
         ek = event.event_kind.value if hasattr(event.event_kind, 'value') else str(event.event_kind)
         conn.execute(
             "INSERT OR REPLACE INTO compressed_memories "
@@ -39,7 +105,7 @@ def _write_compressed_memories_to_db(conn, pipeline_result, now: str) -> int:
             "parent_id, compressed_at, compression_level, status, weight, event_kind) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                event.id, "event", event.title, event.summary,
+                stable_ids.get(event.id, event.id), "event", event.title, event.summary,
                 event.timespan_start.isoformat(), event.timespan_end.isoformat(),
                 event.importance, event.confidence,
                 json.dumps(event.topics), json.dumps(event.entities),
@@ -49,7 +115,14 @@ def _write_compressed_memories_to_db(conn, pipeline_result, now: str) -> int:
         )
         written += 1
     for scene in pipeline_result.scenes:
-        parent_id = scene.parent_ids[0] if scene.parent_ids else None
+        parent_id = stable_ids.get(scene.parent_ids[0], scene.parent_ids[0]) if scene.parent_ids else None
+        child_ids = set(getattr(scene, "child_ids", []) or [])
+        child_kinds = [
+            event.event_kind.value if hasattr(event.event_kind, "value") else str(event.event_kind)
+            for event in pipeline_result.events
+            if event.id in child_ids
+        ]
+        scene_kind = max(set(child_kinds), key=child_kinds.count) if child_kinds else None
         conn.execute(
             "INSERT OR REPLACE INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
@@ -57,17 +130,17 @@ def _write_compressed_memories_to_db(conn, pipeline_result, now: str) -> int:
             "parent_id, compressed_at, compression_level, status, weight, event_kind) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                scene.id, "scene", scene.title, scene.summary,
+                stable_ids.get(scene.id, scene.id), "scene", scene.title, scene.summary,
                 scene.timespan_start.isoformat(), scene.timespan_end.isoformat(),
                 scene.importance, scene.confidence,
                 json.dumps(scene.topics), json.dumps(scene.entities),
                 json.dumps(scene.evidence_refs), parent_id, now,
-                1, "active", 0.7, None,
+                1, "active", 0.7, scene_kind,
             ),
         )
         written += 1
     for arc in pipeline_result.arcs:
-        parent_id = arc.parent_ids[0] if arc.parent_ids else None
+        parent_id = stable_ids.get(arc.parent_ids[0], arc.parent_ids[0]) if arc.parent_ids else None
         conn.execute(
             "INSERT OR REPLACE INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
@@ -75,7 +148,7 @@ def _write_compressed_memories_to_db(conn, pipeline_result, now: str) -> int:
             "parent_id, compressed_at, compression_level, status, weight, event_kind) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                arc.id, "arc", arc.title, arc.summary,
+                stable_ids.get(arc.id, arc.id), "arc", arc.title, arc.summary,
                 arc.timespan_start.isoformat(), arc.timespan_end.isoformat(),
                 arc.importance, arc.confidence,
                 json.dumps(arc.topics), json.dumps(arc.entities),
@@ -92,7 +165,7 @@ def _write_compressed_memories_to_db(conn, pipeline_result, now: str) -> int:
             "parent_id, compressed_at, compression_level, status, weight, event_kind) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                epoch.id, "epoch", epoch.title, epoch.summary,
+                stable_ids.get(epoch.id, epoch.id), "epoch", epoch.title, epoch.summary,
                 epoch.timespan_start.isoformat(), epoch.timespan_end.isoformat(),
                 epoch.importance, epoch.confidence,
                 json.dumps(epoch.topics), json.dumps(epoch.entities),
@@ -168,7 +241,7 @@ class Tier1ToTier2Bridge:
     def find_candidate_turns(self) -> List[Dict[str, Any]]:
         """Find turns older than retention window, not yet compressed."""
         cutoff = (datetime.now(timezone.utc) - timedelta(days=self.retention_days)).isoformat()
-        conn = sqlite3.connect(str(self.db_path))
+        conn = open_memory_sqlite(self.db_path)
         rows = conn.execute(
             "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score "
             "FROM turns WHERE timestamp < ? AND compressed_to_tier2 = 0 "
@@ -176,6 +249,32 @@ class Tier1ToTier2Bridge:
             "ORDER BY timestamp ASC LIMIT ?",
             (cutoff, self.min_relevance, self.batch_size),
         ).fetchall()
+        if not rows:
+            rows = conn.execute(
+                "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score "
+                "FROM turns WHERE timestamp < ? AND compressed_to_tier2 = 0 "
+                "ORDER BY timestamp ASC LIMIT ?",
+                (cutoff, self.batch_size),
+            ).fetchall()
+        if not rows:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0"
+            ).fetchone()[0]
+            if total >= self.max_turns:
+                rows = conn.execute(
+                    "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score "
+                    "FROM turns WHERE compressed_to_tier2 = 0 "
+                    "AND relevance_score >= ? "
+                    "ORDER BY timestamp ASC LIMIT ?",
+                    (self.min_relevance, self.batch_size),
+                ).fetchall()
+                if not rows:
+                    rows = conn.execute(
+                        "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score "
+                        "FROM turns WHERE compressed_to_tier2 = 0 "
+                        "ORDER BY timestamp ASC LIMIT ?",
+                        (self.batch_size,),
+                    ).fetchall()
         conn.close()
         return [
             {
@@ -192,11 +291,17 @@ class Tier1ToTier2Bridge:
     def count_candidates(self) -> int:
         """Count how many turns are eligible for compression."""
         cutoff = (datetime.now(timezone.utc) - timedelta(days=self.retention_days)).isoformat()
-        conn = sqlite3.connect(str(self.db_path))
+        conn = open_memory_sqlite(self.db_path)
         count = conn.execute(
             "SELECT COUNT(*) FROM turns WHERE timestamp < ? AND compressed_to_tier2 = 0",
             (cutoff,),
         ).fetchone()[0]
+        if count == 0:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0"
+            ).fetchone()[0]
+            if total >= self.max_turns:
+                count = total
         conn.close()
         return count
 
@@ -204,7 +309,7 @@ class Tier1ToTier2Bridge:
         """Check if compression is needed (by age or by volume)."""
         if self.count_candidates() > 0:
             return True
-        conn = sqlite3.connect(str(self.db_path))
+        conn = open_memory_sqlite(self.db_path)
         total = conn.execute(
             "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0"
         ).fetchone()[0]
@@ -308,51 +413,65 @@ class Tier1ToTier2Bridge:
         result = tier2_output.get("_pipeline_result")
         if result is None:
             return
+        if not getattr(result, "events", None):
+            logger.warning(
+                "Tier 2 bridge produced no events for %d turns; keeping turns uncompressed.",
+                len(turns),
+            )
+            return
 
         # Build turn_id → event_ids / scene_ids mappings
+        stable_ids = _build_stable_cmem_ids(result)
         turn_to_events: Dict[str, List[str]] = {}
         for event in result.events:
             for src_turn_id in event.source_turns:
-                turn_to_events.setdefault(src_turn_id, []).append(event.id)
+                turn_to_events.setdefault(src_turn_id, []).append(stable_ids.get(event.id, event.id))
 
         turn_to_scenes: Dict[str, List[str]] = {}
         for scene in result.scenes:
             for ev_id in scene.child_ids:
+                stable_ev_id = stable_ids.get(ev_id, ev_id)
                 for turn_id, ev_ids in turn_to_events.items():
-                    if ev_id in ev_ids:
-                        turn_to_scenes.setdefault(turn_id, []).append(scene.id)
+                    if stable_ev_id in ev_ids:
+                        turn_to_scenes.setdefault(turn_id, []).append(stable_ids.get(scene.id, scene.id))
 
         now = datetime.now(timezone.utc).isoformat()
-        conn = sqlite3.connect(str(self.db_path))
-        for t in turns:
-            turn_id = t["turn_id"]
-            event_ids = turn_to_events.get(turn_id, [])
-            scene_ids = turn_to_scenes.get(turn_id, [])
-            original_text = t["text"] if self.archive_keep_original else None
-            text_summary = t["text"][:500]
+        conn = open_memory_sqlite(self.db_path)
+        try:
+            try:
+                for t in turns:
+                    turn_id = t["turn_id"]
+                    event_ids = turn_to_events.get(turn_id, [])
+                    scene_ids = turn_to_scenes.get(turn_id, [])
+                    original_text = t["text"] if self.archive_keep_original else None
+                    text_summary = t["text"][:500]
 
-            conn.execute(
-                "INSERT OR REPLACE INTO turns_archive "
-                "(turn_id, session_id, speaker, text_summary, original_text, "
-                "timestamp, compressed_at, event_ids, scene_ids) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    turn_id, t["session_id"], t["speaker"],
-                    text_summary, original_text,
-                    t["timestamp"], now,
-                    json.dumps(event_ids), json.dumps(scene_ids),
-                ),
-            )
-            conn.execute(
-                "UPDATE turns SET compressed_to_tier2 = 1 WHERE turn_id = ?",
-                (turn_id,),
-            )
+                    conn.execute(
+                        "INSERT OR REPLACE INTO turns_archive "
+                        "(turn_id, session_id, speaker, text_summary, original_text, "
+                        "timestamp, compressed_at, event_ids, scene_ids) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            turn_id, t["session_id"], t["speaker"],
+                            text_summary, original_text,
+                            t["timestamp"], now,
+                            json.dumps(event_ids), json.dumps(scene_ids),
+                        ),
+                    )
+                    conn.execute(
+                        "UPDATE turns SET compressed_to_tier2 = 1 WHERE turn_id = ?",
+                        (turn_id,),
+                    )
 
-        # ── Write compressed memories back to SQLite ─────────────
-        _write_compressed_memories_to_db(conn, result, now)
+                # ── Write compressed memories back to SQLite ─────────────
+                _write_compressed_memories_to_db(conn, result, now)
 
-        conn.commit()
-        conn.close()
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        finally:
+            conn.close()
         logger.info("Archived %d turns with Tier 2 back-references + compressed memories", len(turns))
 
     # ── Full cycle ────────────────────────────────────────────────
@@ -384,6 +503,22 @@ class Tier1ToTier2Bridge:
                 turns_processed=0, events_generated=0, scenes_generated=0,
                 arcs_generated=0, epochs_generated=0, profiles_generated=0,
                 errors=errors,
+            )
+
+        if not tier2_output.get("events"):
+            logger.warning(
+                "Tier 2 bridge cycle produced no events for %d candidate turns; "
+                "leaving Tier1 turns uncompressed.",
+                len(candidates),
+            )
+            return BridgeResult(
+                turns_processed=0,
+                events_generated=0,
+                scenes_generated=0,
+                arcs_generated=0,
+                epochs_generated=0,
+                profiles_generated=0,
+                candidate_count=len(candidates),
             )
 
         try:
@@ -418,7 +553,7 @@ class Tier1ToTier2Bridge:
 
     def stats(self) -> Dict[str, Any]:
         """Return Tier 1 storage statistics."""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = open_memory_sqlite(self.db_path)
         total_turns = conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0]
         active_turns = conn.execute(
             "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0"

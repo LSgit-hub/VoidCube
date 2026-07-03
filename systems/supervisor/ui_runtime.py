@@ -4789,7 +4789,11 @@ class SupervisorUIMixin:
                     f"{gateway_url}/admin/services", timeout=aiohttp.ClientTimeout(total=3)
                 ) as resp:
                     if resp.status != 200:
-                        return {}
+                        return {
+                            "memory_unavailable": True,
+                            "memory_unavailable_reason": f"gateway_services_status_{resp.status}",
+                            "memory_active": False,
+                        }
                     services = (await resp.json()).get("services", {})
                 memory_url = None
                 for svc in services.values():
@@ -4797,7 +4801,11 @@ class SupervisorUIMixin:
                         memory_url = svc.get("address")
                         break
                 if not memory_url:
-                    return {}
+                    return {
+                        "memory_unavailable": True,
+                        "memory_unavailable_reason": "memory_service_not_registered",
+                        "memory_active": False,
+                    }
                 # Fetch both stats and rules status in parallel
                 stats_data = {}
                 rules_data = {}
@@ -4834,9 +4842,12 @@ class SupervisorUIMixin:
                         memory_active = False
                 result["memory_active"] = memory_active
                 return result
-        except Exception:
-            pass
-        return {}
+        except Exception as exc:
+            return {
+                "memory_unavailable": True,
+                "memory_unavailable_reason": type(exc).__name__,
+                "memory_active": False,
+            }
 
     def _build_ui_metrics(
         self,

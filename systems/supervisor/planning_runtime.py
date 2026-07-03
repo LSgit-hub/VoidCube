@@ -4834,9 +4834,16 @@ class PlanningRuntimeMixin:
                 row.get("evidence"),
             )
             if existing_token:
-                row["scheduled_for"] = existing_token
-                row_metadata["scheduled_for"] = existing_token
-                occupied.add(existing_token)
+                if existing_token in occupied:
+                    row_metadata["requested_scheduled_for"] = existing_token
+                    row_metadata["schedule_token_reallocated"] = True
+                    row.pop("scheduled_for", None)
+                    row_metadata.pop("scheduled_for", None)
+                    missing_indexes.append(len(prepared))
+                else:
+                    row["scheduled_for"] = existing_token
+                    row_metadata["scheduled_for"] = existing_token
+                    occupied.add(existing_token)
             else:
                 missing_indexes.append(len(prepared))
             prepared.append(row)
@@ -5138,9 +5145,24 @@ class PlanningRuntimeMixin:
             now = datetime.utcnow()
 
         service_cfg = self.config.service_runtime
-        user_idle_threshold = int(request.get("user_idle_seconds", 600))
-        memory_idle_threshold = int(request.get("memory_idle_seconds", 600))
-        workflow_idle_threshold = int(request.get("workflow_idle_seconds", 600))
+        user_idle_threshold = int(
+            request.get(
+                "user_idle_seconds",
+                getattr(service_cfg, "idle_window_user_seconds", 600),
+            )
+        )
+        memory_idle_threshold = int(
+            request.get(
+                "memory_idle_seconds",
+                getattr(service_cfg, "idle_window_memory_seconds", 600),
+            )
+        )
+        workflow_idle_threshold = int(
+            request.get(
+                "workflow_idle_seconds",
+                getattr(service_cfg, "idle_window_workflow_seconds", 600),
+            )
+        )
         requested_task_profile = self._idle_window_request_profile(request)
         requested_governance_task_type = str(requested_task_profile["governance_task_type"])
         requested_task_family = str(requested_task_profile["task_family"])
@@ -5332,6 +5354,9 @@ class PlanningRuntimeMixin:
                 "user_idle_seconds": user_idle_threshold,
                 "memory_idle_seconds": memory_idle_threshold,
                 "workflow_idle_seconds": workflow_idle_threshold,
+                "active_cli_stale_after_seconds": (
+                    dict(snapshot.get("active_cli_executor") or {}).get("stale_after_seconds")
+                ),
             },
             "checks": {
                 "has_user_idle": has_user_idle,
@@ -6063,7 +6088,7 @@ class PlanningRuntimeMixin:
         if self._is_agent_pull_task(task):
             execution_kind = self._task_execution_kind(task)
             if execution_kind == "body_improvement":
-                if self._has_pending_self_learning_prerequisite():
+                if self._has_pending_self_learning_prerequisite(task):
                     return (
                         "deferred",
                         "Body-improvement task deferred because there are still planned/approved/running self-learning tasks awaiting completion. Supervisor must let learning evidence settle before code-improvement execution is released.",
@@ -6129,14 +6154,30 @@ class PlanningRuntimeMixin:
             "Task deferred because the execution window or idle requirements are not yet satisfied. The task remains queued for future review.",
         )
 
-    def _has_pending_self_learning_prerequisite(self) -> bool:
+    def _has_pending_self_learning_prerequisite(
+        self,
+        body_task: Optional[SelfEvolutionTask] = None,
+    ) -> bool:
+        queued_self_learning = False
         for task in self._self_evolution_queue.list_tasks():
             if self._task_governance_type(task) != "self_learning":
                 continue
             if task.status not in {"planned", "approved", "running"}:
                 continue
+            if task.status == "running":
+                return True
+            queued_self_learning = True
+        if not queued_self_learning:
+            return False
+        if body_task is None:
             return True
-        return False
+        prior_self_learning_deferrals = sum(
+            1
+            for decision in body_task.decision_history
+            if str(decision.status) == "deferred"
+            and "self-learning tasks awaiting completion" in str(decision.reason)
+        )
+        return prior_self_learning_deferrals == 0
 
     def _is_agent_pull_task(self, task: SelfEvolutionTask) -> bool:
         execution_kind = self._task_execution_kind(task)
@@ -6165,24 +6206,30 @@ class PlanningRuntimeMixin:
         active = payload.get("active_cli_executor")
         return dict(active or {}) if isinstance(active, dict) else {}
 
-    async def _recover_orphaned_agent_pull_tasks(self) -> int:
-        # P0-3 恢复保守化: distinguish "gateway said there is no active executor"
-        # from "we could not reach the gateway". On a fetch FAILURE the active
-        # executor is unknown, so treating active_session_id as "" would make
-        # owner==active False for every running task and recover them all →
-        # mass false recovery → double execution. When uncertain, skip entirely.
-        try:
-            active_executor = await self._fetch_gateway_active_cli_executor()
-        except Exception as exc:
-            logger.warning(
-                "Skipping orphaned-task recovery: could not determine active CLI "
-                "executor from gateway (%s). Conservative no-op to avoid mass "
-                "false recovery.",
-                exc,
-            )
-            return 0
-        active_session_id = str(active_executor.get("session_id") or "").strip()
+    async def _fetch_gateway_cli_session(self, session_id: str) -> Dict[str, Any]:
+        import aiohttp
 
+        execution_config = getattr(self.config, "execution", None)
+        gateway_address = getattr(execution_config, "gateway_address", "http://127.0.0.1:6000")
+        url = f"{gateway_address}/v1/sessions/{session_id}"
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as response:
+                if response.status == 404:
+                    return {"session_id": session_id, "missing": True}
+                if response.status >= 400:
+                    raise HTTPException(
+                        status_code=503,
+                        detail=f"Gateway owner session query failed with status {response.status}",
+                    )
+                payload = await response.json()
+        if not isinstance(payload, dict):
+            return {}
+        payload.setdefault("session_id", session_id)
+        payload.setdefault("missing", False)
+        return payload
+
+    async def _recover_orphaned_agent_pull_tasks(self) -> int:
         recovered = 0
         for task in self._self_evolution_queue.list_tasks(status="running"):
             if not self._is_agent_pull_task(task):
@@ -6192,20 +6239,51 @@ class PlanningRuntimeMixin:
             execution_source = str(metadata.get("execution_source") or "").strip().lower()
             if execution_source and execution_source != "cli_agent_pull":
                 continue
-            if owner_session_id and owner_session_id == active_session_id:
+            if not owner_session_id:
+                logger.warning(
+                    "Skipping orphaned-task recovery for running agent-pull task %s: "
+                    "owner_session_id is missing, so ownership is unknown.",
+                    task.task_id,
+                )
+                self._self_evolution_queue.update_metadata(
+                    task.task_id,
+                    metadata={
+                        "owner_session_missing_seen_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+                continue
+            try:
+                owner_session = await self._fetch_gateway_cli_session(owner_session_id)
+            except Exception as exc:
+                logger.warning(
+                    "Skipping orphaned-task recovery for %s: could not determine "
+                    "owner CLI session %s from gateway (%s). Conservative no-op.",
+                    task.task_id,
+                    owner_session_id,
+                    exc,
+                )
+                continue
+            owner_missing = bool(owner_session.get("missing"))
+            owner_stale = bool(owner_session.get("is_stale")) or str(
+                owner_session.get("lease_status") or ""
+            ).strip().lower() == "stale"
+            if not owner_missing and not owner_stale:
                 continue
             self._update_task_status(
                 task.task_id,
                 status="approved",
                 actor="supervisor",
                 reason=(
-                    "Recovered orphaned AUTO agent-pull task because its owning CLI session "
-                    "is no longer the active executor."
+                    "Recovered orphaned AUTO agent-pull task because its owning CLI "
+                    "session is missing or stale."
                 ),
                 context={
                     "recovered": True,
                     "previous_owner_session_id": owner_session_id or None,
-                    "active_cli_session_id": active_session_id or None,
+                    "owner_session_missing": owner_missing,
+                    "owner_session_stale": owner_stale,
+                    "owner_lease_status": owner_session.get("lease_status"),
+                    "active_cli_session_id": owner_session.get("active_cli_session_id"),
                 },
                 event_type="recovery",
             )
@@ -6218,6 +6296,71 @@ class PlanningRuntimeMixin:
             )
             recovered += 1
         return recovered
+
+    def _request_agent_session_id(self, request: Dict[str, Any]) -> str:
+        session_id = str(request.get("session_id") or "").strip()
+        if session_id:
+            return session_id
+        context = request.get("context")
+        if isinstance(context, dict):
+            session_id = str(context.get("session_id") or "").strip()
+            if session_id:
+                return session_id
+        return ""
+
+    def _ensure_agent_pull_task_owner(
+        self,
+        *,
+        task: SelfEvolutionTask,
+        request: Dict[str, Any],
+        decision: str,
+        actor: str,
+    ) -> str:
+        if not self._is_agent_pull_task(task):
+            return ""
+        if decision not in {"running", "completed", "failed"}:
+            return ""
+        actor_normalized = str(actor or "").strip().lower()
+        if actor_normalized not in {"agent", "cli_agent", "gateway"}:
+            return ""
+
+        session_id = self._request_agent_session_id(request)
+        if not session_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Agent-pull task decisions require a session_id in request or context.",
+            )
+
+        metadata = dict(task.metadata or {})
+        owner_session_id = str(metadata.get("owner_session_id") or "").strip()
+        if decision == "running":
+            if owner_session_id and owner_session_id != session_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Agent-pull task is already owned by another CLI session "
+                        f"({owner_session_id})."
+                    ),
+                )
+            return session_id
+
+        if not owner_session_id:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Agent-pull task is running without owner_session_id; completion/failure "
+                    "writeback is rejected because ownership is unknown."
+                ),
+            )
+        if owner_session_id != session_id:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Agent-pull task writeback rejected because requester session "
+                    f"{session_id} does not own task {task.task_id}."
+                ),
+            )
+        return session_id
 
     def _get_self_evolution_cycle_lock(self) -> asyncio.Lock:
         lock = getattr(self, "_self_evolution_cycle_lock", None)
@@ -6736,6 +6879,12 @@ class PlanningRuntimeMixin:
 
         actor = str(request.get("actor", "supervisor"))
         decision_id = str(request.get("decision_id") or uuid.uuid4())
+        owner_session_id = self._ensure_agent_pull_task_owner(
+            task=task,
+            request=request,
+            decision=normalized,
+            actor=actor,
+        )
         execution_request = None
         if normalized == "approved" and self._task_requires_execution_request(task):
             try:
@@ -6748,6 +6897,31 @@ class PlanningRuntimeMixin:
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc))
+
+        if (
+            normalized in {"completed", "failed"}
+            and task.status == "approved"
+            and self._is_agent_pull_task(task)
+            and owner_session_id
+        ):
+            task = self._update_task_status(
+                task_id,
+                status="running",
+                decision_id=str(uuid.uuid4()),
+                actor=actor,
+                reason=(
+                    "Accepted late agent-pull writeback after supervisor recovery reset "
+                    "the task to approved; restoring running state before terminal writeback."
+                ),
+                context={
+                    **decision_context,
+                    "session_id": owner_session_id,
+                    "late_agent_pull_writeback": True,
+                    "restored_from_status": "approved",
+                },
+                execution_request=None,
+                event_type="writeback_reconcile",
+            )
 
         updated_task = self._update_task_status(
             task_id,
@@ -6763,6 +6937,11 @@ class PlanningRuntimeMixin:
         # Persist any metadata attached to the decision (e.g. executed_by_cli,
         # execution_result from CLI agent execution).
         decision_metadata = request.get("metadata")
+        if normalized == "running" and owner_session_id:
+            enriched_metadata = dict(decision_metadata or {})
+            enriched_metadata.setdefault("owner_session_id", owner_session_id)
+            enriched_metadata.setdefault("execution_source", "cli_agent_pull")
+            decision_metadata = enriched_metadata
         if isinstance(decision_metadata, dict) and decision_metadata:
             self._self_evolution_queue.update_metadata(task_id, metadata=decision_metadata)
 
@@ -7361,15 +7540,26 @@ class PlanningRuntimeMixin:
 
         review_result = await self.review_self_evolution_tasks({})
         dispatched = []
+        dispatch_limit = int(
+            getattr(self.config.service_runtime, "self_evolution_dispatch_limit_per_cycle", 1)
+            or 0
+        )
+        dispatch_budget_exhausted = 0
+
+        def _dispatch_budget_available() -> bool:
+            return dispatch_limit <= 0 or len(dispatched) < dispatch_limit
 
         # Pass 1: dispatch tasks that were *just* approved in this review
+        dispatch_considered_ids: set[str] = set()
         for task_payload in review_result.get("tasks", []):
             if task_payload.get("status") != "approved":
                 continue
 
-            task = self._self_evolution_queue.get_task(task_payload.get("task_id", ""))
+            task_payload_id = str(task_payload.get("task_id", "") or "")
+            task = self._self_evolution_queue.get_task(task_payload_id)
             if task is None:
                 continue
+            dispatch_considered_ids.add(task.task_id)
 
             gov_type = self._task_governance_type(task)
             execution_kind = self._task_execution_kind(task)
@@ -7378,6 +7568,10 @@ class PlanningRuntimeMixin:
                 continue
 
             if task.execution_request is None:
+                continue
+
+            if not _dispatch_budget_available():
+                dispatch_budget_exhausted += 1
                 continue
 
             result = await self._dispatch_self_evolution_execution_request(task)
@@ -7398,6 +7592,8 @@ class PlanningRuntimeMixin:
         for task in self._self_evolution_queue.list_tasks(status="approved"):
             if task.task_id in dispatched_ids:
                 continue
+            if task.task_id in dispatch_considered_ids:
+                continue
             if task.status == "running":
                 continue  # already running or permanently failed
 
@@ -7408,6 +7604,10 @@ class PlanningRuntimeMixin:
                 continue
 
             if task.execution_request is None:
+                continue
+
+            if not _dispatch_budget_available():
+                dispatch_budget_exhausted += 1
                 continue
 
             result = await self._dispatch_self_evolution_execution_request(task)
@@ -7423,6 +7623,8 @@ class PlanningRuntimeMixin:
             "governance_consumption": governance_consumption,
             "alignment_consumption": alignment_consumption,
             "truthfulness_consumption": truthfulness_consumption,
+            "dispatch_limit": dispatch_limit,
+            "dispatch_budget_exhausted": dispatch_budget_exhausted,
         }
 
     async def run_auto_cycle(self, request: dict | None = None) -> Dict[str, Any]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import logging
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,11 @@ from plugins.memory.mem.governor_bridge import MemGovernorBridge
 from systems.body_registry import BodyRegistry, BodySlotMeta
 from systems.governor import GovernorRequest
 from systems.lifecycle import LifecycleExecutionReport
+
+
+class _FailingGovernanceRepo:
+    def append(self, event):
+        raise RuntimeError("repo mirror failed")
 
 
 @pytest.mark.unit
@@ -55,12 +61,41 @@ def test_mem_governor_bridge_records_review_and_latest(tmp_path):
     assert latest["request"]["trace_id"] == "trace-1"
     assert latest["request"]["task_type"] == "self_evolution"
     assert latest["request"]["governance_task_type"] == "self_evolution"
-    assert latest["request"]["task_family"] == "body_switch"
-    assert latest["request"]["execution_kind"] == "body_switch"
+    assert latest["request"]["task_family"] == "body_upgrade"
+    assert latest["request"]["execution_kind"] == "body_upgrade"
     assert latest["request"]["decision_id"] == "decision-1"
     assert latest["evolution_lineage"]["governance_task_type"] == "self_evolution"
-    assert latest["evolution_lineage"]["task_family"] == "body_switch"
-    assert latest["evolution_lineage"]["execution_kind"] == "body_switch"
+    assert latest["evolution_lineage"]["task_family"] == "body_upgrade"
+    assert latest["evolution_lineage"]["execution_kind"] == "body_upgrade"
+
+
+@pytest.mark.unit
+def test_mem_governor_bridge_warns_when_repository_mirror_fails(tmp_path, caplog):
+    bridge = MemGovernorBridge(
+        storage_root=tmp_path / "soul",
+        governance_repo=_FailingGovernanceRepo(),
+    )
+    request = GovernorRequest(
+        request_id="review-mirror-failure",
+        trace_id="trace-mirror-failure",
+        task_type="self_evolution",
+        event_type="health_review_request",
+        body_id="slot-B",
+        source_actor="active_body",
+        summary="Candidate ready",
+        evidence={"build_complete": True},
+        constraints={"target_transition": "candidate_to_probe"},
+    )
+
+    with caplog.at_level(logging.WARNING, logger="plugins.memory.mem.governor_bridge"):
+        response = bridge.review(request)
+
+    latest = bridge.get_latest()
+    assert response.decision == "approve"
+    assert latest is not None
+    assert latest["request"]["request_id"] == "review-mirror-failure"
+    assert "Governance repository mirror write failed" in caplog.text
+    assert "repo mirror failed" in caplog.text
 
 
 @pytest.mark.unit
@@ -106,14 +141,14 @@ def test_mem_governor_bridge_records_execution_outcome(tmp_path):
     assert history[-1]["request"]["trace_id"] == "trace-2"
     assert history[-1]["request"]["task_type"] == "self_evolution"
     assert history[-1]["request"]["governance_task_type"] == "self_evolution"
-    assert history[-1]["request"]["task_family"] == "body_switch"
-    assert history[-1]["request"]["execution_kind"] == "body_switch"
+    assert history[-1]["request"]["task_family"] == "body_upgrade"
+    assert history[-1]["request"]["execution_kind"] == "body_upgrade"
     assert history[-1]["request"]["decision_id"] == "decision-2"
     assert history[-1]["evolution_lineage"]["trace_id"] == "trace-2"
     assert history[-1]["evolution_lineage"]["task_type"] == "self_evolution"
     assert history[-1]["evolution_lineage"]["governance_task_type"] == "self_evolution"
-    assert history[-1]["evolution_lineage"]["task_family"] == "body_switch"
-    assert history[-1]["evolution_lineage"]["execution_kind"] == "body_switch"
+    assert history[-1]["evolution_lineage"]["task_family"] == "body_upgrade"
+    assert history[-1]["evolution_lineage"]["execution_kind"] == "body_upgrade"
     assert history[-1]["evolution_lineage"]["decision_id"] == "decision-2"
 
 

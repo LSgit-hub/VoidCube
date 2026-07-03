@@ -83,6 +83,49 @@ async def test_supervisor_idle_window_compares_gateway_naive_timestamps_as_utc(t
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_supervisor_idle_window_uses_configured_thresholds_and_reports_cli_lease(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={
+                    "idle_window_user_seconds": 120,
+                    "idle_window_memory_seconds": 240,
+                    "idle_window_workflow_seconds": 300,
+                }
+            )
+        }
+    )
+
+    async def fake_snapshot():
+        return {
+            "last_user_request_at": "2026-05-25T00:04:00",
+            "last_agent_work_at": "2026-05-25T00:00:00",
+            "last_memory_task_at": "2026-05-25T00:02:00",
+            "last_self_evolution_activity_at": "2026-05-25T00:02:00",
+            "counts": {},
+            "active_sessions": 1,
+            "active_cli_executor": {
+                "session_id": "cli-1",
+                "stale_after_seconds": 90,
+                "lease_status": "stale",
+            },
+        }
+
+    supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
+
+    result = await supervisor.evaluate_idle_window({"now": "2026-05-25T00:05:00"})
+
+    assert result["thresholds"]["user_idle_seconds"] == 120
+    assert result["thresholds"]["memory_idle_seconds"] == 240
+    assert result["thresholds"]["workflow_idle_seconds"] == 300
+    assert result["thresholds"]["active_cli_stale_after_seconds"] == 90
+    assert result["checks"]["has_user_idle"] is False
+    assert result["checks"]["has_agent_idle"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_supervisor_idle_window_blocks_execution_when_recent_user_activity_exists(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
@@ -105,7 +148,7 @@ async def test_supervisor_idle_window_blocks_execution_when_recent_user_activity
     )
 
     assert result["checks"]["has_user_idle"] is False
-    assert result["decisions"]["eligible_for_planning"] is False
+    assert result["decisions"]["eligible_for_planning"] is True
     assert result["decisions"]["eligible_for_execution"] is False
 
 
@@ -206,12 +249,12 @@ async def test_supervisor_idle_window_exposes_body_switch_family_without_collaps
     )
 
     assert result["governance_task_type"] == "self_evolution"
-    assert result["task_family"] == "body_switch"
-    assert result["execution_kind"] == "body_switch"
+    assert result["task_family"] == "body_upgrade"
+    assert result["execution_kind"] == "body_upgrade"
     assert result["task_profile"] == {
         "governance_task_type": "self_evolution",
-        "task_family": "body_switch",
-        "execution_kind": "body_switch",
+        "task_family": "body_upgrade",
+        "execution_kind": "body_upgrade",
     }
     assert result["governance_task_type_decisions"]["self_evolution"] == result["decisions"]
-    assert result["task_family_decisions"]["body_switch"] == result["decisions"]
+    assert result["task_family_decisions"]["body_upgrade"] == result["decisions"]

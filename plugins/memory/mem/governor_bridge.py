@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import uuid
 from datetime import datetime
@@ -16,6 +17,9 @@ from systems.governor import GovernorDecisionEngine, GovernorRequest, GovernorRe
 from systems.lifecycle import LifecycleExecutionReport
 from systems.runtime_task_profile import derive_runtime_task_profile
 from VoidCube_core.utils import atomic_json_write
+
+
+logger = logging.getLogger(__name__)
 
 
 class MemGovernorRecord(BaseModel):
@@ -366,8 +370,13 @@ class MemGovernorBridge:
             try:
                 gov_event = self._to_governance_event(record)
                 self._governance_repo.append(gov_event)
-            except Exception:
-                pass  # best-effort mirror; legacy JSONL is the authoritative store
+            except Exception as exc:
+                logger.warning(
+                    "Governance repository mirror write failed for record %s: %s",
+                    record.record_id,
+                    exc,
+                    exc_info=True,
+                )
 
     @staticmethod
     def _to_governance_event(record: MemGovernorRecord) -> Any:

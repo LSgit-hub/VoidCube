@@ -119,6 +119,164 @@ def test_cli_auto_mode_marks_learning_task_failed_after_agent_error(monkeypatch)
     assert cli._last_agent_turn_result is None
 
 
+def test_cli_auto_mode_keeps_completed_task_when_writeback_fails(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._current_auto_task = {"task_id": "learn-writeback-fail", "task_type": "self_learning"}
+    cli._current_auto_task_started_at = 1.0
+    cli._last_agent_turn_result = {
+        "failed": False,
+        "partial": False,
+        "interrupted": False,
+        "error": "",
+        "response": "Finished findings",
+    }
+    cli._agent_running = False
+    cli.session_id = "cli-owner-writeback"
+    cli._auto_execution_events = []
+
+    def fake_time() -> float:
+        return 31.0
+
+    def fake_urlopen(request, timeout=0):
+        del timeout
+        if isinstance(request, Request):
+            raise OSError("gateway down")
+        return _FakeUrlopenResponse({"tasks": []})
+
+    monkeypatch.setattr("time.time", fake_time)
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("cli._cprint", lambda *args, **kwargs: None)
+
+    cli._poll_auto_mode_workflow()
+
+    assert cli._current_auto_task is not None
+    assert cli._current_auto_task["task_id"] == "learn-writeback-fail"
+    assert cli._last_agent_turn_result is not None
+    assert any(event.get("stage") == "writeback_failed" for event in cli._auto_execution_events)
+
+
+def test_cli_auto_prompt_enqueue_binds_local_run_id():
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    prompts = []
+    cli._pending_input = type("_Queue", (), {"put": lambda self, prompt: prompts.append(prompt)})()
+    cli._auto_execution_events = []
+    task = {
+        "task_id": "learn-run-id",
+        "title": "Bind AUTO run",
+        "summary": "Prompt should map to one run id",
+        "task_type": "self_learning",
+    }
+
+    ok = cli._enqueue_auto_task_prompt(task, "self_learning")
+
+    assert ok is True
+    assert task["_auto_task_run_id"]
+    assert cli._current_auto_task_run_id == task["_auto_task_run_id"]
+    assert task["_auto_prompt_text"] == prompts[0]
+    cli._current_auto_task = task
+    assert cli._auto_task_run_id_for_chat_message(prompts[0]) == task["_auto_task_run_id"]
+    assert cli._auto_task_run_id_for_chat_message("ordinary background chat") == ""
+
+
+def test_cli_auto_mode_ignores_turn_result_from_different_run(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._current_auto_task = {
+        "task_id": "learn-current-run",
+        "task_type": "self_learning",
+        "_auto_task_run_id": "run-current",
+    }
+    cli._current_auto_task_started_at = 1.0
+    cli._last_agent_turn_result = {
+        "failed": False,
+        "partial": False,
+        "interrupted": False,
+        "error": "",
+        "response": "Wrong task response",
+        "auto_task_run_id": "run-other",
+    }
+    cli._agent_running = False
+    calls = []
+
+    def fake_time() -> float:
+        return 31.0
+
+    def fake_urlopen(request, timeout=0):
+        calls.append(request)
+        return _FakeUrlopenResponse({"tasks": []})
+
+    monkeypatch.setattr("time.time", fake_time)
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    cli._poll_auto_mode_workflow()
+
+    assert calls == []
+    assert cli._current_auto_task["task_id"] == "learn-current-run"
+    assert cli._last_agent_turn_result["auto_task_run_id"] == "run-other"
+
+
+def test_cli_auto_mode_does_not_pull_new_task_while_current_task_is_running(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._current_auto_task = {"task_id": "learn-running", "task_type": "self_learning"}
+    cli._current_auto_task_started_at = 1.0
+    cli._last_agent_turn_result = None
+    cli._agent_running = True
+    calls = []
+
+    def fake_time() -> float:
+        return 31.0
+
+    def fake_urlopen(request, timeout=0):
+        calls.append(request)
+        return _FakeUrlopenResponse({"tasks": [{"task_id": "learn-new"}]})
+
+    monkeypatch.setattr("time.time", fake_time)
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    cli._poll_auto_mode_workflow()
+
+    assert calls == []
+    assert cli._current_auto_task["task_id"] == "learn-running"
+
+
+def test_cli_auto_timeout_helper_reports_failed_and_clears_state(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._current_auto_task = {
+        "task_id": "learn-timeout-live",
+        "task_type": "self_learning",
+        "_auto_task_run_id": "run-timeout",
+    }
+    cli._current_auto_task_started_at = 1.0
+    cli._current_auto_task_run_id = "run-timeout"
+    cli._last_agent_turn_result = None
+    cli.session_id = "cli-timeout"
+    cli._auto_execution_events = []
+    requests = []
+
+    def fake_urlopen(request, timeout=0):
+        del timeout
+        requests.append(
+            {
+                "url": request.full_url,
+                "data": json.loads((request.data or b"{}").decode("utf-8")),
+            }
+        )
+        return _FakeUrlopenResponse({})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("cli._cprint", lambda *args, **kwargs: None)
+
+    timed_out = cli._report_current_auto_task_timeout_if_needed(now=1802.0)
+
+    assert timed_out is True
+    assert requests[0]["url"].endswith("/v1/tasks/learn-timeout-live/decision")
+    assert requests[0]["data"]["decision"] == "failed"
+    assert requests[0]["data"]["context"]["error"] == "timeout"
+    assert requests[0]["data"]["context"]["auto_task_run_id"] == "run-timeout"
+    assert cli._current_auto_task is None
+    assert cli._current_auto_task_run_id == ""
+    assert any(event.get("stage") == "writeback" for event in cli._auto_execution_events)
+
+
 def test_cli_auto_mode_pulls_body_improvement_tasks(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._current_auto_task = None
@@ -378,6 +536,49 @@ def test_cli_auto_mode_recovers_owned_running_task_before_completion_writeback(m
     assert cli._last_agent_turn_result is None
 
 
+def test_cli_auto_mode_replays_recovered_running_task_prompt(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._current_auto_task = None
+    cli._current_auto_task_started_at = 0.0
+    cli._last_agent_turn_result = None
+    cli._agent_running = False
+    cli.session_id = "cli-owner-replay"
+    cli._auto_execution_events = []
+    prompts = []
+    cli._pending_input = type("_Queue", (), {"put": lambda self, prompt: prompts.append(prompt)})()
+
+    running_task = {
+        "task_id": "learn-replay-1",
+        "title": "Replay recovered AUTO task",
+        "summary": "Recovered task must run again after restart",
+        "task_type": "self_learning",
+        "metadata": {
+            "owner_session_id": "cli-owner-replay",
+            "execution_source": "cli_agent_pull",
+            "execution_started_at": "2026-06-27T11:00:00+08:00",
+        },
+    }
+
+    def fake_urlopen(request, timeout=0):
+        del timeout
+        if isinstance(request, Request):
+            return _FakeUrlopenResponse({})
+        url = str(request)
+        if "status=running" in url:
+            return _FakeUrlopenResponse({"tasks": [running_task]})
+        return _FakeUrlopenResponse({"tasks": []})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    cli._poll_auto_mode_workflow()
+
+    assert cli._current_auto_task is not None
+    assert cli._current_auto_task["task_id"] == "learn-replay-1"
+    assert prompts
+    assert prompts[0].startswith("[AUTO Learning Task] Replay recovered AUTO task")
+    assert cli._current_auto_task["_auto_prompt_enqueued"] is True
+
+
 def test_execute_pending_input_runs_agent_turn_and_cleans_runtime(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._agent_running = False
@@ -420,6 +621,46 @@ def test_execute_pending_input_runs_agent_turn_and_cleans_runtime(monkeypatch):
     assert cli._pending_tool_info == {}
     assert cli._last_scrollback_tool == ""
     assert app.invalidate_calls >= 2
+
+
+def test_auto_q_fast_path_marks_current_task_interrupted(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._auto_mode_active = True
+    cli._agent_running = False
+    cli._current_auto_task = {"task_id": "learn-autoq-1", "task_type": "self_learning"}
+    cli._current_auto_task_started_at = 10.0
+    cli._last_agent_turn_result = None
+    cli.session_id = "cli-autoq"
+    cli._auto_execution_events = []
+
+    requests = []
+
+    def fake_urlopen(request, timeout=0):
+        del timeout
+        if isinstance(request, Request):
+            payload = json.loads((request.data or b"{}").decode("utf-8")) if request.data else {}
+            requests.append({"url": request.full_url, "data": payload})
+            if request.full_url.endswith("/governor-mode/deactivate"):
+                return _FakeUrlopenResponse({"governor_mode_active": False})
+            return _FakeUrlopenResponse({})
+        return _FakeUrlopenResponse({})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("cli._push_cli_agent_scene", lambda *args, **kwargs: True)
+    monkeypatch.setattr("cli._cprint", lambda *args, **kwargs: None)
+    cli._record_supervisor_ui_activity_safe = lambda *args, **kwargs: None
+
+    assert cli._exit_auto_mode_fast() is True
+
+    decision_request = next(
+        item for item in requests if item["url"].endswith("/v1/tasks/learn-autoq-1/decision")
+    )
+    assert decision_request["data"]["decision"] == "failed"
+    assert decision_request["data"]["context"]["interrupted"] is True
+    assert decision_request["data"]["session_id"] == "cli-autoq"
+    assert cli._auto_mode_active is False
+    assert cli._current_auto_task is None
+    assert cli._last_agent_turn_result is None
 
 
 def test_refresh_gateway_cli_presence_registers_session_and_scene(monkeypatch):
@@ -972,6 +1213,44 @@ def test_auto_command_marks_cli_agent_surface_active(monkeypatch):
     assert pushed[0]["session_id"] == "cli-session-auto"
     assert cycle_calls == [""]
     assert polled == [True]
+
+
+def test_auto_executor_session_is_persisted_before_agent_pull():
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli.session_id = "cli-auto-empty"
+    cli.model = "test-model"
+
+    class _FakeSessionDB:
+        def __init__(self):
+            self.created = []
+
+        def get_session(self, session_id):
+            assert session_id == "cli-auto-empty"
+            return None
+
+        def create_session(self, **kwargs):
+            self.created.append(kwargs)
+
+    db = _FakeSessionDB()
+    cli._session_db = db
+
+    cli._ensure_auto_executor_session()
+
+    assert db.created == [
+        {
+            "session_id": "cli-auto-empty",
+            "source": "cli_auto_executor",
+            "model": "test-model",
+        }
+    ]
+
+
+def test_current_cli_agent_role_stays_supervisor_task_while_auto_task_is_unwinding():
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._auto_mode_active = False
+    cli._current_auto_task = {"task_id": "task-1"}
+
+    assert cli._current_cli_agent_role() == "supervisor_task"
 
 
 def test_push_cli_agent_scene_includes_session_id(monkeypatch):

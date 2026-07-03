@@ -238,11 +238,13 @@ class SelfEvolutionTaskQueue:
     ) -> SelfEvolutionTask:
         # ── Validate state transition ──
         _LEGAL_TRANSITIONS: dict[str, set[str]] = {
-            "planned": {"approved", "paused", "cancelled", "deferred"},
-            "approved": {"running", "cancelled"},
-            "running": {"approved", "completed", "failed", "paused"},
+            "planned": {"approved", "paused", "cancelled", "deferred", "awaiting_review"},
+            "awaiting_review": {"approved", "planned", "deferred", "paused", "cancelled"},
+            "approved": {"running", "cancelled", "deferred", "paused"},
+            "running": {"approved", "completed", "failed", "paused", "retry"},
             "paused": {"planned", "approved", "cancelled", "deferred"},
-            "deferred": {"planned", "approved", "cancelled", "paused"},
+            "deferred": {"planned", "approved", "cancelled", "paused", "awaiting_review"},
+            "retry": {"approved", "planned", "deferred", "paused", "cancelled"},
             "completed": set(),   # terminal
             "failed": set(),      # terminal
             "cancelled": set(),   # terminal
@@ -266,8 +268,12 @@ class SelfEvolutionTaskQueue:
                     snapshot.tasks[index] = task
                     self._write_snapshot(snapshot)
                     return task
-                legal = _LEGAL_TRANSITIONS.get(current, set())
-                if target not in legal and legal:  # empty legal = terminal
+                if current not in _LEGAL_TRANSITIONS:
+                    raise ValueError(f"Unknown task state: {current}")
+                if target not in _LEGAL_TRANSITIONS:
+                    raise ValueError(f"Unknown task target state: {target}")
+                legal = _LEGAL_TRANSITIONS[current]
+                if target not in legal:
                     raise ValueError(
                         f"Illegal task state transition: {current} → {target} "
                         f"(legal: {', '.join(sorted(legal)) if legal else 'terminal'})"

@@ -11,6 +11,10 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from systems.runtime_task_profile import derive_runtime_task_profile
+from systems.runtime_thresholds import (
+    DEFAULT_ACTIVE_CLI_STALE_AFTER_SECONDS,
+    DEFAULT_CLI_SESSION_TTL_SECONDS,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("internal_gateway")
@@ -43,6 +47,8 @@ class GatewayConfig(BaseModel):
     log_level: str = "INFO"
     activity_log_limit: int = 200
     activity_log_path: str = ""  # disk path; "" = auto-derive from VoidCube home
+    session_ttl_seconds: int = DEFAULT_CLI_SESSION_TTL_SECONDS
+    active_cli_stale_after_seconds: int = DEFAULT_ACTIVE_CLI_STALE_AFTER_SECONDS
 
 
 class AgentRequest(BaseModel):
@@ -95,8 +101,11 @@ class InternalGateway:
         # instances.  The gateway should only hold routing metadata.  TTL eviction
         # (SB-04) mitigates unbounded growth for now.
         self._agent_session_cache: Dict[str, Dict[str, Any]] = {}
-        self._session_ttl_seconds: int = 3600  # evict sessions idle >1 hour
-        self._active_cli_stale_after_seconds: int = 90
+        self._session_ttl_seconds: int = max(1, int(self.config.session_ttl_seconds))
+        self._active_cli_stale_after_seconds: int = max(
+            1,
+            int(self.config.active_cli_stale_after_seconds),
+        )
         self._activity_log: Deque[Dict[str, Any]] = deque(
             maxlen=max(int(self.config.activity_log_limit), 1)
         )
@@ -115,6 +124,8 @@ class InternalGateway:
             "self_evolution_activity_count": 0,
             "self_evolution_plan_count": 0,
             "self_evolution_execute_count": 0,
+            "memory_write_failure_count": 0,
+            "last_memory_write_failure_at": None,
             "error_count": 0,
             "uncertainty_high_count": 0,
             "recent_metadata": {
@@ -125,6 +136,7 @@ class InternalGateway:
                 "self_evolution": None,
                 "self_evolution_plan": None,
                 "self_evolution_execute": None,
+                "memory_write_failure": None,
             },
         }
         # ── Scene cache (baseline §8.1 — per-reporter) ──
@@ -477,6 +489,11 @@ class InternalGateway:
                 if self._activity_state["last_self_evolution_execute_at"]
                 else None
             ),
+            "last_memory_write_failure_at": (
+                self._activity_state["last_memory_write_failure_at"].isoformat()
+                if self._activity_state["last_memory_write_failure_at"]
+                else None
+            ),
             "counts": {
                 "user_request_count": self._activity_state["user_request_count"],
                 "agent_work_count": self._activity_state["agent_work_count"],
@@ -485,6 +502,7 @@ class InternalGateway:
                 "self_evolution_activity_count": self._activity_state["self_evolution_activity_count"],
                 "self_evolution_plan_count": self._activity_state["self_evolution_plan_count"],
                 "self_evolution_execute_count": self._activity_state["self_evolution_execute_count"],
+                "memory_write_failure_count": self._activity_state["memory_write_failure_count"],
                 "error_count": self._activity_state["error_count"],
                 "uncertainty_high_count": self._activity_state["uncertainty_high_count"],
             },
@@ -592,6 +610,10 @@ class InternalGateway:
             self._activity_state["last_memory_task_at"] = now
             self._activity_state["memory_task_count"] += 1
             self._activity_state["recent_metadata"]["memory_task"] = activity_metadata
+        elif normalized == "memory_write_failure":
+            self._activity_state["last_memory_write_failure_at"] = now
+            self._activity_state["memory_write_failure_count"] += 1
+            self._activity_state["recent_metadata"]["memory_write_failure"] = activity_metadata
         elif normalized == "self_learning":
             self._activity_state["last_self_learning_activity_at"] = now
             self._activity_state["self_learning_activity_count"] += 1
@@ -841,6 +863,27 @@ class InternalGateway:
             metadata["trace_id"] = str(uuid.uuid4())
         return metadata
 
+    def _is_memory_write_activity(self, path: str, method: str) -> bool:
+        normalized_method = str(method or "").upper()
+        if normalized_method in {"GET", "HEAD", "OPTIONS"}:
+            return False
+        if normalized_method in {"PUT", "PATCH", "DELETE"}:
+            return True
+
+        normalized_path = "/" + str(path or "").strip("/").lower()
+        read_suffixes = (
+            "/search",
+            "/query",
+            "/timeline",
+            "/stats",
+            "/status",
+            "/health",
+            "/usage",
+        )
+        if any(normalized_path.endswith(suffix) for suffix in read_suffixes):
+            return False
+        return True
+
     async def get_activity_status(self):
         return self._build_activity_snapshot()
 
@@ -873,6 +916,7 @@ class InternalGateway:
         self._activity_state["last_self_evolution_activity_at"] = None
         self._activity_state["last_self_evolution_plan_at"] = None
         self._activity_state["last_self_evolution_execute_at"] = None
+        self._activity_state["last_memory_write_failure_at"] = None
         self._activity_state["user_request_count"] = 0
         self._activity_state["agent_work_count"] = 0
         self._activity_state["memory_task_count"] = 0
@@ -880,6 +924,7 @@ class InternalGateway:
         self._activity_state["self_evolution_activity_count"] = 0
         self._activity_state["self_evolution_plan_count"] = 0
         self._activity_state["self_evolution_execute_count"] = 0
+        self._activity_state["memory_write_failure_count"] = 0
         self._activity_state["error_count"] = 0
         self._activity_state["uncertainty_high_count"] = 0
         self._activity_state["recent_metadata"] = {
@@ -890,6 +935,7 @@ class InternalGateway:
             "self_evolution": None,
             "self_evolution_plan": None,
             "self_evolution_execute": None,
+            "memory_write_failure": None,
         }
         self._activity_log.clear()
         self._persist_activity_state(force=True)
@@ -1314,7 +1360,8 @@ class InternalGateway:
                     activity_metadata = {}
 
             if target_service.service_type == "memory":
-                self._touch_activity("memory_task", source_service="gateway", metadata=activity_metadata)
+                if self._is_memory_write_activity(path, request.method):
+                    self._touch_activity("memory_task", source_service="gateway", metadata=activity_metadata)
             elif target_service.service_type == "agent":
                 self._touch_activity("agent_work", source_service="gateway", metadata=activity_metadata)
             elif target_service.service_type == "self_learning":
@@ -1395,13 +1442,6 @@ class InternalGateway:
             return
         try:
             async with aiohttp.ClientSession() as s:
-                # Ensure session exists (lazy-create with caller's session_id)
-                await s.post(
-                    f"{memory_url}/sessions",
-                    json={"session_id": session_id, "metadata": {"source": "gateway"}},
-                    timeout=aiohttp.ClientTimeout(total=2),
-                )
-                # Record the turn
                 await s.post(
                     f"{memory_url}/sessions/{session_id}/turns",
                     json={
@@ -1411,8 +1451,23 @@ class InternalGateway:
                     },
                     timeout=aiohttp.ClientTimeout(total=2),
                 )
-        except Exception:
-            pass  # Tier 1 recording failure must never block the user
+        except Exception as exc:
+            logger.warning(
+                "Tier1 turn record failed for session %s speaker %s: %s",
+                session_id,
+                speaker,
+                exc,
+            )
+            self._touch_activity(
+                "memory_write_failure",
+                source_service="gateway",
+                session_id=session_id,
+                metadata={
+                    "speaker": speaker,
+                    "error": str(exc),
+                    **dict(metadata or {}),
+                },
+            )
 
     async def _record_agent_interaction_to_tier1(
         self, session_id: str, messages: List[Dict[str, Any]], response_text: str
@@ -1492,9 +1547,96 @@ class InternalGateway:
                 metadata={"task_type": task_type, "execution_kind": execution_kind},
             )
             return result
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Failed to fetch approved tasks: {e}")
             raise HTTPException(status_code=502, detail=f"Failed to fetch tasks: {e}")
+
+    @staticmethod
+    def _request_agent_session_id(data: Dict[str, Any]) -> str:
+        session_id = str(data.get("session_id") or "").strip()
+        if session_id:
+            return session_id
+        context = data.get("context")
+        if isinstance(context, dict):
+            return str(context.get("session_id") or "").strip()
+        return ""
+
+    @staticmethod
+    def _is_agent_pull_task_payload(task: Dict[str, Any]) -> bool:
+        metadata = dict(task.get("metadata") or {})
+        governance_type = str(
+            task.get("governance_task_type")
+            or metadata.get("governance_task_type")
+            or task.get("task_type")
+            or ""
+        ).strip().lower()
+        execution_kind = str(
+            task.get("execution_kind")
+            or metadata.get("execution_kind")
+            or ""
+        ).strip().lower()
+        return governance_type == "self_learning" or execution_kind == "body_improvement"
+
+    def _validate_task_writeback_owner(
+        self,
+        *,
+        task_id: str,
+        task: Dict[str, Any],
+        data: Dict[str, Any],
+        decision: str,
+        actor: str,
+    ) -> str:
+        if decision not in {"running", "completed", "failed"}:
+            return ""
+        if str(actor or "").strip().lower() not in {"agent", "cli_agent", "gateway"}:
+            return ""
+        if not self._is_agent_pull_task_payload(task):
+            return ""
+
+        session_id = self._request_agent_session_id(data)
+        if not session_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Agent-pull task decisions require session_id or context.session_id.",
+            )
+        if session_id not in self._agent_session_cache:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Unknown CLI session for task writeback: {session_id}",
+            )
+
+        metadata = dict(task.get("metadata") or {})
+        owner_session_id = str(metadata.get("owner_session_id") or "").strip()
+        if decision == "running":
+            if owner_session_id and owner_session_id != session_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Task {task_id} is already owned by CLI session "
+                        f"{owner_session_id}."
+                    ),
+                )
+            return session_id
+
+        if not owner_session_id:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Task {task_id} is running without owner_session_id; "
+                    "terminal writeback is rejected."
+                ),
+            )
+        if owner_session_id != session_id:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Task {task_id} is owned by {owner_session_id}, "
+                    f"not requester {session_id}."
+                ),
+            )
+        return session_id
 
     async def complete_task(self, task_id: str, request: Request):
         return await self._forward_task_decision(
@@ -1549,16 +1691,49 @@ class InternalGateway:
             raise HTTPException(status_code=400, detail="Invalid JSON")
 
         decision = str(data.get("decision") or default_decision).strip().lower()
+        actor = data.get("actor", default_actor)
         payload = {
             "decision": decision,
             "reason": data.get("reason", default_reason),
-            "actor": data.get("actor", default_actor),
+            "actor": actor,
             "context": data.get("context", {}),
             "metadata": data.get("metadata", {}),
         }
 
         try:
             async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{supervisor_service.address}/self-evolution/tasks/{task_id}",
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as task_resp:
+                    if task_resp.status != 200:
+                        raise HTTPException(
+                            status_code=task_resp.status,
+                            detail=f"Supervisor returned {task_resp.status}",
+                        )
+                    task_result = await task_resp.json()
+                task_payload = (
+                    dict(task_result.get("task") or {})
+                    if isinstance(task_result, dict) and isinstance(task_result.get("task"), dict)
+                    else dict(task_result or {})
+                )
+                session_id = self._validate_task_writeback_owner(
+                    task_id=task_id,
+                    task=task_payload,
+                    data=data,
+                    decision=decision,
+                    actor=str(actor),
+                )
+                if session_id:
+                    payload["session_id"] = session_id
+                    context = dict(payload.get("context") or {})
+                    context.setdefault("session_id", session_id)
+                    payload["context"] = context
+                    metadata = dict(payload.get("metadata") or {})
+                    if decision == "running":
+                        metadata.setdefault("owner_session_id", session_id)
+                        metadata.setdefault("execution_source", "cli_agent_pull")
+                    payload["metadata"] = metadata
                 async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                     if resp.status != 200:
                         raise HTTPException(status_code=resp.status, detail=f"Supervisor returned {resp.status}")
@@ -1592,6 +1767,8 @@ class InternalGateway:
                     except Exception as mem_exc:
                         logger.warning(f"Tier1 finding record failed for task {task_id}: {mem_exc}")
             return result
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Failed to forward task decision: {e}")
             raise HTTPException(status_code=502, detail=f"Failed to forward task decision: {e}")
@@ -1746,6 +1923,7 @@ class InternalGateway:
         return {
             "session_id": session_id,
             **session_data,
+            **self._build_session_lease_snapshot(session_id),
             "active_cli_session_id": self._active_cli_session_id,
             "active_cli_executor": self._build_active_cli_executor_snapshot(),
         }

@@ -16398,6 +16398,58 @@ async def test_batch_review_defers_body_improvement_until_self_learning_finishes
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_batch_review_releases_body_improvement_after_one_self_learning_prereq_deferral(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    await supervisor.plan_self_evolution_task(
+        {
+            "title": "Understand current shell body baseline",
+            "task_family": "self_learning",
+            "source": "self_learning",
+        }
+    )
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Improve shell body after learning",
+            "task_family": "body_upgrade",
+            "execution_kind": "body_improvement",
+            "metadata": {
+                "task_family": "body_upgrade",
+                "execution_kind": "body_improvement",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+
+    async def busy_snapshot():
+        return {
+            "last_user_request_at": "2026-05-25T00:12:00",
+            "last_agent_work_at": "2026-05-25T00:12:00",
+            "last_memory_task_at": None,
+            "last_self_evolution_activity_at": None,
+            "counts": {},
+            "active_sessions": 1,
+        }
+
+    supervisor._fetch_gateway_activity_snapshot = busy_snapshot  # type: ignore[method-assign]
+
+    first = await supervisor.review_self_evolution_tasks(
+        {"idle_window": {"now": "2026-05-25T00:15:00"}}
+    )
+    first_task = next(item for item in first["tasks"] if item["task_id"] == task_id)
+    assert first_task["status"] == "deferred"
+
+    second = await supervisor.review_self_evolution_tasks(
+        {"idle_window": {"now": "2026-05-25T00:16:00"}}
+    )
+    second_task = next(item for item in second["tasks"] if item["task_id"] == task_id)
+
+    assert second_task["status"] == "approved"
+    assert second_task["execution_kind"] == "body_improvement"
+    assert second_task["execution_request"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_gateway_activity_snapshot_retries_after_transient_failure(tmp_path, monkeypatch):
     supervisor = _make_supervisor(tmp_path)
 
@@ -16573,6 +16625,30 @@ async def test_plan_task_normalizes_scheduled_for_into_runtime_payload(tmp_path)
     task = planned["tasks"][0]
     assert task["scheduled_for"] == "2026-06-28T01:00:00"
     assert task["metadata"]["scheduled_for"] == "2026-06-28T01:00:00"
+
+
+@pytest.mark.unit
+def test_candidate_schedule_token_reallocates_when_live_queue_occupies_slot(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._self_evolution_queue.create_task(
+        title="Existing scheduled task",
+        metadata={"scheduled_for": "2026-06-28T01:00:00"},
+    )
+
+    prepared = supervisor._apply_scheduled_for_to_candidate_items(
+        [
+            {
+                "title": "Generated candidate for same slot",
+                "metadata": {"scheduled_for": "2026-06-28T01:00:00"},
+            }
+        ],
+        now=datetime.fromisoformat("2026-06-28T01:00:00"),
+    )
+
+    assert prepared[0]["metadata"]["requested_scheduled_for"] == "2026-06-28T01:00:00"
+    assert prepared[0]["metadata"]["schedule_token_reallocated"] is True
+    assert prepared[0]["metadata"]["scheduled_for"] != "2026-06-28T01:00:00"
+    assert prepared[0]["scheduled_for"] == prepared[0]["metadata"]["scheduled_for"]
 
 
 @pytest.mark.asyncio
@@ -17232,13 +17308,19 @@ async def test_run_self_evolution_cycle_recovers_orphaned_agent_pull_running_tas
         },
     )
 
-    async def fake_active_executor():
-        return {"session_id": "fresh-cli-session", "scene": "idle"}
+    async def fake_owner_session(session_id):
+        assert session_id == "stale-cli-session"
+        return {
+            "session_id": "stale-cli-session",
+            "is_stale": True,
+            "lease_status": "stale",
+            "active_cli_session_id": "fresh-cli-session",
+        }
 
     async def fake_review(request=None):
         return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "idle_window": {}}
 
-    supervisor._fetch_gateway_active_cli_executor = fake_active_executor  # type: ignore[method-assign]
+    supervisor._fetch_gateway_cli_session = fake_owner_session  # type: ignore[method-assign]
     supervisor.review_self_evolution_tasks = fake_review  # type: ignore[method-assign]
 
     result = await supervisor._run_self_evolution_cycle()
@@ -17253,7 +17335,7 @@ async def test_run_self_evolution_cycle_recovers_orphaned_agent_pull_running_tas
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_recovery_skipped_when_gateway_active_executor_fetch_fails(tmp_path):
+async def test_recovery_skipped_when_gateway_owner_session_fetch_fails(tmp_path):
     # P0-3 恢复保守化: when the active CLI executor cannot be determined (gateway
     # unreachable / 5xx), recovery must be a conservative no-op rather than
     # treating active as "" and recovering every running agent-pull task
@@ -17289,10 +17371,10 @@ async def test_recovery_skipped_when_gateway_active_executor_fetch_fails(tmp_pat
         },
     )
 
-    async def failing_active_executor():
+    async def failing_owner_session(_session_id):
         raise HTTPException(status_code=503, detail="gateway down")
 
-    supervisor._fetch_gateway_active_cli_executor = failing_active_executor  # type: ignore[method-assign]
+    supervisor._fetch_gateway_cli_session = failing_owner_session  # type: ignore[method-assign]
 
     recovered = await supervisor._recover_orphaned_agent_pull_tasks()
     updated = await supervisor.get_self_evolution_task(task_id)
@@ -17300,6 +17382,263 @@ async def test_recovery_skipped_when_gateway_active_executor_fetch_fails(tmp_pat
     assert recovered == 0
     assert updated["status"] == "running"
     assert updated["metadata"].get("recovered_from_orphaned_running") is not True
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_recovery_recovers_when_owner_session_missing_from_gateway(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Running learning task owned by deleted CLI",
+            "summary": "Should recover when gateway no longer has the owner session",
+            "task_type": "self_learning",
+            "source": "endogenous_drive",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+    supervisor._self_evolution_queue.update_status(
+        task_id, status="approved", actor="test", reason="ready",
+    )
+    supervisor._self_evolution_queue.update_status(
+        task_id,
+        status="running",
+        actor="cli_agent",
+        reason="Agent pulled task for execution in AUTO mode.",
+        context={"session_id": "deleted-cli-session"},
+    )
+    supervisor._self_evolution_queue.update_metadata(
+        task_id,
+        metadata={
+            "owner_session_id": "deleted-cli-session",
+            "execution_source": "cli_agent_pull",
+        },
+    )
+
+    async def missing_owner_session(session_id):
+        assert session_id == "deleted-cli-session"
+        return {"session_id": session_id, "missing": True}
+
+    supervisor._fetch_gateway_cli_session = missing_owner_session  # type: ignore[method-assign]
+
+    recovered = await supervisor._recover_orphaned_agent_pull_tasks()
+    updated = await supervisor.get_self_evolution_task(task_id)
+
+    assert recovered == 1
+    assert updated["status"] == "approved"
+    assert updated["decision_history"][-1]["context"]["owner_session_missing"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_orphan_recovery_skips_running_agent_pull_task_without_owner(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Running learning task missing owner",
+            "summary": "Unknown ownership must not be recovered every cycle",
+            "task_type": "self_learning",
+            "source": "endogenous_drive",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+    supervisor._self_evolution_queue.update_status(
+        task_id, status="approved", actor="test", reason="ready",
+    )
+    supervisor._self_evolution_queue.update_status(
+        task_id,
+        status="running",
+        actor="cli_agent",
+        reason="Agent pulled task without persisted owner metadata.",
+    )
+    supervisor._self_evolution_queue.update_metadata(
+        task_id,
+        metadata={"execution_source": "cli_agent_pull"},
+    )
+
+    recovered = await supervisor._recover_orphaned_agent_pull_tasks()
+    updated = await supervisor.get_self_evolution_task(task_id)
+
+    assert recovered == 0
+    assert updated["status"] == "running"
+    assert updated["metadata"].get("recovered_from_orphaned_running") is not True
+    assert updated["metadata"]["owner_session_missing_seen_at"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_late_agent_pull_completion_from_approved_reconciles_with_owner(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Late learning completion",
+            "summary": "Completion should survive approved recovery race",
+            "task_type": "self_learning",
+            "source": "endogenous_drive",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+    await supervisor.decide_self_evolution_task(
+        task_id,
+        {"decision": "approve", "actor": "supervisor", "reason": "ready"},
+    )
+    supervisor._self_evolution_queue.update_metadata(
+        task_id,
+        metadata={
+            "owner_session_id": "cli-session-owner",
+            "execution_source": "cli_agent_pull",
+        },
+    )
+
+    result = await supervisor.decide_self_evolution_task(
+        task_id,
+        {
+            "decision": "completed",
+            "actor": "cli_agent",
+            "reason": "Agent finished while supervisor had reset task to approved.",
+            "session_id": "cli-session-owner",
+        },
+    )
+
+    assert result["status"] == "completed"
+    statuses = [entry["status"] for entry in result["task"]["decision_history"]]
+    assert statuses[-2:] == ["running", "completed"]
+    assert result["task"]["decision_history"][-2]["context"]["late_agent_pull_writeback"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_agent_pull_running_noop_rejects_different_owner(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Owned learning task",
+            "summary": "Only the owning CLI may refresh a running agent-pull task",
+            "task_type": "self_learning",
+            "source": "endogenous_drive",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+    await supervisor.decide_self_evolution_task(
+        task_id,
+        {"decision": "approve", "actor": "supervisor", "reason": "ready"},
+    )
+
+    first = await supervisor.decide_self_evolution_task(
+        task_id,
+        {
+            "decision": "running",
+            "actor": "cli_agent",
+            "reason": "owner pulled task",
+            "session_id": "cli-owner-1",
+        },
+    )
+    assert first["status"] == "running"
+    after_first_claim = await supervisor.get_self_evolution_task(task_id)
+    assert after_first_claim["metadata"]["owner_session_id"] == "cli-owner-1"
+
+    with pytest.raises(HTTPException) as exc:
+        await supervisor.decide_self_evolution_task(
+            task_id,
+            {
+                "decision": "running",
+                "actor": "cli_agent",
+                "reason": "different CLI tried to claim no-op running",
+                "session_id": "cli-owner-2",
+            },
+        )
+
+    assert exc.value.status_code == 409
+    updated = await supervisor.get_self_evolution_task(task_id)
+    assert updated["status"] == "running"
+    assert updated["metadata"]["owner_session_id"] == "cli-owner-1"
+
+
+def test_self_evolution_queue_has_explicit_review_and_retry_transitions(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    task = supervisor._self_evolution_queue.create_task(
+        title="Review state coverage",
+        summary="Exercise non-terminal review states",
+    )
+
+    awaiting = supervisor._self_evolution_queue.update_status(
+        task.task_id,
+        status="awaiting_review",
+        actor="test",
+        reason="needs review",
+    )
+    assert awaiting.status == "awaiting_review"
+
+    approved = supervisor._self_evolution_queue.update_status(
+        task.task_id,
+        status="approved",
+        actor="test",
+        reason="review approved",
+    )
+    assert approved.status == "approved"
+
+    running = supervisor._self_evolution_queue.update_status(
+        task.task_id,
+        status="running",
+        actor="test",
+        reason="dispatch",
+    )
+    assert running.status == "running"
+
+    retry = supervisor._self_evolution_queue.update_status(
+        task.task_id,
+        status="retry",
+        actor="test",
+        reason="retryable execution problem",
+    )
+    assert retry.status == "retry"
+
+    back_to_approved = supervisor._self_evolution_queue.update_status(
+        task.task_id,
+        status="approved",
+        actor="test",
+        reason="retry released",
+    )
+    assert back_to_approved.status == "approved"
+
+    completed = supervisor._self_evolution_queue.update_status(
+        task.task_id,
+        status="running",
+        actor="test",
+        reason="dispatch again",
+    )
+    completed = supervisor._self_evolution_queue.update_status(
+        task.task_id,
+        status="completed",
+        actor="test",
+        reason="done",
+    )
+    assert completed.status == "completed"
+
+    with pytest.raises(ValueError, match="terminal"):
+        supervisor._self_evolution_queue.update_status(
+            task.task_id,
+            status="awaiting_review",
+            actor="test",
+            reason="terminal state must stay closed",
+        )
 
 
 @pytest.mark.asyncio
@@ -17362,8 +17701,12 @@ async def test_run_self_evolution_cycle_times_out_agent_pull_execution_started_a
         },
     )
 
-    supervisor._fetch_gateway_active_cli_executor = AsyncMock(  # type: ignore[method-assign]
-        return_value={"session_id": "live-cli-session", "scene": "execution"}
+    supervisor._fetch_gateway_cli_session = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "session_id": "live-cli-session",
+            "is_stale": False,
+            "lease_status": "healthy",
+        }
     )
     supervisor.review_self_evolution_tasks = AsyncMock(  # type: ignore[method-assign]
         return_value={"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": []}
@@ -17376,3 +17719,97 @@ async def test_run_self_evolution_cycle_times_out_agent_pull_execution_started_a
     assert updated["status"] == "failed"
     assert updated["decision_history"][-1]["status"] == "failed"
     assert "timeout" in updated["decision_history"][-1]["reason"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_run_self_evolution_cycle_limits_formal_dispatches_per_cycle(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    task_ids = []
+    for idx in range(3):
+        planned = await supervisor.plan_self_evolution_task(
+            {
+                "title": f"Formal dispatch budget task {idx}",
+                "metadata": {
+                    "execution_kind": "body_switch",
+                    "target_slot_id": f"slot-{idx}",
+                },
+            }
+        )
+        task_id = planned["tasks"][0]["task_id"]
+        task_ids.append(task_id)
+        await supervisor.decide_self_evolution_task(
+            task_id,
+            {
+                "decision": "approve",
+                "actor": "mem_supervisor",
+                "reason": "ready for formal handoff",
+            },
+        )
+
+    async def fake_review(request=None):
+        return {
+            "count": len(task_ids),
+            "tasks": [
+                {"task_id": task_id, "status": "approved"}
+                for task_id in task_ids
+            ],
+            "decision": "approved",
+            "reviewed_statuses": ["approved"] * len(task_ids),
+            "idle_window": {},
+        }
+
+    dispatched = []
+
+    async def fake_dispatch(task):
+        dispatched.append(task.task_id)
+        return {"status": "ok"}
+
+    supervisor.review_self_evolution_tasks = fake_review  # type: ignore[method-assign]
+    supervisor._dispatch_self_evolution_execution_request = fake_dispatch  # type: ignore[method-assign]
+
+    result = await supervisor._run_self_evolution_cycle()
+
+    assert dispatched == [task_ids[0]]
+    assert [item["task_id"] for item in result["dispatched"]] == [task_ids[0]]
+    assert result["dispatch_limit"] == 1
+    assert result["dispatch_budget_exhausted"] == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_fetch_tier1_stats_reports_memory_service_unavailable(tmp_path, monkeypatch):
+    supervisor = _make_supervisor(tmp_path)
+
+    class _FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {"services": {"supervisor": {"service_type": "supervisor"}}}
+
+    class _FakeSession:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, timeout=None):
+            return _FakeResponse()
+
+    monkeypatch.setattr("aiohttp.ClientSession", _FakeSession)
+
+    stats = await supervisor._fetch_tier1_stats()
+
+    assert stats["memory_unavailable"] is True
+    assert stats["memory_unavailable_reason"] == "memory_service_not_registered"
+    assert stats["memory_active"] is False
