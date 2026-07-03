@@ -1,8 +1,9 @@
 """
-VoidCube Live Dashboard — task execution visibility and countdowns.
+VoidCube Live Dashboard — supervisor execution visibility and activity signals.
 
 Fetches real-time data from Gateway (:6000) and Supervisor (:6002)
-to surface what is happening and when the next execution cycle will fire.
+to surface what is happening and how the supervisor currently evaluates
+execution readiness.
 """
 
 from __future__ import annotations
@@ -96,7 +97,7 @@ def fetch_supervisor_tasks(status_filter: str = "") -> Dict[str, Any]:
 
 
 def fetch_idle_window(task_family: str = "general_self_evolution") -> Dict[str, Any]:
-    """Evaluate the idle window for a specific task family."""
+    """Fetch the supervisor runtime-activity evaluation for a task family."""
     return _post_json(
         f"{SUPERVISOR_URL}/runtime/idle-window/evaluate",
         {"task_family": task_family},
@@ -119,16 +120,6 @@ def _fmt_countdown(seconds: Optional[float]) -> str:
     h, r = divmod(int(seconds), 3600)
     m = r // 60
     return f"{h}h{m:02d}m"
-
-
-def _sec_until(target_hour: int, target_min: int = 0) -> float:
-    """Seconds from now until the next occurrence of target_hour:target_min."""
-    now = datetime.now()
-    target = now.replace(hour=target_hour, minute=target_min, second=0, microsecond=0)
-    if target <= now:
-        from datetime import timedelta
-        target += timedelta(days=1)
-    return (target - now).total_seconds()
 
 
 def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
@@ -193,11 +184,8 @@ def build_dashboard() -> Dict[str, Any]:
     user_threshold = int(thresholds.get("user_idle_seconds", 600))
     memory_threshold = int(thresholds.get("memory_idle_seconds", 600))
     workflow_threshold = int(thresholds.get("workflow_idle_seconds", 600))
-    exec_start = int(thresholds.get("execution_window_start_hour", 0))
-    exec_end = int(thresholds.get("execution_window_end_hour", 24))
-
     # ── Countdowns ──────────────────────────────────────────────────
-    # When will each idle condition be met?
+    # When will each activity signal next cross its configured threshold?
     countdowns: Dict[str, Any] = {}
 
     for label, idle_val, thresh in [
@@ -219,27 +207,19 @@ def build_dashboard() -> Dict[str, Any]:
                 "threshold_s": thresh,
             }
 
-    # Execution window countdown
-    now_hour = now.hour
-    in_window = exec_start <= now_hour < exec_end
-    if in_window:
-        window_remaining = _sec_until(exec_end, 0)
-    else:
-        window_remaining = _sec_until(exec_start, 0)
+    # Execution-window gating has been retired. Keep a compatibility banner so
+    # operators can tell the supervisor now runs continuously.
     countdowns["execution_window"] = {
-        "remaining_s": window_remaining if not in_window else max(0.0, window_remaining),
-        "display": _fmt_countdown(window_remaining if not in_window else window_remaining),
-        "met": in_window,
-        "in_window": in_window,
-        "window": f"{exec_start:02d}:00–{exec_end:02d}:00",
+        "remaining_s": 0.0,
+        "display": "always on",
+        "met": True,
+        "in_window": True,
+        "window": "24x7",
     }
 
-    # Overall execution eligibility
-    all_idle_met = all(
-        countdowns[k]["met"]
-        for k in ["user_idle", "agent_idle", "memory_idle", "se_plan_idle", "se_exec_idle"]
-    )
-    can_execute = all_idle_met and in_window
+    # Overall execution eligibility follows the supervisor's current decision,
+    # not a locally reconstructed execution-window gate.
+    can_execute = bool(decisions.get("eligible_for_execution", False))
     countdowns["can_execute"] = {"met": can_execute}
 
     # ── Tasks ───────────────────────────────────────────────────────
@@ -309,9 +289,10 @@ def build_dashboard() -> Dict[str, Any]:
         "next_review_cycle_s": next_review_s,
         "next_review_cycle_display": _fmt_countdown(next_review_s),
         "execution_window": {
-            "start_hour": exec_start,
-            "end_hour": exec_end,
-            "in_window": in_window,
+            "start_hour": 0,
+            "end_hour": 24,
+            "in_window": True,
+            "label": "continuous",
         },
     }
 
@@ -442,9 +423,9 @@ def print_dashboard() -> None:
         title = t["title"][:40]
         print(f"  ║  {status_icon} {title:<42s}   ║")
 
-    # ── Idle window conditions ──────────────────────────────────────
+    # ── Runtime activity signals ────────────────────────────────────
     print(f"  ╠══════════════════════════════════════════════════════════╣")
-    print(f"  ║  Idle Window Conditions                                 ║")
+    print(f"  ║  Runtime Activity Signals                               ║")
 
     conds = [
         ("User idle", "user_idle"),
@@ -459,14 +440,13 @@ def print_dashboard() -> None:
         display = c.get("display", "?")
         print(f"  ║    {icon} {label:<14s} {display:>8s}  (need {c.get('threshold_s', '?')}s)                    ║")
 
-    # Execution window
+    # Continuous execution banner
     ew_cd = cds.get("execution_window", {})
-    ew_icon = "✓" if ew.get("in_window") else "⏳"
-    print(f"  ║    {ew_icon} Exec window  {ew_cd.get('display', '?'):>8s}  ({ew.get('window', '?')})                    ║")
+    print(f"  ║    ✓ Exec lane    {ew_cd.get('display', '?'):>8s}  ({ew_cd.get('window', '?')})                    ║")
 
     # ── Eligibility ─────────────────────────────────────────────────
     print(f"  ╠══════════════════════════════════════════════════════════╣")
-    can = "✓ CAN EXECUTE" if elig["can_execute"] else "✗ BLOCKED"
+    can = "✓ EXECUTION ELIGIBLE" if elig["can_execute"] else "✗ DEFERRED"
     plan_ok = "✓" if elig["eligible_for_planning"] else "✗"
     exec_ok = "✓" if elig["eligible_for_execution"] else "✗"
     print(f"  ║  Status     {can:<40s}   ║")
@@ -488,8 +468,8 @@ def print_dashboard() -> None:
         print(f"  ╠══════════════════════════════════════════════════════════╣")
         print(f"  ║  ⚠ No agent instances registered                        ║")
         print(f"  ║    Agents are launched by the supervisor when a task     ║")
-        print(f"  ║    is approved AND the execution window is open AND      ║")
-        print(f"  ║    all idle conditions are met.                          ║")
+        print(f"  ║    is approved for execution on the current AUTO lane.   ║")
+        print(f"  ║    Activity signals below are advisory context only.     ║")
 
     # ── Footer ──────────────────────────────────────────────────────
     print(f"  ╚══════════════════════════════════════════════════════════╝")
@@ -497,16 +477,14 @@ def print_dashboard() -> None:
 
     # ── Plain-language summary ──────────────────────────────────────
     if not elig["can_execute"]:
-        print("  💡 Why is execution blocked?")
-        if not cds.get("execution_window", {}).get("in_window"):
-            print(f"     → Execution window is {ew.get('window', '?')}.  Current hour: {datetime.now().hour:02d}:00")
-            print(f"     → Window opens in {cds['execution_window']['display']}")
+        print("  💡 Why is execution deferred?")
+        print("     → Supervisor has not approved execution yet.")
         for label, key in conds:
             c = cds.get(key, {})
             if not c.get("met") and c.get("remaining_s", 1) > 0:
-                print(f"     → {label}: {c['display']} remaining (need {c.get('threshold_s', '?')}s total)")
+                print(f"     → {label}: {c['display']} signal gap (reference threshold {c.get('threshold_s', '?')}s)")
         if svc["agents"] == 0:
-            print(f"     → No agent instances are running.  One will be spawned when execution fires.")
+            print(f"     → No agent instances are running. One will be spawned after supervisor approval.")
         print()
 
 

@@ -161,17 +161,17 @@ class Supervisor(
         self.app.add_api_route("/governor-mode/status", self.get_governor_mode_status, methods=["GET"])
 
     async def activate_governor_mode(self, request: dict | None = None) -> Dict[str, Any]:
-        """Enter persistent Governor Mode: start drive + review loops."""
+        """Enable the supervisor AUTO gate: start drive + review loops."""
         await self._start_governor_mode()
         return self._governor_mode_status()
 
     async def deactivate_governor_mode(self, request: dict | None = None) -> Dict[str, Any]:
-        """Exit Governor Mode: stop drive + review loops, keep health-check."""
+        """Disable the supervisor AUTO gate: stop drive + review loops, keep health-check."""
         await self._stop_governor_mode()
         return self._governor_mode_status()
 
     async def get_governor_mode_status(self) -> Dict[str, Any]:
-        """Return current Governor Mode state."""
+        """Return current supervisor AUTO gate state."""
         return self._governor_mode_status()
 
     async def get_body_registry(self) -> Dict[str, Any]:

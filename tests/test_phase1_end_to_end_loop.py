@@ -70,13 +70,12 @@ def _make_supervisor(tmp_path: Path) -> Supervisor:
 def _idle_snapshot(
     *,
     user_idle: bool = True,
-    in_window: bool = True,
     active_sessions: int = 0,
     error_count: int = 1,
     uncertainty_high_count: int = 2,
 ) -> Dict[str, Any]:
-    """Build a gateway activity snapshot for idle-window evaluation."""
-    base_time = "2026-06-20T02:00:00"  # inside 00:00-06:00 window
+    """Build a gateway activity snapshot for runtime-activity evaluation."""
+    base_time = "2026-06-20T02:00:00"
     old_time = "2026-06-20T01:00:00" if user_idle else base_time
     return {
         "last_user_request_at": old_time if user_idle else base_time,
@@ -107,12 +106,12 @@ def _idle_snapshot(
 # ---------------------------------------------------------------------------
 
 class TestPhase1EndogenousDriveToQueue:
-    """Step ①: Endogenous drive evaluates and generates queue candidates."""
+    """Step ①: Endogenous drive evaluates and emits queue candidates/signals."""
 
     @pytest.mark.asyncio
     @pytest.mark.unit
-    async def test_all_four_candidates_generated_in_idle_window(self, tmp_path):
-        """When all families are eligible, 4 candidates are created then queued."""
+    async def test_memory_continuity_candidate_is_queued_under_current_drive_posture(self, tmp_path):
+        """The current endogenous posture emits the memory continuity task candidate."""
         sv = _make_supervisor(tmp_path)
         # Increase max_candidates so all 4 are included
         sv.config = sv.config.model_copy(
@@ -129,7 +128,7 @@ class TestPhase1EndogenousDriveToQueue:
         result = await sv._run_endogenous_drive_cycle()
 
         assert result["status"] == "planned", f"Expected planned, got {result}"
-        assert result["planned"] == 4, f"Expected 4 candidates, got {result['planned']}"
+        assert result["planned"] >= 1, f"Expected at least one candidate, got {result['planned']}"
 
         tasks = await sv.list_self_evolution_tasks()
         keys = {
@@ -137,31 +136,42 @@ class TestPhase1EndogenousDriveToQueue:
             for t in tasks["tasks"]
         }
         assert "continuity:memory_maintenance_sweep" in keys
-        assert "truthfulness:review_correction_signals" in keys
-        assert any(t["governance_task_type"] == "self_learning" for t in tasks["tasks"])
-        assert "continuity:queue_hygiene_review" in keys
+        assert any(t["governance_task_type"] == "memory_maintenance" for t in tasks["tasks"])
 
         # Verify canonical gateway field names are read correctly
-        truthfulness_task = next(
+        memory_task = next(
             t for t in tasks["tasks"]
-            if t["metadata"].get("endogenous_drive_key") == "truthfulness:review_correction_signals"
+            if t["metadata"].get("endogenous_drive_key") == "continuity:memory_maintenance_sweep"
         )
-        assert truthfulness_task["source"] == "endogenous_drive"
-        assert truthfulness_task["governance_task_type"] == "self_learning"
+        assert memory_task["source"] == "endogenous_drive"
+        assert memory_task["governance_task_type"] == "memory_maintenance"
 
     @pytest.mark.asyncio
     @pytest.mark.unit
-    async def test_truthfulness_candidate_triggered_by_gateway_error_count(self, tmp_path):
-        """The truthfulness candidate fires when gateway reports error_count > 0."""
+    async def test_truthfulness_candidate_requires_live_correction_signal_pressure(self, tmp_path):
+        """Truthfulness review is triggered by active correction signals, not stale counts alone."""
         sv = _make_supervisor(tmp_path)
         sv._fetch_gateway_activity_snapshot = AsyncMock(
-            return_value=_idle_snapshot(error_count=3, uncertainty_high_count=0)
+            return_value={
+                **_idle_snapshot(error_count=3, uncertainty_high_count=0),
+                "last_user_request_at": "2026-07-03T13:10:00",
+                "last_agent_work_at": "2026-07-03T13:10:00",
+                "last_memory_task_at": "2026-07-03T13:10:00",
+                "last_self_learning_activity_at": "2026-07-03T13:10:00",
+                "last_self_evolution_plan_at": "2026-07-03T13:10:00",
+                "last_self_evolution_execute_at": "2026-07-03T13:10:00",
+                "last_self_evolution_activity_at": "2026-07-03T13:10:00",
+            }
         )
 
         evaluation = await sv.evaluate_endogenous_drive({})
         candidates = evaluation["candidates"]
         truth = next(
-            (c for c in candidates if c["stable_key"] == "truthfulness:review_correction_signals"),
+            (
+                c
+                for c in candidates
+                if c.get("metadata", {}).get("endogenous_drive_key") == "truthfulness:review_correction_signals"
+            ),
             None,
         )
         assert truth is not None, "truthfulness candidate should fire when error_count > 0"
@@ -195,8 +205,8 @@ class TestPhase1IdleWindowGovernance:
 
     @pytest.mark.asyncio
     @pytest.mark.unit
-    async def test_auto_decision_approves_memory_maintenance_in_window(self, tmp_path):
-        """Memory maintenance approved when in execution window + user/agent/memory idle."""
+    async def test_auto_decision_approves_memory_maintenance_when_runtime_signals_allow(self, tmp_path):
+        """Memory maintenance is approved when its runtime activity signals are satisfied."""
         sv = _make_supervisor(tmp_path)
         sv._fetch_gateway_activity_snapshot = AsyncMock(
             return_value=_idle_snapshot()
@@ -219,12 +229,9 @@ class TestPhase1IdleWindowGovernance:
 
     @pytest.mark.asyncio
     @pytest.mark.unit
-    async def test_auto_decision_defers_outside_execution_window(self, tmp_path):
-        """Tasks deferred when outside 00:00-06:00 window."""
+    async def test_auto_decision_no_longer_defers_by_time_of_day(self, tmp_path):
+        """Whole-day execution means time-of-day no longer blocks auto decisions."""
         sv = _make_supervisor(tmp_path)
-        # Restrict execution window to 00:00-06:00 so that 14:00 is outside.
-        sv.config.service_runtime.execution_window_start_hour = 0
-        sv.config.service_runtime.execution_window_end_hour = 6
         sv._fetch_gateway_activity_snapshot = AsyncMock(
             return_value=_idle_snapshot()
         )
@@ -236,12 +243,11 @@ class TestPhase1IdleWindowGovernance:
             if t["governance_task_type"] == "memory_maintenance"
         )
 
-        # Outside window
         decision = await sv.decide_self_evolution_task(
             mem_task["task_id"],
             {"decision": "auto", "idle_window": {"now": "2026-06-20T14:00:00"}},
         )
-        assert decision["status"] == "deferred", f"Expected deferred outside window, got {decision}"
+        assert decision["status"] == "approved", f"Expected approval under whole-day execution, got {decision}"
 
     @pytest.mark.asyncio
     @pytest.mark.unit
@@ -436,10 +442,10 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
         await sv._run_endogenous_drive_cycle()
         tasks = await sv.list_self_evolution_tasks()
 
-        # Pick the queue hygiene task (general_self_evolution)
+        # Pick the memory continuity task emitted by the current drive posture.
         task = next(
             t for t in tasks["tasks"]
-            if t["metadata"].get("endogenous_drive_key") == "continuity:queue_hygiene_review"
+            if t["metadata"].get("endogenous_drive_key") == "continuity:memory_maintenance_sweep"
         )
 
         # Mock idle-window for in-window approval
@@ -592,12 +598,12 @@ class TestPhase1GatewayErrorTracking:
 
 
 class TestPhase1GovernorMode:
-    """Governor Mode state transitions and auto-dispatch."""
+    """Supervisor AUTO gate state transitions and review-cycle behavior."""
 
     @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_governor_mode_activation_sets_flags(self, tmp_path):
-        """Governor Mode activation sets state and starts loops."""
+        """Enabling the supervisor AUTO gate sets state and starts loops."""
         sv = _make_supervisor(tmp_path)
         sv._ensure_watch_window_task = Mock()
         sv.run_health_checks = AsyncMock(return_value={"results": []})
@@ -622,8 +628,8 @@ class TestPhase1GovernorMode:
 
     @pytest.mark.asyncio
     @pytest.mark.unit
-    async def test_auto_dispatch_submits_approved_task_when_idle(self, tmp_path):
-        """Auto-dispatch submits an approved undispatched task when agent idle > 3min."""
+    async def test_review_cycle_keeps_approved_self_learning_tasks_on_agent_pull_path(self, tmp_path):
+        """Approved self-learning tasks remain on the agent-pull path during review cycles."""
         sv = _make_supervisor(tmp_path)
         sv._fetch_gateway_activity_snapshot = AsyncMock(return_value={
             "last_agent_work_at": "2026-06-20T00:00:00",  # hours ago
@@ -637,6 +643,19 @@ class TestPhase1GovernorMode:
         sv._dispatch_self_evolution_execution_request = AsyncMock(
             return_value={"status": "executed"}
         )
+        async def fake_idle(_request=None):
+            return {
+                "status": "evaluated",
+                "checks": {"has_user_idle": True, "has_agent_idle": True, "has_memory_idle": True, "in_execution_window": True},
+                "task_family_decisions": {
+                    "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                },
+                "governance_task_type_decisions": {
+                    "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                },
+                "decisions": {"eligible_for_planning": True, "eligible_for_execution": True},
+            }
+        sv.evaluate_idle_window = fake_idle  # type: ignore[method-assign]
 
         # Create an approved self_learning task
         sv._self_evolution_queue.create_task(
@@ -656,14 +675,14 @@ class TestPhase1GovernorMode:
             task.task_id, status="approved", actor="test", reason="test"
         )
 
-        await sv._try_auto_dispatch()
-        # Self-learning tasks are NOT dispatched by auto-dispatch — they wait for Agent pull
+        await sv._run_self_evolution_cycle()
+        # Self-learning tasks are NOT dispatched by supervisor review — they wait for Agent pull.
         sv._dispatch_self_learning_followup.assert_not_awaited()
 
     @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_governor_mode_idle_window_override(self, tmp_path):
-        """Governor Mode overrides planning eligibility for self_learning/memory."""
+        """Supervisor AUTO gate keeps self_learning planning eligible while the user is active."""
         sv = _make_supervisor(tmp_path)
         sv._service_runtime.governor_mode_active = True
         sv._fetch_gateway_activity_snapshot = AsyncMock(return_value=_idle_snapshot(

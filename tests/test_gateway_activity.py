@@ -265,6 +265,24 @@ def test_gateway_agent_query_rejects_legacy_proxy_but_still_records_user_activit
     assert activity["counts"]["agent_work_count"] == 1
 
 
+def test_gateway_agent_query_still_records_activity_while_governor_flag_is_active():
+    gateway = InternalGateway(GatewayConfig())
+    gateway._governor_mode_active = True
+    client = TestClient(gateway.app)
+
+    response = client.post(
+        "/v1/agent/query",
+        json={"session_id": "cli-session-1", "messages": [{"role": "user", "content": "hello"}]},
+    )
+
+    assert response.status_code == 410
+    assert "Gateway agent proxy has been removed" in response.json()["detail"]
+
+    activity = client.get("/admin/activity").json()
+    assert activity["last_user_request_at"] is not None
+    assert activity["counts"]["user_request_count"] == 1
+
+
 def test_gateway_body_status_exposes_cli_executor_and_passive_body_slots_only():
     gateway = InternalGateway(GatewayConfig())
     client = TestClient(gateway.app)

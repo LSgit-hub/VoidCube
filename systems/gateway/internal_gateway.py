@@ -1007,7 +1007,11 @@ class InternalGateway:
             raise HTTPException(status_code=500, detail=str(e))
 
     async def set_governor_mode(self, request: Request):
-        """Receive governor mode state from supervisor."""
+        """Receive the supervisor AUTO gate state from supervisor.
+
+        The route and returned key keep the historical `governor_mode` naming
+        for compatibility with older clients.
+        """
         try:
             data = await request.json()
             active = bool(data.get("active", False))
@@ -1864,12 +1868,6 @@ class InternalGateway:
         try:
             data = await request.json()
 
-            if self._governor_mode_active:
-                raise HTTPException(
-                    status_code=503,
-                    detail="系统处于全自动模式，agent 正在自主规划并探索学习。请稍后再试。",
-                )
-            
             session_id = data.get("session_id") or str(uuid.uuid4())
             activity_metadata = self._extract_activity_metadata_from_payload(data)
             self._touch_activity("user_request", session_id=session_id, metadata=activity_metadata)

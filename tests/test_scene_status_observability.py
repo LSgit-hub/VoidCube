@@ -74,3 +74,43 @@ def test_status_scene_bar_includes_subagent_summary(monkeypatch, capsys):
     assert "🤖 API-A: executing" in output
     assert "SA 2+1" in output
     assert "scan workspace" in output
+
+
+def test_build_dashboard_uses_supervisor_execution_eligibility_without_local_window_gate(monkeypatch):
+    monkeypatch.setattr(dashboard, "fetch_gateway_services", lambda: {"services": {}})
+    monkeypatch.setattr(
+        dashboard,
+        "fetch_gateway_activity",
+        lambda: {
+            "last_user_request_at": None,
+            "last_agent_work_at": None,
+            "last_memory_task_at": None,
+            "last_self_evolution_plan_at": None,
+            "last_self_evolution_execute_at": None,
+        },
+    )
+    monkeypatch.setattr(dashboard, "fetch_supervisor_state", lambda: {})
+    monkeypatch.setattr(dashboard, "fetch_supervisor_tasks", lambda status_filter="": {"tasks": []})
+    monkeypatch.setattr(
+        dashboard,
+        "fetch_idle_window",
+        lambda task_family="general_self_evolution": {
+            "checks": {"in_execution_window": True, "has_user_idle": False},
+            "idle_seconds": {},
+            "thresholds": {
+                "user_idle_seconds": 600,
+                "memory_idle_seconds": 600,
+                "workflow_idle_seconds": 600,
+            },
+            "decisions": {
+                "eligible_for_planning": True,
+                "eligible_for_execution": True,
+            },
+        },
+    )
+
+    built = dashboard.build_dashboard()
+
+    assert built["eligibility"]["can_execute"] is True
+    assert built["countdowns"]["execution_window"]["display"] == "always on"
+    assert built["execution_window"]["label"] == "continuous"

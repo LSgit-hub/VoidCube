@@ -1253,6 +1253,20 @@ def test_current_cli_agent_role_stays_supervisor_task_while_auto_task_is_unwindi
     assert cli._current_cli_agent_role() == "supervisor_task"
 
 
+def test_process_command_allows_regular_slash_commands_while_auto_mode_active(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._auto_mode_active = True
+    cli._current_auto_task = {"task_id": "learn-allow-help"}
+
+    called = {"help": 0}
+
+    monkeypatch.setattr("cli._cprint", lambda *args, **kwargs: None)
+    cli.show_help = lambda: called.__setitem__("help", called["help"] + 1)
+
+    assert cli.process_command("/help") is True
+    assert called["help"] == 1
+
+
 def test_push_cli_agent_scene_includes_session_id(monkeypatch):
     requests = []
 

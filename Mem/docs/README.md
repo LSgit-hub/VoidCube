@@ -22,7 +22,7 @@ Core principles:
 In VoidCube terms, these docs mainly cover:
 - how Mem stores long-term memory truth,
 - how Mem preserves identity continuity evidence,
-- how Memory Mode and Governor Mode share one soul domain, and
+- how memory stewardship and supervisor governance share one soul domain, and
 - how downstream governance can rely on audit-safe memory rather than raw transcript drift.
 
 They also support one practical project goal:

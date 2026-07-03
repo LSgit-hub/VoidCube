@@ -8,7 +8,7 @@ It answers five practical questions:
 
 - what the soul is in this system
 - how memory and governance coexist inside Mem
-- what `Memory Mode` and `Governor Mode` mean
+- what the soul layer's memory stewardship and supervisor governance roles mean
 - which inputs and outputs belong to the soul layer
 - how soul-side governance relates to gateway, CLI, and executors
 
@@ -88,27 +88,27 @@ The current implementation already writes governance history into soul-side stor
 
 ## 4. Modes
 
-Mem has two main operating modes:
+Mem has two main operating roles:
 
-- `Memory Mode`
-- `Governor Mode`
+- memory stewardship
+- supervisor governance
 
-These are not two separate systems. They are two roles of the same soul layer.
+These are not two separate systems. They are two responsibilities of the same soul layer.
 
 In VoidCube architecture terms, they share one API-B governance and memory domain.
 
-In the current baseline, they are also understood as two identities of the same Mem-side model thread under different time windows and permissions.
+Historical docs often called them `Memory Mode` and `Governor Mode`. In the current baseline, the runtime should be understood as a continuous background governance system with a shared soul-side memory/governance domain, not as two time-window-driven modes.
 
 That is also why this side of the system uses a separately configured model/API capability:
 
 - the Agent-side working model handles task execution and short-term work memory
 - the Mem-side model handles long-term memory compression, organization, interpretation, and governance decisions
 
-## 5. Memory Mode
+## 5. Memory Stewardship Role
 
 ### 5.1 Purpose
 
-The default state of the soul layer.
+The baseline responsibility of the soul layer.
 
 ### 5.2 Responsibilities
 
@@ -129,7 +129,7 @@ The default state of the soul layer.
 
 ### 5.4 Constraints
 
-Memory mode must not directly approve:
+This role must not directly approve:
 
 - `probe` entry
 - `active` promotion
@@ -138,11 +138,11 @@ Memory mode must not directly approve:
 
 It may summarize facts, but it must not replace governance.
 
-## 6. Governor Mode
+## 6. Supervisor Governance Role
 
 ### 6.1 Purpose
 
-Governor mode is activated when the system enters body governance or self-evolution governance scenarios:
+This governance role is responsible whenever the system enters body governance or self-evolution governance scenarios:
 
 - candidate review
 - probe approval
@@ -150,11 +150,11 @@ Governor mode is activated when the system enters body governance or self-evolut
 - rollback
 - post-switch observation
 - self-evolution task planning
-- execution-window release decisions
+- execution release / defer decisions
 
 ### 6.2 Current Implementation Direction
 
-At the current phase, Governor Mode is taking shape as a structured governance protocol rather than a free-form model persona.
+At the current phase, supervisor governance is taking shape as a structured protocol rather than a free-form model persona.
 
 The implemented path now includes:
 
@@ -177,7 +177,7 @@ This means soul-side governance already exists in executable protocol form.
 - `rollback_request`
 - `post_switch_review`
 - `self_evolution_plan_request`
-- `execution_window_review`
+- `execution_review`
 
 ### 6.4 Typical Outputs
 
@@ -192,14 +192,14 @@ This means soul-side governance already exists in executable protocol form.
 
 ### 6.5 Constraints
 
-Governor mode must:
+This governance role must:
 
 - produce structured outputs
 - preserve evidence summaries
 - preserve auditability
 - separate judgment from mechanical execution
 
-Governor mode must not directly perform body actions itself. It decides. Deterministic executors act.
+This governance role must not directly perform body actions itself. It decides. Deterministic executors act.
 
 ## 7. Governance Capability Requirement
 
@@ -289,9 +289,9 @@ Responses should include:
 - `watch_window_hint`
 - `writeback_events`
 
-## 10. Decisions Reserved For Governor Mode
+## 10. Decisions Reserved For Supervisor Governance
 
-Only Governor Mode may decide:
+Only supervisor governance may decide:
 
 - whether a body may enter `probe`
 - whether a `probe` body may become `active`
@@ -309,7 +309,7 @@ These decisions must not be made by:
 
 ## 11. Automatic Governance State
 
-The current architecture supports an automatic governance state as part of Governor Mode.
+The current architecture supports an automatic governance state as part of supervisor governance.
 
 Its current shape is:
 
@@ -318,7 +318,7 @@ Its current shape is:
 - the task evaluates health during the observation period
 - if healthy and window expires cleanly, the retired body is recycled
 - if unhealthy, rollback is triggered automatically
-- in self-evolution windows, governance may also release, defer, cancel, or pause queued work
+- in self-evolution governance cycles, governance may also release, defer, cancel, or pause queued work
 
 This is the first practical form of soul-side self-regulation in the project.
 

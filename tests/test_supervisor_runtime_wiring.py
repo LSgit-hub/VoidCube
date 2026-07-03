@@ -874,13 +874,13 @@ async def test_supervisor_periodic_compression_runtime_does_not_route_through_ex
     supervisor._health_check_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._health_check_task
-    # Review and drive loops are only started in Governor Mode now.
-    # They are None by default (Memory Mode) and were set to None above.
+    # Review and drive loops are only started behind the supervisor AUTO gate.
+    # They remain disabled during baseline health-check startup.
     assert supervisor._self_evolution_review_task is None, (
-        "Review loop should not be running in Memory Mode"
+        "Review loop should not be running before the supervisor AUTO gate is enabled"
     )
     assert supervisor._endogenous_drive_task is None, (
-        "Drive loop should not be running in Memory Mode"
+        "Drive loop should not be running before the supervisor AUTO gate is enabled"
     )
 
 
@@ -1026,7 +1026,7 @@ async def test_supervisor_periodic_self_evolution_review_runtime_invokes_cycle(t
     supervisor.config = config
 
     await supervisor._start_periodic_tasks()
-    # Review loop is not started in Memory Mode — activate Governor Mode
+    # Review loop is not started during baseline startup — enable the AUTO gate.
     await supervisor._start_governor_mode()
 
     with pytest.raises(asyncio.CancelledError):
@@ -1036,7 +1036,7 @@ async def test_supervisor_periodic_self_evolution_review_runtime_invokes_cycle(t
     supervisor._health_check_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._health_check_task
-    # Drive loop was also started by Governor Mode
+    # Drive loop was also started by the AUTO gate.
     supervisor._endogenous_drive_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._endogenous_drive_task
@@ -1065,7 +1065,7 @@ async def test_supervisor_periodic_endogenous_drive_runtime_invokes_cycle(tmp_pa
     supervisor.config = config
 
     await supervisor._start_periodic_tasks()
-    # Drive loop is not started in Memory Mode — activate Governor Mode
+    # Drive loop is not started during baseline startup — enable the AUTO gate.
     await supervisor._start_governor_mode()
 
     with pytest.raises(asyncio.CancelledError):
@@ -1075,7 +1075,7 @@ async def test_supervisor_periodic_endogenous_drive_runtime_invokes_cycle(tmp_pa
     supervisor._health_check_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._health_check_task
-    # Review loop was also started by Governor Mode
+    # Review loop was also started by the AUTO gate.
     supervisor._self_evolution_review_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._self_evolution_review_task
@@ -1152,7 +1152,7 @@ async def test_supervisor_self_evolution_review_loop_survives_iteration_exceptio
     supervisor.config = config
 
     await supervisor._start_periodic_tasks()
-    # Review loop only starts in Governor Mode
+    # Review loop only starts after the supervisor AUTO gate is enabled.
     await supervisor._start_governor_mode()
 
     with pytest.raises(asyncio.CancelledError):
@@ -1162,7 +1162,7 @@ async def test_supervisor_self_evolution_review_loop_survives_iteration_exceptio
     supervisor._health_check_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._health_check_task
-    # Drive loop was also started by Governor Mode
+    # Drive loop was also started by the AUTO gate.
     supervisor._endogenous_drive_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._endogenous_drive_task

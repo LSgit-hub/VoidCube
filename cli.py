@@ -7680,21 +7680,6 @@ class VoidcubeCLI:
         cmd_lower = command.lower().strip()
         cmd_original = command.strip()
 
-        # ── Auto mode guard: only /auto-q is accepted for user commands ──
-        # AUTO-execution prompts are synthetic queue items injected by the
-        # CLI workflow and must bypass slash-command gating.
-        if self._auto_mode_active:
-            _base = cmd_lower.split()[0].lstrip("/")
-            _is_auto_task = command.startswith("[AUTO Learning Task]") or command.startswith(
-                "[AUTO Body Improvement Task]"
-            )
-            if _base not in ("auto-q", "auto-quit", "auto-stop") and not _is_auto_task:
-                _cprint(
-                    "  🔒 当前为全自动模式，agent 正在自主规划并探索学习。\n"
-                    "     如需 agent 辅助请退出 auto 模式，仅接受 /auto-q。"
-                )
-                return True
-
         # Resolve aliases via central registry so adding an alias is a one-line
         # change in VoidCube_cli/commands.py instead of touching every dispatch site.
         from VoidCube_cli.commands import resolve_command as _resolve_cmd
@@ -8080,11 +8065,12 @@ class VoidcubeCLI:
         return True
 
     def _handle_auto_command(self, cmd: str):
-        """Handle /auto [focus] — enter persistent Governor Mode.
+        """Handle /auto [focus] — enable the supervisor AUTO lane.
 
         Activates the endogenous drive and self-evolution review loops
-        that run continuously at their configured intervals.  Use /auto-q
-        to exit Governor Mode and return to Memory Mode.
+        that run continuously at their configured intervals. The foreground
+        CLI remains available for normal user interaction while AUTO is on.
+        Use /auto-q to stop the supervisor AUTO lane.
 
         An optional focus area can be provided:
         /auto security, /auto performance, etc.
@@ -8094,7 +8080,7 @@ class VoidcubeCLI:
         parts = cmd.strip().split(maxsplit=1)
         focus = parts[1].strip() if len(parts) > 1 else ""
 
-        _cprint(f"  🧠 Activating Governor Mode...")
+        _cprint(f"  🧠 Activating supervisor AUTO lane...")
         if focus:
             _cprint(f"     Focus: {focus}")
 
@@ -8176,7 +8162,7 @@ class VoidcubeCLI:
                         self._poll_auto_mode_workflow()
                     except Exception:
                         pass
-                    _cprint(f"  ✅ Governor Mode [bold green]ACTIVE[/]")
+                    _cprint(f"  ✅ Supervisor AUTO lane [bold green]ACTIVE[/]")
                     _cprint(f"     Drive loop:  {'running' if resp.get('drive_loop_running') else 'stopped'}")
                     _cprint(f"     Review loop: {'running' if resp.get('review_loop_running') else 'stopped'}")
                     if not resp.get("endogenous_drive_enabled", True):
@@ -8190,10 +8176,11 @@ class VoidcubeCLI:
                     if snapshot:
                         for line in self._format_supervisor_status_snapshot(snapshot)[:4]:
                             _cprint(f"     {line}")
-                    _cprint(f"     Use /auto-q to return to Memory Mode.")
+                    _cprint(f"     Foreground CLI interaction remains available.")
+                    _cprint(f"     Use /auto-q to stop the supervisor AUTO lane.")
                     _cprint(f"     Monitor: {supervisor_url}/ui")
                 else:
-                    _cprint(f"  ⚠️  Governor Mode activation failed.")
+                    _cprint(f"  ⚠️  Supervisor AUTO lane activation failed.")
                     if not resp.get("endogenous_drive_enabled", True):
                         _cprint(f"     endogenous_drive_enabled is False in config.")
             except Exception:
@@ -8202,8 +8189,8 @@ class VoidcubeCLI:
         threading.Thread(target=_call_activate_governor, daemon=True, name="governor-activate").start()
 
     def _handle_auto_q_command(self):
-        """Handle /auto-q — exit Governor Mode, return to Memory Mode."""
-        _cprint(f"  🔄 Exiting Governor Mode...")
+        """Handle /auto-q — stop the supervisor AUTO lane."""
+        _cprint(f"  🔄 Stopping supervisor AUTO lane...")
 
         import threading, json as _json
 
@@ -8245,11 +8232,11 @@ class VoidcubeCLI:
                     agent_role="supervisor_task",
                 )
                 self._append_auto_execution_event("AUTO 已退出", tone="warn")
-                _cprint(f"  💤 Governor Mode [bold]DEACTIVATED[/] — returned to Memory Mode.")
-                _cprint(f"     Only health-check loop is running.")
-                _cprint(f"     Use /auto to re-enter Governor Mode.")
+                _cprint(f"  💤 Supervisor AUTO lane [bold]STOPPED[/].")
+                _cprint(f"     The baseline health-check loop remains running.")
+                _cprint(f"     Use /auto to restart the supervisor AUTO lane.")
             else:
-                _cprint(f"  ⚠️  Governor Mode could not be deactivated (still active).")
+                _cprint(f"  ⚠️  Supervisor AUTO lane could not be stopped (still active).")
 
         threading.Thread(target=_call_deactivate_governor, daemon=True, name="governor-deactivate").start()
 
@@ -8272,7 +8259,7 @@ class VoidcubeCLI:
             except Exception:
                 pass
 
-        # 2. Synchronously deactivate Governor Mode on the supervisor
+        # 2. Synchronously stop the supervisor AUTO lane
         import json as _json
         try:
             from VoidCube_cli.config import load_config
@@ -8306,14 +8293,14 @@ class VoidcubeCLI:
                     agent_role="supervisor_task",
                 )
                 self._append_auto_execution_event("AUTO 已退出", tone="warn")
-                _cprint(f"  💤 Governor Mode [bold]DEACTIVATED[/] — returned to Memory Mode.")
-                _cprint(f"     Only health-check loop is running.")
-                _cprint(f"     Use /auto to re-enter Governor Mode.")
+                _cprint(f"  💤 Supervisor AUTO lane [bold]STOPPED[/].")
+                _cprint(f"     The baseline health-check loop remains running.")
+                _cprint(f"     Use /auto to restart the supervisor AUTO lane.")
                 self._record_supervisor_ui_activity_safe("auto_mode_exit", scene="idle",
                     summary="AUTO mode exited via fast-path /auto-q")
                 return True
             else:
-                _cprint(f"  ⚠️  Governor Mode could not be deactivated (still active).")
+                _cprint(f"  ⚠️  Supervisor AUTO lane could not be stopped (still active).")
                 return False
         except Exception as exc:
             # Supervisor unreachable — still exit local auto mode to unblock the user
@@ -8339,7 +8326,7 @@ class VoidcubeCLI:
 
         Attempts every available path to exit cleanly:
         1. Interrupt the running agent (non-blocking)
-        2. Synchronously deactivate Governor Mode (with short timeout)
+        2. Synchronously stop the supervisor AUTO lane (with short timeout)
         3. Mark any in-progress AUTO task as interrupted via Gateway
         4. Unregister from Gateway session
         Returns True if cleanup was attempted (best-effort).
@@ -8374,7 +8361,7 @@ class VoidcubeCLI:
                 method="POST",
             )
             _json.loads(_req.urlopen(r, timeout=5).read())
-            _cprint(f"  ✅ Governor Mode deactivated")
+            _cprint(f"  ✅ Supervisor AUTO lane stopped")
         except Exception as exc:
             _cprint(f"  ⚠️  Governor deactivation failed: {exc}")
 
@@ -8413,7 +8400,7 @@ class VoidcubeCLI:
             session_id=getattr(self, "session_id", None),
             agent_role="supervisor_task",
         )
-        _cprint(f"  🛡️  Force quit complete — returned to Memory Mode.")
+        _cprint(f"  🛡️  Force quit complete — supervisor AUTO lane stopped.")
         return True
 
     def _record_supervisor_ui_activity_safe(self, event_type: str, *, scene: str = "idle", summary: str = "") -> None:
@@ -11596,7 +11583,8 @@ class VoidcubeCLI:
                 # Bundle text + images as a tuple when images are present
                 payload = (text, images) if images else text
 
-                # ── Auto mode guard: /auto-q takes fast path, all else blocked ──
+                # Keep /auto-q as a fast-path exit while allowing the main CLI
+                # to remain usable during supervisor AUTO execution.
                 if self._auto_mode_active:
                     if text and _looks_like_slash_command(text):
                         _base = text.strip().lstrip("/").split()[0].lower()
@@ -11607,12 +11595,6 @@ class VoidcubeCLI:
                             self._exit_auto_mode_fast()
                             event.app.invalidate()
                             return
-                    _cprint(
-                        "  🔒 当前为全自动模式，agent 正在自主规划并探索学习。\n"
-                        "     正常退出: /auto-q   紧急强制退出: Ctrl+D"
-                    )
-                    event.app.current_buffer.reset(append_to_history=True)
-                    return
 
                 if self._agent_running and not (text and _looks_like_slash_command(text)):
                     if self.busy_input_mode == "queue":

@@ -4337,9 +4337,9 @@ class SupervisorUIMixin:
         checks = dict(idle_snapshot.get("checks") or {})
         error_count = int(counts.get("error_count") or 0)
         # Whole-day execution (baseline §6): there is no longer a time-of-day
-        # execution window. Pinned to True so the room theme stays in its
-        # "active/day" state and downstream window panels read as always-on.
-        # The parameter is retained through the render chain for compatibility.
+        # execution window. This compatibility flag is pinned to True so the
+        # room theme stays in its "active/day" state and downstream readers
+        # can keep rendering an always-on lane without reviving old gating.
         in_execution_window = True
 
         # ── Body status (direct from registry snapshot, not task queue) ──
@@ -4553,6 +4553,8 @@ class SupervisorUIMixin:
             "drive_candidates": drive_candidates,
             "drive_available": drive_available,
             "error_count": error_count,
+            # Historical compatibility field: always True under whole-day
+            # execution; callers must not treat it as a live gating result.
             "in_execution_window": in_execution_window,
             "active_sessions": int(activity.get("active_sessions") or 0),
             "timeline": await self._recent_supervisor_observation_timeline(limit=10),
@@ -4646,6 +4648,9 @@ class SupervisorUIMixin:
         drive_candidates: List[Dict[str, Any]],
         in_execution_window: bool,
     ) -> Dict[str, Any]:
+        # `in_execution_window` is retained as a compatibility parameter for
+        # older render-chain signatures. Under the current baseline it is an
+        # always-on display flag, not a scheduling gate.
         creativity_tasks = [task for task in all_tasks if self._is_creativity_ui_task(task)]
         supervisor_tasks = [task for task in all_tasks if not self._is_creativity_ui_task(task)]
 

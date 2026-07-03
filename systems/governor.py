@@ -74,10 +74,10 @@ class GovernorResponse(BaseModel):
 
 
 class GovernorDecisionEngine:
-    """Deterministic evaluator for Governor Mode requests + optional LLM advisor.
+    """Deterministic evaluator for supervisor governance requests + optional LLM advisor.
 
     This engine is intentionally conservative and protocol-safe.  It provides the
-    primary authority for switch, rollback, and execution-window decisions.
+    primary authority for switch, rollback, and execution-governance decisions.
 
     For ambiguous cases (low confidence, request_more_evidence, medium+ risk),
     the optional ``LLMGovernorReasoner`` can provide additional analysis without
@@ -643,4 +643,3 @@ class LLMGovernorReasoner:
             pass
 
         return {"llm_available": True, "error": "LLM analysis failed"}
-

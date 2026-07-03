@@ -303,7 +303,7 @@ class SupervisorServiceRuntimeConfig(BaseModel):
     body_improvement_max_files: int = 5
     # Interval in seconds for the structured 4-layer memory maintenance loop
     # (Event→Scene→Arc→Epoch compression via MemoryMaintenanceEngine).
-    # Runs in Memory Mode independently of the task queue.  0 = disabled.
+    # Runs as a baseline supervisor background task independent of AUTO. 0 = disabled.
     structured_memory_maintenance_interval: int = 3600
 
 

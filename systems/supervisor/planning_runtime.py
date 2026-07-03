@@ -4745,12 +4745,6 @@ class PlanningRuntimeMixin:
         )
         return max(300, review_interval)
 
-    def _next_execution_window_start(self, now: datetime) -> datetime:
-        # Whole-day execution (baseline §6): there is no longer a time-of-day
-        # window, so the "next window start" is simply now. Kept as a method so
-        # existing callers / scheduling code paths remain stable.
-        return now
-
     def _align_scheduled_for(self, when: datetime) -> datetime:
         slot_seconds = self._schedule_slot_interval_seconds()
         base = when.replace(second=0, microsecond=0)
@@ -4763,12 +4757,6 @@ class PlanningRuntimeMixin:
         if remainder == 0:
             return base
         return base + timedelta(seconds=(slot_seconds - remainder))
-
-    def _scheduled_for_within_window(self, when: datetime) -> datetime:
-        # Whole-day execution (baseline §6): no window clamping — any time is a
-        # valid scheduling slot. Kept as an identity pass-through so callers and
-        # tests that reference it stay stable.
-        return when
 
     def _occupied_scheduled_for_tokens(self) -> set[str]:
         terminal = {"completed", "failed", "cancelled"}
@@ -4796,11 +4784,9 @@ class PlanningRuntimeMixin:
         scheduled: list[str] = []
         slot_seconds = self._schedule_slot_interval_seconds()
 
-        cursor = self._scheduled_for_within_window(
-            self._align_scheduled_for(self._next_execution_window_start(current))
-        )
+        cursor = self._align_scheduled_for(current)
         while len(scheduled) < count:
-            cursor = self._scheduled_for_within_window(self._align_scheduled_for(cursor))
+            cursor = self._align_scheduled_for(cursor)
             token = cursor.isoformat()
             if token not in occupied:
                 occupied.add(token)
@@ -5314,9 +5300,9 @@ class PlanningRuntimeMixin:
             or getattr(getattr(self, "_service_runtime", None), "governor_mode_active", False)
         )
         if governor_mode_active:
-            # In Governor Mode, self_learning and memory_maintenance planning
-            # is no longer gated by idle_window — the user has explicitly
-            # authorised governance.  Execution still follows its own gating.
+            # With the supervisor AUTO gate active, self_learning and
+            # memory_maintenance planning is no longer blocked on user-idle
+            # style signals. Execution still follows its own runtime decision.
             governance_task_type_decisions["self_learning"]["eligible_for_planning"] = True
             governance_task_type_decisions["memory_maintenance"]["eligible_for_planning"] = True
             task_family_decisions["self_learning"]["eligible_for_planning"] = True
@@ -5366,10 +5352,14 @@ class PlanningRuntimeMixin:
                 "has_self_evolution_plan_idle": has_self_evolution_plan_idle,
                 "has_self_evolution_execute_idle": has_self_evolution_execute_idle,
                 "has_self_evolution_idle": has_self_evolution_idle,
+                # Historical compatibility flag: always True under whole-day
+                # execution and no longer a live time-window gate.
                 "in_execution_window": in_execution_window,
             },
             "governance_task_type_decisions": governance_task_type_decisions,
             "task_family_decisions": task_family_decisions,
+            # Historical compatibility key: indicates the supervisor AUTO gate
+            # is active, not that a separate legacy CLI mode owns execution.
             "governor_mode_active": governor_mode_active,
             "decisions": {
                 "eligible_for_planning": selected_task_decisions["eligible_for_planning"],
@@ -6102,20 +6092,19 @@ class PlanningRuntimeMixin:
                 "Agent-pull self-learning task approved for API-A execution. AUTO baseline keeps this path directly pull -> execute -> write back.",
             )
 
-        # In Governor Mode, self_learning and memory_maintenance are
-        # approved without idle-window gating — the user has explicitly
-        # authorised governance.  Other task families keep their
-        # existing idle-window and execution-window requirements.
+        # With the supervisor AUTO gate active, self_learning and
+        # memory_maintenance can execute without waiting for user-idle style
+        # signals. Other task families still follow their runtime decisions.
         if governor_mode_active:
             if task_type == "self_learning":
                 return (
                     "approved",
-                    "Governor Mode active: self-learning task approved without idle-window requirement. Learn-only constraints still apply.",
+                    "Supervisor AUTO gate active: self-learning task approved without waiting for idle-window signals. Learn-only constraints still apply.",
                 )
             if task_type == "memory_maintenance":
                 return (
                     "approved",
-                    "Governor Mode active: memory-maintenance task approved without idle-window requirement.",
+                    "Supervisor AUTO gate active: memory-maintenance task approved without waiting for idle-window signals.",
                 )
 
         decision = (
@@ -6133,11 +6122,11 @@ class PlanningRuntimeMixin:
             if task_type == "memory_maintenance":
                 return (
                     "approved",
-                    "Task approved for memory maintenance because the system is inside the execution window and user, runtime, memory, and workflow idle requirements are satisfied.",
+                    "Task approved for memory maintenance because the required user, runtime, memory, and workflow idle requirements are satisfied.",
                 )
             return (
                 "approved",
-                "Task approved for the next execution handoff because the system is inside the execution window and idle requirements are satisfied.",
+                "Task approved for the next execution handoff because the required runtime activity and idle requirements are satisfied.",
             )
         if task_type == "self_learning":
             return (
@@ -6147,11 +6136,11 @@ class PlanningRuntimeMixin:
         if task_type == "memory_maintenance":
             return (
                 "deferred",
-                "Task deferred because memory maintenance requires the execution window plus idle user, runtime, memory, and workflow facts.",
+                "Task deferred because memory maintenance still requires idle user, runtime, memory, and workflow facts before the supervisor will execute it.",
             )
         return (
             "deferred",
-            "Task deferred because the execution window or idle requirements are not yet satisfied. The task remains queued for future review.",
+            "Task deferred because the current runtime activity signals are not yet satisfied. The task remains queued for future review.",
         )
 
     def _has_pending_self_learning_prerequisite(

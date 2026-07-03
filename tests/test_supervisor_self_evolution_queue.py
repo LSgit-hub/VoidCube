@@ -17160,7 +17160,7 @@ async def test_memory_maintenance_auto_decision_defers_when_memory_activity_is_r
     assert result["task"]["decision_history"][-1]["governance_task_type"] == "memory_maintenance"
     assert result["task"]["decision_history"][-1]["task_family"] == "memory_maintenance"
     assert result["task"]["decision_history"][-1]["execution_kind"] == "memory_maintenance"
-    assert "memory maintenance requires the execution window plus idle user, runtime, memory" in result["task"]["decision_reason"]
+    assert "memory maintenance still requires idle user, runtime, memory, and workflow facts" in result["task"]["decision_reason"]
 
 
 @pytest.mark.asyncio

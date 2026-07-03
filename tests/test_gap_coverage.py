@@ -142,7 +142,7 @@ class TestServiceRuntimeLifecycle:
             assert sv._service_runtime_started is True
             assert sv._health_check_task is not None
             assert sv._self_evolution_review_task is None, (
-                "Review loop should not start in Memory Mode"
+                "Review loop should not start before the supervisor AUTO gate is enabled"
             )
             await sv._stop_periodic_tasks()
             assert sv._service_runtime_started is False
@@ -251,7 +251,7 @@ class TestConfigurationValidation:
         cfg = SupervisorConfig(
             execution=SupervisorExecutionConfig(gateway_address="http://gw:6000"),
             service_runtime=SupervisorServiceRuntimeConfig(
-                endogenous_drive_interval=600, execution_window_end_hour=6,
+                endogenous_drive_interval=600,
             ),
             body_runtime=SupervisorBodyRuntimeConfig(slots_dir_name=".custom-slots"),
         )
