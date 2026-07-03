@@ -92,7 +92,7 @@ CLI 运维入口应直接依赖 gateway / executor 标准面；当某条旧 fall
 
 网关应成为系统活动事实源，至少维护：
 
-- `last_user_request_at`
+- `last_user_request_at`（历史字段；当前用户 CLI 直连 LLM provider，实时系统无活 feeder，不再作为用户空闲硬门）
 - `last_agent_work_at`
 - `last_memory_task_at`
 - `last_self_learning_activity_at`
@@ -100,7 +100,7 @@ CLI 运维入口应直接依赖 gateway / executor 标准面；当某条旧 fall
 - `last_self_evolution_execute_at`
 - `last_self_evolution_activity_at`
 
-后续所有“是否空闲”“是否允许自提升任务执行”的判断，应优先依据网关活动事实，而不是由各进程各自推断。
+后续所有“是否自撞”“是否有后台任务在途”“如何软性让路”的判断，应优先依据网关活动事实，而不是由各进程各自推断。用户是否正在使用主 CLI 不再作为自提升任务执行的硬门；用户状态由 `active_sessions` 等独立信号进入认知层软感知。
 
 ### 3.3 Agent 实例
 
@@ -112,7 +112,7 @@ Agent 负责：
 - 调用工具、使用躯体/学习模型推理
 - 通过网关访问长期记忆（Mem）
 - 维护临时会话态、上下文压缩和短期工作记忆
-- **在 AUTO / Governor Mode 下**：通过网关主动遍历监督者的任务列表，拉取并执行监督者已放行的自主任务，包括探索式学习任务（`self_learning`）以及学习后触发的替身改进任务（`body_improvement`）
+- **在自主任务执行通道下**（当前实现仍由 AUTO 临时开关启停）：通过网关主动遍历监督者的任务列表，拉取并执行监督者已放行的自主任务，包括探索式学习任务（`self_learning`）以及学习后触发的替身改进任务（`body_improvement`）
 - **身体升级（Git 替身基础上改进代码）**：根据学习成果，在 Git worktree 中 shell 槽位替身 Agent 的现有代码基础上进行改进——Agent 通过 Git 了解替身代码结构和自身短板，结合学习到的新知识编辑替身代码。升级完成后将 diff、commit 和进展描述提交到 Mem 长期记忆
 
 Agent 不负责：
@@ -133,6 +133,13 @@ Agent 可以拥有临时记忆，但这不等于 Mem 长期记忆。所有需要
 - 另一槽位中的 `shell` Agent 是正在被培养的替身——Agent 在 Git worktree 中基于替身现有代码进行改进
 - `candidate/probe` 是升级完成后等待验证的替身状态
 - 候选子 Agent 只有通过 probe 和监督者裁决，才由执行器切换为新的 active Agent
+
+这里有两层“槽”必须分清：
+
+- **身体槽位**：`active / shell / candidate / probe / retired`，解决“哪个子 Agent 服务用户、哪个替身被培养与验证”的问题。
+- **gateway agent 双泳道**：`user_chat / supervisor_task`，解决“同一个 API-A 域的用户交互与监督者任务可观测性互不覆盖”的问题。`supervisor_task` 表示任务来源是监督者，执行者仍是 API-A，不是 API-B。
+
+这两层槽位共同支撑全天候语义：监督者后台任务可以被观测和执行，但不会覆盖用户主 CLI 与主 Agent 的交互展示，也不会把用户活动当作硬停机条件。
 
 每个子 Agent 应尽量拥有独立的：
 
@@ -278,7 +285,7 @@ Mem 的记忆架构采用**短长期双层设计**，从根本上解决"压缩�
 
 - **Tier 1 衰减管理**（memory\_service）：turns 在 30 天保留窗口内完整保留。超过 30 天后，先降 relevance\_score（指数衰减），再标记为压缩候选。**仅当 Tier 2 已生成对应的结构化记忆（Event/Scene）后，才将原始 turn 移至 archive 表。不压缩、不合并原始对话文本——只做时间窗口管理和衰减标记。**
 - **Tier 2 编年史压缩**（ChroniclePipeline）：将超过保留窗口的 turns 批量送入 ChroniclePipeline，**LLM 优先 + 启发式降级**。当 `DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY` 环境变量存在时，使用 `LLMEventExtractionBackend`（LLM 理解语义提取事件）和 `LLMScholarBackend`（LLM 生成场景/弧线/纪元摘要）。无 API 凭据时自动降级为 `HeuristicEventExtractionBackend`（关键词正则匹配）和 `HeuristicScholarBackend`（模板填充）。**LLM 压缩才能真正理解内容语义——区分"决定重构架构"和"嗯好的"，而不是仅靠关键词匹配。** 压缩不可逆，但通过 source\_turns 保留反向引用链路。
-- **Tier 2 结构化四级压缩**（MemoryMaintenanceEngine）：对 Event→Scene→Arc→Epoch 四层对象做分层压缩与替代（supersede），超期 Scene（>30天）压缩入父 Arc，超期 Arc（>180天）压缩入父 Epoch，超期 Epoch（>365天）进一步压缩。默认使用 LLMScholarBackend（API-B）生成自然压缩摘要，无 API 凭据时自动降级到 HeuristicScholarBackend。**已接入运行时**：Governor Mode 下通过内生驱动→任务队列触发，Memory Mode 下每 3600s 自动执行。
+- **Tier 2 结构化四级压缩**（MemoryMaintenanceEngine）：对 Event→Scene→Arc→Epoch 四层对象做分层压缩与替代（supersede），超期 Scene（>30天）压缩入父 Arc，超期 Arc（>180天）压缩入父 Epoch，超期 Epoch（>365天）进一步压缩。默认使用 LLMScholarBackend（API-B）生成自然压缩摘要，无 API 凭据时自动降级到 HeuristicScholarBackend。**已接入运行时**：可由监督者内生驱动→任务队列触发，也可由结构化记忆维护循环按周期自动执行。
 - **压缩结果写回 SQLite**（`compressed_memories` 表）：Tier 2 压缩产出的 Event/Scene/Arc/Epoch **不仅存在于 Mem Pipeline 内存和 mem\_state.json 中，同时写回 SQLite 的** **`compressed_memories`** **表**。每条记录带 `source_turns`（反向引用原始 turn\_id）、`parent_id`（层级归属）、`compression_level`（压缩等级）、`status`（active/superseded/purged）、`weight`（查询权重）。这使得 SQLite 成为 Tier 1（原始会话）+ Tier 2（压缩记忆）的统一查询入口，不再需要分别访问两个存储系统。
 - **压缩等级递进与最终清退**（生命周期管理，LLM 全程参与）：`compressed_memories` 中的条目按时间自动逐级升档，**每级升级由 LLM 生成更高抽象层次的摘要**（非机械贴标签），最终清退前由 **LLM 终审**防误删：
 
@@ -299,7 +306,7 @@ Level 4: Final   (>730天)  weight=0.05  ← 查询权重极低
 
 每级升级时，旧条目不删除而是标记 `status='superseded'` 并通过 `superseded_by` 指向替代者，保留完整审计链。
 
-**规则执行机制（双路径冗余）**：五条压缩规则通过两条独立路径执行，确保 Memory Mode 和 Governor Mode 下规则始终生效：
+**规则执行机制（双路径冗余）**：五条压缩规则通过两条独立路径执行，确保监督者链路启用与否都不影响记忆维护规则生效：
 
 ```text
 路径 1: memory_service 自主循环 (_compression_loop, 每 3600s)
@@ -309,7 +316,7 @@ Level 4: Final   (>730天)  weight=0.05  ← 查询权重极低
         ├── 3. lifecycle_escalation  (Event→Scene→Arc→Epoch→Final 逐级升档)
         └── 4. purge_expired        (purged 条目审计期满后 DELETE)
 
-路径 2: Supervisor 触发 (Memory Mode structured_maintenance_loop, 每 3600s)
+路径 2: Supervisor 触发 (structured_maintenance_loop, 每 3600s)
   └── facade.trigger_memory_compression()
         └── POST /compressed/run-all-rules  (调用 memory_service 同一套规则)
               └── 同上四步，幂等执行
@@ -371,7 +378,7 @@ W_final   = W_dynamic  otherwise
 在当前基线中，记忆管理者与监督者共用同一条 API-B 能力链。二者不是两套互相割裂的灵魂系统，而是同一长期记忆与治理能力在不同运行模式、不同权限上下文下的两种身份：
 
 - 记忆管理者：负责长期记忆管理、压缩、整理、总结
-- 监督者：全天候负责规划、裁决、放行、推迟、取消或暂停自提升任务（按认知层对用户状态的软感知择机，不受时间窗口限制）
+- 监督者：全天候负责规划、裁决、放行、推迟、取消或治理暂停自提升任务（按认知层对用户状态的软感知择机，不受时间窗口限制）
 
 API-B 必须独立配置的原因是：
 
@@ -386,7 +393,7 @@ API-A / API-B 的运行边界还必须补充两条硬约束：
 
 ### 3.5 学习任务框架
 
-学习任务不是内生驱动的本体，而是当前治理输出中的一种创造类兼容投影。当前阶段，这类投影主要表现为探索式研究任务，并作为身体改造进化的证据来源。学习任务不是由独立的"自学系统"服务执行，而是由 API-A 的活跃 Agent 在 AUTO / Governor Mode 下直接执行。学习之后，如果监督者判断证据积累达到阈值，还会继续产出 `body_improvement` 任务，由同一个 API-A Agent 在 shell 槽位执行代码改进。
+学习任务不是内生驱动的本体，而是当前治理输出中的一种创造类兼容投影。当前阶段，这类投影主要表现为探索式研究任务，并作为身体改造进化的证据来源。学习任务不是由独立的"自学系统"服务执行，而是由 API-A 的活跃 Agent 通过自主任务执行通道直接执行（当前实现仍由 AUTO 临时开关启停）。学习之后，如果监督者判断证据积累达到阈值，还会继续产出 `body_improvement` 任务，由同一个 API-A Agent 在 shell 槽位执行代码改进。
 
 当前进入任务列表的创造类兼容任务投影主要包括：
 
@@ -401,7 +408,7 @@ API-A / API-B 的运行边界还必须补充两条硬约束：
   → 产出自主任务（探索式学习任务 + 视证据累积触发的替身改进任务）
   → 放入任务列表（监督者管理的任务队列）
 
-Agent (API-A, AUTO 模式下)
+Agent (API-A, 自主任务执行通道；当前由 AUTO 临时启停)
   → 通过网关遍历任务列表
   → 拉取并执行已放行任务（可自主决定是否使用子代理辅助）
   → 学习成果 / 改进进展写入 Mem 长期记忆
@@ -421,7 +428,7 @@ Agent (API-A, AUTO 模式下)
 
 ### 3.6 监督者
 
-监督者是 Mem 在治理窗口内的提权身份，使用 API-B。监督者管理一个任务列表（即”任务管理器”），Agent 在 AUTO / Governor Mode 下遍历该列表执行监督者已放行的自主任务，其中包括 `self_learning` 和 `body_improvement`。
+监督者是 Mem 的提权治理身份，使用 API-B。监督者管理一个任务列表（即”任务管理器”），Agent 通过自主任务执行通道遍历该列表执行监督者已放行的自主任务，其中包括 `self_learning` 和 `body_improvement`。当前实现里 AUTO 模式暂时保留为监督者门控；它不是用户输入门控，也不是主 CLI 可用性的限制。
 
 监督者负责：
 
@@ -438,9 +445,9 @@ Agent (API-A, AUTO 模式下)
 - 直接拉代码、跑升级流水线
 - 直接启停 Agent 进程
 - 直接执行蓝绿切换（由执行器执行）
-- 直接执行学习任务（由 Agent 在 AUTO 模式下执行）
+- 直接执行学习任务（由 Agent 通过自主任务执行通道执行）
 - 直接编辑替身代码（由 Agent 根据学习成果执行身体升级）
-- 直接向 Agent 推送任务（Agent 在 AUTO 模式下主动遍历任务列表）
+- 直接向 Agent 推送任务（Agent 主动遍历任务列表）
 - 承担长期机械执行器角色
 
 监督者的内生驱动器：
@@ -472,7 +479,7 @@ Agent (API-A, AUTO 模式下)
 - **真实**：把错误、不确定性、证据缺口转成复核或学习任务 → 产出错误复核任务、证据验证任务
 - **创造**：在空闲容量中提出受边界约束的学习和改进方向 → 先产出 `self_learning` 学习分支，证据成熟后再产出 `body_improvement` 改进分支
 
-其中，创造类候选进入任务列表供 Agent 在 AUTO / Governor Mode 下遍历执行，但会分成两个层次：
+其中，创造类候选进入任务列表供 Agent 通过自主任务执行通道遍历执行，但会分成两个层次：
 
 - **`self_learning` 学习分支**：先建立认知与证据，再决定是否进入改进
 - **`body_improvement` 改进分支**：只在学习证据积累达标后才出现，负责把学习结果落实为替身代码改进
@@ -517,12 +524,11 @@ Agent (API-A, AUTO 模式下)
 
 内生驱动器不能直接执行任务，不能编辑代码，不能执行身体切换。它解决的是”该主动想到什么”，不是”可以不经审查做什么”。
 
-监督者有两种运行模式，由 CLI 用户显式控制：
+监督者的目标语义是全天候运行：内生驱动器按配置周期（默认 300s）运行认知评估与治理输出，其中只有适合投影为 Agent 自主执行任务的创造类输出，才会进入任务列表，当前主要是探索式学习任务（`self_learning`）以及达到阈值后产生的替身改进任务（`body_improvement`）。
 
-- **Memory Mode（默认）**：仅运行 health\_check 和结构化记忆维护循环。内生驱动器不启动。系统只做记忆管理，不派生任务。
-- **Governor Mode（`/auto`** **激活）**：启动内生驱动器，按配置周期（默认 300s）运行认知评估与治理输出；其中只有适合投影为 Agent 自主执行任务的创造类输出，才会进入任务列表，当前主要是探索式学习任务（`self_learning`）以及达到阈值后产生的替身改进任务（`body_improvement`）。CLI `/auto-q` 退出回到 Memory Mode。
+**当前实现临时状态**：`/auto` 与 `/auto-q` 仍暂时保留为监督者启停门控，用于手动打开或停止全天候运行链路；但 AUTO 模式不再限制主 CLI 的用户输入，不会让 Gateway 用户请求返回 503，也不阻断用户使用主 Agent。待监督者门控完善后，应移除对 AUTO 命令的依赖，让监督者无需手动启停即可按全天候语义运行。
 
-这里还要强调一点：**Governor Mode 的关键不只是“自动产任务”，而是“让监督者在治理窗口内接管任务列表管理责任”。** 如果只有产出而缺少治理，那么系统仍然只是程序循环，不是最初设计里的“监督者身份”。
+这里还要强调一点：**监督者的关键不只是“自动产任务”，而是“接管任务列表管理责任”。** 如果只有产出而缺少治理，那么系统仍然只是程序循环，不是最初设计里的“监督者身份”。
 
 正式身体切换不由任务队列驱动，而是由监督者在整理记忆后内生判断替身进展情况，形成"建议切换"裁决。
 
@@ -560,13 +566,13 @@ Agent (API-A, AUTO 模式下)
 
 ### 3.8 任务列表
 
-任务列表（即"任务管理器"）不是独立的架构组件，而是由监督者直接管理的一个任务队列。监督者会把治理输出中适合交由 Agent 执行的兼容任务投影放入此列表，Agent 在 AUTO / Governor Mode 下通过网关主动遍历此列表并执行。
+任务列表（即"任务管理器"）不是独立的架构组件，而是由监督者直接管理的一个任务队列。监督者会把治理输出中适合交由 Agent 执行的兼容任务投影放入此列表，Agent 通过网关主动遍历此列表并执行。当前实现的 AUTO 只临时决定监督者链路是否启用，不改变任务列表的架构归属。
 
 任务列表的定位：
 
 - **持有者**：监督者（属于 `systems/supervisor/` 的一部分，对应 `SelfEvolutionTaskQueue`）
 - **生产者**：监督者治理输出中的兼容任务投影层（由内生驱动认知判断后落入任务列表）
-- **消费者**：Agent（API-A，在 AUTO / Governor Mode 下遍历并执行）
+- **消费者**：Agent（API-A，通过自主任务执行通道遍历并执行；当前由 AUTO 临时启停）
 - **内容**：包含 `self_learning` 与 `body_improvement` 两类 Agent 自主任务；不包含 `body_switch` / `body_upgrade` 这类身体切换机械任务
 - **治理者**：监督者；未来应由“LM 先给出结构化治理意见 + 程序状态机最终把关”共同完成
 
@@ -584,7 +590,7 @@ Agent (API-A, AUTO 模式下)
 
 任何自学习、自提升、自愈、自进化行为都不能抢占用户服务链路。
 
-当用户请求到达时，系统优先保证当前 active Agent 可用。内部自提升任务必须让位于用户任务。
+当用户请求到达时，系统优先保证当前 active Agent 可用。内部自提升任务依赖双槽/双泳道隔离与认知层软让路，不得抢占主 CLI 与主 Agent 的交互链路；用户活跃不是硬停机条件。
 
 ### 4.2 网关中心化
 
@@ -609,7 +615,7 @@ Agent 可以持有短期工作态，但长期身份、长期记忆、治理历�
 
 ### 4.5 学习与执行分离
 
-学习任务由监督者内生驱动产出，由 Agent 在 AUTO / Governor Mode 下执行。学习之后触发的 `body_improvement` 任务同样由 Agent 执行；身体切换则由执行器执行。
+学习任务由监督者内生驱动产出，由 Agent 通过自主任务执行通道执行。学习之后触发的 `body_improvement` 任务同样由 Agent 执行；身体切换则由执行器执行。
 
 三个动作分属三个角色：
 
@@ -705,8 +711,8 @@ Mem 记录“为什么演化”和“是否允许演化”；Git 记录“具体
 
 ### 6.2 执行触发方式
 
-- **全天候自动**：监督者按内生驱动节律自动规划与执行，无时间窗口约束。
-- **手动触发**：用户仍可明确触发 `auto` 立即执行。
+- **目标语义：全天候自动**：监督者按内生驱动节律自动规划与执行，无时间窗口约束，也不等待用户空闲。
+- **当前临时门控：AUTO 开关**：`/auto` 与 `/auto-q` 仍暂时作为监督者链路启停开关，用于手动打开或停止全天候运行链路；该开关不限制主 CLI 输入，不影响用户与主 Agent 交互。待门控完善后，应移除对 AUTO 命令的依赖。
 
 ### 6.3 抢占与让路
 
@@ -727,7 +733,7 @@ Agent 自主任务状态：
 - `running` — Agent 已拉取，正在执行
 - `completed` — Agent 执行成功，学习成果或改进进展已写入 Mem
 - `failed` — Agent 执行失败
-- `paused` — 用户请求到达，监督者暂停
+- `paused` — 监督者治理暂停或人工暂停；不得因用户请求到达而自动暂停
 - `cancelled` — 监督者取消
 
 状态机（由监督者强制执行）：
@@ -747,12 +753,12 @@ planned ──→ approved ──→ running ──→ completed
 合法转换：
 
 - `planned → approved`：监督者放行
-- `planned → paused`：监督者暂停
+- `planned → paused`：监督者治理暂停或人工暂停
 - `planned → cancelled`：监督者取消
 - `approved → running`：Agent 从任务列表拉取并开始执行
 - `running → completed`：Agent 执行成功，学习成果或改进进展写入 Mem
 - `running → failed`：Agent 执行失败，或监督者对长时间卡住的任务做正式失败清理
-- `running → paused`：用户请求到达
+- `running → paused`：仅限明确治理动作；用户请求到达不再触发自动暂停
 
 禁止的转换：
 
@@ -805,14 +811,14 @@ Agent / 监督者 / 执行器 -> 网关 -> Mem
 
 学习成果、身体升级进展、治理裁决、切换记录和演化历史必须进入 Mem。
 
-### 7.3 学习任务链路（AUTO 模式）
+### 7.3 学习任务链路（自主任务执行通道）
 
 ```text
  监督者 (API-B, 内生驱动)
   → 将创造类治理输出投影为探索式学习任务
   → 放入任务列表
 
-Agent (API-A, AUTO 模式下通过网关)
+Agent (API-A, 自主任务执行通道；当前由 AUTO 临时启停)
   → 遍历任务列表
   → 拉取并执行学习任务（Agent 自主决定是否使用子代理辅助）
   → 学习成果写入 Mem
@@ -831,7 +837,7 @@ Agent 主动拉取（pull），监督者不推送（push）。对 Agent 来说�
     └─ 基于当前替身代码基座的学习任务
   → 放入任务列表
 
-Agent (API-A, AUTO 模式下)
+Agent (API-A, 自主任务执行通道；当前由 AUTO 临时启停)
   → 拉取并执行学习任务（只读研究，不修改代码）
   → 学习成果写入 Mem 长期记忆
 ```
@@ -1054,10 +1060,10 @@ Governor (API-B)
 
 已完成收口的方向：
 
-- **监督者模式切换**：Memory Mode / Governor Mode 现已通过 `/auto` 和 `/auto-q` CLI 命令显式控制
+- **监督者临时门控**：`/auto` 和 `/auto-q` 目前仍可显式启停监督者链路，但这只是过渡门控；目标语义是监督者全天候运行，且 AUTO 不限制主 CLI 输入或用户与主 Agent 的交互
 - **结构化四级记忆压缩**（Phase M5）：Event→Scene→Arc→Epoch 四级压缩管线已接入运行时
 - **执行器收口为身体切换专用**：执行器已收缩为身体切换机械流程执行面，不做学习、不做升级
-- **AUTO 改为 Agent pull 执行**：CLI `_poll_auto_mode_workflow()` 与网关 `/v1/tasks/{task_id}/decision` 已接入正式任务链路；活跃 Agent 现在会主动拉取并执行 `self_learning` / `body_improvement`
+- **自主任务改为 Agent pull 执行**：CLI `_poll_auto_mode_workflow()` 与网关 `/v1/tasks/{task_id}/decision` 已接入正式任务链路；活跃 Agent 现在会主动拉取并执行 `self_learning` / `body_improvement`。`AUTO` 只是当前临时启停入口，不再是阻断用户交互的运行模式
 - **任务列表已纳入 `body_improvement` 与 `running` 生命周期**：API-A 可正式回报 `running/completed/failed`，监督者也可对卡住任务执行正式失败清理
 
 ## 10. 非目标
@@ -1119,7 +1125,7 @@ VoidCube 的目标不是维护两套运行模式，而是建立一个单机多�
 │   │  · 判断身体切换     │  裁决    │  · 等待切换           │     │
 │   └────────┬────────────┘          └──────────┬───────────┘     │
 │            │                                  │                 │
-│            │ 任务列表                         │ AUTO 模式        │
+│            │ 任务列表                         │ 自主任务通道      │
 │            │ (监督者管理)                     │ 遍历任务列表     │
 │            │                                  │                 │
 │            ↓                                  ↓                 │
@@ -1160,17 +1166,23 @@ Mem 灵魂层的三个内部角色共享同一 API-B 能力链：
 
 **语义搜索**：`POST /compressed/semantic-search` 通过 LLM Embedding 余弦相似度检索，LLM 不可用时自动降级为 n-gram 哈希伪嵌入。
 
-### 13.4 监督者运行模式
+### 13.4 监督者运行语义与当前临时门控
 
-| <br />             | Memory Mode（默认） | Governor Mode（/auto） |
-| ------------------ | --------------- | -------------------- |
-| health\_check loop | ✅               | ✅                    |
-| 结构化记忆维护            | ✅ 自适应周期         | ✅                    |
-| 内生驱动器（认知评估 + 治理输出） | ❌               | ✅ 每 300s             |
-| 任务列表（Agent 遍历执行）   | ❌               | ✅                    |
-| 整理记忆 + 判断身体切换      | ❌               | ✅                    |
-| Gateway 用户请求       | ✅ 正常服务          | ❌ 返回 503             |
-| CLI 输入             | ✅ 正常            | ❌ 仅 /auto-q          |
+目标语义下，监督者是全天候运行的治理身份：内生驱动、任务列表治理、记忆整理和替身进展判断按节律运行，不再依赖时间窗口或“等用户空闲”。用户请求始终走主 CLI / 主 Agent 通道，监督者后台任务走 `supervisor_task` 泳道，两者由 gateway 双槽隔离。
+
+当前实现仍保留 `/auto` 与 `/auto-q` 作为监督者链路的临时启停开关：
+
+| <br />             | AUTO 关闭（临时停止监督者链路） | AUTO 开启（临时启用监督者链路） |
+| ------------------ | ---------------------- | ---------------------- |
+| health\_check loop | ✅                      | ✅                      |
+| 结构化记忆维护            | ✅ 自适应周期                | ✅                      |
+| 内生驱动器（认知评估 + 治理输出） | 暂停                     | ✅ 每 300s              |
+| 任务列表（Agent 遍历执行）   | 暂停                     | ✅                      |
+| 整理记忆 + 判断身体切换      | 暂停                     | ✅                      |
+| Gateway 用户请求       | ✅ 正常服务                 | ✅ 正常服务              |
+| CLI 输入             | ✅ 正常                   | ✅ 正常                  |
+
+这个表描述的是当前过渡开关，不是最终架构。最终应取消“必须手动 AUTO 才运行监督者”的限制。
 
 ### 13.5 内生驱动器的核心价值观、主判断结构与兼容投影
 
@@ -1217,7 +1229,7 @@ Mem 中长期记忆 + 网关活动快照（7 个时间戳 + 错误/不确定性�
   - **基于当前替身代码基座的学习任务**：围绕当前 shell 槽位代码本体开展代码分析、实验验证、差距评估，理解"现在的自己"与"下一步怎么学"
 - **`body_improvement`**：只在学习证据达到阈值后出现，把学习结果落实为 shell worktree 上的实际代码改进
 
-也就是说，进入任务列表供 Agent 在 AUTO 模式下遍历执行的，不只是单一的探索学习，而是"先学习、后改进"这条创造类兼容链路。其余判断优先在监督者内部完成；队列卫生、错误复核和候选清退本身，未来可以由 LM 监督者先提出治理动作，再交由程序护栏落地。
+也就是说，进入任务列表供 Agent 通过自主任务执行通道遍历执行的，不只是单一的探索学习，而是"先学习、后改进"这条创造类兼容链路。其余判断优先在监督者内部完成；队列卫生、错误复核和候选清退本身，未来可以由 LM 监督者先提出治理动作，再交由程序护栏落地。
 
 当前实现状态应明确区分为两层：
 
@@ -1235,7 +1247,9 @@ Mem 中长期记忆 + 网关活动快照（7 个时间戳 + 错误/不确定性�
 
 ### 13.6 API-A 核：Agent 双槽位 + 学习与升级
 
-**双槽位身体架构**：slot-A (active) 服务用户并执行监督者放行的自主任务，slot-B (shell) 是 Agent 根据学习成果编辑代码的替身。升级完成后标记为 candidate → probe，监督者判断通过后由执行器切换为 active。
+**双槽位身体架构**：slot-A (active) 服务用户并执行监督者放行的自主任务，slot-B (shell) 是 Agent 根据学习成果编辑代码的替身。升级完成后标记为 candidate → probe，监督者判断通过并取得用户同意后，才由执行器切换为 active（用户同意门为目标语义，见 §7.5）。
+
+**gateway 双泳道展示/活动架构**：`user_chat` 与 `supervisor_task` 是同一 API-A 域下的两个工作泳道。用户主 CLI 交互走 `user_chat`，监督者放行的学习/改造任务走 `supervisor_task`；两者互不覆盖，dashboard / Web 监控应按 lane 读取，不能再退回单槽 last-writer-wins 的旧解释。
 
 **学习任务完整链路**：
 
@@ -1246,7 +1260,7 @@ Mem 中长期记忆 + 网关活动快照（7 个时间戳 + 错误/不确定性�
     └─ 基于当前替身代码基座的学习任务
   → 放入任务列表
 
-Agent (API-A, AUTO 模式下通过网关)
+Agent (API-A, 自主任务执行通道；当前由 AUTO 临时启停)
   → 遍历任务列表
   → 拉取并执行 `self_learning` 任务（Agent 自主决定是否使用子代理辅助）
   → 学习成果写入 Mem
@@ -1269,7 +1283,8 @@ Agent (API-A, AUTO 模式下通过网关)
 阶段 4 — 建议切换:
   health_score >= active_health + 15 或 shell > active
     → "建议切换"事件 → Governor 独立审查 → 批准/否决
-    → 批准后 → executor: shell→candidate→probe→active
+    → 批准后 → awaiting_user_consent（目标语义，待实现）
+    → 用户同意后 → executor: shell→candidate→probe→active
 ```
 
 **关键边界**：
@@ -1277,7 +1292,7 @@ Agent (API-A, AUTO 模式下通过网关)
 - 学习任务由活跃 Agent 执行，Agent 可自主决定是否使用子代理辅助复杂任务
 - 身体升级（代码编辑）由 Agent 在 Git 替身基础上执行，不由执行器代劳
 - 身体切换只由执行器执行机械流程
-- 健康值达标是"建议"而非"自动"，Governor 保有最终否决权（边界铁律第 13 条）
+- 健康值达标是"建议"而非"自动"，Governor 保有否决权；真正 activate 还需用户同意（目标语义，边界铁律第 13 条）
 - 不存在独立的"自学系统"运行服务
 
 ### 13.7 不可妥协的边界铁律
@@ -1286,13 +1301,13 @@ Agent (API-A, AUTO 模式下通过网关)
 | -- | ----------------------- | ----------------------------------------------------- |
 | 1  | **监督者只判断，执行器只切换**       | 监督者不拉代码、不编辑代码、不启停进程；执行器只做身体切换机械流程                     |
 | 2  | **Agent 无长期状态**         | 长期记忆、身份真相、演化谱系只属于 Mem（API-B）                          |
-| 3  | **Agent 执行自主任务，监督者管理任务** | `self_learning` 与 `body_improvement` 由监督者产出并放入任务列表，Agent 在 AUTO / Governor Mode 下遍历执行 |
+| 3  | **Agent 执行自主任务，监督者管理任务** | `self_learning` 与 `body_improvement` 由监督者产出并放入任务列表，Agent 通过自主任务执行通道遍历执行（当前由 AUTO 临时启停） |
 | 4  | **不能跳过 probe**          | 候选体未经 probe 不得成为 active                               |
 | 5  | **不能无记录切换**             | 每次切换必须有完整 governance trail                            |
 | 6  | **不能切换后立即销毁旧体**         | 观察窗口是回滚保护层                                            |
 | 7  | **API-A ≠ API-B**       | Agent 工作模型心智用于"做事和学习"，Mem 模型心智用于"记住自己是谁"。API-B 不得回环进入 Gateway 的 API-A chat 路由，API-A 活跃 runtime model 也不得被请求体 `model` 任意覆盖 |
 | 8  | **子代理是 Agent 的自主能力**    | 子代理不是被禁止的能力，也不是学习任务的强制模式。Agent 根据任务复杂度自主决定是否使用子代理辅助执行 |
-| 9  | **用户服务绝对优先**            | 自进化行为不能抢占用户链路。Governor Mode 显式激活后才允许                  |
+| 9  | **用户服务绝对优先**            | 自进化行为不能抢占用户链路；用户主 CLI / 主 Agent 与监督者后台任务通过双槽隔离。AUTO 只是当前临时监督者门控，不得限制用户输入或主 Agent 交互 |
 | 10 | **内生驱动器只输出治理投影，不直接执行** | 不直接执行，不编辑代码，不执行切换。四类治理投影各走各的处置路径                    |
 | 11 | **Agent 编辑替身代码，执行器只切换** | 身体升级（代码编辑）由 Agent 执行，身体切换机械流程由执行器执行                   |
 | 12 | **身体切换不由任务队列驱动**        | 监督者整理记忆后内生判断替身进展，Governor 裁决建议切换，用户同意后交由执行器执行激活（用户同意门为目标语义，见 §7.5） |

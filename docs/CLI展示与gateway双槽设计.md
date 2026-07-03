@@ -14,6 +14,8 @@
 - 内生驱动那几份：定义“监督者认知核心是什么”
 - 本文：定义“监控可观测性（CLI 展示 + gateway 聚合）怎么分工、怎么演进”
 
+> **2026-07 对齐说明**：本文只讨论可观测性分槽，不重新定义监督者运行模式。`AUTO` 当前只是监督者链路的临时启停门控，不限制主 CLI 输入；判断 `supervisor_task` lane 时应以“当前正在执行监督者任务”为准，而不是把整个主 CLI 会话理解成被 AUTO 接管。
+
 ## 2. 子代理展示分层事实
 
 子代理展示分两层看，这是所有设计的前提：
@@ -29,7 +31,7 @@
 - gateway 只有一个 `_scenes_cache["agent"]` 槽位。
 - 两个进程都用 `source_service="cli_agent"` + 各自 session_id 上报，而且两者都会上报：
   - 主 CLI 用户任务时报 `executing`
-  - 监督者任务 CLI 在 auto 模式报 `learning` / `code_editing`，带 `execution_kind` + `task_id`（见 `cli.py` 的 `_current_gateway_presence_snapshot`）
+  - 监督者任务 CLI 在执行 AUTO / current task 时报 `learning` / `code_editing`，带 `execution_kind` + `task_id`（见 `cli.py` 的 `_current_gateway_presence_snapshot`）
 - gateway 取“最后一个非 idle 上报者”占用槽位，两进程同时活跃时互相覆盖，聚合视图分不开。
 
 这就是为什么“按 session 过滤”不成立：session_id 虽不同，但 gateway 单槽后写覆盖，下游读到的是混合结果。
@@ -52,7 +54,7 @@
 
 ### 4.1 判别信号
 
-两个 reporter 的 scene 其实已不同（监督者任务报 `learning` / `code_editing`，用户交互报 `executing`），但 auto 模式空档期也会报 `executing`，所以 scene 不是 100% 可靠判别信号。需要 reporter 显式打标 `agent_role`，gateway 再以 scene 启发式作回退。
+两个 reporter 的 scene 其实已不同（监督者任务报 `learning` / `code_editing`，用户交互报 `executing`），但监督者链路空档期也可能报 `executing`，所以 scene 不是 100% 可靠判别信号。需要 reporter 显式打标 `agent_role`，gateway 再以 scene 启发式作回退。
 
 ### 4.2 数据结构
 
@@ -70,7 +72,7 @@ agent:
 
 ### 4.3 三处改动
 
-1. **Reporter 侧（`cli.py` 的 `_push_cli_agent_scene`）**：metadata 增加 `agent_role`，由 `_auto_mode_active` 派生（auto = `supervisor_task`，否则 `user_chat`）。这是权威来源标签。
+1. **Reporter 侧（`cli.py` 的 `_push_cli_agent_scene`）**：metadata 增加 `agent_role`，由 `_auto_mode_active or _current_auto_task` 派生（正在执行/收尾监督者任务 = `supervisor_task`，否则 `user_chat`）。这是权威来源标签。
 2. **Gateway 侧（`_touch_activity` 的 agent_scene 分支）**：在更新 top-level（照旧）之外，按 `agent_role`（缺失时 scene 启发式：`learning` / `code_editing` → supervisor_task，`executing` → user_chat）把字段写进对应 lane；并记录 `session -> lane`，使该 session 后续 idle 上报清空对应 lane。
 3. **Consumer 侧（`dashboard.py`）**：agent 段读 `scenes["agent"]["lanes"]["supervisor_task"]` 的 SA 计数 / focus；lanes 缺失时回退 top-level（兼容旧 gateway）。`status.py`（主 CLI 状态栏）保持读 top-level 不动。
 
@@ -81,7 +83,7 @@ agent:
 ## 5. 落地顺序
 
 1. gateway 加 `lanes` + session→lane 映射 + 路由逻辑（`agent_role` 优先、scene 启发式回退）+ 新测试，断言两 lane 互不覆盖
-2. reporter（`cli.py`）发 `agent_role` + 测试，断言 auto / 交互两路打标正确
+2. reporter（`cli.py`）发 `agent_role` + 测试，断言监督者任务 / 用户交互两路打标正确
 3. `dashboard.py` 读 supervisor_task lane + 测试，断言用户交互子代理活跃时仍只显示监督者任务那一套
 
 ## 6. 现状

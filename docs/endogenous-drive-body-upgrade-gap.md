@@ -1,5 +1,7 @@
 # 内生驱动与替身改进链路分析（修正版）
 
+> **2026-07 语义对齐说明**：本文保留“内生驱动 → 学习 → 替身改进 → 健康评分”的 gap 分析价值，但需按最新基线理解执行门控：监督者目标语义为全天候运行，旧时间窗口和“等用户空闲”硬门已移除；`active_sessions` 只作为认知层软感知/降权信号，不再是生成或执行的硬条件；`AUTO` 只是当前监督者链路的临时启停门控，不限制主 CLI 输入，也不阻断用户与主 Agent 交互。替身改进和 probe 可全天候自主进行，但真正 `activate_slot` 必须停在用户同意门（目标语义，待实现），不能写成 Governor 批准后自动切换。
+
 ## 1. 当前内生驱动产生的任务
 
 内生驱动器 `EndogenousDriveEngine._candidate_stream()` 当前围绕四类核心候选生成任务，并按 utility 降序参与后续治理：
@@ -23,7 +25,7 @@ constraints={
 ## 2. 创造力候选的三层降级
 
 ```
-active_sessions == 0 + self_learning eligible
+active_sessions 软感知 + self_learning eligible + 防自撞护栏通过
   │
   ├── Tier 1: LLM 智能分析 (utility=0.72)
   │     _llm_generate_learning_topics()
@@ -44,8 +46,9 @@ active_sessions == 0 + self_learning eligible
 ```
 
 触发条件：
-- `active_sessions == 0`（无活跃用户会话）
-- `self_learning` 家族 `eligible_for_planning == True`（Governor Mode 下强制 True）
+- `active_sessions` 仅作为用户状态软感知/降权信号，不再要求等于 0
+- `self_learning` 家族 `eligible_for_planning == True`
+- 防自撞并发护栏通过（不与同类在途任务重复派发）
 - 每周期最多产生 2 个创造力候选
 
 ## 3. 替身改进的当前路径
@@ -59,8 +62,8 @@ POST /body/upgrade/execute
     ├── 2. mark_candidate()            # 标记为 candidate
     ├── 3. health_review_request       # Governor 审批 → probe
     ├── 4. 执行 probe                  # 健康检查（技术层面）
-    ├── 5. switch_request              # Governor 审批 → switch
-    └── 6. execute switch              # active ↔ retired
+    ├── 5. switch_request              # Governor 审批（旧路径）
+    └── 6. execute switch              # active ↔ retired（旧路径；目标语义需先停在用户同意门）
 ```
 
 此路径**不由内生驱动触发，不由任务队列驱动**。必须手动调用 API。
@@ -78,11 +81,12 @@ POST /body/upgrade/execute
           → 在 Git worktree 中编辑替身代码
             → 提交 diff/commit/进展描述到 Mem
               → 监督者整理记忆 → 判断替身进展
-                → 裁决是否允许身体切换
-                  → 执行器执行身体切换
+                → 裁决是否建议身体切换
+                  → 用户同意后
+                    → 执行器执行身体切换
 ```
 
-**架构约束（§3.8）**：身体切换不由任务队列驱动，Governor 保有最终裁决权。
+**架构约束（§3.8 / §7.5）**：身体切换不由任务队列驱动。Governor 保有否决权，但健康值/Governor 批准都只是“建议切换”的程序前置门；真正 `activate_slot` 需用户同意（目标语义，待实现）。
 
 ## 5. 差距分析
 
@@ -94,7 +98,7 @@ POST /body/upgrade/execute
 | Agent 执行学习任务 | ✅ | Agent 通过 `/v1/tasks` 拉取 |
 | 学习成果写入 Mem | ✅ | Agent 完成任务后写入 |
 | 执行器执行身体切换 | ✅ | `BodyUpgradeExecutionAdapter` |
-| Governor 裁决切换 | ✅ | `GovernorDecisionEngine`（保有最终否决权） |
+| Governor 裁决切换 | ✅（程序前置门） | `GovernorDecisionEngine` 保有否决权；但目标语义下 activate 仍需用户同意 |
 | Mem 存储所有记忆 | ✅ | 双层记忆架构 |
 
 ### 缺失的环节
@@ -105,7 +109,7 @@ POST /body/upgrade/execute
 | **2** | 学习成果→替身改进的触发 | Agent 完成学习任务后，没有机制驱动它去读 Mem、了解替身代码、编辑替身 |
 | **3** | 替身改进任务的自动生成 | 监督者不会定期扫描 Mem 中的学习成果，自动生成身体升级候选 |
 | **4** | 改进范围约束 | 没有定义 Agent 编辑替身代码时的边界（白名单目录/禁止模式） |
-| **5** | 改进→切换的自动化 | 从"Agent 提交改进"到"Governor 裁决切换"之间缺少自动桥接 |
+| **5** | 改进→建议切换的自动化 | 从"Agent 提交改进"到"Governor 形成建议切换"之间缺少自动桥接；从建议切换到 activate 还缺用户同意门 |
 | **6** | 健康值时间衰减 | 健康值只增不减，无法反映代码腐化 |
 | **7** | 改进回滚机制 | 破坏性改进后无回滚路径 |
 
@@ -119,7 +123,8 @@ POST /body/upgrade/execute
   内生驱动 → 学习任务 → Agent 学习 → Mem
     → Agent 读 Mem + Git diff → 编辑替身 → 提交改进报告
     → Supervisor LLM 审查 → 健康值评分 → 建议切换
-    → Governor 裁决（保有否决权）→ probe → switch → 新 active body
+    → Governor 裁决（保有否决权）→ awaiting_user_consent
+    → 用户同意后 → probe / activate_slot → 新 active body
 ```
 
 ## 6. 待讨论的设计问题
@@ -133,8 +138,8 @@ POST /body/upgrade/execute
    - 需要 Git commit + diff 记录（commit_hash 验证）
    - 需要通过 evolution_boundary 检查（细粒度评分）
 
-4. **改进→切换的自动化程度**：
-   - **半自动**（推荐）：Agent 编辑 → 提交 → Supervisor LLM 评分 → health_score 达标 → 产生"建议切换"事件 → Governor 审查（保有否决权）→ switch
+4. **改进→建议切换的自动化程度**：
+   - **半自动**（推荐）：Agent 编辑 → 提交 → Supervisor LLM 评分 → health_score 达标 → 产生"建议切换"事件 → Governor 审查（保有否决权）→ `awaiting_user_consent` → 用户同意后 activate
 
 5. **学习证据的质量门槛**：基于学习成果的**累积质量评分**，而非数量
 
@@ -158,13 +163,13 @@ Supervisor LLM 审查 → 健康值评分（细粒度）→ 累加至 BodySlotMe
         │
         │ health_score >= active_health + DELTA_THRESHOLD
         ▼
-产生"建议切换"事件 → Governor 审查（保有最终否决权）
+产生"建议切换"事件 → Governor 审查（保有否决权）
         │
         ▼（Governor 批准后）
-probe（技术健康检查）→ switch → 新 active body
+awaiting_user_consent → 用户同意后 → probe（技术健康检查）→ activate_slot → 新 active body
 ```
 
-**Governor 权力边界**：`health_score` 达标只是"建议触发"，不是"自动切换"。Governor 接收"建议切换"事件后，进行独立审查，可批准或否决。
+**Governor 权力边界**：`health_score` 达标只是"建议触发"，不是"自动切换"。Governor 接收"建议切换"事件后，进行独立审查，可批准或否决；批准后也必须停在用户同意门，不能直接 activate。
 
 ### 7.2 健康值评分公式（修正版）
 
@@ -206,7 +211,7 @@ shell_slot = self._execution_facade.body_registry.get_shell_slot()
 if (learning_quality >= self.config.body_improvement_min_quality
     and shell_slot is not None
     and shell_slot.state != "improving"
-    and self._is_in_execution_window()):
+    and self._passes_self_collision_guards()):
 
     improvement = self._generate_improvement_direction(
         mem_context    = recent_learning_findings,
@@ -273,7 +278,7 @@ learning_quality >= threshold
 | 学习质量提升优先级 | >= 80 → priority="high" | 高质量学习更值得改进 |
 | shell 槽位存在 | slot-B 非空 | 没有替身就不生成改进任务 |
 | shell 槽位状态 | != "improving" | 并发改进隔离保护 |
-| body_improvement eligible | execution_window 判断 | 不和用户任务冲突 |
+| body_improvement eligible | 防自撞护栏 + 软让路策略 | 不与同类在途任务重复派发；用户活跃只降权/择机，不硬阻断 |
 | 最大文件改动数 | 5 | 防止一次改动过大 |
 | **健康值切换阈值** | >= active + 15 | **相对阈值**，自适应不同 Agent |
 
@@ -350,9 +355,9 @@ created → running → awaiting_review → completed / failed / retry
         ▼
 ⑧ health_score >= active_health + 15 → 产生"建议切换"事件 [修正: 相对阈值]
         ▼
-⑨ Governor 审查（保有最终否决权）→ 批准/否决 [修正: 明确权力边界]
+⑨ Governor 审查（保有否决权）→ 批准/否决 [修正: 明确权力边界]
         ▼（批准后）
-⑩ probe（技术健康检查）→ switch → active [复用已有路径]
+⑩ awaiting_user_consent → 用户同意后 → probe / activate_slot → active [目标语义；待实现用户同意门]
 ```
 
 ### 8.2 新增数据结构（修正版）
@@ -526,10 +531,11 @@ async def _review_body_improvement(self, report: BodyImprovementReport):
     else:
         self._update_task_status(report.task_id, "completed", reason="negative_score")
     
-    # 13. 达到相对阈值 → 产生"建议切换"事件
+    # 13. 达到相对阈值或超过 active → 产生"建议切换"事件（不是自动 activate）
     active_slot = registry.get_active_slot()
     if (active_slot is not None
-        and slot_meta.health_score >= active_slot.health_score + 15):
+        and (slot_meta.health_score > active_slot.health_score
+             or slot_meta.health_score >= active_slot.health_score + 15)):
         
         await self._emit_switch_suggestion_event(report.slot_id)
     
@@ -617,7 +623,7 @@ def _calc_learning_freshness(self, learning_refs: list[dict]) -> float:
 
 ```python
 async def _emit_switch_suggestion_event(self, slot_id: str):
-    """产生"建议切换"事件，Governor 接收后独立审查"""
+    """产生"建议切换"事件，Governor 接收后独立审查；批准后仍需用户同意"""
     event = SwitchSuggestionEvent(
         slot_id=slot_id,
         health_score=self._execution_facade.body_registry.load_slot_meta(slot_id).health_score,
@@ -639,6 +645,7 @@ async def _emit_switch_suggestion_event(self, slot_id: str):
 | **改进停滞** | 任务 status=running 超过 2 小时 → auto-failed（已有超时机制） |
 | **切换失败回滚** | 回滚到 `previous_healthy_commit`，健康值降为 active slot 的健康值 |
 | **竞争条件** | `body_improvement` 候选生成前检查 slot.state != "improving" |
+| **用户未同意切换** | 停留在 `awaiting_user_consent`，继续展示替身健康与风险，不自动 activate |
 | **健康值上限** | max=100，超过不累加 |
 | **健康值下限** | min=0，不出现负数 |
 | **时间衰减** | 30 天内不衰减，30-90 天逐渐衰减，90 天后稳定衰减 |
@@ -797,6 +804,7 @@ async def _rollback_to_healthy_commit(self, slot_id: str):
 | **P1** | 健康值时间衰减机制 | P0 |
 | **P2** | 相对阈值触发 + "建议切换"事件 | P1 |
 | **P2** | Governor 事件处理（接收建议切换事件） | P2 |
+| **P2** | `awaiting_user_consent` 用户同意门（阻断自动 activate） | P2 |
 | **P2** | 改进回滚机制 | P0 |
 | **P2** | 学习成果新鲜度衡量 | P0 |
 | **P3** | UI 健康值可视化 | P0 |
@@ -806,7 +814,7 @@ async def _rollback_to_healthy_commit(self, slot_id: str):
 
 | # | 原问题 | 修正方案 |
 |---|--------|---------|
-| 1 | Governor 裁决路径被绕过 | 改为事件驱动：健康值达标 → 产生"建议切换"事件 → Governor 独立审查（保有否决权） |
+| 1 | Governor 裁决路径被绕过 | 改为事件驱动：健康值达标 → 产生"建议切换"事件 → Governor 独立审查（保有否决权）→ 用户同意后 activate |
 | 2 | LLM 审查与 Governor 审查重复 | LLM 评分是策略层面（健康值），probe 是技术层面，两者互补 |
 | 3 | 健康值无时间衰减 | 新增时间衰减机制：30 天内不衰减，之后逐渐衰减 |
 | 4 | 学习次数阈值 10 无依据 | 改为基于学习成果质量评分（`_calculate_learning_quality_score`） |
@@ -821,6 +829,7 @@ async def _rollback_to_healthy_commit(self, slot_id: str):
 | 13 | 并发改进无隔离 | 候选生成前检查 slot.state != "improving" |
 | 14 | 改进回滚机制缺失 | 新增 `previous_healthy_commit` 字段 + 回滚方法 |
 | 15 | 学习成果无新鲜度衡量 | 新增 `_calc_learning_freshness()` 考虑时间衰减 |
+| 16 | 建议切换后缺用户同意门 | 新增 `awaiting_user_consent`，Governor 批准后仍不得自动 activate |
 
 ## 10. 安全边界清单
 
@@ -828,7 +837,7 @@ async def _rollback_to_healthy_commit(self, slot_id: str):
 |---------|---------|
 | **文件访问** | 白名单目录 + 禁止模式 + 运行时检查 |
 | **代码完整性** | commit_hash 验证 + 分支归属验证 |
-| **架构一致性** | Governor 保有最终否决权 |
+| **架构一致性** | Governor 保有否决权，真正 activate 需用户同意 |
 | **质量控制** | LLM 审查 + probe 检查 + 边界评分 |
 | **时间衰减** | 健康值自动衰减，防止过时改进长期生效 |
 | **回滚能力** | previous_healthy_commit + 一键回滚 |
@@ -1007,7 +1016,7 @@ def _apply_cumulative_decay(self, slot_meta: BodySlotMeta):
 | `_llm_review_diff(diff_text, description, learning_refs)` | LLM 评估代码改动质量 | LLM client |
 | `_get_probe_score(slot_id, slot_meta)` | 获取 probe 分数（新替身用父 slot 平均） | `BodySlotMeta.last_probe_result` |
 | `_apply_cumulative_decay(slot_meta)` | 应用累积时间衰减 | `BodySlotMeta` |
-| `_emit_switch_suggestion_event(slot_id)` | 发送"建议切换"事件给 Governor | `GovernorDecisionEngine.evaluate()` |
+| `_emit_switch_suggestion_event(slot_id)` | 发送"建议切换"事件给 Governor；批准后进入用户同意门 | `GovernorDecisionEngine.evaluate()` + `awaiting_user_consent` |
 
 ### 11.11 `BodyRegistryManager` 方法补充
 
