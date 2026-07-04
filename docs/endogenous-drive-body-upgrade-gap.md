@@ -1,6 +1,6 @@
 # 内生驱动与替身改进链路分析（修正版）
 
-> **2026-07 语义对齐说明**：本文保留“内生驱动 → 学习 → 替身改进 → 健康评分”的 gap 分析价值，但需按最新基线理解执行门控：监督者目标语义为全天候运行，旧时间窗口和“等用户空闲”硬门已移除；`active_sessions` 只作为认知层软感知/降权信号，不再是生成或执行的硬条件；`AUTO` 只是当前自主链路的临时启停门控，不限制主 CLI 输入，也不阻断用户与主 Agent 交互。替身改进和 probe 可全天候自主进行，但真正 `activate_slot` 必须停在用户同意门（目标语义，待实现），不能写成 Governor 批准后自动切换。
+> **2026-07 语义对齐说明**：本文保留“内生驱动 → 学习 → 替身改进 → 健康评分”的 gap 分析价值，但需按最新基线理解执行门控：监督者目标语义为全天候运行，旧时间窗口和“等用户空闲”硬门已移除；`active_sessions` 只作为认知层软感知/降权信号，不再是生成或执行的硬条件；`/auto` 开关只是当前自主链路的临时启停门控，不限制主 CLI 输入，也不阻断用户与主 Agent 交互。替身改进和 probe 可全天候自主进行，但真正 `activate_slot` 必须停在用户同意门（目标语义，待实现），不能写成 Governor 批准后自动切换。
 
 ## 1. 当前内生驱动产生的任务
 
@@ -898,15 +898,17 @@ elif shell.health_score >= active.health_score + 15:
 
 ### 11.6 `runtime_task_profile` 扩展
 
-当前 `normalize_runtime_task_family()` 不认识 `body_improvement`，会被归一化为 `general_self_evolution`。需要添加映射：
+当前 `normalize_runtime_task_family()` 已补入 `body_improvement` 映射：
 
 ```python
 # runtime_task_profile.py normalize_runtime_task_family()
-if normalized in {"body_upgrade", "body_switch", "body_improvement"}:
+if normalized in {"body_upgrade", "body_improvement"}:
     return "body_upgrade"
+if normalized == "body_switch":
+    return "body_switch"
 ```
 
-这样 `body_improvement` 任务会走 `body_upgrade` 的执行路径，复用现有的 `BodyUpgradeExecutionAdapter`。
+这样 `body_improvement` 任务会走 `body_upgrade` 的执行路径，复用现有的 `BodyUpgradeExecutionAdapter`；`body_switch` 保持独立 task family，避免身体改进与身体切换在治理、审计和用户同意门上混成同一类任务。
 
 ### 11.7 `BodySlotMeta` 字段补充
 

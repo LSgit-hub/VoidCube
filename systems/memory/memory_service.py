@@ -687,7 +687,6 @@ class MemoryService:
         self.app.add_api_route("/memories/{memory_id}", self.delete_memory, methods=["DELETE"])
         self.app.add_api_route("/memories/search", self.search_memories, methods=["POST"])
         self.app.add_api_route("/memories/namespace/{namespace}", self.list_by_namespace, methods=["GET"])
-        self.app.add_api_route("/memories/compress", self.compress_memories, methods=["POST"])
         self.app.add_api_route("/memories/decay", self.apply_decay, methods=["POST"])
         self.app.add_api_route("/memories/summarize/{memory_id}", self.summarize_memory, methods=["POST"])
         # ── Tier 1 routes ──────────────────────────────────────────

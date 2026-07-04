@@ -62,6 +62,14 @@ from typing import List, Dict, Any, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from run_agent import AIAgent  # noqa: F401 — only for static type-checkers
 
+from VoidCube_cli.autonomous_executor import (
+    AutonomousExecutorRuntime,
+    autonomous_task_execution_kind,
+    autonomous_task_label,
+    autonomous_task_run_id_for_message,
+    build_autonomous_task_prompt,
+)
+
 logger = logging.getLogger(__name__)
 
 # Suppress startup messages for clean CLI experience
@@ -1082,8 +1090,8 @@ def _git_repo_root() -> Optional[str]:
 def _git_head_commit(worktree_path: str) -> str:
     """Return the current HEAD commit hash of a worktree, or '' on failure.
 
-    Used by AUTO body_improvement to capture a baseline before the agent edits
-    so the post-run diff can be attributed to this task (P0-2 成果回流).
+    Used by autonomous body_improvement to capture a baseline before the agent
+    edits so the post-run diff can be attributed to this task (P0-2 成果回流).
     """
     import subprocess
     if not worktree_path:
@@ -1996,14 +2004,14 @@ class VoidcubeCLI:
             auto_resume = CLI_CONFIG["display"].get("auto_resume_last_session", False)
             if auto_resume and self._session_db:
                 try:
-                    # Prefer an unclosed AUTO executor session even when it has
-                    # no user messages: AUTO tasks can be supervisor-pulled and
+                    # Prefer an unclosed autonomous executor session even when it has
+                    # no user messages: autonomous tasks can be supervisor-pulled and
                     # never produce a user row, so message_count alone can skip
                     # the owner session after a crash/restart.
                     recent_sessions = self._session_db.list_sessions_rich(limit=20)
                     selected_session = None
                     for sess in recent_sessions:
-                        if sess.get("source") == "cli_auto_executor" and sess.get("ended_at") is None:
+                        if sess.get("source") == "cli_autonomous_executor" and sess.get("ended_at") is None:
                             selected_session = sess
                             break
                     if selected_session is None:
@@ -2048,7 +2056,7 @@ class VoidcubeCLI:
         # These must exist before any direct chat() call because single-query
         # mode does not go through run().
         self._agent_running = False
-        self._auto_mode_active: bool = False
+        self._autonomous_gate_active: bool = False
         self._pending_input: queue.Queue = queue.Queue()
         self._interrupt_queue: queue.Queue = queue.Queue()
         self._should_exit = False
@@ -2097,11 +2105,11 @@ class VoidcubeCLI:
         self._background_task_counter = 0
         self._last_gateway_presence_refresh_at: float = 0.0
         self._gateway_presence_refresh_interval_seconds: float = 30.0
-        self._auto_execution_events: List[Dict[str, str]] = []
-        self._auto_last_supervisor_event_key: str = ""
-        self._auto_gateway_status_cache: Dict[str, Any] = {}
-        self._auto_gateway_status_ts: float = 0.0
-        self._auto_gateway_status_refreshing: bool = False
+        self._autonomous_execution_events: List[Dict[str, str]] = []
+        self._autonomous_last_supervisor_event_key: str = ""
+        self._autonomous_gateway_status_cache: Dict[str, Any] = {}
+        self._autonomous_gateway_status_ts: float = 0.0
+        self._autonomous_gateway_status_refreshing: bool = False
 
     def _invalidate(self, min_interval: float = 0.25) -> None:
         """Throttled UI repaint — prevents terminal blinking on slow/SSH connections."""
@@ -2373,18 +2381,18 @@ class VoidcubeCLI:
             return 0
         return 0 if self._use_minimal_tui_chrome(width=width) else 1
 
-    def _append_auto_execution_event(
+    def _append_autonomous_execution_event(
         self,
         message: str,
         *,
         tone: str = "info",
         stage: str = "",
     ) -> None:
-        """Record a short AUTO execution event for the foreground panel."""
+        """Record a short autonomous execution event for the foreground panel."""
         compact = " ".join(str(message or "").split()).strip()
         if not compact:
             return
-        events = list(getattr(self, "_auto_execution_events", []) or [])
+        events = list(getattr(self, "_autonomous_execution_events", []) or [])
         events.append(
             {
                 "at": datetime.now().strftime("%H:%M:%S"),
@@ -2393,11 +2401,11 @@ class VoidcubeCLI:
                 "stage": str(stage or "").strip().lower(),
             }
         )
-        self._auto_execution_events = events[-6:]
+        self._autonomous_execution_events = events[-6:]
 
-    def _sync_auto_supervisor_event(self, state: Dict[str, Any]) -> None:
-        """Mirror the supervisor's latest visible decision into the AUTO panel."""
-        if not getattr(self, "_auto_mode_active", False):
+    def _sync_autonomous_supervisor_event(self, state: Dict[str, Any]) -> None:
+        """Mirror the supervisor's latest visible decision into the autonomous panel."""
+        if not getattr(self, "_autonomous_gate_active", False):
             return
         timeline = list(state.get("timeline") or [])
         if not timeline:
@@ -2410,25 +2418,25 @@ class VoidcubeCLI:
                 str(latest.get("summary") or latest.get("title") or ""),
             ]
         )
-        if not event_key or event_key == getattr(self, "_auto_last_supervisor_event_key", ""):
+        if not event_key or event_key == getattr(self, "_autonomous_last_supervisor_event_key", ""):
             return
-        self._auto_last_supervisor_event_key = event_key
+        self._autonomous_last_supervisor_event_key = event_key
         label = str(latest.get("event_type") or latest.get("source") or "supervisor").strip()
         summary = str(latest.get("summary") or latest.get("title") or "").strip()
         if summary:
-            self._append_auto_execution_event(
+            self._append_autonomous_execution_event(
                 f"监督者 {label}: {summary}",
                 tone="info",
                 stage="supervisor",
             )
 
-    def _auto_execution_panel_height(self) -> int:
-        if not getattr(self, "_auto_mode_active", False):
+    def _autonomous_execution_panel_height(self) -> int:
+        if not getattr(self, "_autonomous_gate_active", False):
             return 0
-        return len(self._build_auto_execution_panel_rows())
+        return len(self._build_autonomous_execution_panel_rows())
 
-    def _resolve_auto_panel_focus_task(self, supervisor_state: Dict[str, Any]) -> Dict[str, Any]:
-        current = getattr(self, "_current_auto_task", None) or {}
+    def _resolve_autonomous_panel_focus_task(self, supervisor_state: Dict[str, Any]) -> Dict[str, Any]:
+        current = getattr(self, "_current_autonomous_task", None) or {}
         if current.get("task_id"):
             return current
         for task in list(supervisor_state.get("tasks") or []):
@@ -2445,8 +2453,8 @@ class VoidcubeCLI:
                 return dict(task)
         return {}
 
-    def _resolve_auto_panel_focus_stage(self, focus_task: Dict[str, Any]) -> str:
-        current_task = getattr(self, "_current_auto_task", None) or {}
+    def _resolve_autonomous_panel_focus_stage(self, focus_task: Dict[str, Any]) -> str:
+        current_task = getattr(self, "_current_autonomous_task", None) or {}
         current_task_id = str(current_task.get("task_id") or "").strip()
         focus_task_id = str(focus_task.get("task_id") or "").strip()
         if current_task_id and focus_task_id and current_task_id == focus_task_id:
@@ -2462,15 +2470,15 @@ class VoidcubeCLI:
             return "running_elsewhere"
         return "idle"
 
-    def _build_auto_execution_panel_rows(self) -> list[tuple[str, str]]:
+    def _build_autonomous_execution_panel_rows(self) -> list[tuple[str, str]]:
         width = self._get_tui_terminal_width()
         inner_width = max(34, min(width - 4, 92))
         session_short = str(getattr(self, "session_id", "") or "")[-8:] or "unknown"
         rows: list[tuple[str, str]] = []
         supervisor_state = self._fetch_supervisor_status()
-        gateway_state = self._fetch_auto_gateway_status()
-        focus_task = self._resolve_auto_panel_focus_task(supervisor_state)
-        focus_stage = self._resolve_auto_panel_focus_stage(focus_task)
+        gateway_state = self._fetch_autonomous_gateway_status()
+        focus_task = self._resolve_autonomous_panel_focus_task(supervisor_state)
+        focus_stage = self._resolve_autonomous_panel_focus_stage(focus_task)
 
         if focus_stage == "claimed_running":
             status_label = "执行中"
@@ -2496,7 +2504,7 @@ class VoidcubeCLI:
 
         rows.append(("class:auto-panel-title", f"Autonomous Executor · 会话 {session_short}"))
         rows.append((status_style, f"状态: {status_label}"))
-        rows.append(self._build_auto_executor_lease_row(gateway_state, inner_width))
+        rows.append(self._build_autonomous_executor_lease_row(gateway_state, inner_width))
         task_id = str(focus_task.get("task_id") or "").strip()
         task_title = str(focus_task.get("title") or "").strip()
         execution_kind = str(
@@ -2508,8 +2516,8 @@ class VoidcubeCLI:
         if task_id:
             label = "改进" if execution_kind == "body_improvement" else "学习"
             task_text = f"任务: {label} · {task_id[:8]} · {task_title or '(untitled)'}"
-            if focus_task is getattr(self, "_current_auto_task", None):
-                started_at = float(getattr(self, "_current_auto_task_started_at", 0.0) or 0.0)
+            if focus_task is getattr(self, "_current_autonomous_task", None):
+                started_at = float(getattr(self, "_current_autonomous_task_started_at", 0.0) or 0.0)
                 if started_at > 0:
                     elapsed = max(0, int(time.time() - started_at))
                     task_text += f" · {elapsed}s"
@@ -2524,7 +2532,7 @@ class VoidcubeCLI:
                         ),
                     )
                 )
-                cause_style, cause_text = self._resolve_auto_waiting_start_cause()
+                cause_style, cause_text = self._resolve_autonomous_waiting_start_cause()
                 rows.append((cause_style, self._trim_status_bar_text(cause_text, inner_width)))
             elif focus_stage == "claimed_waiting_writeback":
                 rows.append(
@@ -2558,7 +2566,7 @@ class VoidcubeCLI:
                 )
         else:
             rows.append(("class:auto-panel-dim", "任务: 当前没有被认领的自主任务"))
-            reason_style, reason_text = self._resolve_auto_no_task_reason(supervisor_state)
+            reason_style, reason_text = self._resolve_autonomous_no_task_reason(supervisor_state)
             rows.append((reason_style, self._trim_status_bar_text(reason_text, inner_width)))
 
         spinner_text = str(getattr(self, "_spinner_text", "") or "").strip()
@@ -2591,7 +2599,7 @@ class VoidcubeCLI:
                 )
             )
 
-        for event in list(getattr(self, "_auto_execution_events", []) or [])[-3:]:
+        for event in list(getattr(self, "_autonomous_execution_events", []) or [])[-3:]:
             tone = str(event.get("tone") or "info").strip().lower()
             style = {
                 "success": "class:auto-panel-good",
@@ -2604,8 +2612,8 @@ class VoidcubeCLI:
         rows.append(("class:auto-panel-dim", "控制: /auto-q 退出"))
         return rows
 
-    def _get_auto_execution_panel_fragments(self):
-        rows = self._build_auto_execution_panel_rows()
+    def _get_autonomous_execution_panel_fragments(self):
+        rows = self._build_autonomous_execution_panel_rows()
         if not rows:
             return []
         width = self._get_tui_terminal_width()
@@ -2693,9 +2701,9 @@ class VoidcubeCLI:
         """
         return getattr(self, "_supervisor_state_cache", None) or {}
 
-    def _fetch_auto_gateway_status(self) -> Dict[str, Any]:
-        """Return cached gateway body status for AUTO executor visibility."""
-        return getattr(self, "_auto_gateway_status_cache", None) or {}
+    def _fetch_autonomous_gateway_status(self) -> Dict[str, Any]:
+        """Return cached gateway body status for autonomous executor visibility."""
+        return getattr(self, "_autonomous_gateway_status_cache", None) or {}
 
     def _refresh_supervisor_status(self) -> None:
         """Fetch supervisor state in a background thread.  Called from process_loop.
@@ -2722,7 +2730,7 @@ class VoidcubeCLI:
                 with urllib.request.urlopen(req, timeout=2) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
                     self._supervisor_state_cache = data
-                    self._sync_auto_supervisor_event(data)
+                    self._sync_autonomous_supervisor_event(data)
             except Exception:
                 # Keep previous cache on failure — don't overwrite with {}
                 pass
@@ -2732,17 +2740,17 @@ class VoidcubeCLI:
 
         threading.Thread(target=_do_fetch, daemon=True, name="supervisor-status").start()
 
-    def _refresh_auto_gateway_status(self) -> None:
-        """Fetch gateway body status in a background thread for AUTO panel diagnostics."""
+    def _refresh_autonomous_gateway_status(self) -> None:
+        """Fetch gateway body status in a background thread for autonomous panel diagnostics."""
         import time
         import threading
 
         now = time.time()
-        if (now - getattr(self, "_auto_gateway_status_ts", 0.0)) < 5.0:
+        if (now - getattr(self, "_autonomous_gateway_status_ts", 0.0)) < 5.0:
             return
-        if getattr(self, "_auto_gateway_status_refreshing", False):
+        if getattr(self, "_autonomous_gateway_status_refreshing", False):
             return
-        self._auto_gateway_status_refreshing = True
+        self._autonomous_gateway_status_refreshing = True
 
         def _do_fetch():
             try:
@@ -2751,23 +2759,23 @@ class VoidcubeCLI:
 
                 req = urllib.request.Request("http://127.0.0.1:6000/admin/body/status")
                 with urllib.request.urlopen(req, timeout=2) as resp:
-                    self._auto_gateway_status_cache = _json.loads(resp.read().decode("utf-8"))
+                    self._autonomous_gateway_status_cache = _json.loads(resp.read().decode("utf-8"))
             except Exception:
                 pass
             finally:
-                self._auto_gateway_status_ts = time.time()
-                self._auto_gateway_status_refreshing = False
+                self._autonomous_gateway_status_ts = time.time()
+                self._autonomous_gateway_status_refreshing = False
 
         threading.Thread(target=_do_fetch, daemon=True, name="auto-gateway-status").start()
 
-    _auto_mode_last_event_ts: str = ""
+    _autonomous_gate_last_event_ts: str = ""
 
-    _current_auto_task: Dict[str, Any] | None = None
-    _current_auto_task_started_at: float = 0.0
+    _current_autonomous_task: Dict[str, Any] | None = None
+    _current_autonomous_task_started_at: float = 0.0
     _last_agent_turn_result: Dict[str, Any] | None = None
-    _current_auto_task_run_id: str = ""
+    _current_autonomous_task_run_id: str = ""
 
-    def _build_auto_executor_lease_row(
+    def _build_autonomous_executor_lease_row(
         self,
         gateway_state: Dict[str, Any],
         inner_width: int,
@@ -2792,8 +2800,8 @@ class VoidcubeCLI:
             return "class:auto-panel-warn", self._trim_status_bar_text(text, inner_width)
         return "class:auto-panel-info", self._trim_status_bar_text(text, inner_width)
 
-    def _resolve_auto_waiting_start_cause(self) -> tuple[str, str]:
-        events = list(getattr(self, "_auto_execution_events", []) or [])
+    def _resolve_autonomous_waiting_start_cause(self) -> tuple[str, str]:
+        events = list(getattr(self, "_autonomous_execution_events", []) or [])
         if not events:
             return (
                 "class:auto-panel-warn",
@@ -2836,7 +2844,7 @@ class VoidcubeCLI:
             f"近因: {str(latest.get('message') or '暂无可用诊断').strip()}",
         )
 
-    def _resolve_auto_no_task_reason(self, supervisor_state: Dict[str, Any]) -> tuple[str, str]:
+    def _resolve_autonomous_no_task_reason(self, supervisor_state: Dict[str, Any]) -> tuple[str, str]:
         panels = dict(supervisor_state.get("panels") or {})
         learning_panel = dict(panels.get("learning") or {})
         learning_tasks = list(learning_panel.get("tasks") or [])
@@ -2866,166 +2874,59 @@ class VoidcubeCLI:
             "队列: 当前没有已批准的 API-A 可执行任务",
         )
 
-    def _find_owned_running_auto_task(self) -> Dict[str, Any] | None:
-        """Recover the running AUTO task owned by this CLI session, if any."""
-        session_id = str(getattr(self, "session_id", "") or "").strip()
-        if not session_id:
-            return None
-
-        try:
-            from VoidCube_cli.config import load_config
-            cfg = load_config()
-            sv_cfg = cfg.get("supervisor", {}) if isinstance(cfg, dict) else {}
-            host = sv_cfg.get("host", "127.0.0.1")
-            port = sv_cfg.get("port", 6002)
-            supervisor_url = f"http://{host}:{port}"
-        except Exception:
-            supervisor_url = "http://127.0.0.1:6002"
-
-        import json as _json
-        import urllib.request as _req
-
-        try:
-            resp = _json.loads(
-                _req.urlopen(
-                    f"{supervisor_url}/self-evolution/tasks?status=running",
-                    timeout=10,
-                ).read()
+    def _autonomous_executor_runtime(self) -> AutonomousExecutorRuntime:
+        runtime = getattr(self, "_autonomous_executor_runtime_instance", None)
+        if runtime is None:
+            runtime = AutonomousExecutorRuntime(
+                self,
+                push_cli_agent_scene=_push_cli_agent_scene,
+                git_improvement_diff=_git_improvement_diff,
+                cprint=_cprint,
             )
-        except Exception:
-            return None
+            self._autonomous_executor_runtime_instance = runtime
+        return runtime
 
-        tasks = resp.get("tasks", []) if isinstance(resp, dict) else []
-        for task in tasks:
-            metadata = dict(task.get("metadata") or {})
-            owner_session_id = str(metadata.get("owner_session_id") or "").strip()
-            execution_source = str(metadata.get("execution_source") or "").strip().lower()
-            if owner_session_id != session_id:
-                continue
-            if execution_source and execution_source != "cli_agent_pull":
-                continue
-            return task
-        return None
+    def _find_owned_running_autonomous_task(self) -> Dict[str, Any] | None:
+        return self._autonomous_executor_runtime().find_owned_running_task()
 
-    def _auto_task_execution_kind(self, task: Dict[str, Any]) -> str:
-        return str(task.get("execution_kind") or task.get("task_type") or "").strip().lower()
+    def _autonomous_task_execution_kind(self, task: Dict[str, Any]) -> str:
+        return autonomous_task_execution_kind(task)
 
-    def _auto_task_label(self, execution_kind: str) -> str:
-        return "body improvement task" if execution_kind == "body_improvement" else "learning task"
+    def _autonomous_task_label(self, execution_kind: str) -> str:
+        return autonomous_task_label(execution_kind)
 
-    def _build_auto_task_prompt(self, task: Dict[str, Any], execution_kind: str) -> str:
-        title = task.get("title", "Agent task")
-        summary = task.get("summary", "")
-        if execution_kind == "body_improvement":
-            constraints = dict(task.get("constraints") or {})
-            worktree_path = str(
-                constraints.get("worktree_path")
-                or constraints.get("target_worktree")
-                or ""
-            ).strip()
-            task["_baseline_head"] = _git_head_commit(worktree_path)
-            task["_improvement_worktree"] = worktree_path
-            task["_improvement_slot_id"] = str(
-                constraints.get("target_slot_id")
-                or constraints.get("target_slot")
-                or ""
-            ).strip()
-            editable_dirs = constraints.get("editable_dirs") or []
-            forbidden_patterns = constraints.get("forbidden_patterns") or []
-            max_files = constraints.get("max_files_changed")
-            prompt_parts = [f"[AUTO Body Improvement Task] {title}"]
-            if summary:
-                prompt_parts.append(summary)
-            prompt_parts.append("Edit the shell body code directly and implement the approved improvement.")
-            if worktree_path:
-                prompt_parts.append(f"Worktree path: {worktree_path}")
-            if editable_dirs:
-                prompt_parts.append(f"Editable dirs: {', '.join(str(x) for x in editable_dirs)}")
-            if forbidden_patterns:
-                prompt_parts.append(f"Forbidden patterns: {', '.join(str(x) for x in forbidden_patterns)}")
-            if max_files:
-                prompt_parts.append(f"Max files changed: {max_files}")
-            prompt_parts.append("Produce a concise implementation summary with the concrete files changed and reasoning.")
-            return "\n\n".join(prompt_parts)
-
-        constraints = dict(task.get("constraints") or {})
-        metadata = dict(task.get("metadata") or {})
-        baseline_worktree = str(
-            constraints.get("baseline_worktree_path")
-            or constraints.get("worktree_path")
-            or ""
-        ).strip()
-        baseline_slot_id = str(
-            constraints.get("baseline_slot_id")
-            or constraints.get("target_slot_id")
-            or ""
-        ).strip()
-        learning_branch = str(
-            metadata.get("learning_branch")
-            or ((task.get("evidence") or {}).get("learning_branch"))
-            or ""
-        ).strip()
-        prompt_parts = [f"[AUTO Learning Task] {title}"]
-        if summary:
-            prompt_parts.append(summary)
-        if learning_branch == "codebase_baseline":
-            prompt_parts.append("Learning branch: shell codebase baseline")
-        elif learning_branch == "exploratory":
-            prompt_parts.append("Learning branch: exploratory")
-        if baseline_slot_id:
-            prompt_parts.append(f"Shell slot baseline: {baseline_slot_id}")
-        if baseline_worktree:
-            prompt_parts.append(f"Shell worktree baseline: {baseline_worktree}")
-        prompt_parts.append(
-            "Execute this research task thoroughly. Produce structured findings and conclusions."
+    def _build_autonomous_task_prompt(self, task: Dict[str, Any], execution_kind: str) -> str:
+        return build_autonomous_task_prompt(
+            task,
+            execution_kind,
+            git_head_commit=_git_head_commit,
         )
-        return "\n\n".join(part for part in prompt_parts if part)
 
-    def _enqueue_auto_task_prompt(self, task: Dict[str, Any], execution_kind: str, *, recovered: bool = False) -> bool:
-        if task.get("_auto_prompt_enqueued"):
-            return True
-        try:
-            prompt = self._build_auto_task_prompt(task, execution_kind)
-            run_id = str(task.get("_auto_task_run_id") or "").strip() or str(uuid.uuid4())
-            task["_auto_task_run_id"] = run_id
-            task["_auto_prompt_text"] = prompt
-            self._current_auto_task_run_id = run_id
-            self._pending_input.put(prompt)
-            task["_auto_prompt_enqueued"] = True
-            self._append_auto_execution_event(
-                "恢复任务提示已重新注入前台 CLI，等待模型响应" if recovered else "执行提示已注入前台 CLI，等待模型响应",
-                tone="warn" if recovered else "info",
-                stage="prompt_enqueued",
-            )
-            return True
-        except Exception:
-            return False
+    def _enqueue_autonomous_task_prompt(self, task: Dict[str, Any], execution_kind: str, *, recovered: bool = False) -> bool:
+        return self._autonomous_executor_runtime().enqueue_task_prompt(
+            task,
+            execution_kind,
+            recovered=recovered,
+        )
 
-    def _auto_task_run_id_for_chat_message(self, message: Any) -> str:
-        current = getattr(self, "_current_auto_task", None)
-        if not isinstance(current, dict) or not isinstance(message, str):
-            return ""
-        run_id = str(current.get("_auto_task_run_id") or "").strip()
-        if not run_id:
-            return ""
-        if message == str(current.get("_auto_prompt_text") or ""):
-            return run_id
-        if message.startswith("[AUTO Learning Task]") or message.startswith("[AUTO Body Improvement Task]"):
-            return run_id
-        return ""
+    def _autonomous_task_run_id_for_chat_message(self, message: Any) -> str:
+        return autonomous_task_run_id_for_message(
+            getattr(self, "_current_autonomous_task", None),
+            message,
+        )
 
-    def _clear_current_auto_task_state(self) -> None:
-        self._current_auto_task = None
-        self._current_auto_task_started_at = 0
-        self._current_auto_task_run_id = ""
-        self._last_agent_turn_result = None
+    def _clear_current_autonomous_task_state(self) -> None:
+        self._autonomous_executor_runtime().clear_current_task_state()
 
     def _current_cli_agent_role(self) -> str:
-        if getattr(self, "_auto_mode_active", False) or getattr(self, "_current_auto_task", None):
+        active_turn_role = str(getattr(self, "_active_chat_agent_role", "") or "").strip()
+        if active_turn_role in {"supervisor_task", "user_chat"}:
+            return active_turn_role
+        if getattr(self, "_current_autonomous_task", None):
             return "supervisor_task"
         return "user_chat"
 
-    def _ensure_auto_executor_session(self) -> None:
+    def _ensure_autonomous_executor_session(self) -> None:
         session_id = str(getattr(self, "session_id", "") or "").strip()
         if not session_id:
             return
@@ -3037,7 +2938,7 @@ class VoidcubeCLI:
             if existing is None:
                 session_db.create_session(
                     session_id=session_id,
-                    source="cli_auto_executor",
+                    source="cli_autonomous_executor",
                     model=getattr(self, "model", None),
                 )
                 return
@@ -3050,64 +2951,26 @@ class VoidcubeCLI:
                 if message_count == 0:
                     session_db._conn.execute(
                         "UPDATE sessions SET source = ? WHERE id = ?",
-                        ("cli_auto_executor", session_id),
+                        ("cli_autonomous_executor", session_id),
                     )
                     session_db._conn.commit()
         except Exception as exc:
-            logger.debug("Could not persist AUTO executor session: %s", exc)
+            logger.debug("Could not persist autonomous executor session: %s", exc)
 
-    def _report_current_auto_task_timeout_if_needed(
+    def _report_current_autonomous_task_timeout_if_needed(
         self,
         *,
         gateway_base: str = "http://127.0.0.1:6000",
         timeout: float = 15,
         now: float | None = None,
     ) -> bool:
-        current = getattr(self, "_current_auto_task", None)
-        if not isinstance(current, dict):
-            return False
-        started_at = float(getattr(self, "_current_auto_task_started_at", 0.0) or 0.0)
-        if not started_at:
-            return False
-        current_time = time.time() if now is None else float(now)
-        elapsed = current_time - started_at
-        if elapsed <= 1800:
-            return False
-
-        task_id = str(current.get("task_id") or "").strip()
-        if not task_id:
-            return False
-        execution_kind = self._auto_task_execution_kind(current)
-        task_label = self._auto_task_label(execution_kind)
-        writeback_ok = self._post_auto_task_decision(
-            task_id,
-            decision="failed",
-            reason=f"AUTO {task_label} timed out (30 min).",
-            context={
-                "error": "timeout",
-                "elapsed_s": int(elapsed),
-                "execution_kind": execution_kind,
-                "auto_task_run_id": str(current.get("_auto_task_run_id") or ""),
-            },
-            timeout=timeout,
+        return self._autonomous_executor_runtime().report_current_task_timeout_if_needed(
             gateway_base=gateway_base,
+            timeout=timeout,
+            now=now,
         )
-        if writeback_ok:
-            _cprint(f"  ⏰  AUTO {task_label} {task_id[:8]}... timed out ({int(elapsed)}s)")
-            self._append_auto_execution_event(
-                f"任务 {task_id[:8]} 超时，已回写 failed",
-                tone="error",
-                stage="writeback",
-            )
-            _push_cli_agent_scene(
-                "idle",
-                session_id=getattr(self, "session_id", None),
-                agent_role="supervisor_task",
-            )
-            self._clear_current_auto_task_state()
-        return True
 
-    def _post_auto_task_decision(
+    def _post_autonomous_task_decision(
         self,
         task_id: str,
         *,
@@ -3118,42 +2981,17 @@ class VoidcubeCLI:
         timeout: float = 15,
         gateway_base: str = "http://127.0.0.1:6000",
     ) -> bool:
-        import json as _json
-        import urllib.request as _req
+        return self._autonomous_executor_runtime().post_task_decision(
+            task_id,
+            decision=decision,
+            reason=reason,
+            context=context,
+            final_response=final_response,
+            timeout=timeout,
+            gateway_base=gateway_base,
+        )
 
-        payload: Dict[str, Any] = {
-            "decision": decision,
-            "reason": reason,
-            "session_id": str(getattr(self, "session_id", "") or ""),
-            "context": {
-                "source": "cli_agent_pull",
-                **dict(context or {}),
-            },
-        }
-        if final_response:
-            payload["final_response"] = final_response[:4000]
-        try:
-            request = _req.Request(
-                f"{gateway_base}/v1/tasks/{task_id}/decision",
-                data=_json.dumps(payload).encode(),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            _req.urlopen(request, timeout=timeout)
-            return True
-        except Exception as exc:
-            self._append_auto_execution_event(
-                f"任务 {task_id[:8]} 回写 {decision} 失败，保留本地状态待重试",
-                tone="error",
-                stage="writeback_failed",
-            )
-            try:
-                _cprint(f"  ⚠️  AUTO task writeback failed for {task_id[:8]}: {exc}")
-            except Exception:
-                pass
-            return False
-
-    def _interrupt_current_auto_task(
+    def _interrupt_current_autonomous_task(
         self,
         *,
         reason: str,
@@ -3161,35 +2999,14 @@ class VoidcubeCLI:
         timeout: float = 5,
         gateway_base: str = "http://127.0.0.1:6000",
     ) -> bool:
-        current = getattr(self, "_current_auto_task", None)
-        if current is None:
-            return True
-        task_id = str(current.get("task_id") or "").strip()
-        if not task_id:
-            return True
-        execution_kind = self._auto_task_execution_kind(current)
-        ok = self._post_auto_task_decision(
-            task_id,
-            decision="failed",
+        return self._autonomous_executor_runtime().interrupt_current_task(
             reason=reason,
-            context={
-                "source": source,
-                "execution_kind": execution_kind,
-                "interrupted": True,
-            },
+            source=source,
             timeout=timeout,
             gateway_base=gateway_base,
         )
-        if ok:
-            self._append_auto_execution_event(
-                f"任务 {task_id[:8]} 已按中断回写 failed",
-                tone="warn",
-                stage="writeback",
-            )
-            self._clear_current_auto_task_state()
-        return ok
 
-    def _poll_auto_mode_workflow(self) -> None:
+    def _poll_autonomous_workflow(self) -> None:
         """Pull approved autonomous tasks from Gateway and execute them.
 
         With the autonomous chain enabled, the API-A autonomous executor pulls
@@ -3199,250 +3016,7 @@ class VoidcubeCLI:
 
         Architecture baseline: §3.3, §3.5, §3.6, §7.3, §7.5.
         """
-        import urllib.request as _req
-        import json as _json
-
-        gateway_base = "http://127.0.0.1:6000"
-
-        if getattr(self, "_current_auto_task", None) is None:
-            recovered_task = self._find_owned_running_auto_task()
-            if recovered_task is not None:
-                self._current_auto_task = recovered_task
-                self._append_auto_execution_event(
-                    f"认回运行中任务 {str(recovered_task.get('task_id') or '')[:8]}",
-                    tone="warn",
-                    stage="claim",
-                )
-                metadata = dict(recovered_task.get("metadata") or {})
-                started_at_raw = str(metadata.get("execution_started_at") or "").strip()
-                if started_at_raw:
-                    try:
-                        started_dt = datetime.fromisoformat(started_at_raw)
-                        self._current_auto_task_started_at = started_dt.timestamp()
-                    except ValueError:
-                        self._current_auto_task_started_at = 0.0
-                recovered_execution_kind = self._auto_task_execution_kind(recovered_task)
-                if not getattr(self, "_agent_running", False) and getattr(self, "_last_agent_turn_result", None) is None:
-                    if not self._enqueue_auto_task_prompt(
-                        self._current_auto_task,
-                        recovered_execution_kind,
-                        recovered=True,
-                    ):
-                        writeback_ok = self._post_auto_task_decision(
-                            str(recovered_task.get("task_id") or ""),
-                            decision="failed",
-                            reason="API-A autonomous executor recovered the task but failed to re-enqueue it for execution.",
-                            context={
-                                "error": "recovered_prompt_enqueue_failed",
-                                "execution_kind": recovered_execution_kind,
-                            },
-                            timeout=15,
-                            gateway_base=gateway_base,
-                        )
-                        if writeback_ok:
-                            _push_cli_agent_scene(
-                                "idle",
-                                session_id=getattr(self, "session_id", None),
-                                agent_role="supervisor_task",
-                            )
-                            self._clear_current_auto_task_state()
-                        return
-                    return
-
-        # ── If an autonomous task was just completed, report it ──
-        current = getattr(self, '_current_auto_task', None)
-        if current is not None:
-            task_id = current.get("task_id", "")
-            execution_kind = self._auto_task_execution_kind(current)
-            task_label = self._auto_task_label(execution_kind)
-            import time as _time
-            started_at = getattr(self, '_current_auto_task_started_at', 0)
-            elapsed = _time.time() - started_at if started_at else -1
-            turn_result = getattr(self, "_last_agent_turn_result", None)
-            expected_run_id = str(current.get("_auto_task_run_id") or "").strip()
-            observed_run_id = str((turn_result or {}).get("auto_task_run_id") or "").strip()
-            if (
-                not self._agent_running
-                and turn_result is not None
-                and (not expected_run_id or observed_run_id == expected_run_id)
-            ):
-                # The autonomous executor finished a queued turn; classify by the actual result.
-                decision = "failed" if (
-                    turn_result.get("failed")
-                    or turn_result.get("partial")
-                    or turn_result.get("interrupted")
-                ) else "completed"
-                reason = (
-                    f"AUTO {task_label} failed in the API-A autonomous executor: {turn_result.get('error', 'unknown error')}"
-                    if decision == "failed"
-                    else f"AUTO {task_label} completed by the API-A autonomous executor."
-                )
-                writeback_ok = self._post_auto_task_decision(
-                    task_id,
-                    decision=decision,
-                    reason=reason,
-                    final_response=str(turn_result.get("response") or "")[:4000],
-                    context={
-                        "elapsed_s": int(elapsed),
-                        "execution_kind": execution_kind,
-                        "failed": bool(turn_result.get("failed")),
-                        "partial": bool(turn_result.get("partial")),
-                        "interrupted": bool(turn_result.get("interrupted")),
-                        "error": str(turn_result.get("error", "") or "")[:200],
-                    },
-                    timeout=15,
-                    gateway_base=gateway_base,
-                )
-                if writeback_ok:
-                    self._append_auto_execution_event(
-                        f"任务 {task_id[:8]} 已回写 {decision}",
-                        tone="error" if decision == "failed" else "success",
-                        stage="writeback",
-                    )
-                    # P0-2 成果回流: for a completed body_improvement task, attribute
-                    # the committed diff and submit a report so the supervisor can
-                    # score the shell slot's health. Best-effort and gated on an
-                    # actual commit (HEAD moved); a missing commit just skips this.
-                    if decision == "completed" and execution_kind == "body_improvement":
-                        self._submit_body_improvement_report(
-                            current, task_id, gateway_base,
-                            improvement_description=str(turn_result.get("response") or "")[:4000],
-                        )
-                    _push_cli_agent_scene(
-                        "idle",
-                        session_id=getattr(self, "session_id", None),
-                        agent_role="supervisor_task",
-                    )
-                    self._clear_current_auto_task_state()
-                return
-            # ── Timeout check: if task ran > 30 min, report as failed ──
-            elif self._report_current_auto_task_timeout_if_needed(
-                gateway_base=gateway_base,
-                timeout=15,
-            ):
-                return
-            return
-
-        # ── Pull next approved autonomous-executor task from Gateway ──
-        try:
-            tasks = []
-            urls = (
-                f"{gateway_base}/v1/tasks?status=approved&task_type=self_learning",
-                f"{gateway_base}/v1/tasks?status=approved&execution_kind=body_improvement",
-            )
-            seen = set()
-            for url in urls:
-                resp = _json.loads(_req.urlopen(url, timeout=10).read())
-                fetched = resp.get("tasks", []) if isinstance(resp, dict) else []
-                for task in fetched:
-                    task_id = str(task.get("task_id", "")).strip()
-                    if not task_id or task_id in seen:
-                        continue
-                    seen.add(task_id)
-                    tasks.append(task)
-        except Exception:
-            return
-
-        if not tasks:
-            return
-
-        task = tasks[0]
-        task_id = task.get("task_id", "")
-        execution_kind = self._auto_task_execution_kind(task)
-        title = task.get("title", "Agent task")
-
-        # ── Mark as running ──
-        try:
-            run_payload = _json.dumps({
-                "decision": "running",
-                "actor": "cli_agent",
-                "reason": "API-A autonomous executor pulled task for execution.",
-                "context": {
-                    "session_id": getattr(self, "session_id", None),
-                    "source": "cli_agent_pull",
-                    "execution_kind": execution_kind,
-                },
-                "metadata": {
-                    "owner_session_id": getattr(self, "session_id", None),
-                    "execution_started_at": datetime.now().astimezone().isoformat(),
-                    "execution_source": "cli_agent_pull",
-                },
-            }).encode()
-            r = _req.Request(
-                f"{gateway_base}/v1/tasks/{task_id}/decision",
-                data=run_payload,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            _req.urlopen(r, timeout=15)
-        except Exception:
-            return  # Can't mark running — skip
-
-        import time as _time
-        self._current_auto_task = task
-        self._current_auto_task_started_at = _time.time()
-        self._current_auto_task_run_id = ""
-        self._last_agent_turn_result = None
-        self._append_auto_execution_event(
-            f"已接管任务 {task_id[:8]} · {title}",
-            tone="success",
-            stage="claim",
-        )
-        _push_cli_agent_scene(
-            "code_editing" if execution_kind == "body_improvement" else "learning",
-            session_id=getattr(self, "session_id", None),
-            task_id=task_id,
-            execution_kind=execution_kind,
-            agent_role="supervisor_task",
-        )
-
-        # ── Notify Gateway that agent is starting work ──
-        try:
-            touch_payload = _json.dumps({
-                "activity_kind": "agent_work",
-                "source_service": "cli_agent",
-                "metadata": {
-                    "task_id": task_id,
-                    "title": title,
-                    "source": "auto_mode_pull",
-                    "execution_kind": execution_kind,
-                },
-            }).encode()
-            r = _req.Request(
-                f"{gateway_base}/admin/activity/touch",
-                data=touch_payload,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            _req.urlopen(r, timeout=10)
-        except Exception:
-            pass
-
-        # ── Push task as Agent input ──
-        if not self._enqueue_auto_task_prompt(self._current_auto_task, execution_kind):
-            # Queue failure — report task as failed so supervisor can retry
-            task_label = self._auto_task_label(execution_kind)
-            _cprint(f"  ⚠️  Failed to enqueue AUTO {task_label} {task_id[:8]}...")
-            self._append_auto_execution_event(
-                f"任务 {task_id[:8]} 入队失败",
-                tone="error",
-                stage="prompt_enqueue_failed",
-            )
-            writeback_ok = self._post_auto_task_decision(
-                task_id,
-                decision="failed",
-                reason="CLI Agent failed to enqueue task for execution.",
-                context={"error": "queue_put_failed", "execution_kind": execution_kind},
-                timeout=15,
-                gateway_base=gateway_base,
-            )
-            if writeback_ok:
-                _push_cli_agent_scene(
-                    "idle",
-                    session_id=getattr(self, "session_id", None),
-                    agent_role="supervisor_task",
-                )
-                self._clear_current_auto_task_state()
+        self._autonomous_executor_runtime().poll_workflow()
 
     def _submit_body_improvement_report(
         self,
@@ -3452,7 +3026,7 @@ class VoidcubeCLI:
         *,
         improvement_description: str,
     ) -> None:
-        """Submit a body-improvement report for a completed AUTO task.
+        """Submit a body-improvement report for a completed autonomous task.
 
         Attributes the worktree commit made during this task (HEAD moved off the
         baseline captured at dispatch) and POSTs a report so the supervisor can
@@ -3460,60 +3034,15 @@ class VoidcubeCLI:
         or a transport error just skips reporting — it never disturbs the
         already-completed decision writeback (P0-2 成果回流, body path).
         """
-        import json as _json
-        import urllib.request as _req
+        self._autonomous_executor_runtime().submit_body_improvement_report(
+            task,
+            task_id,
+            gateway_base,
+            improvement_description=improvement_description,
+        )
 
-        worktree_path = str(task.get("_improvement_worktree") or "").strip()
-        baseline_head = str(task.get("_baseline_head") or "").strip()
-        slot_id = str(task.get("_improvement_slot_id") or "").strip()
-        if not worktree_path or not baseline_head or not slot_id:
-            return
-        diff = _git_improvement_diff(worktree_path, baseline_head)
-        if not diff or not diff.get("changed_files"):
-            # Agent did not commit — nothing to score. Surface for visibility.
-            self._append_auto_execution_event(
-                f"任务 {task_id[:8]} 未检测到替身提交，跳过改进报告",
-                tone="warn",
-                stage="improvement_report_skipped",
-            )
-            return
-        learning_refs = []
-        evidence = task.get("evidence") or {}
-        if isinstance(evidence, dict) and evidence.get("learning_refs"):
-            learning_refs = evidence.get("learning_refs") or []
-        report = {
-            "slot_id": slot_id,
-            "task_id": task_id,
-            "commit_hash": diff["commit_hash"],
-            "diff_summary": diff["diff_summary"],
-            "changed_files": diff["changed_files"],
-            "learning_refs": learning_refs,
-            "improvement_description": improvement_description,
-        }
-        try:
-            r = _req.Request(
-                f"{gateway_base}/v1/body/improvement-report",
-                data=_json.dumps(report).encode(),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            _req.urlopen(r, timeout=15)
-            self._append_auto_execution_event(
-                f"任务 {task_id[:8]} 改进报告已提交（{len(diff['changed_files'])} 文件）",
-                tone="success",
-                stage="improvement_report",
-            )
-        except Exception:
-            # Report submission failure must not fail the task; supervisor can
-            # still re-derive health from git lineage later.
-            self._append_auto_execution_event(
-                f"任务 {task_id[:8]} 改进报告提交失败",
-                tone="error",
-                stage="improvement_report_failed",
-            )
-
-    def _trigger_auto_mode_cycle(self, *, focus: str = "") -> Dict[str, Any] | None:
-        """Run one synchronous supervisor auto-cycle for immediate AUTO responsiveness."""
+    def _trigger_autonomous_cycle(self, *, focus: str = "") -> Dict[str, Any] | None:
+        """Run one synchronous supervisor cycle for immediate autonomous-chain responsiveness."""
         import json as _json
         import urllib.request as _req
 
@@ -3529,7 +3058,7 @@ class VoidcubeCLI:
 
         payload = _json.dumps({"focus": focus}).encode()
         request = _req.Request(
-            f"{supervisor_url}/self-evolution/auto-cycle",
+            f"{supervisor_url}/self-evolution/autonomous-cycle",
             data=payload,
             headers={"Content-Type": "application/json"},
             method="POST",
@@ -3538,8 +3067,9 @@ class VoidcubeCLI:
 
     def _current_gateway_presence_snapshot(self) -> tuple[str, str | None, str | None]:
         """Return the CLI scene the gateway should treat as the active executor."""
-        if getattr(self, "_auto_mode_active", False):
-            current = getattr(self, "_current_auto_task", None) or {}
+        active_turn_role = str(getattr(self, "_active_chat_agent_role", "") or "").strip()
+        current = getattr(self, "_current_autonomous_task", None) or {}
+        if active_turn_role != "user_chat" and current:
             task_id = str(current.get("task_id") or "").strip() or None
             execution_kind = str(
                 current.get("execution_kind") or current.get("task_type") or ""
@@ -3578,8 +3108,8 @@ class VoidcubeCLI:
 
         scene, task_id, execution_kind = self._current_gateway_presence_snapshot()
         subagent_summary = self._get_subagent_observability_snapshot()
-        # Tag the gateway agent lane. A current AUTO task keeps ownership even
-        # during fast AUTO exit cleanup, before the model turn has fully unwound.
+        # Tag the gateway agent lane. A current autonomous task keeps ownership
+        # during fast gate cleanup, before the model turn has fully unwound.
         agent_role = self._current_cli_agent_role()
         scene_pushed = _push_cli_agent_scene(
             scene,
@@ -4944,7 +4474,7 @@ class VoidcubeCLI:
 
             # ── Gateway observability ───────────────────────────────────
             # The interactive CLI remains the canonical API-A executor for
-            # direct user turns and AUTO-mode task execution.  We still
+            # direct user turns and autonomous task execution.  We still
             # register the session with Gateway for observability, but we do
             # NOT rewrite the CLI agent's base_url to Gateway here; doing so
             # would proxy the live CLI session through the daemon-side 6080
@@ -8070,7 +7600,7 @@ class VoidcubeCLI:
 
         Activates the endogenous drive and self-evolution review loops
         that run continuously at their configured intervals. The foreground
-        CLI remains available for normal user interaction while AUTO is on.
+        CLI remains available for normal user interaction while the /auto gate is on.
         Use /auto-q to stop the autonomous chain.
 
         An optional focus area can be provided:
@@ -8104,7 +7634,7 @@ class VoidcubeCLI:
                 or supervisor_state.get("running")
             )
 
-        def _call_activate_governor():
+        def _call_activate_autonomous_chain_gate():
             try:
                 from VoidCube_cli.config import load_config
                 cfg = load_config()
@@ -8121,7 +7651,7 @@ class VoidcubeCLI:
 
                 def _activate_once():
                     request = _req.Request(
-                        f"{supervisor_url}/governor-mode/activate",
+                        f"{supervisor_url}/autonomous-chain-gate/activate",
                         data=payload,
                         headers={"Content-Type": "application/json"},
                         method="POST",
@@ -8137,30 +7667,30 @@ class VoidcubeCLI:
                     else:
                         raise first_exc
             except Exception as exc:
-                self._auto_mode_active = False
+                self._autonomous_gate_active = False
                 _cprint(f"  ⚠️  Supervisor unreachable: {exc}")
                 _cprint(f"     Ensure daemons are running (auto-started in interactive mode).")
                 _cprint(f"     Or run: voidcube serve start")
                 return
 
             try:
-                active = resp.get("governor_mode_active", False)
+                active = resp.get("autonomous_chain_gate_active", False)
                 if active:
-                    self._auto_mode_active = True
-                    self._ensure_auto_executor_session()
-                    self._append_auto_execution_event(
+                    self._autonomous_gate_active = True
+                    self._ensure_autonomous_executor_session()
+                    self._append_autonomous_execution_event(
                         "自主链路已激活，API-A 自主执行面等待任务",
                         tone="success",
-                        stage="auto_mode",
+                        stage="autonomous_gate",
                     )
                     self._refresh_gateway_cli_presence(force=True)
                     cycle_result = None
                     try:
-                        cycle_result = self._trigger_auto_mode_cycle(focus=focus)
+                        cycle_result = self._trigger_autonomous_cycle(focus=focus)
                     except Exception as exc:
-                        _cprint(f"     ⚠️  Initial AUTO cycle failed: {exc}")
+                        _cprint(f"     ⚠️  Initial autonomous cycle failed: {exc}")
                     try:
-                        self._poll_auto_mode_workflow()
+                        self._poll_autonomous_workflow()
                     except Exception:
                         pass
                     _cprint(f"  ✅ Autonomous chain [bold green]ACTIVE[/]")
@@ -8187,7 +7717,7 @@ class VoidcubeCLI:
             except Exception:
                 pass  # best-effort reporting; the API call succeeded
 
-        threading.Thread(target=_call_activate_governor, daemon=True, name="governor-activate").start()
+        threading.Thread(target=_call_activate_autonomous_chain_gate, daemon=True, name="autonomous-chain-gate-activate").start()
 
     def _handle_auto_q_command(self):
         """Handle /auto-q — stop the autonomous chain."""
@@ -8195,7 +7725,7 @@ class VoidcubeCLI:
 
         import threading, json as _json
 
-        def _call_deactivate_governor():
+        def _call_deactivate_autonomous_chain_gate():
             try:
                 from VoidCube_cli.config import load_config
                 cfg = load_config()
@@ -8209,7 +7739,7 @@ class VoidcubeCLI:
             try:
                 import urllib.request as _req
                 r = _req.Request(
-                    f"{supervisor_url}/governor-mode/deactivate",
+                    f"{supervisor_url}/autonomous-chain-gate/deactivate",
                     data=b"{}",
                     headers={"Content-Type": "application/json"},
                     method="POST",
@@ -8219,36 +7749,36 @@ class VoidcubeCLI:
                 _cprint(f"  ⚠️  Supervisor unreachable: {exc}")
                 return
 
-            active = resp.get("governor_mode_active", True)
+            active = resp.get("autonomous_chain_gate_active", True)
             if not active:
-                self._interrupt_current_auto_task(
+                self._interrupt_current_autonomous_task(
                     reason="Autonomous chain exited by /auto-q; current task interrupted by user.",
                     source="auto_q",
                     timeout=5,
                 )
-                self._auto_mode_active = False
+                self._autonomous_gate_active = False
                 _push_cli_agent_scene(
                     "idle",
                     session_id=getattr(self, "session_id", None),
                     agent_role="supervisor_task",
                 )
-                self._append_auto_execution_event("AUTO 已退出", tone="warn")
+                self._append_autonomous_execution_event("/auto 已退出", tone="warn")
                 _cprint(f"  💤 Autonomous chain [bold]STOPPED[/].")
                 _cprint(f"     The baseline health-check loop remains running.")
                 _cprint(f"     Use /auto to restart the autonomous chain.")
             else:
                 _cprint(f"  ⚠️  Autonomous chain could not be stopped (still active).")
 
-        threading.Thread(target=_call_deactivate_governor, daemon=True, name="governor-deactivate").start()
+        threading.Thread(target=_call_deactivate_autonomous_chain_gate, daemon=True, name="autonomous-chain-gate-deactivate").start()
 
-    def _exit_auto_mode_fast(self) -> bool:
+    def _exit_autonomous_gate_fast(self) -> bool:
         """Fast-path synchronous exit from the autonomous chain; bypasses the message queue.
 
         Called directly from the prompt_toolkit input handler so /auto-q takes
         effect immediately even when the agent is blocked on an LLM call.
         Returns True if the exit was successful.
         """
-        if not self._auto_mode_active:
+        if not self._autonomous_gate_active:
             return True
 
         _cprint(f"  🔄 Exiting autonomous chain (fast path)...")
@@ -8256,7 +7786,7 @@ class VoidcubeCLI:
         # 1. Interrupt the running agent so the process loop can resume
         if self._agent_running:
             try:
-                self._interrupt_queue.put("__AUTO_Q_EXIT__")
+                self._interrupt_queue.put("__AUTONOMOUS_Q_EXIT__")
             except Exception:
                 pass
 
@@ -8275,29 +7805,29 @@ class VoidcubeCLI:
         try:
             import urllib.request as _req
             r = _req.Request(
-                f"{supervisor_url}/governor-mode/deactivate",
+                f"{supervisor_url}/autonomous-chain-gate/deactivate",
                 data=b"{}",
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
             resp = _json.loads(_req.urlopen(r, timeout=10).read())
-            if not resp.get("governor_mode_active", True):
-                self._interrupt_current_auto_task(
+            if not resp.get("autonomous_chain_gate_active", True):
+                self._interrupt_current_autonomous_task(
                     reason="Autonomous chain exited via fast-path /auto-q; current task interrupted by user.",
                     source="auto_q_fast_path",
                     timeout=5,
                 )
-                self._auto_mode_active = False
+                self._autonomous_gate_active = False
                 _push_cli_agent_scene(
                     "idle",
                     session_id=getattr(self, "session_id", None),
                     agent_role="supervisor_task",
                 )
-                self._append_auto_execution_event("AUTO 已退出", tone="warn")
+                self._append_autonomous_execution_event("/auto 已退出", tone="warn")
                 _cprint(f"  💤 Autonomous chain [bold]STOPPED[/].")
                 _cprint(f"     The baseline health-check loop remains running.")
                 _cprint(f"     Use /auto to restart the autonomous chain.")
-                self._record_supervisor_ui_activity_safe("auto_mode_exit", scene="idle",
+                self._record_supervisor_ui_activity_safe("autonomous_gate_exit", scene="idle",
                     summary="Autonomous chain exited via fast-path /auto-q")
                 return True
             else:
@@ -8305,24 +7835,24 @@ class VoidcubeCLI:
                 return False
         except Exception as exc:
             # Supervisor unreachable — still exit local auto mode to unblock the user
-            self._interrupt_current_auto_task(
+            self._interrupt_current_autonomous_task(
                 reason="Autonomous chain exited locally while supervisor was unreachable; current task interrupted by user.",
                 source="auto_q_local_exit",
                 timeout=5,
             )
-            self._auto_mode_active = False
+            self._autonomous_gate_active = False
             _push_cli_agent_scene(
                 "idle",
                 session_id=getattr(self, "session_id", None),
                 agent_role="supervisor_task",
             )
-            self._append_auto_execution_event("AUTO 本地已退出，但 supervisor 可能仍保持激活", tone="warn")
+            self._append_autonomous_execution_event("/auto 本地已退出，但 supervisor 可能仍保持激活", tone="warn")
             _cprint(f"  ⚠️  Supervisor unreachable: {exc}")
             _cprint(f"     Local autonomous chain state deactivated (supervisor state may be stale).")
             _cprint(f"     Run /auto to re-enter when supervisor is available.")
             return True
 
-    def _force_quit_auto_mode(self) -> bool:
+    def _force_quit_autonomous_gate(self) -> bool:
         """Emergency force-quit: triple-Ctrl+C in the autonomous chain triggers safe exit.
 
         Attempts every available path to exit cleanly:
@@ -8341,7 +7871,7 @@ class VoidcubeCLI:
             except Exception:
                 pass
 
-        # 2. Synchronous governor deactivation (short timeout)
+        # 2. Synchronous autonomous-chain deactivation (short timeout)
         import json as _json
         try:
             from VoidCube_cli.config import load_config
@@ -8356,7 +7886,7 @@ class VoidcubeCLI:
         try:
             import urllib.request as _req
             r = _req.Request(
-                f"{supervisor_url}/governor-mode/deactivate",
+                f"{supervisor_url}/autonomous-chain-gate/deactivate",
                 data=b"{}",
                 headers={"Content-Type": "application/json"},
                 method="POST",
@@ -8364,15 +7894,15 @@ class VoidcubeCLI:
             _json.loads(_req.urlopen(r, timeout=5).read())
             _cprint(f"  ✅ Autonomous chain stopped")
         except Exception as exc:
-            _cprint(f"  ⚠️  Governor deactivation failed: {exc}")
+            _cprint(f"  ⚠️  Autonomous chain deactivation failed: {exc}")
 
         # 3. Report any in-progress autonomous task as interrupted via Gateway
-        current = getattr(self, '_current_auto_task', None)
+        current = getattr(self, '_current_autonomous_task', None)
         if current is not None:
             task_id = str(current.get("task_id") or "")
-            execution_kind = self._auto_task_execution_kind(current)
-            task_label = self._auto_task_label(execution_kind)
-            if self._interrupt_current_auto_task(
+            execution_kind = self._autonomous_task_execution_kind(current)
+            task_label = self._autonomous_task_label(execution_kind)
+            if self._interrupt_current_autonomous_task(
                 reason=f"Autonomous chain force-quit — {task_label} interrupted by user.",
                 source="force_quit",
                 timeout=5,
@@ -8395,7 +7925,7 @@ class VoidcubeCLI:
         except Exception:
             pass
 
-        self._auto_mode_active = False
+        self._autonomous_gate_active = False
         _push_cli_agent_scene(
             "idle",
             session_id=getattr(self, "session_id", None),
@@ -9551,13 +9081,13 @@ class VoidcubeCLI:
             self._tool_start_time = 0.0
             self._current_tool_name = ""
             if (
-                getattr(self, "_auto_mode_active", False)
-                and getattr(self, "_current_auto_task", None)
+                getattr(self, "_autonomous_gate_active", False)
+                and getattr(self, "_current_autonomous_task", None)
                 and function_name
             ):
                 duration = kwargs.get("duration", 0.0)
                 suffix = f" ({duration:.1f}s)" if duration else ""
-                self._append_auto_execution_event(
+                self._append_autonomous_execution_event(
                     f"工具完成: {function_name}{suffix}",
                     tone="success" if not kwargs.get("is_error", False) else "error",
                     stage="tool_completed",
@@ -9604,8 +9134,8 @@ class VoidcubeCLI:
             self._pending_tool_info.setdefault(function_name, []).append(
                 function_args if function_args is not None else {}
             )
-            if getattr(self, "_auto_mode_active", False) and getattr(self, "_current_auto_task", None):
-                self._append_auto_execution_event(
+            if getattr(self, "_autonomous_gate_active", False) and getattr(self, "_current_autonomous_task", None):
+                self._append_autonomous_execution_event(
                     f"工具启动: {function_name}",
                     tone="info",
                     stage="tool_started",
@@ -10524,8 +10054,8 @@ class VoidcubeCLI:
         # Refresh provider credentials if needed (handles key rotation transparently)
         if not self._ensure_runtime_credentials():
             return None
-        auto_task_run_id = self._auto_task_run_id_for_chat_message(message)
-        if auto_task_run_id or not getattr(self, "_current_auto_task", None):
+        autonomous_task_run_id = self._autonomous_task_run_id_for_chat_message(message)
+        if autonomous_task_run_id or not getattr(self, "_current_autonomous_task", None):
             self._last_agent_turn_result = None
 
         turn_route = self._resolve_turn_agent_config(message)
@@ -10586,8 +10116,10 @@ class VoidcubeCLI:
         ChatConsole().print(f"[#34D399]{'~' * 40}[/]")
         print(flush=True)
         
-        auto_timeout_reported = False
-        auto_timeout_writeback_succeeded = False
+        autonomous_timeout_reported = False
+        autonomous_timeout_writeback_succeeded = False
+        previous_active_role = str(getattr(self, "_active_chat_agent_role", "") or "")
+        self._active_chat_agent_role = "supervisor_task" if autonomous_task_run_id else "user_chat"
         try:
             # Run the conversation with interrupt monitoring
             result = None
@@ -10697,24 +10229,24 @@ class VoidcubeCLI:
             # so we skip interrupt processing to avoid stealing that input.
             interrupt_msg = None
             while agent_thread.is_alive():
-                if auto_task_run_id and not auto_timeout_reported:
-                    timed_out_task = getattr(self, "_current_auto_task", None)
+                if autonomous_task_run_id and not autonomous_timeout_reported:
+                    timed_out_task = getattr(self, "_current_autonomous_task", None)
                     timed_out_run_id = (
-                        str((timed_out_task or {}).get("_auto_task_run_id") or "").strip()
+                        str((timed_out_task or {}).get("_autonomous_task_run_id") or "").strip()
                         if isinstance(timed_out_task, dict)
                         else ""
                     )
-                    if timed_out_run_id == auto_task_run_id:
-                        auto_timeout_reported = self._report_current_auto_task_timeout_if_needed(
+                    if timed_out_run_id == autonomous_task_run_id:
+                        autonomous_timeout_reported = self._report_current_autonomous_task_timeout_if_needed(
                             timeout=15,
                         )
-                        auto_timeout_writeback_succeeded = (
-                            auto_timeout_reported
-                            and getattr(self, "_current_auto_task", None) is None
+                        autonomous_timeout_writeback_succeeded = (
+                            autonomous_timeout_reported
+                            and getattr(self, "_current_autonomous_task", None) is None
                         )
-                        if auto_timeout_reported:
+                        if autonomous_timeout_reported:
                             try:
-                                self.agent.interrupt("__AUTO_TIMEOUT__")
+                                self.agent.interrupt("__AUTONOMOUS_TIMEOUT__")
                             except Exception:
                                 pass
                 if hasattr(self, '_interrupt_queue'):
@@ -10723,7 +10255,7 @@ class VoidcubeCLI:
                         if interrupt_msg:
                             # ── Sentinel values for internal control (not user messages) ──
                             if isinstance(interrupt_msg, str) and interrupt_msg.startswith("__") and interrupt_msg.endswith("__"):
-                                # __AUTO_Q_EXIT__ / __FORCE_QUIT__ — just wake the loop,
+                                # __AUTONOMOUS_Q_EXIT__ / __FORCE_QUIT__ — just wake the loop,
                                 # don't pass to agent.interrupt()
                                 continue
                             # If clarify is active, the Enter handler routes
@@ -10799,45 +10331,45 @@ class VoidcubeCLI:
                 "partial": bool(result.get("partial")) if result else False,
                 "interrupted": bool(result.get("interrupted")) if result else False,
                 "error": str(result.get("error", "") or "") if result else "No result returned",
-                # Preserve the agent's finding text so the AUTO writeback can flow
+                # Preserve the agent's finding text so the autonomous writeback can flow
                 # it back to Mem Tier1 (P0-2 成果回流). Without this it is discarded
                 # here and the learning/improvement output never leaves the CLI.
                 "response": str(response or ""),
             }
-            if auto_timeout_reported:
+            if autonomous_timeout_reported:
                 turn_result.update(
                     {
                         "failed": True,
                         "interrupted": True,
-                        "error": "AUTO task timed out after 30 minutes.",
+                        "error": "Autonomous task timed out after 30 minutes.",
                     }
                 )
-            if auto_task_run_id and not auto_timeout_writeback_succeeded:
-                turn_result["auto_task_run_id"] = auto_task_run_id
+            if autonomous_task_run_id and not autonomous_timeout_writeback_succeeded:
+                turn_result["autonomous_task_run_id"] = autonomous_task_run_id
                 self._last_agent_turn_result = turn_result
-            elif not getattr(self, "_current_auto_task", None):
+            elif not getattr(self, "_current_autonomous_task", None):
                 self._last_agent_turn_result = turn_result
 
             if (
-                getattr(self, "_auto_mode_active", False)
-                and getattr(self, "_current_auto_task", None)
-                and auto_task_run_id
-                and not auto_timeout_writeback_succeeded
+                getattr(self, "_autonomous_gate_active", False)
+                and getattr(self, "_current_autonomous_task", None)
+                and autonomous_task_run_id
+                and not autonomous_timeout_writeback_succeeded
             ):
                 if turn_result["failed"] or turn_result["partial"]:
-                    self._append_auto_execution_event(
+                    self._append_autonomous_execution_event(
                         f"模型回合结束，但结果异常: {turn_result['error'] or 'unknown error'}",
                         tone="error",
                         stage="model_turn_finished",
                     )
                 elif turn_result["interrupted"]:
-                    self._append_auto_execution_event(
+                    self._append_autonomous_execution_event(
                         "模型回合被中断，等待下一条指令",
                         tone="warn",
                         stage="model_turn_finished",
                     )
                 else:
-                    self._append_auto_execution_event(
+                    self._append_autonomous_execution_event(
                         "模型回合完成，等待任务回写",
                         tone="success",
                         stage="model_turn_finished",
@@ -10988,21 +10520,22 @@ class VoidcubeCLI:
                 "error": str(e),
                 "response": "",
             }
-            if auto_timeout_reported:
+            if autonomous_timeout_reported:
                 error_result.update(
                     {
                         "interrupted": True,
-                        "error": "AUTO task timed out after 30 minutes.",
+                        "error": "Autonomous task timed out after 30 minutes.",
                     }
                 )
-            if auto_task_run_id and not auto_timeout_writeback_succeeded:
-                error_result["auto_task_run_id"] = auto_task_run_id
+            if autonomous_task_run_id and not autonomous_timeout_writeback_succeeded:
+                error_result["autonomous_task_run_id"] = autonomous_task_run_id
                 self._last_agent_turn_result = error_result
-            elif not getattr(self, "_current_auto_task", None):
+            elif not getattr(self, "_current_autonomous_task", None):
                 self._last_agent_turn_result = error_result
             print(f"Error: {e}")
             return None
         finally:
+            self._active_chat_agent_role = previous_active_role
             # Ensure streaming TTS resources are cleaned up even on error.
             # Normal path sends the sentinel at line ~3568; this is a safety
             # net for exception paths that skip it.  Duplicate sentinels are
@@ -11215,7 +10748,7 @@ class VoidcubeCLI:
         input_area,
         input_rule_bot,
         voice_status_bar,
-        auto_mode_bar=None,
+        autonomous_gate_bar=None,
         completions_menu,
     ) -> list:
         """Assemble the ordered list of children for the root ``HSplit``.
@@ -11242,7 +10775,7 @@ class VoidcubeCLI:
                 input_area,
                 input_rule_bot,
                 voice_status_bar,
-                auto_mode_bar,
+                autonomous_gate_bar,
                 completions_menu,
             ] if item is not None
         ]
@@ -11586,14 +11119,14 @@ class VoidcubeCLI:
 
                 # Keep /auto-q as a fast-path exit while allowing the main CLI
                 # to remain usable during autonomous-chain execution.
-                if self._auto_mode_active:
+                if self._autonomous_gate_active:
                     if text and _looks_like_slash_command(text):
                         _base = text.strip().lstrip("/").split()[0].lower()
                         if _base in ("auto-q", "auto-quit", "auto-stop"):
                             # ── FAST PATH: exit immediately, bypass queue ──
                             event.app.current_buffer.reset(append_to_history=True)
                             _cprint(f"  🔓 退出自主链路...")
-                            self._exit_auto_mode_fast()
+                            self._exit_autonomous_gate_fast()
                             event.app.invalidate()
                             return
 
@@ -11811,11 +11344,11 @@ class VoidcubeCLI:
         @kb.add('c-d')
         def handle_ctrl_d(event):
             """Handle Ctrl+D — force-quit the autonomous chain, or clear input otherwise."""
-            if self._auto_mode_active:
+            if self._autonomous_gate_active:
                 # ── Autonomous chain: Ctrl+D = emergency force-quit ──
                 event.app.current_buffer.reset()
                 _cprint(f"\n  ⚡ Ctrl+D — 触发紧急强制退出自主链路...")
-                self._force_quit_auto_mode()
+                self._force_quit_autonomous_gate()
                 event.app.invalidate()
                 return
             # Normal mode: clear input (no exit, use /quit instead)
@@ -12550,26 +12083,26 @@ class VoidcubeCLI:
             filter=Condition(lambda: cli_ref._voice_mode),
         )
 
-        def _get_auto_mode_text():
+        def _get_autonomous_gate_text():
             return [
-                ("class:auto-mode", " 🤖 AUTO 模式 | /auto-q 退出"),
+                ("class:auto-mode", " 🤖 自主链路 | /auto-q 退出"),
             ]
 
         auto_execution_panel = ConditionalContainer(
             Window(
-                FormattedTextControl(lambda: cli_ref._get_auto_execution_panel_fragments()),
-                height=lambda: cli_ref._auto_execution_panel_height(),
+                FormattedTextControl(lambda: cli_ref._get_autonomous_execution_panel_fragments()),
+                height=lambda: cli_ref._autonomous_execution_panel_height(),
                 wrap_lines=False,
             ),
-            filter=Condition(lambda: cli_ref._auto_mode_active),
+            filter=Condition(lambda: cli_ref._autonomous_gate_active),
         )
 
-        auto_mode_bar = ConditionalContainer(
+        autonomous_gate_bar = ConditionalContainer(
             Window(
-                FormattedTextControl(_get_auto_mode_text),
+                FormattedTextControl(_get_autonomous_gate_text),
                 height=1,
             ),
-            filter=Condition(lambda: cli_ref._auto_mode_active),
+            filter=Condition(lambda: cli_ref._autonomous_gate_active),
         )
 
         status_bar = ConditionalContainer(
@@ -12614,7 +12147,7 @@ class VoidcubeCLI:
                     input_area=input_area,
                     input_rule_bot=input_rule_bot,
                     voice_status_bar=voice_status_bar,
-                    auto_mode_bar=auto_mode_bar,
+                    autonomous_gate_bar=autonomous_gate_bar,
                     completions_menu=completions_menu,
                 )
             )
@@ -12779,10 +12312,10 @@ class VoidcubeCLI:
                         if not self._agent_running:
                             self._check_config_mcp_changes()
                             self._refresh_supervisor_status()
-                            self._refresh_auto_gateway_status()
+                            self._refresh_autonomous_gateway_status()
                             self._refresh_gateway_cli_presence()
-                            if self._auto_mode_active:
-                                self._poll_auto_mode_workflow()
+                            if self._autonomous_gate_active:
+                                self._poll_autonomous_workflow()
                             # Check for background process notifications (completions
                             # and watch pattern matches) while agent is idle.
                             try:

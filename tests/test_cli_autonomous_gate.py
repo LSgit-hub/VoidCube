@@ -78,10 +78,10 @@ def test_cli_does_not_rewrite_live_agent_base_url_to_gateway(monkeypatch):
     assert cli.agent.base_url == "https://runtime-base.example/v1"
 
 
-def test_cli_auto_mode_marks_learning_task_failed_after_agent_error(monkeypatch):
+def test_cli_autonomous_gate_marks_learning_task_failed_after_agent_error(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._current_auto_task = {"task_id": "learn-1"}
-    cli._current_auto_task_started_at = 1.0
+    cli._current_autonomous_task = {"task_id": "learn-1"}
+    cli._current_autonomous_task_started_at = 1.0
     cli._last_agent_turn_result = {
         "failed": True,
         "partial": False,
@@ -110,19 +110,19 @@ def test_cli_auto_mode_marks_learning_task_failed_after_agent_error(monkeypatch)
     monkeypatch.setattr("time.time", fake_time)
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    cli._poll_auto_mode_workflow()
+    cli._poll_autonomous_workflow()
 
     assert requests[0]["url"].endswith("/v1/tasks/learn-1/decision")
     assert requests[0]["data"]["decision"] == "failed"
     assert requests[0]["data"]["context"]["error"] == "LLM upstream error: 502"
-    assert cli._current_auto_task is None
+    assert cli._current_autonomous_task is None
     assert cli._last_agent_turn_result is None
 
 
-def test_cli_auto_mode_keeps_completed_task_when_writeback_fails(monkeypatch):
+def test_cli_autonomous_gate_keeps_completed_task_when_writeback_fails(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._current_auto_task = {"task_id": "learn-writeback-fail", "task_type": "self_learning"}
-    cli._current_auto_task_started_at = 1.0
+    cli._current_autonomous_task = {"task_id": "learn-writeback-fail", "task_type": "self_learning"}
+    cli._current_autonomous_task_started_at = 1.0
     cli._last_agent_turn_result = {
         "failed": False,
         "partial": False,
@@ -132,7 +132,7 @@ def test_cli_auto_mode_keeps_completed_task_when_writeback_fails(monkeypatch):
     }
     cli._agent_running = False
     cli.session_id = "cli-owner-writeback"
-    cli._auto_execution_events = []
+    cli._autonomous_execution_events = []
 
     def fake_time() -> float:
         return 31.0
@@ -147,52 +147,52 @@ def test_cli_auto_mode_keeps_completed_task_when_writeback_fails(monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr("cli._cprint", lambda *args, **kwargs: None)
 
-    cli._poll_auto_mode_workflow()
+    cli._poll_autonomous_workflow()
 
-    assert cli._current_auto_task is not None
-    assert cli._current_auto_task["task_id"] == "learn-writeback-fail"
+    assert cli._current_autonomous_task is not None
+    assert cli._current_autonomous_task["task_id"] == "learn-writeback-fail"
     assert cli._last_agent_turn_result is not None
-    assert any(event.get("stage") == "writeback_failed" for event in cli._auto_execution_events)
+    assert any(event.get("stage") == "writeback_failed" for event in cli._autonomous_execution_events)
 
 
-def test_cli_auto_prompt_enqueue_binds_local_run_id():
+def test_cli_autonomous_prompt_enqueue_binds_local_run_id():
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     prompts = []
     cli._pending_input = type("_Queue", (), {"put": lambda self, prompt: prompts.append(prompt)})()
-    cli._auto_execution_events = []
+    cli._autonomous_execution_events = []
     task = {
         "task_id": "learn-run-id",
-        "title": "Bind AUTO run",
+        "title": "Bind autonomous run",
         "summary": "Prompt should map to one run id",
         "task_type": "self_learning",
     }
 
-    ok = cli._enqueue_auto_task_prompt(task, "self_learning")
+    ok = cli._enqueue_autonomous_task_prompt(task, "self_learning")
 
     assert ok is True
-    assert task["_auto_task_run_id"]
-    assert cli._current_auto_task_run_id == task["_auto_task_run_id"]
-    assert task["_auto_prompt_text"] == prompts[0]
-    cli._current_auto_task = task
-    assert cli._auto_task_run_id_for_chat_message(prompts[0]) == task["_auto_task_run_id"]
-    assert cli._auto_task_run_id_for_chat_message("ordinary background chat") == ""
+    assert task["_autonomous_task_run_id"]
+    assert cli._current_autonomous_task_run_id == task["_autonomous_task_run_id"]
+    assert task["_autonomous_prompt_text"] == prompts[0]
+    cli._current_autonomous_task = task
+    assert cli._autonomous_task_run_id_for_chat_message(prompts[0]) == task["_autonomous_task_run_id"]
+    assert cli._autonomous_task_run_id_for_chat_message("ordinary background chat") == ""
 
 
-def test_cli_auto_mode_ignores_turn_result_from_different_run(monkeypatch):
+def test_cli_autonomous_gate_ignores_turn_result_from_different_run(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._current_auto_task = {
+    cli._current_autonomous_task = {
         "task_id": "learn-current-run",
         "task_type": "self_learning",
-        "_auto_task_run_id": "run-current",
+        "_autonomous_task_run_id": "run-current",
     }
-    cli._current_auto_task_started_at = 1.0
+    cli._current_autonomous_task_started_at = 1.0
     cli._last_agent_turn_result = {
         "failed": False,
         "partial": False,
         "interrupted": False,
         "error": "",
         "response": "Wrong task response",
-        "auto_task_run_id": "run-other",
+        "autonomous_task_run_id": "run-other",
     }
     cli._agent_running = False
     calls = []
@@ -207,17 +207,17 @@ def test_cli_auto_mode_ignores_turn_result_from_different_run(monkeypatch):
     monkeypatch.setattr("time.time", fake_time)
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    cli._poll_auto_mode_workflow()
+    cli._poll_autonomous_workflow()
 
     assert calls == []
-    assert cli._current_auto_task["task_id"] == "learn-current-run"
-    assert cli._last_agent_turn_result["auto_task_run_id"] == "run-other"
+    assert cli._current_autonomous_task["task_id"] == "learn-current-run"
+    assert cli._last_agent_turn_result["autonomous_task_run_id"] == "run-other"
 
 
-def test_cli_auto_mode_does_not_pull_new_task_while_current_task_is_running(monkeypatch):
+def test_cli_autonomous_gate_does_not_pull_new_task_while_current_task_is_running(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._current_auto_task = {"task_id": "learn-running", "task_type": "self_learning"}
-    cli._current_auto_task_started_at = 1.0
+    cli._current_autonomous_task = {"task_id": "learn-running", "task_type": "self_learning"}
+    cli._current_autonomous_task_started_at = 1.0
     cli._last_agent_turn_result = None
     cli._agent_running = True
     calls = []
@@ -232,24 +232,24 @@ def test_cli_auto_mode_does_not_pull_new_task_while_current_task_is_running(monk
     monkeypatch.setattr("time.time", fake_time)
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    cli._poll_auto_mode_workflow()
+    cli._poll_autonomous_workflow()
 
     assert calls == []
-    assert cli._current_auto_task["task_id"] == "learn-running"
+    assert cli._current_autonomous_task["task_id"] == "learn-running"
 
 
 def test_cli_auto_timeout_helper_reports_failed_and_clears_state(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._current_auto_task = {
+    cli._current_autonomous_task = {
         "task_id": "learn-timeout-live",
         "task_type": "self_learning",
-        "_auto_task_run_id": "run-timeout",
+        "_autonomous_task_run_id": "run-timeout",
     }
-    cli._current_auto_task_started_at = 1.0
-    cli._current_auto_task_run_id = "run-timeout"
+    cli._current_autonomous_task_started_at = 1.0
+    cli._current_autonomous_task_run_id = "run-timeout"
     cli._last_agent_turn_result = None
     cli.session_id = "cli-timeout"
-    cli._auto_execution_events = []
+    cli._autonomous_execution_events = []
     requests = []
 
     def fake_urlopen(request, timeout=0):
@@ -265,22 +265,22 @@ def test_cli_auto_timeout_helper_reports_failed_and_clears_state(monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr("cli._cprint", lambda *args, **kwargs: None)
 
-    timed_out = cli._report_current_auto_task_timeout_if_needed(now=1802.0)
+    timed_out = cli._report_current_autonomous_task_timeout_if_needed(now=1802.0)
 
     assert timed_out is True
     assert requests[0]["url"].endswith("/v1/tasks/learn-timeout-live/decision")
     assert requests[0]["data"]["decision"] == "failed"
     assert requests[0]["data"]["context"]["error"] == "timeout"
-    assert requests[0]["data"]["context"]["auto_task_run_id"] == "run-timeout"
-    assert cli._current_auto_task is None
-    assert cli._current_auto_task_run_id == ""
-    assert any(event.get("stage") == "writeback" for event in cli._auto_execution_events)
+    assert requests[0]["data"]["context"]["autonomous_task_run_id"] == "run-timeout"
+    assert cli._current_autonomous_task is None
+    assert cli._current_autonomous_task_run_id == ""
+    assert any(event.get("stage") == "writeback" for event in cli._autonomous_execution_events)
 
 
-def test_cli_auto_mode_pulls_body_improvement_tasks(monkeypatch):
+def test_cli_autonomous_gate_pulls_body_improvement_tasks(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._current_auto_task = None
-    cli._current_auto_task_started_at = 0.0
+    cli._current_autonomous_task = None
+    cli._current_autonomous_task_started_at = 0.0
     cli._last_agent_turn_result = None
     cli._agent_running = False
     cli._pending_input = type("_Queue", (), {"put": lambda self, prompt: prompts.append(prompt)})()
@@ -320,21 +320,21 @@ def test_cli_auto_mode_pulls_body_improvement_tasks(monkeypatch):
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    cli._poll_auto_mode_workflow()
+    cli._poll_autonomous_workflow()
 
     assert any("task_type=self_learning" in url for url in requested_urls)
     assert any("execution_kind=body_improvement" in url for url in requested_urls)
     assert any(url.endswith("/admin/activity/touch") for url in requested_urls)
-    assert cli._current_auto_task is not None
-    assert cli._current_auto_task["task_id"] == "body-1"
+    assert cli._current_autonomous_task is not None
+    assert cli._current_autonomous_task["task_id"] == "body-1"
     assert prompts
-    assert prompts[0].startswith("[AUTO Body Improvement Task]")
+    assert prompts[0].startswith("[Autonomous Body Improvement Task]")
 
 
-def test_cli_auto_mode_running_decision_records_owner_session(monkeypatch):
+def test_cli_autonomous_gate_running_decision_records_owner_session(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._current_auto_task = None
-    cli._current_auto_task_started_at = 0.0
+    cli._current_autonomous_task = None
+    cli._current_autonomous_task_started_at = 0.0
     cli._last_agent_turn_result = None
     cli._agent_running = False
     cli.session_id = "cli-owner-1"
@@ -373,7 +373,7 @@ def test_cli_auto_mode_running_decision_records_owner_session(monkeypatch):
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    cli._poll_auto_mode_workflow()
+    cli._poll_autonomous_workflow()
 
     run_request = next(item for item in requests if item["url"].endswith("/v1/tasks/learn-7/decision"))
     assert run_request["data"]["decision"] == "running"
@@ -383,10 +383,10 @@ def test_cli_auto_mode_running_decision_records_owner_session(monkeypatch):
     assert "Shell slot baseline:" not in prompts[0]
 
 
-def test_cli_auto_mode_learning_prompt_includes_shell_baseline_when_present(monkeypatch):
+def test_cli_autonomous_gate_learning_prompt_includes_shell_baseline_when_present(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._current_auto_task = None
-    cli._current_auto_task_started_at = 0.0
+    cli._current_autonomous_task = None
+    cli._current_autonomous_task_started_at = 0.0
     cli._last_agent_turn_result = None
     cli._agent_running = False
     cli.session_id = "cli-owner-2"
@@ -424,7 +424,7 @@ def test_cli_auto_mode_learning_prompt_includes_shell_baseline_when_present(monk
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    cli._poll_auto_mode_workflow()
+    cli._poll_autonomous_workflow()
 
     assert prompts
     assert "Learning branch: shell codebase baseline" in prompts[0]
@@ -432,10 +432,10 @@ def test_cli_auto_mode_learning_prompt_includes_shell_baseline_when_present(monk
     assert "Shell worktree baseline: F:/tmp/shell-worktree" in prompts[0]
 
 
-def test_cli_auto_mode_learning_prompt_shows_exploratory_branch(monkeypatch):
+def test_cli_autonomous_gate_learning_prompt_shows_exploratory_branch(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._current_auto_task = None
-    cli._current_auto_task_started_at = 0.0
+    cli._current_autonomous_task = None
+    cli._current_autonomous_task_started_at = 0.0
     cli._last_agent_turn_result = None
     cli._agent_running = False
     cli.session_id = "cli-owner-3"
@@ -469,16 +469,16 @@ def test_cli_auto_mode_learning_prompt_shows_exploratory_branch(monkeypatch):
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    cli._poll_auto_mode_workflow()
+    cli._poll_autonomous_workflow()
 
     assert prompts
     assert "Learning branch: exploratory" in prompts[0]
 
 
-def test_cli_auto_mode_recovers_owned_running_task_before_completion_writeback(monkeypatch):
+def test_cli_autonomous_gate_recovers_owned_running_task_before_completion_writeback(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._current_auto_task = None
-    cli._current_auto_task_started_at = 0.0
+    cli._current_autonomous_task = None
+    cli._current_autonomous_task_started_at = 0.0
     cli._last_agent_turn_result = {
         "failed": False,
         "partial": False,
@@ -494,7 +494,7 @@ def test_cli_auto_mode_recovers_owned_running_task_before_completion_writeback(m
 
     running_task = {
         "task_id": "learn-restore-1",
-        "title": "Recovered AUTO task",
+        "title": "Recovered autonomous task",
         "summary": "Continue and write back completion",
         "task_type": "self_learning",
         "metadata": {
@@ -525,31 +525,31 @@ def test_cli_auto_mode_recovers_owned_running_task_before_completion_writeback(m
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    cli._poll_auto_mode_workflow()
+    cli._poll_autonomous_workflow()
 
     complete_request = next(
         item for item in requests if item["url"].endswith("/v1/tasks/learn-restore-1/decision")
     )
     assert complete_request["data"]["decision"] == "completed"
-    assert "completed by CLI Agent" in complete_request["data"]["reason"]
-    assert cli._current_auto_task is None
+    assert "completed by the API-A autonomous executor" in complete_request["data"]["reason"]
+    assert cli._current_autonomous_task is None
     assert cli._last_agent_turn_result is None
 
 
-def test_cli_auto_mode_replays_recovered_running_task_prompt(monkeypatch):
+def test_cli_autonomous_gate_replays_recovered_running_task_prompt(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._current_auto_task = None
-    cli._current_auto_task_started_at = 0.0
+    cli._current_autonomous_task = None
+    cli._current_autonomous_task_started_at = 0.0
     cli._last_agent_turn_result = None
     cli._agent_running = False
     cli.session_id = "cli-owner-replay"
-    cli._auto_execution_events = []
+    cli._autonomous_execution_events = []
     prompts = []
     cli._pending_input = type("_Queue", (), {"put": lambda self, prompt: prompts.append(prompt)})()
 
     running_task = {
         "task_id": "learn-replay-1",
-        "title": "Replay recovered AUTO task",
+        "title": "Replay recovered autonomous task",
         "summary": "Recovered task must run again after restart",
         "task_type": "self_learning",
         "metadata": {
@@ -570,13 +570,13 @@ def test_cli_auto_mode_replays_recovered_running_task_prompt(monkeypatch):
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    cli._poll_auto_mode_workflow()
+    cli._poll_autonomous_workflow()
 
-    assert cli._current_auto_task is not None
-    assert cli._current_auto_task["task_id"] == "learn-replay-1"
+    assert cli._current_autonomous_task is not None
+    assert cli._current_autonomous_task["task_id"] == "learn-replay-1"
     assert prompts
-    assert prompts[0].startswith("[AUTO Learning Task] Replay recovered AUTO task")
-    assert cli._current_auto_task["_auto_prompt_enqueued"] is True
+    assert prompts[0].startswith("[Autonomous Learning Task] Replay recovered autonomous task")
+    assert cli._current_autonomous_task["_autonomous_prompt_enqueued"] is True
 
 
 def test_execute_pending_input_runs_agent_turn_and_cleans_runtime(monkeypatch):
@@ -610,10 +610,10 @@ def test_execute_pending_input_runs_agent_turn_and_cleans_runtime(monkeypatch):
     app = _FakeApp()
     cli.chat = fake_chat
 
-    handled = cli._execute_pending_input("[AUTO Learning Task] Learn queue recovery", app=app)
+    handled = cli._execute_pending_input("[Autonomous Learning Task] Learn queue recovery", app=app)
 
     assert handled is True
-    assert calls == [{"user_input": "[AUTO Learning Task] Learn queue recovery", "images": None}]
+    assert calls == [{"user_input": "[Autonomous Learning Task] Learn queue recovery", "images": None}]
     assert cli._agent_running is False
     assert cli._spinner_text == ""
     assert cli._tool_start_time == 0.0
@@ -625,13 +625,13 @@ def test_execute_pending_input_runs_agent_turn_and_cleans_runtime(monkeypatch):
 
 def test_auto_q_fast_path_marks_current_task_interrupted(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._auto_mode_active = True
+    cli._autonomous_gate_active = True
     cli._agent_running = False
-    cli._current_auto_task = {"task_id": "learn-autoq-1", "task_type": "self_learning"}
-    cli._current_auto_task_started_at = 10.0
+    cli._current_autonomous_task = {"task_id": "learn-autoq-1", "task_type": "self_learning"}
+    cli._current_autonomous_task_started_at = 10.0
     cli._last_agent_turn_result = None
     cli.session_id = "cli-autoq"
-    cli._auto_execution_events = []
+    cli._autonomous_execution_events = []
 
     requests = []
 
@@ -640,8 +640,8 @@ def test_auto_q_fast_path_marks_current_task_interrupted(monkeypatch):
         if isinstance(request, Request):
             payload = json.loads((request.data or b"{}").decode("utf-8")) if request.data else {}
             requests.append({"url": request.full_url, "data": payload})
-            if request.full_url.endswith("/governor-mode/deactivate"):
-                return _FakeUrlopenResponse({"governor_mode_active": False})
+            if request.full_url.endswith("/autonomous-chain-gate/deactivate"):
+                return _FakeUrlopenResponse({"autonomous_chain_gate_active": False})
             return _FakeUrlopenResponse({})
         return _FakeUrlopenResponse({})
 
@@ -650,7 +650,7 @@ def test_auto_q_fast_path_marks_current_task_interrupted(monkeypatch):
     monkeypatch.setattr("cli._cprint", lambda *args, **kwargs: None)
     cli._record_supervisor_ui_activity_safe = lambda *args, **kwargs: None
 
-    assert cli._exit_auto_mode_fast() is True
+    assert cli._exit_autonomous_gate_fast() is True
 
     decision_request = next(
         item for item in requests if item["url"].endswith("/v1/tasks/learn-autoq-1/decision")
@@ -658,8 +658,8 @@ def test_auto_q_fast_path_marks_current_task_interrupted(monkeypatch):
     assert decision_request["data"]["decision"] == "failed"
     assert decision_request["data"]["context"]["interrupted"] is True
     assert decision_request["data"]["session_id"] == "cli-autoq"
-    assert cli._auto_mode_active is False
-    assert cli._current_auto_task is None
+    assert cli._autonomous_gate_active is False
+    assert cli._current_autonomous_task is None
     assert cli._last_agent_turn_result is None
 
 
@@ -668,8 +668,8 @@ def test_refresh_gateway_cli_presence_registers_session_and_scene(monkeypatch):
     cli.session_id = "cli-session-keepalive"
     cli.model = "api-a-model"
     cli.provider = "agnesai"
-    cli._auto_mode_active = True
-    cli._current_auto_task = {
+    cli._autonomous_gate_active = True
+    cli._current_autonomous_task = {
         "task_id": "learn-11",
         "task_type": "self_learning",
     }
@@ -687,7 +687,7 @@ def test_refresh_gateway_cli_presence_registers_session_and_scene(monkeypatch):
     monkeypatch.setattr(
         "cli._push_cli_agent_scene",
         lambda scene, *, session_id=None, task_id=None, execution_kind=None, subagent_summary=None, agent_role=None: scenes.append(
-            (scene, session_id, task_id, execution_kind, subagent_summary)
+            (scene, session_id, task_id, execution_kind, subagent_summary, agent_role)
         ) or True,
     )
     monkeypatch.setattr("time.monotonic", lambda: 100.0)
@@ -695,8 +695,68 @@ def test_refresh_gateway_cli_presence_registers_session_and_scene(monkeypatch):
     cli._refresh_gateway_cli_presence(force=True)
 
     assert registrations == [("cli-session-keepalive", "api-a-model", "agnesai")]
-    assert scenes == [("learning", "cli-session-keepalive", "learn-11", "self_learning", {"active": False, "foreground_count": 0, "background_count": 0, "total_count": 0, "counts_label": "0", "focus_task_id": "", "focus_tool": "", "focus_preview": "", "compact_preview": ""})]
+    assert scenes == [("learning", "cli-session-keepalive", "learn-11", "self_learning", {"active": False, "foreground_count": 0, "background_count": 0, "total_count": 0, "counts_label": "0", "focus_task_id": "", "focus_tool": "", "focus_preview": "", "compact_preview": ""}, "supervisor_task")]
     assert cli._last_gateway_presence_refresh_at == 100.0
+
+
+def test_refresh_gateway_cli_presence_keeps_user_turn_in_user_chat_lane_during_auto(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli.session_id = "cli-session-user-turn"
+    cli.model = "api-a-model"
+    cli.provider = "agnesai"
+    cli._autonomous_gate_active = True
+    cli._current_autonomous_task = {
+        "task_id": "learn-22",
+        "task_type": "self_learning",
+    }
+    cli._active_chat_agent_role = "user_chat"
+    cli._agent_running = True
+    cli._command_running = False
+    cli._stream_started = False
+    cli._gateway_presence_refresh_interval_seconds = 30.0
+    cli._last_gateway_presence_refresh_at = 0.0
+
+    scenes = []
+
+    monkeypatch.setattr("cli._is_gateway_running", lambda timeout=0.3: True)
+    monkeypatch.setattr("cli._register_with_gateway", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        "cli._push_cli_agent_scene",
+        lambda scene, *, session_id=None, task_id=None, execution_kind=None, subagent_summary=None, agent_role=None: scenes.append(
+            {
+                "scene": scene,
+                "session_id": session_id,
+                "task_id": task_id,
+                "execution_kind": execution_kind,
+                "agent_role": agent_role,
+                "subagent_summary": subagent_summary,
+            }
+        ) or True,
+    )
+    monkeypatch.setattr("time.monotonic", lambda: 100.0)
+
+    cli._refresh_gateway_cli_presence(force=True)
+
+    assert scenes == [
+        {
+            "scene": "executing",
+            "session_id": "cli-session-user-turn",
+            "task_id": None,
+            "execution_kind": None,
+            "agent_role": "user_chat",
+            "subagent_summary": {
+                "active": False,
+                "foreground_count": 0,
+                "background_count": 0,
+                "total_count": 0,
+                "counts_label": "0",
+                "focus_task_id": "",
+                "focus_tool": "",
+                "focus_preview": "",
+                "compact_preview": "",
+            },
+        }
+    ]
 
 
 def test_refresh_gateway_cli_presence_respects_refresh_interval(monkeypatch):
@@ -704,8 +764,8 @@ def test_refresh_gateway_cli_presence_respects_refresh_interval(monkeypatch):
     cli.session_id = "cli-session-keepalive"
     cli.model = "api-a-model"
     cli.provider = "agnesai"
-    cli._auto_mode_active = False
-    cli._current_auto_task = None
+    cli._autonomous_gate_active = False
+    cli._current_autonomous_task = None
     cli._gateway_presence_refresh_interval_seconds = 30.0
     cli._last_gateway_presence_refresh_at = 90.0
 
@@ -724,8 +784,8 @@ def test_refresh_gateway_cli_presence_retries_quickly_after_register_failure(mon
     cli.session_id = "cli-session-keepalive"
     cli.model = "api-a-model"
     cli.provider = "agnesai"
-    cli._auto_mode_active = False
-    cli._current_auto_task = None
+    cli._autonomous_gate_active = False
+    cli._current_autonomous_task = None
     cli._gateway_presence_refresh_interval_seconds = 30.0
     cli._last_gateway_presence_refresh_at = 0.0
 
@@ -747,22 +807,22 @@ def test_refresh_gateway_cli_presence_retries_quickly_after_register_failure(mon
     assert cli._last_gateway_presence_refresh_at == 72.0
 
 
-def test_auto_panel_fragments_include_focus_task_and_recent_events(monkeypatch):
+def test_autonomous_panel_fragments_include_focus_task_and_recent_events(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._auto_mode_active = True
+    cli._autonomous_gate_active = True
     cli._agent_running = False
     cli._spinner_text = ""
     cli.session_id = "20260627_focus1234"
-    cli._current_auto_task = {
+    cli._current_autonomous_task = {
         "task_id": "learn-panel-1",
         "title": "Panel task title",
         "task_type": "self_learning",
     }
-    cli._current_auto_task_started_at = 0.0
-    cli._auto_execution_events = []
-    cli._auto_last_supervisor_event_key = ""
-    cli._append_auto_execution_event("已接管任务 learn-panel-1", tone="success")
-    cli._append_auto_execution_event("工具启动: web_search", tone="info")
+    cli._current_autonomous_task_started_at = 0.0
+    cli._autonomous_execution_events = []
+    cli._autonomous_last_supervisor_event_key = ""
+    cli._append_autonomous_execution_event("已接管任务 learn-panel-1", tone="success")
+    cli._append_autonomous_execution_event("工具启动: web_search", tone="info")
 
     monkeypatch.setattr(VoidcubeCLI, "_get_tui_terminal_width", staticmethod(lambda default=(80, 24): 80))
     cli._fetch_supervisor_status = lambda: {
@@ -774,7 +834,7 @@ def test_auto_panel_fragments_include_focus_task_and_recent_events(monkeypatch):
         ],
         "tasks": [],
     }
-    cli._fetch_auto_gateway_status = lambda: {
+    cli._fetch_autonomous_gateway_status = lambda: {
         "active_cli_executor": {
             "session_id": "20260627_focus1234",
             "lease_status": "healthy",
@@ -784,31 +844,30 @@ def test_auto_panel_fragments_include_focus_task_and_recent_events(monkeypatch):
         }
     }
 
-    fragments = cli._get_auto_execution_panel_fragments()
-    rendered = "".join(text for _, text in fragments)
+    rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
 
-    assert "AUTO Execution Panel" in rendered
-    assert "Executor: this CLI healthy" in rendered
+    assert "Autonomous Executor" in rendered
+    assert "Executor: this executor healthy" in rendered
     assert "Panel task title" in rendered
     assert "已接管任务 learn-panel-1" in rendered
     assert "工具启动: web_search" in rendered
     assert "Supervisor approved task for execution." in rendered
 
 
-def test_auto_panel_shows_stale_foreign_executor(monkeypatch):
+def test_autonomous_panel_shows_stale_foreign_executor(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._auto_mode_active = True
+    cli._autonomous_gate_active = True
     cli._agent_running = False
     cli._spinner_text = ""
     cli.session_id = "cli-session-local"
-    cli._current_auto_task = None
-    cli._current_auto_task_started_at = 0.0
-    cli._auto_execution_events = []
-    cli._auto_last_supervisor_event_key = ""
+    cli._current_autonomous_task = None
+    cli._current_autonomous_task_started_at = 0.0
+    cli._autonomous_execution_events = []
+    cli._autonomous_last_supervisor_event_key = ""
 
     monkeypatch.setattr(VoidcubeCLI, "_get_tui_terminal_width", staticmethod(lambda default=(80, 24): 80))
     cli._fetch_supervisor_status = lambda: {"timeline": [], "tasks": []}
-    cli._fetch_auto_gateway_status = lambda: {
+    cli._fetch_autonomous_gateway_status = lambda: {
         "active_cli_executor": {
             "session_id": "cli-session-remote",
             "lease_status": "stale",
@@ -818,24 +877,23 @@ def test_auto_panel_shows_stale_foreign_executor(monkeypatch):
         }
     }
 
-    fragments = cli._get_auto_execution_panel_fragments()
-    rendered = "".join(text for _, text in fragments)
+    rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
 
-    assert "Executor: CLI " in rendered
+    assert "Executor: executor " in rendered
     assert "stale (120s idle, scene=executing)" in rendered
 
 
-def test_auto_panel_shows_no_api_a_executable_task_reason(monkeypatch):
+def test_autonomous_panel_shows_no_api_a_executable_task_reason(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._auto_mode_active = True
+    cli._autonomous_gate_active = True
     cli._agent_running = False
     cli._spinner_text = ""
     cli.session_id = "cli-session-local"
-    cli._current_auto_task = None
-    cli._current_auto_task_started_at = 0.0
+    cli._current_autonomous_task = None
+    cli._current_autonomous_task_started_at = 0.0
     cli._last_agent_turn_result = None
-    cli._auto_execution_events = []
-    cli._auto_last_supervisor_event_key = ""
+    cli._autonomous_execution_events = []
+    cli._autonomous_last_supervisor_event_key = ""
 
     monkeypatch.setattr(VoidcubeCLI, "_get_tui_terminal_width", staticmethod(lambda default=(80, 24): 80))
     cli._fetch_supervisor_status = lambda: {
@@ -852,7 +910,7 @@ def test_auto_panel_shows_no_api_a_executable_task_reason(monkeypatch):
             }
         },
     }
-    cli._fetch_auto_gateway_status = lambda: {
+    cli._fetch_autonomous_gateway_status = lambda: {
         "active_cli_executor": {
             "session_id": "cli-session-local",
             "lease_status": "healthy",
@@ -862,23 +920,22 @@ def test_auto_panel_shows_no_api_a_executable_task_reason(monkeypatch):
         }
     }
 
-    fragments = cli._get_auto_execution_panel_fragments()
-    rendered = "".join(text for _, text in fragments)
+    rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
 
-    assert "任务: 当前没有被接管的 AUTO 任务" in rendered
+    assert "任务: 当前没有被认领的自主任务" in rendered
     assert "当前没有已批准的 API-A 可执行任务" in rendered
 
 
-def test_auto_panel_shows_approved_task_waiting_for_claim(monkeypatch):
+def test_autonomous_panel_shows_approved_task_waiting_for_claim(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._auto_mode_active = True
+    cli._autonomous_gate_active = True
     cli._agent_running = False
     cli._spinner_text = ""
     cli.session_id = "cli-session-local"
-    cli._current_auto_task = None
-    cli._current_auto_task_started_at = 0.0
-    cli._auto_execution_events = []
-    cli._auto_last_supervisor_event_key = ""
+    cli._current_autonomous_task = None
+    cli._current_autonomous_task_started_at = 0.0
+    cli._autonomous_execution_events = []
+    cli._autonomous_last_supervisor_event_key = ""
 
     monkeypatch.setattr(VoidcubeCLI, "_get_tui_terminal_width", staticmethod(lambda default=(80, 24): 80))
     cli._fetch_supervisor_status = lambda: {
@@ -892,7 +949,7 @@ def test_auto_panel_shows_approved_task_waiting_for_claim(monkeypatch):
             }
         ],
     }
-    cli._fetch_auto_gateway_status = lambda: {
+    cli._fetch_autonomous_gateway_status = lambda: {
         "active_cli_executor": {
             "session_id": "cli-session-local",
             "lease_status": "healthy",
@@ -902,25 +959,24 @@ def test_auto_panel_shows_approved_task_waiting_for_claim(monkeypatch):
         }
     }
 
-    fragments = cli._get_auto_execution_panel_fragments()
-    rendered = "".join(text for _, text in fragments)
+    rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
 
     assert "状态: 已放行待认领" in rendered
     assert "Approved waiting task" in rendered
-    assert "队列: 监督者已放行该任务，等待活跃 AUTO CLI 认领" in rendered
-    assert "执行流: 监督者已放行任务，等待活跃 AUTO CLI 认领" in rendered
+    assert "队列: 监督者已放行该任务，等待 API-A 自主执行面认领" in rendered
+    assert "执行流: 监督者已放行任务，等待 API-A 自主执行面认领" in rendered
 
 
-def test_auto_panel_shows_running_task_owned_elsewhere(monkeypatch):
+def test_autonomous_panel_shows_running_task_owned_elsewhere(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._auto_mode_active = True
+    cli._autonomous_gate_active = True
     cli._agent_running = False
     cli._spinner_text = ""
     cli.session_id = "cli-session-local"
-    cli._current_auto_task = None
-    cli._current_auto_task_started_at = 0.0
-    cli._auto_execution_events = []
-    cli._auto_last_supervisor_event_key = ""
+    cli._current_autonomous_task = None
+    cli._current_autonomous_task_started_at = 0.0
+    cli._autonomous_execution_events = []
+    cli._autonomous_last_supervisor_event_key = ""
 
     monkeypatch.setattr(VoidcubeCLI, "_get_tui_terminal_width", staticmethod(lambda default=(80, 24): 80))
     cli._fetch_supervisor_status = lambda: {
@@ -934,7 +990,7 @@ def test_auto_panel_shows_running_task_owned_elsewhere(monkeypatch):
             }
         ],
     }
-    cli._fetch_auto_gateway_status = lambda: {
+    cli._fetch_autonomous_gateway_status = lambda: {
         "active_cli_executor": {
             "session_id": "cli-session-remote",
             "lease_status": "healthy",
@@ -944,34 +1000,33 @@ def test_auto_panel_shows_running_task_owned_elsewhere(monkeypatch):
         }
     }
 
-    fragments = cli._get_auto_execution_panel_fragments()
-    rendered = "".join(text for _, text in fragments)
+    rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
 
     assert "状态: 他处执行中" in rendered
     assert "Running elsewhere task" in rendered
-    assert "队列: 该任务已被其他 AUTO 执行体认领" in rendered
-    assert "执行流: 任务正在其他 AUTO 执行体中运行" in rendered
+    assert "队列: 该任务已被其他 API-A 自主执行面认领" in rendered
+    assert "执行流: 任务正在其他 API-A 自主执行面中运行" in rendered
 
 
-def test_auto_panel_shows_claimed_task_waiting_to_start(monkeypatch):
+def test_autonomous_panel_shows_claimed_task_waiting_to_start(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._auto_mode_active = True
+    cli._autonomous_gate_active = True
     cli._agent_running = False
     cli._spinner_text = ""
     cli.session_id = "cli-session-local"
-    cli._current_auto_task = {
+    cli._current_autonomous_task = {
         "task_id": "learn-claimed-1",
         "title": "Claimed not started task",
         "task_type": "self_learning",
     }
-    cli._current_auto_task_started_at = 0.0
+    cli._current_autonomous_task_started_at = 0.0
     cli._last_agent_turn_result = None
-    cli._auto_execution_events = []
-    cli._auto_last_supervisor_event_key = ""
+    cli._autonomous_execution_events = []
+    cli._autonomous_last_supervisor_event_key = ""
 
     monkeypatch.setattr(VoidcubeCLI, "_get_tui_terminal_width", staticmethod(lambda default=(80, 24): 80))
     cli._fetch_supervisor_status = lambda: {"timeline": [], "tasks": []}
-    cli._fetch_auto_gateway_status = lambda: {
+    cli._fetch_autonomous_gateway_status = lambda: {
         "active_cli_executor": {
             "session_id": "cli-session-local",
             "lease_status": "healthy",
@@ -981,30 +1036,29 @@ def test_auto_panel_shows_claimed_task_waiting_to_start(monkeypatch):
         }
     }
 
-    fragments = cli._get_auto_execution_panel_fragments()
-    rendered = "".join(text for _, text in fragments)
+    rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
 
     assert "状态: 已认领待起跑" in rendered
     assert "Claimed not started task" in rendered
-    assert "队列: 当前 CLI 已认领该任务，等待进入首个模型或工具回合" in rendered
+    assert "队列: 自主执行面已认领该任务，等待进入首个模型或工具回合" in rendered
     assert "近因: 已认领任务，但还没有收到后续执行事件" in rendered
-    assert "执行流: 当前 CLI 已认领任务，等待进入首个模型或工具回合" in rendered
+    assert "执行流: API-A 自主执行面已认领任务，等待进入首个模型或工具回合" in rendered
 
 
-def test_auto_panel_shows_waiting_start_cause_after_prompt_enqueued(monkeypatch):
+def test_autonomous_panel_shows_waiting_start_cause_after_prompt_enqueued(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._auto_mode_active = True
+    cli._autonomous_gate_active = True
     cli._agent_running = False
     cli._spinner_text = ""
     cli.session_id = "cli-session-local"
-    cli._current_auto_task = {
+    cli._current_autonomous_task = {
         "task_id": "learn-claimed-2",
         "title": "Prompt enqueued task",
         "task_type": "self_learning",
     }
-    cli._current_auto_task_started_at = 0.0
+    cli._current_autonomous_task_started_at = 0.0
     cli._last_agent_turn_result = None
-    cli._auto_execution_events = [
+    cli._autonomous_execution_events = [
         {
             "at": "12:00:00",
             "message": "执行提示已注入前台 CLI，等待模型响应",
@@ -1012,11 +1066,11 @@ def test_auto_panel_shows_waiting_start_cause_after_prompt_enqueued(monkeypatch)
             "stage": "prompt_enqueued",
         }
     ]
-    cli._auto_last_supervisor_event_key = ""
+    cli._autonomous_last_supervisor_event_key = ""
 
     monkeypatch.setattr(VoidcubeCLI, "_get_tui_terminal_width", staticmethod(lambda default=(80, 24): 80))
     cli._fetch_supervisor_status = lambda: {"timeline": [], "tasks": []}
-    cli._fetch_auto_gateway_status = lambda: {
+    cli._fetch_autonomous_gateway_status = lambda: {
         "active_cli_executor": {
             "session_id": "cli-session-local",
             "lease_status": "healthy",
@@ -1026,37 +1080,36 @@ def test_auto_panel_shows_waiting_start_cause_after_prompt_enqueued(monkeypatch)
         }
     }
 
-    fragments = cli._get_auto_execution_panel_fragments()
-    rendered = "".join(text for _, text in fragments)
+    rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
 
     assert "状态: 已认领待起跑" in rendered
     assert "近因: 执行提示已入队，正在等待首个模型响应" in rendered
 
 
-def test_auto_panel_shows_claimed_task_waiting_for_writeback(monkeypatch):
+def test_autonomous_panel_shows_claimed_task_waiting_for_writeback(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._auto_mode_active = True
+    cli._autonomous_gate_active = True
     cli._agent_running = False
     cli._spinner_text = ""
     cli.session_id = "cli-session-local"
-    cli._current_auto_task = {
+    cli._current_autonomous_task = {
         "task_id": "learn-writeback-1",
         "title": "Writeback waiting task",
         "task_type": "self_learning",
     }
-    cli._current_auto_task_started_at = 0.0
+    cli._current_autonomous_task_started_at = 0.0
     cli._last_agent_turn_result = {
         "failed": False,
         "partial": False,
         "interrupted": False,
         "error": "",
     }
-    cli._auto_execution_events = []
-    cli._auto_last_supervisor_event_key = ""
+    cli._autonomous_execution_events = []
+    cli._autonomous_last_supervisor_event_key = ""
 
     monkeypatch.setattr(VoidcubeCLI, "_get_tui_terminal_width", staticmethod(lambda default=(80, 24): 80))
     cli._fetch_supervisor_status = lambda: {"timeline": [], "tasks": []}
-    cli._fetch_auto_gateway_status = lambda: {
+    cli._fetch_autonomous_gateway_status = lambda: {
         "active_cli_executor": {
             "session_id": "cli-session-local",
             "lease_status": "healthy",
@@ -1066,20 +1119,19 @@ def test_auto_panel_shows_claimed_task_waiting_for_writeback(monkeypatch):
         }
     }
 
-    fragments = cli._get_auto_execution_panel_fragments()
-    rendered = "".join(text for _, text in fragments)
+    rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
 
     assert "状态: 等待回写" in rendered
     assert "Writeback waiting task" in rendered
-    assert "队列: 当前 CLI 已完成执行，等待结果回写到任务链" in rendered
-    assert "执行流: 当前 CLI 已结束本轮执行，等待写回任务状态" in rendered
+    assert "队列: 自主执行面已完成执行，等待结果回写到任务链" in rendered
+    assert "执行流: API-A 自主执行面已结束本轮执行，等待写回任务状态" in rendered
 
 
-def test_sync_auto_supervisor_event_records_latest_timeline_once():
+def test_sync_autonomous_supervisor_event_records_latest_timeline_once():
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._auto_mode_active = True
-    cli._auto_execution_events = []
-    cli._auto_last_supervisor_event_key = ""
+    cli._autonomous_gate_active = True
+    cli._autonomous_execution_events = []
+    cli._autonomous_last_supervisor_event_key = ""
 
     state = {
         "timeline": [
@@ -1091,18 +1143,18 @@ def test_sync_auto_supervisor_event_records_latest_timeline_once():
         ]
     }
 
-    cli._sync_auto_supervisor_event(state)
-    cli._sync_auto_supervisor_event(state)
+    cli._sync_autonomous_supervisor_event(state)
+    cli._sync_autonomous_supervisor_event(state)
 
-    assert len(cli._auto_execution_events) == 1
-    assert "监督者 task_decided: Approved learning task from supervisor." in cli._auto_execution_events[0]["message"]
+    assert len(cli._autonomous_execution_events) == 1
+    assert "监督者 task_decided: Approved learning task from supervisor." in cli._autonomous_execution_events[0]["message"]
 
 
 def test_cli_force_quit_marks_body_improvement_task_interrupted(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._agent_running = False
-    cli._auto_mode_active = True
-    cli._current_auto_task = {
+    cli._autonomous_gate_active = True
+    cli._current_autonomous_task = {
         "task_id": "body-1",
         "execution_kind": "body_improvement",
     }
@@ -1128,19 +1180,19 @@ def test_cli_force_quit_marks_body_improvement_task_interrupted(monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr("cli._cprint", fake_cprint)
 
-    result = cli._force_quit_auto_mode()
+    result = cli._force_quit_autonomous_gate()
 
     assert result is True
     task_request = next(item for item in requests if item["url"].endswith("/v1/tasks/body-1/decision"))
     assert task_request["data"]["decision"] == "failed"
     assert task_request["data"]["context"]["execution_kind"] == "body_improvement"
     assert "body improvement task" in task_request["data"]["reason"]
-    assert cli._current_auto_task is None
+    assert cli._current_autonomous_task is None
 
 
 def test_auto_command_marks_cli_agent_surface_active(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._auto_mode_active = False
+    cli._autonomous_gate_active = False
     cli.session_id = "cli-session-auto"
 
     pushed = []
@@ -1175,7 +1227,7 @@ def test_auto_command_marks_cli_agent_surface_active(monkeypatch):
         del request, timeout
         return _FakeUrlopenResponse(
             {
-                "governor_mode_active": True,
+                "autonomous_chain_gate_active": True,
                 "drive_loop_running": True,
                 "review_loop_running": True,
                 "endogenous_drive_enabled": True,
@@ -1197,8 +1249,8 @@ def test_auto_command_marks_cli_agent_surface_active(monkeypatch):
     monkeypatch.setattr("cli._push_cli_agent_scene", fake_push)
     monkeypatch.setattr("threading.Thread", _ImmediateThread)
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr(cli, "_trigger_auto_mode_cycle", fake_cycle)
-    monkeypatch.setattr(cli, "_poll_auto_mode_workflow", fake_poll)
+    monkeypatch.setattr(cli, "_trigger_autonomous_cycle", fake_cycle)
+    monkeypatch.setattr(cli, "_poll_autonomous_workflow", fake_poll)
     monkeypatch.setattr(cli, "_refresh_gateway_cli_presence", fake_refresh_gateway_cli_presence)
     monkeypatch.setattr(
         "VoidCube_cli.config.load_config",
@@ -1207,7 +1259,7 @@ def test_auto_command_marks_cli_agent_surface_active(monkeypatch):
 
     cli._handle_auto_command("/auto")
 
-    assert cli._auto_mode_active is True
+    assert cli._autonomous_gate_active is True
     assert presence_refreshes == [True]
     assert pushed[0]["scene"] == "executing"
     assert pushed[0]["session_id"] == "cli-session-auto"
@@ -1215,7 +1267,7 @@ def test_auto_command_marks_cli_agent_surface_active(monkeypatch):
     assert polled == [True]
 
 
-def test_auto_executor_session_is_persisted_before_agent_pull():
+def test_autonomous_executor_session_is_persisted_before_agent_pull():
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli.session_id = "cli-auto-empty"
     cli.model = "test-model"
@@ -1234,29 +1286,37 @@ def test_auto_executor_session_is_persisted_before_agent_pull():
     db = _FakeSessionDB()
     cli._session_db = db
 
-    cli._ensure_auto_executor_session()
+    cli._ensure_autonomous_executor_session()
 
     assert db.created == [
         {
             "session_id": "cli-auto-empty",
-            "source": "cli_auto_executor",
+            "source": "cli_autonomous_executor",
             "model": "test-model",
         }
     ]
 
 
-def test_current_cli_agent_role_stays_supervisor_task_while_auto_task_is_unwinding():
+def test_current_cli_agent_role_stays_supervisor_task_while_autonomous_task_is_unwinding():
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._auto_mode_active = False
-    cli._current_auto_task = {"task_id": "task-1"}
+    cli._autonomous_gate_active = False
+    cli._current_autonomous_task = {"task_id": "task-1"}
 
     assert cli._current_cli_agent_role() == "supervisor_task"
 
 
-def test_process_command_allows_regular_slash_commands_while_auto_mode_active(monkeypatch):
+def test_current_cli_agent_role_treats_autonomous_gate_without_task_as_user_chat():
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._auto_mode_active = True
-    cli._current_auto_task = {"task_id": "learn-allow-help"}
+    cli._autonomous_gate_active = True
+    cli._current_autonomous_task = None
+
+    assert cli._current_cli_agent_role() == "user_chat"
+
+
+def test_process_command_allows_regular_slash_commands_while_autonomous_gate_active(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._autonomous_gate_active = True
+    cli._current_autonomous_task = {"task_id": "learn-allow-help"}
 
     called = {"help": 0}
 
@@ -1341,9 +1401,9 @@ def test_push_cli_agent_scene_includes_subagent_summary(monkeypatch):
 
 def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._auto_mode_active = False
+    cli._autonomous_gate_active = False
     cli.session_id = "cli-session-auto-recover"
-    cli._append_auto_execution_event = lambda *args, **kwargs: None
+    cli._append_autonomous_execution_event = lambda *args, **kwargs: None
 
     printed = []
     cycle_calls = []
@@ -1384,7 +1444,7 @@ def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
             raise OSError("connection refused")
         return _FakeUrlopenResponse(
             {
-                "governor_mode_active": True,
+                "autonomous_chain_gate_active": True,
                 "drive_loop_running": True,
                 "review_loop_running": True,
                 "endogenous_drive_enabled": True,
@@ -1406,8 +1466,8 @@ def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
     monkeypatch.setattr("cli._push_cli_agent_scene", fake_push)
     monkeypatch.setattr("threading.Thread", _ImmediateThread)
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr(cli, "_trigger_auto_mode_cycle", fake_cycle)
-    monkeypatch.setattr(cli, "_poll_auto_mode_workflow", fake_poll)
+    monkeypatch.setattr(cli, "_trigger_autonomous_cycle", fake_cycle)
+    monkeypatch.setattr(cli, "_poll_autonomous_workflow", fake_poll)
     monkeypatch.setattr(cli, "_refresh_gateway_cli_presence", fake_refresh_gateway_cli_presence)
     monkeypatch.setattr(
         "VoidCube_cli.config.load_config",
@@ -1422,7 +1482,7 @@ def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
 
     cli._handle_auto_command("/auto")
 
-    assert cli._auto_mode_active is True
+    assert cli._autonomous_gate_active is True
     assert attempts["count"] >= 2
     assert any("attempting daemon recovery" in line for line in printed)
     assert presence_refreshes == [True]

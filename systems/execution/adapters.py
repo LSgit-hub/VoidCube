@@ -109,8 +109,7 @@ class WatchWindowState:
 class WatchWindowExecutionAdapter:
     """Execution boundary for watch-window runtime mechanics and cleanup.
 
-    Owns its runtime state directly (S-02/S-03) — the supervisor no longer
-    injects a ``runtime_state`` protocol.
+    Owns its runtime state directly (S-02/S-03).
     """
 
     def __init__(
@@ -120,7 +119,6 @@ class WatchWindowExecutionAdapter:
         agents: MutableMapping[str, Any],
         stop_agent: Optional[Callable[[str], Awaitable[Dict[str, Any]]]],
         run_health_checks: Callable[[], Awaitable[Dict[str, Any]]],
-        runtime_state: Any = None,  # deprecated; state is now self-owned (S-02/03)
         governor_request_executor: Optional[GovernorRequestExecutorProtocol] = None,
         poll_interval_seconds: float = 1.0,
     ) -> None:
@@ -1039,13 +1037,13 @@ class MemoryMaintenanceExecutionAdapter:
             logger.warning("Structured memory maintenance failed: %s", exc)
             result["structured_maintenance"] = {"status": "error", "error": str(exc)}
 
-        # ── Flat SQLite compression (secondary, backward-compatible) ──
+        # ── Canonical memory-service rule compression ──
         try:
-            flat = await self._run_flat_compression(request)
-            result["flat_compression"] = flat
+            rule_compression = await self._run_memory_rule_compression(request)
+            result["rule_compression"] = rule_compression
         except Exception as exc:
-            logger.warning("Flat memory compression failed: %s", exc)
-            result["flat_compression"] = {"status": "error", "error": str(exc)}
+            logger.warning("Memory rule compression failed: %s", exc)
+            result["rule_compression"] = {"status": "error", "error": str(exc)}
 
         return self.attach_execution_route_hint(result, "memory.compress")
 
@@ -1123,13 +1121,12 @@ class MemoryMaintenanceExecutionAdapter:
             ],
         }
 
-    async def _run_flat_compression(self, request: dict) -> Dict[str, Any]:
-        """Run full five-rule compression via memory-service, with legacy fallback."""
+    async def _run_memory_rule_compression(self, _request: dict) -> Dict[str, Any]:
+        """Run full five-rule compression via the memory service."""
         try:
             import aiohttp
 
             async with aiohttp.ClientSession() as session:
-                # Primary: five-rule compression (two-tier architecture)
                 url = f"{self.config.gateway_address}{self.config.memory_gateway_path}compressed/run-all-rules"
                 async with session.post(url, json={}, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                     if resp.status == 200:
@@ -1137,15 +1134,12 @@ class MemoryMaintenanceExecutionAdapter:
                         logger.info("Five-rule compression: %s",
                                     {k: type(v).__name__ for k, v in result.get("rules", {}).items()})
                         return result
-                # Fallback: legacy flat compression
-                url = f"{self.config.gateway_address}{self.config.memory_gateway_path}memories/compress"
-                payload = {"namespace": request.get("namespace", "default"),
-                           "max_entries": int(request.get("max_entries", 100))}
-                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as response:
-                    if response.status == 200:
-                        return await response.json()
-            return {"status": "compression_error", "error": "All endpoints unreachable"}
+                    return {
+                        "status": "rule_compression_error",
+                        "error": f"Memory rule compression endpoint returned HTTP {resp.status}",
+                    }
+            return {"status": "rule_compression_error", "error": "Memory rule compression endpoint unreachable"}
         except Exception as exc:
             logger.warning("Memory compression failed: %s", exc)
-            return {"status": "compression_error", "error": str(exc)}
+            return {"status": "rule_compression_error", "error": str(exc)}
 

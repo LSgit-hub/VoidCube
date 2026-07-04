@@ -61,12 +61,12 @@ def test_mem_governor_bridge_records_review_and_latest(tmp_path):
     assert latest["request"]["trace_id"] == "trace-1"
     assert latest["request"]["task_type"] == "self_evolution"
     assert latest["request"]["governance_task_type"] == "self_evolution"
-    assert latest["request"]["task_family"] == "body_upgrade"
-    assert latest["request"]["execution_kind"] == "body_upgrade"
+    assert latest["request"]["task_family"] == "body_switch"
+    assert latest["request"]["execution_kind"] == "body_switch"
     assert latest["request"]["decision_id"] == "decision-1"
     assert latest["evolution_lineage"]["governance_task_type"] == "self_evolution"
-    assert latest["evolution_lineage"]["task_family"] == "body_upgrade"
-    assert latest["evolution_lineage"]["execution_kind"] == "body_upgrade"
+    assert latest["evolution_lineage"]["task_family"] == "body_switch"
+    assert latest["evolution_lineage"]["execution_kind"] == "body_switch"
 
 
 @pytest.mark.unit
@@ -141,14 +141,14 @@ def test_mem_governor_bridge_records_execution_outcome(tmp_path):
     assert history[-1]["request"]["trace_id"] == "trace-2"
     assert history[-1]["request"]["task_type"] == "self_evolution"
     assert history[-1]["request"]["governance_task_type"] == "self_evolution"
-    assert history[-1]["request"]["task_family"] == "body_upgrade"
-    assert history[-1]["request"]["execution_kind"] == "body_upgrade"
+    assert history[-1]["request"]["task_family"] == "body_switch"
+    assert history[-1]["request"]["execution_kind"] == "body_switch"
     assert history[-1]["request"]["decision_id"] == "decision-2"
     assert history[-1]["evolution_lineage"]["trace_id"] == "trace-2"
     assert history[-1]["evolution_lineage"]["task_type"] == "self_evolution"
     assert history[-1]["evolution_lineage"]["governance_task_type"] == "self_evolution"
-    assert history[-1]["evolution_lineage"]["task_family"] == "body_upgrade"
-    assert history[-1]["evolution_lineage"]["execution_kind"] == "body_upgrade"
+    assert history[-1]["evolution_lineage"]["task_family"] == "body_switch"
+    assert history[-1]["evolution_lineage"]["execution_kind"] == "body_switch"
     assert history[-1]["evolution_lineage"]["decision_id"] == "decision-2"
 
 

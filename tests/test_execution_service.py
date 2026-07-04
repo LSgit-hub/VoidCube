@@ -71,9 +71,9 @@ def test_execution_service_health_describes_execution_only_boundary():
     assert payload["executor_access_policy"]["failure_mode"] == "executor_required"
     assert "/body/upgrade/execute" in payload["routes"]["body_upgrade"]
     assert "/self-evolution/execute" in payload["routes"]["formal_self_evolution"]
-    assert "/self-learning/execute" in payload["routes"]["self_learning"]
     assert "/body/watch-window/status" in payload["routes"]["body_lifecycle"]
-    assert "legacy_compatibility" not in payload["routes"]
+    assert "self_learning" not in payload["routes"]
+    assert "compatibility_notes" not in payload
 
 
 @pytest.mark.unit
@@ -183,4 +183,3 @@ def test_execution_service_delegates_maintenance_route():
     adapters.memory_maintenance.trigger_memory_compression.assert_awaited_once_with({"namespace": "default"})
     missing_legacy = client.post("/upgrade/legacy", json={"branch": "main"})
     assert missing_legacy.status_code == 404
-

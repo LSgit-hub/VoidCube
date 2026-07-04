@@ -68,7 +68,6 @@ def assemble_supervisor_execution_runtime(supervisor: Any) -> None:
         agents=supervisor._agents,
         stop_agent=None,
         run_health_checks=supervisor.run_health_checks,
-        runtime_state=supervisor._watch_window_runtime,
     )
     supervisor._body_upgrade_executor = BodyUpgradeExecutionAdapter(
         config=execution_config,

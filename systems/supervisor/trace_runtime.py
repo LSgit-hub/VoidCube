@@ -219,6 +219,8 @@ class TraceRuntimeMixin:
         for event in events:
             if not isinstance(event, dict):
                 continue
+            if not self._gateway_activity_visible_to_supervisor_ui(event):
+                continue
             metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
             metadata_trace_id = metadata.get("trace_id")
             if trace_id and metadata_trace_id != trace_id:
@@ -239,6 +241,52 @@ class TraceRuntimeMixin:
                 )
             )
         return records
+
+    @staticmethod
+    def _gateway_activity_visible_to_supervisor_ui(event: Dict[str, Any]) -> bool:
+        """Return whether a Gateway event belongs on the API-B Web monitor.
+
+        Gateway records both user-chain and autonomous-chain activity for idle
+        decisions. The supervisor room only visualizes API-B governance state
+        and autonomous task reports, so user chat and API-A scene reports stay
+        out of the Web timeline even when they carry a trace_id.
+        """
+        activity_kind = str(event.get("activity_kind") or "").strip().lower()
+        if activity_kind in {"user_request", "agent_scene"}:
+            return False
+        if activity_kind in {
+            "self_learning",
+            "self_evolution",
+            "self_evolution_plan",
+            "self_evolution_execute",
+            "memory_task",
+            "memory_write_failure",
+            "uncertainty_high",
+        }:
+            return True
+
+        metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        governance_task_type = str(metadata.get("governance_task_type") or "").strip().lower()
+        task_family = str(metadata.get("task_family") or "").strip().lower()
+        execution_kind = str(metadata.get("execution_kind") or "").strip().lower()
+        if governance_task_type in {"self_learning", "self_evolution", "memory_maintenance"}:
+            return True
+        if task_family in {
+            "self_learning",
+            "memory_maintenance",
+            "general_self_evolution",
+            "body_upgrade",
+            "body_switch",
+        }:
+            return True
+        if execution_kind in {
+            "self_learning",
+            "memory_maintenance",
+            "body_improvement",
+            "body_switch",
+        }:
+            return True
+        return False
 
     async def _fetch_gateway_activity_log(
         self,

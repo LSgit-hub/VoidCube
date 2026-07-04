@@ -110,7 +110,7 @@ def test_handle_tasks_command_falls_back_to_background_summary(monkeypatch):
 
 def test_process_command_routes_tasks(monkeypatch):
     app = cli.VoidcubeCLI.__new__(cli.VoidcubeCLI)
-    app._auto_mode_active = False
+    app._autonomous_gate_active = False
 
     called = {"tasks": 0}
     app._handle_tasks_command = lambda cmd="/tasks": called.__setitem__("tasks", called["tasks"] + 1)

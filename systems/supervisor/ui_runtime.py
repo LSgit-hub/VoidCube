@@ -3884,7 +3884,7 @@ function renderStatsPanel(state) {
   const bs = state.body_status || {};
   const ts = state.tier1_stats || {};
   const mem = state.mem_usage || {};
-  const gov = state.governor_mode || {};
+  const gate = state.autonomous_chain_gate || {};
 
   const drill = document.createElement('div');
   drill.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:6px;';
@@ -3927,11 +3927,11 @@ function renderStatsPanel(state) {
   body.append(memSec);
 
   // 治理状态
-  const govSec = document.createElement('div');
-  govSec.className = 'lm-section';
-  govSec.innerHTML = '<div class="lm-section-label">⚙️ 治理状态</div>';
+  const gateSec = document.createElement('div');
+  gateSec.className = 'lm-section';
+  gateSec.innerHTML = '<div class="lm-section-label">⚙️ 治理状态</div>';
   [
-    {icon:'🔮', label:'Governor', value: gov.active ? '✅ 已激活' : '⏸ 未激活'},
+    {icon:'🔮', label:'自主链路', value: gate.autonomous_chain_gate_active ? '✅ 已激活' : '⏸ 未激活'},
     {icon:'🌐', label:'执行模式', value: '全天候'},
     {icon:'👥', label:'活跃会话', value: state.active_sessions || 0},
     {icon:'📡', label:'驱动可用', value: state.drive_available ? '✅' : '⚠️ 不可用'},
@@ -3940,9 +3940,9 @@ function renderStatsPanel(state) {
     const row = document.createElement('div');
     row.className = 'lm-stat-row';
     row.innerHTML = '<span class="lm-stat-icon">' + s.icon + '</span><span class="lm-stat-label">' + s.label + '</span><span class="lm-stat-value">' + s.value + '</span>';
-    govSec.append(row);
+    gateSec.append(row);
   });
-  body.append(govSec);
+  body.append(gateSec);
 }
 
 /* ── Dock 角色迷你状态更新 ── */
@@ -4560,7 +4560,7 @@ class SupervisorUIMixin:
             "timeline": await self._recent_supervisor_observation_timeline(limit=10),
             "lm_input": lm_input,
             "cognition": cognition,
-            "governor_mode": self._governor_mode_status(),
+            "autonomous_chain_gate": self._autonomous_chain_gate_status(),
             "active_executions": [
                 self._serialize_self_evolution_task(task)
                 for task in self._self_evolution_queue.list_tasks()

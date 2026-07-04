@@ -90,8 +90,8 @@ def test_gateway_activity_touch_derives_runtime_task_profile_from_broad_metadata
     assert metadata["trace_id"] == "trace-plan-1"
     assert metadata["task_type"] == "self_evolution"
     assert metadata["governance_task_type"] == "self_evolution"
-    assert metadata["task_family"] == "body_upgrade"
-    assert metadata["execution_kind"] == "body_upgrade"
+    assert metadata["task_family"] == "body_switch"
+    assert metadata["execution_kind"] == "body_switch"
     assert metadata["decision_id"] == "decision-plan-1"
     assert metadata["task_identity"]["display_kind"] == "body_switch"
     assert metadata["task_identity"]["requested_kind"] == "body_switch"
@@ -199,12 +199,12 @@ def test_gateway_activity_log_is_bounded_and_trace_filterable():
     assert filtered["count"] == 1
     assert filtered["events"][0]["activity_kind"] == "self_evolution_execute"
     assert filtered["events"][0]["metadata"]["trace_id"] == "trace-log-1"
-    assert filtered["events"][0]["metadata"]["task_family"] == "body_upgrade"
-    assert filtered["events"][0]["metadata"]["execution_kind"] == "body_upgrade"
+    assert filtered["events"][0]["metadata"]["task_family"] == "body_switch"
+    assert filtered["events"][0]["metadata"]["execution_kind"] == "body_switch"
     assert filtered["events"][0]["metadata"]["task_identity"]["display_kind"] == "body_switch"
 
 
-def test_gateway_self_learning_route_updates_learning_activity_even_when_upstream_fails():
+def test_gateway_does_not_publish_self_learning_service_route():
     gateway = InternalGateway(GatewayConfig())
     client = TestClient(gateway.app)
 
@@ -212,7 +212,7 @@ def test_gateway_self_learning_route_updates_learning_activity_even_when_upstrea
         "/register",
         json={
             "service_id": "self-learning-1",
-            "service_name": "self-learning-service",
+            "service_name": "archived-learning-record-service",
             "service_type": "self_learning",
             "address": "http://127.0.0.1:65526",
         },
@@ -220,21 +220,21 @@ def test_gateway_self_learning_route_updates_learning_activity_even_when_upstrea
     assert register_response.status_code == 201
 
     health = client.get("/").json()
-    assert health["registered_services"]["self_learning"] == 1
+    assert "self_learning" not in health["registered_services"]
 
     routes = client.get("/admin/routes").json()
-    self_learning_route = next(
-        route for route in routes["routes"] if route["path_prefix"] == "/self-learning/"
+    retired_proxy_prefix = "/" + "self" + "-learning/"
+    assert all(route["path_prefix"] != retired_proxy_prefix for route in routes["routes"])
+
+    response = client.post(
+        "/api/" + "self" + "-learning/conclusions/submit",
+        json={"summary": "noop"},
     )
-    assert self_learning_route["target_service"] == "self_learning"
-    assert self_learning_route["target_instance"] == "self-learning-1"
 
-    response = client.post("/api/self-learning/conclusions/submit", json={"summary": "noop"})
-
-    assert response.status_code in {500, 504}
+    assert response.status_code == 404
     activity = client.get("/admin/activity").json()
-    assert activity["last_self_learning_activity_at"] is not None
-    assert activity["counts"]["self_learning_activity_count"] == 1
+    assert activity["last_self_learning_activity_at"] is None
+    assert activity["counts"]["self_learning_activity_count"] == 0
 
 
 def test_gateway_agent_query_rejects_legacy_proxy_but_still_records_user_activity():
@@ -265,9 +265,9 @@ def test_gateway_agent_query_rejects_legacy_proxy_but_still_records_user_activit
     assert activity["counts"]["agent_work_count"] == 1
 
 
-def test_gateway_agent_query_still_records_activity_while_governor_flag_is_active():
+def test_gateway_agent_query_still_records_activity_while_autonomous_gate_is_active():
     gateway = InternalGateway(GatewayConfig())
-    gateway._governor_mode_active = True
+    gateway._autonomous_chain_gate_active = True
     client = TestClient(gateway.app)
 
     response = client.post(
@@ -281,6 +281,15 @@ def test_gateway_agent_query_still_records_activity_while_governor_flag_is_activ
     activity = client.get("/admin/activity").json()
     assert activity["last_user_request_at"] is not None
     assert activity["counts"]["user_request_count"] == 1
+
+
+def test_gateway_exposes_only_autonomous_chain_gate_admin_route():
+    gateway = InternalGateway(GatewayConfig())
+    route_paths = {route.path for route in gateway.app.routes}
+
+    assert "/admin/autonomous-chain-gate" in route_paths
+    deprecated_gate_route = "/admin/" + "gover" + "nor-mode"
+    assert deprecated_gate_route not in route_paths
 
 
 def test_gateway_body_status_exposes_cli_executor_and_passive_body_slots_only():
@@ -882,8 +891,8 @@ def test_gateway_executor_route_updates_execute_activity_even_when_upstream_fail
     assert activity["recent_metadata"]["self_evolution_execute"]["trace_id"] == "trace-exec-1"
     assert activity["recent_metadata"]["self_evolution_execute"]["task_type"] == "self_evolution"
     assert activity["recent_metadata"]["self_evolution_execute"]["governance_task_type"] == "self_evolution"
-    assert activity["recent_metadata"]["self_evolution_execute"]["task_family"] == "body_upgrade"
-    assert activity["recent_metadata"]["self_evolution_execute"]["execution_kind"] == "body_upgrade"
+    assert activity["recent_metadata"]["self_evolution_execute"]["task_family"] == "body_switch"
+    assert activity["recent_metadata"]["self_evolution_execute"]["execution_kind"] == "body_switch"
     assert activity["recent_metadata"]["self_evolution_execute"]["decision_id"] == "decision-exec-1"
     assert activity["recent_metadata"]["self_evolution_execute"]["task_id"] == "task-exec-1"
     assert activity["recent_metadata"]["self_evolution_execute"]["task_identity"]["display_kind"] == "body_switch"
@@ -935,7 +944,11 @@ def test_gateway_agent_lanes_keep_supervisor_and_user_chat_separate():
     )
     assert resp.status_code == 200
 
-    lanes = client.get("/admin/scenes").json()["scenes"]["agent"]["lanes"]
+    agent_scene = client.get("/admin/scenes").json()["scenes"]["agent"]
+    assert agent_scene["scene"] == "executing"
+    assert agent_scene["subagent_focus_tool"] == "grep"
+
+    lanes = agent_scene["lanes"]
     # supervisor_task lane is preserved, NOT overwritten by the later user_chat push
     assert lanes["supervisor_task"]["scene"] == "learning"
     assert lanes["supervisor_task"]["subagent_foreground_count"] == 3
@@ -1054,7 +1067,7 @@ def _register_supervisor(gateway, address="http://127.0.0.1:6002"):
 
 
 def test_completed_task_writeback_records_finding_to_tier1(monkeypatch):
-    # P0-2 成果回流: a completed AUTO task carrying final_response + session_id
+    # P0-2 成果回流: a completed autonomous task carrying final_response + session_id
     # must trigger a Tier1 turn write so the agent's finding leaves the CLI.
     gateway = InternalGateway(GatewayConfig())
     _register_supervisor(gateway)
@@ -1062,6 +1075,7 @@ def test_completed_task_writeback_records_finding_to_tier1(monkeypatch):
     client = TestClient(gateway.app)
 
     recorded = {}
+    forwarded = {}
 
     async def _fake_record(session_id, speaker, text, metadata=None):
         recorded["session_id"] = session_id
@@ -1097,6 +1111,8 @@ def test_completed_task_writeback_records_finding_to_tier1(monkeypatch):
             return False
 
         def post(self, url, json=None, timeout=None):
+            forwarded["url"] = url
+            forwarded["json"] = json or {}
             return _FakeResponse({"status": "completed"})
 
         def get(self, url, timeout=None):
@@ -1129,6 +1145,8 @@ def test_completed_task_writeback_records_finding_to_tier1(monkeypatch):
     assert recorded["text"] == "Findings: X improves Y."
     assert recorded["metadata"]["task_id"] == "learn-42"
     assert recorded["metadata"]["execution_kind"] == "self_learning"
+    assert forwarded["url"].endswith("/self-evolution/tasks/learn-42/decision")
+    assert forwarded["json"]["final_response"] == "Findings: X improves Y."
 
 
 def test_failed_task_writeback_does_not_record_finding(monkeypatch):

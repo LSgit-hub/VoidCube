@@ -272,8 +272,8 @@ async def test_tier1_add_turn_derives_dedup_key_from_task_metadata(tmp_path):
     await svc.create_session(SessionCreate(session_id="task-dedup", metadata={}))
     payload = TurnCreate(
         speaker="agent",
-        text="AUTO finding written through gateway",
-        metadata={"task_id": "task-42", "source": "auto_task_finding"},
+        text="Autonomous-chain finding written through gateway",
+        metadata={"task_id": "task-42", "source": "autonomous_task_finding"},
     )
 
     first = await svc.add_turn("task-dedup", payload)

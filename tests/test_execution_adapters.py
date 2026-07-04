@@ -17,6 +17,7 @@ from systems.execution.adapters import (
     BodyUpgradeExecutionAdapter,
     BodyLifecycleExecutionAdapter,
     GovernorReviewExecutionAdapter,
+    MemoryMaintenanceExecutionAdapter,
     WatchWindowExecutionAdapter,
 )
 from systems.execution.facade import VoidCubeExecutionFacade
@@ -31,10 +32,6 @@ def _attach_route_hint(payload: dict, interface_id: str) -> dict:
     result = dict(payload)
     result["execution_route_hint"] = {"interface_id": interface_id}
     return result
-
-
-def _make_watch_window_state(*, task=None, last_outcome=None, last_body_upgrade_trace_id=None) -> SimpleNamespace:
-    return SimpleNamespace(task=task, last_outcome=last_outcome, last_body_upgrade_trace_id=last_body_upgrade_trace_id)
 
 
 def _make_governor_request_executor(result=None) -> SimpleNamespace:
@@ -217,6 +214,63 @@ async def test_execution_facade_delegates_to_current_adapters():
     )
     assert formal_result["status"] == "formal_self_evolution_executed"
     memory_maintenance.trigger_memory_compression.assert_awaited_once_with({})
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_memory_maintenance_uses_canonical_rule_compression_endpoint(monkeypatch):
+    captured_urls: list[str] = []
+
+    class FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {"status": "rules_complete", "rules": {"deduplicate": {"changed": 1}}}
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, *, json, timeout):
+            del json, timeout
+            captured_urls.append(url)
+            return FakeResponse()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "aiohttp",
+        SimpleNamespace(
+            ClientSession=lambda: FakeSession(),
+            ClientTimeout=lambda *, total: SimpleNamespace(total=total),
+        ),
+    )
+    adapter = MemoryMaintenanceExecutionAdapter(
+        config=SimpleNamespace(
+            gateway_address="http://gateway",
+            memory_gateway_path="/mem/",
+        ),
+        attach_execution_route_hint=_attach_route_hint,
+        mem_state_path="missing-state.json",
+    )
+    adapter._run_structured_maintenance = AsyncMock(return_value={"status": "no_state"})  # type: ignore[method-assign]
+
+    result = await adapter.trigger_memory_compression({"namespace": "default", "max_entries": 5})
+
+    assert captured_urls == ["http://gateway/mem/compressed/run-all-rules"]
+    assert result["structured_maintenance"] == {"status": "no_state"}
+    assert result["rule_compression"]["status"] == "rules_complete"
+    old_result_key = "flat" + "_compression"
+    assert old_result_key not in result
+    assert result["execution_route_hint"]["interface_id"] == "memory.compress"
 
 
 
@@ -590,7 +644,6 @@ async def test_body_upgrade_then_watch_window_pass_recycles_retired_slot_end_to_
         agents=agents,
         stop_agent=stop_agent,
         run_health_checks=AsyncMock(return_value={"results": []}),
-        runtime_state=_make_watch_window_state(),
         governor_request_executor=runtime.governor_request_executor,
     )
 
@@ -683,7 +736,6 @@ async def test_body_upgrade_then_watch_window_failure_rolls_back_to_retired_slot
         agents=agents,
         stop_agent=stop_agent,
         run_health_checks=AsyncMock(return_value={"results": []}),
-        runtime_state=_make_watch_window_state(),
         governor_request_executor=runtime.governor_request_executor,
     )
 
@@ -750,7 +802,6 @@ async def test_watch_window_execution_adapter_stops_retired_slot_agents():
         agents={"old-active": old_agent, "new-active": new_agent},
         stop_agent=stop_agent,
         run_health_checks=AsyncMock(),
-        runtime_state=_make_watch_window_state(),
         governor_request_executor=_make_governor_request_executor(),
     )
 
@@ -797,7 +848,6 @@ async def test_watch_window_execution_adapter_stops_failed_slot_agents_after_rol
         agents={"restored-old": restored_agent, "failed-new": failed_agent},
         stop_agent=stop_agent,
         run_health_checks=AsyncMock(),
-        runtime_state=_make_watch_window_state(),
         governor_request_executor=_make_governor_request_executor(),
     )
 
@@ -848,7 +898,6 @@ async def test_watch_window_execution_adapter_polls_for_expired_window(tmp_path:
         agents={"new-active": agent},
         stop_agent=AsyncMock(),
         run_health_checks=run_health_checks,
-        runtime_state=_make_watch_window_state(),
         governor_request_executor=_make_governor_request_executor(),
     )
 
@@ -887,15 +936,14 @@ async def test_watch_window_execution_adapter_builds_runtime_status_snapshot():
         healthy=True,
         slot_id="slot-B",
     )
-    runtime_state = _make_watch_window_state(last_outcome={"status": "watch_window_evaluated"})
     adapter = WatchWindowExecutionAdapter(
         body_registry=body_registry,
         agents={"new-active": agent},
         stop_agent=AsyncMock(),
         run_health_checks=AsyncMock(),
-        runtime_state=runtime_state,
         governor_request_executor=_make_governor_request_executor(),
     )
+    adapter._state.last_outcome = {"status": "watch_window_evaluated"}
 
     status = adapter.get_watch_window_status()
     evidence = adapter.build_watch_window_evidence(metrics={"reason": "manual-check"})
@@ -937,13 +985,11 @@ async def test_watch_window_execution_adapter_evaluates_and_records_outcome():
             "registry": {"active_slot": "slot-B", "retired_slot": None},
         }
     )
-    runtime_state = _make_watch_window_state()
     adapter = WatchWindowExecutionAdapter(
         body_registry=body_registry,
         agents={"new-active": agent},
         stop_agent=AsyncMock(return_value={"status": "stopped"}),
         run_health_checks=AsyncMock(),
-        runtime_state=runtime_state,
         governor_request_executor=governor_request_executor,
     )
 
@@ -1003,7 +1049,6 @@ async def test_watch_window_execution_adapter_evaluate_success_reuses_reconcile_
         agents={"old-active": old_agent, "new-active": new_agent},
         stop_agent=stop_agent,
         run_health_checks=AsyncMock(),
-        runtime_state=_make_watch_window_state(),
         governor_request_executor=_make_governor_request_executor(
             {
                 "request": {"body_id": "slot-A"},
@@ -1072,7 +1117,6 @@ async def test_watch_window_execution_adapter_evaluate_rollback_reuses_reconcile
         agents={"restored-old": restored_agent, "failed-new": failed_agent},
         stop_agent=stop_agent,
         run_health_checks=AsyncMock(),
-        runtime_state=_make_watch_window_state(),
         governor_request_executor=_make_governor_request_executor(
             {
                 "request": {"body_id": "slot-B"},
@@ -1110,14 +1154,12 @@ async def test_watch_window_execution_adapter_owns_task_lifecycle():
         watch_window=watch_window,
     )
     body_registry = SimpleNamespace(load_registry=Mock(return_value=registry))
-    runtime_state = _make_watch_window_state()
 
     adapter = WatchWindowExecutionAdapter(
         body_registry=body_registry,
         agents={},
         stop_agent=AsyncMock(),
         run_health_checks=AsyncMock(),
-        runtime_state=runtime_state,
         governor_request_executor=_make_governor_request_executor(),
         poll_interval_seconds=0.01,
     )
@@ -1134,14 +1176,13 @@ async def test_watch_window_execution_adapter_owns_task_lifecycle():
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    assert runtime_state.task is None
+    assert adapter._state.task is None
 
 
 @pytest.mark.unit
 def test_watch_window_execution_adapter_syncs_runtime_after_watch_approval():
     existing_task = Mock()
     existing_task.done.return_value = False
-    runtime_state = _make_watch_window_state(task=existing_task)
 
     adapter = WatchWindowExecutionAdapter(
         body_registry=SimpleNamespace(load_registry=Mock()),
@@ -1169,7 +1210,6 @@ def test_watch_window_execution_adapter_ignores_non_watch_governor_decisions():
         agents={},
         stop_agent=AsyncMock(),
         run_health_checks=AsyncMock(),
-        runtime_state=_make_watch_window_state(),
         governor_request_executor=_make_governor_request_executor(),
     )
 

@@ -1271,6 +1271,74 @@ async def test_endogenous_drive_history_records_planned_and_decision_outcomes(tm
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_completed_autonomous_task_finding_flows_into_next_drive_context(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    final_response = "Findings: prefer lane-specific observation before expanding autonomous tasks."
+
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Learn lane observation",
+            "summary": "Learning result must be visible to the next endogenous drive cycle",
+            "task_type": "self_learning",
+            "source": "endogenous_drive",
+            "metadata": {
+                "endogenous_drive_key": "continuity:test-learning-finding",
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+
+    await supervisor.decide_self_evolution_task(
+        task_id,
+        {"decision": "approve", "actor": "supervisor", "reason": "ready"},
+    )
+    await supervisor.decide_self_evolution_task(
+        task_id,
+        {
+            "decision": "running",
+            "actor": "cli_agent",
+            "reason": "API-A autonomous executor pulled task",
+            "session_id": "cli-autonomous-1",
+            "context": {"source": "cli_agent_pull", "execution_kind": "self_learning"},
+        },
+    )
+    await supervisor.decide_self_evolution_task(
+        task_id,
+        {
+            "decision": "completed",
+            "actor": "cli_agent",
+            "reason": "API-A autonomous executor completed task",
+            "session_id": "cli-autonomous-1",
+            "context": {"source": "cli_agent_pull", "execution_kind": "self_learning"},
+            "final_response": final_response,
+        },
+    )
+
+    history = supervisor._load_endogenous_drive_history()
+    completed_outcome = next(
+        outcome
+        for outcome in history["outcomes"]
+        if outcome.get("task_id") == task_id
+        and outcome.get("event_type") == "decision"
+        and outcome.get("status") == "completed"
+    )
+    assert completed_outcome["autonomous_executor_final_response"] == final_response
+    assert completed_outcome["outcome_summary"] == final_response
+
+    idle_window = _endogenous_idle_window_payload(error_count=0, uncertainty_count=0)
+    idle_window["completed_learning_tasks"] = supervisor._completed_learning_task_summaries()
+    idle_window["drive_history"] = supervisor._history_for_endogenous_drive(history)
+    drive_context = supervisor._endogenous_drive_engine._build_drive_context(idle_window)
+
+    rendered_outcomes = json.dumps(drive_context["drive_history"]["outcomes"], ensure_ascii=False)
+    assert final_response in rendered_outcomes
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_endogenous_drive_outcome_dedup_scans_full_retained_history_window(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
@@ -6751,7 +6819,7 @@ def test_prompt_packet_prefers_context_layers_and_keeps_compact_cognitive_memory
             },
             "cognitive_assessment_memory": {
                 "dominant_constraint": "old duplicate constraint",
-                "common_current_judgements": ["older judgement"],
+                "current_judgement": "older judgement",
                 "summary": "assessment memory summary",
             },
             "self_iteration_trend_memory": {
@@ -6823,7 +6891,6 @@ def test_prompt_packet_prefers_context_layers_and_keeps_compact_cognitive_memory
     assert "secondary_task_shape_hint" not in compact["meta_cognition_profile"]
     assert compact["cognitive_assessment_memory"]["dominant_constraint"] == "old duplicate constraint"
     assert compact["cognitive_assessment_memory"]["current_judgement"] == "older judgement"
-    assert "common_current_judgements" not in compact["cognitive_assessment_memory"]
     assert compact["self_iteration_trend_memory"]["trend_state"] == "locked"
     assert compact["self_iteration_trend_memory"]["dominant_hypothesis"] == "repair grounding"
     assert compact["self_iteration_trend_memory"]["stay_or_switch"] == "stay"
@@ -6832,8 +6899,6 @@ def test_prompt_packet_prefers_context_layers_and_keeps_compact_cognitive_memory
     assert compact["self_iteration_trend_memory"]["hypothesis_signal_count"] == 1
     assert compact["self_iteration_trend_memory"]["stay_or_switch_signal_count"] == 1
     assert compact["self_iteration_trend_memory"]["switch_reason_signal_count"] == 1
-    assert "common_targets" not in compact["self_iteration_trend_memory"]
-    assert "common_hypotheses" not in compact["self_iteration_trend_memory"]
     assert compact["self_iteration_hypotheses"]["hypothesis_count"] == 1
     assert compact["self_iteration_hypotheses"]["suggested_task_types"] == ["review"]
     assert "hypotheses" not in compact["self_iteration_hypotheses"]
@@ -8859,36 +8924,6 @@ def test_engine_self_iteration_hypotheses_use_thin_why_not_improvement_field(tmp
         if row["target_domain"] == "improvement_readiness"
     )
     assert readiness_hypothesis["evidence"] == ["improvement would outrun grounding"]
-    assert "common_why_not_improvement_now" not in hypotheses
-
-    legacy_hypotheses = supervisor._endogenous_drive_engine._build_self_iteration_hypotheses(
-        self_model_snapshot={
-            "readiness": {"self_iteration_readiness_score": 0.76},
-            "self_understanding_gaps": [],
-        },
-        evidence_credibility_summary={"weak_or_missing_channels": []},
-        task_type_priors={"top_priority_task_type": "review", "top_priority_score": 0.72},
-        recent_reference_alignment={
-            "available": True,
-            "average_alignment_score": 0.82,
-            "weak_or_partial_count": 0,
-        },
-        proposal_drift_memory={"available": True, "drift_state": "stable"},
-        cognitive_assessment_memory={
-            "available": True,
-            "common_why_not_improvement_now": "legacy improvement blocker",
-        },
-        self_iteration_trend_memory={},
-        switch_self_regulation_memory={},
-        post_task_effect_memory={"effect_direction": "mixed"},
-        grounding_focus={"grounding_gaps": []},
-    )
-    legacy_readiness_hypothesis = next(
-        row
-        for row in legacy_hypotheses["hypotheses"]
-        if row["target_domain"] == "improvement_readiness"
-    )
-    assert legacy_readiness_hypothesis["evidence"] == ["legacy improvement blocker"]
 
 
 @pytest.mark.asyncio
@@ -11063,24 +11098,16 @@ def test_meta_cognition_profile_does_not_let_task_prior_override_review_judgemen
             "hypotheses": [],
         },
         cognitive_assessment_memory={
-            "common_current_judgements": [
-                "review should dominate until grounding is repaired",
-            ],
+            "current_judgement": "review should dominate until grounding is repaired",
             "dominant_constraint": "weak self structure grounding",
-            "common_self_iteration_targets": ["grounding"],
-            "common_self_iteration_hypotheses": [
-                "repair evidence-to-agenda grounding before aggressive self-iteration",
-            ],
-            "common_why_not_improvement_now": [
-                "improvement would outrun current self-understanding",
-            ],
+            "self_iteration_target": "grounding",
+            "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+            "why_not_improvement_now": "improvement would outrun current self-understanding",
         },
         self_iteration_trend_memory={
             "dominant_target": "grounding",
-            "common_hypotheses": [
-                "repair evidence-to-agenda grounding before aggressive self-iteration",
-            ],
-            "common_stay_or_switch": ["stay"],
+            "dominant_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+            "dominant_stay_or_switch": "stay",
             "trend_state": "steady",
         },
         switch_self_regulation_memory={
@@ -11242,7 +11269,7 @@ def test_meta_cognition_profile_is_unavailable_without_real_signals():
 
 
 @pytest.mark.unit
-def test_meta_cognition_legacy_string_fallback_is_not_split_into_characters(tmp_path):
+def test_meta_cognition_primary_string_fields_are_used_directly(tmp_path):
     from systems.supervisor.endogenous_drive import EndogenousDriveEngine
 
     engine = EndogenousDriveEngine()
@@ -11250,12 +11277,12 @@ def test_meta_cognition_legacy_string_fallback_is_not_split_into_characters(tmp_
         grounding_focus={"grounding_gaps": [], "contradictory_topics": []},
         self_iteration_hypotheses={},
         cognitive_assessment_memory={
-            "common_current_judgements": "review should remain primary",
-            "common_self_iteration_targets": "grounding",
-            "common_self_iteration_hypotheses": "repair grounding first",
-            "common_why_not_improvement_now": "improvement would outrun grounding",
+            "current_judgement": "review should remain primary",
+            "self_iteration_target": "grounding",
+            "self_iteration_hypothesis": "repair grounding first",
+            "why_not_improvement_now": "improvement would outrun grounding",
         },
-        self_iteration_trend_memory={"common_stay_or_switch": "stay"},
+        self_iteration_trend_memory={"dominant_stay_or_switch": "stay"},
         switch_self_regulation_memory={},
         post_task_effect_memory={},
         proposal_drift_memory={},
@@ -11270,12 +11297,12 @@ def test_meta_cognition_legacy_string_fallback_is_not_split_into_characters(tmp_
     supervisor = _make_supervisor(tmp_path)
     runtime_profile = supervisor._build_recent_meta_cognition_profile_summary(
         cognitive_assessment_memory={
-            "common_current_judgements": "review should remain primary",
-            "common_self_iteration_targets": "grounding",
-            "common_self_iteration_hypotheses": "repair grounding first",
-            "common_why_not_improvement_now": "improvement would outrun grounding",
+            "current_judgement": "review should remain primary",
+            "self_iteration_target": "grounding",
+            "self_iteration_hypothesis": "repair grounding first",
+            "why_not_improvement_now": "improvement would outrun grounding",
         },
-        self_iteration_trend_memory={"common_stay_or_switch": "stay"},
+        self_iteration_trend_memory={"dominant_stay_or_switch": "stay"},
         switch_self_regulation_memory={},
         post_task_effect_memory={},
         proposal_drift_memory={},
@@ -11365,7 +11392,7 @@ def test_detect_needs_sorts_primary_need_by_strength_instead_of_append_order():
     needs = engine._detect_needs(
         perception=DrivePerceptionSnapshot(
             user_mode="idle_window",
-            governor_mode_active=False,
+            autonomous_chain_gate_active=False,
             system_posture="stable",
             active_sessions=0,
             recent_errors=4,
@@ -11439,7 +11466,7 @@ def test_detect_needs_prefers_observe_before_learning_when_historical_underdeliv
     needs = engine._detect_needs(
         perception=DrivePerceptionSnapshot(
             user_mode="idle_window",
-            governor_mode_active=False,
+            autonomous_chain_gate_active=False,
             system_posture="stable",
             active_sessions=0,
             recent_errors=1,
@@ -11512,7 +11539,7 @@ def test_detect_needs_does_not_let_memory_continuity_override_observation_under_
     needs = engine._detect_needs(
         perception=DrivePerceptionSnapshot(
             user_mode="idle_window",
-            governor_mode_active=False,
+            autonomous_chain_gate_active=False,
             system_posture="stable",
             active_sessions=0,
             recent_errors=1,
@@ -11585,7 +11612,7 @@ def test_detect_needs_keeps_memory_continuity_primary_before_observation_gate_tr
     needs = engine._detect_needs(
         perception=DrivePerceptionSnapshot(
             user_mode="idle_window",
-            governor_mode_active=False,
+            autonomous_chain_gate_active=False,
             system_posture="stable",
             active_sessions=0,
             recent_errors=1,
@@ -11658,7 +11685,7 @@ def test_detect_needs_enters_observation_when_historical_underdelivery_and_obser
     needs = engine._detect_needs(
         perception=DrivePerceptionSnapshot(
             user_mode="idle_window",
-            governor_mode_active=False,
+            autonomous_chain_gate_active=False,
             system_posture="stable",
             active_sessions=0,
             recent_errors=1,
@@ -11733,7 +11760,7 @@ def test_detect_needs_keeps_historical_underdelivery_boundary_deterministic_for_
         return engine._detect_needs(
             perception=DrivePerceptionSnapshot(
                 user_mode="idle_window",
-                governor_mode_active=False,
+                autonomous_chain_gate_active=False,
                 system_posture="stable",
                 active_sessions=0,
                 recent_errors=1,
@@ -11812,7 +11839,7 @@ def test_detect_needs_crosses_from_memory_to_observation_monotonically_near_hist
         needs = engine._detect_needs(
             perception=DrivePerceptionSnapshot(
                 user_mode="idle_window",
-                governor_mode_active=False,
+                autonomous_chain_gate_active=False,
                 system_posture="stable",
                 active_sessions=0,
                 recent_errors=1,
@@ -16107,7 +16134,7 @@ async def test_endogenous_drive_still_plans_learning_candidates_with_active_sess
                 "counts": {},
                 "active_sessions": 2,
                 "recent_metadata": {
-                    "user_request": {"topic": "AUTO foreground execution diagnostics"}
+                    "user_request": {"topic": "autonomous foreground execution diagnostics"}
                 },
             },
             "task_family_decisions": {
@@ -16207,9 +16234,9 @@ async def test_batch_review_accepts_lm_queue_governance_override(tmp_path, monke
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_governor_mode_preserves_agent_pull_task_approval_when_lm_suggests_defer(tmp_path, monkeypatch):
+async def test_autonomous_chain_gate_preserves_agent_pull_task_approval_when_lm_suggests_defer(tmp_path, monkeypatch):
     supervisor = _make_supervisor(tmp_path)
-    supervisor._service_runtime.governor_mode_active = True
+    supervisor._service_runtime.autonomous_chain_gate_active = True
     planned = await supervisor.plan_self_evolution_task(
         {
             "title": "Explore one unresolved learning thread",
@@ -16258,7 +16285,7 @@ async def test_governor_mode_preserves_agent_pull_task_approval_when_lm_suggests
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_batch_review_preserves_agent_pull_task_approval_without_governor_mode(tmp_path, monkeypatch):
+async def test_batch_review_preserves_agent_pull_task_approval_without_autonomous_chain_gate(tmp_path, monkeypatch):
     supervisor = _make_supervisor(tmp_path)
     planned = await supervisor.plan_self_evolution_task(
         {
@@ -17275,7 +17302,7 @@ async def test_run_self_evolution_cycle_recovers_orphaned_agent_pull_running_tas
     planned = await supervisor.plan_self_evolution_task(
         {
             "title": "Recover abandoned learning task",
-            "summary": "Ensure orphaned AUTO tasks return to approved",
+            "summary": "Ensure orphaned autonomous tasks return to approved",
             "task_type": "self_learning",
             "source": "endogenous_drive",
             "metadata": {
@@ -17296,7 +17323,7 @@ async def test_run_self_evolution_cycle_recovers_orphaned_agent_pull_running_tas
         task_id,
         status="running",
         actor="cli_agent",
-        reason="Agent pulled task for execution in AUTO mode.",
+        reason="Agent pulled task for execution in the autonomous chain.",
         context={"session_id": "stale-cli-session"},
     )
     supervisor._self_evolution_queue.update_metadata(
@@ -17360,7 +17387,7 @@ async def test_recovery_skipped_when_gateway_owner_session_fetch_fails(tmp_path)
     )
     supervisor._self_evolution_queue.update_status(
         task_id, status="running", actor="cli_agent",
-        reason="Agent pulled task for execution in AUTO mode.",
+        reason="Agent pulled task for execution in the autonomous chain.",
         context={"session_id": "live-cli-session"},
     )
     supervisor._self_evolution_queue.update_metadata(
@@ -17409,7 +17436,7 @@ async def test_recovery_recovers_when_owner_session_missing_from_gateway(tmp_pat
         task_id,
         status="running",
         actor="cli_agent",
-        reason="Agent pulled task for execution in AUTO mode.",
+        reason="Agent pulled task for execution in the autonomous chain.",
         context={"session_id": "deleted-cli-session"},
     )
     supervisor._self_evolution_queue.update_metadata(
@@ -17688,7 +17715,7 @@ async def test_run_self_evolution_cycle_times_out_agent_pull_execution_started_a
         task_id,
         status="running",
         actor="cli_agent",
-        reason="Agent pulled task for execution in AUTO mode.",
+        reason="Agent pulled task for execution in the autonomous chain.",
         context={"session_id": "live-cli-session"},
     )
     started_at = (datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat()

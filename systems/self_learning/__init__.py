@@ -15,7 +15,6 @@ from .models import (
     SupervisorConclusionSubmission,
     SupervisorTaskProposal,
 )
-from .service import SelfLearningService
 
 __all__ = [
     "ExperimentRecord",
@@ -23,7 +22,6 @@ __all__ = [
     "LearningRecommendation",
     "LearningSession",
     "LearningTopic",
-    "SelfLearningService",
     "SupervisorConclusionSubmission",
     "SupervisorTaskProposal",
 ]

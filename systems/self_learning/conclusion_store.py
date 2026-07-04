@@ -19,12 +19,11 @@ from .models import (
 )
 
 
-class SelfLearningService:
+class SelfLearningConclusionStore:
     """Compatibility store for learning conclusions and supervisor payloads.
 
-    The name is retained for imports and older tests, but this class must not
-    be treated as an autonomous execution service. It persists historical
-    learning artifacts and builds Supervisor submissions; API-A autonomous
+    This class persists historical learning artifacts and builds Supervisor
+    submissions. It is not an autonomous execution service; API-A autonomous
     execution of `self_learning` tasks happens through the task pull path.
     """
 

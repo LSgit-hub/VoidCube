@@ -18,7 +18,7 @@ from systems.runtime_task_profile import (
     normalize_runtime_task_type,
     resolve_broad_task_type,
 )
-from systems.self_learning import SupervisorConclusionSubmission
+from systems.self_learning.models import SupervisorConclusionSubmission
 from systems.supervisor.endogenous_drive import (
     CORE_VALUES,
     TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD,
@@ -1544,62 +1544,16 @@ class PlanningRuntimeMixin:
         self_iteration_hypotheses = dict(
             lm_reasoning_state.get("self_iteration_hypotheses") or {}
         )
-        def _legacy_texts(values: Any, *, limit: int = 4) -> list[str]:
-            raw_values = [values] if isinstance(values, str) else list(values or [])
-            return [
-                str(item).strip()
-                for item in raw_values[:limit]
-                if str(item).strip()
-            ]
-
-        def _dominant_text(
-            mapping: Dict[str, Any],
-            primary_key: str,
-            legacy_key: str,
-            *,
-            limit: int = 4,
-        ) -> str:
-            primary = str(mapping.get(primary_key) or "").strip()
-            if primary:
-                return primary
-            legacy_values = _legacy_texts(mapping.get(legacy_key), limit=limit)
-            return legacy_values[0] if legacy_values else ""
-
-        def _signal_count(
-            mapping: Dict[str, Any],
-            primary_keys: tuple[str, ...],
-            legacy_key: str,
-            *,
-            limit: int = 4,
-        ) -> int:
-            for key in primary_keys:
-                value = mapping.get(key)
-                if value is None:
-                    continue
-                try:
-                    return max(0, int(value or 0))
-                except (TypeError, ValueError):
-                    continue
-            return len(_legacy_texts(mapping.get(legacy_key), limit=limit))
-
         if not self_iteration_hypotheses:
             dominant_hypothesis = str(
                 cognitive_assessment_memory.get("self_iteration_hypothesis")
                 or self_iteration_trend_memory.get("dominant_hypothesis")
                 or ""
             ).strip()
-            legacy_hypotheses = _legacy_texts(
-                cognitive_assessment_memory.get("common_self_iteration_hypotheses")
-                or self_iteration_trend_memory.get("common_hypotheses"),
-                limit=3,
-            )
-            if not dominant_hypothesis and legacy_hypotheses:
-                dominant_hypothesis = legacy_hypotheses[0]
             hypothesis_count = max(
                 1 if dominant_hypothesis else 0,
                 max(0, int(cognitive_assessment_memory.get("self_iteration_hypothesis_count") or 0)),
                 max(0, int(self_iteration_trend_memory.get("hypothesis_count") or 0)),
-                len(legacy_hypotheses),
             )
             self_iteration_hypotheses = {
                 "available": bool(dominant_hypothesis),
@@ -1641,16 +1595,11 @@ class PlanningRuntimeMixin:
             f"drift={drift_state}."
         )
         current_judgement = str(
-            _dominant_text(
-                cognitive_assessment_memory,
-                "current_judgement",
-                "common_current_judgements",
-            )
+            cognitive_assessment_memory.get("current_judgement") or ""
         ).strip()
-        why_not_improvement_now_count = _signal_count(
-            cognitive_assessment_memory,
-            ("why_not_improvement_now_count",),
-            "common_why_not_improvement_now",
+        why_not_improvement_now_count = max(
+            0,
+            int(cognitive_assessment_memory.get("why_not_improvement_now_count") or 0),
         )
 
         return {
@@ -1727,18 +1676,11 @@ class PlanningRuntimeMixin:
         switch_self_regulation_memory: Dict[str, Any],
         post_task_effect_memory: Dict[str, Any],
     ) -> Dict[str, Dict[str, Any]]:
-        def _nonempty_count(values: Any) -> int:
-            raw_values = [values] if isinstance(values, str) else list(values or [])
-            return sum(1 for item in raw_values if str(item).strip())
-
         def _stored_count(item: Dict[str, Any], key: str) -> int:
             return max(0, int(item.get(key) or 0))
 
-        def _signal_count(item: Dict[str, Any], primary_keys: tuple[str, ...], legacy_key: str) -> int:
-            return max(
-                *(_stored_count(item, key) for key in primary_keys),
-                _nonempty_count(item.get(legacy_key)),
-            )
+        def _signal_count(item: Dict[str, Any], keys: tuple[str, ...]) -> int:
+            return max([0, *(_stored_count(item, key) for key in keys)])
 
         return {
             "recent_reference_alignment": {
@@ -1860,7 +1802,6 @@ class PlanningRuntimeMixin:
                     _signal_count(
                         cognitive_assessment_memory,
                         ("current_judgement_count",),
-                        "common_current_judgements",
                     ),
                     1 if str(cognitive_assessment_memory.get("current_judgement") or "").strip() else 0,
                 ),
@@ -1868,7 +1809,6 @@ class PlanningRuntimeMixin:
                     _signal_count(
                         cognitive_assessment_memory,
                         ("self_iteration_target_count", "target_count"),
-                        "common_self_iteration_targets",
                     ),
                     1
                     if str(cognitive_assessment_memory.get("self_iteration_target") or "").strip()
@@ -1878,7 +1818,6 @@ class PlanningRuntimeMixin:
                     _signal_count(
                         cognitive_assessment_memory,
                         ("self_iteration_hypothesis_count", "hypothesis_count"),
-                        "common_self_iteration_hypotheses",
                     ),
                     1
                     if str(
@@ -1917,7 +1856,6 @@ class PlanningRuntimeMixin:
                     _signal_count(
                         self_iteration_trend_memory,
                         ("target_count", "target_signal_count"),
-                        "common_targets",
                     ),
                     1 if str(self_iteration_trend_memory.get("dominant_target") or "").strip() else 0,
                 ),
@@ -1925,7 +1863,6 @@ class PlanningRuntimeMixin:
                     _signal_count(
                         self_iteration_trend_memory,
                         ("hypothesis_count", "hypothesis_signal_count"),
-                        "common_hypotheses",
                     ),
                     1
                     if str(self_iteration_trend_memory.get("dominant_hypothesis") or "").strip()
@@ -1935,7 +1872,6 @@ class PlanningRuntimeMixin:
                     _signal_count(
                         self_iteration_trend_memory,
                         ("stay_or_switch_count", "stay_or_switch_signal_count"),
-                        "common_stay_or_switch",
                     ),
                     1
                     if str(
@@ -1947,7 +1883,6 @@ class PlanningRuntimeMixin:
                     _signal_count(
                         self_iteration_trend_memory,
                         ("switch_reason_count", "switch_reason_signal_count"),
-                        "common_switch_reasons",
                     ),
                     1
                     if str(
@@ -1982,7 +1917,6 @@ class PlanningRuntimeMixin:
                 "stay_or_switch_count": _signal_count(
                     switch_self_regulation_memory,
                     ("stay_or_switch_count", "stay_or_switch_signal_count"),
-                    "common_stay_or_switch",
                 ),
             },
             "post_task_effect_memory": {
@@ -2533,56 +2467,24 @@ class PlanningRuntimeMixin:
         task_type_priors: Dict[str, Any],
         recent_reference_alignment: Dict[str, Any],
     ) -> Dict[str, Any]:
-        def _first_text(mapping: Dict[str, Any], primary_key: str, legacy_key: str) -> str:
-            primary = str(mapping.get(primary_key) or "").strip()
-            if primary:
-                return primary
-            raw_legacy = mapping.get(legacy_key)
-            legacy_values = (
-                [raw_legacy] if isinstance(raw_legacy, str) else list(raw_legacy or [])
-            )
-            return str(legacy_values[0] if legacy_values else "").strip()
-
         current_judgement = str(
-            _first_text(
-                cognitive_assessment_memory,
-                "current_judgement",
-                "common_current_judgements",
-            )
+            cognitive_assessment_memory.get("current_judgement") or ""
         ).strip()
         dominant_constraint = str(
             cognitive_assessment_memory.get("dominant_constraint") or ""
         ).strip()
         top_self_iteration_domain = str(
-            _first_text(
-                cognitive_assessment_memory,
-                "self_iteration_target",
-                "common_self_iteration_targets",
-            )
+            cognitive_assessment_memory.get("self_iteration_target")
             or self_iteration_trend_memory.get("dominant_target")
             or ""
         ).strip()
         top_self_iteration_hypothesis = str(
-            _first_text(
-                cognitive_assessment_memory,
-                "self_iteration_hypothesis",
-                "common_self_iteration_hypotheses",
-            )
-            or (
-                _first_text(
-                    self_iteration_trend_memory,
-                    "dominant_hypothesis",
-                    "common_hypotheses",
-                )
-            )
+            cognitive_assessment_memory.get("self_iteration_hypothesis")
+            or self_iteration_trend_memory.get("dominant_hypothesis")
             or ""
         ).strip()
         stay_or_switch_bias = str(
-            _first_text(
-                self_iteration_trend_memory,
-                "dominant_stay_or_switch",
-                "common_stay_or_switch",
-            )
+            self_iteration_trend_memory.get("dominant_stay_or_switch")
             or switch_self_regulation_memory.get("preferred_switch_bias")
             or ""
         ).strip()
@@ -2628,11 +2530,9 @@ class PlanningRuntimeMixin:
             dominant_failure_mode = dominant_constraint
 
         top_task_type = str(task_type_priors.get("top_priority_task_type") or "").strip()
-        why_not_improvement_now = _first_text(
-            cognitive_assessment_memory,
-            "why_not_improvement_now",
-            "common_why_not_improvement_now",
-        )
+        why_not_improvement_now = str(
+            cognitive_assessment_memory.get("why_not_improvement_now") or ""
+        ).strip()
         governance_posture = "review"
         if grounding_pressure == "high":
             governance_posture = "observation_or_review"
@@ -4301,7 +4201,7 @@ class PlanningRuntimeMixin:
                         "active_sessions": dict(deliberation.get("perception") or {}).get("active_sessions"),
                         "correction_signals": dict(deliberation.get("perception") or {}).get("correction_signals"),
                         "queue_count": dict(deliberation.get("perception") or {}).get("active_queue_count"),
-                        "governor_mode_active": bool(idle_window.get("governor_mode_active")),
+                        "autonomous_chain_gate_active": bool(idle_window.get("autonomous_chain_gate_active")),
                     },
                 }
             )
@@ -4404,6 +4304,11 @@ class PlanningRuntimeMixin:
 
         evidence = dict(task.evidence or {})
         execution_result = dict(metadata.get("execution_result") or {})
+        decision_context = (
+            latest_decision.get("context")
+            if isinstance(latest_decision.get("context"), dict)
+            else {}
+        )
         preferred_focus = str(metadata.get("endogenous_preferred_focus") or "").strip().lower()
         context_key = self._derive_endogenous_context_key(task=task)
         outcome_bucket = self._status_to_strategy_outcome_bucket(status)
@@ -4449,6 +4354,12 @@ class PlanningRuntimeMixin:
             "learning_quality_score": evidence.get("learning_quality_score"),
             "result_status": execution_result.get("status"),
         }
+        final_response = str(
+            decision_context.get("autonomous_executor_final_response") or ""
+        ).strip()
+        if final_response:
+            outcome["autonomous_executor_final_response"] = final_response[:4000]
+            outcome["outcome_summary"] = final_response[:800]
         reference_alignment = metadata.get("reference_alignment")
         if not isinstance(reference_alignment, dict):
             reference_alignment = evidence.get("reference_alignment")
@@ -4482,7 +4393,24 @@ class PlanningRuntimeMixin:
         cognitive_assessment = metadata.get("llm_cognitive_assessment")
         if not isinstance(cognitive_assessment, dict):
             cognitive_assessment = evidence.get("llm_cognitive_assessment")
+        if (
+            (not isinstance(cognitive_assessment, dict) or not cognitive_assessment)
+            and event_type != "planned"
+        ):
+            cognitive_assessment = self._canonical_cognitive_assessment_from_drive_judgement(
+                drive_judgement=drive_judgement,
+                preferred_focus=preferred_focus,
+                status=status,
+            )
         if isinstance(cognitive_assessment, dict) and cognitive_assessment:
+            def _assessment_texts(value: Any, *, limit: int = 6) -> list[str]:
+                raw_values = [value] if isinstance(value, str) else list(value or [])
+                return [
+                    str(item).strip()
+                    for item in raw_values[:limit]
+                    if str(item).strip()
+                ]
+
             outcome["llm_cognitive_assessment"] = {
                 "current_judgement": str(
                     cognitive_assessment.get("current_judgement") or ""
@@ -4490,27 +4418,15 @@ class PlanningRuntimeMixin:
                 "dominant_constraint": str(
                     cognitive_assessment.get("dominant_constraint") or ""
                 ).strip(),
-                "primary_grounding_gaps": [
-                    str(item).strip()
-                    for item in list(
-                        cognitive_assessment.get("primary_grounding_gaps") or []
-                    )[:6]
-                    if str(item).strip()
-                ],
-                "why_this_task_type_now": [
-                    str(item).strip()
-                    for item in list(
-                        cognitive_assessment.get("why_this_task_type_now") or []
-                    )[:6]
-                    if str(item).strip()
-                ],
-                "why_not_improvement_now": [
-                    str(item).strip()
-                    for item in list(
-                        cognitive_assessment.get("why_not_improvement_now") or []
-                    )[:6]
-                    if str(item).strip()
-                ],
+                "primary_grounding_gaps": _assessment_texts(
+                    cognitive_assessment.get("primary_grounding_gaps")
+                ),
+                "why_this_task_type_now": _assessment_texts(
+                    cognitive_assessment.get("why_this_task_type_now")
+                ),
+                "why_not_improvement_now": _assessment_texts(
+                    cognitive_assessment.get("why_not_improvement_now")
+                ),
                 "self_iteration_target": str(
                     cognitive_assessment.get("self_iteration_target") or ""
                 ).strip(),
@@ -4539,6 +4455,92 @@ class PlanningRuntimeMixin:
                 )
         history["outcomes"] = [outcome] + list(history.get("outcomes") or [])
         self._persist_endogenous_drive_history(history)
+
+    def _canonical_cognitive_assessment_from_drive_judgement(
+        self,
+        *,
+        drive_judgement: Dict[str, Any],
+        preferred_focus: str,
+        status: str,
+    ) -> Dict[str, Any]:
+        if not drive_judgement:
+            return {}
+
+        reflection = dict(drive_judgement.get("reflection") or {})
+        adaptive_policy = dict(drive_judgement.get("adaptive_policy") or {})
+        intents = [
+            dict(item)
+            for item in list(drive_judgement.get("intents") or [])
+            if isinstance(item, dict)
+        ]
+        needs = [
+            dict(item)
+            for item in list(drive_judgement.get("needs") or [])
+            if isinstance(item, dict)
+        ]
+        primary_intent = intents[0] if intents else {}
+        primary_need = needs[0] if needs else {}
+
+        focus = preferred_focus or str(adaptive_policy.get("preferred_focus") or "").strip().lower()
+        dominant_constraint = str(reflection.get("dominant_constraint") or "").strip()
+        intent_type = str(primary_intent.get("intent_type") or "").strip()
+        need_type = str(primary_need.get("need_type") or "").strip()
+        candidate_kind = str(primary_intent.get("candidate_kind") or "").strip()
+
+        target_by_focus = {
+            "truthfulness": "truthfulness",
+            "learning_expansion": "learning_frontier",
+            "memory_continuity": "memory_continuity",
+            "queue_hygiene": "governance_queue",
+            "body_growth": "body_growth",
+            "observation": "grounding",
+        }
+        target = target_by_focus.get(focus) or target_by_focus.get(candidate_kind) or focus
+        if not target and need_type:
+            target = need_type
+
+        current_judgement = (
+            f"{focus or 'endogenous'} focus selected"
+            + (f" under {dominant_constraint}" if dominant_constraint else "")
+        ).strip()
+        if not focus and not dominant_constraint and not intent_type and not need_type:
+            return {}
+
+        why_not_improvement: list[str] = []
+        if dominant_constraint in {"user_service_priority", "historical_underdelivery"}:
+            why_not_improvement.append(
+                f"Delay direct body improvement while {dominant_constraint} remains dominant."
+            )
+        if focus in {"truthfulness", "observation", "queue_hygiene", "memory_continuity"}:
+            why_not_improvement.append(
+                f"Prioritize {focus} governance before direct body improvement."
+            )
+        if status in {"failed", "deferred", "awaiting_review"}:
+            why_not_improvement.append(
+                f"Recent outcome status {status} requires review before broader self-improvement."
+            )
+
+        return {
+            "current_judgement": current_judgement,
+            "dominant_constraint": dominant_constraint,
+            "primary_grounding_gaps": [need_type] if need_type else [],
+            "why_this_task_type_now": [
+                item
+                for item in [
+                    str(primary_intent.get("rationale") or "").strip(),
+                    str(primary_need.get("rationale") or "").strip(),
+                ]
+                if item
+            ][:6],
+            "why_not_improvement_now": why_not_improvement[:6],
+            "self_iteration_target": target,
+            "self_iteration_hypothesis": (
+                str(primary_intent.get("rationale") or "").strip()
+                or f"Continue {target or focus or 'endogenous'} work until evidence changes."
+            ),
+            "stay_or_switch": "stay" if focus else "",
+            "switch_reason": "",
+        }
 
     def _normalize_runtime_task_family(self, value: Optional[str]) -> str:
         return str(
@@ -5295,11 +5297,11 @@ class PlanningRuntimeMixin:
         }
         selected_task_decisions = task_family_decisions[requested_task_family]
 
-        governor_mode_active = bool(
-            request.get("governor_mode_active")
-            or getattr(getattr(self, "_service_runtime", None), "governor_mode_active", False)
+        autonomous_chain_gate_active = bool(
+            request.get("autonomous_chain_gate_active")
+            or getattr(getattr(self, "_service_runtime", None), "autonomous_chain_gate_active", False)
         )
-        if governor_mode_active:
+        if autonomous_chain_gate_active:
             # With the autonomous-chain gate active, self_learning and
             # memory_maintenance planning is no longer blocked on user-idle
             # style signals. Execution still follows its own runtime decision.
@@ -5358,9 +5360,7 @@ class PlanningRuntimeMixin:
             },
             "governance_task_type_decisions": governance_task_type_decisions,
             "task_family_decisions": task_family_decisions,
-            # Historical compatibility key: indicates the autonomous-chain gate
-            # is active, not that a separate legacy CLI mode owns execution.
-            "governor_mode_active": governor_mode_active,
+            "autonomous_chain_gate_active": autonomous_chain_gate_active,
             "decisions": {
                 "eligible_for_planning": selected_task_decisions["eligible_for_planning"],
                 "eligible_for_execution": selected_task_decisions["eligible_for_execution"],
@@ -5417,8 +5417,8 @@ class PlanningRuntimeMixin:
         request = request or {}
         idle_window_request = dict(request.get("idle_window") or {})
         idle_window_request.setdefault(
-            "governor_mode_active",
-            getattr(getattr(self, "_service_runtime", None), "governor_mode_active", False),
+            "autonomous_chain_gate_active",
+            getattr(getattr(self, "_service_runtime", None), "autonomous_chain_gate_active", False),
         )
         record_activity = bool(request.get("record_activity", True))
         persist_evaluation = bool(request.get("persist_evaluation", True))
@@ -6071,7 +6071,7 @@ class PlanningRuntimeMixin:
         *,
         task: SelfEvolutionTask,
         idle_window: Dict[str, Any],
-        governor_mode_active: bool = False,
+        autonomous_chain_gate_active: bool = False,
     ) -> tuple[str, str]:
         task_type = self._task_governance_type(task)
         task_family = self._task_runtime_family(task)
@@ -6095,7 +6095,7 @@ class PlanningRuntimeMixin:
         # With the autonomous-chain gate active, self_learning and
         # memory_maintenance can execute without waiting for user-idle style
         # signals. Other task families still follow their runtime decisions.
-        if governor_mode_active:
+        if autonomous_chain_gate_active:
             if task_type == "self_learning":
                 return (
                     "approved",
@@ -6847,8 +6847,8 @@ class PlanningRuntimeMixin:
             normalized, auto_reason = self._build_self_evolution_auto_decision(
                 task=task,
                 idle_window=idle_window,
-                governor_mode_active=getattr(
-                    getattr(self, "_service_runtime", None), "governor_mode_active", False
+                autonomous_chain_gate_active=getattr(
+                    getattr(self, "_service_runtime", None), "autonomous_chain_gate_active", False
                 ),
             )
             decision_context["idle_window"] = idle_window
@@ -6858,6 +6858,10 @@ class PlanningRuntimeMixin:
             request_context = request.get("context")
             if isinstance(request_context, dict) and request_context:
                 decision_context.update(dict(request_context))
+            if normalized in {"completed", "failed"}:
+                final_response = str(request.get("final_response") or "").strip()
+                if final_response:
+                    decision_context["autonomous_executor_final_response"] = final_response[:4000]
 
         if task.status == "cancelled":
             return {
@@ -7015,8 +7019,8 @@ class PlanningRuntimeMixin:
             target_status, default_reason = self._build_self_evolution_auto_decision(
                 task=task,
                 idle_window=task_idle_window,
-                governor_mode_active=getattr(
-                    getattr(self, "_service_runtime", None), "governor_mode_active", False
+                autonomous_chain_gate_active=getattr(
+                    getattr(self, "_service_runtime", None), "autonomous_chain_gate_active", False
                 ),
             )
             decision_context: Dict[str, Any] = {"idle_window": task_idle_window}
@@ -7616,12 +7620,13 @@ class PlanningRuntimeMixin:
             "dispatch_budget_exhausted": dispatch_budget_exhausted,
         }
 
-    async def run_auto_cycle(self, request: dict | None = None) -> Dict[str, Any]:
+    async def run_autonomous_cycle(self, request: dict | None = None) -> Dict[str, Any]:
         """Execute one full autonomous cycle: drive → plan → review → dispatch.
 
-        This is the single-endpoint entry point for ``/auto``.  It runs the
-        same pipeline as the periodic background loops, but triggered
-        synchronously on demand so the user sees immediate results.
+        This is the single-endpoint entry point used by the ``/auto`` switch.
+        It runs the same pipeline as the periodic background loops, but is
+        triggered synchronously on demand so the autonomous chain responds
+        immediately.
 
         Returns a summary of every phase so the CLI can report what happened.
         """
@@ -7674,10 +7679,10 @@ class PlanningRuntimeMixin:
         total_dispatched = len(phases.get("review", {}).get("dispatched", []))
         total_planned = phases.get("drive", {}).get("planned", 0)
         self._record_supervisor_ui_activity(
-            "auto_cycle_completed",
+            "autonomous_cycle_completed",
             scene="dispatch" if total_dispatched > 0 else "planning",
             summary=(
-                f"Auto cycle complete: {total_planned} planned, "
+                f"Autonomous cycle complete: {total_planned} planned, "
                 f"{total_dispatched} dispatched for execution."
             ),
             metadata={

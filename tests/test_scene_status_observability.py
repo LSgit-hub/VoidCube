@@ -47,6 +47,42 @@ def test_dashboard_agent_segment_includes_subagent_summary():
     assert "read_file" in rendered
 
 
+def test_dashboard_agent_segment_prefers_supervisor_task_lane():
+    rendered = dashboard._format_segment_line(
+        {"key": "agent", "icon": "🤖", "name": "API-A"},
+        {
+            "agent": {
+                "scene": "executing",
+                "reachable": True,
+                "subagent_foreground_count": 1,
+                "subagent_focus_tool": "grep",
+                "lanes": {
+                    "supervisor_task": {
+                        "scene": "learning",
+                        "reachable": True,
+                        "scene_task_id": "learn-supervisor-1",
+                        "subagent_foreground_count": 3,
+                        "subagent_background_count": 1,
+                        "subagent_focus_tool": "read_file",
+                    },
+                    "user_chat": {
+                        "scene": "executing",
+                        "reachable": True,
+                        "subagent_foreground_count": 1,
+                        "subagent_focus_tool": "grep",
+                    },
+                },
+            }
+        },
+    )
+
+    assert "API-A: learning" in rendered
+    assert "task learn-su" in rendered
+    assert "SA 3+1" in rendered
+    assert "read_file" in rendered
+    assert "grep" not in rendered
+
+
 def test_status_scene_bar_includes_subagent_summary(monkeypatch, capsys):
     payload = {
         "scenes": {
@@ -74,6 +110,52 @@ def test_status_scene_bar_includes_subagent_summary(monkeypatch, capsys):
     assert "🤖 API-A: executing" in output
     assert "SA 2+1" in output
     assert "scan workspace" in output
+
+
+def test_status_scene_bar_prefers_user_chat_lane(monkeypatch, capsys):
+    payload = {
+        "scenes": {
+            "supervisor": {"scene": "idle", "reachable": True},
+            "agent": {
+                "scene": "learning",
+                "reachable": True,
+                "scene_task_id": "learn-top-level",
+                "subagent_foreground_count": 4,
+                "subagent_focus_tool": "read_file",
+                "lanes": {
+                    "supervisor_task": {
+                        "scene": "learning",
+                        "reachable": True,
+                        "scene_task_id": "learn-supervisor-1",
+                        "subagent_foreground_count": 4,
+                        "subagent_focus_tool": "read_file",
+                    },
+                    "user_chat": {
+                        "scene": "executing",
+                        "reachable": True,
+                        "scene_task_id": "user-chat-1",
+                        "subagent_foreground_count": 1,
+                        "subagent_focus_preview": "grep app.py",
+                    },
+                },
+            },
+            "executor": {"scene": "idle", "reachable": True},
+        }
+    }
+
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda request, timeout=0: _FakeUrlopenResponse(payload),
+    )
+
+    cli_status._print_three_segment_scene_bar()
+
+    output = capsys.readouterr().out
+    assert "🤖 API-A: executing" in output
+    assert "user-cha" in output
+    assert "SA 1" in output
+    assert "grep app.py" in output
+    assert "read_file" not in output
 
 
 def test_build_dashboard_uses_supervisor_execution_eligibility_without_local_window_gate(monkeypatch):

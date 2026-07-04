@@ -1417,7 +1417,7 @@ def _derive_grounding_focus(packet: Dict[str, Any]) -> Dict[str, Any]:
         grounding_gaps.append(f"missing_evidence:{primary_missing_evidence_node}")
     if primary_missing_agenda_node:
         grounding_gaps.append(f"missing_agenda:{primary_missing_agenda_node}")
-    recent_entries = _legacy_reference_alignment_entries(
+    recent_entries = _reference_alignment_entries(
         recent_reference_alignment,
         limit=3,
     )
@@ -1492,7 +1492,7 @@ def _stored_count(item: Dict[str, Any], *keys: str) -> int:
     return max(_safe_count(item.get(key)) for key in keys)
 
 
-def _legacy_reference_alignment_entries(item: Dict[str, Any], *, limit: int) -> list[Dict[str, Any]]:
+def _reference_alignment_entries(item: Dict[str, Any], *, limit: int) -> list[Dict[str, Any]]:
     return [
         dict(row)
         for row in list(item.get("recent_entries") or [])[:limit]
@@ -1506,35 +1506,23 @@ def _compact_cognitive_assessment_memory(
     summary_limit: int,
     text_limit: int = 180,
 ) -> Dict[str, Any]:
-    legacy_current_judgements = item.get("common_current_judgements") or []
-    legacy_why_not_improvement = item.get("common_why_not_improvement_now") or []
-    legacy_grounding_gaps = item.get("common_grounding_gaps") or []
     current_judgement = str(item.get("current_judgement") or "").strip()[
         :text_limit
-    ] or _first_text(legacy_current_judgements, limit=text_limit)
+    ]
     why_not_improvement_now = str(
         item.get("why_not_improvement_now") or ""
-    ).strip()[:text_limit] or _first_text(legacy_why_not_improvement, limit=text_limit)
+    ).strip()[:text_limit]
     primary_grounding_gap = str(item.get("primary_grounding_gap") or "").strip()[
         :text_limit
-    ] or _first_text(legacy_grounding_gaps, limit=text_limit)
+    ]
     return {
         "dominant_constraint": str(item.get("dominant_constraint") or "").strip()[:text_limit],
         "current_judgement": current_judgement,
         "why_not_improvement_now": why_not_improvement_now,
         "primary_grounding_gap": primary_grounding_gap,
-        "current_judgement_count": max(
-            _safe_count(item.get("current_judgement_count")),
-            _text_count(legacy_current_judgements),
-        ),
-        "why_not_improvement_now_count": max(
-            _safe_count(item.get("why_not_improvement_now_count")),
-            _text_count(legacy_why_not_improvement),
-        ),
-        "grounding_gap_count": max(
-            _safe_count(item.get("grounding_gap_count")),
-            _text_count(legacy_grounding_gaps),
-        ),
+        "current_judgement_count": _safe_count(item.get("current_judgement_count")),
+        "why_not_improvement_now_count": _safe_count(item.get("why_not_improvement_now_count")),
+        "grounding_gap_count": _safe_count(item.get("grounding_gap_count")),
         "summary": str(item.get("summary") or "").strip()[:summary_limit],
     }
 
@@ -1545,23 +1533,18 @@ def _compact_self_iteration_trend_memory(
     summary_limit: int,
     text_limit: int = 120,
 ) -> Dict[str, Any]:
-    legacy_targets = item.get("common_targets") or []
-    legacy_hypotheses = item.get("common_hypotheses") or []
-    legacy_stay_or_switch = item.get("common_stay_or_switch") or []
-    legacy_switch_reasons = item.get("common_switch_reasons") or []
     dominant_hypothesis = str(item.get("dominant_hypothesis") or "").strip()[
         : max(text_limit, 160)
-    ] or _first_text(legacy_hypotheses, limit=max(text_limit, 160))
+    ]
     stay_or_switch_value = (
         str(item.get("dominant_stay_or_switch") or "").strip()[:40]
         or str(item.get("stay_or_switch") or "").strip()[:40]
-        or _first_text(legacy_stay_or_switch, limit=40)
     )
     switch_reason = str(
         item.get("dominant_switch_reason") or item.get("switch_reason") or ""
     ).strip()[
         : max(text_limit, 160)
-    ] or _first_text(legacy_switch_reasons, limit=max(text_limit, 160))
+    ]
     return {
         "dominant_target": str(item.get("dominant_target") or "").strip()[:text_limit],
         "trend_state": str(item.get("trend_state") or "").strip()[:40],
@@ -1569,22 +1552,10 @@ def _compact_self_iteration_trend_memory(
         "dominant_hypothesis": dominant_hypothesis,
         "stay_or_switch": stay_or_switch_value,
         "switch_reason": switch_reason,
-        "target_signal_count": max(
-            _stored_count(item, "target_count", "target_signal_count"),
-            _text_count(legacy_targets),
-        ),
-        "hypothesis_signal_count": max(
-            _stored_count(item, "hypothesis_count", "hypothesis_signal_count"),
-            _text_count(legacy_hypotheses),
-        ),
-        "stay_or_switch_signal_count": max(
-            _stored_count(item, "stay_or_switch_count", "stay_or_switch_signal_count"),
-            _text_count(legacy_stay_or_switch),
-        ),
-        "switch_reason_signal_count": max(
-            _stored_count(item, "switch_reason_count", "switch_reason_signal_count"),
-            _text_count(legacy_switch_reasons),
-        ),
+        "target_signal_count": _stored_count(item, "target_count", "target_signal_count"),
+        "hypothesis_signal_count": _stored_count(item, "hypothesis_count", "hypothesis_signal_count"),
+        "stay_or_switch_signal_count": _stored_count(item, "stay_or_switch_count", "stay_or_switch_signal_count"),
+        "switch_reason_signal_count": _stored_count(item, "switch_reason_count", "switch_reason_signal_count"),
         "summary": str(item.get("summary") or "").strip()[:summary_limit],
     }
 
@@ -1649,14 +1620,14 @@ def _compact_recent_reference_alignment(
     summary_limit: int,
     text_limit: int = 140,
 ) -> Dict[str, Any]:
-    entries = _legacy_reference_alignment_entries(item, limit=12)
+    entries = _reference_alignment_entries(item, limit=12)
     missing_evidence_nodes: list[str] = []
     missing_agenda_nodes: list[str] = []
-    legacy_weak_or_partial_count = 0
+    entry_weak_or_partial_count = 0
     for entry in entries:
         quality = str(entry.get("quality") or "").strip().lower()
         if quality in {"weak", "partial", "drifted"}:
-            legacy_weak_or_partial_count += 1
+            entry_weak_or_partial_count += 1
         missing_evidence_nodes.extend(
             str(node).strip()
             for node in list(entry.get("missing_evidence_nodes") or [])
@@ -1672,7 +1643,7 @@ def _compact_recent_reference_alignment(
         "average_alignment_score": item.get("average_alignment_score"),
         "weak_or_partial_count": max(
             _safe_count(item.get("weak_or_partial_count")),
-            legacy_weak_or_partial_count,
+            entry_weak_or_partial_count,
         ),
         "entry_count": max(len(entries), _safe_count(item.get("entry_count"))),
         "primary_missing_evidence_node": str(

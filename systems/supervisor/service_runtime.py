@@ -15,7 +15,7 @@ class ServiceRuntimeState:
     self_evolution_review_task: Optional[asyncio.Task[Any]] = None
     endogenous_drive_task: Optional[asyncio.Task[Any]] = None
     started: bool = False
-    governor_mode_active: bool = False
+    autonomous_chain_gate_active: bool = False
     structured_maintenance_task: Optional[asyncio.Task[Any]] = None
     # Scheduling visibility for the web UI countdown
     last_review_at: Optional[datetime] = None
@@ -181,7 +181,7 @@ class ServiceRuntimeMixin:
 
         This always starts the health-check loop. The review loop and
         endogenous-drive loop remain behind the autonomous-chain gate and are
-        activated by _start_governor_mode().
+        activated by _start_autonomous_chain_gate().
         """
         runtime_config = self.config.service_runtime
         if self._health_check_task:
@@ -226,7 +226,7 @@ class ServiceRuntimeMixin:
         # its FastAPI lifespan.
 
         # Autonomous-chain loops are NOT started here — they are activated
-        # on demand via _start_governor_mode().
+        # on demand via _start_autonomous_chain_gate().
 
         # ── Structured memory maintenance loop (baseline background task) ──
         maintenance_interval = getattr(
@@ -272,16 +272,16 @@ class ServiceRuntimeMixin:
         self._ensure_watch_window_task()
         self._service_runtime_started = True
 
-    async def _start_governor_mode(self) -> None:
+    async def _start_autonomous_chain_gate(self) -> None:
         """Enable the autonomous chain and start review/drive loops.
 
         Idempotent — if the autonomous chain is already active this is a no-op.
         """
-        if self._service_runtime.governor_mode_active:
-            await self._notify_gateway_governor_mode(active=True)
+        if self._service_runtime.autonomous_chain_gate_active:
+            await self._notify_gateway_autonomous_chain_gate(active=True)
             return
-        self._service_runtime.governor_mode_active = True
-        await self._notify_gateway_governor_mode(active=True)
+        self._service_runtime.autonomous_chain_gate_active = True
+        await self._notify_gateway_autonomous_chain_gate(active=True)
         runtime_config = self.config.service_runtime
 
         if self._self_evolution_review_task:
@@ -348,16 +348,16 @@ class ServiceRuntimeMixin:
         except Exception as exc:
             logger.warning(f"Immediate endogenous-drive cycle failed: {exc}")
 
-    async def _stop_governor_mode(self) -> None:
+    async def _stop_autonomous_chain_gate(self) -> None:
         """Stop the autonomous chain review/drive loops immediately.
 
         Idempotent — if the autonomous chain is not active this is a no-op.
         Does NOT stop the health-check loop.
         """
-        if not self._service_runtime.governor_mode_active:
+        if not self._service_runtime.autonomous_chain_gate_active:
             return
-        self._service_runtime.governor_mode_active = False
-        await self._notify_gateway_governor_mode(active=False)
+        self._service_runtime.autonomous_chain_gate_active = False
+        await self._notify_gateway_autonomous_chain_gate(active=False)
 
         async def cancel_task(task: Optional[asyncio.Task[Any]]) -> None:
             if task is None:
@@ -379,16 +379,13 @@ class ServiceRuntimeMixin:
 
         logger.info("Autonomous chain stopped — baseline health-check loop still running")
 
-    def _governor_mode_status(self) -> Dict[str, Any]:
+    def _autonomous_chain_gate_status(self) -> Dict[str, Any]:
         """Return the current autonomous-chain gate state.
 
-        The payload keeps the historical `governor_mode_active` key for
-        compatibility with older clients and tests.
+        The payload exposes the canonical autonomous-chain gate state.
         """
         return {
-            # Historical compatibility key: this now means the autonomous-chain
-            # gate is active, not that a separate legacy mode owns the CLI.
-            "governor_mode_active": self._service_runtime.governor_mode_active,
+            "autonomous_chain_gate_active": self._service_runtime.autonomous_chain_gate_active,
             "review_loop_running": (
                 self._service_runtime.self_evolution_review_task is not None
                 and not self._service_runtime.self_evolution_review_task.done()
@@ -400,11 +397,11 @@ class ServiceRuntimeMixin:
             "endogenous_drive_enabled": self.config.service_runtime.endogenous_drive_enabled,
         }
 
-    async def _notify_gateway_governor_mode(self, *, active: bool) -> None:
+    async def _notify_gateway_autonomous_chain_gate(self, *, active: bool) -> None:
         """Notify the gateway that the autonomous-chain gate is active/inactive."""
         try:
             import aiohttp
-            gateway_url = f"{self.config.execution.gateway_address}/admin/governor-mode"
+            gateway_url = f"{self.config.execution.gateway_address}/admin/autonomous-chain-gate"
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     gateway_url,
@@ -412,9 +409,9 @@ class ServiceRuntimeMixin:
                     timeout=aiohttp.ClientTimeout(total=5),
                 ) as resp:
                     if resp.status != 200:
-                        logger.debug("Gateway governor-mode notification returned %d", resp.status)
+                        logger.debug("Gateway autonomous-chain-gate notification returned %d", resp.status)
         except Exception as exc:
-            logger.debug("Failed to notify gateway of governor mode change: %s", exc)
+            logger.debug("Failed to notify gateway of autonomous chain gate change: %s", exc)
 
     async def _stop_periodic_tasks(self) -> None:
         async def cancel_task(task: Optional[asyncio.Task[Any]]) -> None:

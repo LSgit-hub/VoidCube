@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from systems.body_registry import BodyRegistryManager
 from systems.governor import GovernorDecisionEngine, GovernorRequest
-from systems.lifecycle import BodyLifecycleController
+from systems.lifecycle import BodyLifecycleExecutor
 
 
 @pytest.mark.unit
@@ -30,8 +30,8 @@ def test_lifecycle_applies_probe_lease_action(tmp_path):
     )
     response = engine.evaluate(request, slot_meta=slot)
 
-    controller = BodyLifecycleController(manager)
-    report = controller.apply_governor_response(response)
+    executor = BodyLifecycleExecutor(manager)
+    report = executor.apply_governor_response(response)
     slot_meta = manager.load_slot_meta("slot-B")
 
     assert report.action_results[0].status == "applied"
@@ -66,8 +66,8 @@ def test_lifecycle_applies_activate_slot_action(tmp_path):
     )
     response = engine.evaluate(request, slot_meta=slot)
 
-    controller = BodyLifecycleController(manager)
-    report = controller.apply_governor_response(response)
+    executor = BodyLifecycleExecutor(manager)
+    report = executor.apply_governor_response(response)
     registry = manager.load_registry()
 
     assert report.action_results[0].status == "applied"
@@ -106,8 +106,8 @@ def test_lifecycle_applies_rollback_restore_action(tmp_path):
     )
     response = engine.evaluate(request)
 
-    controller = BodyLifecycleController(manager)
-    report = controller.apply_governor_response(response)
+    executor = BodyLifecycleExecutor(manager)
+    report = executor.apply_governor_response(response)
     registry = manager.load_registry()
 
     assert report.action_results[0].status == "applied"
@@ -136,8 +136,8 @@ def test_lifecycle_applies_recycle_action_after_post_switch_review(tmp_path):
     )
     response = engine.evaluate(request, slot_meta=retired)
 
-    controller = BodyLifecycleController(manager)
-    report = controller.apply_governor_response(response)
+    executor = BodyLifecycleExecutor(manager)
+    report = executor.apply_governor_response(response)
     slot_meta = manager.load_slot_meta("slot-A")
 
     assert report.action_results[0].status == "applied"
@@ -159,7 +159,7 @@ def test_record_evolution_event_is_noop_but_successful(tmp_path):
     )
     response = engine.evaluate(request)
 
-    controller = BodyLifecycleController(manager)
-    report = controller.apply_governor_response(response)
+    executor = BodyLifecycleExecutor(manager)
+    report = executor.apply_governor_response(response)
 
     assert report.action_results[0].status == "noop"

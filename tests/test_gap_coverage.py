@@ -1,6 +1,6 @@
 """Tests for endogenous drive with real gateway activity data (T-05),
 CLI executor canonical path (T-07), configuration validation (T-08),
-self-learning conclusion compatibility layer (T-09), service runtime lifecycle (T-06),
+learning conclusion store compatibility layer (T-09), service runtime lifecycle (T-06),
 and endogenous drive error bridge (S-05)."""
 
 from __future__ import annotations
@@ -142,7 +142,7 @@ class TestServiceRuntimeLifecycle:
             assert sv._service_runtime_started is True
             assert sv._health_check_task is not None
             assert sv._self_evolution_review_task is None, (
-                "Review loop should not start before the supervisor AUTO gate is enabled"
+                "Review loop should not start before the supervisor autonomous-chain gate is enabled"
             )
             await sv._stop_periodic_tasks()
             assert sv._service_runtime_started is False
@@ -303,7 +303,7 @@ class TestEndogenousDriveErrorBridge:
                 "active_sessions": 0,
                 "recent_metadata": {
                     "user_request": {
-                        "text": "Investigate AUTO queue scheduling fairness across body improvement and learning tasks"
+                        "text": "Investigate autonomous queue scheduling fairness across body improvement and learning tasks"
                     }
                 },
             },
@@ -1058,16 +1058,16 @@ class TestEndogenousDriveErrorBridge:
         candidates = engine.generate_candidates(idle_window=idle, existing_drive_keys=set(), max_candidates=5)
         assert len(candidates) == 0
 
-    def test_learning_candidates_still_generate_with_active_sessions_when_planning_allowed(self):
+    def test_learning_candidates_use_active_sessions_as_soft_signal_when_planning_allowed(self):
         engine = EndogenousDriveEngine()
         idle = {
             "checks": {"in_execution_window": True},
             "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
             "activity": {
-                "counts": {"error_count": 0, "uncertainty_high_count": 0},
+                "counts": {"error_count": 4, "uncertainty_high_count": 1},
                 "active_sessions": 3,
                 "recent_metadata": {
-                    "user_request": {"topic": "API-A AUTO execution visibility"}
+                    "user_request": {"topic": "API-A autonomous execution visibility"}
                 },
             },
             "task_family_decisions": {
@@ -1094,13 +1094,13 @@ class TestEndogenousDriveErrorBridge:
                 "active_sessions": 0,
                 "recent_metadata": {
                     "user_request": {
-                        "text": "Investigate agent task queue deduplication strategy for AUTO mode"
+                        "text": "Investigate agent task queue deduplication strategy for autonomous-chain gate"
                     }
                 },
             },
             "completed_learning_tasks": [
                 {
-                    "title": "Investigate agent task queue deduplication strategy for AUTO mode",
+                    "title": "Investigate agent task queue deduplication strategy for autonomous-chain gate",
                     "completed_at": "2099-01-01T00:00:00+00:00",
                     "quality_score": 0.9,
                 }
@@ -1183,14 +1183,14 @@ class TestEndogenousDriveErrorBridge:
 
 # ── T-09: Self-learning conclusion compatibility layer ─────────────
 
-class TestSelfLearningServiceLifecycle:
-    """Verify the legacy self-learning conclusion compatibility layer (T-09)."""
+class TestSelfLearningConclusionStoreLifecycle:
+    """Verify the learning conclusion store compatibility layer (T-09)."""
 
     @pytest.mark.xfail(reason="LearningSession Pydantic validation — pre-existing schema issue")
     def test_create_topic_and_build_submission(self, tmp_path):
-        from systems.self_learning.service import SelfLearningService
+        from systems.self_learning.conclusion_store import SelfLearningConclusionStore
 
-        svc = SelfLearningService(storage_root=str(tmp_path))
+        svc = SelfLearningConclusionStore(storage_root=str(tmp_path))
         topic = svc.create_topic(title="Test Topic", reason="Testing lifecycle")
         assert topic.topic_id
         assert topic.title == "Test Topic"

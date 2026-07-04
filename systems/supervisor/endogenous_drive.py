@@ -131,7 +131,7 @@ class EndogenousTaskCandidate:
 @dataclass(frozen=True, slots=True)
 class DrivePerceptionSnapshot:
     user_mode: str
-    governor_mode_active: bool
+    autonomous_chain_gate_active: bool
     system_posture: str
     active_sessions: int
     recent_errors: int
@@ -241,7 +241,7 @@ class DriveDeliberationReport:
         return {
             "perception": {
                 "user_mode": self.perception.user_mode,
-                "governor_mode_active": self.perception.governor_mode_active,
+                "autonomous_chain_gate_active": self.perception.autonomous_chain_gate_active,
                 "system_posture": self.perception.system_posture,
                 "active_sessions": self.perception.active_sessions,
                 "recent_errors": self.perception.recent_errors,
@@ -556,7 +556,7 @@ class EndogenousDriveEngine:
     ) -> DrivePerceptionSnapshot:
         checks = dict(idle_window.get("checks") or {})
         idle_seconds = dict(idle_window.get("idle_seconds") or {})
-        governor_mode_active = bool(idle_window.get("governor_mode_active", False))
+        autonomous_chain_gate_active = bool(idle_window.get("autonomous_chain_gate_active", False))
         active_sessions = int(activity.get("active_sessions") or 0)
         queued_learning_count = len(list(drive_context.get("queued_learning_titles") or []))
         queued_body_improvement_count = len(
@@ -576,8 +576,8 @@ class EndogenousDriveEngine:
         shell_slot_present = bool(shell_slot_id or (shell_slot_meta or {}).get("worktree_path"))
 
         user_mode = "serving_user"
-        if governor_mode_active:
-            user_mode = "governor_autonomous"
+        if autonomous_chain_gate_active:
+            user_mode = "autonomous_chain_gate"
         elif checks.get("has_user_idle"):
             user_mode = "idle_window"
 
@@ -593,7 +593,7 @@ class EndogenousDriveEngine:
 
         return DrivePerceptionSnapshot(
             user_mode=user_mode,
-            governor_mode_active=governor_mode_active,
+            autonomous_chain_gate_active=autonomous_chain_gate_active,
             system_posture=system_posture,
             active_sessions=active_sessions,
             recent_errors=recent_errors,
@@ -642,7 +642,7 @@ class EndogenousDriveEngine:
         )
         self_confidence = self._clamp01(
             0.55
-            + (0.08 if perception.governor_mode_active else 0.0)
+            + (0.08 if perception.autonomous_chain_gate_active else 0.0)
             - min(perception.active_sessions, 3) * 0.08
             - min(perception.pending_review_count, 3) * 0.04
         )
@@ -2517,10 +2517,12 @@ class EndogenousDriveEngine:
             has_learning_history = perception.has_learning_history
             learning_intent = intents_by_kind.get("exploratory_learning")
             shell_baseline_intent = intents_by_kind.get("shell_baseline_learning")
+            cognitive_assessment_memory = self._build_cognitive_assessment_memory(drive_context)
+            self_iteration_trend_memory = self._build_self_iteration_trend_memory(drive_context)
 
             topics: list[dict] = []
 
-            governor_active = idle_window.get("governor_mode_active", False)
+            autonomous_chain_gate_active = idle_window.get("autonomous_chain_gate_active", False)
             mechanical_topic = self._extract_learning_topic(activity)
             if mechanical_topic:
                 topics = [{"title": mechanical_topic, "summary": (
@@ -2591,7 +2593,7 @@ class EndogenousDriveEngine:
                             "urgency": self._idle_learning_urgency(
                                 active_sessions=active_sessions,
                                 topic_source="activity_metadata",
-                                governor_mode=governor_active,
+                                autonomous_chain_gate=autonomous_chain_gate_active,
                             ),
                             "novelty": float(topic.get("novelty_score") or 0.6),
                             "specificity": float(topic.get("specificity_score") or 0.55),
@@ -2648,6 +2650,97 @@ class EndogenousDriveEngine:
                 generated_count += 1
                 if generated_count >= 2:
                     break
+
+            if generated_count == 0 and cognitive_assessment_memory.get("available"):
+                target = str(
+                    cognitive_assessment_memory.get("self_iteration_target")
+                    or self_iteration_trend_memory.get("dominant_target")
+                    or adaptive_policy.preferred_focus
+                    or "endogenous_judgement"
+                ).strip()
+                judgement = str(
+                    cognitive_assessment_memory.get("current_judgement")
+                    or cognitive_assessment_memory.get("dominant_constraint")
+                    or "recent endogenous judgement"
+                ).strip()
+                review_key = f"creativity:self_learning:cognitive_review:{_stable_key_for_topic(target or judgement)}"
+                if review_key not in existing_keys:
+                    review_summary = (
+                        "Review the latest endogenous cognitive-assessment memory, "
+                        "extract what changed, and record evidence-backed learning notes "
+                        "for the next autonomous planning cycle."
+                    )
+                    if judgement:
+                        review_summary += f" Current judgement: {judgement}."
+                    candidates.append(
+                        self._build_scored_candidate(
+                            stable_key=review_key,
+                            title=f"Review endogenous cognition: {target or 'current judgement'}",
+                            summary=review_summary,
+                            priority="normal",
+                            governance_task_type="self_learning",
+                            task_family="self_learning",
+                            execution_kind=None,
+                            value_tags=["creativity", "truthfulness"],
+                            candidate_kind="exploratory_learning",
+                            score_inputs={
+                                "core_value_strength": 0.72,
+                                "urgency": self._clamp01(
+                                    0.42
+                                    + float(cognitive_assessment_memory.get("why_not_improvement_now_count") or 0) * 0.08
+                                    + (
+                                        0.08
+                                        if adaptive_policy.preferred_focus in {"truthfulness", "observation"}
+                                        else 0.0
+                                    )
+                                ),
+                                "novelty": 0.52,
+                                "specificity": 0.66,
+                                "execution_readiness": 0.72,
+                                "queue_pressure_penalty": self._queue_pressure_penalty(
+                                    drive_context,
+                                    governance_task_type="self_learning",
+                                    task_family="self_learning",
+                                ),
+                                "adaptive_factor": self._adaptive_factor_for_candidate(
+                                    candidate_kind="exploratory_learning",
+                                    adaptive_policy=adaptive_policy,
+                                ),
+                            },
+                            metadata={
+                                "learning_branch": "cognitive_assessment_review",
+                                "self_learning_mode": "endogenous_cognition_review",
+                                "cognitive_assessment_target": target,
+                                "llm_cognitive_assessment": dict(cognitive_assessment_memory),
+                                "drive_judgement": (
+                                    self._intent_metadata(
+                                        intent=learning_intent,
+                                        needs=needs,
+                                        perception=perception,
+                                        world_model=world_model,
+                                        reflection=reflection,
+                                        adaptive_policy=adaptive_policy,
+                                    )
+                                    if learning_intent is not None
+                                    else {}
+                                ),
+                            },
+                            evidence={
+                                "active_sessions": active_sessions,
+                                "trigger": "canonical_cognitive_assessment_memory",
+                                "learning_topic": target,
+                                "topic_source": "cognitive_assessment_memory",
+                                "learning_branch": "cognitive_assessment_review",
+                                "llm_generated": False,
+                                "cognitive_assessment_memory": dict(cognitive_assessment_memory),
+                            },
+                            constraints={
+                                "execution_policy": "learn_only",
+                                "must_not_modify_active_body": True,
+                            },
+                        )
+                    )
+                    existing_keys.add(review_key)
 
         if (
             self_evolution_plan.get("eligible_for_planning")
@@ -3139,42 +3232,10 @@ class EndogenousDriveEngine:
             cognition_charter
         )
 
-        def _first_text(mapping: Dict[str, Any], primary_key: str, legacy_key: str) -> str:
-            primary = str(mapping.get(primary_key) or "").strip()
-            if primary:
-                return primary
-            raw_legacy = mapping.get(legacy_key)
-            legacy_values = (
-                [raw_legacy] if isinstance(raw_legacy, str) else list(raw_legacy or [])
-            )
-            return str(legacy_values[0] if legacy_values else "").strip()
-
-        def _text_values(
-            mapping: Dict[str, Any],
-            primary_key: str,
-            legacy_key: str,
-            *,
-            limit: int = 4,
-        ) -> List[str]:
-            primary = str(mapping.get(primary_key) or "").strip()
-            if primary:
-                return [primary]
-            raw_values = mapping.get(legacy_key)
-            raw_values = [raw_values] if isinstance(raw_values, str) else list(raw_values or [])
-            return [
-                str(item).strip()
-                for item in raw_values[:limit]
-                if str(item).strip()
-            ]
-
         decision_core = {
             "current_judgement": str(
                 meta_cognition_profile.get("current_judgement")
-                or _first_text(
-                    cognitive_assessment_memory,
-                    "current_judgement",
-                    "common_current_judgements",
-                )
+                or cognitive_assessment_memory.get("current_judgement")
                 or ""
             ).strip(),
             "dominant_constraint": str(
@@ -3261,12 +3322,11 @@ class EndogenousDriveEngine:
                 if str(item).strip()
             ],
             "why_not_improvement_now": [
-                *_text_values(
-                    cognitive_assessment_memory,
-                    "why_not_improvement_now",
-                    "common_why_not_improvement_now",
-                    limit=4,
-                )
+                item
+                for item in [
+                    str(cognitive_assessment_memory.get("why_not_improvement_now") or "").strip()
+                ]
+                if item
             ][:4],
             "trend_state": str(self_iteration_trend_memory.get("trend_state") or "").strip(),
             "stay_or_switch_bias": str(
@@ -4089,22 +4149,20 @@ class EndogenousDriveEngine:
         def _dominant_text(
             mapping: Dict[str, Any],
             primary_key: str | tuple[str, ...],
-            legacy_key: str,
             *,
             limit: int = 4,
         ) -> str:
+            del limit
             primary_keys = (primary_key,) if isinstance(primary_key, str) else primary_key
             for key in primary_keys:
                 primary = str(mapping.get(key) or "").strip()
                 if primary:
                     return primary
-            legacy_values = _texts(mapping.get(legacy_key), limit=limit)
-            return legacy_values[0] if legacy_values else ""
+            return ""
 
         def _signal_count(
             mapping: Dict[str, Any],
             primary_keys: tuple[str, ...],
-            legacy_key: str,
         ) -> int:
             for key in primary_keys:
                 value = mapping.get(key)
@@ -4114,7 +4172,7 @@ class EndogenousDriveEngine:
                     return max(0, int(value or 0))
                 except (TypeError, ValueError):
                     continue
-            return _text_count(mapping.get(legacy_key))
+            return 0
 
         def _stored_count(mapping: Dict[str, Any], key: str) -> int:
             try:
@@ -4133,38 +4191,31 @@ class EndogenousDriveEngine:
         dominant_trend_hypothesis = _dominant_text(
             self_iteration_trend_memory,
             "dominant_hypothesis",
-            "common_hypotheses",
         )
         dominant_stay_or_switch = _dominant_text(
             self_iteration_trend_memory,
             ("dominant_stay_or_switch", "stay_or_switch"),
-            "common_stay_or_switch",
             limit=2,
         )
         dominant_switch_reason = _dominant_text(
             self_iteration_trend_memory,
             ("dominant_switch_reason", "switch_reason"),
-            "common_switch_reasons",
         )
         current_judgement = _dominant_text(
             cognitive_assessment_memory,
             "current_judgement",
-            "common_current_judgements",
         )
         why_not_improvement_now = _dominant_text(
             cognitive_assessment_memory,
             "why_not_improvement_now",
-            "common_why_not_improvement_now",
         )
         self_iteration_target = _dominant_text(
             cognitive_assessment_memory,
             "self_iteration_target",
-            "common_self_iteration_targets",
         )
         self_iteration_assessment_hypothesis = _dominant_text(
             cognitive_assessment_memory,
             "self_iteration_hypothesis",
-            "common_self_iteration_hypotheses",
         )
         return {
             "status": status,
@@ -4293,22 +4344,18 @@ class EndogenousDriveEngine:
                 "target_count": _signal_count(
                     self_iteration_trend_memory,
                     ("target_count", "target_signal_count"),
-                    "common_targets",
                 ),
                 "hypothesis_count": _signal_count(
                     self_iteration_trend_memory,
                     ("hypothesis_count", "hypothesis_signal_count"),
-                    "common_hypotheses",
                 ),
                 "stay_or_switch_count": _signal_count(
                     self_iteration_trend_memory,
                     ("stay_or_switch_count", "stay_or_switch_signal_count"),
-                    "common_stay_or_switch",
                 ),
                 "switch_reason_count": _signal_count(
                     self_iteration_trend_memory,
                     ("switch_reason_count", "switch_reason_signal_count"),
-                    "common_switch_reasons",
                 ),
             },
             "switch_self_regulation_memory": {
@@ -4372,22 +4419,18 @@ class EndogenousDriveEngine:
                 "current_judgement_count": _signal_count(
                     cognitive_assessment_memory,
                     ("current_judgement_count",),
-                    "common_current_judgements",
                 ),
                 "why_not_improvement_now_count": _signal_count(
                     cognitive_assessment_memory,
                     ("why_not_improvement_now_count",),
-                    "common_why_not_improvement_now",
                 ),
                 "self_iteration_target_count": _signal_count(
                     cognitive_assessment_memory,
                     ("self_iteration_target_count", "target_count"),
-                    "common_self_iteration_targets",
                 ),
                 "self_iteration_hypothesis_count": _signal_count(
                     cognitive_assessment_memory,
                     ("self_iteration_hypothesis_count", "hypothesis_count"),
-                    "common_self_iteration_hypotheses",
                 ),
             },
             "proposal_drift_memory": {
@@ -4532,39 +4575,17 @@ class EndogenousDriveEngine:
         proposal_drift_memory: Dict[str, Any],
         task_type_priors: Dict[str, Any],
     ) -> Dict[str, Any]:
-        def _first_text(mapping: Dict[str, Any], primary_key: str, legacy_key: str) -> str:
-            primary = str(mapping.get(primary_key) or "").strip()
-            if primary:
-                return primary
-            raw_legacy = mapping.get(legacy_key)
-            legacy_values = (
-                [raw_legacy] if isinstance(raw_legacy, str) else list(raw_legacy or [])
-            )
-            return str(legacy_values[0] if legacy_values else "").strip()
-
         current_judgement = str(
-            _first_text(
-                cognitive_assessment_memory,
-                "current_judgement",
-                "common_current_judgements",
-            )
+            cognitive_assessment_memory.get("current_judgement") or ""
         ).strip()
         dominant_constraint = str(
             cognitive_assessment_memory.get("dominant_constraint") or ""
         ).strip()
         lm_self_iteration_target = str(
-            _first_text(
-                cognitive_assessment_memory,
-                "self_iteration_target",
-                "common_self_iteration_targets",
-            )
+            cognitive_assessment_memory.get("self_iteration_target") or ""
         ).strip()
         lm_self_iteration_hypothesis = str(
-            _first_text(
-                cognitive_assessment_memory,
-                "self_iteration_hypothesis",
-                "common_self_iteration_hypotheses",
-            )
+            cognitive_assessment_memory.get("self_iteration_hypothesis") or ""
         ).strip()
         top_self_iteration_domain = str(
             lm_self_iteration_target
@@ -4574,11 +4595,7 @@ class EndogenousDriveEngine:
         ).strip()
         top_self_iteration_hypothesis = str(
             lm_self_iteration_hypothesis
-            or _first_text(
-                self_iteration_trend_memory,
-                "dominant_hypothesis",
-                "common_hypotheses",
-            )
+            or self_iteration_trend_memory.get("dominant_hypothesis")
             or self_iteration_hypotheses.get("dominant_hypothesis")
             or (
                 hypotheses[0].get("hypothesis")
@@ -4595,11 +4612,7 @@ class EndogenousDriveEngine:
             or ""
         ).strip()
         stay_or_switch_bias = str(
-            _first_text(
-                self_iteration_trend_memory,
-                "dominant_stay_or_switch",
-                "common_stay_or_switch",
-            )
+            self_iteration_trend_memory.get("dominant_stay_or_switch")
             or switch_self_regulation_memory.get("preferred_switch_bias")
             or ""
         ).strip()
@@ -4615,11 +4628,9 @@ class EndogenousDriveEngine:
         recent_effect_direction = str(
             post_task_effect_memory.get("effect_direction") or ""
         ).strip()
-        why_not_improvement_now = _first_text(
-            cognitive_assessment_memory,
-            "why_not_improvement_now",
-            "common_why_not_improvement_now",
-        )
+        why_not_improvement_now = str(
+            cognitive_assessment_memory.get("why_not_improvement_now") or ""
+        ).strip()
         grounding_gap_count = len(
             [str(item).strip() for item in list(grounding_focus.get("grounding_gaps") or []) if str(item).strip()]
         )
@@ -6646,22 +6657,10 @@ class EndogenousDriveEngine:
         why_not_improvement_now = str(
             cognitive_assessment_memory.get("why_not_improvement_now") or ""
         ).strip()
-        raw_legacy_why_not = cognitive_assessment_memory.get(
-            "common_why_not_improvement_now"
-        )
-        legacy_why_not_values = (
-            [raw_legacy_why_not]
-            if isinstance(raw_legacy_why_not, str)
-            else list(raw_legacy_why_not or [])
-        )
         why_not_improvement_evidence = (
             [why_not_improvement_now]
             if why_not_improvement_now
-            else [
-                str(item).strip()
-                for item in legacy_why_not_values[:4]
-                if str(item).strip()
-            ]
+            else []
         )
         trend_state = str(self_iteration_trend_memory.get("trend_state") or "").strip().lower()
         dominant_trend_target = str(
@@ -8135,7 +8134,7 @@ class EndogenousDriveEngine:
         *,
         active_sessions: int,
         topic_source: str,
-        governor_mode: bool,
+        autonomous_chain_gate: bool,
     ) -> float:
         base = {
             "activity_metadata": 0.42,
@@ -8143,8 +8142,8 @@ class EndogenousDriveEngine:
             "shell_baseline_fallback": 0.4,
         }.get(topic_source, 0.4)
         session_penalty = min(max(active_sessions, 0), 3) * 0.05
-        governor_bonus = 0.05 if governor_mode else 0.0
-        return round(self._clamp01(base - session_penalty + governor_bonus), 4)
+        autonomous_gate_bonus = 0.05 if autonomous_chain_gate else 0.0
+        return round(self._clamp01(base - session_penalty + autonomous_gate_bonus), 4)
 
     def _queue_hygiene_urgency(self, drive_context: Dict[str, Any]) -> float:
         active_queue_count = int(drive_context.get("active_queue_count") or 0)
@@ -8400,7 +8399,13 @@ class EndogenousDriveEngine:
         agent_work = recent.get("agent_work") or {}
 
         # Try to extract a topic from the user's last request
-        user_text = str(user_req.get("text") or user_req.get("query") or "")
+        user_text = str(
+            user_req.get("text")
+            or user_req.get("query")
+            or user_req.get("topic")
+            or user_req.get("title")
+            or ""
+        )
         if not user_text:
             user_text = str(user_req.get("summary") or "")
         if user_text and len(user_text) > 10:
@@ -8461,7 +8466,7 @@ class EndogenousDriveEngine:
                         if bootstrap
                         else "shell_baseline_fallback"
                     ),
-                    governor_mode=False,
+                    autonomous_chain_gate=False,
                 ),
                 "novelty": 0.88 if bootstrap else 0.45,
                 "specificity": 0.68 if bootstrap else 0.58,

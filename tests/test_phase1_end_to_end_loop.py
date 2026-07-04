@@ -151,16 +151,17 @@ class TestPhase1EndogenousDriveToQueue:
     async def test_truthfulness_candidate_requires_live_correction_signal_pressure(self, tmp_path):
         """Truthfulness review is triggered by active correction signals, not stale counts alone."""
         sv = _make_supervisor(tmp_path)
+        live_signal_at = datetime.now().isoformat()
         sv._fetch_gateway_activity_snapshot = AsyncMock(
             return_value={
                 **_idle_snapshot(error_count=3, uncertainty_high_count=0),
-                "last_user_request_at": "2026-07-03T13:10:00",
-                "last_agent_work_at": "2026-07-03T13:10:00",
-                "last_memory_task_at": "2026-07-03T13:10:00",
-                "last_self_learning_activity_at": "2026-07-03T13:10:00",
-                "last_self_evolution_plan_at": "2026-07-03T13:10:00",
-                "last_self_evolution_execute_at": "2026-07-03T13:10:00",
-                "last_self_evolution_activity_at": "2026-07-03T13:10:00",
+                "last_user_request_at": live_signal_at,
+                "last_agent_work_at": live_signal_at,
+                "last_memory_task_at": live_signal_at,
+                "last_self_learning_activity_at": live_signal_at,
+                "last_self_evolution_plan_at": live_signal_at,
+                "last_self_evolution_execute_at": live_signal_at,
+                "last_self_evolution_activity_at": live_signal_at,
             }
         )
 
@@ -598,12 +599,12 @@ class TestPhase1GatewayErrorTracking:
 
 
 class TestPhase1GovernorMode:
-    """Supervisor AUTO gate state transitions and review-cycle behavior."""
+    """Supervisor autonomous-chain gate state transitions and review-cycle behavior."""
 
     @pytest.mark.asyncio
     @pytest.mark.unit
-    async def test_governor_mode_activation_sets_flags(self, tmp_path):
-        """Enabling the supervisor AUTO gate sets state and starts loops."""
+    async def test_autonomous_chain_gate_activation_sets_flags(self, tmp_path):
+        """Enabling the supervisor autonomous-chain gate sets state and starts loops."""
         sv = _make_supervisor(tmp_path)
         sv._ensure_watch_window_task = Mock()
         sv.run_health_checks = AsyncMock(return_value={"results": []})
@@ -614,17 +615,17 @@ class TestPhase1GovernorMode:
         })
 
         await sv._start_periodic_tasks()
-        assert sv._service_runtime.governor_mode_active is False
+        assert sv._service_runtime.autonomous_chain_gate_active is False
         assert sv._self_evolution_review_task is None
         assert sv._endogenous_drive_task is None
 
-        await sv._start_governor_mode()
-        assert sv._service_runtime.governor_mode_active is True
+        await sv._start_autonomous_chain_gate()
+        assert sv._service_runtime.autonomous_chain_gate_active is True
         assert sv._self_evolution_review_task is not None
         assert sv._endogenous_drive_task is not None
 
-        await sv._stop_governor_mode()
-        assert sv._service_runtime.governor_mode_active is False
+        await sv._stop_autonomous_chain_gate()
+        assert sv._service_runtime.autonomous_chain_gate_active is False
 
     @pytest.mark.asyncio
     @pytest.mark.unit
@@ -681,16 +682,16 @@ class TestPhase1GovernorMode:
 
     @pytest.mark.asyncio
     @pytest.mark.unit
-    async def test_governor_mode_idle_window_override(self, tmp_path):
-        """Supervisor AUTO gate keeps self_learning planning eligible while the user is active."""
+    async def test_autonomous_chain_gate_idle_window_override(self, tmp_path):
+        """Supervisor autonomous-chain gate keeps self_learning planning eligible while the user is active."""
         sv = _make_supervisor(tmp_path)
-        sv._service_runtime.governor_mode_active = True
+        sv._service_runtime.autonomous_chain_gate_active = True
         sv._fetch_gateway_activity_snapshot = AsyncMock(return_value=_idle_snapshot(
             user_idle=False  # user IS active
         ))
 
         idle = await sv.evaluate_idle_window({"task_family": "self_learning"})
-        assert idle["governor_mode_active"] is True
+        assert idle["autonomous_chain_gate_active"] is True
         # self_learning planning should be eligible despite user being active
         assert idle["task_family_decisions"]["self_learning"]["eligible_for_planning"] is True
 

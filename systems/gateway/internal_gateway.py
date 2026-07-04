@@ -92,7 +92,7 @@ class InternalGateway:
         # ("supervisor_task" | "user_chat"), so an idle push from that session
         # clears the correct lane instead of leaving stale subagent counts.
         self._agent_session_lane: Dict[str, str] = {}
-        self._governor_mode_active: bool = False
+        self._autonomous_chain_gate_active: bool = False
         self._request_counter = 0
         # Tier 1 memory service URL (lazy-resolved from registered services)
         self._memory_service_url: str | None = None
@@ -216,7 +216,7 @@ class InternalGateway:
         self.app.add_api_route("/admin/activity/log", self.get_activity_log, methods=["GET"])
         self.app.add_api_route("/admin/activity/clear", self.clear_activity_state, methods=["POST"])
         self.app.add_api_route("/admin/activity/touch", self.touch_activity, methods=["POST"])
-        self.app.add_api_route("/admin/governor-mode", self.set_governor_mode, methods=["POST"])
+        self.app.add_api_route("/admin/autonomous-chain-gate", self.set_autonomous_chain_gate, methods=["POST"])
         # ── Scene aggregation (baseline §8.1) ──
         # Scene is per-reporter, not global.  The gateway collects the
         # supervisor / active-agent / executor scenes and presents a
@@ -246,7 +246,6 @@ class InternalGateway:
             "total": len(self._services),
             "agents": len([s for s in self._services.values() if s.service_type == "agent"]),
             "memory": 1 if any(s.service_type == "memory" for s in self._services.values()) else 0,
-            "self_learning": 1 if any(s.service_type == "self_learning" for s in self._services.values()) else 0,
             "supervisor": 1 if any(s.service_type == "supervisor" for s in self._services.values()) else 0,
             "executor": 1 if any(s.service_type == "executor" for s in self._services.values()) else 0,
         }
@@ -1006,20 +1005,19 @@ class InternalGateway:
             logger.error(f"Error registering session: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
-    async def set_governor_mode(self, request: Request):
-        """Receive the supervisor AUTO gate state from supervisor.
+    async def set_autonomous_chain_gate(self, request: Request):
+        """Receive the supervisor autonomous-chain gate state.
 
-        The route and returned key keep the historical `governor_mode` naming
-        for compatibility with older clients.
+        This is the canonical supervisor-owned switch for the autonomous chain.
         """
         try:
             data = await request.json()
             active = bool(data.get("active", False))
-            self._governor_mode_active = active
-            logger.info("Gateway governor mode set to: %s", active)
-            return {"governor_mode_active": active}
+            self._autonomous_chain_gate_active = active
+            logger.info("Gateway autonomous chain gate set to: %s", active)
+            return {"autonomous_chain_gate_active": active}
         except Exception as e:
-            logger.error(f"Error setting governor mode: {e}")
+            logger.error(f"Error setting autonomous chain gate: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
     async def register_service(self, request: Request):
@@ -1066,7 +1064,6 @@ class InternalGateway:
     async def _auto_configure_route(self, service_type: str, service_id: str, address: str):
         route_map = {
             "memory": "/mem/",
-            "self_learning": "/self-learning/",
             "supervisor": "/supervisor/",
             "executor": "/executor/",
         }
@@ -1368,8 +1365,6 @@ class InternalGateway:
                     self._touch_activity("memory_task", source_service="gateway", metadata=activity_metadata)
             elif target_service.service_type == "agent":
                 self._touch_activity("agent_work", source_service="gateway", metadata=activity_metadata)
-            elif target_service.service_type == "self_learning":
-                self._touch_activity("self_learning", source_service="gateway", metadata=activity_metadata)
             elif target_service.service_type == "supervisor":
                 self._touch_activity("self_evolution_plan", source_service="gateway", metadata=activity_metadata)
             elif target_service.service_type == "executor":
@@ -1703,6 +1698,9 @@ class InternalGateway:
             "context": data.get("context", {}),
             "metadata": data.get("metadata", {}),
         }
+        final_response = str(data.get("final_response") or "").strip()
+        if final_response:
+            payload["final_response"] = final_response[:4000]
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -1747,12 +1745,11 @@ class InternalGateway:
                 source_service="gateway",
                 metadata={"task_id": task_id, "decision": decision},
             )
-            # P0-2 成果回流: on successful completion, flow the agent's finding
+            # P0-2 成果回流: on successful completion, flow the executor finding
             # text into Mem Tier1 so learning/improvement output is not stranded
             # in the CLI conversation history. Best-effort: a Mem write failure
             # must never turn a successful task writeback into an error.
             if decision == "completed":
-                final_response = str(data.get("final_response") or "").strip()
                 session_id = str(data.get("session_id") or "").strip()
                 if final_response and session_id:
                     try:
@@ -1762,7 +1759,7 @@ class InternalGateway:
                             final_response,
                             metadata={
                                 "task_id": task_id,
-                                "source": "auto_task_finding",
+                                "source": "autonomous_task_finding",
                                 "execution_kind": str(
                                     (data.get("context") or {}).get("execution_kind") or ""
                                 ),
@@ -1893,7 +1890,7 @@ class InternalGateway:
                 status_code=410,
                 detail=(
                     "Gateway agent proxy has been removed. "
-                    "AUTO and task execution must run on the current CLI/API-A executor."
+                    "Autonomous tasks must run on the current CLI/API-A executor."
                 ),
             )
         

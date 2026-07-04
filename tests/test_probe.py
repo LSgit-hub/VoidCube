@@ -8,7 +8,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from systems.body_registry import BodyRegistryManager
-from systems.lifecycle import BodyLifecycleController
+from systems.lifecycle import BodyLifecycleExecutor
 from systems.probe import ProbeCheckResult, ProbeExecutor, ProbeRunner
 
 
@@ -88,8 +88,8 @@ def test_lifecycle_can_persist_probe_report_to_slot_meta(tmp_path):
         ],
     )
 
-    controller = BodyLifecycleController(manager)
-    result = controller.record_probe_report("slot-B", report)
+    executor = BodyLifecycleExecutor(manager)
+    result = executor.record_probe_report("slot-B", report)
     stored = manager.load_slot_meta("slot-B")
 
     assert result.status == "applied"
@@ -123,8 +123,8 @@ def test_probe_report_persistence_inherits_slot_git_lineage(tmp_path):
         ],
     )
 
-    controller = BodyLifecycleController(manager)
-    result = controller.record_probe_report("slot-B", report)
+    executor = BodyLifecycleExecutor(manager)
+    result = executor.record_probe_report("slot-B", report)
     stored = manager.load_slot_meta("slot-B")
 
     assert result.status == "applied"
@@ -154,8 +154,8 @@ def test_lifecycle_rejects_probe_report_for_wrong_slot(tmp_path):
         ],
     )
 
-    controller = BodyLifecycleController(manager)
-    result = controller.record_probe_report("slot-B", report)
+    executor = BodyLifecycleExecutor(manager)
+    result = executor.record_probe_report("slot-B", report)
 
     assert result.status == "failed"
     assert "does not match" in result.details["reason"]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -19,7 +20,8 @@ from systems.supervisor.supervisor import (
     SupervisorExecutionConfig,
     SupervisorServiceRuntimeConfig,
 )
-from systems.self_learning import LearningRecommendation, SelfLearningService
+from systems.self_learning import LearningRecommendation
+from systems.self_learning.conclusion_store import SelfLearningConclusionStore
 
 
 def _make_supervisor_config(tmp_path: Path) -> SupervisorConfig:
@@ -127,6 +129,16 @@ def test_supervisor_routes_no_longer_publish_deprecated_execution_surface(tmp_pa
     assert deprecated_routes == set()
     assert "/upgrade/history" not in route_paths
     assert "/upgrade/legacy" not in route_paths
+    assert "/self-evolution/autonomous-cycle" in route_paths
+    deprecated_autonomous_cycle_route = "/self-evolution/" + "auto" + "-cycle"
+    assert deprecated_autonomous_cycle_route not in route_paths
+    assert "/autonomous-chain-gate/activate" in route_paths
+    assert "/autonomous-chain-gate/deactivate" in route_paths
+    assert "/autonomous-chain-gate/status" in route_paths
+    deprecated_gate_prefix = "/" + "governor" + "-mode"
+    assert f"{deprecated_gate_prefix}/activate" not in route_paths
+    assert f"{deprecated_gate_prefix}/deactivate" not in route_paths
+    assert f"{deprecated_gate_prefix}/status" not in route_paths
 
 
 @pytest.mark.unit
@@ -301,7 +313,30 @@ async def test_supervisor_runtime_timeline_exposes_recent_unified_trace_records(
                         "governance_task_type": "self_learning",
                         "task_family": "self_learning",
                     },
-                }
+                },
+                {
+                    "activity_id": "gateway-user-request-1",
+                    "activity_kind": "user_request",
+                    "recorded_at": "2026-05-25T12:06:00",
+                    "session_id": "user-chat-session",
+                    "metadata": {
+                        "trace_id": "trace-timeline-1",
+                        "request_id": "user-request-1",
+                        "prompt_preview": "USER_CHAT_SECRET_SHOULD_NOT_RENDER",
+                    },
+                },
+                {
+                    "activity_id": "gateway-user-chat-scene-1",
+                    "activity_kind": "agent_scene",
+                    "recorded_at": "2026-05-25T12:07:00",
+                    "session_id": "user-chat-session",
+                    "metadata": {
+                        "trace_id": "trace-timeline-1",
+                        "agent_role": "user_chat",
+                        "scene": "executing",
+                        "subagent_focus_preview": "USER_CHAT_SUBAGENT_SHOULD_NOT_RENDER",
+                    },
+                },
             ],
         }
 
@@ -320,6 +355,14 @@ async def test_supervisor_runtime_timeline_exposes_recent_unified_trace_records(
     }.issubset(sources)
     assert {event["trace_id"] for event in result["timeline"]} == {trace_id}
     assert {event["task_id"] for event in result["timeline"] if event.get("task_id")} == {task_id}
+    rendered = json.dumps(result["timeline"], ensure_ascii=False)
+    assert "USER_CHAT_SECRET_SHOULD_NOT_RENDER" not in rendered
+    assert "USER_CHAT_SUBAGENT_SHOULD_NOT_RENDER" not in rendered
+    gateway_events = [
+        event for event in result["timeline"]
+        if event.get("source") == "gateway_activity_log"
+    ]
+    assert [event["event_type"] for event in gateway_events] == ["self_learning"]
 
 
 @pytest.mark.unit
@@ -699,8 +742,8 @@ async def test_supervisor_room_state_uses_single_slot_governance_layout(tmp_path
     assert timed_titles == ["Supervisor second task", "Agent second creative task"]
     assert [item["display_status"] for item in layout["timed_queue"]] == ["预设时间", "预设时间"]
     assert [item["lane"] for item in layout["timed_queue"]] == ["supervisor", "agent"]
-    assert layout["window"]["label"] == "预设时间"
-    assert layout["window"]["status_text"] == "限时自动执行中"
+    assert layout["window"]["label"] == "执行模式"
+    assert layout["window"]["status_text"] == "全天候自动执行中"
     assert state["metrics"]["slot_overview"] == "slot-A / slot-B"
 
 
@@ -874,13 +917,13 @@ async def test_supervisor_periodic_compression_runtime_does_not_route_through_ex
     supervisor._health_check_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._health_check_task
-    # Review and drive loops are only started behind the supervisor AUTO gate.
+    # Review and drive loops are only started behind the supervisor autonomous-chain gate.
     # They remain disabled during baseline health-check startup.
     assert supervisor._self_evolution_review_task is None, (
-        "Review loop should not be running before the supervisor AUTO gate is enabled"
+        "Review loop should not be running before the supervisor autonomous-chain gate is enabled"
     )
     assert supervisor._endogenous_drive_task is None, (
-        "Drive loop should not be running before the supervisor AUTO gate is enabled"
+        "Drive loop should not be running before the supervisor autonomous-chain gate is enabled"
     )
 
 
@@ -1026,8 +1069,8 @@ async def test_supervisor_periodic_self_evolution_review_runtime_invokes_cycle(t
     supervisor.config = config
 
     await supervisor._start_periodic_tasks()
-    # Review loop is not started during baseline startup — enable the AUTO gate.
-    await supervisor._start_governor_mode()
+    # Review loop is not started during baseline startup — enable the autonomous-chain gate.
+    await supervisor._start_autonomous_chain_gate()
 
     with pytest.raises(asyncio.CancelledError):
         await supervisor._self_evolution_review_task
@@ -1036,7 +1079,7 @@ async def test_supervisor_periodic_self_evolution_review_runtime_invokes_cycle(t
     supervisor._health_check_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._health_check_task
-    # Drive loop was also started by the AUTO gate.
+    # Drive loop was also started by the autonomous-chain gate.
     supervisor._endogenous_drive_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._endogenous_drive_task
@@ -1065,8 +1108,8 @@ async def test_supervisor_periodic_endogenous_drive_runtime_invokes_cycle(tmp_pa
     supervisor.config = config
 
     await supervisor._start_periodic_tasks()
-    # Drive loop is not started during baseline startup — enable the AUTO gate.
-    await supervisor._start_governor_mode()
+    # Drive loop is not started during baseline startup — enable the autonomous-chain gate.
+    await supervisor._start_autonomous_chain_gate()
 
     with pytest.raises(asyncio.CancelledError):
         await supervisor._endogenous_drive_task
@@ -1075,7 +1118,7 @@ async def test_supervisor_periodic_endogenous_drive_runtime_invokes_cycle(tmp_pa
     supervisor._health_check_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._health_check_task
-    # Review loop was also started by the AUTO gate.
+    # Review loop was also started by the autonomous-chain gate.
     supervisor._self_evolution_review_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._self_evolution_review_task
@@ -1097,16 +1140,16 @@ async def test_supervisor_immediate_endogenous_drive_logs_and_survives_exception
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_start_governor_mode_renotifies_gateway_when_already_active(tmp_path):
+async def test_start_autonomous_chain_gate_renotifies_gateway_when_already_active(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    supervisor._service_runtime.governor_mode_active = True
-    supervisor._notify_gateway_governor_mode = AsyncMock()  # type: ignore[method-assign]
+    supervisor._service_runtime.autonomous_chain_gate_active = True
+    supervisor._notify_gateway_autonomous_chain_gate = AsyncMock()  # type: ignore[method-assign]
     supervisor._run_self_evolution_cycle = AsyncMock()  # type: ignore[method-assign]
     supervisor._run_endogenous_drive_cycle = AsyncMock()  # type: ignore[method-assign]
 
-    await supervisor._start_governor_mode()
+    await supervisor._start_autonomous_chain_gate()
 
-    supervisor._notify_gateway_governor_mode.assert_awaited_once_with(active=True)  # type: ignore[attr-defined]
+    supervisor._notify_gateway_autonomous_chain_gate.assert_awaited_once_with(active=True)  # type: ignore[attr-defined]
     assert supervisor._self_evolution_review_task is None
     assert supervisor._endogenous_drive_task is None
 
@@ -1152,8 +1195,8 @@ async def test_supervisor_self_evolution_review_loop_survives_iteration_exceptio
     supervisor.config = config
 
     await supervisor._start_periodic_tasks()
-    # Review loop only starts after the supervisor AUTO gate is enabled.
-    await supervisor._start_governor_mode()
+    # Review loop only starts after the supervisor autonomous-chain gate is enabled.
+    await supervisor._start_autonomous_chain_gate()
 
     with pytest.raises(asyncio.CancelledError):
         await supervisor._self_evolution_review_task
@@ -1162,7 +1205,7 @@ async def test_supervisor_self_evolution_review_loop_survives_iteration_exceptio
     supervisor._health_check_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._health_check_task
-    # Drive loop was also started by the AUTO gate.
+    # Drive loop was also started by the autonomous-chain gate.
     supervisor._endogenous_drive_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._endogenous_drive_task
@@ -1203,7 +1246,7 @@ async def test_supervisor_internal_body_upgrade_pipeline_does_not_route_through_
 async def test_supervisor_accepts_self_learning_conclusion_submission_into_queue(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
-    learning = SelfLearningService(tmp_path / "self-learning")
+    learning = SelfLearningConclusionStore(tmp_path / "self-learning")
 
     topic = learning.create_topic(
         title="Gateway-backed idle window",

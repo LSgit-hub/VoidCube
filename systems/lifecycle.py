@@ -321,7 +321,3 @@ class BodyLifecycleExecutor:
                 default_task_family="general_self_evolution",
             ),
         }
-
-
-# Backward-compatible alias for older supervisor/tests imports.
-BodyLifecycleController = BodyLifecycleExecutor

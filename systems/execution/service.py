@@ -84,14 +84,7 @@ class VoidCubeExecutionService:
                 ],
                 "body_upgrade": ["/body/upgrade/execute"],
                 "formal_self_evolution": ["/self-evolution/execute"],
-                "self_learning": ["/self-learning/execute"],
                 "memory_maintenance": ["/memory/compress"],
-            },
-            "compatibility_notes": {
-                "self_learning": (
-                    "legacy health advertisement only; autonomous self_learning "
-                    "tasks execute through the API-A pull path, not this executor"
-                ),
             },
         }
 

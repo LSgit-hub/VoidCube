@@ -155,24 +155,28 @@ class Supervisor(
         self.app.add_api_route("/body/governor/history", self.get_governor_history, methods=["GET"])
         self.app.add_api_route("/body/improvement-report", self.receive_improvement_report, methods=["POST"])
         self.app.add_api_route("/body/{slot_id}/health", self.get_slot_health, methods=["GET"])
-        self.app.add_api_route("/self-evolution/auto-cycle", self.run_auto_cycle, methods=["POST"])
-        self.app.add_api_route("/governor-mode/activate", self.activate_governor_mode, methods=["POST"])
-        self.app.add_api_route("/governor-mode/deactivate", self.deactivate_governor_mode, methods=["POST"])
-        self.app.add_api_route("/governor-mode/status", self.get_governor_mode_status, methods=["GET"])
+        self.app.add_api_route(
+            "/self-evolution/autonomous-cycle",
+            self.run_autonomous_cycle,
+            methods=["POST"],
+        )
+        self.app.add_api_route("/autonomous-chain-gate/activate", self.activate_autonomous_chain_gate, methods=["POST"])
+        self.app.add_api_route("/autonomous-chain-gate/deactivate", self.deactivate_autonomous_chain_gate, methods=["POST"])
+        self.app.add_api_route("/autonomous-chain-gate/status", self.get_autonomous_chain_gate_status, methods=["GET"])
 
-    async def activate_governor_mode(self, request: dict | None = None) -> Dict[str, Any]:
+    async def activate_autonomous_chain_gate(self, request: dict | None = None) -> Dict[str, Any]:
         """Enable the autonomous-chain gate: start drive + review loops."""
-        await self._start_governor_mode()
-        return self._governor_mode_status()
+        await self._start_autonomous_chain_gate()
+        return self._autonomous_chain_gate_status()
 
-    async def deactivate_governor_mode(self, request: dict | None = None) -> Dict[str, Any]:
+    async def deactivate_autonomous_chain_gate(self, request: dict | None = None) -> Dict[str, Any]:
         """Disable the autonomous-chain gate: stop drive + review loops, keep health-check."""
-        await self._stop_governor_mode()
-        return self._governor_mode_status()
+        await self._stop_autonomous_chain_gate()
+        return self._autonomous_chain_gate_status()
 
-    async def get_governor_mode_status(self) -> Dict[str, Any]:
+    async def get_autonomous_chain_gate_status(self) -> Dict[str, Any]:
         """Return current autonomous-chain gate state."""
-        return self._governor_mode_status()
+        return self._autonomous_chain_gate_status()
 
     async def get_body_registry(self) -> Dict[str, Any]:
         return self._execution_facade.get_body_registry()

@@ -147,6 +147,13 @@ def _print_three_segment_scene_bar() -> None:
 
     def _render(key: str, name: str) -> str:
         info = scenes.get(key) or {}
+        # Main CLI status observes the user chain. If Gateway exposes API-A
+        # lanes, read user_chat so autonomous self-learning subagents in
+        # supervisor_task do not leak into the user's status surface.
+        if key == "agent":
+            lane = ((info.get("lanes") or {}).get("user_chat")) if isinstance(info, dict) else None
+            if isinstance(lane, dict) and lane:
+                info = lane
         if not info.get("reachable"):
             return f"{name}: ⛔"
         scene = str(info.get("scene") or "idle")
