@@ -2,8 +2,8 @@
 VoidCube Live Dashboard — supervisor execution visibility and activity signals.
 
 Fetches real-time data from Gateway (:6000) and Supervisor (:6002)
-to surface what is happening and how the supervisor currently evaluates
-autonomous-chain activity guards.
+to surface what is happening and how the supervisor currently observes
+the autonomous chain.
 """
 
 from __future__ import annotations
@@ -88,20 +88,77 @@ def fetch_supervisor_state() -> Dict[str, Any]:
     return _get_json(f"{SUPERVISOR_URL}/ui/state") or {}
 
 
-def fetch_supervisor_tasks(status_filter: str = "") -> Dict[str, Any]:
-    """Return the supervisor governance task list."""
-    url = f"{SUPERVISOR_URL}/self-evolution/tasks"
-    if status_filter:
-        url += f"?status={status_filter}"
-    return _get_json(url) or {}
+def _observation_queue_groups(state: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
+    observation = dict(state.get("autonomous_observation") or {})
+    queue = dict(observation.get("queue") or {})
+    sections = list(queue.get("sections") or [])
+    result: Dict[str, List[Dict[str, Any]]] = {}
+    for group in sections:
+        if not isinstance(group, dict):
+            continue
+        key = str(group.get("key") or "").strip()
+        if not key:
+            continue
+        result[key] = [
+            dict(item)
+            for item in list(group.get("items") or [])
+            if isinstance(item, dict)
+        ]
+    return result
 
 
-def fetch_activity_guards(task_family: str = "general_self_evolution") -> Dict[str, Any]:
-    """Fetch supervisor runtime activity guards for a task family."""
-    return _post_json(
-        f"{SUPERVISOR_URL}/runtime/activity-guards/evaluate",
-        {"task_family": task_family},
-    ) or {}
+def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
+    observation = dict(state.get("autonomous_observation") or {})
+    counts = dict(observation.get("counts") or {})
+    board = dict(observation.get("board") or {})
+    queue = dict(observation.get("queue") or {})
+    current_cards = [
+        dict(item)
+        for item in list(board.get("current_cards") or [])
+        if isinstance(item, dict)
+    ]
+    groups = _observation_queue_groups(state)
+
+    if not current_cards and not groups:
+        return {}
+
+    def _group_label(key: str) -> str:
+        mapping = {
+            "api_b_backlog": "API-B",
+            "api_a_ready": "API-A",
+            "api_b_candidates": "候选",
+            "mem_recent": "Mem",
+        }
+        return mapping.get(key, key)
+
+    queue_preview: List[Dict[str, Any]] = []
+    for key in ("api_b_backlog", "api_a_ready", "api_b_candidates", "mem_recent"):
+        for item in groups.get(key, [])[:3]:
+            queue_preview.append(
+                {
+                    "title": str(item.get("title") or "?"),
+                    "status": str(item.get("display_status") or item.get("status") or "?"),
+                    "group": _group_label(key),
+                }
+            )
+
+    return {
+        "api_b_backlog": int(counts.get("api_b_backlog") or len(groups.get("api_b_backlog", []))),
+        "api_a_ready": int(counts.get("api_a_ready") or len(groups.get("api_a_ready", []))),
+        "candidates": int(counts.get("candidates") or len(groups.get("api_b_candidates", []))),
+        "writebacks": int(counts.get("writebacks") or len(groups.get("mem_recent", []))),
+        "current_cards": [
+            {
+                "title": str(item.get("title") or "?"),
+                "status": str(item.get("display_status") or item.get("status") or "?"),
+                "role": str(item.get("observation_role") or ""),
+            }
+            for item in current_cards[:4]
+        ],
+        "queue_preview": queue_preview[:8],
+        "headline": str(board.get("headline") or "自主链路闭环观测"),
+        "queue_headline": str(queue.get("headline") or "自主链路片段观察"),
+    }
 
 
 # ── Time calculations ──────────────────────────────────────────────────
@@ -145,8 +202,12 @@ def build_dashboard() -> Dict[str, Any]:
     services = fetch_gateway_services()
     activity = fetch_gateway_activity()
     state = fetch_supervisor_state()
-    guards = fetch_activity_guards("general_self_evolution")
-    tasks_data = fetch_supervisor_tasks()
+    observation = dict(state.get("autonomous_observation") or {})
+    runtime = dict(observation.get("runtime") or {})
+    guards = dict(runtime.get("activity_guards") or {})
+    decisions = dict(runtime.get("eligibility") or guards.get("decisions") or {})
+    thresholds = dict(guards.get("thresholds") or {})
+    chain_snapshot = _build_autonomous_chain_snapshot(state)
 
     # ── Services ────────────────────────────────────────────────────
     registered = services.get("services", {})
@@ -175,16 +236,10 @@ def build_dashboard() -> Dict[str, Any]:
     se_plan_idle_s = idle_since(last_se_plan)
     se_exec_idle_s = idle_since(last_se_exec)
 
-    # ── Idle window from supervisor ─────────────────────────────────
-    checks = guards.get("checks", {})
-    idle_secs = guards.get("idle_seconds", {})
-    thresholds = guards.get("thresholds", {})
-    decisions = guards.get("decisions", {})
-
+    # ── Activity guard read model from supervisor state ─────────────
     user_threshold = int(thresholds.get("user_idle_seconds", 600))
     memory_threshold = int(thresholds.get("memory_idle_seconds", 600))
     workflow_threshold = int(thresholds.get("workflow_idle_seconds", 600))
-    user_chain_signal = guards.get("user_chain_signal", {})
     # ── Countdowns ──────────────────────────────────────────────────
     # When will each activity signal next cross its configured threshold?
     countdowns: Dict[str, Any] = {}
@@ -221,10 +276,33 @@ def build_dashboard() -> Dict[str, Any]:
     can_execute = bool(decisions.get("eligible_for_execution", False))
     countdowns["can_execute"] = {"met": can_execute}
 
-    # ── Tasks ───────────────────────────────────────────────────────
-    tasks = tasks_data.get("tasks", [])
-    approved = [t for t in tasks if t.get("status") == "approved"]
-    pending = [t for t in tasks if t.get("status") in ("planned", "deferred", "paused")]
+    # ── Autonomous chain board ──────────────────────────────────────
+    chain_view: Dict[str, Any]
+    if chain_snapshot:
+        chain_view = {
+            "mode": "autonomous_chain_board",
+            "headline": chain_snapshot.get("headline", "自主链路闭环观测"),
+            "api_b_backlog": chain_snapshot.get("api_b_backlog", 0),
+            "api_a_ready": chain_snapshot.get("api_a_ready", 0),
+            "candidates": chain_snapshot.get("candidates", 0),
+            "writebacks": chain_snapshot.get("writebacks", 0),
+            "current_cards": list(chain_snapshot.get("current_cards") or []),
+            "queue_preview": list(chain_snapshot.get("queue_preview") or []),
+            "queue_headline": chain_snapshot.get("queue_headline", "自主链路片段观察"),
+        }
+    else:
+        chain_view = {
+            "mode": "observation_unavailable",
+            "headline": "自主链路观测暂不可用",
+            "summary": "Supervisor 尚未提供 autonomous_observation.board 读模型",
+            "api_b_backlog": 0,
+            "api_a_ready": 0,
+            "candidates": 0,
+            "writebacks": 0,
+            "current_cards": [],
+            "queue_preview": [],
+            "queue_headline": "自主链路片段观察",
+        }
 
     # ── Next review cycle estimate ──────────────────────────────────
     review_interval = 300  # default 5 min
@@ -250,36 +328,7 @@ def build_dashboard() -> Dict[str, Any]:
             "supervisor": bool(supervisor_info),
             "memory": bool(memory_info),
         },
-        "tasks": {
-            "approved": len(approved),
-            "pending": len(pending),
-            "approved_list": [
-                {
-                    "title": t.get("title", "?"),
-                    "status": t.get("status", "?"),
-                    "task_type": t.get("task_type", "?"),
-                    "task_id": t.get("task_id", "?")[:8],
-                }
-                for t in approved[:5]
-            ],
-            "pending_summary": [
-                {
-                    "title": t.get("title", "?"),
-                    "status": t.get("status", "?"),
-                }
-                for t in pending[:5]
-            ],
-        },
-        "activity_guards": {
-            "checks": checks,
-            "idle_seconds": idle_secs,
-            "user_chain_signal": user_chain_signal,
-            "thresholds": {
-                "user_chain_quiet_s": user_threshold,
-                "memory_idle_s": memory_threshold,
-                "workflow_idle_s": workflow_threshold,
-            },
-        },
+        "chain": chain_view,
         "countdowns": countdowns,
         "eligibility": {
             "can_execute": can_execute,
@@ -390,7 +439,7 @@ def print_dashboard() -> None:
     db = build_dashboard()
 
     svc = db["services"]
-    tasks = db["tasks"]
+    chain = db["chain"]
     cds = db["countdowns"]
     elig = db["eligibility"]
     policy = db["autonomous_chain_policy"]
@@ -409,17 +458,32 @@ def print_dashboard() -> None:
     mem_ok = "✓" if svc["memory"] else "✗"
     print(f"  ║  Services   Gateway ✓  Super {sup_ok}  Memory {mem_ok}  Agents {agent_n:<3}         ║")
 
-    # ── Governance tasks ────────────────────────────────────────────
+    # ── Autonomous chain board ─────────────────────────────────────
     print(f"  ╠══════════════════════════════════════════════════════════╣")
-    print(f"  ║  Tasks      {tasks['approved']} approved  ·  {tasks['pending']} pending                            ║")
-
-    for t in tasks["approved_list"]:
-        title = t["title"][:42]
-        print(f"  ║  ✓ {title:<42s}   ║")
-    for t in tasks["pending_summary"][:3]:
-        status_icon = {"planned": "○", "deferred": "⏸", "paused": "⏸"}.get(t["status"], "•")
-        title = t["title"][:40]
-        print(f"  ║  {status_icon} {title:<42s}   ║")
+    if chain.get("mode") == "autonomous_chain_board":
+        print(
+            f"  ║  {chain.get('headline', '自主链路闭环观测')[:46]:<46s}          ║"
+        )
+        print(
+            f"  ║  API-B {chain.get('api_b_backlog', 0)}  ·  API-A {chain.get('api_a_ready', 0)}  ·  "
+            f"候选 {chain.get('candidates', 0)}  ·  写回 {chain.get('writebacks', 0)}              ║"
+        )
+        for item in list(chain.get("current_cards") or [])[:4]:
+            title = str(item.get("title") or "?")[:28]
+            status = str(item.get("status") or "?")[:12]
+            print(f"  ║  ↻ {title:<28s} {status:<12s}                          ║")
+        for item in list(chain.get("queue_preview") or [])[:4]:
+            group = str(item.get("group") or "?")[:6]
+            title = str(item.get("title") or "?")[:28]
+            status = str(item.get("status") or "?")[:10]
+            print(f"  ║  • {group:<6s} {title:<28s} {status:<10s}                    ║")
+    else:
+        print(
+            f"  ║  {chain.get('headline', '自主链路观测暂不可用')[:46]:<46s}          ║"
+        )
+        print(
+            f"  ║  {chain.get('summary', '等待 Supervisor 观测板数据')[:54]:<54s}  ║"
+        )
 
     # ── Runtime activity signals ────────────────────────────────────
     print(f"  ╠══════════════════════════════════════════════════════════╣")

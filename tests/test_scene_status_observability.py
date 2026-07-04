@@ -171,24 +171,28 @@ def test_build_dashboard_uses_supervisor_execution_eligibility_without_local_win
             "last_self_evolution_execute_at": None,
         },
     )
-    monkeypatch.setattr(dashboard, "fetch_supervisor_state", lambda: {})
-    monkeypatch.setattr(dashboard, "fetch_supervisor_tasks", lambda status_filter="": {"tasks": []})
     monkeypatch.setattr(
         dashboard,
-        "fetch_activity_guards",
-        lambda task_family="general_self_evolution": {
-            "checks": {},
-            "user_chain_signal": {"scope": "soft_signal_only", "is_quiet": False},
-            "idle_seconds": {},
-            "thresholds": {
-                "user_idle_seconds": 600,
-                "memory_idle_seconds": 600,
-                "workflow_idle_seconds": 600,
-            },
-            "decisions": {
-                "eligible_for_planning": True,
-                "eligible_for_execution": True,
-            },
+        "fetch_supervisor_state",
+        lambda: {
+            "autonomous_observation": {
+                "runtime": {
+                    "activity_guards": {
+                        "checks": {},
+                        "idle_seconds": {},
+                        "thresholds": {
+                            "user_idle_seconds": 600,
+                            "memory_idle_seconds": 600,
+                            "workflow_idle_seconds": 600,
+                        },
+                        "user_chain_signal": {"scope": "soft_signal_only", "is_quiet": False},
+                    },
+                    "eligibility": {
+                        "eligible_for_planning": True,
+                        "eligible_for_execution": True,
+                    },
+                }
+            }
         },
     )
 
@@ -197,3 +201,97 @@ def test_build_dashboard_uses_supervisor_execution_eligibility_without_local_win
     assert built["eligibility"]["can_execute"] is True
     assert built["countdowns"]["autonomous_chain"]["display"] == "continuous"
     assert built["autonomous_chain_policy"]["label"] == "continuous"
+    assert built["chain"]["mode"] == "observation_unavailable"
+
+
+def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeypatch):
+    monkeypatch.setattr(dashboard, "fetch_gateway_services", lambda: {"services": {}})
+    monkeypatch.setattr(
+        dashboard,
+        "fetch_gateway_activity",
+        lambda: {
+            "last_user_request_at": None,
+            "last_agent_work_at": None,
+            "last_memory_task_at": None,
+            "last_self_evolution_plan_at": None,
+            "last_self_evolution_execute_at": None,
+        },
+    )
+    monkeypatch.setattr(
+        dashboard,
+        "fetch_supervisor_state",
+        lambda: {
+            "autonomous_observation": {
+                "counts": {
+                    "api_b_backlog": 1,
+                    "api_a_ready": 2,
+                    "candidates": 3,
+                    "writebacks": 1,
+                },
+                "board": {
+                    "headline": "自主链路闭环观测",
+                    "current_cards": [
+                        {
+                            "title": "API-B judgement",
+                            "display_status": "当前在途",
+                            "observation_role": "api_b_judgement",
+                        },
+                        {
+                            "title": "API-A execution",
+                            "display_status": "已观察到",
+                            "observation_role": "api_a_execution",
+                        },
+                    ],
+                },
+                "queue": {
+                    "headline": "自主链路片段观察",
+                    "sections": [
+                        {
+                            "key": "api_b_backlog",
+                            "items": [{"title": "Governance backlog task", "display_status": "待审核"}],
+                        },
+                        {
+                            "key": "api_a_ready",
+                            "items": [{"title": "Autonomous ready task", "display_status": "待执行"}],
+                        },
+                        {
+                            "key": "api_b_candidates",
+                            "items": [{"title": "Candidate decision", "display_status": "API-B 候选判断"}],
+                        },
+                        {
+                            "key": "mem_recent",
+                            "items": [{"title": "Mem writeback", "display_status": "已观察到"}],
+                        },
+                    ],
+                },
+                "runtime": {
+                    "activity_guards": {
+                        "checks": {},
+                        "idle_seconds": {},
+                        "thresholds": {
+                            "user_idle_seconds": 600,
+                            "memory_idle_seconds": 600,
+                            "workflow_idle_seconds": 600,
+                        },
+                        "user_chain_signal": {"scope": "soft_signal_only", "is_quiet": True},
+                    },
+                    "eligibility": {
+                        "eligible_for_planning": True,
+                        "eligible_for_execution": False,
+                    },
+                },
+            }
+        },
+    )
+
+    built = dashboard.build_dashboard()
+
+    assert built["chain"]["mode"] == "autonomous_chain_board"
+    assert built["chain"]["headline"] == "自主链路闭环观测"
+    assert built["chain"]["api_b_backlog"] == 1
+    assert built["chain"]["api_a_ready"] == 2
+    assert built["chain"]["candidates"] == 3
+    assert built["chain"]["writebacks"] == 1
+    assert built["chain"]["queue_headline"] == "自主链路片段观察"
+    assert built["chain"]["current_cards"][0]["title"] == "API-B judgement"
+    assert built["chain"]["queue_preview"][0]["group"] == "API-B"

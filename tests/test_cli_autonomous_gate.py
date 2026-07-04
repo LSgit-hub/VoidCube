@@ -898,11 +898,27 @@ def test_autonomous_panel_shows_no_api_a_executable_task_reason(monkeypatch):
     monkeypatch.setattr(VoidcubeCLI, "_get_tui_terminal_width", staticmethod(lambda default=(80, 24): 80))
     cli._fetch_supervisor_status = lambda: {
         "timeline": [],
-        "tasks": [
-            {"task_id": "deferred-1", "title": "Deferred task", "status": "deferred", "task_family": "self_learning"},
-        ],
-        "active_executions": [],
         "autonomous_observation": {
+            "queue": {
+                "sections": [
+                    {
+                        "key": "api_a_ready",
+                        "items": [
+                            {"task_id": "deferred-1", "title": "Deferred task", "status": "deferred", "lane": "agent"}
+                        ],
+                    }
+                ]
+            },
+            "board": {
+                "current_cards": [
+                    {
+                        "title": "API-B judgement",
+                        "status": "active",
+                        "observation_role": "api_b_judgement",
+                        "summary": "API-B is still judging the next step.",
+                    }
+                ],
+            },
             "api_a": {
                 "pending": [
                     {"task_id": "deferred-1", "title": "Deferred task", "status": "deferred", "lane": "agent"}
@@ -924,6 +940,79 @@ def test_autonomous_panel_shows_no_api_a_executable_task_reason(monkeypatch):
 
     assert "任务: 当前没有被认领的自主任务" in rendered
     assert "当前没有已批准的 API-A 可执行任务" in rendered
+
+
+def test_autonomous_panel_prefers_board_current_task_when_present(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._autonomous_gate_active = True
+    cli._agent_running = False
+    cli._spinner_text = ""
+    cli.session_id = "cli-session-local"
+    cli._current_autonomous_task = None
+    cli._current_autonomous_task_started_at = 0.0
+    cli._last_agent_turn_result = None
+    cli._autonomous_execution_events = []
+    cli._autonomous_last_supervisor_event_key = ""
+
+    monkeypatch.setattr(VoidcubeCLI, "_get_tui_terminal_width", staticmethod(lambda default=(80, 24): 80))
+    cli._fetch_supervisor_status = lambda: {
+        "timeline": [],
+        "autonomous_observation": {
+            "queue": {
+                "sections": [
+                    {
+                        "key": "api_a_ready",
+                        "items": [
+                            {
+                                "task_id": "learn-board-1",
+                                "title": "Board approved task",
+                                "status": "approved",
+                                "task_family": "self_learning",
+                                "lane": "agent",
+                            }
+                        ],
+                    }
+                ]
+            },
+            "board": {
+                "current_cards": [
+                    {
+                        "task_id": "learn-board-1",
+                        "title": "Board approved task",
+                        "status": "ready",
+                        "display_status": "已观察到",
+                        "observation_role": "api_a_execution",
+                    }
+                ],
+            },
+            "api_a": {
+                "current": {
+                    "task_id": "learn-board-1",
+                    "title": "Board approved task",
+                    "status": "approved",
+                    "task_family": "self_learning",
+                    "lane": "agent",
+                },
+                "pending": [],
+            },
+        },
+        "tasks": [],
+    }
+    cli._fetch_autonomous_gateway_status = lambda: {
+        "active_cli_executor": {
+            "session_id": "cli-session-local",
+            "lease_status": "healthy",
+            "is_stale": False,
+            "idle_seconds": 2,
+            "scene": "idle",
+        }
+    }
+
+    rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
+
+    assert "状态: 已放行待认领" in rendered
+    assert "Board approved task" in rendered
+    assert "等待 API-A 自主执行面认领" in rendered
 
 
 def test_autonomous_panel_shows_approved_task_waiting_for_claim(monkeypatch):
@@ -1497,21 +1586,35 @@ def test_cli_formats_supervisor_status_snapshot():
         {
             "scene": "planning",
             "title": "义子正在整理任务",
-            "metrics": {
-                "by_path": {"learning": 2, "maintenance": 1, "evolution": 3},
-                "running_count": 1,
-                "governance": {
-                    "direct_lm_actions": 2,
-                    "shadow_recommendations": 1,
-                    "priority_updates": 1,
+            "autonomous_observation": {
+                "metrics": {
+                    "by_path": {"learning": 2, "maintenance": 1, "evolution": 3},
+                    "running_count": 1,
+                    "governance": {
+                        "direct_lm_actions": 2,
+                        "shadow_recommendations": 1,
+                        "priority_updates": 1,
+                    },
                 },
-            },
-            "active_executions": [
-                {
-                    "title": "Improve shell body",
-                    "execution_kind": "body_improvement",
+                "board": {
+                    "primary_focus": {
+                        "title": "API-B judgement",
+                        "status": "当前在途",
+                    },
+                    "current_cards": [
+                        {
+                            "title": "Review self-evolution governance hygiene",
+                            "display_status": "当前在途",
+                            "observation_role": "api_b_judgement",
+                        },
+                        {
+                            "title": "Improve shell body",
+                            "display_status": "等待写回",
+                            "observation_role": "mem_writeback",
+                        }
+                    ],
                 }
-            ],
+            },
             "timeline": [
                 {
                     "event_type": "tasks_reviewed",
@@ -1524,6 +1627,7 @@ def test_cli_formats_supervisor_status_snapshot():
     assert any("Scene: planning" in line for line in lines)
     assert any("learning=2" in line and "evolution=3" in line for line in lines)
     assert any("priority_updates=1" in line for line in lines)
+    assert any("Autonomous Focus: Review self-evolution governance hygiene (当前在途)" in line for line in lines)
     assert any("Improve shell body" in line for line in lines)
     assert any("tasks_reviewed" in line for line in lines)
 

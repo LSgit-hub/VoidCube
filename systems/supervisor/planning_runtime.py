@@ -4812,7 +4812,7 @@ class PlanningRuntimeMixin:
     def _occupied_scheduled_for_tokens(self) -> set[str]:
         terminal = {"completed", "failed", "cancelled"}
         occupied: set[str] = set()
-        for task in self._self_evolution_queue.list_tasks():
+        for task in self._self_evolution_queue.list_governance_backlog_tasks():
             if str(task.status or "").strip().lower() in terminal:
                 continue
             token = self._task_schedule_token(task)
@@ -4924,7 +4924,10 @@ class PlanningRuntimeMixin:
         terminal = {"completed", "failed", "cancelled"}
         excluded = exclude_task_ids or set()
         conflicts: Dict[str, SelfEvolutionTask] = {}
-        for task in sorted(self._self_evolution_queue.list_tasks(), key=self._task_sort_key):
+        for task in sorted(
+            self._self_evolution_queue.list_governance_backlog_tasks(),
+            key=self._task_sort_key,
+        ):
             if task.task_id in excluded:
                 continue
             if str(task.status or "").strip().lower() in terminal:
@@ -5034,7 +5037,7 @@ class PlanningRuntimeMixin:
 
     def _completed_learning_task_summaries(self, limit: int = 8) -> list[Dict[str, Any]]:
         rows: list[tuple[str, Dict[str, Any]]] = []
-        for task in self._self_evolution_queue.list_tasks(status="completed"):
+        for task in self._self_evolution_queue.list_writeback_history(status="completed"):
             if self._task_runtime_family(task) != "self_learning":
                 continue
             metadata = dict(task.metadata or {})
@@ -5059,9 +5062,9 @@ class PlanningRuntimeMixin:
         rows.sort(key=lambda item: item[0], reverse=True)
         return [payload for _, payload in rows[: max(0, limit)]]
 
-    def _drive_queue_task_summaries(self, limit: int = 20) -> list[Dict[str, Any]]:
+    def _governance_backlog_task_summaries(self, limit: int = 20) -> list[Dict[str, Any]]:
         rows: list[tuple[str, Dict[str, Any]]] = []
-        for task in self._self_evolution_queue.list_tasks():
+        for task in self._self_evolution_queue.list_governance_backlog_tasks():
             rows.append(
                 (
                     str(getattr(task, "updated_at", None) or getattr(task, "created_at", None) or ""),
@@ -5456,7 +5459,7 @@ class PlanningRuntimeMixin:
         """
         terminal = {"completed", "failed", "cancelled"}
         keys: set[str] = set()
-        for task in self._self_evolution_queue.list_tasks():
+        for task in self._self_evolution_queue.list_governance_backlog_tasks():
             if task.status in terminal:
                 continue
             key = task.metadata.get("endogenous_drive_key")
@@ -5477,7 +5480,7 @@ class PlanningRuntimeMixin:
         persist_evaluation = bool(request.get("persist_evaluation", True))
         activity_guards = await self.evaluate_activity_guards(activity_guard_request)
         persisted_self_regulation = self._load_endogenous_self_regulation()
-        activity_guards["governance_backlog_tasks"] = self._drive_queue_task_summaries(limit=24)
+        activity_guards["governance_backlog_tasks"] = self._governance_backlog_task_summaries(limit=24)
         activity_guards["endogenous_drive_policy"] = {
             "learning_topic_cooldown_hours": int(
                 getattr(
@@ -6201,7 +6204,7 @@ class PlanningRuntimeMixin:
         body_task: Optional[SelfEvolutionTask] = None,
     ) -> bool:
         queued_self_learning = False
-        for task in self._self_evolution_queue.list_tasks():
+        for task in self._self_evolution_queue.list_governance_backlog_tasks():
             if self._task_governance_type(task) != "self_learning":
                 continue
             if task.status not in {"planned", "approved", "running"}:
@@ -6273,7 +6276,7 @@ class PlanningRuntimeMixin:
 
     async def _recover_orphaned_agent_pull_tasks(self) -> int:
         recovered = 0
-        for task in self._self_evolution_queue.list_tasks(status="running"):
+        for task in self._self_evolution_queue.list_execution_dispatch_tasks(status="running"):
             if not self._is_agent_pull_task(task):
                 continue
             metadata = dict(task.metadata or {})
@@ -6737,7 +6740,10 @@ class PlanningRuntimeMixin:
             normalized_status = self._normalize_self_evolution_decision(status)
             if normalized_status is None or normalized_status == "auto":
                 raise HTTPException(status_code=400, detail=f"Unsupported task status filter: {status}")
-        tasks = self._self_evolution_queue.list_tasks(status=normalized_status)
+        tasks = self._self_evolution_queue.list_chain_projection_tasks(
+            status=normalized_status,
+            include_cancelled=True,
+        )
         if task_type:
             tasks = [t for t in tasks if self._task_governance_type(t) == str(task_type).strip()]
         if execution_kind:
@@ -6771,6 +6777,8 @@ class PlanningRuntimeMixin:
 
     async def clear_self_evolution_runtime(self, request: dict | None = None):
         del request
+        # Administrative clear needs the entire storage snapshot, including records
+        # that are no longer part of the autonomous-chain projections.
         tasks = list(self._self_evolution_queue.list_tasks())
         cleared_counts: Dict[str, int] = {}
         for task in tasks:
@@ -7040,7 +7048,7 @@ class PlanningRuntimeMixin:
         )
 
         candidate_tasks: list[SelfEvolutionTask] = []
-        for task in self._self_evolution_queue.list_tasks():
+        for task in self._self_evolution_queue.list_governance_backlog_tasks():
             if task.status not in normalized_statuses or task.status == "cancelled":
                 continue
             candidate_tasks.append(task)
@@ -7561,9 +7569,7 @@ class PlanningRuntimeMixin:
         # ── Cleanup: auto-fail tasks stuck in "running" > 30 min ──
         stale_running = 0
         now = datetime.now(timezone.utc)
-        for task in self._self_evolution_queue.list_tasks():
-            if task.status != "running":
-                continue
+        for task in self._self_evolution_queue.list_execution_dispatch_tasks(status="running"):
             started = task.metadata.get("executed_at") or task.metadata.get("execution_started_at")
             if started:
                 try:
@@ -7633,7 +7639,7 @@ class PlanningRuntimeMixin:
         # failure_count < max_retries).  Tasks in running state or
         # permanently failed are skipped here.
         dispatched_ids = {d["task_id"] for d in dispatched}
-        for task in self._self_evolution_queue.list_tasks(status="approved"):
+        for task in self._self_evolution_queue.list_execution_dispatch_tasks(status="approved"):
             if task.task_id in dispatched_ids:
                 continue
             if task.task_id in dispatch_considered_ids:
@@ -7772,7 +7778,7 @@ class PlanningRuntimeMixin:
         freshness_sum = 0.0
         now = datetime.now(timezone.utc)
 
-        for task in self._self_evolution_queue.list_tasks(status="completed"):
+        for task in self._self_evolution_queue.list_writeback_history(status="completed"):
             if self._task_runtime_family(task) != "self_learning":
                 continue
             completed_count += 1

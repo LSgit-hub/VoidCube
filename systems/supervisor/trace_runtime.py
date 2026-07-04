@@ -74,7 +74,9 @@ class TraceRuntimeMixin:
         trace_id: Optional[str],
     ) -> List[Dict[str, Any]]:
         records: List[Dict[str, Any]] = []
-        for task in self._self_evolution_queue.list_tasks():
+        for task in self._self_evolution_queue.list_chain_projection_tasks(
+            include_cancelled=True,
+        ):
             if trace_id and task.trace_id != trace_id:
                 continue
             serialized = self._serialize_self_evolution_task(task)

@@ -2202,6 +2202,264 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
   color: var(--text-secondary);
 }
 
+.board-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  padding: 0 2px;
+}
+.observation-stack {
+  display: grid;
+  gap: 8px;
+}
+.current-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+@media (max-width: 720px) {
+  .current-card-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.chain-hero {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(226,176,74,.18);
+  background: linear-gradient(160deg, rgba(48,35,27,.96) 0%, rgba(33,24,19,.94) 100%);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
+}
+.chain-hero-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.chain-hero-main {
+  display: grid;
+  gap: 5px;
+  min-width: min(320px, 100%);
+}
+.chain-hero-label {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.chain-hero-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+.chain-hero-summary {
+  font-size: 10.5px;
+  color: rgba(244,228,188,.78);
+  line-height: 1.5;
+}
+.chain-hero-focus {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+}
+.chain-hero-focus-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.chain-hero-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chain-focus-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 600;
+  background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.08);
+  color: var(--text-secondary);
+}
+.chain-focus-pill.accent {
+  background: rgba(226,176,74,.12);
+  border-color: rgba(226,176,74,.22);
+  color: var(--gold);
+}
+.chain-focus-pill.good {
+  background: rgba(111,198,160,.12);
+  border-color: rgba(111,198,160,.22);
+  color: var(--mint);
+}
+.chain-focus-pill.info {
+  background: rgba(106,158,232,.12);
+  border-color: rgba(106,158,232,.22);
+  color: var(--accent-blue);
+}
+.chain-focus-pill.warn {
+  background: rgba(167,138,212,.12);
+  border-color: rgba(167,138,212,.22);
+  color: var(--plum);
+}
+.chain-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+@media (max-width: 720px) {
+  .chain-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.chain-metric {
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background: rgba(255,255,255,.03);
+  border: 1px solid rgba(255,255,255,.06);
+}
+.chain-metric.api-b { border-top: 2px solid var(--gold); }
+.chain-metric.api-a { border-top: 2px solid var(--mint); }
+.chain-metric.candidate { border-top: 2px solid var(--plum); }
+.chain-metric.mem { border-top: 2px solid var(--coral); }
+.chain-metric-label {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+.chain-metric-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.chain-metric-note {
+  font-size: 9.5px;
+  color: rgba(244,228,188,.62);
+}
+.chain-watch-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+@media (max-width: 720px) {
+  .chain-watch-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.watch-band {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 11px;
+  background: rgba(255,255,255,.025);
+  border: 1px solid rgba(255,255,255,.06);
+}
+.watch-band-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.watch-band-title-wrap {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.watch-band-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.watch-band-subline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.watch-band-owner,
+.watch-band-stage {
+  font-size: 9px;
+  color: var(--text-muted);
+}
+.watch-band-summary {
+  font-size: 9.5px;
+  line-height: 1.45;
+  color: rgba(244,228,188,.72);
+}
+.watch-band-latest {
+  font-size: 9px;
+  line-height: 1.4;
+  color: rgba(226,176,74,.86);
+}
+.watch-band-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 9px;
+  color: var(--text-muted);
+  background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.07);
+}
+.watch-band-body {
+  display: grid;
+  gap: 6px;
+}
+.watch-band-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.watch-band-footnote {
+  font-size: 9px;
+  color: var(--text-muted);
+}
+.trace-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.trace-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(121,163,255,.25);
+  background: rgba(121,163,255,.1);
+  color: var(--text-primary);
+  font-size: 9px;
+  cursor: pointer;
+}
+.trace-chip.active {
+  border-color: rgba(226,176,74,.38);
+  background: rgba(226,176,74,.18);
+  color: var(--accent-yellow);
+}
+.watch-inline-note {
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 1.45;
+  padding: 0 2px;
+}
+
 /* score bar */
 .game-score-bar {
   height: 5px; border-radius: 3px;
@@ -2765,13 +3023,13 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
     <!-- 面板层(在 Dock 上方滑出) -->
     <div class="dock-panels" id="dockPanels">
 
-      <!-- 📋 自主链路观测 -->
-      <div class="dock-panel" id="panelTasks">
+      <!-- 🚦 自主链路总览 -->
+      <div class="dock-panel" id="panelChain">
         <div class="panel-header">
-          <div class="panel-title"><span class="pt-icon">📋</span>自主链路观测</div>
-          <button class="panel-close" data-panel="tasks">×</button>
+          <div class="panel-title"><span class="pt-icon">🚦</span>自主链路总览</div>
+          <button class="panel-close" data-panel="chain">×</button>
         </div>
-        <div class="panel-body" id="panelTasksBody">
+        <div class="panel-body" id="panelChainBody">
         </div>
       </div>
 
@@ -2832,8 +3090,8 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
         <div class="dcs-hp-bar"><div class="dcs-hp-fill good" id="dcsHpFill" style="width:100%"></div></div>
       </div>
 
-      <button class="dock-btn" data-panel="tasks" title="自主链路观测">
-        <span class="db-icon">📋</span>
+      <button class="dock-btn" data-panel="chain" title="自主链路总览">
+        <span class="db-icon">🚦</span>
         <span class="db-label">链路</span>
       </button>
       <span class="dock-sep"></span>
@@ -2926,7 +3184,7 @@ const els = {
   dcsStatus: $('#dcsStatus'),
   dcsHpFill: $('#dcsHpFill'),
   /* panel bodies */
-  panelTasksBody: $('#panelTasksBody'),
+  panelChainBody: $('#panelChainBody'),
   panelLMInputBody: $('#panelLMInputBody'),
   panelCognitionBody: $('#panelCognitionBody'),
   panelObservationBody: $('#panelObservationBody'),
@@ -2962,6 +3220,12 @@ function taskLane(t) {
   );
 }
 function typeLabel(t) {
+  const observationRole = String(t.observation_role || '').trim();
+  if (observationRole === 'mem_writeback') return 'Mem 写回';
+  if (observationRole === 'api_b_reread') return '再次判断';
+  if (observationRole === 'api_b_judgement') return 'API-B 判断';
+  if (observationRole === 'api_a_execution') return 'API-A 执行';
+  if (observationRole === 'candidate') return '候选判断';
   const identity = t.task_identity || {};
   const displayKind = String(identity.display_kind || t.execution_kind || '').trim();
   const governance = String(t.governance_task_type || '').trim();
@@ -2996,7 +3260,23 @@ function governanceHint(t) {
   return '';
 }
 function statusLabel(s) {
-  const map = { planned:'待审核', approved:'待执行', running:'执行中', deferred:'已推迟', paused:'已暂停', completed:'已完成', failed:'失败', cancelled:'已取消', awaiting_review:'待审查', retry:'重试' };
+  const map = {
+    planned:'待审核',
+    approved:'待执行',
+    running:'执行中',
+    active:'当前在途',
+    ready:'已观察到',
+    idle:'等待中',
+    queued:'等待中',
+    candidate:'候选判断',
+    deferred:'已推迟',
+    paused:'已暂停',
+    completed:'已完成',
+    failed:'失败',
+    cancelled:'已取消',
+    awaiting_review:'待审查',
+    retry:'重试',
+  };
   return map[s] || s || '待定';
 }
 function rarityClass(task) {
@@ -3064,7 +3344,7 @@ function openPanel(name) {
   showDock();
   // 立即渲染该面板
   if (lastState) {
-    if (name === 'tasks') renderTasksPanel(lastState);
+    if (name === 'chain') renderChainPanel(lastState);
     if (name === 'lminput') renderLMInputPanel(lastState);
     if (name === 'cognition') renderCognitionPanel(lastState);
     if (name === 'observation') renderObservationPanel(lastState);
@@ -3127,6 +3407,7 @@ document.addEventListener('click', e => {
    drill-down 详情抽屉
    ═══════════════════════════════════════════ */
 let drawerOpen = null;  // 当前抽屉类型: 'autonomous' | 'provenance' | 'health' | null
+let drawerContext = {};
 
 const DRAWER_META = {
   autonomous: { icon: '🚦', title: '自主链路观测总览' },
@@ -3134,9 +3415,10 @@ const DRAWER_META = {
   health:     { icon: '💗', title: '身体 / 记忆健康度' },
 };
 
-function openDrawer(type) {
+function openDrawer(type, context) {
   if (!els.drawer || !DRAWER_META[type]) return;
   drawerOpen = type;
+  drawerContext = context || {};
   const meta = DRAWER_META[type];
   if (els.drawerTitle) els.drawerTitle.innerHTML = '<span>' + meta.icon + '</span>' + meta.title;
   renderDrawer();
@@ -3145,6 +3427,7 @@ function openDrawer(type) {
 
 function closeDrawer() {
   drawerOpen = null;
+  drawerContext = {};
   if (els.drawer) els.drawer.classList.remove('open');
 }
 
@@ -3175,7 +3458,16 @@ document.addEventListener('click', e => {
   const trigger = e.target.closest('[data-drill]');
   if (!trigger) return;
   e.stopPropagation();
-  openDrawer(trigger.dataset.drill);
+  const context = {};
+  if (trigger.dataset.chainGroup) context.chainGroup = String(trigger.dataset.chainGroup);
+  if (trigger.dataset.chainTrace) context.chainTrace = String(trigger.dataset.chainTrace);
+  if (trigger.dataset.chainTraceExpanded) {
+    context.chainTraceExpanded = String(trigger.dataset.chainTraceExpanded) === 'true';
+  }
+  if (trigger.dataset.chainTraceSource) {
+    context.chainTraceSource = String(trigger.dataset.chainTraceSource);
+  }
+  openDrawer(trigger.dataset.drill, context);
 });
 
 function drillButton(type, label) {
@@ -3195,6 +3487,16 @@ function autonomousLoopStatusLabel(status) {
     idle: '等待中',
   };
   return map[String(status || '').trim()] || '等待中';
+}
+
+function observationStateBadgeClass(status) {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (normalized === 'active' || normalized === 'running') return 'running';
+  if (normalized === 'ready' || normalized === 'approved') return 'approved';
+  if (normalized === 'completed') return 'completed';
+  if (normalized === 'failed') return 'failed';
+  if (normalized === 'deferred') return 'deferred';
+  return 'planned';
 }
 
 function renderAutonomousLoop(loop, options) {
@@ -3233,16 +3535,235 @@ function renderAutonomousLoop(loop, options) {
   return html;
 }
 
+function chainQueueSections(observation) {
+  const obs = observation || {};
+  const queue = obs.queue || {};
+  return Array.isArray(queue.sections) ? queue.sections : [];
+}
+
+function chainQueueGroups(observation, keys) {
+  const groups = chainQueueSections(observation);
+  if (!Array.isArray(keys) || !keys.length) return groups;
+  const wanted = new Set(keys);
+  return groups.filter(group => wanted.has(group.key)).sort((left, right) => {
+    const leftOrder = Number((left || {}).order || 0);
+    const rightOrder = Number((right || {}).order || 0);
+    return leftOrder - rightOrder;
+  });
+}
+
+function chainQueueGroup(observation, key) {
+  const groups = chainQueueSections(observation);
+  return groups.find(group => String((group || {}).key || '').trim() === String(key || '').trim()) || null;
+}
+
+function chainTraceSummary(group, traceId) {
+  const traces = Array.isArray((group || {}).recent_traces) ? group.recent_traces : [];
+  return traces.find(item => String((item || {}).trace_id || '').trim() === String(traceId || '').trim()) || null;
+}
+
+function shortClock(ts) {
+  if (!ts) return '最近';
+  try {
+    return new Date(ts).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+  } catch (_err) {
+    return '最近';
+  }
+}
+
+function createBoardSectionLabel(text) {
+  const label = document.createElement('div');
+  label.className = 'board-section-label';
+  label.textContent = text;
+  return label;
+}
+
+function observationGroupCount(group) {
+  return Array.isArray((group || {}).items) ? group.items.length : 0;
+}
+
+function buildChainSectionBand(group, options) {
+  const opts = options || {};
+  const limit = typeof opts.limit === 'number' ? opts.limit : 3;
+  const band = document.createElement('section');
+  band.className = 'watch-band';
+  const recentEvents = Array.isArray(group.recent_events) ? group.recent_events : [];
+  const latestEvent = recentEvents[0] || null;
+
+  const head = document.createElement('div');
+  head.className = 'watch-band-head';
+  head.innerHTML =
+    '<div class="watch-band-title-wrap">' +
+      '<div class="watch-band-title">' + esc(group.label || '链路片段') + '</div>' +
+      '<div class="watch-band-subline">' +
+        '<span class="watch-band-owner">' + esc(group.owner || 'Autonomous') + '</span>' +
+        '<span class="watch-band-stage">' + esc(group.stage_label || '链路阶段') + '</span>' +
+      '</div>' +
+      '<div class="watch-band-summary">' + esc(group.summary || group.empty_text || '暂无链路信号').substring(0, 96) + '</div>' +
+      (latestEvent
+        ? '<div class="watch-band-latest">最近 ' + esc(shortClock(latestEvent.recorded_at)) +
+          ' · ' + esc(String(latestEvent.summary || latestEvent.event_type || '链路事件').substring(0, 88)) + '</div>'
+        : '') +
+    '</div>' +
+    '<span class="watch-band-count">' + observationGroupCount(group) + '</span>';
+  band.append(head);
+
+  const body = document.createElement('div');
+  body.className = 'watch-band-body';
+  const items = Array.isArray(group.items) ? group.items : [];
+  if (!items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'game-card rarity-common';
+    empty.innerHTML =
+      '<div class="game-card-sub" style="text-align:center;color:var(--text-muted);">' +
+      esc(group.empty_text || '暂无信号') +
+      '</div>';
+    body.append(empty);
+  } else {
+    items.slice(0, limit).forEach(item => {
+      if (String(item.observation_role || '').trim() === 'candidate') {
+        body.append(buildCandidateCard(item));
+      } else {
+        body.append(buildSectionCard(item));
+      }
+    });
+  }
+  band.append(body);
+
+  const footer = document.createElement('div');
+  footer.className = 'watch-band-footer';
+  footer.innerHTML =
+    '<span class="watch-band-footnote">' +
+    esc(recentEvents.length ? ('最近链路事件 ' + recentEvents.length + ' 条') : '查看这一段自主链路的最近事件') +
+    '</span>' +
+    '<span class="drill-link" data-drill="autonomous" data-chain-group="' + esc(group.key || '') + '">🔬 段内链路</span>';
+  band.append(footer);
+  return band;
+}
+
+function appendCurrentCardsGrid(container, cards, title) {
+  const items = Array.isArray(cards) ? cards : [];
+  if (!container || !items.length) return;
+  const section = document.createElement('section');
+  section.className = 'observation-stack';
+  section.append(createBoardSectionLabel(title || '闭环当前态'));
+  const grid = document.createElement('div');
+  grid.className = 'current-card-grid';
+  items.forEach(card => {
+    grid.append(buildStageCard(card));
+  });
+  section.append(grid);
+  container.append(section);
+}
+
+function appendChainSectionGrid(container, state, keys, options) {
+  if (!container) return;
+  const observation = ((state || {}).autonomous_observation || {});
+  const queue = observation.queue || {};
+  const groups = chainQueueGroups(observation, keys);
+  if (!groups.length) return;
+  const section = document.createElement('section');
+  section.className = 'observation-stack';
+  section.append(createBoardSectionLabel(queue.headline || '链路片段观察'));
+  const grid = document.createElement('div');
+  grid.className = 'chain-watch-grid';
+  groups.forEach(group => grid.append(buildChainSectionBand(group, options)));
+  section.append(grid);
+  container.append(section);
+}
+
+function buildChainHero(state) {
+  const obs = state.autonomous_observation || {};
+  const board = obs.board || {};
+  const queue = obs.queue || {};
+  const counts = obs.counts || {};
+  const runtime = obs.runtime || {};
+  const guards = runtime.activity_guards || {};
+  const userSignal = guards.user_chain_signal || {};
+  const focus = board.primary_focus || {};
+  const currentCards = Array.isArray(board.current_cards) ? board.current_cards : [];
+  const focusCard = currentCards.find(card =>
+    String(card.observation_role || '').trim() === String(focus.observation_role || '').trim()
+  ) || currentCards[0] || {};
+  const focusBadgeClass = observationStateBadgeClass(focusCard.status);
+  const hero = document.createElement('section');
+  hero.className = 'chain-hero';
+  hero.innerHTML =
+    '<div class="chain-hero-top">' +
+      '<div class="chain-hero-main">' +
+        '<div class="chain-hero-label">自主链路读模型 · v' + esc(obs.read_model_version != null ? obs.read_model_version : 3) + '</div>' +
+        '<div class="chain-hero-title">' + esc(board.headline || '自主链路闭环观测') + '</div>' +
+        '<div class="chain-hero-summary">' + esc(focus.summary || board.summary || queue.summary || 'Web 小屋只读展示 API-B 判断、API-A 自主执行、Mem 写回与 API-B 再读取。').substring(0, 220) + '</div>' +
+      '</div>' +
+      '<div class="chain-hero-focus">' +
+        '<span class="game-card-badge ' + focusBadgeClass + '">' + esc(focus.status || focusCard.display_status || '等待中') + '</span>' +
+        '<div class="chain-hero-focus-title">' + esc(focus.title || '当前没有突出焦点') + '</div>' +
+      '</div>' +
+    '</div>';
+
+  const meta = document.createElement('div');
+  meta.className = 'chain-hero-meta';
+  [
+    { cls: 'accent', text: '当前焦点 · ' + String(focus.title || '自主链路闭环') },
+    {
+      cls: userSignal.is_quiet ? 'good' : 'warn',
+      text: userSignal.is_quiet ? '用户链路安静软信号' : '用户链路活跃软信号',
+    },
+    {
+      cls: 'info',
+      text: runtime.autonomous_chain_gate_active ? '自主链路门 · 已激活' : '自主链路门 · 未激活',
+    },
+  ].forEach(item => {
+    const pill = document.createElement('div');
+    pill.className = 'chain-focus-pill ' + item.cls;
+    pill.textContent = item.text;
+    meta.append(pill);
+  });
+  hero.append(meta);
+
+  const metrics = document.createElement('div');
+  metrics.className = 'chain-metrics';
+  [
+    { cls: 'api-b', label: 'API-B 判断', value: counts.api_b_backlog || 0, note: '治理在途' },
+    { cls: 'api-a', label: 'API-A 待拉取', value: counts.api_a_ready || 0, note: '自主执行面' },
+    { cls: 'candidate', label: '候选判断', value: counts.candidates || 0, note: '待裁决' },
+    { cls: 'mem', label: 'Mem 写回', value: counts.writebacks || 0, note: '结果回流' },
+  ].forEach(item => {
+    const box = document.createElement('div');
+    box.className = 'chain-metric ' + item.cls;
+    box.innerHTML =
+      '<div class="chain-metric-label">' + esc(item.label) + '</div>' +
+      '<div class="chain-metric-value">' + esc(item.value) + '</div>' +
+      '<div class="chain-metric-note">' + esc(item.note) + '</div>';
+    metrics.append(box);
+  });
+  hero.append(metrics);
+  return hero;
+}
+
 /* ── 🚦 自主链路观测总览 ── */
 function renderAutonomousDrawer(state) {
   const obs = state.autonomous_observation || {};
-  const guards = state.activity_guards || {};
+  const runtime = obs.runtime || {};
+  const guards = runtime.activity_guards || {};
   const userSignal = guards.user_chain_signal || {};
   const apiB = obs.api_b || {};
   const apiA = obs.api_a || {};
   const mem = obs.mem || {};
-  const counts = obs.counts || {};
+  const reread = obs.reread || {};
   const loop = obs.loop || {};
+  const focusGroupKey = String((drawerContext || {}).chainGroup || '').trim();
+  const focusTraceId = String((drawerContext || {}).chainTrace || '').trim();
+  const focusTraceExpanded = Boolean((drawerContext || {}).chainTraceExpanded);
+  const focusTraceSource = String((drawerContext || {}).chainTraceSource || '').trim();
+  const focusGroup = focusGroupKey ? chainQueueGroup(obs, focusGroupKey) : null;
+  const focusEvents = Array.isArray((focusGroup || {}).recent_events) ? focusGroup.recent_events : [];
+  const focusTraces = Array.isArray((focusGroup || {}).recent_traces) ? focusGroup.recent_traces : [];
+  const selectedTrace = focusTraceId ? chainTraceSummary(focusGroup, focusTraceId) : null;
+  const selectedTraceDetail = selectedTrace && selectedTrace.detail ? selectedTrace.detail : null;
+  const selectedTraceEvents = selectedTrace
+    ? focusEvents.filter(event => String(event.trace_id || '').trim() === focusTraceId)
+    : focusEvents;
 
   function activeBlock(task) {
     if (!task) return '<div class="lane-active" style="color:var(--text-muted);">空闲 · 无活跃执行</div>';
@@ -3252,7 +3773,7 @@ function renderAutonomousDrawer(state) {
   function latestWritebackBlock(item) {
     if (!item) return '<div class="lane-active" style="color:var(--text-muted);">暂无新的 Mem 写回</div>';
     return '<div class="lane-active"><div class="la-title">' + esc(String(item.title || '未命名').substring(0, 48)) +
-      '</div><div style="margin-top:3px;">状态: ' + esc(item.status_label || item.status || '—') +
+      '</div><div style="margin-top:3px;">状态: ' + esc(item.display_status || item.status_label || item.status || '—') +
       (item.summary ? ' · ' + esc(String(item.summary).substring(0, 60)) : '') + '</div></div>';
   }
   function laneCol(cls, icon, name, tag, section) {
@@ -3260,29 +3781,165 @@ function renderAutonomousDrawer(state) {
       '<div class="lane-col-head">' + icon + ' ' + name + ' <span class="lane-col-tag">' + tag + '</span></div>' +
       '<div class="lane-metric"><span>链路在途</span><b>' + (section.pending_count || 0) + '</b></div>' +
       '<div class="lane-metric"><span>观测范围</span><b>' + esc(section.scope || '—') + '</b></div>' +
-      activeBlock(section.active) + '</div>';
+      activeBlock(section.current || section.active) + '</div>';
   }
   const userState = userSignal.is_quiet ? '安静软信号' : '活跃软信号';
   const activeSessions = userSignal.active_sessions != null ? userSignal.active_sessions : 0;
   const quietAfter = userSignal.quiet_after_seconds != null ? userSignal.quiet_after_seconds : '—';
 
   let html = '<div class="drawer-sub">Web 小屋只观察 API-B 内生驱动、自主任务状态和执行回报；用户链路只作为软感知信号进入治理判断，不展示聊天内容。</div>';
+  if (focusGroup) {
+    const focusItems = Array.isArray(focusGroup.items) ? focusGroup.items : [];
+    const focusTraceIds = [];
+    focusEvents.forEach(event => {
+      const traceId = String(event.trace_id || '').trim();
+      if (traceId && !focusTraceIds.includes(traceId)) focusTraceIds.push(traceId);
+    });
+    html += '<div class="drawer-section">' +
+      '<div class="drawer-section-label">' + esc(focusGroup.label || '链路分段') + '</div>' +
+      '<div class="drawer-sub" style="margin:0;">' +
+      esc(focusGroup.owner || 'Autonomous') + ' · ' +
+      esc(focusGroup.stage_label || '链路阶段') + ' · ' +
+      esc(focusGroup.summary || focusGroup.empty_text || '暂无链路说明') +
+      '</div>' +
+      '<div class="drawer-sub" style="margin-top:8px;">当前可见任务 ' + focusItems.length +
+      ' · 最近链路事件 ' + focusEvents.length +
+      (focusTraceIds.length ? (' · trace ' + esc(focusTraceIds.slice(0, 3).join(' / '))) : '') +
+      '</div>' +
+      (focusItems.length
+        ? focusItems.slice(0, 4).map(item =>
+            '<div class="lane-active" style="margin-top:6px;"><div class="la-title">' +
+            esc(String(item.title || '未命名').substring(0, 56)) + '</div>' +
+            '<div style="margin-top:3px;">状态: ' + esc(item.display_status || item.status || '—') +
+            (item.summary ? ' · ' + esc(String(item.summary).substring(0, 88)) : '') +
+            '</div></div>'
+          ).join('')
+        : '<div class="drawer-sub" style="margin-top:8px;">当前该分段没有可见任务，但仍可能有最近链路事件。</div>') +
+      '</div>';
+    html += '<div class="drawer-section"><div class="drawer-section-label">最近链路事件</div>' +
+      (selectedTraceEvents.length
+        ? selectedTraceEvents.slice(0, 6).map(event =>
+            '<div class="lane-active" style="margin-top:6px;"><div class="la-title">' +
+            esc(shortClock(event.recorded_at)) + ' · ' +
+            esc(String(event.summary || event.event_type || '链路事件').substring(0, 84)) + '</div>' +
+            '<div style="margin-top:3px;">来源: ' + esc(event.source || 'unknown') +
+            (event.task_id ? ' · task ' + esc(String(event.task_id).substring(0, 16)) : '') +
+            (event.trace_id ? ' · trace ' + esc(String(event.trace_id).substring(0, 18)) : '') +
+            '</div></div>'
+          ).join('')
+        : '<div class="drawer-sub" style="margin:0;">该分段暂时没有命中最近 timeline / trace 记录。</div>') +
+      '</div>';
+    html += '<div class="drawer-section"><div class="drawer-section-label">最近 Trace 摘要</div>' +
+      (focusTraces.length
+        ? '<div class="trace-chip-row">' +
+          focusTraces.slice(0, 5).map(trace =>
+            '<span class="trace-chip" data-drill="autonomous" data-chain-group="' + esc(focusGroup.key || '') +
+            '" data-chain-trace="' + esc(trace.trace_id || '') + '">trace ' +
+            esc(String(trace.trace_id || '').substring(0, 10)) + ' · ' +
+            esc(String(trace.last_event_type || 'event').substring(0, 14)) + ' · ' +
+            esc(String(trace.event_count || 0)) + '</span>'
+          ).join('') + '</div>'
+        : '<div class="drawer-sub" style="margin:0;">该分段最近没有可聚合的 trace 摘要。</div>') +
+      '</div>';
+    if (selectedTrace) {
+      html += '<div class="drawer-section"><div class="drawer-section-label">选中 Trace</div>' +
+        '<div class="drawer-sub" style="margin:0;">trace ' + esc(String(selectedTrace.trace_id || '').substring(0, 24)) +
+        ' · 最近 ' + esc(shortClock(selectedTrace.last_seen_at)) +
+        ' · 事件 ' + esc(selectedTrace.event_count) +
+        (selectedTrace.task_titles && selectedTrace.task_titles.length
+          ? ' · 任务 ' + esc(selectedTrace.task_titles.slice(0, 2).join(' / '))
+          : '') +
+        '</div>' +
+        '<div class="drawer-sub" style="margin-top:8px;">来源 ' + esc((selectedTrace.sources || []).join(' / ') || 'unknown') +
+        ' · ' + esc(String(selectedTrace.latest_summary || '').substring(0, 120) || '暂无摘要') +
+        '</div></div>';
+      if (selectedTraceDetail) {
+        const sourceCounts = selectedTraceDetail.source_counts || {};
+        const sourceSummary = Object.keys(sourceCounts).map(key => key + ':' + sourceCounts[key]).join(' / ');
+        const taskFamilies = Array.isArray(selectedTraceDetail.task_families) ? selectedTraceDetail.task_families : [];
+        const executionKinds = Array.isArray(selectedTraceDetail.execution_kinds) ? selectedTraceDetail.execution_kinds : [];
+        const decisionIds = Array.isArray(selectedTraceDetail.decision_ids) ? selectedTraceDetail.decision_ids : [];
+        const preview = Array.isArray(selectedTraceDetail.timeline_preview) ? selectedTraceDetail.timeline_preview : [];
+        const allEvents = Array.isArray(selectedTraceDetail.timeline_events) ? selectedTraceDetail.timeline_events : [];
+        const visibleEvents = (focusTraceExpanded ? allEvents : preview).filter(event => {
+          if (!focusTraceSource) return true;
+          return String(event.source || '').trim() === focusTraceSource;
+        });
+        const toggleLabel = focusTraceExpanded ? '收起事件流' : '展开全部事件';
+        const sourceKeys = Object.keys(sourceCounts);
+        html += '<div class="drawer-section"><div class="drawer-section-label">Trace 详情</div>' +
+          '<div class="drawer-sub" style="margin:0;">记录 ' + esc(selectedTraceDetail.record_count) +
+          ' · 首次 ' + esc(shortClock(selectedTraceDetail.first_seen_at)) +
+          ' · 最近 ' + esc(shortClock(selectedTraceDetail.last_seen_at)) +
+          (sourceSummary ? ' · sources ' + esc(sourceSummary) : '') +
+          '</div>' +
+          (taskFamilies.length
+            ? '<div class="drawer-sub" style="margin-top:8px;">任务家族 ' + esc(taskFamilies.join(' / ')) + '</div>'
+            : '') +
+          (executionKinds.length
+            ? '<div class="drawer-sub" style="margin-top:4px;">执行类型 ' + esc(executionKinds.join(' / ')) + '</div>'
+            : '') +
+          (decisionIds.length
+            ? '<div class="drawer-sub" style="margin-top:4px;">decision ' + esc(decisionIds.slice(0, 3).join(' / ')) + '</div>'
+            : '') +
+          (sourceKeys.length
+            ? '<div class="trace-chip-row">' +
+              '<span class="trace-chip ' + (!focusTraceSource ? 'active' : '') +
+              '" data-drill="autonomous" data-chain-group="' + esc(focusGroup.key || '') +
+              '" data-chain-trace="' + esc(selectedTrace.trace_id || '') +
+              '" data-chain-trace-expanded="' + (focusTraceExpanded ? 'true' : 'false') +
+              '" data-chain-trace-source="">全部来源</span>' +
+              sourceKeys.map(source =>
+                '<span class="trace-chip ' + (focusTraceSource === source ? 'active' : '') +
+                '" data-drill="autonomous" data-chain-group="' + esc(focusGroup.key || '') +
+                '" data-chain-trace="' + esc(selectedTrace.trace_id || '') +
+                '" data-chain-trace-expanded="' + (focusTraceExpanded ? 'true' : 'false') +
+                '" data-chain-trace-source="' + esc(source) + '">' +
+                esc(source) + ' · ' + esc(sourceCounts[source]) + '</span>'
+              ).join('') +
+              '</div>'
+            : '') +
+          '<div class="drawer-sub" style="margin-top:8px;"><span class="drill-link" data-drill="autonomous" data-chain-group="' +
+          esc(focusGroup.key || '') + '" data-chain-trace="' + esc(selectedTrace.trace_id || '') +
+          '" data-chain-trace-expanded="' + (focusTraceExpanded ? 'false' : 'true') +
+          '" data-chain-trace-source="' + esc(focusTraceSource) + '">🔬 ' + esc(toggleLabel) + '</span></div>' +
+          (visibleEvents.length
+            ? visibleEvents.map(event =>
+                '<div class="lane-active" style="margin-top:6px;"><div class="la-title">' +
+                esc(shortClock(event.recorded_at)) + ' · ' +
+                esc(String(event.summary || event.event_type || 'trace event').substring(0, 84)) + '</div>' +
+                '<div style="margin-top:3px;">来源: ' + esc(event.source || 'unknown') +
+                (event.task_id ? ' · task ' + esc(String(event.task_id).substring(0, 16)) : '') +
+                (event.decision_id ? ' · decision ' + esc(String(event.decision_id).substring(0, 16)) : '') +
+                '</div></div>'
+              ).join('')
+            : '<div class="drawer-sub" style="margin-top:8px;">当前来源过滤下没有可显示的事件。</div>') +
+          '</div>';
+      }
+    }
+  }
   html += renderAutonomousLoop(loop, {showWritebacks: true});
   html += '<div class="drawer-sub" style="margin-top:10px;">用户链路感知: ' + esc(userState) +
     ' · active_sessions ' + esc(activeSessions) +
     ' · quiet_after ' + esc(quietAfter) + 's' +
-    ' · gate ' + (guards.autonomous_chain_gate_active ? 'on' : 'off') + '</div>';
+    ' · gate ' + (runtime.autonomous_chain_gate_active ? 'on' : 'off') + '</div>';
   html += '<div class="lane-grid">' +
     laneCol('supervisor', '🧠', 'API-B 判断', '内生驱动 / 记忆', apiB) +
     laneCol('agent', '🤖', 'API-A 自主执行', '学习 / 替身改进', apiA) +
     '<div class="lane-col mem"><div class="lane-col-head">💾 Mem 写回 <span class="lane-col-tag">结果回流</span></div>' +
       '<div class="lane-metric"><span>最近写回</span><b>' + (mem.recent_count || 0) + '</b></div>' +
       '<div class="lane-metric"><span>观测范围</span><b>' + esc(mem.scope || '—') + '</b></div>' +
-      latestWritebackBlock(mem.latest) + '</div>' +
+      latestWritebackBlock(mem.current || mem.latest) + '</div>' +
     '</div>';
-  html += '<div class="drawer-sub" style="margin-top:10px;">候选 ' + (counts.candidates || 0) +
-    ' · 活跃执行 ' + (counts.active || 0) + ' · 链路回流 ' + (counts.pending || 0) +
-    ' · Mem 写回 ' + (counts.writebacks || 0) + '</div>';
+  if (reread.current) {
+    html += '<div class="drawer-sub" style="margin-top:10px;">API-B 再读取: ' +
+      esc(reread.current.display_status || '等待中') + ' · ' +
+      esc((reread.current.summary || reread.summary || '').substring(0, 120)) + '</div>';
+  }
+  html += '<div class="drawer-sub" style="margin-top:10px;">当前抽屉聚焦 ' +
+    esc((focusGroup && focusGroup.label) || '自主链路闭环') +
+    (selectedTrace ? (' · trace ' + esc(String(selectedTrace.trace_id || '').substring(0, 18))) : '') +
+    ' · 用户链路只作为软感知输入，不参与这条观测链的展示。</div>';
   els.drawerBody.innerHTML = html;
 }
 
@@ -3383,82 +4040,54 @@ function renderHealthDrawer(state) {
    面板渲染函数
    ═══════════════════════════════════════════ */
 
-/* ── 📋 任务面板 ── */
-function renderTasksPanel(state) {
-  const body = els.panelTasksBody;
+/* ── 🚦 自主链路总览面板 ── */
+function renderChainPanel(state) {
+  const body = els.panelChainBody;
   if (!body) return;
   body.replaceChildren();
-  const obs = state.autonomous_observation || {};
-  const apiB = obs.api_b || {};
-  const apiA = obs.api_a || {};
-  const loop = obs.loop || {};
 
+  const drill = document.createElement('div');
+  drill.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:6px;';
+  drill.innerHTML = drillButton('autonomous', '链路总览');
+  body.append(drill);
+
+  body.append(buildChainHero(state));
+
+  const loop = (((state || {}).autonomous_observation || {}).loop || {});
   const loopSec = document.createElement('div');
+  loopSec.style.cssText = 'margin-top:10px;';
   loopSec.innerHTML = renderAutonomousLoop(loop, {showWritebacks: true});
   if (loopSec.innerHTML) body.append(loopSec.firstElementChild);
 
-  function addSection(label, task, emptyText) {
-    const sec = document.createElement('div');
-    sec.style.cssText = 'display:grid;gap:6px;';
-    const hdr = document.createElement('div');
-    hdr.style.cssText = 'font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;padding:0 2px;';
-    hdr.textContent = label;
-    sec.append(hdr);
-    if (!task) {
-      const empty = document.createElement('div');
-      empty.className = 'game-card rarity-common';
-      empty.innerHTML = '<div class="game-card-sub" style="text-align:center;color:var(--text-muted);">' + emptyText + '</div>';
-      sec.append(empty);
-    } else {
-      sec.append(buildGameCard(task));
-    }
-    body.append(sec);
-  }
-
-  addSection('🧠 API-B 当前判断', apiB.active || null, '当前没有 API-B 内部治理执行');
-  addSection('🤖 API-A 自主执行', apiA.active || null, '当前没有 API-A 自主任务执行');
-
-  const pending = []
-    .concat(Array.isArray(apiB.pending) ? apiB.pending : [])
-    .concat(Array.isArray(apiA.pending) ? apiA.pending : []);
-  const pendingSec = document.createElement('div');
-  pendingSec.style.cssText = 'display:grid;gap:6px;';
-  const pendingHdr = document.createElement('div');
-  pendingHdr.style.cssText = 'font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;padding:0 2px;';
-  pendingHdr.textContent = '🛰 自主链路回流 / 待观察';
-  pendingSec.append(pendingHdr);
-  if (!pending.length) {
-    const empty = document.createElement('div');
-    empty.className = 'game-card rarity-common';
-    empty.innerHTML = '<div class="game-card-sub" style="text-align:center;color:var(--text-muted);">暂无新的链路回流任务</div>';
-    pendingSec.append(empty);
-  } else {
-    pending.slice(0, 8).forEach(t => pendingSec.append(buildGameCard(t)));
-  }
-  body.append(pendingSec);
-
-  // 内生驱动候选
-  const candSec = document.createElement('div');
-  candSec.style.cssText = 'display:grid;gap:6px;';
-  const candHdr = document.createElement('div');
-  candHdr.style.cssText = 'font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;padding:0 2px;';
-  candHdr.textContent = '💡 API-B 新候选判断';
-  candSec.append(candHdr);
-  const candidates = Array.isArray(obs.candidates) ? obs.candidates : [];
-  if (!candidates.length) {
-    const empty = document.createElement('div');
-    empty.className = 'game-card rarity-common';
-    empty.innerHTML = '<div class="game-card-sub" style="text-align:center;color:var(--text-muted);">当前没有 API-B 候选判断</div>';
-    candSec.append(empty);
-  } else {
-    candidates.forEach(c => candSec.append(buildGameCard(c, true)));
-  }
-  body.append(candSec);
+  appendCurrentCardsGrid(
+    body,
+    (((state || {}).autonomous_observation || {}).board || {}).current_cards || [],
+    '闭环当前态'
+  );
+  appendChainSectionGrid(
+    body,
+    state,
+    ['api_b_backlog', 'api_b_candidates', 'api_a_ready', 'mem_recent'],
+    {limit: 3}
+  );
 }
 
-function buildGameCard(task, isCandidate) {
+function observationRoleStageLabel(task) {
+  const role = String(task.observation_role || '').trim();
+  const labels = {
+    api_b_judgement: 'API-B 判断阶段',
+    api_a_execution: 'API-A 自主执行阶段',
+    mem_writeback: 'Mem 写回阶段',
+    api_b_reread: 'API-B 再读取阶段',
+    candidate: 'API-B 候选判断',
+  };
+  return labels[role] || '自主链路观察';
+}
+
+function buildObservationCard(task, options) {
+  const opts = options || {};
   const card = document.createElement('div');
-  card.className = 'game-card ' + (isCandidate ? rarityClass(task) : rarityClass(task));
+  card.className = 'game-card ' + rarityClass(task);
 
   const head = document.createElement('div');
   head.className = 'game-card-head';
@@ -3467,28 +4096,23 @@ function buildGameCard(task, isCandidate) {
   title.textContent = (task.title || '未命名').substring(0, 64);
   title.title = task.title || '';
   const badge = document.createElement('span');
+  const rawStatus = String(task.status || '').trim().toLowerCase();
+  const badgeTone = (
+    ['planned', 'approved', 'running', 'completed', 'failed', 'deferred', 'paused'].includes(rawStatus)
+      ? rawStatus
+      : observationStateBadgeClass(rawStatus)
+  );
   const st = task.display_status || task.status || 'queued';
-  badge.className = 'game-card-badge ' + (task.status || 'queued');
+  badge.className = 'game-card-badge ' + badgeTone;
   badge.textContent = statusLabel(st);
   head.append(title, badge);
   card.append(head);
 
-  // subtitle
   const sub = document.createElement('div');
   sub.className = 'game-card-sub';
-  const hints = [];
-  if (!isCandidate) {
-    const ih = taskIdentityHint(task);
-    if (ih) hints.push(ih);
-    const gh = governanceHint(task);
-    if (gh) hints.push(gh);
-  }
-  if (task.summary) hints.push(String(task.summary).substring(0, 100));
-  if (!hints.length) hints.push(isCandidate ? '等待 API-B 判断' : typeLabel(task));
-  sub.textContent = hints.join(' · ').substring(0, 160);
+  sub.textContent = String(opts.subtitle || typeLabel(task)).substring(0, 160);
   card.append(sub);
 
-  // meta row
   const meta = document.createElement('div');
   meta.className = 'game-card-meta';
 
@@ -3496,10 +4120,25 @@ function buildGameCard(task, isCandidate) {
   tags.className = 'game-card-tags';
   const lane = taskLane(task);
   const laneTag = document.createElement('span');
-  laneTag.className = 'game-card-tag ' + (lane === 'agent' ? 'creativity' : 'memory');
-  laneTag.textContent = lane === 'agent' ? 'API-A 执行' : 'API-B 治理';
+  if (lane === 'agent') {
+    laneTag.className = 'game-card-tag creativity';
+    laneTag.textContent = 'API-A 执行';
+  } else if (lane === 'mem') {
+    laneTag.className = 'game-card-tag truthfulness';
+    laneTag.textContent = 'Mem 写回';
+  } else {
+    laneTag.className = 'game-card-tag memory';
+    laneTag.textContent = 'API-B 治理';
+  }
   tags.append(laneTag);
-  if (task.governance_task_type) {
+  (Array.isArray(opts.extraTags) ? opts.extraTags : []).forEach(tag => {
+    if (!tag || !tag.text) return;
+    const extraTag = document.createElement('span');
+    extraTag.className = 'game-card-tag ' + String(tag.cls || '').trim();
+    extraTag.textContent = String(tag.text);
+    tags.append(extraTag);
+  });
+  if (task.governance_task_type && opts.includeType !== false) {
     const typeTag = document.createElement('span');
     typeTag.className = 'game-card-tag ' + tagClass(task.governance_task_type);
     typeTag.textContent = typeLabel(task);
@@ -3507,7 +4146,7 @@ function buildGameCard(task, isCandidate) {
   }
   const taskMeta = task && task.metadata ? task.metadata : {};
   const candidateTags = Array.isArray(taskMeta.core_values) ? taskMeta.core_values : (Array.isArray(task.value_tags) ? task.value_tags : []);
-  if (isCandidate && candidateTags.length) {
+  if (opts.showCandidateTags && candidateTags.length) {
     candidateTags.forEach(vt => {
       const vtTag = document.createElement('span');
       vtTag.className = 'game-card-tag ' + tagClass(vt);
@@ -3517,8 +4156,7 @@ function buildGameCard(task, isCandidate) {
   }
   meta.append(tags);
 
-  // utility score bar
-  if (task.utility != null) {
+  if (opts.showUtility && task.utility != null) {
     const scoreWrap = document.createElement('div');
     scoreWrap.style.cssText = 'display:flex;align-items:center;gap:4px;flex-shrink:0;';
     const pct = Math.round((task.utility || 0) * 100);
@@ -3538,6 +4176,51 @@ function buildGameCard(task, isCandidate) {
 
   card.append(meta);
   return card;
+}
+
+function buildStageCard(task) {
+  const subtitle = [
+    observationRoleStageLabel(task),
+    task.summary ? String(task.summary).substring(0, 100) : '',
+  ].filter(Boolean).join(' · ') || '自主链路阶段观察';
+  return buildObservationCard(task, {
+    subtitle,
+    extraTags: [{text: '闭环阶段', cls: 'truthfulness'}],
+    includeType: false,
+    showUtility: false,
+    showCandidateTags: false,
+  });
+}
+
+function buildSectionCard(task) {
+  const hints = [];
+  const ih = taskIdentityHint(task);
+  if (ih) hints.push(ih);
+  const gh = governanceHint(task);
+  if (gh) hints.push(gh);
+  if (task.summary) hints.push(String(task.summary).substring(0, 100));
+  const subtitle = hints.join(' · ').substring(0, 160) || typeLabel(task);
+  return buildObservationCard(task, {
+    subtitle,
+    extraTags: [{text: '片段观察', cls: 'memory'}],
+    includeType: true,
+    showUtility: false,
+    showCandidateTags: false,
+  });
+}
+
+function buildCandidateCard(task) {
+  const subtitle = [
+    '内生驱动候选判断',
+    task.summary ? String(task.summary).substring(0, 100) : '',
+  ].filter(Boolean).join(' · ') || '等待 API-B 判断';
+  return buildObservationCard(task, {
+    subtitle,
+    extraTags: [{text: '候选判断', cls: 'creativity'}],
+    includeType: false,
+    showUtility: true,
+    showCandidateTags: true,
+  });
 }
 
 /* ── 🧠 LM 输入面板 ── */
@@ -3756,10 +4439,14 @@ function renderObservationPanel(state) {
   body.replaceChildren();
 
   const obs = state.autonomous_observation || {};
-  const guards = state.activity_guards || {};
+  const board = obs.board || {};
+  const runtime = obs.runtime || {};
+  const guards = runtime.activity_guards || {};
   const userSignal = guards.user_chain_signal || {};
-  const m = state.metrics || {};
   const loop = obs.loop || {};
+  const apiB = obs.api_b || {};
+  const mem = obs.mem || {};
+  const reread = obs.reread || {};
 
   const drill = document.createElement('div');
   drill.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:6px;';
@@ -3775,13 +4462,10 @@ function renderObservationPanel(state) {
   const summary = document.createElement('div');
   summary.style.cssText = 'display:flex;gap:12px;flex-wrap:wrap;padding:4px 0;margin-bottom:8px;';
   [
-    {label:'链路回流', value: m.observed_task_total || 0, color:'var(--text-primary)'},
-    {label:'自主任务', value: m.autonomous_task_total || 0, color:'var(--mint)'},
-    {label:'API-B 任务', value: m.api_b_task_total || 0, color:'var(--gold)'},
-    {label:'运行中', value: m.running_count || 0, color:'var(--accent-blue)'},
-    {label:'候选', value: m.drive_candidates || 0, color:'var(--plum)'},
+    {label:'API-B 在途', value: ((obs.counts || {}).api_b_backlog || 0), color:'var(--gold)'},
+    {label:'API-A 待拉取', value: ((obs.counts || {}).api_a_ready || 0), color:'var(--mint)'},
+    {label:'候选判断', value: ((obs.counts || {}).candidates || 0), color:'var(--plum)'},
     {label:'Mem 写回', value: ((obs.counts || {}).writebacks || 0), color:'var(--coral)'},
-    {label:'错误', value: m.error_count || 0, color:(m.error_count||0) > 0 ? 'var(--coral)' : 'var(--text-muted)'},
   ].forEach(s => {
     const chip = document.createElement('div');
     chip.style.cssText = 'text-align:center;padding:6px 10px;border-radius:8px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05);min-width:50px;';
@@ -3793,33 +4477,37 @@ function renderObservationPanel(state) {
   const signalRow = document.createElement('div');
   signalRow.className = 'game-card rarity-common';
   signalRow.innerHTML =
-    '<div class="game-card-head"><div class="game-card-title">用户链路软感知</div>' +
+    '<div class="game-card-head"><div class="game-card-title">用户链路软感知输入</div>' +
     '<span class="game-card-badge ' + (userSignal.is_quiet ? 'approved' : 'deferred') + '">' +
     (userSignal.is_quiet ? '安静软信号' : '活跃软信号') + '</span></div>' +
     '<div class="game-card-sub">active_sessions ' + esc(userSignal.active_sessions != null ? userSignal.active_sessions : 0) +
     ' · quiet_after ' + esc(userSignal.quiet_after_seconds != null ? userSignal.quiet_after_seconds : '—') + 's' +
-    ' · scope ' + esc(guards.scope || '—') + '</div>';
+    ' · 仅影响 API-B 判断让路，不展示用户聊天内容</div>';
   body.append(signalRow);
 
-  const observed = Array.isArray(obs.observed_tasks) ? obs.observed_tasks : [];
-  const observedSec = document.createElement('div');
-  observedSec.style.cssText = 'display:grid;gap:6px;';
-  observedSec.innerHTML = '<div class="lm-section-label">👁 链路回流 / 只读观测</div>';
-  if (!observed.length) {
-    observedSec.innerHTML += '<div class="game-card-sub" style="text-align:center;color:var(--text-muted);padding:12px;">暂无任务状态</div>';
-  } else {
-    observed.slice(0, 10).forEach(t => observedSec.append(buildGameCard(t)));
-  }
-  body.append(observedSec);
+  appendCurrentCardsGrid(
+    body,
+    [
+      apiB.current,
+      reread.current,
+      mem.current,
+    ].filter(item => item && Object.keys(item).length),
+    'API-B 判断 / 回流'
+  );
 
-  const candidates = Array.isArray(obs.candidates) ? obs.candidates : [];
-  if (candidates.length) {
-    const candSec = document.createElement('div');
-    candSec.style.cssText = 'display:grid;gap:6px;';
-    candSec.innerHTML = '<div class="lm-section-label">💡 内生驱动候选 (' + candidates.length + ')</div>';
-    candidates.forEach(c => candSec.append(buildGameCard(c, true)));
-    body.append(candSec);
-  }
+  appendChainSectionGrid(
+    body,
+    state,
+    ['api_b_backlog', 'api_b_candidates', 'mem_recent'],
+    {limit: 4}
+  );
+
+  const apiANote = document.createElement('div');
+  apiANote.className = 'watch-inline-note';
+  apiANote.textContent =
+    'API-A 待拉取 ' + String((obs.counts || {}).api_a_ready || 0) +
+    ' · 当前焦点 ' + String((board.primary_focus || {}).title || '暂无');
+  body.append(apiANote);
 }
 
 /* ── 📈 统计面板 ── */
@@ -3831,7 +4519,9 @@ function renderStatsPanel(state) {
   const bs = state.body_status || {};
   const ts = state.tier1_stats || {};
   const mem = state.mem_usage || {};
-  const gate = state.autonomous_chain_gate || {};
+  const obs = state.autonomous_observation || {};
+  const runtime = obs.runtime || {};
+  const userSignal = runtime.user_chain_signal || {};
 
   const drill = document.createElement('div');
   drill.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:6px;';
@@ -3878,11 +4568,11 @@ function renderStatsPanel(state) {
   gateSec.className = 'lm-section';
   gateSec.innerHTML = '<div class="lm-section-label">⚙️ 治理状态</div>';
   [
-    {icon:'🔮', label:'自主链路', value: gate.autonomous_chain_gate_active ? '✅ 已激活' : '⏸ 未激活'},
+    {icon:'🔮', label:'自主链路', value: runtime.autonomous_chain_gate_active ? '✅ 已激活' : '⏸ 未激活'},
     {icon:'🌐', label:'执行模式', value: '全天候'},
-    {icon:'👁', label:'用户链路感知', value: state.active_sessions || 0},
-    {icon:'📡', label:'驱动可用', value: state.drive_available ? '✅' : '⚠️ 不可用'},
-    {icon:'📋', label:'活跃执行', value: (state.active_executions || []).length || 0},
+    {icon:'👁', label:'用户链路感知', value: userSignal.active_sessions || 0},
+    {icon:'📡', label:'驱动可用', value: runtime.drive_available ? '✅' : '⚠️ 不可用'},
+    {icon:'📋', label:'闭环当前态', value: ((obs.board || {}).current_cards || []).length || 0},
   ].forEach(s => {
     const row = document.createElement('div');
     row.className = 'lm-stat-row';
@@ -3965,7 +4655,7 @@ function applyState(state) {
   updateDockCharStrip(state);
 
   // 渲染已打开的面板
-  if (panelOpen === 'tasks') renderTasksPanel(state);
+  if (panelOpen === 'chain') renderChainPanel(state);
   if (panelOpen === 'lminput') renderLMInputPanel(state);
   if (panelOpen === 'cognition') renderCognitionPanel(state);
   if (panelOpen === 'observation') renderObservationPanel(state);
@@ -4092,6 +4782,8 @@ class SupervisorUIMixin:
             self._load_supervisor_ui_activity(),
             maxlen=self.config.ui_activity_buffer_size,
         )
+        self._supervisor_ui_activity_guards_cache: Dict[str, Any] = {}
+        self._supervisor_ui_memory_stats_cache: Dict[str, Any] = {}
 
     def _record_supervisor_ui_activity(
         self,
@@ -4234,10 +4926,117 @@ class SupervisorUIMixin:
         data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         return f"event: {event_name}\ndata: {data}\n\n"
 
+    def _default_ui_activity_guard_snapshot(self) -> Dict[str, Any]:
+        return {
+            "activity": {"active_sessions": 0, "counts": {}},
+            "checks": {},
+            "decisions": {},
+            "thresholds": {},
+            "user_chain_signal": {
+                "scope": "soft_signal_only",
+                "active_sessions": 0,
+                "is_quiet": True,
+                "quiet_after_seconds": 600,
+            },
+            "autonomous_chain_gate_active": bool(
+                getattr(getattr(self, "_service_runtime", None), "autonomous_chain_gate_active", False)
+            ),
+            "snapshot_source": "default",
+        }
+
+    async def _load_ui_activity_guard_snapshot(
+        self,
+        *,
+        timeout_seconds: float = 0.8,
+    ) -> tuple[Dict[str, Any], bool]:
+        default_snapshot = self._default_ui_activity_guard_snapshot()
+        try:
+            payload = await asyncio.wait_for(
+                self.evaluate_activity_guards({}),
+                timeout=max(float(timeout_seconds), 0.05),
+            )
+        except Exception:
+            cached = dict(getattr(self, "_supervisor_ui_activity_guards_cache", {}) or {})
+            if cached:
+                cached["snapshot_source"] = "cached"
+                cached["autonomous_chain_gate_active"] = bool(
+                    cached.get(
+                        "autonomous_chain_gate_active",
+                        default_snapshot.get("autonomous_chain_gate_active", False),
+                    )
+                )
+                return cached, False
+            return default_snapshot, False
+
+        normalized = {
+            "activity": dict(payload.get("activity") or {}),
+            "checks": dict(payload.get("checks") or {}),
+            "decisions": dict(payload.get("decisions") or {}),
+            "thresholds": dict(payload.get("thresholds") or {}),
+            "user_chain_signal": dict(payload.get("user_chain_signal") or {}),
+            "autonomous_chain_gate_active": bool(
+                payload.get(
+                    "autonomous_chain_gate_active",
+                    default_snapshot.get("autonomous_chain_gate_active", False),
+                )
+            ),
+            "snapshot_source": "live",
+        }
+        if not normalized["user_chain_signal"]:
+            normalized["user_chain_signal"] = dict(default_snapshot["user_chain_signal"])
+        normalized["user_chain_signal"]["scope"] = str(
+            normalized["user_chain_signal"].get("scope") or "soft_signal_only"
+        ).strip() or "soft_signal_only"
+        self._supervisor_ui_activity_guards_cache = dict(normalized)
+        return normalized, True
+
+    async def _load_ui_memory_stats(
+        self,
+        *,
+        timeout_seconds: float = 0.8,
+    ) -> Dict[str, Any]:
+        try:
+            stats = await asyncio.wait_for(
+                self._fetch_tier1_stats(),
+                timeout=max(float(timeout_seconds), 0.05),
+            )
+        except Exception:
+            cached = dict(getattr(self, "_supervisor_ui_memory_stats_cache", {}) or {})
+            if cached:
+                cached["snapshot_source"] = "cached"
+                return cached
+            return {
+                "memory_unavailable": True,
+                "memory_unavailable_reason": "ui_snapshot_unavailable",
+                "memory_active": False,
+                "snapshot_source": "default",
+            }
+
+        normalized = dict(stats or {})
+        normalized["snapshot_source"] = "live"
+        self._supervisor_ui_memory_stats_cache = dict(normalized)
+        return normalized
+
+    async def _load_ui_observation_timeline(
+        self,
+        *,
+        limit: int = 12,
+        timeout_seconds: float = 0.8,
+    ) -> List[Dict[str, Any]]:
+        try:
+            return await asyncio.wait_for(
+                self._recent_supervisor_observation_timeline(limit=limit),
+                timeout=max(float(timeout_seconds), 0.05),
+            )
+        except Exception:
+            return self._recent_supervisor_ui_activity(limit=limit)
+
     async def get_supervisor_ui_state(self) -> Dict[str, Any]:
+        backlog_tasks = list(self._self_evolution_queue.list_governance_backlog_tasks())
+        writeback_history_tasks = list(self._self_evolution_queue.list_writeback_history())
         all_serialized_tasks = [
             self._serialize_self_evolution_task(task)
-            for task in self._self_evolution_queue.list_tasks()
+            for task in [*backlog_tasks, *writeback_history_tasks]
         ]
         all_serialized_tasks.sort(
             key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""),
@@ -4246,36 +5045,23 @@ class SupervisorUIMixin:
 
         visible_tasks = [
             self._serialize_self_evolution_task(task)
-            for task in self._self_evolution_queue.list_tasks()
-            if task.status in {"planned", "deferred", "paused", "approved", "running"}
+            for task in backlog_tasks
         ]
         visible_tasks.sort(key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
 
         drive_candidates: List[Dict[str, Any]] = self._latest_drive_candidate_snapshot()
-        drive_available = True
-        activity_guard_snapshot: Dict[str, Any] = {}
-        try:
-            activity_guard_snapshot = await self.evaluate_activity_guards({})
-        except Exception:
-            drive_available = False
-        if (
-            drive_available
-            and not drive_candidates
-            and not bool(getattr(getattr(self, "_service_runtime", None), "suppress_candidate_refresh", False))
-        ):
-            try:
-                evaluation = await self.evaluate_endogenous_drive(
-                    {"record_activity": False, "persist_evaluation": False}
-                )
-                fallback_candidates = evaluation.get("candidates") if isinstance(evaluation, dict) else None
-                if isinstance(fallback_candidates, list):
-                    drive_candidates = [
-                        dict(item) for item in fallback_candidates if isinstance(item, dict)
-                    ]
-            except Exception:
-                pass
 
         # Extract metrics from gateway activity for richer UI expression
+        (
+            activity_guard_snapshot_with_status,
+            tier1_stats,
+            observation_timeline,
+        ) = await asyncio.gather(
+            self._load_ui_activity_guard_snapshot(),
+            self._load_ui_memory_stats(),
+            self._load_ui_observation_timeline(limit=12),
+        )
+        activity_guard_snapshot, drive_available = activity_guard_snapshot_with_status
         activity = dict(activity_guard_snapshot.get("activity") or {})
         counts = dict(activity.get("counts") or {})
         error_count = int(counts.get("error_count") or 0)
@@ -4323,19 +5109,24 @@ class SupervisorUIMixin:
         except Exception:
             pass
 
-        # ── Tier 1 short-term memory stats ──
-        tier1_stats: Dict[str, Any] = {}
-        try:
-            tier1_stats = await self._fetch_tier1_stats()
-        except Exception:
-            pass
-
         # ── Web room observation model ──
         autonomous_observation = self._build_autonomous_observation(
             visible_tasks,
             drive_candidates=drive_candidates,
+            drive_available=drive_available,
+            autonomous_chain_gate_active=bool(
+                activity_guard_snapshot.get("autonomous_chain_gate_active", False)
+            ),
             history_tasks=all_serialized_tasks,
+            timeline=observation_timeline,
         )
+        try:
+            autonomous_observation = await asyncio.wait_for(
+                self._attach_recent_trace_details_to_observation(autonomous_observation),
+                timeout=1.0,
+            )
+        except Exception:
+            pass
         metrics = self._build_ui_metrics(
             all_serialized_tasks,
             visible_tasks=visible_tasks,
@@ -4483,7 +5274,14 @@ class SupervisorUIMixin:
             "autonomous_chain_gate_active": bool(
                 activity_guard_snapshot.get("autonomous_chain_gate_active", False)
             ),
+            "snapshot_source": str(activity_guard_snapshot.get("snapshot_source") or "default"),
         }
+        autonomous_runtime = dict(autonomous_observation.get("runtime") or {})
+        autonomous_runtime["activity_guards"] = ui_activity_guards
+        autonomous_runtime["user_chain_signal"] = dict(ui_activity_guards.get("user_chain_signal") or {})
+        autonomous_runtime["eligibility"] = dict(ui_activity_guards.get("decisions") or {})
+        autonomous_observation["runtime"] = autonomous_runtime
+        autonomous_observation["metrics"] = metrics
 
         return {
             "status": "ok",
@@ -4491,28 +5289,15 @@ class SupervisorUIMixin:
             "title": title,
             "summary": summary,
             "generated_at": datetime.utcnow().isoformat(),
-            "tasks": visible_tasks[:12],
             "autonomous_observation": autonomous_observation,
             "schedule": schedule,
-            "metrics": metrics,
             "mem_usage": mem_usage,
             "tier1_stats": tier1_stats,
             "body_status": body_status,
-            "drive_candidates": drive_candidates,
-            "drive_available": drive_available,
             "error_count": error_count,
-            "active_sessions": int(activity.get("active_sessions") or 0),
-            "activity_guards": ui_activity_guards,
-            "timeline": await self._recent_supervisor_observation_timeline(limit=10),
+            "timeline": observation_timeline[:10],
             "lm_input": lm_input,
             "cognition": cognition,
-            "autonomous_chain_gate": self._autonomous_chain_gate_status(),
-            "active_executions": [
-                self._serialize_self_evolution_task(task)
-                for task in self._self_evolution_queue.list_tasks()
-                if task.status == "running"
-                and not task.metadata.get("execution_failed")
-            ],
         }
 
     def _is_creativity_ui_task(self, task: Dict[str, Any]) -> bool:
@@ -4549,8 +5334,354 @@ class SupervisorUIMixin:
         }
         return mapping.get(status, status or "待定")
 
+    def _loop_stage_status_label(self, status: str) -> str:
+        mapping = {
+            "active": "当前在途",
+            "ready": "已观察到",
+            "idle": "等待中",
+        }
+        return mapping.get(str(status or "").strip().lower(), "等待中")
+
     def _observation_role_tag(self, task: Dict[str, Any]) -> str:
         return "agent" if self._is_creativity_ui_task(task) else "supervisor"
+
+    def _build_observation_card(
+        self,
+        payload: Optional[Dict[str, Any]],
+        *,
+        lane: str,
+        display_status: Optional[str] = None,
+        status: Optional[str] = None,
+        summary_override: Optional[str] = None,
+        observation_role: Optional[str] = None,
+        title_override: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if not isinstance(payload, dict):
+            return None
+        card = dict(payload)
+        card["lane"] = str(lane or card.get("lane") or "supervisor").strip() or "supervisor"
+        if title_override is not None:
+            card["title"] = str(title_override).strip() or card.get("title") or "未命名"
+        else:
+            card["title"] = str(card.get("title") or "未命名").strip() or "未命名"
+        if summary_override is not None:
+            card["summary"] = str(summary_override).strip()[:160]
+        elif card.get("summary") is not None:
+            card["summary"] = str(card.get("summary") or "").strip()[:160]
+        metadata = dict(card.get("metadata") or {})
+        card["metadata"] = metadata
+        if observation_role is not None:
+            card["observation_role"] = observation_role
+        if status is not None:
+            card["status"] = str(status).strip().lower()
+        else:
+            card["status"] = str(card.get("status") or "").strip().lower()
+        if display_status is not None:
+            card["display_status"] = str(display_status).strip() or "待定"
+        elif card.get("display_status") is None:
+            card["display_status"] = self._observation_display_status(card)
+        return card
+
+    def _build_observation_group(
+        self,
+        *,
+        key: str,
+        label: str,
+        empty_text: str,
+        items: List[Dict[str, Any]],
+        emphasis: str = "neutral",
+        owner: str = "",
+        stage_label: str = "",
+        summary: str = "",
+        order: int = 0,
+    ) -> Dict[str, Any]:
+        return {
+            "key": key,
+            "label": label,
+            "empty_text": empty_text,
+            "emphasis": emphasis,
+            "owner": owner,
+            "stage_label": stage_label,
+            "summary": summary,
+            "order": order,
+            "count": len(items),
+            "items": list(items),
+        }
+
+    def _recent_chain_section_events(
+        self,
+        *,
+        key: str,
+        items: List[Dict[str, Any]],
+        timeline: List[Dict[str, Any]],
+        limit: int = 4,
+    ) -> List[Dict[str, Any]]:
+        task_ids = {
+            str(item.get("task_id") or "").strip()
+            for item in items
+            if isinstance(item, dict) and str(item.get("task_id") or "").strip()
+        }
+        trace_ids = {
+            str(item.get("trace_id") or "").strip()
+            for item in items
+            if isinstance(item, dict) and str(item.get("trace_id") or "").strip()
+        }
+
+        def _matches(event: Dict[str, Any]) -> bool:
+            event_task_id = str(event.get("task_id") or "").strip()
+            event_trace_id = str(event.get("trace_id") or "").strip()
+            if event_task_id and event_task_id in task_ids:
+                return True
+            if event_trace_id and event_trace_id in trace_ids:
+                return True
+            event_type = str(event.get("event_type") or "").strip().lower()
+            summary = str(event.get("summary") or "").strip().lower()
+            if key == "api_b_candidates":
+                return (
+                    "endogenous_drive" in event_type
+                    or "candidate" in summary
+                    or "候选" in summary
+                )
+            if key == "mem_recent":
+                return "writeback" in event_type or "写回" in summary
+            return False
+
+        matched: List[Dict[str, Any]] = []
+        for event in timeline:
+            if not isinstance(event, dict) or not _matches(event):
+                continue
+            matched.append(
+                {
+                    "recorded_at": event.get("recorded_at"),
+                    "source": str(event.get("source") or "").strip(),
+                    "event_type": str(event.get("event_type") or "").strip(),
+                    "summary": str(event.get("summary") or "").strip()[:160],
+                    "task_id": str(event.get("task_id") or "").strip(),
+                    "trace_id": str(event.get("trace_id") or "").strip(),
+                }
+            )
+            if len(matched) >= max(int(limit), 1):
+                break
+        return matched
+
+    def _recent_chain_section_traces(
+        self,
+        *,
+        items: List[Dict[str, Any]],
+        recent_events: List[Dict[str, Any]],
+        limit: int = 3,
+    ) -> List[Dict[str, Any]]:
+        titles_by_trace: Dict[str, List[str]] = {}
+        task_ids_by_trace: Dict[str, List[str]] = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            trace_id = str(item.get("trace_id") or "").strip()
+            if not trace_id:
+                continue
+            title = str(item.get("title") or "").strip()
+            task_id = str(item.get("task_id") or "").strip()
+            if title:
+                titles = titles_by_trace.setdefault(trace_id, [])
+                if title not in titles:
+                    titles.append(title)
+            if task_id:
+                task_ids = task_ids_by_trace.setdefault(trace_id, [])
+                if task_id not in task_ids:
+                    task_ids.append(task_id)
+
+        traces: List[Dict[str, Any]] = []
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for event in recent_events:
+            trace_id = str((event or {}).get("trace_id") or "").strip()
+            if not trace_id:
+                continue
+            grouped.setdefault(trace_id, []).append(dict(event))
+
+        for trace_id, events in grouped.items():
+            if not events:
+                continue
+            first = dict(events[0])
+            sources: List[str] = []
+            task_ids = list(task_ids_by_trace.get(trace_id) or [])
+            for event in events:
+                source = str(event.get("source") or "").strip()
+                if source and source not in sources:
+                    sources.append(source)
+                event_task_id = str(event.get("task_id") or "").strip()
+                if event_task_id and event_task_id not in task_ids:
+                    task_ids.append(event_task_id)
+            traces.append(
+                {
+                    "trace_id": trace_id,
+                    "event_count": len(events),
+                    "last_seen_at": first.get("recorded_at"),
+                    "last_event_type": str(first.get("event_type") or "").strip(),
+                    "latest_summary": str(first.get("summary") or "").strip()[:160],
+                    "sources": sources,
+                    "task_ids": task_ids,
+                    "task_titles": list(titles_by_trace.get(trace_id) or []),
+                }
+            )
+        traces.sort(key=lambda item: str(item.get("last_seen_at") or ""), reverse=True)
+        return traces[: max(int(limit), 1)]
+
+    def _attach_chain_section_activity(
+        self,
+        *,
+        queue_sections: List[Dict[str, Any]],
+        timeline: List[Dict[str, Any]],
+        activity_items_by_key: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    ) -> List[Dict[str, Any]]:
+        enriched: List[Dict[str, Any]] = []
+        for group in queue_sections:
+            section = dict(group or {})
+            items = [
+                dict(item)
+                for item in list(section.get("items") or [])
+                if isinstance(item, dict)
+            ]
+            activity_items = [
+                dict(item)
+                for item in list((activity_items_by_key or {}).get(str(section.get("key") or "").strip()) or [])
+                if isinstance(item, dict)
+            ]
+            recent_events = self._recent_chain_section_events(
+                key=str(section.get("key") or "").strip(),
+                items=[*items, *activity_items],
+                timeline=timeline,
+            )
+            section["items"] = items
+            section["recent_events"] = recent_events
+            section["recent_event_count"] = len(recent_events)
+            section["latest_trace_id"] = next(
+                (
+                    str(event.get("trace_id") or "").strip()
+                    for event in recent_events
+                    if str(event.get("trace_id") or "").strip()
+                ),
+                "",
+            )
+            section["recent_traces"] = self._recent_chain_section_traces(
+                items=[*items, *activity_items],
+                recent_events=recent_events,
+            )
+            enriched.append(section)
+        return enriched
+
+    async def _load_recent_trace_details(
+        self,
+        trace_ids: List[str],
+        *,
+        limit: int = 6,
+    ) -> Dict[str, Dict[str, Any]]:
+        normalized: List[str] = []
+        for trace_id in trace_ids:
+            candidate = str(trace_id or "").strip()
+            if not candidate or candidate in normalized:
+                continue
+            normalized.append(candidate)
+            if len(normalized) >= max(int(limit), 1):
+                break
+
+        async def _load(trace_id: str) -> tuple[str, Dict[str, Any]]:
+            try:
+                payload = await self.get_runtime_trace(trace_id)
+            except Exception:
+                return trace_id, {
+                    "trace_id": trace_id,
+                    "found": False,
+                    "timeline_preview": [],
+                }
+
+            summary = dict(payload.get("summary") or {})
+            timeline = [
+                dict(event)
+                for event in list(payload.get("timeline") or [])
+                if isinstance(event, dict)
+            ]
+            preview = [
+                {
+                    "recorded_at": event.get("recorded_at"),
+                    "source": str(event.get("source") or "").strip(),
+                    "event_type": str(event.get("event_type") or "").strip(),
+                    "summary": str(event.get("summary") or "").strip()[:160],
+                    "task_id": str(event.get("task_id") or "").strip(),
+                    "decision_id": str(event.get("decision_id") or "").strip(),
+                }
+                for event in reversed(timeline[-6:])
+            ]
+            all_events = [
+                {
+                    "recorded_at": event.get("recorded_at"),
+                    "source": str(event.get("source") or "").strip(),
+                    "event_type": str(event.get("event_type") or "").strip(),
+                    "summary": str(event.get("summary") or "").strip()[:160],
+                    "task_id": str(event.get("task_id") or "").strip(),
+                    "decision_id": str(event.get("decision_id") or "").strip(),
+                }
+                for event in reversed(timeline[-20:])
+            ]
+            return trace_id, {
+                "trace_id": trace_id,
+                "found": bool(payload.get("found")),
+                "record_count": int(summary.get("record_count") or 0),
+                "first_seen_at": summary.get("first_seen_at"),
+                "last_seen_at": summary.get("last_seen_at"),
+                "source_counts": dict(summary.get("sources") or {}),
+                "task_ids": list(summary.get("task_ids") or []),
+                "decision_ids": list(summary.get("decision_ids") or []),
+                "task_families": list(summary.get("task_families") or []),
+                "execution_kinds": list(summary.get("execution_kinds") or []),
+                "timeline_preview": preview,
+                "timeline_events": all_events,
+            }
+
+        results = await asyncio.gather(*[_load(trace_id) for trace_id in normalized])
+        return {trace_id: detail for trace_id, detail in results}
+
+    async def _attach_recent_trace_details_to_observation(
+        self,
+        observation: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        queue = dict(observation.get("queue") or {})
+        sections = [
+            dict(section)
+            for section in list(queue.get("sections") or [])
+            if isinstance(section, dict)
+        ]
+        trace_ids: List[str] = []
+        for section in sections:
+            for trace in list(section.get("recent_traces") or []):
+                if not isinstance(trace, dict):
+                    continue
+                trace_id = str(trace.get("trace_id") or "").strip()
+                if trace_id and trace_id not in trace_ids:
+                    trace_ids.append(trace_id)
+        if not trace_ids:
+            return observation
+
+        details = await self._load_recent_trace_details(trace_ids)
+        enriched_sections: List[Dict[str, Any]] = []
+        for section in sections:
+            traces: List[Dict[str, Any]] = []
+            for trace in list(section.get("recent_traces") or []):
+                if not isinstance(trace, dict):
+                    continue
+                trace_payload = dict(trace)
+                trace_id = str(trace_payload.get("trace_id") or "").strip()
+                if trace_id:
+                    trace_payload["detail"] = dict(details.get(trace_id) or {})
+                traces.append(trace_payload)
+            section["recent_traces"] = traces
+            latest_trace_id = str(section.get("latest_trace_id") or "").strip()
+            if latest_trace_id and latest_trace_id in details:
+                section["latest_trace_detail"] = dict(details.get(latest_trace_id) or {})
+            enriched_sections.append(section)
+
+        queue["sections"] = enriched_sections
+        observation["queue"] = queue
+        return observation
 
     def _observation_schedule_token(self, payload: Dict[str, Any]) -> str:
         if not isinstance(payload, dict):
@@ -4584,7 +5715,10 @@ class SupervisorUIMixin:
         all_tasks: List[Dict[str, Any]],
         *,
         drive_candidates: List[Dict[str, Any]],
+        drive_available: bool,
+        autonomous_chain_gate_active: bool,
         history_tasks: Optional[List[Dict[str, Any]]] = None,
+        timeline: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         creativity_tasks = [
             task for task in all_tasks if self._is_creativity_ui_task(task)
@@ -4621,14 +5755,15 @@ class SupervisorUIMixin:
         }
 
         observed_tasks = [
-            {
-                **task,
-                "lane": self._observation_role_tag(task),
-                "display_status": self._observation_display_status(task),
-            }
+            self._build_observation_card(
+                task,
+                lane=self._observation_role_tag(task),
+                observation_role="observed_task",
+            )
             for task in sorted(all_tasks, key=self._observation_sort_key)
             if task.get("task_id") not in active_ids
         ]
+        observed_tasks = [task for task in observed_tasks if isinstance(task, dict)]
 
         seen_keys = {
             str(task.get("metadata", {}).get("endogenous_drive_key") or "").strip()
@@ -4654,12 +5789,15 @@ class SupervisorUIMixin:
                 continue
             if candidate_title and candidate_title in seen_titles:
                 continue
-            candidates.append(
-                {
-                    **candidate,
-                    "display_status": "API-B 候选判断",
-                }
+            candidate_card = self._build_observation_card(
+                candidate,
+                lane="supervisor",
+                display_status="API-B 候选判断",
+                status="candidate",
+                observation_role="candidate",
             )
+            if candidate_card is not None:
+                candidates.append(candidate_card)
             if candidate_key:
                 seen_keys.add(candidate_key)
             if candidate_title:
@@ -4679,6 +5817,17 @@ class SupervisorUIMixin:
         recent_writebacks = [
             self._build_autonomous_writeback_summary(task)
             for task in completed_tasks[:3]
+        ]
+        recent_writeback_cards = [
+            self._build_observation_card(
+                item,
+                lane="mem",
+                observation_role="mem_writeback",
+            )
+            for item in recent_writebacks
+        ]
+        recent_writeback_cards = [
+            item for item in recent_writeback_cards if isinstance(item, dict)
         ]
 
         if drive_candidates or supervisor_active or api_b_pending:
@@ -4719,12 +5868,199 @@ class SupervisorUIMixin:
             reread_status = "idle"
             reread_summary = "等待新的 Mem 写回结果进入下一轮判断"
 
+        api_b_current = self._build_observation_card(
+            supervisor_active
+            or (candidates[0] if candidates else None)
+            or (api_b_pending[0] if api_b_pending else None)
+            or {"title": "API-B 判断"},
+            lane="supervisor",
+            display_status=self._loop_stage_status_label(api_b_status),
+            status=api_b_status,
+            summary_override=api_b_summary,
+            observation_role="api_b_judgement",
+            title_override=(
+                str((supervisor_active or {}).get("title") or "").strip()
+                or str((candidates[0] if candidates else {}).get("title") or "").strip()
+                or str((api_b_pending[0] if api_b_pending else {}).get("title") or "").strip()
+                or "API-B 判断"
+            ),
+        )
+        api_a_current = self._build_observation_card(
+            agent_active
+            or (api_a_pending[0] if api_a_pending else None)
+            or {"title": "API-A 自主执行"},
+            lane="agent",
+            display_status=self._loop_stage_status_label(api_a_status),
+            status=api_a_status,
+            summary_override=api_a_summary,
+            observation_role="api_a_execution",
+            title_override=(
+                str((agent_active or {}).get("title") or "").strip()
+                or str((api_a_pending[0] if api_a_pending else {}).get("title") or "").strip()
+                or "API-A 自主执行"
+            ),
+        )
+        mem_current = self._build_observation_card(
+            (recent_writeback_cards[0] if recent_writeback_cards else None)
+            or {"title": "Mem 写回"},
+            lane="mem",
+            display_status=self._loop_stage_status_label(writeback_status),
+            status=writeback_status,
+            summary_override=writeback_summary,
+            observation_role="mem_writeback",
+            title_override=(
+                str((recent_writeback_cards[0] if recent_writeback_cards else {}).get("title") or "").strip()
+                or "Mem 写回"
+            ),
+        )
+        reread_card = self._build_observation_card(
+            {"title": "API-B 再读取", "summary": reread_summary},
+            lane="supervisor",
+            display_status=self._loop_stage_status_label(reread_status),
+            status=reread_status,
+            summary_override=reread_summary,
+            observation_role="api_b_reread",
+        )
+        api_b_active_task = (
+            self._build_observation_card(
+                supervisor_active,
+                lane="supervisor",
+                observation_role="api_b_active_task",
+            )
+            if supervisor_active
+            else None
+        )
+        api_a_active_task = (
+            self._build_observation_card(
+                agent_active,
+                lane="agent",
+                observation_role="api_a_active_task",
+            )
+            if agent_active
+            else None
+        )
+
+        queue_sections = [
+            self._build_observation_group(
+                key="api_b_backlog",
+                label="API-B 治理在途",
+                empty_text="当前没有新的 API-B 治理在途任务",
+                items=api_b_pending[:6],
+                emphasis="supervisor",
+                owner="API-B",
+                stage_label="判断与治理",
+                summary="等待 API-B 判断、审批、延后或复核的治理在途任务。",
+                order=1,
+            ),
+            self._build_observation_group(
+                key="api_a_ready",
+                label="API-A 待拉取",
+                empty_text="当前没有等待 API-A 拉取的自主任务",
+                items=api_a_pending[:6],
+                emphasis="agent",
+                owner="API-A",
+                stage_label="自主执行",
+                summary="已经放行、等待 API-A 最小执行面拉取的自主任务。",
+                order=2,
+            ),
+            self._build_observation_group(
+                key="api_b_candidates",
+                label="API-B 候选判断",
+                empty_text="当前没有新的 API-B 候选判断",
+                items=candidates[:6],
+                emphasis="candidate",
+                owner="API-B",
+                stage_label="候选形成",
+                summary="内生驱动刚形成、尚待 API-B 判断是否进入治理链路的候选。",
+                order=0,
+            ),
+            self._build_observation_group(
+                key="mem_recent",
+                label="Mem 最近写回",
+                empty_text="尚未观察到新的 Mem 写回记录",
+                items=recent_writeback_cards[:4],
+                emphasis="mem",
+                owner="Mem",
+                stage_label="写回回流",
+                summary="最近完成并已经回流到 Mem 的自主链路结果记录。",
+                order=3,
+            ),
+        ]
+        queue_sections = self._attach_chain_section_activity(
+            queue_sections=queue_sections,
+            timeline=[
+                dict(event)
+                for event in list(timeline or [])
+                if isinstance(event, dict)
+            ],
+            activity_items_by_key={
+                "api_b_backlog": [
+                    item
+                    for item in (api_b_current, api_b_active_task, *api_b_pending)
+                    if isinstance(item, dict)
+                ],
+                "api_a_ready": [
+                    item
+                    for item in (api_a_current, api_a_active_task, *api_a_pending)
+                    if isinstance(item, dict)
+                ],
+                "api_b_candidates": [
+                    item
+                    for item in candidates
+                    if isinstance(item, dict)
+                ],
+                "mem_recent": [
+                    item
+                    for item in (mem_current, *recent_writeback_cards)
+                    if isinstance(item, dict)
+                ],
+            },
+        )
+        focus_card = next(
+            (
+                card
+                for card in (api_b_current, api_a_current, mem_current, reread_card)
+                if isinstance(card, dict)
+                and str(card.get("status") or "").strip().lower() in {"active", "ready"}
+            ),
+            api_b_current,
+        )
+        board = {
+            "headline": "自主链路闭环观测",
+            "summary": (
+                "Web 小屋只读展示 API-B 判断、API-A 自主执行、Mem 写回与 API-B 再读取；"
+                "用户链路只作为软感知信号。"
+            ),
+            "primary_focus": {
+                "title": str((focus_card or {}).get("title") or "自主链路闭环").strip(),
+                "status": str((focus_card or {}).get("display_status") or "等待中").strip(),
+                "summary": str((focus_card or {}).get("summary") or "").strip(),
+                "observation_role": str((focus_card or {}).get("observation_role") or "").strip(),
+            },
+            "current_cards": [
+                card
+                for card in (api_b_current, api_a_current, mem_current, reread_card)
+                if isinstance(card, dict)
+            ],
+        }
+
         return {
+            "read_model_version": 3,
             "mode": {
                 "label": "观测模式",
                 "scope": "api_b_autonomous_chain_only",
                 "status_text": "只读观测 API-B 与自主任务",
             },
+            "runtime": {
+                "drive_available": bool(drive_available),
+                "autonomous_chain_gate_active": bool(autonomous_chain_gate_active),
+            },
+            "queue": {
+                "headline": "自主链路片段观察",
+                "summary": "显式展示 API-B 候选形成、治理在途、API-A 待拉取与 Mem 最近写回四段链路片段。",
+                "sections": queue_sections,
+            },
+            "board": board,
             "loop": {
                 "boundary": (
                     "自主链路闭环只展示 API-B 判断、API-A 自主执行、Mem 写回和 API-B 再读取；"
@@ -4764,37 +6100,29 @@ class SupervisorUIMixin:
             },
             "api_b": {
                 "scope": "supervisor_governance",
-                "active": (
-                    {
-                        **supervisor_active,
-                        "lane": "supervisor",
-                        "display_status": self._observation_display_status(supervisor_active),
-                    }
-                    if supervisor_active
-                    else None
-                ),
+                "current": api_b_current,
+                "active": api_b_active_task,
                 "pending": api_b_pending[:8],
                 "pending_count": len(api_b_pending),
             },
             "api_a": {
                 "scope": "autonomous_executor",
-                "active": (
-                    {
-                        **agent_active,
-                        "lane": "agent",
-                        "display_status": self._observation_display_status(agent_active),
-                    }
-                    if agent_active
-                    else None
-                ),
+                "current": api_a_current,
+                "active": api_a_active_task,
                 "pending": api_a_pending[:8],
                 "pending_count": len(api_a_pending),
             },
             "mem": {
                 "scope": "writeback_memory",
-                "latest": recent_writebacks[0] if recent_writebacks else None,
-                "recent": recent_writebacks[:3],
+                "current": mem_current,
+                "latest": recent_writeback_cards[0] if recent_writeback_cards else None,
+                "recent": recent_writeback_cards[:3],
                 "recent_count": len(recent_writebacks),
+            },
+            "reread": {
+                "current": reread_card,
+                "status": reread_status,
+                "summary": reread_summary,
             },
             "observed_tasks": observed_tasks[:12],
             "candidates": candidates[:8],
@@ -4803,6 +6131,8 @@ class SupervisorUIMixin:
                 "active": sum(1 for task in (supervisor_active, agent_active) if task),
                 "candidates": len(candidates),
                 "writebacks": len(recent_writebacks),
+                "api_b_backlog": len(api_b_pending),
+                "api_a_ready": len(api_a_pending),
             },
         }
 

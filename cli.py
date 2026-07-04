@@ -2435,22 +2435,79 @@ class VoidcubeCLI:
             return 0
         return len(self._build_autonomous_execution_panel_rows())
 
+    @staticmethod
+    def _autonomous_observation_board(state: Dict[str, Any]) -> Dict[str, Any]:
+        observation = dict(state.get("autonomous_observation") or {})
+        return dict(observation.get("board") or {})
+
+    @staticmethod
+    def _autonomous_observation_queue(state: Dict[str, Any]) -> Dict[str, Any]:
+        observation = dict(state.get("autonomous_observation") or {})
+        return dict(observation.get("queue") or {})
+
+    def _autonomous_observation_group_items(
+        self,
+        state: Dict[str, Any],
+        group_key: str,
+    ) -> list[Dict[str, Any]]:
+        queue = self._autonomous_observation_queue(state)
+        groups = [
+            dict(item)
+            for item in list(queue.get("sections") or [])
+            if isinstance(item, dict)
+        ]
+        for group in groups:
+            if str(group.get("key") or "").strip() != group_key:
+                continue
+            return [
+                dict(item)
+                for item in list(group.get("items") or [])
+                if isinstance(item, dict)
+            ]
+        return []
+
+    def _autonomous_observation_current_cards(self, state: Dict[str, Any]) -> list[Dict[str, Any]]:
+        board = self._autonomous_observation_board(state)
+        return [
+            dict(item)
+            for item in list(board.get("current_cards") or [])
+            if isinstance(item, dict)
+        ]
+
+    def _autonomous_observation_current_card(
+        self,
+        state: Dict[str, Any],
+        *roles: str,
+    ) -> Dict[str, Any]:
+        wanted = {
+            str(role or "").strip()
+            for role in roles
+            if str(role or "").strip()
+        }
+        if not wanted:
+            return {}
+        for item in self._autonomous_observation_current_cards(state):
+            role = str(item.get("observation_role") or "").strip()
+            if role in wanted:
+                return item
+        return {}
+
     def _resolve_autonomous_panel_focus_task(self, supervisor_state: Dict[str, Any]) -> Dict[str, Any]:
         current = getattr(self, "_current_autonomous_task", None) or {}
         if current.get("task_id"):
             return current
-        for task in list(supervisor_state.get("tasks") or []):
-            if str(task.get("status") or "").strip().lower() not in {"approved", "running"}:
-                continue
-            task_family = str(
-                task.get("execution_kind")
-                or task.get("task_family")
-                or task.get("governance_task_type")
-                or task.get("task_type")
-                or ""
-            ).strip().lower()
-            if task_family in {"self_learning", "body_improvement"}:
-                return dict(task)
+        observation = dict(supervisor_state.get("autonomous_observation") or {})
+        api_a = dict(observation.get("api_a") or {})
+        current_card = dict(api_a.get("current") or {})
+        if current_card.get("task_id"):
+            return current_card
+        for task in self._autonomous_observation_group_items(
+            supervisor_state,
+            "api_a_ready",
+        ):
+            task_status = str(task.get("status") or "").strip().lower()
+            if task_status in {"approved", "running"} and task.get("task_id"):
+                return task
         return {}
 
     def _resolve_autonomous_panel_focus_stage(self, focus_task: Dict[str, Any]) -> str:
@@ -2849,11 +2906,10 @@ class VoidcubeCLI:
         api_a = dict(observation.get("api_a") or {})
         learning_tasks = list(api_a.get("pending") or [])
         if not learning_tasks:
-            learning_tasks = [
-                dict(task)
-                for task in list(supervisor_state.get("tasks") or [])
-                if self._autonomous_task_execution_kind(dict(task)) in {"self_learning", "body_improvement"}
-            ]
+            learning_tasks = self._autonomous_observation_group_items(
+                supervisor_state,
+                "api_a_ready",
+            )
         if learning_tasks:
             approved = [
                 task for task in learning_tasks
@@ -2874,11 +2930,28 @@ class VoidcubeCLI:
                     "链路: 当前没有已批准的 API-A 可执行任务；最近自主任务多处于 deferred/待观察",
                 )
 
-        active_executions = list(supervisor_state.get("active_executions") or [])
-        if active_executions:
+        current_cards = self._autonomous_observation_current_cards(supervisor_state)
+        if any(
+            str(card.get("observation_role") or "").strip()
+            in {"api_b_judgement", "mem_writeback", "api_b_reread"}
+            and str(card.get("status") or "").strip().lower() in {"active", "ready"}
+            for card in current_cards
+        ):
             return (
                 "class:auto-panel-info",
-                "链路: 当前没有新的 API-A 可执行任务；监督者正在处理其他执行路径",
+                "链路: 当前没有新的 API-A 可执行任务；API-B 正在判断、回收写回或推进下一轮再读取",
+            )
+
+        other_execution = self._autonomous_observation_current_card(
+            supervisor_state,
+            "api_b_judgement",
+            "mem_writeback",
+            "api_b_reread",
+        )
+        if other_execution:
+            return (
+                "class:auto-panel-info",
+                "链路: 当前没有新的 API-A 可执行任务；闭环当前焦点仍在 API-B 或 Mem 侧",
             )
 
         return (
@@ -5301,10 +5374,17 @@ class VoidcubeCLI:
 
     def _format_supervisor_status_snapshot(self, state: Dict[str, Any]) -> list[str]:
         lines: list[str] = []
-        metrics = dict(state.get("metrics") or {})
+        observation = dict(state.get("autonomous_observation") or {})
+        metrics = dict(observation.get("metrics") or {})
         by_path = dict(metrics.get("by_path") or {})
         governance = dict(metrics.get("governance") or {})
-        active_executions = list(state.get("active_executions") or [])
+        board = dict(observation.get("board") or {})
+        focus = dict(board.get("primary_focus") or {})
+        current_cards = [
+            dict(item)
+            for item in list(board.get("current_cards") or [])
+            if isinstance(item, dict)
+        ]
         timeline = list(state.get("timeline") or [])
 
         lines.append(f"Scene: {state.get('scene', 'unknown')} — {state.get('title', '')}")
@@ -5322,11 +5402,29 @@ class VoidcubeCLI:
             f"priority_updates={governance.get('priority_updates', 0)}"
         )
 
-        if active_executions:
-            task = active_executions[0]
+        if current_cards:
+            primary = current_cards[0]
             lines.append(
-                f"Active Execution: {task.get('title', 'unknown')} "
-                f"({task.get('execution_kind') or task.get('task_family') or task.get('governance_task_type') or 'task'})"
+                "Autonomous Focus: "
+                f"{primary.get('title', 'unknown')} "
+                f"({primary.get('display_status') or primary.get('status') or 'unknown'})"
+            )
+        elif focus:
+            lines.append(
+                "Autonomous Focus: "
+                f"{focus.get('title', 'unknown')} "
+                f"({focus.get('status') or 'unknown'})"
+            )
+
+        execution_card = self._autonomous_observation_current_card(
+            state,
+            "api_a_execution",
+            "mem_writeback",
+        )
+        if execution_card:
+            lines.append(
+                f"Active Execution: {execution_card.get('title', 'unknown')} "
+                f"({execution_card.get('display_status') or execution_card.get('status') or 'task'})"
             )
 
         if timeline:

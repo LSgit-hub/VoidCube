@@ -20,6 +20,7 @@ from systems.supervisor.supervisor import (
     SupervisorExecutionConfig,
     SupervisorServiceRuntimeConfig,
 )
+from systems.supervisor.ui_runtime import UI_HTML
 from systems.self_learning import LearningRecommendation
 from systems.self_learning.conclusion_store import SelfLearningConclusionStore
 
@@ -32,6 +33,33 @@ def _make_supervisor_config(tmp_path: Path) -> SupervisorConfig:
 
 def _make_supervisor(tmp_path: Path) -> Supervisor:
     return Supervisor(_make_supervisor_config(tmp_path))
+
+
+def _find_autonomous_observation_task(state: dict, *, title: str = "", task_id: str = "") -> dict:
+    observation = dict(state.get("autonomous_observation") or {})
+    candidates: list[dict] = []
+
+    def _append(item):
+        if isinstance(item, dict) and item:
+            candidates.append(item)
+
+    def _append_many(items):
+        for item in list(items or []):
+            _append(item)
+
+    _append_many(observation.get("observed_tasks"))
+    for key in ("api_b", "api_a"):
+        section = dict(observation.get(key) or {})
+        _append(section.get("current"))
+        _append(section.get("active"))
+        _append_many(section.get("pending"))
+
+    for item in candidates:
+        if title and str(item.get("title") or "") == title:
+            return item
+        if task_id and str(item.get("task_id") or "") == task_id:
+            return item
+    raise AssertionError(f"task not found in autonomous observation: title={title!r} task_id={task_id!r}")
 
 
 async def _trigger_memory_compression(supervisor: Supervisor, request: dict | None = None):
@@ -62,6 +90,20 @@ def test_supervisor_wires_execution_facade_to_canonical_executors(tmp_path):
     assert supervisor._execution_facade.body_lifecycle is supervisor._body_lifecycle_executor
     assert supervisor._execution_facade.body_upgrade is supervisor._body_upgrade_executor
     assert supervisor._execution_facade.memory_maintenance is supervisor._memory_maintenance_executor
+
+
+@pytest.mark.unit
+def test_supervisor_room_frontend_uses_chain_panel_contract():
+    assert 'id="panelChain"' in UI_HTML
+    assert 'id="panelChainBody"' in UI_HTML
+    assert 'data-panel="chain"' in UI_HTML
+    assert 'renderChainPanel' in UI_HTML
+    assert 'data-chain-group="' in UI_HTML
+    assert 'data-chain-trace="' in UI_HTML
+    assert 'data-chain-trace-expanded="' in UI_HTML
+    assert 'data-chain-trace-source="' in UI_HTML
+    assert 'panelTasks' not in UI_HTML
+    assert 'renderTasksPanel' not in UI_HTML
 
 
 @pytest.mark.unit
@@ -283,6 +325,62 @@ async def test_supervisor_runtime_trace_list_summarizes_known_traces_without_gat
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_supervisor_runtime_trace_includes_writeback_and_cancelled_chain_records(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+
+    async def empty_gateway_activity_log(trace_id=None, limit=200):
+        return {"status": "ok", "events": []}
+
+    supervisor._fetch_gateway_activity_log = empty_gateway_activity_log  # type: ignore[method-assign]
+
+    completed = await supervisor.plan_self_evolution_task(
+        {"title": "Completed trace record", "trace_id": "trace-runtime-projection-1"}
+    )
+    cancelled = await supervisor.plan_self_evolution_task(
+        {"title": "Cancelled trace record", "trace_id": "trace-runtime-projection-2"}
+    )
+
+    completed_id = completed["tasks"][0]["task_id"]
+    supervisor._self_evolution_queue.update_status(
+        completed_id,
+        status="approved",
+        actor="test",
+        reason="approved for dispatch",
+    )
+    supervisor._self_evolution_queue.update_status(
+        completed_id,
+        status="running",
+        actor="test",
+        reason="dispatch in progress",
+    )
+    supervisor._self_evolution_queue.update_status(
+        completed_id,
+        status="completed",
+        actor="test",
+        reason="writeback finished",
+    )
+    cancelled_id = cancelled["tasks"][0]["task_id"]
+    supervisor._self_evolution_queue.update_status(
+        cancelled_id,
+        status="cancelled",
+        actor="test",
+        reason="cancelled during governance review",
+    )
+
+    completed_trace = await supervisor.get_runtime_trace(completed["tasks"][0]["trace_id"])
+    cancelled_trace = await supervisor.get_runtime_trace(cancelled["tasks"][0]["trace_id"])
+
+    assert completed_trace["found"] is True
+    assert cancelled_trace["found"] is True
+    assert completed_trace["summary"]["task_ids"] == [completed_id]
+    assert cancelled_trace["summary"]["task_ids"] == [cancelled_id]
+    assert completed_trace["sources"]["self_evolution_queue"] >= 2
+    assert cancelled_trace["sources"]["self_evolution_queue"] >= 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_supervisor_runtime_timeline_exposes_recent_unified_trace_records(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
@@ -489,7 +587,9 @@ async def test_supervisor_room_state_maps_memory_task_to_memory_scene(tmp_path):
     state = await supervisor.get_supervisor_ui_state()
 
     assert state["scene"] == "maintenance"
-    assert state["tasks"][0]["title"] == "Run memory continuity sweep"
+    observed = state["autonomous_observation"]["observed_tasks"]
+    assert observed[0]["title"] == "Run memory continuity sweep"
+    assert "tasks" not in state
     assert "整理记忆" in state["title"]
     assert "tasks_planned" in [event["event_type"] for event in state["timeline"]]
     assert "supervisor_activity" in [event["source"] for event in state["timeline"]]
@@ -531,13 +631,41 @@ async def test_supervisor_room_state_read_does_not_create_timeline_events(tmp_pa
 
     state = await supervisor.get_supervisor_ui_state()
 
-    assert state["drive_candidates"]
+    assert state["autonomous_observation"]["candidates"] == []
     assert state["timeline"] == []
     assert "in_execution_window" not in state
-    assert state["active_sessions"] == 2
-    assert state["activity_guards"]["scope"] == "user_chain_soft_signal_only"
-    assert state["activity_guards"]["user_chain_signal"]["active_sessions"] == 2
-    assert state["activity_guards"]["user_chain_signal"]["is_quiet"] is False
+    assert "active_executions" not in state
+    assert "drive_candidates" not in state
+    assert "drive_available" not in state
+    assert "autonomous_chain_gate" not in state
+    assert "active_sessions" not in state
+    assert "activity_guards" not in state
+    assert "metrics" not in state
+    runtime = state["autonomous_observation"]["runtime"]
+    assert runtime["drive_available"] is True
+    assert runtime["autonomous_chain_gate_active"] is False
+    assert runtime["activity_guards"]["scope"] == "user_chain_soft_signal_only"
+    assert runtime["user_chain_signal"]["active_sessions"] == 2
+    assert runtime["user_chain_signal"]["is_quiet"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_falls_back_to_fast_default_snapshots_when_live_probes_fail(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_activity_guards = AsyncMock(side_effect=RuntimeError("gateway down"))  # type: ignore[method-assign]
+    supervisor._fetch_tier1_stats = AsyncMock(side_effect=RuntimeError("memory down"))  # type: ignore[method-assign]
+    supervisor.get_runtime_timeline = AsyncMock(side_effect=RuntimeError("timeline down"))  # type: ignore[method-assign]
+
+    state = await supervisor.get_supervisor_ui_state()
+
+    runtime = state["autonomous_observation"]["runtime"]
+    assert runtime["drive_available"] is False
+    assert runtime["activity_guards"]["snapshot_source"] == "default"
+    assert runtime["user_chain_signal"]["active_sessions"] == 0
+    assert state["tier1_stats"]["memory_unavailable"] is True
+    assert state["tier1_stats"]["snapshot_source"] == "default"
+    assert state["timeline"] == []
 
 
 @pytest.mark.unit
@@ -599,7 +727,10 @@ async def test_supervisor_room_state_exposes_governance_preview_for_shadow_revie
     )
 
     state = await supervisor.get_supervisor_ui_state()
-    duplicate = next(task for task in state["tasks"] if task["title"] == "Duplicate learning branch")
+    duplicate = _find_autonomous_observation_task(
+        state,
+        title="Duplicate learning branch",
+    )
     assert "lm_queue_shadow" not in duplicate["governance_preview"]
     assert all(
         "lm_queue_shadow" not in dict(entry.get("context") or {})
@@ -609,7 +740,7 @@ async def test_supervisor_room_state_exposes_governance_preview_for_shadow_revie
     preview = duplicate["governance_preview"]["lm_governance_shadow"]
     assert preview["action"] == "merge"
     assert preview["merge_into"] == tasks_by_title["Canonical learning branch"]
-    assert state["metrics"]["governance"]["shadow_recommendations"] >= 1
+    assert state["autonomous_observation"]["metrics"]["governance"]["shadow_recommendations"] >= 1
 
 
 @pytest.mark.asyncio
@@ -657,7 +788,10 @@ async def test_supervisor_room_state_exposes_applied_priority_updates(tmp_path, 
     )
 
     state = await supervisor.get_supervisor_ui_state()
-    task = next(item for item in state["tasks"] if item["task_id"] == task_id)
+    task = _find_autonomous_observation_task(
+        state,
+        task_id=task_id,
+    )
     assert task["priority"] == "high"
     assert "lm_queue_priority" not in task["governance_preview"]
     assert all(
@@ -666,7 +800,7 @@ async def test_supervisor_room_state_exposes_applied_priority_updates(tmp_path, 
         if isinstance(entry, dict)
     )
     assert task["governance_preview"]["lm_governance_priority"]["priority"] == "high"
-    assert state["metrics"]["governance"]["priority_updates"] >= 1
+    assert state["autonomous_observation"]["metrics"]["governance"]["priority_updates"] >= 1
 
 
 @pytest.mark.asyncio
@@ -692,7 +826,10 @@ async def test_supervisor_room_state_exposes_task_identity_for_body_improvement(
     task_id = planned["tasks"][0]["task_id"]
 
     state = await supervisor.get_supervisor_ui_state()
-    task = next(item for item in state["tasks"] if item["task_id"] == task_id)
+    task = _find_autonomous_observation_task(
+        state,
+        task_id=task_id,
+    )
 
     assert task["task_identity"]["task_family"] == "body_upgrade"
     assert task["task_identity"]["execution_kind"] == "body_improvement"
@@ -772,24 +909,64 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
     state = await supervisor.get_supervisor_ui_state()
     observation = state["autonomous_observation"]
     observed_titles = [item["title"] for item in observation["observed_tasks"]]
+    board_roles = [item["observation_role"] for item in observation["board"]["current_cards"]]
+    board_titles = [item["title"] for item in observation["board"]["current_cards"]]
+    group_keys = [group["key"] for group in observation["queue"]["sections"]]
 
     assert "queue_layout" not in state
     assert "panels" not in state
+    assert observation["read_model_version"] == 3
     assert observation["mode"]["scope"] == "api_b_autonomous_chain_only"
     assert observation["loop"]["stages"][0]["key"] == "api_b_judgement"
     assert observation["loop"]["stages"][1]["key"] == "api_a_execution"
     assert observation["loop"]["recent_writebacks"] == []
+    assert observation["board"]["headline"] == "自主链路闭环观测"
+    assert "watch_groups" not in observation["board"]
+    assert board_roles == [
+        "api_b_judgement",
+        "api_a_execution",
+        "mem_writeback",
+        "api_b_reread",
+    ]
+    assert board_titles[0] == "Supervisor first task"
+    assert board_titles[1] == "Agent first creative task"
+    assert group_keys == ["api_b_backlog", "api_a_ready", "api_b_candidates", "mem_recent"]
+    assert observation["queue"]["headline"] == "自主链路片段观察"
+    assert [group["key"] for group in observation["queue"]["sections"]] == group_keys
+    assert observation["queue"]["sections"][0]["owner"] == "API-B"
+    assert observation["queue"]["sections"][0]["stage_label"] == "判断与治理"
+    assert isinstance(observation["queue"]["sections"][0]["recent_events"], list)
+    assert observation["queue"]["sections"][0]["recent_event_count"] >= 1
+    assert isinstance(observation["queue"]["sections"][0]["recent_traces"], list)
+    assert observation["queue"]["sections"][0]["recent_traces"][0]["trace_id"] == supervisor_task_1["tasks"][0]["trace_id"]
+    assert observation["queue"]["sections"][0]["recent_traces"][0]["detail"]["record_count"] >= 1
+    assert isinstance(
+        observation["queue"]["sections"][0]["recent_traces"][0]["detail"]["source_counts"],
+        dict,
+    )
+    assert isinstance(
+        observation["queue"]["sections"][0]["recent_traces"][0]["detail"]["timeline_preview"],
+        list,
+    )
+    assert isinstance(
+        observation["queue"]["sections"][0]["recent_traces"][0]["detail"]["timeline_events"],
+        list,
+    )
+    assert observation["queue"]["sections"][0]["latest_trace_detail"]["trace_id"] == supervisor_task_1["tasks"][0]["trace_id"]
     assert observation["api_b"]["active"]["title"] == "Supervisor first task"
     assert observation["api_b"]["active"]["display_status"] == "待执行"
+    assert observation["api_b"]["current"]["display_status"] == "当前在途"
     assert observation["api_a"]["active"]["title"] == "Agent first creative task"
     assert observation["api_a"]["active"]["display_status"] == "待执行"
+    assert observation["api_a"]["current"]["display_status"] == "当前在途"
     assert observed_titles == ["Supervisor second task", "Agent second creative task"]
     assert [item["display_status"] for item in observation["observed_tasks"]] == ["待审核", "待审核"]
     assert [item["lane"] for item in observation["observed_tasks"]] == ["supervisor", "agent"]
-    assert state["metrics"]["slot_overview"] == "slot-A / slot-B"
-    assert state["metrics"]["observed_task_total"] == 4
-    assert state["metrics"]["autonomous_task_total"] == 2
-    assert state["metrics"]["api_b_task_total"] == 2
+    assert observation["metrics"]["slot_overview"] == "slot-A / slot-B"
+    assert observation["metrics"]["observed_task_total"] == 4
+    assert observation["metrics"]["autonomous_task_total"] == 2
+    assert observation["metrics"]["api_b_task_total"] == 2
+    assert observation["runtime"]["activity_guards"]["snapshot_source"] == "live"
 
 
 @pytest.mark.asyncio
@@ -811,8 +988,11 @@ async def test_supervisor_room_state_observed_candidates_deduplicate_tasks_by_ke
             },
         }
     )
-    supervisor.evaluate_endogenous_drive = AsyncMock(  # type: ignore[method-assign]
-        return_value={
+    supervisor._record_supervisor_ui_activity(
+        "endogenous_drive_evaluated",
+        scene="drive",
+        summary="Cached endogenous drive candidates.",
+        metadata={
             "candidates": [
                 {
                     "title": "Duplicate scheduled candidate",
@@ -835,7 +1015,7 @@ async def test_supervisor_room_state_observed_candidates_deduplicate_tasks_by_ke
                     },
                 },
             ]
-        }
+        },
     )
 
     await supervisor.plan_self_evolution_task(
@@ -894,10 +1074,15 @@ async def test_supervisor_room_state_exposes_recent_mem_writebacks_in_autonomous
 
     state = await supervisor.get_supervisor_ui_state()
     writeback = state["autonomous_observation"]["loop"]["recent_writebacks"][0]
+    mem_current = state["autonomous_observation"]["mem"]["current"]
+    mem_recent = state["autonomous_observation"]["queue"]["sections"][3]["items"][0]
 
     assert writeback["title"] == "Completed autonomous learning writeback"
     assert writeback["lane"] == "agent"
     assert writeback["status"] == "completed"
+    assert mem_current["title"] == "Completed autonomous learning writeback"
+    assert mem_current["display_status"] == "已观察到"
+    assert mem_recent["lane"] == "mem"
 
 
 @pytest.mark.asyncio
@@ -1339,7 +1524,7 @@ async def test_supervisor_accepts_self_learning_conclusion_submission_into_queue
     learning = SelfLearningConclusionStore(tmp_path / "self-learning")
 
     topic = learning.create_topic(
-        title="Gateway-backed idle window",
+        title="Gateway-backed activity guard",
         reason="Need a formal self-evolution proposal backed by learning evidence.",
         tags=["gateway", "idle"],
     )
@@ -1365,7 +1550,7 @@ async def test_supervisor_accepts_self_learning_conclusion_submission_into_queue
                 recommendation_type="propose_evolution_task",
                 title="Adopt gateway-backed idle judgement",
                 summary="Queue an evolution task instead of changing runtime directly.",
-                evidence={"priority_reason": "reduces false idle windows"},
+                evidence={"priority_reason": "reduces false activity-guard approvals"},
             )
         ],
     )

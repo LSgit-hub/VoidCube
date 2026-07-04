@@ -806,7 +806,7 @@ class EndogenousDriveEngine:
 
         rationale_parts = [
             f"recent learning yield is {learning_yield_state}",
-            f"queue blockage is {governance_backlog_blockage_state}",
+            f"governance backlog blockage is {governance_backlog_blockage_state}",
         ]
         if historical_total > 0:
             rationale_parts.append(
@@ -1274,7 +1274,7 @@ class EndogenousDriveEngine:
             f"candidate throttle is {candidate_throttle:.2f}",
             f"candidate budget is {candidate_budget}",
             f"learning bias is {learning_expansion_bias:.2f}",
-            f"queue bias is {governance_hygiene_bias:.2f}",
+            f"governance hygiene bias is {governance_hygiene_bias:.2f}",
         ]
         if focus_stats:
             rationale_parts.append(
@@ -1540,7 +1540,7 @@ class EndogenousDriveEngine:
                     ),
                     rationale=(
                         "Learning should expand when recent evidence still yields value, "
-                        "but it should cool down when queue blockage suggests more output would only add pressure."
+                        "but it should cool down when governance backlog blockage suggests more output would only add pressure."
                     ),
                     source_evidence=[
                         f"learning_quality={perception.learning_quality:.2f}",
@@ -1844,11 +1844,11 @@ class EndogenousDriveEngine:
                         (queue_need.severity if queue_need else 0.45)
                         + (0.08 if world_model.governance_load_state == "strained" else 0.0)
                     ),
-                    message="Queue state suggests a governance review pass before more autonomous work accumulates.",
+                    message="Governance backlog state suggests a governance review pass before more autonomous work accumulates.",
                     rationale=(
                         queue_need.rationale
                         if queue_need is not None
-                        else "Backlog pressure and review debt indicate the queue should be examined."
+                        else "Backlog pressure and review debt indicate the governance backlog should be examined."
                     ),
                     source_needs=(
                         [queue_need.need_type]
@@ -2808,7 +2808,7 @@ class EndogenousDriveEngine:
             candidates.append(
                 self._build_scored_candidate(
                     stable_key="continuity:governance_hygiene_review",
-                    title="Review self-evolution queue hygiene",
+                    title="Review self-evolution governance hygiene",
                     summary=(
                         "Check whether planned, deferred, or paused self-evolution work still "
                         "has enough evidence and clear rollback constraints."
@@ -7143,7 +7143,7 @@ class EndogenousDriveEngine:
         summary = (
             f"Current self model sees dominant constraint={dominant_constraint}, "
             f"preferred focus={preferred_focus}, body status={body_profile_status}, "
-            f"learning state={learning_state}, queue health={governance_load_state}."
+            f"learning state={learning_state}, governance health={governance_load_state}."
         )
         if self_understanding_gaps:
             summary += " Active self-understanding gaps: " + ", ".join(self_understanding_gaps[:4]) + "."

@@ -170,6 +170,31 @@ class SelfEvolutionTaskQueueSnapshot(BaseModel):
 
 
 class SelfEvolutionTaskQueue:
+    _GOVERNANCE_BACKLOG_STATUSES: frozenset[str] = frozenset(
+        {
+            "planned",
+            "deferred",
+            "approved",
+            "running",
+            "paused",
+            "awaiting_review",
+            "retry",
+        }
+    )
+    _EXECUTION_DISPATCH_STATUSES: frozenset[str] = frozenset(
+        {
+            "approved",
+            "running",
+            "retry",
+        }
+    )
+    _WRITEBACK_HISTORY_STATUSES: frozenset[str] = frozenset(
+        {
+            "completed",
+            "failed",
+        }
+    )
+
     def __init__(self, storage_path: str | Path) -> None:
         self.storage_path = Path(storage_path).resolve()
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
@@ -183,6 +208,65 @@ class SelfEvolutionTaskQueue:
         if status is not None:
             tasks = [task for task in tasks if task.status == status]
         return tasks
+
+    def list_governance_backlog_tasks(
+        self,
+        *,
+        status: Optional[SelfEvolutionTaskStatus] = None,
+    ) -> List[SelfEvolutionTask]:
+        """Return live governance backlog items still participating in the chain."""
+        allowed = self._status_filter(
+            status=status,
+            default_statuses=self._GOVERNANCE_BACKLOG_STATUSES,
+        )
+        return self._list_tasks_by_statuses(allowed)
+
+    def list_execution_dispatch_tasks(
+        self,
+        *,
+        status: Optional[SelfEvolutionTaskStatus] = None,
+    ) -> List[SelfEvolutionTask]:
+        """Return tasks that are in or approaching the execution-dispatch lane."""
+        allowed = self._status_filter(
+            status=status,
+            default_statuses=self._EXECUTION_DISPATCH_STATUSES,
+        )
+        return self._list_tasks_by_statuses(allowed)
+
+    def list_writeback_history(
+        self,
+        *,
+        status: Optional[SelfEvolutionTaskStatus] = None,
+    ) -> List[SelfEvolutionTask]:
+        """Return outcome records that already formed a writeback-worthy history."""
+        allowed = self._status_filter(
+            status=status,
+            default_statuses=self._WRITEBACK_HISTORY_STATUSES,
+        )
+        return self._list_tasks_by_statuses(allowed)
+
+    def list_chain_projection_tasks(
+        self,
+        *,
+        status: Optional[SelfEvolutionTaskStatus] = None,
+        include_cancelled: bool = False,
+    ) -> List[SelfEvolutionTask]:
+        """Return autonomous-chain task records without exposing raw storage semantics."""
+        normalized_status = self._normalized_status_value(status)
+        if normalized_status:
+            if normalized_status in self._GOVERNANCE_BACKLOG_STATUSES:
+                return self.list_governance_backlog_tasks(status=status)
+            if normalized_status in self._WRITEBACK_HISTORY_STATUSES:
+                return self.list_writeback_history(status=status)
+            if include_cancelled and normalized_status == "cancelled":
+                return self._list_tasks_by_statuses(frozenset({"cancelled"}))
+            return []
+
+        allowed_statuses = set(self._GOVERNANCE_BACKLOG_STATUSES)
+        allowed_statuses.update(self._WRITEBACK_HISTORY_STATUSES)
+        if include_cancelled:
+            allowed_statuses.add("cancelled")
+        return self._list_tasks_by_statuses(frozenset(allowed_statuses))
 
     def get_task(self, task_id: str) -> Optional[SelfEvolutionTask]:
         snapshot = self._load_snapshot()
@@ -374,3 +458,31 @@ class SelfEvolutionTaskQueue:
             self.storage_path,
             snapshot.model_dump(mode="json"),
         )
+
+    def _list_tasks_by_statuses(
+        self,
+        allowed_statuses: frozenset[str],
+    ) -> List[SelfEvolutionTask]:
+        snapshot = self._load_snapshot()
+        return [
+            task for task in snapshot.tasks
+            if self._normalized_status(task) in allowed_statuses
+        ]
+
+    @staticmethod
+    def _normalized_status(task: SelfEvolutionTask) -> str:
+        return str(task.status or "").strip().lower()
+
+    @staticmethod
+    def _normalized_status_value(status: Optional[SelfEvolutionTaskStatus]) -> str:
+        return str(status or "").strip().lower()
+
+    @staticmethod
+    def _status_filter(
+        *,
+        status: Optional[SelfEvolutionTaskStatus],
+        default_statuses: frozenset[str],
+    ) -> frozenset[str]:
+        if status is None:
+            return default_statuses
+        return frozenset({str(status).strip().lower()})
