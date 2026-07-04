@@ -83,7 +83,7 @@ def _self_learning_outcome(
     return row
 
 
-def _endogenous_idle_window_payload(
+def _endogenous_activity_guard_payload(
     *,
     quality_score: float = 0.46,
     completed_title: str = "Recent learning",
@@ -102,15 +102,20 @@ def _endogenous_idle_window_payload(
 ) -> dict:
     return {
         "checks": {
-            "has_user_idle": True,
             "has_agent_idle": True,
             "has_memory_idle": True,
-            "in_execution_window": True,
         },
         "idle_seconds": {
             "user": user_idle,
             "agent": agent_idle,
             "memory": memory_idle,
+        },
+        "user_chain_signal": {
+            "scope": "soft_signal_only",
+            "active_sessions": 0,
+            "is_quiet": True,
+            "recent_user_idle_seconds": user_idle,
+            "quiet_after_seconds": 600,
         },
         "activity": {
             "active_sessions": 0,
@@ -165,23 +170,23 @@ def _drive_cycle_failure_replay_evaluation(
     self_regulation: dict | None = None,
 ) -> dict:
     user_mode, posture, constraint = context.split("|")
-    if focus not in {"truthfulness", "queue_hygiene"}:
+    if focus not in {"truthfulness", "governance_hygiene"}:
         raise AssertionError(f"Unsupported fake drive focus: {focus}")
     truthfulness_focus = focus == "truthfulness"
-    candidate_kind = "truthfulness_review" if truthfulness_focus else "queue_hygiene_review"
+    candidate_kind = "truthfulness_review" if truthfulness_focus else "governance_hygiene_review"
     governance_type = "self_learning" if truthfulness_focus else "self_evolution"
     task_family = "self_learning" if truthfulness_focus else "general_self_evolution"
     execution_kind = None if truthfulness_focus else "general_self_evolution"
     need_type = "repair_truthfulness" if truthfulness_focus else "stabilize_memory_continuity"
-    intent_type = "review_truthfulness_signals" if truthfulness_focus else "review_queue_hygiene"
-    observation_target = "truthfulness" if truthfulness_focus else "queue_hygiene"
+    intent_type = "review_truthfulness_signals" if truthfulness_focus else "review_governance_hygiene"
+    observation_target = "truthfulness" if truthfulness_focus else "governance_hygiene"
     deliberation = {
         "perception": {
             "user_mode": user_mode,
             "system_posture": posture,
             "active_sessions": 0,
             "correction_signals": 3 if truthfulness_focus else 0,
-            "active_queue_count": 0,
+            "governance_backlog_count": 0,
         },
         "reflection": {
             "dominant_constraint": constraint,
@@ -253,13 +258,13 @@ def _drive_cycle_failure_replay_evaluation(
                 "priority": 0.7,
                 "message": "queue hygiene review",
                 "rationale": "queue context switched",
-                "payload": {"queue_health": "review"},
+                "payload": {"governance_load_state": "review"},
             }
         ]
     return {
         "status": "evaluated",
-        "idle_window": {
-            "checks": {"in_execution_window": True},
+        "activity_guards": {
+            "checks": {},
             "task_family_decisions": {
                 task_family: {"eligible_for_planning": True, "eligible_for_execution": True},
             },
@@ -397,13 +402,11 @@ async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_dupli
         }
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -447,7 +450,7 @@ async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_dupli
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
 
     first = await supervisor._run_endogenous_drive_cycle()
     second = await supervisor._run_endogenous_drive_cycle()
@@ -463,7 +466,7 @@ async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_dupli
     }
     assert "continuity:memory_maintenance_sweep" in tasks_by_key
     assert "truthfulness:review_correction_signals" in tasks_by_key
-    assert "continuity:queue_hygiene_review" not in tasks_by_key
+    assert "continuity:governance_hygiene_review" not in tasks_by_key
     assert not any(
         str(key).startswith("creativity:idle_learning:")
         for key in tasks_by_key
@@ -519,13 +522,11 @@ async def test_evaluate_endogenous_drive_exposes_deliberation_report(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -569,7 +570,7 @@ async def test_evaluate_endogenous_drive_exposes_deliberation_report(tmp_path):
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
 
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     deliberation = result["deliberation"]
@@ -591,13 +592,11 @@ async def test_endogenous_drive_evaluation_persists_judgement_history(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -641,7 +640,7 @@ async def test_endogenous_drive_evaluation_persists_judgement_history(tmp_path):
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     history = supervisor._load_endogenous_drive_history()
 
@@ -665,13 +664,11 @@ async def test_endogenous_drive_preview_evaluation_does_not_persist_runtime_stat
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -690,7 +687,7 @@ async def test_endogenous_drive_preview_evaluation_does_not_persist_runtime_stat
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive(
         {"record_activity": False, "persist_evaluation": False}
     )
@@ -714,13 +711,11 @@ async def test_endogenous_drive_persistent_evaluation_rolls_back_history_when_la
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -742,7 +737,7 @@ async def test_endogenous_drive_persistent_evaluation_rolls_back_history_when_la
     def fail_cognition_persist(_state):
         raise RuntimeError("cognition persist failed")
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     supervisor._persist_endogenous_cognition_state = fail_cognition_persist  # type: ignore[method-assign]
 
     with pytest.raises(RuntimeError, match="cognition persist failed"):
@@ -762,13 +757,11 @@ async def test_evaluate_endogenous_drive_exposes_non_task_signals(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -812,7 +805,7 @@ async def test_evaluate_endogenous_drive_exposes_non_task_signals(tmp_path):
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     await supervisor.plan_self_evolution_task(
         {
             "title": "Revisit deferred governance note",
@@ -847,13 +840,11 @@ async def test_endogenous_drive_preserves_truthfulness_channel_under_observe_bef
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -897,7 +888,7 @@ async def test_endogenous_drive_preserves_truthfulness_channel_under_observe_bef
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
 
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     needs = list(result["deliberation"]["needs"])
@@ -971,13 +962,11 @@ async def test_evaluate_endogenous_drive_exposes_cognition_state(tmp_path):
         },
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 1200,
@@ -1021,13 +1010,13 @@ async def test_evaluate_endogenous_drive_exposes_cognition_state(tmp_path):
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     cognition = result["cognition_state"]
 
     assert cognition["identity"]["role"] == "endogenous_supervisory_core"
     assert cognition["identity"]["execution_chain_coupled"] is False
-    assert cognition["perception"]["user_mode"] == "idle_window"
+    assert cognition["perception"]["user_mode"] == "user_chain_quiet"
     assert cognition["world_model"]["system_posture"] in {"strained", "degrading", "growth_window", "stable"}
     assert cognition["self_model"]["reflection"]["dominant_constraint"]
     assert cognition["self_model"]["adaptive_policy"]["preferred_focus"]
@@ -1094,13 +1083,11 @@ async def test_evaluate_endogenous_drive_exposes_alignment_signal_when_reflectio
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -1148,7 +1135,7 @@ async def test_evaluate_endogenous_drive_exposes_alignment_signal_when_reflectio
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     await supervisor.plan_self_evolution_task(
         {
             "title": "Stale endogenous queue item",
@@ -1156,7 +1143,7 @@ async def test_evaluate_endogenous_drive_exposes_alignment_signal_when_reflectio
             "execution_kind": "general_self_evolution",
             "source": "endogenous_drive",
             "metadata": {
-                "endogenous_drive_key": "continuity:queue_hygiene_review",
+                "endogenous_drive_key": "continuity:governance_hygiene_review",
             },
         }
     )
@@ -1182,13 +1169,11 @@ async def test_endogenous_drive_history_records_planned_and_decision_outcomes(tm
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -1232,7 +1217,7 @@ async def test_endogenous_drive_history_records_planned_and_decision_outcomes(tm
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     cycle = await supervisor._run_endogenous_drive_cycle()
     task_id = cycle["tasks"][0]["task_id"]
 
@@ -1328,10 +1313,10 @@ async def test_completed_autonomous_task_finding_flows_into_next_drive_context(t
     assert completed_outcome["autonomous_executor_final_response"] == final_response
     assert completed_outcome["outcome_summary"] == final_response
 
-    idle_window = _endogenous_idle_window_payload(error_count=0, uncertainty_count=0)
-    idle_window["completed_learning_tasks"] = supervisor._completed_learning_task_summaries()
-    idle_window["drive_history"] = supervisor._history_for_endogenous_drive(history)
-    drive_context = supervisor._endogenous_drive_engine._build_drive_context(idle_window)
+    activity_guards = _endogenous_activity_guard_payload(error_count=0, uncertainty_count=0)
+    activity_guards["completed_learning_tasks"] = supervisor._completed_learning_task_summaries()
+    activity_guards["drive_history"] = supervisor._history_for_endogenous_drive(history)
+    drive_context = supervisor._endogenous_drive_engine._build_drive_context(activity_guards)
 
     rendered_outcomes = json.dumps(drive_context["drive_history"]["outcomes"], ensure_ascii=False)
     assert final_response in rendered_outcomes
@@ -1343,10 +1328,10 @@ async def test_endogenous_drive_outcome_dedup_scans_full_retained_history_window
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
-        return _endogenous_idle_window_payload(error_count=2, uncertainty_count=1)
+    async def fake_activity_guards(_request=None):
+        return _endogenous_activity_guard_payload(error_count=2, uncertainty_count=1)
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     cycle = await supervisor._run_endogenous_drive_cycle()
     task_id = cycle["tasks"][0]["task_id"]
     task = supervisor._self_evolution_queue.get_task(task_id)
@@ -1381,7 +1366,7 @@ async def test_endogenous_drive_outcome_dedup_scans_full_retained_history_window
             "decision_id": f"filler-decision-{index}",
             "status": "completed",
             "preferred_focus": "learning_expansion",
-            "context_key": "idle_window|stable|none",
+            "context_key": "user_chain_quiet|stable|none",
         }
         for index in range(30)
     ]
@@ -1417,13 +1402,11 @@ async def test_planned_outcomes_do_not_count_as_dragging_before_any_real_decisio
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -1467,7 +1450,7 @@ async def test_planned_outcomes_do_not_count_as_dragging_before_any_real_decisio
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     cycle = await supervisor._run_endogenous_drive_cycle()
     history = supervisor._load_endogenous_drive_history()
 
@@ -1493,13 +1476,11 @@ async def test_single_evaluation_counts_focus_judged_once_even_with_multiple_can
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -1543,7 +1524,7 @@ async def test_single_evaluation_counts_focus_judged_once_even_with_multiple_can
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     history = supervisor._load_endogenous_drive_history()
 
@@ -1823,7 +1804,7 @@ def test_candidate_annotation_adds_canonical_drive_judgement_and_evidence_contex
     prepared = supervisor._annotate_endogenous_drive_candidates(
         deliberation={
             "perception": {
-                "user_mode": "idle_window",
+                "user_mode": "user_chain_quiet",
                 "system_posture": "stable",
             },
             "world_model": {
@@ -1851,7 +1832,7 @@ def test_candidate_annotation_adds_canonical_drive_judgement_and_evidence_contex
             ],
             "signals": [],
         },
-        idle_window={"autonomous_chain_gate_active": True},
+        activity_guards={"autonomous_chain_gate_active": True},
         candidate_items=[
             {
                 "title": "Review correction signals",
@@ -1890,13 +1871,11 @@ async def test_run_endogenous_drive_cycle_exposes_drive_posture(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -1940,7 +1919,7 @@ async def test_run_endogenous_drive_cycle_exposes_drive_posture(tmp_path):
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     cycle = await supervisor._run_endogenous_drive_cycle()
 
     assert cycle["drive_posture"]["signal_type"] == "drive_posture_signal"
@@ -1957,13 +1936,11 @@ async def test_endogenous_governance_events_persist_to_runtime_file(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -2007,7 +1984,7 @@ async def test_endogenous_governance_events_persist_to_runtime_file(tmp_path):
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     events_path = supervisor._get_endogenous_governance_events_path()
     events_snapshot = supervisor._load_endogenous_governance_events()
@@ -2056,13 +2033,11 @@ async def test_endogenous_cognition_state_persists_to_runtime_file(tmp_path):
         },
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -2106,7 +2081,7 @@ async def test_endogenous_cognition_state_persists_to_runtime_file(tmp_path):
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     path = supervisor._get_endogenous_cognition_state_path()
     snapshot = supervisor._load_endogenous_cognition_state()
@@ -2206,13 +2181,11 @@ async def test_cognitive_self_regulation_tightens_adaptive_policy_when_lm_drift_
         },
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 1500,
@@ -2256,7 +2229,7 @@ async def test_cognitive_self_regulation_tightens_adaptive_policy_when_lm_drift_
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     regulation = result["self_regulation"]
@@ -2333,13 +2306,11 @@ async def test_cognitive_self_regulation_stays_light_when_lm_alignment_and_evide
         },
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 1200,
@@ -2390,7 +2361,7 @@ async def test_cognitive_self_regulation_stays_light_when_lm_alignment_and_evide
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     adaptive_policy = result["deliberation"]["adaptive_policy"]
@@ -2481,11 +2452,11 @@ def test_cognition_charter_prompt_attention_policy_can_be_overridden_from_env(mo
     )
     monkeypatch.setenv(
         "SUPERVISOR_ENDOGENOUS_DRIVE_PROMPT_ATTENTION_PRIORITY_ORDER",
-        '["decision_core","queue_state_snapshot","identity"]',
+        '["decision_core","governance_backlog_snapshot","identity"]',
     )
     monkeypatch.setenv(
         "SUPERVISOR_ENDOGENOUS_DRIVE_PROMPT_ATTENTION_STRUCTURE_KEYS",
-        '["decision_core","queue_state_snapshot"]',
+        '["decision_core","governance_backlog_snapshot"]',
     )
     monkeypatch.setenv(
         "SUPERVISOR_ENDOGENOUS_DRIVE_PROMPT_ATTENTION_TRIM_STAGE_ORDER",
@@ -2500,12 +2471,12 @@ def test_cognition_charter_prompt_attention_policy_can_be_overridden_from_env(mo
     assert policy.max_chars == 4200
     assert policy.priority_order == [
         "decision_core",
-        "queue_state_snapshot",
+        "governance_backlog_snapshot",
         "identity",
     ]
     assert policy.structure_keys == [
         "decision_core",
-        "queue_state_snapshot",
+        "governance_backlog_snapshot",
     ]
     assert policy.trim_stage_order == [
         "graph_compaction",
@@ -2560,13 +2531,11 @@ async def test_cognitive_self_regulation_uses_charter_control_policy_thresholds(
         },
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 1200,
@@ -2617,7 +2586,7 @@ async def test_cognitive_self_regulation_uses_charter_control_policy_thresholds(
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     assert result["cognitive_self_regulation"]["dynamic_observation_bias_boost"] >= 0.22
@@ -2671,13 +2640,11 @@ async def test_cognitive_posture_profile_observe_first_amplifies_observation_bia
         },
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 1200,
@@ -2721,7 +2688,7 @@ async def test_cognitive_posture_profile_observe_first_amplifies_observation_bia
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     assert result["cognition_state"]["proposal_cognition"]["active_cognitive_posture_profile"]["name"] == "observe_first"
@@ -2776,13 +2743,11 @@ async def test_cognitive_posture_profile_truthfulness_first_amplifies_truthfulne
         },
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 1200,
@@ -2826,7 +2791,7 @@ async def test_cognitive_posture_profile_truthfulness_first_amplifies_truthfulne
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     assert result["cognition_state"]["proposal_cognition"]["active_cognitive_posture_profile"]["name"] == "truthfulness_first"
@@ -2851,13 +2816,11 @@ async def test_cognitive_posture_profile_auto_switches_to_conservative_under_ser
         },
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -2890,7 +2853,7 @@ async def test_cognitive_posture_profile_auto_switches_to_conservative_under_ser
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     profile = result["cognition_state"]["proposal_cognition"]["active_cognitive_posture_profile"]
@@ -2919,13 +2882,11 @@ async def test_cognitive_posture_profile_auto_switches_to_evidence_repair_first_
         },
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 1000,
@@ -2951,7 +2912,7 @@ async def test_cognitive_posture_profile_auto_switches_to_evidence_repair_first_
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     profile = result["cognition_state"]["proposal_cognition"]["active_cognitive_posture_profile"]
@@ -2976,13 +2937,11 @@ async def test_cognitive_posture_profile_auto_switches_to_truthfulness_first_whe
         },
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -3008,7 +2967,7 @@ async def test_cognitive_posture_profile_auto_switches_to_truthfulness_first_whe
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     profile = result["cognition_state"]["proposal_cognition"]["active_cognitive_posture_profile"]
@@ -3043,13 +3002,11 @@ async def test_cognitive_posture_profile_auto_switches_to_observe_first_when_exp
         },
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
@@ -3065,7 +3022,7 @@ async def test_cognitive_posture_profile_auto_switches_to_observe_first_when_exp
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     profile = result["cognition_state"]["proposal_cognition"]["active_cognitive_posture_profile"]
@@ -3100,13 +3057,11 @@ async def test_cognitive_posture_profile_auto_switches_to_truthfulness_first_whe
         },
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
@@ -3122,7 +3077,7 @@ async def test_cognitive_posture_profile_auto_switches_to_truthfulness_first_whe
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     profile = result["cognition_state"]["proposal_cognition"]["active_cognitive_posture_profile"]
@@ -3185,13 +3140,11 @@ async def test_cognitive_self_regulation_tightens_when_proposal_explanations_are
         },
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 1200, "agent": 1200, "memory": 1200},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
@@ -3207,7 +3160,7 @@ async def test_cognitive_self_regulation_tightens_when_proposal_explanations_are
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     regulation = result["cognitive_self_regulation"]
@@ -3230,18 +3183,18 @@ async def test_run_self_evolution_cycle_consumes_governance_review_events(tmp_pa
             "event_type": "governance_review_request",
             "channel": "governance_review_requests",
             "recorded_at": "2026-06-28T00:00:00+00:00",
-            "context_key": "idle_window|stable|none",
-            "preferred_focus": "queue_hygiene",
+            "context_key": "user_chain_quiet|stable|none",
+            "preferred_focus": "governance_hygiene",
             "priority": 0.7,
             "message": "Queue state suggests a governance review pass.",
             "rationale": "review debt exists",
-            "payload": {"queue_health": "busy"},
+            "payload": {"governance_load_state": "busy"},
         }
     ]
     supervisor._persist_endogenous_governance_events(events_snapshot)
 
     async def fake_review(request=None):
-        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "idle_window": {}}
+        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "activity_guards": {}}
 
     supervisor.review_self_evolution_tasks = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
@@ -3267,7 +3220,7 @@ async def test_run_self_evolution_cycle_consumes_alignment_events_into_self_regu
             "event_type": "autonomy_alignment_request",
             "channel": "autonomy_alignment_requests",
             "recorded_at": "2026-06-28T00:00:00+00:00",
-            "context_key": "idle_window|stable|weak_learning_yield",
+            "context_key": "user_chain_quiet|stable|weak_learning_yield",
             "preferred_focus": "observation",
             "priority": 0.8,
             "message": "Autonomous output should be aligned and throttled.",
@@ -3278,7 +3231,7 @@ async def test_run_self_evolution_cycle_consumes_alignment_events_into_self_regu
     supervisor._persist_endogenous_governance_events(events_snapshot)
 
     async def fake_review(request=None):
-        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "idle_window": {}}
+        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "activity_guards": {}}
 
     supervisor.review_self_evolution_tasks = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
@@ -3304,7 +3257,7 @@ async def test_duplicate_governance_event_ids_are_deduped_before_consumption(tmp
         "event_type": "autonomy_alignment_request",
         "channel": "autonomy_alignment_requests",
         "recorded_at": "2026-06-28T00:00:00+00:00",
-        "context_key": "idle_window|stable|weak_learning_yield",
+        "context_key": "user_chain_quiet|stable|weak_learning_yield",
         "preferred_focus": "observation",
         "priority": 0.8,
         "message": "Autonomous output should be aligned and throttled.",
@@ -3322,7 +3275,7 @@ async def test_duplicate_governance_event_ids_are_deduped_before_consumption(tmp
     supervisor._persist_endogenous_governance_events(events_snapshot)
 
     async def fake_review(request=None):
-        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "idle_window": {}}
+        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "activity_guards": {}}
 
     supervisor.review_self_evolution_tasks = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
@@ -3349,7 +3302,7 @@ def test_governance_events_without_event_ids_are_preserved_during_semantic_trim(
         "event_type": "autonomy_alignment_request",
         "channel": "autonomy_alignment_requests",
         "recorded_at": "2026-06-28T00:00:00+00:00",
-        "context_key": "idle_window|stable|weak_learning_yield",
+        "context_key": "user_chain_quiet|stable|weak_learning_yield",
         "preferred_focus": "observation",
         "priority": 0.8,
         "message": "Autonomous output should be aligned and throttled.",
@@ -3378,7 +3331,7 @@ def test_repeated_governance_event_generation_keeps_unconsumed_semantic_events_s
     supervisor = _make_supervisor(tmp_path)
     deliberation = {
         "perception": {
-            "user_mode": "idle_window",
+            "user_mode": "user_chain_quiet",
             "system_posture": "strained",
         },
         "reflection": {
@@ -3490,7 +3443,7 @@ async def test_run_self_evolution_cycle_consumes_truthfulness_alerts_into_correc
             "event_type": "truthfulness_alert",
             "channel": "truthfulness_alerts",
             "recorded_at": "2026-06-28T00:00:00+00:00",
-            "context_key": "idle_window|strained|none",
+            "context_key": "user_chain_quiet|strained|none",
             "preferred_focus": "truthfulness",
             "priority": 0.85,
             "message": "Correction pressure is rising.",
@@ -3501,7 +3454,7 @@ async def test_run_self_evolution_cycle_consumes_truthfulness_alerts_into_correc
     supervisor._persist_endogenous_governance_events(events_snapshot)
 
     async def fake_review(request=None):
-        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "idle_window": {}}
+        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "activity_guards": {}}
 
     supervisor.review_self_evolution_tasks = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
@@ -3527,7 +3480,7 @@ def test_repeated_alignment_events_accumulate_self_regulation_but_respect_config
             "event_type": "autonomy_alignment_request",
             "channel": "autonomy_alignment_requests",
             "recorded_at": "2026-06-28T00:00:00+00:00",
-            "context_key": "idle_window|stable|weak_learning_yield",
+            "context_key": "user_chain_quiet|stable|weak_learning_yield",
             "preferred_focus": "observation",
             "priority": 0.8,
             "message": f"Alignment warning {idx}",
@@ -3557,7 +3510,7 @@ def test_repeated_truthfulness_alerts_accumulate_corrective_mode_but_respect_con
             "event_type": "truthfulness_alert",
             "channel": "truthfulness_alerts",
             "recorded_at": "2026-06-28T00:00:00+00:00",
-            "context_key": "idle_window|strained|none",
+            "context_key": "user_chain_quiet|strained|none",
             "preferred_focus": "truthfulness",
             "priority": 0.85,
             "message": f"Truthfulness warning {idx}",
@@ -3664,13 +3617,11 @@ async def test_decayed_persistent_self_regulation_does_not_keep_runtime_stuck_in
         encoding="utf-8",
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
@@ -3693,7 +3644,7 @@ async def test_decayed_persistent_self_regulation_does_not_keep_runtime_stuck_in
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -3752,13 +3703,11 @@ async def test_get_endogenous_governance_state_aggregates_cognition_events_and_r
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -3802,7 +3751,7 @@ async def test_get_endogenous_governance_state_aggregates_cognition_events_and_r
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     await supervisor.evaluate_endogenous_drive({"record_activity": False})
     state = await supervisor.get_endogenous_governance_state()
     regulation_view = await supervisor.get_endogenous_self_regulation()
@@ -3841,20 +3790,20 @@ async def test_supervisor_ui_state_reads_wrapped_cognition_state_lm_trace(tmp_pa
     supervisor._fetch_tier1_stats = AsyncMock(return_value={})  # type: ignore[method-assign]
     supervisor._recent_supervisor_observation_timeline = AsyncMock(return_value=[])  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
-        return _endogenous_idle_window_payload()
+    async def fake_activity_guards(_request=None):
+        return _endogenous_activity_guard_payload()
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     cognition_state = supervisor._endogenous_cognition_state_default()["state"]
     cognition_state["perception"] = {
         "system_posture": "strained",
-        "active_queue_count": 3,
+        "governance_backlog_count": 3,
         "recent_errors": 1,
         "learning_quality": 0.42,
         "correction_signals": 2,
     }
     cognition_state["world_model"] = {
-        "queue_health": "dragging",
+        "governance_load_state": "dragging",
         "memory_pressure": 0.3,
         "truthfulness_pressure": 0.7,
         "learning_momentum": 0.2,
@@ -3886,7 +3835,7 @@ async def test_supervisor_ui_state_reads_wrapped_cognition_state_lm_trace(tmp_pa
     assert "prompt_estimate" not in ui_state["lm_input"]
     assert ui_state["lm_input"]["recent_evidence_nodes"][0]["node"] == "evidence:self_structure"
     assert ui_state["cognition"]["perception"]["system_posture"] == "strained"
-    assert ui_state["cognition"]["world_model"]["queue_health"] == "dragging"
+    assert ui_state["cognition"]["world_model"]["governance_load_state"] == "dragging"
 
 
 @pytest.mark.asyncio
@@ -3895,13 +3844,11 @@ async def test_cognition_state_attention_agenda_prioritizes_observe_before_actin
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -3949,7 +3896,7 @@ async def test_cognition_state_attention_agenda_prioritizes_observe_before_actin
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     await supervisor.plan_self_evolution_task(
         {
             "title": "Stale endogenous queue item",
@@ -3957,7 +3904,7 @@ async def test_cognition_state_attention_agenda_prioritizes_observe_before_actin
             "execution_kind": "general_self_evolution",
             "source": "endogenous_drive",
             "metadata": {
-                "endogenous_drive_key": "continuity:queue_hygiene_review",
+                "endogenous_drive_key": "continuity:governance_hygiene_review",
             },
         }
     )
@@ -3984,13 +3931,11 @@ async def test_cognition_state_uncertainty_ledger_tracks_truthfulness_queue_and_
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -4041,7 +3986,7 @@ async def test_cognition_state_uncertainty_ledger_tracks_truthfulness_queue_and_
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     ledger = result["cognition_state"]["uncertainty_ledger"]
     domains = {entry["domain"] for entry in ledger["entries"]}
@@ -4058,13 +4003,11 @@ async def test_observation_program_is_generated_from_uncertainty_ledger_and_requ
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -4115,7 +4058,7 @@ async def test_observation_program_is_generated_from_uncertainty_ledger_and_requ
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     observation_program = result["cognition_state"]["observation_program"]
     strategy_memory = result["cognition_state"]["strategy_memory"]
@@ -4136,13 +4079,11 @@ async def test_observation_program_builds_cross_cycle_target_memory(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -4193,7 +4134,7 @@ async def test_observation_program_builds_cross_cycle_target_memory(tmp_path):
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     await supervisor.evaluate_endogenous_drive({"record_activity": False})
     await supervisor.evaluate_endogenous_drive({"record_activity": False})
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
@@ -4221,13 +4162,11 @@ async def test_repeated_observation_history_does_not_saturate_observation_bias_w
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -4278,7 +4217,7 @@ async def test_repeated_observation_history_does_not_saturate_observation_bias_w
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     first = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     second = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
@@ -4351,7 +4290,7 @@ async def test_strategy_memory_memory_focus_history_does_not_override_learning_p
             "learning_expansion": {"judged": 8, "completed": 2, "failed": 3, "dragging": 3},
         },
         "contextual_focus_stats": {
-            "idle_window|stable|none": {
+            "user_chain_quiet|stable|none": {
                 "memory_continuity": {"judged": 8, "completed": 7, "failed": 0, "dragging": 0},
                 "learning_expansion": {"judged": 6, "completed": 1, "failed": 2, "dragging": 3},
             }
@@ -4359,13 +4298,11 @@ async def test_strategy_memory_memory_focus_history_does_not_override_learning_p
     }
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
@@ -4388,7 +4325,7 @@ async def test_strategy_memory_memory_focus_history_does_not_override_learning_p
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -4456,7 +4393,7 @@ async def test_strategy_memory_observation_history_does_not_reenter_observation_
             "learning_expansion": {"judged": 8, "completed": 5, "failed": 1, "dragging": 2},
         },
         "contextual_focus_stats": {
-            "idle_window|stable|none": {
+            "user_chain_quiet|stable|none": {
                 "observation": {"judged": 9, "completed": 8, "failed": 0, "dragging": 0},
                 "learning_expansion": {"judged": 6, "completed": 3, "failed": 1, "dragging": 2},
             }
@@ -4470,19 +4407,17 @@ async def test_strategy_memory_observation_history_does_not_reenter_observation_
                 "last_priority": 0.7,
                 "last_risk": 0.2,
                 "last_status": "resolved",
-                "last_context_key": "idle_window|stable|none",
+                "last_context_key": "user_chain_quiet|stable|none",
             }
         },
     }
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
@@ -4505,7 +4440,7 @@ async def test_strategy_memory_observation_history_does_not_reenter_observation_
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -4570,15 +4505,15 @@ async def test_contextual_focus_history_does_not_leak_stable_truthfulness_bias_i
     history["strategy_memory"] = {
         "focus_stats": {
             "truthfulness": {"judged": 10, "completed": 8, "failed": 0, "dragging": 0},
-            "queue_hygiene": {"judged": 10, "completed": 9, "failed": 0, "dragging": 0},
+            "governance_hygiene": {"judged": 10, "completed": 9, "failed": 0, "dragging": 0},
             "learning_expansion": {"judged": 8, "completed": 5, "failed": 1, "dragging": 2},
         },
         "contextual_focus_stats": {
-            "idle_window|stable|none": {
+            "user_chain_quiet|stable|none": {
                 "truthfulness": {"judged": 9, "completed": 9, "failed": 0, "dragging": 0},
             },
-            "idle_window|degrading|none": {
-                "queue_hygiene": {"judged": 9, "completed": 9, "failed": 0, "dragging": 0},
+            "user_chain_quiet|degrading|none": {
+                "governance_hygiene": {"judged": 9, "completed": 9, "failed": 0, "dragging": 0},
                 "memory_continuity": {"judged": 9, "completed": 9, "failed": 0, "dragging": 0},
             },
         },
@@ -4594,13 +4529,11 @@ async def test_contextual_focus_history_does_not_leak_stable_truthfulness_bias_i
     task_id = planned["tasks"][0]["task_id"]
     supervisor._self_evolution_queue.update_status(task_id, status="deferred", reason="probe")
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -4626,13 +4559,13 @@ async def test_contextual_focus_history_does_not_leak_stable_truthfulness_bias_i
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
-    assert "context_key=idle_window|degrading|none" in result["deliberation"]["adaptive_policy"]["source_evidence"]
+    assert "context_key=user_chain_quiet|degrading|none" in result["deliberation"]["adaptive_policy"]["source_evidence"]
     assert result["deliberation"]["adaptive_policy"]["preferred_focus"] == "truthfulness"
     assert result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == "stabilize_memory_continuity"
 
@@ -4692,27 +4625,25 @@ async def test_contextual_focus_history_allows_strained_truthfulness_context_to_
     history["strategy_memory"] = {
         "focus_stats": {
             "truthfulness": {"judged": 10, "completed": 8, "failed": 0, "dragging": 0},
-            "queue_hygiene": {"judged": 10, "completed": 9, "failed": 0, "dragging": 0},
+            "governance_hygiene": {"judged": 10, "completed": 9, "failed": 0, "dragging": 0},
             "learning_expansion": {"judged": 8, "completed": 5, "failed": 1, "dragging": 2},
         },
         "contextual_focus_stats": {
-            "idle_window|stable|none": {
+            "user_chain_quiet|stable|none": {
                 "truthfulness": {"judged": 9, "completed": 9, "failed": 0, "dragging": 0},
             },
-            "idle_window|strained|none": {
-                "queue_hygiene": {"judged": 9, "completed": 9, "failed": 0, "dragging": 0},
+            "user_chain_quiet|strained|none": {
+                "governance_hygiene": {"judged": 9, "completed": 9, "failed": 0, "dragging": 0},
             },
         },
     }
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -4738,13 +4669,13 @@ async def test_contextual_focus_history_allows_strained_truthfulness_context_to_
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
-    assert "context_key=idle_window|strained|none" in result["deliberation"]["adaptive_policy"]["source_evidence"]
+    assert "context_key=user_chain_quiet|strained|none" in result["deliberation"]["adaptive_policy"]["source_evidence"]
     assert result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == "repair_truthfulness"
     assert result["deliberation"]["adaptive_policy"]["preferred_focus"] == "truthfulness"
 
@@ -4810,7 +4741,7 @@ async def test_observe_first_posture_strategy_memory_and_persistent_self_regulat
             "learning_expansion": {"judged": 8, "completed": 5, "failed": 1, "dragging": 2},
         },
         "contextual_focus_stats": {
-            "idle_window|stable|none": {
+            "user_chain_quiet|stable|none": {
                 "observation": {"judged": 8, "completed": 8, "failed": 0, "dragging": 0},
             }
         },
@@ -4851,13 +4782,11 @@ async def test_observe_first_posture_strategy_memory_and_persistent_self_regulat
         },
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 1200, "agent": 1200, "memory": 1200},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 1}},
@@ -4880,7 +4809,7 @@ async def test_observe_first_posture_strategy_memory_and_persistent_self_regulat
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -4957,13 +4886,11 @@ async def test_multicycle_continuity_writeback_does_not_block_truthfulness_takeo
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def stable_idle_window(_request=None):
+    async def stable_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
@@ -4986,7 +4913,7 @@ async def test_multicycle_continuity_writeback_does_not_block_truthfulness_takeo
             },
         }
 
-    supervisor.evaluate_idle_window = stable_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = stable_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
     wrote_back_cycles = 0
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -5010,13 +4937,11 @@ async def test_multicycle_continuity_writeback_does_not_block_truthfulness_takeo
     assert wrote_back_cycles >= 2
     assert continuity_bucket.get("judged", 0) >= 1
 
-    async def strained_truthfulness_idle_window(_request=None):
+    async def strained_truthfulness_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 3, "uncertainty_high_count": 1}},
@@ -5039,7 +4964,7 @@ async def test_multicycle_continuity_writeback_does_not_block_truthfulness_takeo
             },
         }
 
-    supervisor.evaluate_idle_window = strained_truthfulness_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = strained_truthfulness_activity_guards  # type: ignore[method-assign]
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
@@ -5082,7 +5007,7 @@ async def test_multicycle_memory_writeback_does_not_keep_learning_recovery_stuck
             "learning_expansion": {"judged": 4, "completed": 1, "failed": 1, "dragging": 2},
         },
         "contextual_focus_stats": {
-            "idle_window|stable|none": {
+            "user_chain_quiet|stable|none": {
                 "memory_continuity": {"judged": 5, "completed": 5, "failed": 0, "dragging": 0},
                 "learning_expansion": {"judged": 3, "completed": 1, "failed": 0, "dragging": 2},
             }
@@ -5090,13 +5015,11 @@ async def test_multicycle_memory_writeback_does_not_keep_learning_recovery_stuck
     }
     supervisor._persist_endogenous_drive_history(history)
 
-    async def stable_memory_idle_window(_request=None):
+    async def stable_memory_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
@@ -5119,7 +5042,7 @@ async def test_multicycle_memory_writeback_does_not_keep_learning_recovery_stuck
             },
         }
 
-    supervisor.evaluate_idle_window = stable_memory_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = stable_memory_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
     observed_focuses = []
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -5149,13 +5072,11 @@ async def test_mixed_multicycle_writeback_and_context_switch_do_not_lock_primary
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
-    async def stable_idle_window(_request=None):
+    async def stable_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
@@ -5178,13 +5099,11 @@ async def test_mixed_multicycle_writeback_and_context_switch_do_not_lock_primary
             },
         }
 
-    async def degrading_idle_window(_request=None):
+    async def degrading_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 1, "uncertainty_high_count": 1}},
@@ -5207,13 +5126,11 @@ async def test_mixed_multicycle_writeback_and_context_switch_do_not_lock_primary
             },
         }
 
-    async def strained_idle_window(_request=None):
+    async def strained_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 3, "uncertainty_high_count": 1}},
@@ -5237,12 +5154,12 @@ async def test_mixed_multicycle_writeback_and_context_switch_do_not_lock_primary
         }
 
     sequence = [
-        (stable_idle_window, "completed"),
-        (stable_idle_window, "deferred"),
-        (degrading_idle_window, "failed"),
-        (strained_idle_window, "completed"),
-        (stable_idle_window, "completed"),
-        (degrading_idle_window, "failed"),
+        (stable_activity_guards, "completed"),
+        (stable_activity_guards, "deferred"),
+        (degrading_activity_guards, "failed"),
+        (strained_activity_guards, "completed"),
+        (stable_activity_guards, "completed"),
+        (degrading_activity_guards, "failed"),
     ]
 
     observed_contexts: set[str] = set()
@@ -5250,8 +5167,8 @@ async def test_mixed_multicycle_writeback_and_context_switch_do_not_lock_primary
     observed_focuses: set[str] = set()
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
-        for idle_window_fn, outcome_status in sequence:
-            supervisor.evaluate_idle_window = idle_window_fn  # type: ignore[method-assign]
+        for activity_guard_fn, outcome_status in sequence:
+            supervisor.evaluate_activity_guards = activity_guard_fn  # type: ignore[method-assign]
             cycle = await _plan_and_write_back_endogenous_cycle(
                 supervisor,
                 outcome_status=outcome_status,
@@ -5270,7 +5187,7 @@ async def test_mixed_multicycle_writeback_and_context_switch_do_not_lock_primary
             observed_meta_modes.add(cycle["cognition_state"]["meta_governance"]["mode"])
             observed_focuses.add(cycle["deliberation"]["adaptive_policy"]["preferred_focus"])
 
-        supervisor.evaluate_idle_window = strained_idle_window  # type: ignore[method-assign]
+        supervisor.evaluate_activity_guards = strained_activity_guards  # type: ignore[method-assign]
         final = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     history = supervisor._load_endogenous_drive_history()
@@ -5321,7 +5238,7 @@ async def test_accumulated_focus_context_and_observation_stats_do_not_block_lear
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    def _build_idle_window(
+    def _build_activity_guards(
         *,
         quality_score: float,
         error_count: int = 0,
@@ -5329,10 +5246,8 @@ async def test_accumulated_focus_context_and_observation_stats_do_not_block_lear
     ) -> dict:
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -5361,24 +5276,24 @@ async def test_accumulated_focus_context_and_observation_stats_do_not_block_lear
             },
         }
 
-    async def stable_growth_idle_window(_request=None):
-        return _build_idle_window(quality_score=0.88)
+    async def stable_growth_activity_guards(_request=None):
+        return _build_activity_guards(quality_score=0.88)
 
-    async def degrading_idle_window(_request=None):
-        return _build_idle_window(quality_score=0.2, error_count=1, uncertainty_count=1)
+    async def degrading_activity_guards(_request=None):
+        return _build_activity_guards(quality_score=0.2, error_count=1, uncertainty_count=1)
 
-    async def strained_truthfulness_idle_window(_request=None):
-        return _build_idle_window(quality_score=0.46, error_count=3, uncertainty_count=1)
+    async def strained_truthfulness_activity_guards(_request=None):
+        return _build_activity_guards(quality_score=0.46, error_count=3, uncertainty_count=1)
 
     sequence = [
-        (stable_growth_idle_window, "completed"),
-        (degrading_idle_window, "failed"),
-        (strained_truthfulness_idle_window, "completed"),
-        (stable_growth_idle_window, "completed"),
-        (degrading_idle_window, "failed"),
-        (strained_truthfulness_idle_window, "completed"),
-        (stable_growth_idle_window, "completed"),
-        (degrading_idle_window, "failed"),
+        (stable_growth_activity_guards, "completed"),
+        (degrading_activity_guards, "failed"),
+        (strained_truthfulness_activity_guards, "completed"),
+        (stable_growth_activity_guards, "completed"),
+        (degrading_activity_guards, "failed"),
+        (strained_truthfulness_activity_guards, "completed"),
+        (stable_growth_activity_guards, "completed"),
+        (degrading_activity_guards, "failed"),
     ]
 
     wrote_back_cycles = 0
@@ -5386,8 +5301,8 @@ async def test_accumulated_focus_context_and_observation_stats_do_not_block_lear
     observed_primary_needs: set[str] = set()
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
-        for idle_window_fn, outcome_status in sequence:
-            supervisor.evaluate_idle_window = idle_window_fn  # type: ignore[method-assign]
+        for activity_guard_fn, outcome_status in sequence:
+            supervisor.evaluate_activity_guards = activity_guard_fn  # type: ignore[method-assign]
             cycle = await _plan_and_write_back_endogenous_cycle(
                 supervisor,
                 outcome_status=outcome_status,
@@ -5437,10 +5352,10 @@ async def test_accumulated_focus_context_and_observation_stats_do_not_block_lear
     memory_supervisor = _make_replay_supervisor("memory_replay")
 
     async def recovered_learning_idle_window(_request=None):
-        return _build_idle_window(quality_score=0.9)
+        return _build_activity_guards(quality_score=0.9)
 
     async def memory_queue_idle_window(_request=None):
-        return _build_idle_window(quality_score=0.46)
+        return _build_activity_guards(quality_score=0.46)
 
     planned = await memory_supervisor.plan_self_evolution_task(
         {
@@ -5455,9 +5370,9 @@ async def test_accumulated_focus_context_and_observation_stats_do_not_block_lear
         reason="probe",
     )
 
-    learning_supervisor.evaluate_idle_window = recovered_learning_idle_window  # type: ignore[method-assign]
-    truthfulness_supervisor.evaluate_idle_window = strained_truthfulness_idle_window  # type: ignore[method-assign]
-    memory_supervisor.evaluate_idle_window = memory_queue_idle_window  # type: ignore[method-assign]
+    learning_supervisor.evaluate_activity_guards = recovered_learning_idle_window  # type: ignore[method-assign]
+    truthfulness_supervisor.evaluate_activity_guards = strained_truthfulness_activity_guards  # type: ignore[method-assign]
+    memory_supervisor.evaluate_activity_guards = memory_queue_idle_window  # type: ignore[method-assign]
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         learning_result = await learning_supervisor.evaluate_endogenous_drive({"record_activity": False})
@@ -5511,13 +5426,11 @@ async def test_meta_governance_switches_toward_observe_when_uncertainty_pressure
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -5568,7 +5481,7 @@ async def test_meta_governance_switches_toward_observe_when_uncertainty_pressure
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     meta = result["cognition_state"]["meta_governance"]
 
@@ -5583,13 +5496,11 @@ async def test_meta_governance_switches_toward_expand_when_uncertainty_recovers(
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -5640,7 +5551,7 @@ async def test_meta_governance_switches_toward_expand_when_uncertainty_recovers(
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     meta = result["cognition_state"]["meta_governance"]
 
@@ -5669,13 +5580,11 @@ async def test_meta_governance_uses_recent_mode_history_to_reduce_flip_flop(tmp_
     }
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -5726,7 +5635,7 @@ async def test_meta_governance_uses_recent_mode_history_to_reduce_flip_flop(tmp_
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     meta = result["cognition_state"]["meta_governance"]
 
@@ -5742,13 +5651,11 @@ async def test_meta_governance_persists_mode_history_across_cycles(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -5799,7 +5706,7 @@ async def test_meta_governance_persists_mode_history_across_cycles(tmp_path):
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     first = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     second = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     history = supervisor._load_endogenous_drive_history()
@@ -5819,13 +5726,11 @@ async def test_attention_agenda_builds_cross_cycle_persistence_memory(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -5869,7 +5774,7 @@ async def test_attention_agenda_builds_cross_cycle_persistence_memory(tmp_path):
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     first = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     second = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     third = await supervisor.evaluate_endogenous_drive({"record_activity": False})
@@ -5899,7 +5804,7 @@ async def test_run_endogenous_drive_cycle_observation_posture_defers_non_stabili
     async def fake_evaluate_endogenous_drive(_request=None):
         return {
             "status": "evaluated",
-            "idle_window": {},
+            "activity_guards": {},
             "drive_posture": {
                 "signal_type": "drive_posture_signal",
                 "payload": {
@@ -5961,7 +5866,7 @@ async def test_run_endogenous_drive_cycle_only_judges_candidates_kept_after_runt
     def drive_judgement(preferred_focus: str) -> dict:
         return {
             "perception": {
-                "user_mode": "idle_window",
+                "user_mode": "user_chain_quiet",
                 "system_posture": "stable",
             },
             "reflection": {
@@ -5983,7 +5888,7 @@ async def test_run_endogenous_drive_cycle_only_judges_candidates_kept_after_runt
         evaluation_requests.append(dict(request or {}))
         deliberation = {
             "perception": {
-                "user_mode": "idle_window",
+                "user_mode": "user_chain_quiet",
                 "system_posture": "stable",
             },
             "reflection": {
@@ -6004,7 +5909,7 @@ async def test_run_endogenous_drive_cycle_only_judges_candidates_kept_after_runt
         }
         return {
             "status": "evaluated",
-            "idle_window": {
+            "activity_guards": {
                 "task_family_decisions": {
                     "self_learning": {
                         "eligible_for_planning": True,
@@ -6098,7 +6003,7 @@ async def test_governance_consumption_survives_drive_plan_failure_and_context_sw
             "event_type": "autonomy_alignment_request",
             "channel": "autonomy_alignment_requests",
             "recorded_at": "2026-06-28T00:00:00+00:00",
-            "context_key": "idle_window|stable|weak_learning_yield",
+            "context_key": "user_chain_quiet|stable|weak_learning_yield",
             "preferred_focus": "observation",
             "priority": 0.82,
             "message": "Alignment should tighten before autonomous work.",
@@ -6110,7 +6015,7 @@ async def test_governance_consumption_survives_drive_plan_failure_and_context_sw
             "event_type": "truthfulness_alert",
             "channel": "truthfulness_alerts",
             "recorded_at": "2026-06-28T00:01:00+00:00",
-            "context_key": "idle_window|strained|none",
+            "context_key": "user_chain_quiet|strained|none",
             "preferred_focus": "truthfulness",
             "priority": 0.88,
             "message": "Truthfulness pressure should suppress expansion.",
@@ -6121,7 +6026,7 @@ async def test_governance_consumption_survives_drive_plan_failure_and_context_sw
     supervisor._persist_endogenous_governance_events(events_snapshot)
 
     async def fake_review(_request=None):
-        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "idle_window": {}}
+        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "activity_guards": {}}
 
     supervisor.review_self_evolution_tasks = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
@@ -6137,13 +6042,13 @@ async def test_governance_consumption_survives_drive_plan_failure_and_context_sw
 
     current_self_regulation = supervisor._load_endogenous_self_regulation()
     failing_eval = _drive_cycle_failure_replay_evaluation(
-        context="idle_window|stable|weak_learning_yield",
-        key="continuity:queue_hygiene_review",
-        focus="queue_hygiene",
+        context="user_chain_quiet|stable|weak_learning_yield",
+        key="continuity:governance_hygiene_review",
+        focus="governance_hygiene",
         self_regulation=current_self_regulation,
     )
     successful_eval = _drive_cycle_failure_replay_evaluation(
-        context="idle_window|strained|none",
+        context="user_chain_quiet|strained|none",
         key="truthfulness:review_correction_signals",
         focus="truthfulness",
         self_regulation=current_self_regulation,
@@ -6190,9 +6095,9 @@ async def test_governance_consumption_survives_drive_plan_failure_and_context_sw
     assert result["planned"] == 1
     assert result["tasks"][0]["metadata"]["endogenous_drive_key"] == "truthfulness:review_correction_signals"
     assert judgement_keys.count("truthfulness:review_correction_signals") == 1
-    assert "continuity:queue_hygiene_review" not in judgement_keys
+    assert "continuity:governance_hygiene_review" not in judgement_keys
     assert history["strategy_memory"]["focus_stats"]["truthfulness"]["judged"] == 1
-    assert "queue_hygiene" not in history["strategy_memory"]["focus_stats"]
+    assert "governance_hygiene" not in history["strategy_memory"]["focus_stats"]
     assert any(item.get("event_id") == "evt-align-switch" for item in events_after_success)
     assert any(item.get("event_id") == "evt-truth-switch" for item in events_after_success)
     assert any(item.get("event_type") == "truthfulness_alert" for item in events_after_success)
@@ -6208,7 +6113,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
     async def fake_review(_request=None):
-        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "idle_window": {}}
+        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "activity_guards": {}}
 
     supervisor.review_self_evolution_tasks = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
@@ -6220,7 +6125,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
             "event_type": "autonomy_alignment_request",
             "channel": "autonomy_alignment_requests",
             "recorded_at": "2026-06-28T00:00:00+00:00",
-            "context_key": "idle_window|stable|weak_learning_yield",
+            "context_key": "user_chain_quiet|stable|weak_learning_yield",
             "preferred_focus": "observation",
             "priority": 0.82,
             "message": "Alignment should tighten before autonomous work.",
@@ -6232,7 +6137,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
             "event_type": "truthfulness_alert",
             "channel": "truthfulness_alerts",
             "recorded_at": "2026-06-28T00:01:00+00:00",
-            "context_key": "idle_window|strained|none",
+            "context_key": "user_chain_quiet|strained|none",
             "preferred_focus": "truthfulness",
             "priority": 0.88,
             "message": "Truthfulness pressure should suppress expansion.",
@@ -6255,13 +6160,13 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
 
     current_self_regulation = supervisor._load_endogenous_self_regulation()
     first_failure_eval = _drive_cycle_failure_replay_evaluation(
-        context="idle_window|stable|weak_learning_yield",
+        context="user_chain_quiet|stable|weak_learning_yield",
         key="continuity:queue_hygiene_failed_cycle_a",
-        focus="queue_hygiene",
+        focus="governance_hygiene",
         self_regulation=current_self_regulation,
     )
     first_success_eval = _drive_cycle_failure_replay_evaluation(
-        context="idle_window|strained|none",
+        context="user_chain_quiet|strained|none",
         key="truthfulness:review_cycle_a",
         focus="truthfulness",
         self_regulation=current_self_regulation,
@@ -6305,20 +6210,20 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
                 "event_type": "governance_review_request",
                 "channel": "governance_review_requests",
                 "recorded_at": "2026-06-28T00:02:00+00:00",
-                "context_key": "idle_window|stable|queue_debt",
-                "preferred_focus": "queue_hygiene",
+                "context_key": "user_chain_quiet|stable|queue_debt",
+                "preferred_focus": "governance_hygiene",
                 "priority": 0.79,
                 "message": "Queue hygiene should be reviewed after context switch.",
                 "rationale": "queue context switched",
-                "payload": {"queue_health": "review"},
+                "payload": {"governance_load_state": "review"},
             },
             {
                 "event_id": "evt-align-cycle-b",
                 "event_type": "autonomy_alignment_request",
                 "channel": "autonomy_alignment_requests",
                 "recorded_at": "2026-06-28T00:03:00+00:00",
-                "context_key": "idle_window|stable|queue_debt",
-                "preferred_focus": "queue_hygiene",
+                "context_key": "user_chain_quiet|stable|queue_debt",
+                "preferred_focus": "governance_hygiene",
                 "priority": 0.81,
                 "message": "Context switch should keep self-regulation tight.",
                 "rationale": "queue context switched",
@@ -6340,15 +6245,15 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
 
     second_self_regulation = supervisor._load_endogenous_self_regulation()
     second_failure_eval = _drive_cycle_failure_replay_evaluation(
-        context="idle_window|stable|queue_debt",
+        context="user_chain_quiet|stable|queue_debt",
         key="truthfulness:review_failed_cycle_b",
         focus="truthfulness",
         self_regulation=second_self_regulation,
     )
     second_success_eval = _drive_cycle_failure_replay_evaluation(
-        context="idle_window|stable|queue_debt",
+        context="user_chain_quiet|stable|queue_debt",
         key="continuity:queue_hygiene_cycle_b",
-        focus="queue_hygiene",
+        focus="governance_hygiene",
         self_regulation=second_self_regulation,
     )
 
@@ -6399,9 +6304,9 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
     assert "continuity:queue_hygiene_failed_cycle_a" not in judgement_keys
     assert "truthfulness:review_failed_cycle_b" not in judgement_keys
     assert focus_stats["truthfulness"]["judged"] == 1
-    assert focus_stats["queue_hygiene"]["judged"] == 1
-    assert contextual_stats["idle_window|strained|none"]["truthfulness"]["judged"] == 1
-    assert contextual_stats["idle_window|stable|queue_debt"]["queue_hygiene"]["judged"] == 1
+    assert focus_stats["governance_hygiene"]["judged"] == 1
+    assert contextual_stats["user_chain_quiet|strained|none"]["truthfulness"]["judged"] == 1
+    assert contextual_stats["user_chain_quiet|stable|queue_debt"]["governance_hygiene"]["judged"] == 1
     assert final_events["evt-align-cycle-a"]["consumed_at"] == first_consumed_at["evt-align-cycle-a"]
     assert final_events["evt-truth-cycle-a"]["consumed_at"] == first_consumed_at["evt-truth-cycle-a"]
     assert final_events["evt-review-cycle-b"]["consumed_action"] == "trigger_review_pass"
@@ -6427,13 +6332,11 @@ async def test_endogenous_drive_lm_task_generation_is_disabled_by_default(tmp_pa
         },
     }
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -6450,7 +6353,7 @@ async def test_endogenous_drive_lm_task_generation_is_disabled_by_default(tmp_pa
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     assert all(
         not bool(dict(candidate.get("metadata") or {}).get("llm_task_generated"))
@@ -6509,13 +6412,11 @@ async def test_endogenous_drive_can_materialize_llm_task_proposals_from_evidence
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -6540,7 +6441,7 @@ async def test_endogenous_drive_can_materialize_llm_task_proposals_from_evidence
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
 
     fake_client = _FakeLLMClient(
         {
@@ -6683,13 +6584,11 @@ async def test_endogenous_drive_reuses_lm_proposals_when_cognitive_self_regulati
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -6709,7 +6608,7 @@ async def test_endogenous_drive_reuses_lm_proposals_when_cognitive_self_regulati
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient(
         {
             "proposals": [
@@ -6806,7 +6705,7 @@ async def test_endogenous_drive_prefers_lm_led_candidate_stream_with_small_heuri
             metadata={"score_breakdown": {"candidate_kind": "truthfulness_review"}},
         ),
         EndogenousTaskCandidate(
-            stable_key="continuity:queue_hygiene_review",
+            stable_key="continuity:governance_hygiene_review",
             title="Review self-evolution queue hygiene",
             summary="Heuristic queue review",
             priority="normal",
@@ -6815,7 +6714,7 @@ async def test_endogenous_drive_prefers_lm_led_candidate_stream_with_small_heuri
             execution_kind="general_self_evolution",
             value_tags=["continuity", "truthfulness"],
             utility=0.71,
-            metadata={"score_breakdown": {"candidate_kind": "queue_hygiene_review"}},
+            metadata={"score_breakdown": {"candidate_kind": "governance_hygiene_review"}},
         ),
     ]
 
@@ -6826,7 +6725,7 @@ async def test_endogenous_drive_prefers_lm_led_candidate_stream_with_small_heuri
             learning_expansion_bias=0.5,
             truthfulness_bias=0.5,
             memory_continuity_bias=0.5,
-            queue_hygiene_bias=0.5,
+            governance_hygiene_bias=0.5,
             body_growth_bias=0.5,
             observation_bias=0.5,
             candidate_throttle=0.0,
@@ -6861,7 +6760,7 @@ async def test_prompt_packet_budget_preserves_queue_state_snapshot_under_large_c
             "top_self_iteration_domain": "grounding",
             "primary_evidence_nodes": ["self_structure"],
             "primary_agenda_nodes": ["focus:learning_expansion"],
-            "queue_state_summary": "queued_tasks=2",
+            "governance_backlog_summary": "governance_backlog=2",
             "summary": "Decision core summary",
         },
         "supporting_detail": {
@@ -6880,7 +6779,7 @@ async def test_prompt_packet_budget_preserves_queue_state_snapshot_under_large_c
             "evidence_channels": [{"channel": "recent_learning", "evidence_strength": "weak", "item_count": 6}],
             "summary": "Long tail summary",
         },
-        "queued_tasks": [
+        "governance_backlog_tasks": [
             {
                 "title": "Existing queue task A",
                 "status": "queued",
@@ -6898,8 +6797,8 @@ async def test_prompt_packet_budget_preserves_queue_state_snapshot_under_large_c
                 "execution_kind": "general_self_evolution",
             },
         ],
-        "queued_learning_titles": ["Existing queue task A"],
-        "queued_body_improvement_titles": ["Existing improvement task"],
+        "learning_backlog_titles": ["Existing queue task A"],
+        "body_improvement_backlog_titles": ["Existing improvement task"],
         "recent_learning_evidence": [
             {"title": f"Learning {idx}", "summary": "x" * 400, "quality_score": 0.7}
             for idx in range(12)
@@ -6931,9 +6830,9 @@ async def test_prompt_packet_budget_preserves_queue_state_snapshot_under_large_c
     ]
     assert "long_tail_context" in compact
     assert "Learning A" in compact["long_tail_context"]["recent_learning_titles"]
-    assert "queue_state_snapshot" in compact
-    queue_snapshot = compact["queue_state_snapshot"]
-    assert queue_snapshot["queued_task_count"] == 2
+    assert "governance_backlog_snapshot" in compact
+    queue_snapshot = compact["governance_backlog_snapshot"]
+    assert queue_snapshot["governance_backlog_task_count"] == 2
     assert "Existing queue task A" in queue_snapshot["recent_titles"]
     assert "guidance" in queue_snapshot
 
@@ -6946,13 +6845,13 @@ def test_prompt_packet_priority_order_follows_charter_attention_policy():
         {
             "identity": {"role": "endogenous_supervisory_core"},
             "decision_core": {"current_judgement": "review first"},
-            "queue_state_snapshot": {"summary": "queued_tasks=1"},
+            "governance_backlog_snapshot": {"summary": "governance_backlog=1"},
             "supporting_detail": {"grounding_gaps": ["missing_evidence:self_structure"]},
         },
         cognition_charter={
             "prompt_attention_policy": {
                 "priority_order": [
-                    "queue_state_snapshot",
+                    "governance_backlog_snapshot",
                     "decision_core",
                     "identity",
                     "supporting_detail",
@@ -6962,7 +6861,7 @@ def test_prompt_packet_priority_order_follows_charter_attention_policy():
     )
 
     assert list(compact.keys())[:4] == [
-        "queue_state_snapshot",
+        "governance_backlog_snapshot",
         "decision_core",
         "identity",
         "supporting_detail",
@@ -7138,7 +7037,7 @@ def test_prompt_packet_trim_stage_order_follows_charter_attention_policy():
             "top_self_iteration_domain": "grounding",
             "primary_evidence_nodes": ["self_structure"] * 10,
             "primary_agenda_nodes": ["focus:learning_expansion"] * 10,
-            "queue_state_summary": "queued_tasks=2;" + ("q" * 500),
+            "governance_backlog_summary": "governance_backlog=2;" + ("q" * 500),
             "summary": "s" * 500,
         },
         "agenda_graph": {
@@ -7204,13 +7103,11 @@ async def test_endogenous_drive_passes_cognition_charter_to_lm_system_prompt(tmp
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -7227,7 +7124,7 @@ async def test_endogenous_drive_passes_cognition_charter_to_lm_system_prompt(tmp
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -7277,13 +7174,11 @@ async def test_endogenous_drive_passes_configurable_task_generation_focus_to_pay
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -7300,7 +7195,7 @@ async def test_endogenous_drive_passes_configurable_task_generation_focus_to_pay
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -7343,13 +7238,11 @@ async def test_endogenous_drive_builds_context_layers_in_evidence_packet(tmp_pat
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -7366,15 +7259,15 @@ async def test_endogenous_drive_builds_context_layers_in_evidence_packet(tmp_pat
             },
         }
 
-    idle_window = await fake_idle_window()
-    idle_window["drive_history"] = supervisor._history_for_endogenous_drive(
+    activity_guards = await fake_activity_guards()
+    activity_guards["drive_history"] = supervisor._history_for_endogenous_drive(
         supervisor._load_endogenous_drive_history()
     )
-    drive_context = supervisor._endogenous_drive_engine._build_drive_context(idle_window)
+    drive_context = supervisor._endogenous_drive_engine._build_drive_context(activity_guards)
     evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(
-        idle_window=idle_window,
+        activity_guards=activity_guards,
         deliberation=supervisor._endogenous_drive_engine.build_deliberation_report(
-            idle_window=idle_window
+            activity_guards=activity_guards
         ),
         drive_context=drive_context,
         memory_plan={},
@@ -7431,13 +7324,11 @@ async def test_endogenous_drive_context_layers_follow_charter_layering_policy(tm
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -7454,15 +7345,15 @@ async def test_endogenous_drive_context_layers_follow_charter_layering_policy(tm
             },
         }
 
-    idle_window = await fake_idle_window()
-    idle_window["drive_history"] = supervisor._history_for_endogenous_drive(
+    activity_guards = await fake_activity_guards()
+    activity_guards["drive_history"] = supervisor._history_for_endogenous_drive(
         supervisor._load_endogenous_drive_history()
     )
-    drive_context = supervisor._endogenous_drive_engine._build_drive_context(idle_window)
+    drive_context = supervisor._endogenous_drive_engine._build_drive_context(activity_guards)
     evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(
-        idle_window=idle_window,
+        activity_guards=activity_guards,
         deliberation=supervisor._endogenous_drive_engine.build_deliberation_report(
-            idle_window=idle_window
+            activity_guards=activity_guards
         ),
         drive_context=drive_context,
         memory_plan={},
@@ -7494,13 +7385,11 @@ async def test_endogenous_drive_lm_evidence_packet_stays_on_slim_default_path(tm
     history = supervisor._endogenous_drive_history_default()
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -7536,7 +7425,7 @@ async def test_endogenous_drive_lm_evidence_packet_stays_on_slim_default_path(tm
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     supervisor.config = supervisor.config.model_copy(
         update={
             "service_runtime": supervisor.config.service_runtime.model_copy(
@@ -7552,15 +7441,15 @@ async def test_endogenous_drive_lm_evidence_packet_stays_on_slim_default_path(tm
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
 
-    idle_window = await fake_idle_window()
-    idle_window["drive_history"] = supervisor._history_for_endogenous_drive(
+    activity_guards = await fake_activity_guards()
+    activity_guards["drive_history"] = supervisor._history_for_endogenous_drive(
         supervisor._load_endogenous_drive_history()
     )
-    drive_context = supervisor._endogenous_drive_engine._build_drive_context(idle_window)
+    drive_context = supervisor._endogenous_drive_engine._build_drive_context(activity_guards)
     evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(
-        idle_window=idle_window,
+        activity_guards=activity_guards,
         deliberation=supervisor._endogenous_drive_engine.build_deliberation_report(
-            idle_window=idle_window
+            activity_guards=activity_guards
         ),
         drive_context=drive_context,
         memory_plan={},
@@ -7602,13 +7491,11 @@ async def test_run_endogenous_drive_cycle_does_not_expose_cognitive_feedback_tra
         },
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 1200, "agent": 1200, "memory": 1200},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -7625,7 +7512,7 @@ async def test_run_endogenous_drive_cycle_does_not_expose_cognitive_feedback_tra
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     proposal_cognition = result["cognition_state"]["proposal_cognition"]
@@ -7659,13 +7546,11 @@ async def test_run_endogenous_drive_cycle_does_not_expose_cognitive_strategy_del
         },
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 1200, "agent": 1200, "memory": 1200},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -7682,7 +7567,7 @@ async def test_run_endogenous_drive_cycle_does_not_expose_cognitive_strategy_del
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     proposal_cognition = result["cognition_state"]["proposal_cognition"]
@@ -7753,13 +7638,11 @@ async def test_run_endogenous_drive_cycle_does_not_expose_cognitive_evolution_dr
         },
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 1200, "agent": 1200, "memory": 1200},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -7776,7 +7659,7 @@ async def test_run_endogenous_drive_cycle_does_not_expose_cognitive_evolution_dr
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     proposal_cognition = result["cognition_state"]["proposal_cognition"]
@@ -7802,7 +7685,7 @@ async def test_endogenous_drive_cognitive_briefing_prefers_context_layers(tmp_pa
                 "top_self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
                 "primary_evidence_nodes": ["self_structure"],
                 "primary_agenda_nodes": ["focus:learning_expansion"],
-                "queue_state_summary": "queued_tasks=2; recent_titles=Existing queue task A.",
+                "governance_backlog_summary": "governance_backlog=2; recent_titles=Existing queue task A.",
                 "cognitive_posture": {
                     "name": "truthfulness_first",
                     "selection_reason": "grounding remains unstable",
@@ -7823,10 +7706,10 @@ async def test_endogenous_drive_cognitive_briefing_prefers_context_layers(tmp_pa
                 "recent_learning_titles": ["Learning A"],
                 "summary": "Long tail summary",
             },
-            "queue_state_snapshot": {
-                "queued_task_count": 2,
+            "governance_backlog_snapshot": {
+                "governance_backlog_task_count": 2,
                 "recent_titles": ["Existing queue task A"],
-                "summary": "queued_tasks=2; recent_titles=Existing queue task A.",
+                "summary": "governance_backlog=2; recent_titles=Existing queue task A.",
             },
             "meta_cognition_profile": {
                 "summary": "stale fallback summary",
@@ -7848,7 +7731,7 @@ async def test_endogenous_drive_cognitive_briefing_prefers_context_layers(tmp_pa
     assert "- 当前主约束: weak self structure grounding" in payload
     assert "- 当前首要自我迭代域: grounding" in payload
     assert "- 当前不宜直接 improvement 的原因: improvement would outrun grounding" in payload
-    assert "- 当前排队上下文: queued_tasks=2; recent_titles=Existing queue task A." in payload
+    assert "- 当前治理在途上下文: governance_backlog=2; recent_titles=Existing queue task A." in payload
 
 
 @pytest.mark.asyncio
@@ -7868,13 +7751,11 @@ async def test_endogenous_drive_uses_default_task_generation_focus_when_not_conf
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -7891,7 +7772,7 @@ async def test_endogenous_drive_uses_default_task_generation_focus_when_not_conf
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -7923,13 +7804,11 @@ async def test_endogenous_drive_passes_cognitive_posture_semantics_to_lm_system_
     supervisor.config.service_runtime.endogenous_drive_cognition_charter.cognitive_control_policy.posture_selection_mode = "manual"
     supervisor.config.service_runtime.endogenous_drive_cognition_charter.cognitive_control_policy.active_posture_profile = "truthfulness_first"
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -7949,7 +7828,7 @@ async def test_endogenous_drive_passes_cognitive_posture_semantics_to_lm_system_
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -7982,13 +7861,11 @@ async def test_endogenous_drive_constrains_high_risk_or_weak_evidence_lm_proposa
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -8008,7 +7885,7 @@ async def test_endogenous_drive_constrains_high_risk_or_weak_evidence_lm_proposa
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
 
     fake_client = _FakeLLMClient(
         {
@@ -8016,7 +7893,7 @@ async def test_endogenous_drive_constrains_high_risk_or_weak_evidence_lm_proposa
                 {
                     "title": "Review queue anomalies conservatively",
                     "summary": "Inspect queue anomalies first because the current evidence is weak.",
-                    "candidate_kind": "queue_hygiene_review",
+                    "candidate_kind": "governance_hygiene_review",
                     "task_type": "review",
                     "rationale": "Queue anomalies may exist but supporting evidence is still weak.",
                     "evidence_summary": ["only one weak signal"],
@@ -8073,13 +7950,11 @@ async def test_endogenous_drive_marks_improvement_proposal_weak_when_it_conflict
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -8107,7 +7982,7 @@ async def test_endogenous_drive_marks_improvement_proposal_weak_when_it_conflict
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient(
         {
             "proposals": [
@@ -8176,13 +8051,11 @@ async def test_endogenous_drive_prefers_conservative_review_over_weak_improvemen
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -8210,7 +8083,7 @@ async def test_endogenous_drive_prefers_conservative_review_over_weak_improvemen
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient(
         {
             "cognitive_assessment": {
@@ -8244,7 +8117,7 @@ async def test_endogenous_drive_prefers_conservative_review_over_weak_improvemen
                 {
                     "title": "Review grounding gaps before any body change",
                     "summary": "Repair evidence binding and confirm self-structure grounding before considering improvement.",
-                    "candidate_kind": "queue_hygiene_review",
+                    "candidate_kind": "governance_hygiene_review",
                     "task_type": "review",
                     "rationale": "Weak grounding should be repaired before any risky body change.",
                     "evidence_summary": ["missing_evidence:self_structure", "weak learning evidence"],
@@ -8420,13 +8293,11 @@ async def test_endogenous_drive_passes_learning_and_shell_body_evidence_to_lm(tm
         encoding="utf-8",
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -8469,7 +8340,7 @@ async def test_endogenous_drive_passes_learning_and_shell_body_evidence_to_lm(tm
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
 
     fake_client = _FakeLLMClient({"proposals": []})
 
@@ -8508,13 +8379,11 @@ async def test_endogenous_drive_passes_configured_external_research_evidence_to_
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -8531,7 +8400,7 @@ async def test_endogenous_drive_passes_configured_external_research_evidence_to_
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -8587,13 +8456,11 @@ async def test_endogenous_drive_passes_external_research_file_evidence_to_lm(tmp
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -8610,7 +8477,7 @@ async def test_endogenous_drive_passes_external_research_file_evidence_to_lm(tmp
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -8666,13 +8533,11 @@ async def test_endogenous_drive_passes_unified_evidence_channels_to_lm(tmp_path)
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -8701,7 +8566,7 @@ async def test_endogenous_drive_passes_unified_evidence_channels_to_lm(tmp_path)
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -8765,13 +8630,11 @@ async def test_endogenous_drive_passes_recent_reference_alignment_feedback_to_lm
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -8788,7 +8651,7 @@ async def test_endogenous_drive_passes_recent_reference_alignment_feedback_to_lm
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -9145,13 +9008,11 @@ async def test_endogenous_drive_passes_grounding_focus_summary_to_lm(tmp_path):
     (shell_worktree / "config.yaml").write_text("name: shell\n", encoding="utf-8")
     (shell_worktree / "agent").mkdir(exist_ok=True)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -9183,7 +9044,7 @@ async def test_endogenous_drive_passes_grounding_focus_summary_to_lm(tmp_path):
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -9237,13 +9098,11 @@ async def test_endogenous_drive_passes_cognitive_assessment_memory_to_lm(tmp_pat
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -9260,7 +9119,7 @@ async def test_endogenous_drive_passes_cognitive_assessment_memory_to_lm(tmp_pat
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -9311,13 +9170,11 @@ async def test_endogenous_drive_passes_self_iteration_hypotheses_to_lm(tmp_path)
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -9334,7 +9191,7 @@ async def test_endogenous_drive_passes_self_iteration_hypotheses_to_lm(tmp_path)
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -9395,13 +9252,11 @@ async def test_endogenous_drive_passes_self_iteration_trend_memory_to_lm(tmp_pat
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -9418,7 +9273,7 @@ async def test_endogenous_drive_passes_self_iteration_trend_memory_to_lm(tmp_pat
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -9475,13 +9330,11 @@ async def test_endogenous_drive_passes_switch_self_regulation_memory_to_lm(tmp_p
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -9498,7 +9351,7 @@ async def test_endogenous_drive_passes_switch_self_regulation_memory_to_lm(tmp_p
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -9551,13 +9404,11 @@ async def test_endogenous_drive_passes_post_task_effect_memory_to_lm(tmp_path):
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -9574,7 +9425,7 @@ async def test_endogenous_drive_passes_post_task_effect_memory_to_lm(tmp_path):
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -9625,13 +9476,11 @@ async def test_endogenous_drive_passes_meta_cognition_profile_to_lm(tmp_path):
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"uncertainty_high_count": 1}},
@@ -9648,7 +9497,7 @@ async def test_endogenous_drive_passes_meta_cognition_profile_to_lm(tmp_path):
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -9682,13 +9531,11 @@ async def test_endogenous_drive_passes_cognitive_briefing_to_lm(tmp_path):
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -9715,7 +9562,7 @@ async def test_endogenous_drive_passes_cognitive_briefing_to_lm(tmp_path):
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -9753,13 +9600,11 @@ async def test_endogenous_drive_requests_cognitive_assessment_from_lm(tmp_path):
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -9779,7 +9624,7 @@ async def test_endogenous_drive_requests_cognitive_assessment_from_lm(tmp_path):
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -9837,13 +9682,11 @@ async def test_endogenous_drive_passes_self_model_snapshot_to_lm(tmp_path):
     (shell_worktree / "config.yaml").write_text("name: shell\n", encoding="utf-8")
     (shell_worktree / "agent").mkdir(exist_ok=True)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -9881,7 +9724,7 @@ async def test_endogenous_drive_passes_self_model_snapshot_to_lm(tmp_path):
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -9933,13 +9776,11 @@ async def test_endogenous_drive_passes_evidence_credibility_and_task_shape_hint_
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -9971,7 +9812,7 @@ async def test_endogenous_drive_passes_evidence_credibility_and_task_shape_hint_
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -10043,13 +9884,11 @@ async def test_endogenous_drive_passes_proposal_drift_memory_to_lm(tmp_path):
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -10066,7 +9905,7 @@ async def test_endogenous_drive_passes_proposal_drift_memory_to_lm(tmp_path):
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -10153,13 +9992,11 @@ async def test_runtime_cognition_exposes_posture_reasoning_memory(tmp_path):
         },
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -10203,7 +10040,7 @@ async def test_runtime_cognition_exposes_posture_reasoning_memory(tmp_path):
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     proposal_cognition = result["cognition_state"]["proposal_cognition"]
     drift_memory = proposal_cognition["auxiliary_memory"]["proposal_drift_memory"]
@@ -10238,13 +10075,11 @@ async def test_endogenous_drive_passes_cognitive_posture_to_lm(tmp_path):
     supervisor._endogenous_drive_engine.config = supervisor.config
     supervisor.config.service_runtime.endogenous_drive_cognition_charter.cognitive_control_policy.posture_selection_mode = "auto"
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -10264,7 +10099,7 @@ async def test_endogenous_drive_passes_cognitive_posture_to_lm(tmp_path):
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -10317,13 +10152,11 @@ async def test_endogenous_drive_records_cognitive_posture_in_lm_generation_conte
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -10340,7 +10173,7 @@ async def test_endogenous_drive_records_cognitive_posture_in_lm_generation_conte
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -10398,13 +10231,11 @@ async def test_endogenous_drive_records_lm_cognitive_assessment_in_generation_co
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -10421,7 +10252,7 @@ async def test_endogenous_drive_records_lm_cognitive_assessment_in_generation_co
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient(
         {
             "cognitive_assessment": {
@@ -10478,13 +10309,11 @@ async def test_endogenous_drive_records_self_iteration_fields_in_generation_cont
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -10501,7 +10330,7 @@ async def test_endogenous_drive_records_self_iteration_fields_in_generation_cont
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient(
         {
             "cognitive_assessment": {
@@ -10549,13 +10378,11 @@ async def test_endogenous_drive_keeps_lm_candidates_empty_when_weak_context_retu
     )
     supervisor._endogenous_drive_engine.config = supervisor.config
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -10583,7 +10410,7 @@ async def test_endogenous_drive_keeps_lm_candidates_empty_when_weak_context_retu
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient(
         {
             "cognitive_assessment": {
@@ -10626,7 +10453,7 @@ async def test_endogenous_drive_keeps_lm_candidates_empty_when_weak_context_retu
     assert "body_improvement" not in program_candidate_kinds
     assert "generic_learning_fallback" not in program_candidate_kinds
     assert "exploratory_learning" not in program_candidate_kinds
-    assert program_candidate_kinds <= {"truthfulness_review", "queue_hygiene_review", ""}
+    assert program_candidate_kinds <= {"truthfulness_review", "governance_hygiene_review", ""}
     state = supervisor._endogenous_drive_engine.get_latest_lm_task_generation_context()
     assert state["status"] == "completed"
     assert state["proposal_count"] == 0
@@ -10676,13 +10503,11 @@ async def test_run_endogenous_drive_cycle_exposes_stay_switch_trend_memory(tmp_p
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -10699,7 +10524,7 @@ async def test_run_endogenous_drive_cycle_exposes_stay_switch_trend_memory(tmp_p
             "completed_learning_tasks": [],
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -10734,13 +10559,11 @@ async def test_run_endogenous_drive_cycle_exposes_cognitive_assessment_memory(tm
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -10757,7 +10580,7 @@ async def test_run_endogenous_drive_cycle_exposes_cognitive_assessment_memory(tm
             "completed_learning_tasks": [],
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -10841,13 +10664,11 @@ async def test_run_endogenous_drive_cycle_falls_back_to_history_reference_alignm
         {},
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -10864,7 +10685,7 @@ async def test_run_endogenous_drive_cycle_falls_back_to_history_reference_alignm
             "completed_learning_tasks": [],
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -10917,13 +10738,11 @@ async def test_run_endogenous_drive_cycle_exposes_self_iteration_trend_memory(tm
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -10940,7 +10759,7 @@ async def test_run_endogenous_drive_cycle_exposes_self_iteration_trend_memory(tm
             "completed_learning_tasks": [],
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -10985,13 +10804,11 @@ async def test_run_endogenous_drive_cycle_exposes_switch_self_regulation_memory(
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -11008,7 +10825,7 @@ async def test_run_endogenous_drive_cycle_exposes_switch_self_regulation_memory(
             "completed_learning_tasks": [],
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -11053,13 +10870,11 @@ async def test_run_endogenous_drive_cycle_exposes_post_task_effect_memory(tmp_pa
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -11076,7 +10891,7 @@ async def test_run_endogenous_drive_cycle_exposes_post_task_effect_memory(tmp_pa
             "completed_learning_tasks": [],
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -11119,13 +10934,11 @@ async def test_run_endogenous_drive_cycle_exposes_meta_cognition_profile(tmp_pat
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -11142,7 +10955,7 @@ async def test_run_endogenous_drive_cycle_exposes_meta_cognition_profile(tmp_pat
             "completed_learning_tasks": [],
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -11214,13 +11027,11 @@ async def test_endogenous_drive_builds_meta_cognition_profile_in_evidence_packet
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -11237,15 +11048,15 @@ async def test_endogenous_drive_builds_meta_cognition_profile_in_evidence_packet
             },
         }
 
-    idle_window = await fake_idle_window()
-    idle_window["drive_history"] = supervisor._history_for_endogenous_drive(
+    activity_guards = await fake_activity_guards()
+    activity_guards["drive_history"] = supervisor._history_for_endogenous_drive(
         supervisor._load_endogenous_drive_history()
     )
-    drive_context = supervisor._endogenous_drive_engine._build_drive_context(idle_window)
+    drive_context = supervisor._endogenous_drive_engine._build_drive_context(activity_guards)
     evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(
-        idle_window=idle_window,
+        activity_guards=activity_guards,
         deliberation=supervisor._endogenous_drive_engine.build_deliberation_report(
-            idle_window=idle_window
+            activity_guards=activity_guards
         ),
         drive_context=drive_context,
         memory_plan={},
@@ -11570,7 +11381,7 @@ def test_detect_needs_sorts_primary_need_by_strength_instead_of_append_order():
     engine = EndogenousDriveEngine()
     needs = engine._detect_needs(
         perception=DrivePerceptionSnapshot(
-            user_mode="idle_window",
+            user_mode="user_chain_quiet",
             autonomous_chain_gate_active=False,
             system_posture="stable",
             active_sessions=0,
@@ -11581,21 +11392,21 @@ def test_detect_needs_sorts_primary_need_by_strength_instead_of_append_order():
             has_learning_history=True,
             shell_slot_present=False,
             shell_slot_id="",
-            active_queue_count=0,
-            queued_learning_count=0,
-            queued_body_improvement_count=0,
-            stale_queue_count=0,
+            governance_backlog_count=0,
+            learning_backlog_count=0,
+            body_improvement_backlog_count=0,
+            stale_backlog_count=0,
             pending_review_count=0,
-            checks={"has_memory_idle": True, "in_execution_window": True},
+            checks={"has_memory_idle": True},
             idle_seconds={"user": 1200, "agent": 1200, "memory": 1200},
         ),
         world_model=DriveWorldModel(
-            user_mode="idle_window",
+            user_mode="user_chain_quiet",
             system_posture="stable",
             truthfulness_pressure=0.95,
             learning_momentum=0.18,
             body_upgrade_readiness=0.05,
-            queue_health="healthy",
+            governance_load_state="healthy",
             memory_pressure=0.12,
             self_confidence=0.32,
         ),
@@ -11603,8 +11414,8 @@ def test_detect_needs_sorts_primary_need_by_strength_instead_of_append_order():
             recent_learning_count=1,
             recent_learning_quality=0.24,
             learning_yield_state="weak",
-            queue_blockage_pressure=0.08,
-            queue_blockage_state="light",
+            governance_backlog_blockage_pressure=0.08,
+            governance_backlog_blockage_state="light",
             body_growth_blocked=False,
             repeated_drive_pressure=0.04,
             autonomy_readiness=0.34,
@@ -11616,7 +11427,7 @@ def test_detect_needs_sorts_primary_need_by_strength_instead_of_append_order():
             learning_expansion_bias=0.08,
             truthfulness_bias=0.95,
             memory_continuity_bias=0.05,
-            queue_hygiene_bias=0.08,
+            governance_hygiene_bias=0.08,
             body_growth_bias=0.0,
             observation_bias=0.22,
             candidate_throttle=0.18,
@@ -11644,7 +11455,7 @@ def test_detect_needs_prefers_observe_before_learning_when_historical_underdeliv
     engine = EndogenousDriveEngine()
     needs = engine._detect_needs(
         perception=DrivePerceptionSnapshot(
-            user_mode="idle_window",
+            user_mode="user_chain_quiet",
             autonomous_chain_gate_active=False,
             system_posture="stable",
             active_sessions=0,
@@ -11655,21 +11466,21 @@ def test_detect_needs_prefers_observe_before_learning_when_historical_underdeliv
             has_learning_history=True,
             shell_slot_present=False,
             shell_slot_id="",
-            active_queue_count=0,
-            queued_learning_count=0,
-            queued_body_improvement_count=0,
-            stale_queue_count=0,
+            governance_backlog_count=0,
+            learning_backlog_count=0,
+            body_improvement_backlog_count=0,
+            stale_backlog_count=0,
             pending_review_count=0,
-            checks={"has_memory_idle": True, "in_execution_window": True},
+            checks={"has_memory_idle": True},
             idle_seconds={"user": 900, "agent": 900, "memory": 900},
         ),
         world_model=DriveWorldModel(
-            user_mode="idle_window",
+            user_mode="user_chain_quiet",
             system_posture="stable",
             truthfulness_pressure=0.275,
             learning_momentum=0.468,
             body_upgrade_readiness=0.322,
-            queue_health="clear",
+            governance_load_state="clear",
             memory_pressure=0.4,
             self_confidence=0.65,
         ),
@@ -11677,8 +11488,8 @@ def test_detect_needs_prefers_observe_before_learning_when_historical_underdeliv
             recent_learning_count=1,
             recent_learning_quality=0.46,
             learning_yield_state="mixed",
-            queue_blockage_pressure=0.0,
-            queue_blockage_state="clear",
+            governance_backlog_blockage_pressure=0.0,
+            governance_backlog_blockage_state="clear",
             body_growth_blocked=False,
             repeated_drive_pressure=0.0,
             autonomy_readiness=0.3519,
@@ -11690,7 +11501,7 @@ def test_detect_needs_prefers_observe_before_learning_when_historical_underdeliv
             learning_expansion_bias=0.44,
             truthfulness_bias=0.73,
             memory_continuity_bias=0.58,
-            queue_hygiene_bias=0.51,
+            governance_hygiene_bias=0.51,
             body_growth_bias=0.28,
             observation_bias=0.76,
             candidate_throttle=0.68,
@@ -11717,7 +11528,7 @@ def test_detect_needs_does_not_let_memory_continuity_override_observation_under_
     engine = EndogenousDriveEngine()
     needs = engine._detect_needs(
         perception=DrivePerceptionSnapshot(
-            user_mode="idle_window",
+            user_mode="user_chain_quiet",
             autonomous_chain_gate_active=False,
             system_posture="stable",
             active_sessions=0,
@@ -11728,21 +11539,21 @@ def test_detect_needs_does_not_let_memory_continuity_override_observation_under_
             has_learning_history=True,
             shell_slot_present=False,
             shell_slot_id="",
-            active_queue_count=0,
-            queued_learning_count=0,
-            queued_body_improvement_count=0,
-            stale_queue_count=0,
+            governance_backlog_count=0,
+            learning_backlog_count=0,
+            body_improvement_backlog_count=0,
+            stale_backlog_count=0,
             pending_review_count=0,
-            checks={"has_memory_idle": True, "in_execution_window": True},
+            checks={"has_memory_idle": True},
             idle_seconds={"user": 900, "agent": 900, "memory": 900},
         ),
         world_model=DriveWorldModel(
-            user_mode="idle_window",
+            user_mode="user_chain_quiet",
             system_posture="stable",
             truthfulness_pressure=0.275,
             learning_momentum=0.468,
             body_upgrade_readiness=0.322,
-            queue_health="clear",
+            governance_load_state="clear",
             memory_pressure=0.4,
             self_confidence=0.65,
         ),
@@ -11750,8 +11561,8 @@ def test_detect_needs_does_not_let_memory_continuity_override_observation_under_
             recent_learning_count=1,
             recent_learning_quality=0.46,
             learning_yield_state="mixed",
-            queue_blockage_pressure=0.0,
-            queue_blockage_state="clear",
+            governance_backlog_blockage_pressure=0.0,
+            governance_backlog_blockage_state="clear",
             body_growth_blocked=False,
             repeated_drive_pressure=0.0,
             autonomy_readiness=0.3519,
@@ -11763,7 +11574,7 @@ def test_detect_needs_does_not_let_memory_continuity_override_observation_under_
             learning_expansion_bias=0.44,
             truthfulness_bias=0.73,
             memory_continuity_bias=0.70,
-            queue_hygiene_bias=0.51,
+            governance_hygiene_bias=0.51,
             body_growth_bias=0.28,
             observation_bias=0.76,
             candidate_throttle=0.68,
@@ -11790,7 +11601,7 @@ def test_detect_needs_keeps_memory_continuity_primary_before_observation_gate_tr
     engine = EndogenousDriveEngine()
     needs = engine._detect_needs(
         perception=DrivePerceptionSnapshot(
-            user_mode="idle_window",
+            user_mode="user_chain_quiet",
             autonomous_chain_gate_active=False,
             system_posture="stable",
             active_sessions=0,
@@ -11801,21 +11612,21 @@ def test_detect_needs_keeps_memory_continuity_primary_before_observation_gate_tr
             has_learning_history=True,
             shell_slot_present=False,
             shell_slot_id="",
-            active_queue_count=0,
-            queued_learning_count=0,
-            queued_body_improvement_count=0,
-            stale_queue_count=0,
+            governance_backlog_count=0,
+            learning_backlog_count=0,
+            body_improvement_backlog_count=0,
+            stale_backlog_count=0,
             pending_review_count=0,
-            checks={"has_memory_idle": True, "in_execution_window": True},
+            checks={"has_memory_idle": True},
             idle_seconds={"user": 900, "agent": 900, "memory": 900},
         ),
         world_model=DriveWorldModel(
-            user_mode="idle_window",
+            user_mode="user_chain_quiet",
             system_posture="stable",
             truthfulness_pressure=0.275,
             learning_momentum=0.468,
             body_upgrade_readiness=0.322,
-            queue_health="clear",
+            governance_load_state="clear",
             memory_pressure=0.4,
             self_confidence=0.65,
         ),
@@ -11823,8 +11634,8 @@ def test_detect_needs_keeps_memory_continuity_primary_before_observation_gate_tr
             recent_learning_count=1,
             recent_learning_quality=0.46,
             learning_yield_state="mixed",
-            queue_blockage_pressure=0.0,
-            queue_blockage_state="clear",
+            governance_backlog_blockage_pressure=0.0,
+            governance_backlog_blockage_state="clear",
             body_growth_blocked=False,
             repeated_drive_pressure=0.0,
             autonomy_readiness=0.4386,
@@ -11836,7 +11647,7 @@ def test_detect_needs_keeps_memory_continuity_primary_before_observation_gate_tr
             learning_expansion_bias=0.44,
             truthfulness_bias=0.73,
             memory_continuity_bias=0.58,
-            queue_hygiene_bias=0.51,
+            governance_hygiene_bias=0.51,
             body_growth_bias=0.28,
             observation_bias=0.52,
             candidate_throttle=0.54,
@@ -11863,7 +11674,7 @@ def test_detect_needs_enters_observation_when_historical_underdelivery_and_obser
     engine = EndogenousDriveEngine()
     needs = engine._detect_needs(
         perception=DrivePerceptionSnapshot(
-            user_mode="idle_window",
+            user_mode="user_chain_quiet",
             autonomous_chain_gate_active=False,
             system_posture="stable",
             active_sessions=0,
@@ -11874,21 +11685,21 @@ def test_detect_needs_enters_observation_when_historical_underdelivery_and_obser
             has_learning_history=True,
             shell_slot_present=False,
             shell_slot_id="",
-            active_queue_count=0,
-            queued_learning_count=0,
-            queued_body_improvement_count=0,
-            stale_queue_count=0,
+            governance_backlog_count=0,
+            learning_backlog_count=0,
+            body_improvement_backlog_count=0,
+            stale_backlog_count=0,
             pending_review_count=0,
-            checks={"has_memory_idle": True, "in_execution_window": True},
+            checks={"has_memory_idle": True},
             idle_seconds={"user": 900, "agent": 900, "memory": 900},
         ),
         world_model=DriveWorldModel(
-            user_mode="idle_window",
+            user_mode="user_chain_quiet",
             system_posture="stable",
             truthfulness_pressure=0.275,
             learning_momentum=0.468,
             body_upgrade_readiness=0.322,
-            queue_health="clear",
+            governance_load_state="clear",
             memory_pressure=0.4,
             self_confidence=0.65,
         ),
@@ -11896,8 +11707,8 @@ def test_detect_needs_enters_observation_when_historical_underdelivery_and_obser
             recent_learning_count=1,
             recent_learning_quality=0.46,
             learning_yield_state="mixed",
-            queue_blockage_pressure=0.0,
-            queue_blockage_state="clear",
+            governance_backlog_blockage_pressure=0.0,
+            governance_backlog_blockage_state="clear",
             body_growth_blocked=False,
             repeated_drive_pressure=0.0,
             autonomy_readiness=0.4386,
@@ -11909,7 +11720,7 @@ def test_detect_needs_enters_observation_when_historical_underdelivery_and_obser
             learning_expansion_bias=0.44,
             truthfulness_bias=0.73,
             memory_continuity_bias=0.58,
-            queue_hygiene_bias=0.51,
+            governance_hygiene_bias=0.51,
             body_growth_bias=0.28,
             observation_bias=0.7184,
             candidate_throttle=0.54,
@@ -11938,7 +11749,7 @@ def test_detect_needs_keeps_historical_underdelivery_boundary_deterministic_for_
     def _run_once():
         return engine._detect_needs(
             perception=DrivePerceptionSnapshot(
-                user_mode="idle_window",
+                user_mode="user_chain_quiet",
                 autonomous_chain_gate_active=False,
                 system_posture="stable",
                 active_sessions=0,
@@ -11949,21 +11760,21 @@ def test_detect_needs_keeps_historical_underdelivery_boundary_deterministic_for_
                 has_learning_history=True,
                 shell_slot_present=False,
                 shell_slot_id="",
-                active_queue_count=0,
-                queued_learning_count=0,
-                queued_body_improvement_count=0,
-                stale_queue_count=0,
+                governance_backlog_count=0,
+                learning_backlog_count=0,
+                body_improvement_backlog_count=0,
+                stale_backlog_count=0,
                 pending_review_count=0,
-                checks={"has_memory_idle": True, "in_execution_window": True},
+                checks={"has_memory_idle": True},
                 idle_seconds={"user": 900, "agent": 900, "memory": 900},
             ),
             world_model=DriveWorldModel(
-                user_mode="idle_window",
+                user_mode="user_chain_quiet",
                 system_posture="stable",
                 truthfulness_pressure=0.275,
                 learning_momentum=0.468,
                 body_upgrade_readiness=0.322,
-                queue_health="clear",
+                governance_load_state="clear",
                 memory_pressure=0.4,
                 self_confidence=0.65,
             ),
@@ -11971,8 +11782,8 @@ def test_detect_needs_keeps_historical_underdelivery_boundary_deterministic_for_
                 recent_learning_count=1,
                 recent_learning_quality=0.46,
                 learning_yield_state="mixed",
-                queue_blockage_pressure=0.0,
-                queue_blockage_state="clear",
+                governance_backlog_blockage_pressure=0.0,
+                governance_backlog_blockage_state="clear",
                 body_growth_blocked=False,
                 repeated_drive_pressure=0.0,
                 autonomy_readiness=0.4386,
@@ -11984,7 +11795,7 @@ def test_detect_needs_keeps_historical_underdelivery_boundary_deterministic_for_
                 learning_expansion_bias=0.44,
                 truthfulness_bias=0.73,
                 memory_continuity_bias=0.58,
-                queue_hygiene_bias=0.51,
+                governance_hygiene_bias=0.51,
                 body_growth_bias=0.28,
                 observation_bias=0.68,
                 candidate_throttle=0.54,
@@ -12017,7 +11828,7 @@ def test_detect_needs_crosses_from_memory_to_observation_monotonically_near_hist
     def _top_needs(observation_bias: float):
         needs = engine._detect_needs(
             perception=DrivePerceptionSnapshot(
-                user_mode="idle_window",
+                user_mode="user_chain_quiet",
                 autonomous_chain_gate_active=False,
                 system_posture="stable",
                 active_sessions=0,
@@ -12028,21 +11839,21 @@ def test_detect_needs_crosses_from_memory_to_observation_monotonically_near_hist
                 has_learning_history=True,
                 shell_slot_present=False,
                 shell_slot_id="",
-                active_queue_count=0,
-                queued_learning_count=0,
-                queued_body_improvement_count=0,
-                stale_queue_count=0,
+                governance_backlog_count=0,
+                learning_backlog_count=0,
+                body_improvement_backlog_count=0,
+                stale_backlog_count=0,
                 pending_review_count=0,
-                checks={"has_memory_idle": True, "in_execution_window": True},
+                checks={"has_memory_idle": True},
                 idle_seconds={"user": 900, "agent": 900, "memory": 900},
             ),
             world_model=DriveWorldModel(
-                user_mode="idle_window",
+                user_mode="user_chain_quiet",
                 system_posture="stable",
                 truthfulness_pressure=0.275,
                 learning_momentum=0.468,
                 body_upgrade_readiness=0.322,
-                queue_health="clear",
+                governance_load_state="clear",
                 memory_pressure=0.4,
                 self_confidence=0.65,
             ),
@@ -12050,8 +11861,8 @@ def test_detect_needs_crosses_from_memory_to_observation_monotonically_near_hist
                 recent_learning_count=1,
                 recent_learning_quality=0.46,
                 learning_yield_state="mixed",
-                queue_blockage_pressure=0.0,
-                queue_blockage_state="clear",
+                governance_backlog_blockage_pressure=0.0,
+                governance_backlog_blockage_state="clear",
                 body_growth_blocked=False,
                 repeated_drive_pressure=0.0,
                 autonomy_readiness=0.4386,
@@ -12063,7 +11874,7 @@ def test_detect_needs_crosses_from_memory_to_observation_monotonically_near_hist
                 learning_expansion_bias=0.44,
                 truthfulness_bias=0.73,
                 memory_continuity_bias=0.58,
-                queue_hygiene_bias=0.51,
+                governance_hygiene_bias=0.51,
                 body_growth_bias=0.28,
                 observation_bias=observation_bias,
                 candidate_throttle=0.54,
@@ -12178,13 +11989,11 @@ async def test_single_recovery_outcome_does_not_immediately_flip_primary_need_ou
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -12207,7 +12016,7 @@ async def test_single_recovery_outcome_does_not_immediately_flip_primary_need_ou
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -12270,13 +12079,11 @@ async def test_memory_maintenance_recovery_does_not_clear_self_learning_historic
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -12299,7 +12106,7 @@ async def test_memory_maintenance_recovery_does_not_clear_self_learning_historic
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -12362,13 +12169,11 @@ async def test_two_self_learning_recoveries_can_clear_historical_underdelivery(
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -12391,7 +12196,7 @@ async def test_two_self_learning_recoveries_can_clear_historical_underdelivery(
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -12462,13 +12267,11 @@ async def test_cleared_historical_underdelivery_does_not_reenter_observation_fro
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -12491,7 +12294,7 @@ async def test_cleared_historical_underdelivery_does_not_reenter_observation_fro
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -12555,13 +12358,11 @@ async def test_cleared_historical_underdelivery_allows_truthfulness_to_take_prim
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -12587,7 +12388,7 @@ async def test_cleared_historical_underdelivery_allows_truthfulness_to_take_prim
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -12653,13 +12454,11 @@ async def test_cleared_historical_underdelivery_keeps_learning_primary_under_wea
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -12685,7 +12484,7 @@ async def test_cleared_historical_underdelivery_keeps_learning_primary_under_wea
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -12705,7 +12504,7 @@ async def test_cleared_historical_underdelivery_keeps_learning_primary_under_wea
     assert result["deliberation"]["perception"]["correction_signals"] == 1
     assert result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == "expand_learning_frontier"
     assert result["deliberation"]["adaptive_policy"]["preferred_focus"] == "truthfulness"
-    assert "queue_hygiene_review" not in candidate_kinds
+    assert "governance_hygiene_review" not in candidate_kinds
 
 
 @pytest.mark.asyncio
@@ -12769,13 +12568,11 @@ async def test_cleared_historical_underdelivery_shifts_to_memory_continuity_when
     task_id = planned["tasks"][0]["task_id"]
     supervisor._self_evolution_queue.update_status(task_id, status="deferred", reason="probe")
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -12801,7 +12598,7 @@ async def test_cleared_historical_underdelivery_shifts_to_memory_continuity_when
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -12822,7 +12619,7 @@ async def test_cleared_historical_underdelivery_shifts_to_memory_continuity_when
     assert result["deliberation"]["perception"]["pending_review_count"] == 1
     assert result["cognition_state"]["judgement_core"]["primary_need"]["need_type"] == "stabilize_memory_continuity"
     assert result["deliberation"]["adaptive_policy"]["preferred_focus"] == "truthfulness"
-    assert "queue_hygiene_review" in candidate_kinds
+    assert "governance_hygiene_review" in candidate_kinds
 
 
 @pytest.mark.asyncio
@@ -12886,13 +12683,11 @@ async def test_cleared_historical_underdelivery_with_light_queue_debt_does_not_j
     task_id = planned["tasks"][0]["task_id"]
     supervisor._self_evolution_queue.update_status(task_id, status="deferred", reason="probe")
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
@@ -12915,7 +12710,7 @@ async def test_cleared_historical_underdelivery_with_light_queue_debt_does_not_j
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -13004,13 +12799,11 @@ async def test_mixed_recovery_history_does_not_let_memory_need_override_observat
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -13033,7 +12826,7 @@ async def test_mixed_recovery_history_does_not_let_memory_need_override_observat
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -13121,13 +12914,11 @@ async def test_self_learning_recovery_then_block_again_keeps_preferred_focus_ali
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -13150,7 +12941,7 @@ async def test_self_learning_recovery_then_block_again_keeps_preferred_focus_ali
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -13248,13 +13039,11 @@ async def test_recent_self_learning_relapse_reenters_historical_underdelivery_af
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -13277,7 +13066,7 @@ async def test_recent_self_learning_relapse_reenters_historical_underdelivery_af
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -13394,13 +13183,11 @@ async def test_recorded_at_normalization_keeps_historical_underdelivery_stable_a
         newest_first[8],
     ]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -13423,7 +13210,7 @@ async def test_recorded_at_normalization_keeps_historical_underdelivery_stable_a
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     first_history = supervisor._endogenous_drive_history_default()
@@ -13541,13 +13328,11 @@ async def test_legacy_history_without_timestamps_stays_conservative_across_order
         newest_first[8],
     ]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -13570,7 +13355,7 @@ async def test_legacy_history_without_timestamps_stays_conservative_across_order
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     first_history = supervisor._endogenous_drive_history_default()
@@ -13701,13 +13486,11 @@ async def test_recent_relapse_retightens_candidate_budget_in_longer_mixed_histor
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -13730,7 +13513,7 @@ async def test_recent_relapse_retightens_candidate_budget_in_longer_mixed_histor
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -13868,20 +13651,18 @@ async def test_recent_completed_sequence_releases_observation_after_long_dirty_s
             "learning_expansion": {"judged": 7, "completed": 5, "failed": 1, "dragging": 1},
         },
         "contextual_focus_stats": {
-            "idle_window|stable|none": {
+            "user_chain_quiet|stable|none": {
                 "learning_expansion": {"judged": 5, "completed": 4, "failed": 0, "dragging": 1},
             }
         },
     }
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -13904,7 +13685,7 @@ async def test_recent_completed_sequence_releases_observation_after_long_dirty_s
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -13960,7 +13741,7 @@ async def test_recent_relapse_reenters_observation_after_recovery_despite_stale_
             "observation": {"judged": 8, "completed": 7, "failed": 0, "dragging": 0},
         },
         "contextual_focus_stats": {
-            "idle_window|stable|none": {
+            "user_chain_quiet|stable|none": {
                 "learning_expansion": {"judged": 8, "completed": 7, "failed": 0, "dragging": 1},
                 "observation": {"judged": 6, "completed": 6, "failed": 0, "dragging": 0},
             }
@@ -13988,14 +13769,14 @@ async def test_recent_relapse_reenters_observation_after_recovery_despite_stale_
         encoding="utf-8",
     )
 
-    async def fake_idle_window(_request=None):
-        return _endogenous_idle_window_payload(
+    async def fake_activity_guards(_request=None):
+        return _endogenous_activity_guard_payload(
             quality_score=0.72,
             completed_title="Recent mixed recovery learning",
             completed_at="2026-06-28T10:00:00+00:00",
         )
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -14044,7 +13825,7 @@ async def test_alternating_recovery_and_relapse_reacts_under_continuous_strategy
         )
 
     def idle_payload(*, quality: float, error_count: int = 0, uncertainty_count: int = 0) -> dict:
-        return _endogenous_idle_window_payload(
+        return _endogenous_activity_guard_payload(
             quality_score=quality,
             completed_title="Recent alternating learning",
             completed_at="2026-06-28T12:00:00+00:00",
@@ -14052,22 +13833,22 @@ async def test_alternating_recovery_and_relapse_reacts_under_continuous_strategy
             uncertainty_count=uncertainty_count,
         )
 
-    async def stable_idle_window(_request=None):
+    async def stable_activity_guards(_request=None):
         return idle_payload(quality=0.84)
 
-    async def strained_idle_window(_request=None):
+    async def strained_activity_guards(_request=None):
         return idle_payload(quality=0.46, error_count=2, uncertainty_count=1)
 
     writeback_sequence = [
-        (stable_idle_window, "completed"),
-        (strained_idle_window, "failed"),
-        (stable_idle_window, "completed"),
-        (strained_idle_window, "deferred"),
-        (stable_idle_window, "completed"),
+        (stable_activity_guards, "completed"),
+        (strained_activity_guards, "failed"),
+        (stable_activity_guards, "completed"),
+        (strained_activity_guards, "deferred"),
+        (stable_activity_guards, "completed"),
     ]
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
-        for idle_window_fn, status in writeback_sequence:
-            supervisor.evaluate_idle_window = idle_window_fn  # type: ignore[method-assign]
+        for activity_guard_fn, status in writeback_sequence:
+            supervisor.evaluate_activity_guards = activity_guard_fn  # type: ignore[method-assign]
             await _plan_and_write_back_endogenous_cycle(
                 supervisor,
                 outcome_status=status,
@@ -14103,7 +13884,7 @@ async def test_alternating_recovery_and_relapse_reacts_under_continuous_strategy
         build_history_with_strategy(relapse_outcomes, accumulated_strategy)
     )
     install_decayed_self_regulation()
-    supervisor.evaluate_idle_window = stable_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = stable_activity_guards  # type: ignore[method-assign]
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         relapse_result = await supervisor.evaluate_endogenous_drive(
@@ -14144,7 +13925,7 @@ async def test_alternating_recovery_and_relapse_reacts_under_continuous_strategy
         build_history_with_strategy(recovered_outcomes, accumulated_strategy)
     )
     install_decayed_self_regulation()
-    supervisor.evaluate_idle_window = stable_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = stable_activity_guards  # type: ignore[method-assign]
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         recovered_result = await supervisor.evaluate_endogenous_drive(
@@ -14172,15 +13953,15 @@ async def test_long_dirty_history_switches_between_relapse_tightening_and_recove
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
-    async def stable_idle_window(_request=None):
-        return _endogenous_idle_window_payload(
+    async def stable_activity_guards(_request=None):
+        return _endogenous_activity_guard_payload(
             quality_score=0.84,
             completed_title="Stable long-span learning",
             completed_at="2026-06-29T12:00:00+00:00",
         )
 
-    async def strained_idle_window(_request=None):
-        return _endogenous_idle_window_payload(
+    async def strained_activity_guards(_request=None):
+        return _endogenous_activity_guard_payload(
             quality_score=0.38,
             completed_title="Strained long-span learning",
             completed_at="2026-06-29T12:00:00+00:00",
@@ -14189,16 +13970,16 @@ async def test_long_dirty_history_switches_between_relapse_tightening_and_recove
         )
 
     writeback_sequence = [
-        (stable_idle_window, "completed"),
-        (strained_idle_window, "failed"),
-        (stable_idle_window, "completed"),
-        (strained_idle_window, "deferred"),
-        (stable_idle_window, "completed"),
-        (stable_idle_window, "completed"),
+        (stable_activity_guards, "completed"),
+        (strained_activity_guards, "failed"),
+        (stable_activity_guards, "completed"),
+        (strained_activity_guards, "deferred"),
+        (stable_activity_guards, "completed"),
+        (stable_activity_guards, "completed"),
     ]
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
-        for idle_window_fn, status in writeback_sequence:
-            supervisor.evaluate_idle_window = idle_window_fn  # type: ignore[method-assign]
+        for activity_guard_fn, status in writeback_sequence:
+            supervisor.evaluate_activity_guards = activity_guard_fn  # type: ignore[method-assign]
             await _plan_and_write_back_endogenous_cycle(
                 supervisor,
                 outcome_status=status,
@@ -14262,7 +14043,7 @@ async def test_long_dirty_history_switches_between_relapse_tightening_and_recove
         },
     ]
     install_history(dirty_relapse_outcomes)
-    supervisor.evaluate_idle_window = stable_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = stable_activity_guards  # type: ignore[method-assign]
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         relapse_result = await supervisor.evaluate_endogenous_drive(
@@ -14300,7 +14081,7 @@ async def test_long_dirty_history_switches_between_relapse_tightening_and_recove
         _self_learning_outcome("Failed old self-learning", "failed", quality_score=0.20, recorded_hour=15),
     ]
     install_history(list(reversed(recovered_outcomes)))
-    supervisor.evaluate_idle_window = stable_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = stable_activity_guards  # type: ignore[method-assign]
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         recovered_result = await supervisor.evaluate_endogenous_drive(
@@ -14328,15 +14109,15 @@ async def test_writeback_history_replay_remains_time_ordered_when_outcomes_are_s
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
-    async def stable_idle_window(_request=None):
-        return _endogenous_idle_window_payload(
+    async def stable_activity_guards(_request=None):
+        return _endogenous_activity_guard_payload(
             quality_score=0.82,
             completed_title="Stable writeback learning",
             completed_at="2026-06-28T12:00:00+00:00",
         )
 
-    async def strained_idle_window(_request=None):
-        return _endogenous_idle_window_payload(
+    async def strained_activity_guards(_request=None):
+        return _endogenous_activity_guard_payload(
             quality_score=0.42,
             completed_title="Strained writeback learning",
             completed_at="2026-06-28T12:00:00+00:00",
@@ -14345,16 +14126,16 @@ async def test_writeback_history_replay_remains_time_ordered_when_outcomes_are_s
         )
 
     writeback_sequence = [
-        (stable_idle_window, "completed"),
-        (stable_idle_window, "completed"),
-        (stable_idle_window, "completed"),
-        (strained_idle_window, "failed"),
-        (stable_idle_window, "completed"),
-        (strained_idle_window, "failed"),
+        (stable_activity_guards, "completed"),
+        (stable_activity_guards, "completed"),
+        (stable_activity_guards, "completed"),
+        (strained_activity_guards, "failed"),
+        (stable_activity_guards, "completed"),
+        (strained_activity_guards, "failed"),
     ]
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
-        for idle_window_fn, status in writeback_sequence:
-            supervisor.evaluate_idle_window = idle_window_fn  # type: ignore[method-assign]
+        for activity_guard_fn, status in writeback_sequence:
+            supervisor.evaluate_activity_guards = activity_guard_fn  # type: ignore[method-assign]
             await _plan_and_write_back_endogenous_cycle(
                 supervisor,
                 outcome_status=status,
@@ -14397,8 +14178,8 @@ async def test_writeback_history_replay_remains_time_ordered_when_outcomes_are_s
     ]
     replay_strategy = json.loads(json.dumps(accumulated_history["strategy_memory"]))
 
-    async def replay_idle_window(_request=None):
-        return _endogenous_idle_window_payload(
+    async def replay_activity_guards(_request=None):
+        return _endogenous_activity_guard_payload(
             quality_score=0.76,
             completed_title="Replay stable learning",
             completed_at="2026-06-28T12:00:00+00:00",
@@ -14410,7 +14191,7 @@ async def test_writeback_history_replay_remains_time_ordered_when_outcomes_are_s
         history["strategy_memory"] = json.loads(json.dumps(replay_strategy))
         supervisor._persist_endogenous_drive_history(history)
 
-    supervisor.evaluate_idle_window = replay_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = replay_activity_guards  # type: ignore[method-assign]
     _install_replay_history(replay_outcomes)
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         ordered_result = await supervisor.evaluate_endogenous_drive(
@@ -14448,13 +14229,11 @@ async def test_memory_success_does_not_reopen_candidate_budget_while_self_learni
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -14477,7 +14256,7 @@ async def test_memory_success_does_not_reopen_candidate_budget_while_self_learni
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     base_bad3 = [
@@ -14610,13 +14389,11 @@ async def test_observation_mode_does_not_revive_filtered_learning_fallback_when_
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -14639,7 +14416,7 @@ async def test_observation_mode_does_not_revive_filtered_learning_fallback_when_
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -14690,13 +14467,11 @@ async def test_observation_mode_does_not_fall_back_to_memory_maintenance_when_ob
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -14719,7 +14494,7 @@ async def test_observation_mode_does_not_fall_back_to_memory_maintenance_when_ob
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -14771,13 +14546,11 @@ async def test_queue_hygiene_candidate_path_does_not_crash_when_self_learning_is
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -14800,7 +14573,7 @@ async def test_queue_hygiene_candidate_path_does_not_crash_when_self_learning_is
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -14815,7 +14588,7 @@ async def test_queue_hygiene_candidate_path_does_not_crash_when_self_learning_is
         ).strip()
         for candidate in result["candidates"]
     }
-    assert "queue_hygiene_review" in candidate_kinds
+    assert "governance_hygiene_review" in candidate_kinds
 
 
 @pytest.mark.asyncio
@@ -14879,13 +14652,11 @@ async def test_truthfulness_candidate_survives_budget_trimming_when_truthfulness
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -14911,7 +14682,7 @@ async def test_truthfulness_candidate_survives_budget_trimming_when_truthfulness
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -14986,13 +14757,11 @@ async def test_weak_truthfulness_signal_does_not_materialize_truthfulness_candid
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -15018,7 +14787,7 @@ async def test_weak_truthfulness_signal_does_not_materialize_truthfulness_candid
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -15092,13 +14861,11 @@ async def test_truthfulness_candidate_materializes_once_review_threshold_is_reac
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -15124,7 +14891,7 @@ async def test_truthfulness_candidate_materializes_once_review_threshold_is_reac
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -15204,13 +14971,11 @@ async def test_drive_posture_signal_keeps_observation_intent_link_when_truthfuln
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {
@@ -15236,7 +15001,7 @@ async def test_drive_posture_signal_keeps_observation_intent_link_when_truthfuln
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -15315,13 +15080,11 @@ async def test_queue_hygiene_candidate_survives_budget_trimming_when_observation
         reason="probe queue review signal",
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -15338,7 +15101,7 @@ async def test_queue_hygiene_candidate_survives_budget_trimming_when_observation
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -15350,7 +15113,7 @@ async def test_queue_hygiene_candidate_survives_budget_trimming_when_observation
     assert result["deliberation"]["adaptive_policy"]["candidate_budget"] == 1
     assert any(
         signal["signal_type"] == "governance_review_suggestion"
-        and signal.get("related_intent") == "review_queue_hygiene"
+        and signal.get("related_intent") == "review_governance_hygiene"
         for signal in result["deliberation"]["signals"]
     )
     candidate_kinds = [
@@ -15362,7 +15125,7 @@ async def test_queue_hygiene_candidate_survives_budget_trimming_when_observation
         ).strip()
         for candidate in result["candidates"]
     ]
-    assert candidate_kinds == ["queue_hygiene_review"]
+    assert candidate_kinds == ["governance_hygiene_review"]
 
 
 @pytest.mark.asyncio
@@ -15402,13 +15165,11 @@ async def test_weak_queue_debt_does_not_materialize_queue_hygiene_candidate_befo
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
@@ -15430,10 +15191,10 @@ async def test_weak_queue_debt_does_not_materialize_queue_hygiene_candidate_befo
                 "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
             },
             "pending_review_count": 0,
-            "stale_queue_count": 0,
+            "stale_backlog_count": 0,
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -15454,7 +15215,7 @@ async def test_weak_queue_debt_does_not_materialize_queue_hygiene_candidate_befo
         ).strip()
         for candidate in result["candidates"]
     ]
-    assert "queue_hygiene_review" not in candidate_kinds
+    assert "governance_hygiene_review" not in candidate_kinds
 
 
 @pytest.mark.asyncio
@@ -15510,13 +15271,11 @@ async def test_queue_hygiene_candidate_materializes_once_real_queue_debt_exists_
         reason="probe queue review debt",
     )
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
@@ -15539,7 +15298,7 @@ async def test_queue_hygiene_candidate_materializes_once_real_queue_debt_exists_
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -15558,7 +15317,7 @@ async def test_queue_hygiene_candidate_materializes_once_real_queue_debt_exists_
         ).strip()
         for candidate in result["candidates"]
     ]
-    assert "queue_hygiene_review" in candidate_kinds
+    assert "governance_hygiene_review" in candidate_kinds
 
 
 @pytest.mark.asyncio
@@ -15588,7 +15347,7 @@ async def test_observation_mode_prefers_candidate_with_stronger_drive_judgement_
         },
     )
     candidate_queue = EndogenousTaskCandidate(
-        stable_key="continuity:queue_hygiene_review",
+        stable_key="continuity:governance_hygiene_review",
         title="Review self-evolution queue hygiene",
         summary="Queue hygiene review",
         priority="normal",
@@ -15598,7 +15357,7 @@ async def test_observation_mode_prefers_candidate_with_stronger_drive_judgement_
         value_tags=["continuity", "truthfulness"],
         utility=0.95,
         metadata={
-            "score_breakdown": {"candidate_kind": "queue_hygiene_review"},
+            "score_breakdown": {"candidate_kind": "governance_hygiene_review"},
             "drive_judgement": {
                 "intent": {"priority": 0.54},
                 "needs": [{"need_type": "clear_governance_backlog", "severity": 0.56, "urgency": 0.48}],
@@ -15612,7 +15371,7 @@ async def test_observation_mode_prefers_candidate_with_stronger_drive_judgement_
             learning_expansion_bias=0.5,
             truthfulness_bias=0.5,
             memory_continuity_bias=0.5,
-            queue_hygiene_bias=0.5,
+            governance_hygiene_bias=0.5,
             body_growth_bias=0.5,
             observation_bias=0.75,
             candidate_throttle=0.0,
@@ -15652,7 +15411,7 @@ def test_observation_mode_tie_break_is_stable_across_input_order_when_truthfulne
         },
     )
     candidate_queue = EndogenousTaskCandidate(
-        stable_key="continuity:queue_hygiene_review",
+        stable_key="continuity:governance_hygiene_review",
         title="Review self-evolution queue hygiene",
         summary="Queue hygiene review",
         priority="normal",
@@ -15662,7 +15421,7 @@ def test_observation_mode_tie_break_is_stable_across_input_order_when_truthfulne
         value_tags=["continuity", "truthfulness"],
         utility=0.8,
         metadata={
-            "score_breakdown": {"candidate_kind": "queue_hygiene_review"},
+            "score_breakdown": {"candidate_kind": "governance_hygiene_review"},
             "drive_judgement": {
                 "intent": {"priority": 0.7},
                 "needs": [{"need_type": "clear_governance_backlog", "severity": 0.7, "urgency": 0.7}],
@@ -15673,7 +15432,7 @@ def test_observation_mode_tie_break_is_stable_across_input_order_when_truthfulne
         learning_expansion_bias=0.5,
         truthfulness_bias=0.5,
         memory_continuity_bias=0.5,
-        queue_hygiene_bias=0.5,
+        governance_hygiene_bias=0.5,
         body_growth_bias=0.5,
         observation_bias=0.75,
         candidate_throttle=0.0,
@@ -15710,7 +15469,7 @@ def test_observation_mode_keeps_monotonic_switch_when_queue_review_becomes_sligh
         learning_expansion_bias=0.5,
         truthfulness_bias=0.5,
         memory_continuity_bias=0.5,
-        queue_hygiene_bias=0.5,
+        governance_hygiene_bias=0.5,
         body_growth_bias=0.5,
         observation_bias=0.75,
         candidate_throttle=0.0,
@@ -15740,7 +15499,7 @@ def test_observation_mode_keeps_monotonic_switch_when_queue_review_becomes_sligh
         },
     )
     candidate_queue = EndogenousTaskCandidate(
-        stable_key="continuity:queue_hygiene_review",
+        stable_key="continuity:governance_hygiene_review",
         title="Review self-evolution queue hygiene",
         summary="Queue hygiene review",
         priority="normal",
@@ -15750,7 +15509,7 @@ def test_observation_mode_keeps_monotonic_switch_when_queue_review_becomes_sligh
         value_tags=["continuity", "truthfulness"],
         utility=0.8,
         metadata={
-            "score_breakdown": {"candidate_kind": "queue_hygiene_review"},
+            "score_breakdown": {"candidate_kind": "governance_hygiene_review"},
             "drive_judgement": {
                 "intent": {"priority": 0.71},
                 "needs": [{"need_type": "clear_governance_backlog", "severity": 0.71, "urgency": 0.70}],
@@ -15763,7 +15522,7 @@ def test_observation_mode_keeps_monotonic_switch_when_queue_review_becomes_sligh
         adaptive_policy=adaptive_policy,
     )
 
-    assert [candidate.stable_key for candidate in selected] == ["continuity:queue_hygiene_review"]
+    assert [candidate.stable_key for candidate in selected] == ["continuity:governance_hygiene_review"]
 
 
 @pytest.mark.unit
@@ -15808,13 +15567,13 @@ def test_recent_completed_static_governance_candidates_are_not_recreated_immedia
     engine = EndogenousDriveEngine()
     now = datetime.now(timezone.utc)
     idle = {
-        "checks": {"in_execution_window": True, "has_user_idle": True},
+        "checks": {},
         "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
         "activity": {
             "active_sessions": 0,
             "counts": {},
         },
-        "queued_tasks": [
+        "governance_backlog_tasks": [
             {
                 "title": "Recent memory sweep",
                 "status": "completed",
@@ -15834,7 +15593,7 @@ def test_recent_completed_static_governance_candidates_are_not_recreated_immedia
                 "execution_kind": "general_self_evolution",
                 "updated_at": (now - timedelta(hours=1)).isoformat(),
                 "metadata": {
-                    "endogenous_drive_key": "continuity:queue_hygiene_review",
+                    "endogenous_drive_key": "continuity:governance_hygiene_review",
                 },
             },
             {
@@ -15860,14 +15619,14 @@ def test_recent_completed_static_governance_candidates_are_not_recreated_immedia
     }
 
     candidates = engine.generate_candidates(
-        idle_window=idle,
+        activity_guards=idle,
         existing_drive_keys=set(),
         max_candidates=5,
     )
     candidate_keys = {candidate.stable_key for candidate in candidates}
 
     assert "continuity:memory_maintenance_sweep" not in candidate_keys
-    assert "continuity:queue_hygiene_review" not in candidate_keys
+    assert "continuity:governance_hygiene_review" not in candidate_keys
 
 
 @pytest.mark.unit
@@ -15875,13 +15634,13 @@ def test_static_governance_candidates_reopen_after_completion_cooldown():
     engine = EndogenousDriveEngine()
     now = datetime.now(timezone.utc)
     idle = {
-        "checks": {"in_execution_window": True, "has_user_idle": True},
+        "checks": {},
         "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
         "activity": {
             "active_sessions": 0,
             "counts": {},
         },
-        "queued_tasks": [
+        "governance_backlog_tasks": [
             {
                 "title": "Old memory sweep",
                 "status": "completed",
@@ -15901,7 +15660,7 @@ def test_static_governance_candidates_reopen_after_completion_cooldown():
                 "execution_kind": "general_self_evolution",
                 "updated_at": (now - timedelta(hours=18)).isoformat(),
                 "metadata": {
-                    "endogenous_drive_key": "continuity:queue_hygiene_review",
+                    "endogenous_drive_key": "continuity:governance_hygiene_review",
                 },
             },
             {
@@ -15927,25 +15686,25 @@ def test_static_governance_candidates_reopen_after_completion_cooldown():
     }
 
     candidates = engine.generate_candidates(
-        idle_window=idle,
+        activity_guards=idle,
         existing_drive_keys=set(),
         max_candidates=5,
     )
     candidate_keys = {candidate.stable_key for candidate in candidates}
 
     assert "continuity:memory_maintenance_sweep" in candidate_keys
-    assert "continuity:queue_hygiene_review" in candidate_keys
+    assert "continuity:governance_hygiene_review" in candidate_keys
 
 
 @pytest.mark.unit
 def test_generate_candidates_allows_empty_when_default_path_has_no_evidence():
     engine = EndogenousDriveEngine()
     idle = {
-        "checks": {"in_execution_window": True, "has_user_idle": True},
+        "checks": {},
         "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
         "activity": {"active_sessions": 0, "counts": {}},
         "completed_learning_tasks": [],
-        "queued_tasks": [],
+        "governance_backlog_tasks": [],
         "task_family_decisions": {
             "memory_maintenance": {"eligible_for_planning": False},
             "self_learning": {"eligible_for_planning": True},
@@ -15959,7 +15718,7 @@ def test_generate_candidates_allows_empty_when_default_path_has_no_evidence():
     }
 
     candidates = engine.generate_candidates(
-        idle_window=idle,
+        activity_guards=idle,
         existing_drive_keys=set(),
         max_candidates=3,
     )
@@ -15995,13 +15754,11 @@ async def test_proposal_drift_memory_biases_program_task_type_priors_toward_obse
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
@@ -16018,7 +15775,7 @@ async def test_proposal_drift_memory_biases_program_task_type_priors_toward_obse
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     deliberation = result["deliberation"]
     signals = deliberation["signals"]
@@ -16038,14 +15795,14 @@ async def test_proposal_drift_memory_biases_program_task_type_priors_toward_obse
         assert "\"posture_alignment_health\":" in prompt_payload
         assert "\"priority_basis_health\":" in prompt_payload
     else:
-        idle_window = await fake_idle_window()
-        idle_window["drive_history"] = supervisor._history_for_endogenous_drive(
+        activity_guards = await fake_activity_guards()
+        activity_guards["drive_history"] = supervisor._history_for_endogenous_drive(
             supervisor._load_endogenous_drive_history()
         )
-        drive_context = supervisor._endogenous_drive_engine._build_drive_context(idle_window)
+        drive_context = supervisor._endogenous_drive_engine._build_drive_context(activity_guards)
         evidence_packet = supervisor._endogenous_drive_engine._build_lm_evidence_packet(
-            idle_window=idle_window,
-            deliberation=supervisor._endogenous_drive_engine.build_deliberation_report(idle_window=idle_window),
+            activity_guards=activity_guards,
+            deliberation=supervisor._endogenous_drive_engine.build_deliberation_report(activity_guards=activity_guards),
             drive_context=drive_context,
             memory_plan={},
             self_learning_plan={},
@@ -16068,13 +15825,11 @@ async def test_endogenous_drive_fallback_learning_targets_shell_codebase_without
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
-    async def fake_idle_window(_request=None):
+    async def fake_activity_guards(_request=None):
         return {
             "checks": {
-                "has_user_idle": True,
                 "has_agent_idle": True,
                 "has_memory_idle": True,
-                "in_execution_window": True,
             },
             "idle_seconds": {
                 "user": 900,
@@ -16121,7 +15876,7 @@ async def test_endogenous_drive_fallback_learning_targets_shell_codebase_without
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
 
     result = await supervisor._run_endogenous_drive_cycle()
 
@@ -16199,7 +15954,7 @@ async def test_auto_decision_approves_task_when_idle_window_allows_execution(tmp
         task_id,
         {
             "decision": "auto",
-            "idle_window": {"now": "2026-05-25T00:15:00"},
+            "activity_guards": {"now": "2026-05-25T00:15:00"},
         },
     )
 
@@ -16239,7 +15994,7 @@ async def test_batch_review_defers_tasks_when_idle_window_is_not_ready(tmp_path)
 
     result = await supervisor.review_self_evolution_tasks(
         {
-            "idle_window": {"now": "2026-05-25T00:15:00"},
+            "activity_guards": {"now": "2026-05-25T00:15:00"},
         }
     )
 
@@ -16276,7 +16031,7 @@ async def test_batch_review_can_reapprove_deferred_tasks_on_later_cycle(tmp_path
 
     first = await supervisor.review_self_evolution_tasks(
         {
-            "idle_window": {"now": "2026-05-25T00:15:00"},
+            "activity_guards": {"now": "2026-05-25T00:15:00"},
         }
     )
     assert all(task["status"] == "deferred" for task in first["tasks"])
@@ -16296,7 +16051,7 @@ async def test_batch_review_can_reapprove_deferred_tasks_on_later_cycle(tmp_path
 
     second = await supervisor.review_self_evolution_tasks(
         {
-            "idle_window": {"now": "2026-05-25T01:00:00"},
+            "activity_guards": {"now": "2026-05-25T01:00:00"},
         }
     )
 
@@ -16310,10 +16065,10 @@ async def test_batch_review_can_reapprove_deferred_tasks_on_later_cycle(tmp_path
 async def test_endogenous_drive_still_plans_learning_candidates_with_active_sessions(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    async def fake_idle_window(request: dict | None = None):
+    async def fake_activity_guards(request: dict | None = None):
         del request
         return {
-            "checks": {"in_execution_window": True},
+            "checks": {},
             "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
             "activity": {
                 "counts": {},
@@ -16352,7 +16107,7 @@ async def test_endogenous_drive_still_plans_learning_candidates_with_active_sess
             },
         }
 
-    supervisor.evaluate_idle_window = fake_idle_window  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
 
     result = await supervisor._run_endogenous_drive_cycle()
     queued = await supervisor.list_self_evolution_tasks()
@@ -16391,9 +16146,9 @@ async def test_batch_review_accepts_lm_governance_override(tmp_path, monkeypatch
 
     supervisor._fetch_gateway_activity_snapshot = idle_snapshot  # type: ignore[method-assign]
 
-    async def fake_lm_review(tasks, *, idle_window):
+    async def fake_lm_review(tasks, *, activity_guards):
         assert len(tasks) == 2
-        assert idle_window["checks"]["has_user_idle"] is True
+        assert activity_guards["user_chain_signal"]["is_quiet"] is True
         return {
             tasks_by_title["Weak duplicate follow-up"]: {
                 "action": "cancel",
@@ -16405,7 +16160,7 @@ async def test_batch_review_accepts_lm_governance_override(tmp_path, monkeypatch
 
     result = await supervisor.review_self_evolution_tasks(
         {
-            "idle_window": {"now": "2026-05-25T01:00:00"},
+            "activity_guards": {"now": "2026-05-25T01:00:00"},
         }
     )
 
@@ -16444,8 +16199,8 @@ async def test_autonomous_chain_gate_preserves_agent_pull_task_approval_when_lm_
 
     supervisor._fetch_gateway_activity_snapshot = idle_snapshot  # type: ignore[method-assign]
 
-    async def fake_lm_review(tasks, *, idle_window):
-        del idle_window
+    async def fake_lm_review(tasks, *, activity_guards):
+        del activity_guards
         assert len(tasks) == 1
         return {
             task_id: {
@@ -16458,7 +16213,7 @@ async def test_autonomous_chain_gate_preserves_agent_pull_task_approval_when_lm_
 
     result = await supervisor.review_self_evolution_tasks(
         {
-            "idle_window": {"now": "2026-05-25T01:00:00"},
+            "activity_guards": {"now": "2026-05-25T01:00:00"},
         }
     )
 
@@ -16493,8 +16248,8 @@ async def test_batch_review_preserves_agent_pull_task_approval_without_autonomou
 
     supervisor._fetch_gateway_activity_snapshot = busy_snapshot  # type: ignore[method-assign]
 
-    async def fake_lm_review(tasks, *, idle_window):
-        del idle_window
+    async def fake_lm_review(tasks, *, activity_guards):
+        del activity_guards
         assert len(tasks) == 1
         return {
             task_id: {
@@ -16507,7 +16262,7 @@ async def test_batch_review_preserves_agent_pull_task_approval_without_autonomou
 
     result = await supervisor.review_self_evolution_tasks(
         {
-            "idle_window": {"now": "2026-05-25T00:15:00"},
+            "activity_guards": {"now": "2026-05-25T00:15:00"},
         }
     )
 
@@ -16548,7 +16303,7 @@ async def test_batch_review_auto_approves_body_improvement_agent_pull_task(tmp_p
 
     result = await supervisor.review_self_evolution_tasks(
         {
-            "idle_window": {"now": "2026-05-25T00:15:00"},
+            "activity_guards": {"now": "2026-05-25T00:15:00"},
         }
     )
 
@@ -16597,7 +16352,7 @@ async def test_batch_review_defers_body_improvement_until_self_learning_finishes
 
     result = await supervisor.review_self_evolution_tasks(
         {
-            "idle_window": {"now": "2026-05-25T00:15:00"},
+            "activity_guards": {"now": "2026-05-25T00:15:00"},
         }
     )
 
@@ -16645,13 +16400,13 @@ async def test_batch_review_releases_body_improvement_after_one_self_learning_pr
     supervisor._fetch_gateway_activity_snapshot = busy_snapshot  # type: ignore[method-assign]
 
     first = await supervisor.review_self_evolution_tasks(
-        {"idle_window": {"now": "2026-05-25T00:15:00"}}
+        {"activity_guards": {"now": "2026-05-25T00:15:00"}}
     )
     first_task = next(item for item in first["tasks"] if item["task_id"] == task_id)
     assert first_task["status"] == "deferred"
 
     second = await supervisor.review_self_evolution_tasks(
-        {"idle_window": {"now": "2026-05-25T00:16:00"}}
+        {"activity_guards": {"now": "2026-05-25T00:16:00"}}
     )
     second_task = next(item for item in second["tasks"] if item["task_id"] == task_id)
 
@@ -16731,7 +16486,7 @@ async def test_batch_review_records_shadow_governance_actions_without_mutating_s
 
     supervisor._fetch_gateway_activity_snapshot = idle_snapshot  # type: ignore[method-assign]
 
-    async def fake_lm_review(tasks, *, idle_window):
+    async def fake_lm_review(tasks, *, activity_guards):
         assert len(tasks) == 2
         return {
             tasks_by_title["Duplicate learning branch"]: {
@@ -16758,7 +16513,7 @@ async def test_batch_review_records_shadow_governance_actions_without_mutating_s
 
     result = await supervisor.review_self_evolution_tasks(
         {
-            "idle_window": {"now": "2026-05-25T01:00:00"},
+            "activity_guards": {"now": "2026-05-25T01:00:00"},
         }
     )
 
@@ -16798,7 +16553,7 @@ async def test_batch_review_can_apply_lm_reprioritize_to_real_task_priority(tmp_
 
     supervisor._fetch_gateway_activity_snapshot = idle_snapshot  # type: ignore[method-assign]
 
-    async def fake_lm_review(tasks, *, idle_window):
+    async def fake_lm_review(tasks, *, activity_guards):
         return {
             task_id: {
                 "action": "reprioritize",
@@ -16811,7 +16566,7 @@ async def test_batch_review_can_apply_lm_reprioritize_to_real_task_priority(tmp_
 
     result = await supervisor.review_self_evolution_tasks(
         {
-            "idle_window": {"now": "2026-05-25T01:00:00"},
+            "activity_guards": {"now": "2026-05-25T01:00:00"},
         }
     )
 
@@ -16896,7 +16651,7 @@ async def test_batch_review_defers_second_task_when_scheduled_for_conflicts(tmp_
 
     result = await supervisor.review_self_evolution_tasks(
         {
-            "idle_window": {"now": "2026-05-25T01:00:00"},
+            "activity_guards": {"now": "2026-05-25T01:00:00"},
         }
     )
 
@@ -16948,7 +16703,7 @@ async def test_batch_review_defers_body_task_with_boundary_violations(tmp_path):
 
     result = await supervisor.review_self_evolution_tasks(
         {
-            "idle_window": {"now": "2026-05-25T00:15:00"},
+            "activity_guards": {"now": "2026-05-25T00:15:00"},
         }
     )
 
@@ -17010,7 +16765,7 @@ async def test_batch_review_boundary_defer_does_not_depend_on_mem_write_success(
 
     result = await supervisor.review_self_evolution_tasks(
         {
-            "idle_window": {"now": "2026-05-25T00:15:00"},
+            "activity_guards": {"now": "2026-05-25T00:15:00"},
         }
     )
 
@@ -17302,7 +17057,7 @@ async def test_self_learning_followup_auto_approval_does_not_build_execution_req
         task_id,
         {
             "decision": "auto",
-            "idle_window": {
+            "activity_guards": {
                 "now": "2026-05-25T12:00:00",
             },
         },
@@ -17321,11 +17076,11 @@ async def test_self_learning_followup_auto_approval_does_not_build_execution_req
     assert decision["task_family"] == "self_learning"
     assert decision["execution_kind"] is None
     assert decision["decision_id"]
-    idle_window = decision["context"]["idle_window"]
-    assert idle_window["governance_task_type"] == "self_learning"
-    assert idle_window["task_family"] == "self_learning"
-    assert isinstance(idle_window["checks"]["in_execution_window"], bool)
-    assert idle_window["decisions"]["eligible_for_execution"] is True
+    activity_guards = decision["context"]["activity_guards"]
+    assert activity_guards["governance_task_type"] == "self_learning"
+    assert activity_guards["task_family"] == "self_learning"
+    assert activity_guards["user_chain_signal"]["scope"] == "soft_signal_only"
+    assert activity_guards["decisions"]["eligible_for_execution"] is True
 
 
 @pytest.mark.asyncio
@@ -17357,7 +17112,7 @@ async def test_memory_maintenance_auto_decision_defers_when_memory_activity_is_r
         task_id,
         {
             "decision": "auto",
-            "idle_window": {
+            "activity_guards": {
                 "now": "2026-05-25T00:15:00",
             },
         },
@@ -17530,7 +17285,7 @@ async def test_run_self_evolution_cycle_recovers_orphaned_agent_pull_running_tas
         }
 
     async def fake_review(request=None):
-        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "idle_window": {}}
+        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "activity_guards": {}}
 
     supervisor._fetch_gateway_cli_session = fake_owner_session  # type: ignore[method-assign]
     supervisor.review_self_evolution_tasks = fake_review  # type: ignore[method-assign]
@@ -17968,7 +17723,7 @@ async def test_run_self_evolution_cycle_limits_formal_dispatches_per_cycle(tmp_p
             ],
             "decision": "approved",
             "reviewed_statuses": ["approved"] * len(task_ids),
-            "idle_window": {},
+            "activity_guards": {},
         }
 
     dispatched = []
@@ -18025,3 +17780,7 @@ async def test_fetch_tier1_stats_reports_memory_service_unavailable(tmp_path, mo
     assert stats["memory_unavailable"] is True
     assert stats["memory_unavailable_reason"] == "memory_service_not_registered"
     assert stats["memory_active"] is False
+
+
+
+

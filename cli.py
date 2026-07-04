@@ -2527,7 +2527,7 @@ class VoidcubeCLI:
                     (
                         "class:auto-panel-warn",
                         self._trim_status_bar_text(
-                            "队列: 自主执行面已认领该任务，等待进入首个模型或工具回合",
+                            "链路: 自主执行面已认领该任务，等待进入首个模型或工具回合",
                             inner_width,
                         ),
                     )
@@ -2539,7 +2539,7 @@ class VoidcubeCLI:
                     (
                         "class:auto-panel-info",
                         self._trim_status_bar_text(
-                            "队列: 自主执行面已完成执行，等待结果回写到任务链",
+                            "链路: 自主执行面已完成执行，等待结果回写到任务链",
                             inner_width,
                         ),
                     )
@@ -2549,7 +2549,7 @@ class VoidcubeCLI:
                     (
                         "class:auto-panel-warn",
                         self._trim_status_bar_text(
-                            "队列: 监督者已放行该任务，等待 API-A 自主执行面认领",
+                            "链路: 监督者已放行该任务，等待 API-A 自主执行面认领",
                             inner_width,
                         ),
                     )
@@ -2559,7 +2559,7 @@ class VoidcubeCLI:
                     (
                         "class:auto-panel-info",
                         self._trim_status_bar_text(
-                            "队列: 该任务已被其他 API-A 自主执行面认领",
+                            "链路: 该任务已被其他 API-A 自主执行面认领",
                             inner_width,
                         ),
                     )
@@ -2866,24 +2866,24 @@ class VoidcubeCLI:
             if deferred and not approved:
                 return (
                     "class:auto-panel-warn",
-                    "队列: 当前学习任务大多被监督者延后，当前没有已批准的 API-A 可执行任务",
+                    "链路: 当前学习任务大多被监督者延后，当前没有已批准的 API-A 可执行任务",
                 )
             if deferred:
                 return (
                     "class:auto-panel-dim",
-                    "队列: 当前没有已批准的 API-A 可执行任务；最近自主任务多处于 deferred/待观察",
+                    "链路: 当前没有已批准的 API-A 可执行任务；最近自主任务多处于 deferred/待观察",
                 )
 
         active_executions = list(supervisor_state.get("active_executions") or [])
         if active_executions:
             return (
                 "class:auto-panel-info",
-                "队列: 当前没有新的 API-A 可执行任务；监督者正在处理其他执行路径",
+                "链路: 当前没有新的 API-A 可执行任务；监督者正在处理其他执行路径",
             )
 
         return (
             "class:auto-panel-dim",
-            "队列: 当前没有已批准的 API-A 可执行任务",
+            "链路: 当前没有已批准的 API-A 可执行任务",
         )
 
     def _autonomous_executor_runtime(self) -> AutonomousExecutorRuntime:

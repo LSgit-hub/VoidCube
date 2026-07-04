@@ -175,9 +175,10 @@ def test_build_dashboard_uses_supervisor_execution_eligibility_without_local_win
     monkeypatch.setattr(dashboard, "fetch_supervisor_tasks", lambda status_filter="": {"tasks": []})
     monkeypatch.setattr(
         dashboard,
-        "fetch_idle_window",
+        "fetch_activity_guards",
         lambda task_family="general_self_evolution": {
-            "checks": {"in_execution_window": True, "has_user_idle": False},
+            "checks": {},
+            "user_chain_signal": {"scope": "soft_signal_only", "is_quiet": False},
             "idle_seconds": {},
             "thresholds": {
                 "user_idle_seconds": 600,
@@ -194,5 +195,5 @@ def test_build_dashboard_uses_supervisor_execution_eligibility_without_local_win
     built = dashboard.build_dashboard()
 
     assert built["eligibility"]["can_execute"] is True
-    assert built["countdowns"]["execution_window"]["display"] == "always on"
-    assert built["execution_window"]["label"] == "continuous"
+    assert built["countdowns"]["autonomous_chain"]["display"] == "continuous"
+    assert built["autonomous_chain_policy"]["label"] == "continuous"

@@ -17,7 +17,7 @@ def _make_supervisor(tmp_path: Path) -> Supervisor:
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_supervisor_idle_window_allows_planning_and_execution_when_gateway_is_idle(tmp_path):
+async def test_supervisor_activity_guard_allows_planning_and_execution_when_gateway_is_idle(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
     async def fake_snapshot():
@@ -32,7 +32,7 @@ async def test_supervisor_idle_window_allows_planning_and_execution_when_gateway
 
     supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
 
-    result = await supervisor.evaluate_idle_window(
+    result = await supervisor.evaluate_activity_guards(
         {
             "now": "2026-05-25T00:15:00",
         }
@@ -47,15 +47,15 @@ async def test_supervisor_idle_window_allows_planning_and_execution_when_gateway
         "execution_kind": "general_self_evolution",
     }
     assert result["governance_task_type_decisions"]["self_evolution"] == result["decisions"]
-    assert result["checks"]["has_user_idle"] is True
-    assert result["checks"]["in_execution_window"] is True
+    assert result["user_chain_signal"]["is_quiet"] is True
+    assert result["user_chain_signal"]["scope"] == "soft_signal_only"
     assert result["decisions"]["eligible_for_planning"] is True
     assert result["decisions"]["eligible_for_execution"] is True
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_supervisor_idle_window_compares_gateway_naive_timestamps_as_utc(tmp_path):
+async def test_supervisor_activity_guard_compares_gateway_naive_timestamps_as_utc(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
     async def fake_snapshot():
@@ -70,7 +70,7 @@ async def test_supervisor_idle_window_compares_gateway_naive_timestamps_as_utc(t
 
     supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
 
-    result = await supervisor.evaluate_idle_window(
+    result = await supervisor.evaluate_activity_guards(
         {
             "now": "2026-05-25T08:15:00+08:00",
         }
@@ -83,15 +83,15 @@ async def test_supervisor_idle_window_compares_gateway_naive_timestamps_as_utc(t
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_supervisor_idle_window_uses_configured_thresholds_and_reports_cli_lease(tmp_path):
+async def test_supervisor_activity_guard_uses_configured_thresholds_and_reports_cli_lease(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor.config = supervisor.config.model_copy(
         update={
             "service_runtime": supervisor.config.service_runtime.model_copy(
                 update={
-                    "idle_window_user_seconds": 120,
-                    "idle_window_memory_seconds": 240,
-                    "idle_window_workflow_seconds": 300,
+                    "activity_guard_user_seconds": 120,
+                    "activity_guard_memory_seconds": 240,
+                    "activity_guard_workflow_seconds": 300,
                 }
             )
         }
@@ -114,19 +114,19 @@ async def test_supervisor_idle_window_uses_configured_thresholds_and_reports_cli
 
     supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
 
-    result = await supervisor.evaluate_idle_window({"now": "2026-05-25T00:05:00"})
+    result = await supervisor.evaluate_activity_guards({"now": "2026-05-25T00:05:00"})
 
     assert result["thresholds"]["user_idle_seconds"] == 120
     assert result["thresholds"]["memory_idle_seconds"] == 240
     assert result["thresholds"]["workflow_idle_seconds"] == 300
     assert result["thresholds"]["active_cli_stale_after_seconds"] == 90
-    assert result["checks"]["has_user_idle"] is False
+    assert result["user_chain_signal"]["is_quiet"] is False
     assert result["checks"]["has_agent_idle"] is True
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_supervisor_idle_window_blocks_execution_when_recent_workflow_activity_exists(tmp_path):
+async def test_supervisor_activity_guard_blocks_execution_when_recent_workflow_activity_exists(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
     async def fake_snapshot():
@@ -141,13 +141,13 @@ async def test_supervisor_idle_window_blocks_execution_when_recent_workflow_acti
 
     supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
 
-    result = await supervisor.evaluate_idle_window(
+    result = await supervisor.evaluate_activity_guards(
         {
             "now": "2026-05-25T00:15:00",
         }
     )
 
-    assert result["checks"]["has_user_idle"] is False
+    assert result["user_chain_signal"]["is_quiet"] is False
     assert result["checks"]["has_agent_idle"] is False
     assert result["decisions"]["eligible_for_planning"] is True
     assert result["decisions"]["eligible_for_execution"] is False
@@ -155,7 +155,7 @@ async def test_supervisor_idle_window_blocks_execution_when_recent_workflow_acti
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_supervisor_idle_window_allows_self_learning_followup_outside_execution_window_when_idle(tmp_path):
+async def test_supervisor_activity_guard_allows_self_learning_followup_outside_execution_window_when_idle(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
     async def fake_snapshot():
@@ -171,7 +171,7 @@ async def test_supervisor_idle_window_allows_self_learning_followup_outside_exec
 
     supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
 
-    result = await supervisor.evaluate_idle_window(
+    result = await supervisor.evaluate_activity_guards(
         {
             "now": "2026-05-25T12:00:00",
             "task_family": "self_learning",
@@ -182,7 +182,7 @@ async def test_supervisor_idle_window_allows_self_learning_followup_outside_exec
     assert result["task_family"] == "self_learning"
     assert result["execution_kind"] is None
     assert result["governance_task_type_decisions"]["self_learning"] == result["decisions"]
-    assert isinstance(result["checks"]["in_execution_window"], bool)
+    assert result["user_chain_signal"]["scope"] == "soft_signal_only"
     assert result["checks"]["has_self_learning_idle"] is True
     assert result["decisions"]["eligible_for_planning"] is True
     assert result["decisions"]["eligible_for_execution"] is True
@@ -190,7 +190,7 @@ async def test_supervisor_idle_window_allows_self_learning_followup_outside_exec
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_supervisor_idle_window_blocks_memory_maintenance_when_recent_memory_activity_exists(tmp_path):
+async def test_supervisor_activity_guard_blocks_memory_maintenance_when_recent_memory_activity_exists(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
     async def fake_snapshot():
@@ -206,7 +206,7 @@ async def test_supervisor_idle_window_blocks_memory_maintenance_when_recent_memo
 
     supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
 
-    result = await supervisor.evaluate_idle_window(
+    result = await supervisor.evaluate_activity_guards(
         {
             "now": "2026-05-25T00:15:00",
             "task_family": "memory_maintenance",
@@ -217,14 +217,14 @@ async def test_supervisor_idle_window_blocks_memory_maintenance_when_recent_memo
     assert result["task_family"] == "memory_maintenance"
     assert result["execution_kind"] == "memory_maintenance"
     assert result["governance_task_type_decisions"]["memory_maintenance"] == result["task_family_decisions"]["memory_maintenance"]
-    assert result["checks"]["in_execution_window"] is True
+    assert result["user_chain_signal"]["is_quiet"] is True
     assert result["checks"]["has_memory_idle"] is False
     assert result["decisions"]["eligible_for_execution"] is False
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_supervisor_idle_window_exposes_body_switch_family_without_collapsing_it_to_generic_self_evolution(tmp_path):
+async def test_supervisor_activity_guard_exposes_body_switch_family_without_collapsing_it_to_generic_self_evolution(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
     async def fake_snapshot():
@@ -242,7 +242,7 @@ async def test_supervisor_idle_window_exposes_body_switch_family_without_collaps
 
     supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
 
-    result = await supervisor.evaluate_idle_window(
+    result = await supervisor.evaluate_activity_guards(
         {
             "now": "2026-05-25T00:15:00",
             "task_family": "body_switch",
@@ -259,3 +259,5 @@ async def test_supervisor_idle_window_exposes_body_switch_family_without_collaps
     }
     assert result["governance_task_type_decisions"]["self_evolution"] == result["decisions"]
     assert result["task_family_decisions"]["body_switch"] == result["decisions"]
+
+

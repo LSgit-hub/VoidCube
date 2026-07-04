@@ -168,7 +168,7 @@ def build_endogenous_task_generation_payload(
         "- truthfulness_review\n"
         "- exploratory_learning\n"
         "- shell_baseline_learning\n"
-        "- queue_hygiene_review\n"
+        "- governance_hygiene_review\n"
         "- body_improvement\n\n"
         "输出要求：\n"
         "1. 最多返回 "
@@ -264,7 +264,7 @@ def build_endogenous_task_generation_payload(
 def _render_cognitive_briefing(packet: Dict[str, Any]) -> str:
     decision_core = dict(packet.get("decision_core") or {})
     supporting_detail = dict(packet.get("supporting_detail") or {})
-    queue_state_snapshot = dict(packet.get("queue_state_snapshot") or {})
+    governance_backlog_snapshot = dict(packet.get("governance_backlog_snapshot") or {})
     grounding_focus = dict(packet.get("grounding_focus") or {})
     meta_cognition_profile = dict(packet.get("meta_cognition_profile") or {})
     cognitive_posture = dict(packet.get("cognitive_posture") or {})
@@ -386,9 +386,9 @@ def _render_cognitive_briefing(packet: Dict[str, Any]) -> str:
         for item in list(supporting_detail.get("why_not_improvement_now") or [])[:3]
         if str(item).strip()
     ]
-    queue_state_summary = str(
-        decision_core.get("queue_state_summary")
-        or queue_state_snapshot.get("summary")
+    governance_backlog_summary = str(
+        decision_core.get("governance_backlog_summary")
+        or governance_backlog_snapshot.get("summary")
         or ""
     ).strip()
 
@@ -408,7 +408,7 @@ def _render_cognitive_briefing(packet: Dict[str, Any]) -> str:
         f"- 当前自我理解缺口: {', '.join(self_gaps) or 'none'}",
         f"- 当前首要自我迭代域: {top_iteration_domain or 'none'}",
         f"- 当前首要自我迭代假设: {dominant_iteration_hypothesis or 'none'}",
-        f"- 当前排队上下文: {queue_state_summary or 'none'}",
+        f"- 当前治理在途上下文: {governance_backlog_summary or 'none'}",
         f"- 当前不宜直接 improvement 的原因: {', '.join(why_not_improvement_now) or 'none'}",
         "- 先输出一个 cognitive_assessment，明确写出当前判断、主约束、grounding 缺口，以及为什么当前治理姿态成立。",
         "- 如果 evidence_packet 提供了 self_iteration_hypotheses，请在 cognitive_assessment 中写出 self_iteration_target 与 self_iteration_hypothesis。",
@@ -527,8 +527,8 @@ def _prompt_facing_evidence_packet(
                 for item in list(decision_core.get("primary_agenda_nodes") or [])[:3]
                 if str(item).strip()
             ],
-            "queue_state_summary": str(
-                decision_core.get("queue_state_summary") or ""
+            "governance_backlog_summary": str(
+                decision_core.get("governance_backlog_summary") or ""
             ).strip(),
             "summary": str(decision_core.get("summary") or "").strip()[:220],
         }
@@ -839,15 +839,15 @@ def _prompt_facing_evidence_packet(
     shell_body_profile = dict(packet.get("shell_body_profile") or {})
     if shell_body_profile:
         packet["shell_body_profile"] = _compact_shell_body_profile(shell_body_profile)
-    if isinstance(packet.get("queued_tasks"), list):
-        packet["queued_tasks"] = [
-            _compact_queued_task(item)
-            for item in list(packet["queued_tasks"])[:4]
+    if isinstance(packet.get("governance_backlog_tasks"), list):
+        packet["governance_backlog_tasks"] = [
+            _compact_governance_backlog_task(item)
+            for item in list(packet["governance_backlog_tasks"])[:4]
             if isinstance(item, dict)
         ]
-    queue_state_snapshot = _derive_queue_state_snapshot(source_packet)
-    if queue_state_snapshot:
-        packet["queue_state_snapshot"] = queue_state_snapshot
+    governance_backlog_snapshot = _derive_governance_backlog_snapshot(source_packet)
+    if governance_backlog_snapshot:
+        packet["governance_backlog_snapshot"] = governance_backlog_snapshot
     has_context_layers = any(
         packet.get(key) for key in ("decision_core", "supporting_detail", "long_tail_context")
     )
@@ -1081,12 +1081,12 @@ def _compact_deliberation_state_item(item: Dict[str, Any]) -> Dict[str, Any]:
             "truthfulness_pressure": world_model.get("truthfulness_pressure"),
             "learning_momentum": world_model.get("learning_momentum"),
             "body_upgrade_readiness": world_model.get("body_upgrade_readiness"),
-            "queue_health": world_model.get("queue_health"),
+            "governance_load_state": world_model.get("governance_load_state"),
             "self_confidence": world_model.get("self_confidence"),
         },
         "reflection": {
             "learning_yield_state": reflection.get("learning_yield_state"),
-            "queue_blockage_state": reflection.get("queue_blockage_state"),
+            "governance_backlog_blockage_state": reflection.get("governance_backlog_blockage_state"),
             "dominant_constraint": reflection.get("dominant_constraint"),
             "autonomy_readiness": reflection.get("autonomy_readiness"),
         },
@@ -1109,8 +1109,8 @@ def _compact_perception_summary(item: Dict[str, Any]) -> Dict[str, Any]:
         "correction_signals": item.get("correction_signals"),
         "has_learning_history": item.get("has_learning_history"),
         "shell_slot_present": item.get("shell_slot_present"),
-        "active_queue_count": item.get("active_queue_count"),
-        "stale_queue_count": item.get("stale_queue_count"),
+        "governance_backlog_count": item.get("governance_backlog_count"),
+        "stale_backlog_count": item.get("stale_backlog_count"),
         "pending_review_count": item.get("pending_review_count"),
     }
 
@@ -1122,7 +1122,7 @@ def _compact_world_model_summary(item: Dict[str, Any]) -> Dict[str, Any]:
         "truthfulness_pressure": item.get("truthfulness_pressure"),
         "learning_momentum": item.get("learning_momentum"),
         "body_upgrade_readiness": item.get("body_upgrade_readiness"),
-        "queue_health": item.get("queue_health"),
+        "governance_load_state": item.get("governance_load_state"),
         "memory_pressure": item.get("memory_pressure"),
         "self_confidence": item.get("self_confidence"),
     }
@@ -1134,8 +1134,8 @@ def _compact_reflection_summary(item: Dict[str, Any]) -> Dict[str, Any]:
         "recent_learning_count": item.get("recent_learning_count"),
         "recent_learning_quality": item.get("recent_learning_quality"),
         "learning_yield_state": item.get("learning_yield_state"),
-        "queue_blockage_pressure": item.get("queue_blockage_pressure"),
-        "queue_blockage_state": item.get("queue_blockage_state"),
+        "governance_backlog_blockage_pressure": item.get("governance_backlog_blockage_pressure"),
+        "governance_backlog_blockage_state": item.get("governance_backlog_blockage_state"),
         "body_growth_blocked": item.get("body_growth_blocked"),
         "repeated_drive_pressure": item.get("repeated_drive_pressure"),
         "autonomy_readiness": item.get("autonomy_readiness"),
@@ -1151,7 +1151,7 @@ def _compact_adaptive_policy_summary(item: Dict[str, Any]) -> Dict[str, Any]:
         "learning_expansion_bias": item.get("learning_expansion_bias"),
         "truthfulness_bias": item.get("truthfulness_bias"),
         "memory_continuity_bias": item.get("memory_continuity_bias"),
-        "queue_hygiene_bias": item.get("queue_hygiene_bias"),
+        "governance_hygiene_bias": item.get("governance_hygiene_bias"),
         "body_growth_bias": item.get("body_growth_bias"),
         "observation_bias": item.get("observation_bias"),
         "candidate_throttle": item.get("candidate_throttle"),
@@ -1164,7 +1164,7 @@ def _compact_adaptive_policy_summary(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _compact_queued_task(item: Dict[str, Any]) -> Dict[str, Any]:
+def _compact_governance_backlog_task(item: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "title": item.get("title"),
         "status": item.get("status"),
@@ -1303,52 +1303,52 @@ def _compact_evidence_credibility_summary(item: Dict[str, Any]) -> Dict[str, Any
     }
 
 
-def _derive_queue_state_snapshot(packet: Dict[str, Any]) -> Dict[str, Any]:
-    queued_tasks = [
+def _derive_governance_backlog_snapshot(packet: Dict[str, Any]) -> Dict[str, Any]:
+    governance_backlog_tasks = [
         dict(item)
-        for item in list(packet.get("queued_tasks") or [])[:8]
+        for item in list(packet.get("governance_backlog_tasks") or [])[:8]
         if isinstance(item, dict)
     ]
-    queued_learning_titles = [
+    learning_backlog_titles = [
         str(item).strip()
-        for item in list(packet.get("queued_learning_titles") or [])[:5]
+        for item in list(packet.get("learning_backlog_titles") or [])[:5]
         if str(item).strip()
     ]
     queued_body_titles = [
         str(item).strip()
-        for item in list(packet.get("queued_body_improvement_titles") or [])[:4]
+        for item in list(packet.get("body_improvement_backlog_titles") or [])[:4]
         if str(item).strip()
     ]
-    if not queued_tasks and not queued_learning_titles and not queued_body_titles:
+    if not governance_backlog_tasks and not learning_backlog_titles and not queued_body_titles:
         return {}
 
-    queue_count = len(queued_tasks)
-    learning_count = len(queued_learning_titles)
+    backlog_count = len(governance_backlog_tasks)
+    learning_count = len(learning_backlog_titles)
     body_count = len(queued_body_titles)
     recent_titles = [
         str(item.get("title") or "").strip()
-        for item in queued_tasks[:4]
+        for item in governance_backlog_tasks[:4]
         if str(item.get("title") or "").strip()
     ]
     statuses = [
         str(item.get("status") or "").strip()
-        for item in queued_tasks[:4]
+        for item in governance_backlog_tasks[:4]
         if str(item.get("status") or "").strip()
     ]
     return {
-        "queued_task_count": queue_count,
-        "queued_learning_count": learning_count,
-        "queued_body_improvement_count": body_count,
+        "governance_backlog_task_count": backlog_count,
+        "learning_backlog_count": learning_count,
+        "body_improvement_backlog_count": body_count,
         "recent_titles": recent_titles,
         "recent_statuses": statuses,
         "summary": (
-            f"queued_tasks={queue_count}; "
-            f"queued_learning={learning_count}; "
-            f"queued_body_improvement={body_count}; "
+            f"governance_backlog={backlog_count}; "
+            f"learning_backlog={learning_count}; "
+            f"body_improvement_backlog={body_count}; "
             f"recent_titles={', '.join(recent_titles[:3]) or 'none'}."
         ),
         "guidance": (
-            "Avoid proposing tasks that duplicate existing queued work unless the evidence clearly justifies a stronger replacement."
+            "Avoid proposing tasks that duplicate existing governance backlog unless the evidence clearly justifies a stronger replacement."
         ),
     }
 
@@ -1739,7 +1739,7 @@ def _resolve_prompt_attention_policy(
             "decision_core",
             "supporting_detail",
             "long_tail_context",
-            "queue_state_snapshot",
+            "governance_backlog_snapshot",
             "agenda_graph",
             "perception",
             "world_model",
@@ -1770,9 +1770,9 @@ def _resolve_prompt_attention_policy(
             "checks",
             "idle_seconds",
             "plans",
-            "queued_learning_titles",
-            "queued_body_improvement_titles",
-            "queued_tasks",
+            "learning_backlog_titles",
+            "body_improvement_backlog_titles",
+            "governance_backlog_tasks",
             "shell_slot",
         ],
         "structure_keys": [
@@ -1780,7 +1780,7 @@ def _resolve_prompt_attention_policy(
             for item in list(raw_policy.get("structure_keys") or [])[:16]
             if str(item).strip()
         ]
-        or ["decision_core", "supporting_detail", "long_tail_context", "queue_state_snapshot"],
+        or ["decision_core", "supporting_detail", "long_tail_context", "governance_backlog_snapshot"],
         "trim_stage_order": [
             str(item).strip()
             for item in list(raw_policy.get("trim_stage_order") or [])[:16]
@@ -1818,7 +1818,7 @@ def _apply_prompt_trim_stage(packet: Dict[str, Any], *, stage_name: str) -> Dict
                 "top_self_iteration_domain": str(decision_core.get("top_self_iteration_domain") or "")[:80],
                 "primary_evidence_nodes": list(decision_core.get("primary_evidence_nodes") or [])[:3],
                 "primary_agenda_nodes": list(decision_core.get("primary_agenda_nodes") or [])[:3],
-                "queue_state_summary": str(decision_core.get("queue_state_summary") or "")[:180],
+                "governance_backlog_summary": str(decision_core.get("governance_backlog_summary") or "")[:180],
                 "summary": str(decision_core.get("summary") or "")[:220],
             }
         supporting_detail = dict(trimmed.get("supporting_detail") or {})
@@ -1841,16 +1841,16 @@ def _apply_prompt_trim_stage(packet: Dict[str, Any], *, stage_name: str) -> Dict
                 "evidence_channels": list(long_tail_context.get("evidence_channels") or [])[:3],
                 "summary": str(long_tail_context.get("summary") or "")[:220],
             }
-        queue_state_snapshot = dict(trimmed.get("queue_state_snapshot") or {})
-        if queue_state_snapshot:
-            trimmed["queue_state_snapshot"] = {
-                "queued_task_count": queue_state_snapshot.get("queued_task_count"),
-                "queued_learning_count": queue_state_snapshot.get("queued_learning_count"),
-                "queued_body_improvement_count": queue_state_snapshot.get("queued_body_improvement_count"),
-                "recent_titles": list(queue_state_snapshot.get("recent_titles") or [])[:3],
-                "recent_statuses": list(queue_state_snapshot.get("recent_statuses") or [])[:3],
-                "summary": str(queue_state_snapshot.get("summary") or "")[:220],
-                "guidance": str(queue_state_snapshot.get("guidance") or "")[:180],
+        governance_backlog_snapshot = dict(trimmed.get("governance_backlog_snapshot") or {})
+        if governance_backlog_snapshot:
+            trimmed["governance_backlog_snapshot"] = {
+                "governance_backlog_task_count": governance_backlog_snapshot.get("governance_backlog_task_count"),
+                "learning_backlog_count": governance_backlog_snapshot.get("learning_backlog_count"),
+                "body_improvement_backlog_count": governance_backlog_snapshot.get("body_improvement_backlog_count"),
+                "recent_titles": list(governance_backlog_snapshot.get("recent_titles") or [])[:3],
+                "recent_statuses": list(governance_backlog_snapshot.get("recent_statuses") or [])[:3],
+                "summary": str(governance_backlog_snapshot.get("summary") or "")[:220],
+                "guidance": str(governance_backlog_snapshot.get("guidance") or "")[:180],
             }
         meta_cognition_profile = dict(trimmed.get("meta_cognition_profile") or {})
         if meta_cognition_profile:
@@ -1913,7 +1913,10 @@ def _apply_prompt_trim_stage(packet: Dict[str, Any], *, stage_name: str) -> Dict
             trimmed["intents"] = list(trimmed["intents"])[:3]
         if isinstance(trimmed.get("needs"), list):
             trimmed["needs"] = list(trimmed["needs"])[:3]
-        if isinstance(trimmed.get("queued_tasks"), list):
-            trimmed["queued_tasks"] = list(trimmed["queued_tasks"])[:2]
+        if isinstance(trimmed.get("governance_backlog_tasks"), list):
+            trimmed["governance_backlog_tasks"] = list(trimmed["governance_backlog_tasks"])[:2]
         return trimmed
     return trimmed
+
+
+

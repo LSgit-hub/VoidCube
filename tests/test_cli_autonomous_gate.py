@@ -963,7 +963,7 @@ def test_autonomous_panel_shows_approved_task_waiting_for_claim(monkeypatch):
 
     assert "状态: 已放行待认领" in rendered
     assert "Approved waiting task" in rendered
-    assert "队列: 监督者已放行该任务，等待 API-A 自主执行面认领" in rendered
+    assert "链路: 监督者已放行该任务，等待 API-A 自主执行面认领" in rendered
     assert "执行流: 监督者已放行任务，等待 API-A 自主执行面认领" in rendered
 
 
@@ -1004,7 +1004,7 @@ def test_autonomous_panel_shows_running_task_owned_elsewhere(monkeypatch):
 
     assert "状态: 他处执行中" in rendered
     assert "Running elsewhere task" in rendered
-    assert "队列: 该任务已被其他 API-A 自主执行面认领" in rendered
+    assert "链路: 该任务已被其他 API-A 自主执行面认领" in rendered
     assert "执行流: 任务正在其他 API-A 自主执行面中运行" in rendered
 
 
@@ -1040,7 +1040,7 @@ def test_autonomous_panel_shows_claimed_task_waiting_to_start(monkeypatch):
 
     assert "状态: 已认领待起跑" in rendered
     assert "Claimed not started task" in rendered
-    assert "队列: 自主执行面已认领该任务，等待进入首个模型或工具回合" in rendered
+    assert "链路: 自主执行面已认领该任务，等待进入首个模型或工具回合" in rendered
     assert "近因: 已认领任务，但还没有收到后续执行事件" in rendered
     assert "执行流: API-A 自主执行面已认领任务，等待进入首个模型或工具回合" in rendered
 
@@ -1123,7 +1123,7 @@ def test_autonomous_panel_shows_claimed_task_waiting_for_writeback(monkeypatch):
 
     assert "状态: 等待回写" in rendered
     assert "Writeback waiting task" in rendered
-    assert "队列: 自主执行面已完成执行，等待结果回写到任务链" in rendered
+    assert "链路: 自主执行面已完成执行，等待结果回写到任务链" in rendered
     assert "执行流: API-A 自主执行面已结束本轮执行，等待写回任务状态" in rendered
 
 

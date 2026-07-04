@@ -58,7 +58,7 @@ class SelfEvolutionExecutionRequest(BaseModel):
     session_id: Optional[str] = None
     git_lineage: SelfEvolutionGitLineage = Field(default_factory=SelfEvolutionGitLineage)
     probe_report_ref: Optional[str] = None
-    idle_window_evidence: Dict[str, Any] = Field(default_factory=dict)
+    activity_guard_evidence: Dict[str, Any] = Field(default_factory=dict)
     governor_decision: Dict[str, Any] = Field(default_factory=dict)
     rollback_plan: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.utcnow)

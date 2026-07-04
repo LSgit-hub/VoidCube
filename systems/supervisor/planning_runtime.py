@@ -60,7 +60,7 @@ SUPERVISOR_LEGAL_SCENES: frozenset[str] = frozenset(
 
 
 class PlanningRuntimeMixin:
-    """Supervisor planning, idle-window, and self-evolution orchestration."""
+    """Supervisor planning, activity-guard evaluation, and self-evolution orchestration."""
     _ENDOGENOUS_DRIVE_HISTORY_LIMIT = 240
     _ENDOGENOUS_GOVERNANCE_EVENT_LIMIT = 240
 
@@ -939,13 +939,13 @@ class PlanningRuntimeMixin:
 
         if str(reflection.get("dominant_constraint") or "").strip().lower() != "none":
             return adjusted
-        if float(reflection.get("queue_blockage_pressure") or 0.0) >= 0.18:
+        if float(reflection.get("governance_backlog_blockage_pressure") or 0.0) >= 0.18:
             return adjusted
         if str(reflection.get("learning_yield_state") or "").strip().lower() not in {"mixed", "strong"}:
             return adjusted
-        if max(0, int(perception.get("active_queue_count") or 0)) > 0:
+        if max(0, int(perception.get("governance_backlog_count") or 0)) > 0:
             return adjusted
-        if max(0, int(perception.get("stale_queue_count") or 0)) > 0:
+        if max(0, int(perception.get("stale_backlog_count") or 0)) > 0:
             return adjusted
         if max(0, int(perception.get("pending_review_count") or 0)) > 0:
             return adjusted
@@ -1196,7 +1196,7 @@ class PlanningRuntimeMixin:
             or readiness_score < self._clamp_endogenous_ratio(
                 policy.get("readiness_min_score") or 0.52
             )
-            or dominant_constraint in {"queue_blockage", "historical_underdelivery"}
+            or dominant_constraint in {"governance_backlog_blockage", "historical_underdelivery"}
         ):
             return "observe_first", "drift_or_readiness_requires_observation"
         return "balanced", "balanced_posture_is_sufficient"
@@ -2869,7 +2869,7 @@ class PlanningRuntimeMixin:
                 + observation_bias * 0.22
                 + uncertainty_risk * 0.2
                 + (0.1 if current_focus == "observation" else 0.0)
-                + (0.08 if dominant_constraint in {"weak_learning_yield", "historical_underdelivery", "queue_blockage"} else 0.0)
+                + (0.08 if dominant_constraint in {"weak_learning_yield", "historical_underdelivery", "governance_backlog_blockage"} else 0.0)
                 + (0.06 if last_mode == "observe" else 0.0)
                 - (0.04 if last_mode == "expand" and uncertainty_risk < 0.3 else 0.0)
             ),
@@ -2893,7 +2893,7 @@ class PlanningRuntimeMixin:
                 candidate_throttle * 0.35
                 + max(0.0, 0.52 - autonomy_readiness) * 0.22
                 + float(self_regulation.get("dynamic_candidate_throttle_boost") or 0.0) * 0.18
-                + (0.06 if current_focus == "queue_hygiene" else 0.0)
+                + (0.06 if current_focus == "governance_hygiene" else 0.0)
                 + (0.04 if last_mode == "conserve" else 0.0)
             ),
         }
@@ -3211,20 +3211,20 @@ class PlanningRuntimeMixin:
                 }
             )
 
-        queue_pressure = float(reflection.get("queue_blockage_pressure") or 0.0)
-        if queue_pressure >= 0.28 or str(world_model.get("queue_health") or "").strip() in {"busy", "strained"}:
+        queue_pressure = float(reflection.get("governance_backlog_blockage_pressure") or 0.0)
+        if queue_pressure >= 0.28 or str(world_model.get("governance_load_state") or "").strip() in {"busy", "strained"}:
             risk = self._clamp_endogenous_ratio(
                 queue_pressure * 0.7
-                + (0.2 if str(world_model.get("queue_health") or "").strip() == "strained" else 0.08)
+                + (0.2 if str(world_model.get("governance_load_state") or "").strip() == "strained" else 0.08)
             )
             entries.append(
                 {
-                    "ledger_id": "uncertainty:queue_blockage",
+                    "ledger_id": "uncertainty:governance_backlog_blockage",
                     "domain": "governance_backlog",
                     "risk": round(risk, 4),
                     "confidence": round(
                         self._clamp_endogenous_ratio(
-                            0.58 + float(adaptive_policy.get("queue_hygiene_bias") or 0.0) * 0.18
+                            0.58 + float(adaptive_policy.get("governance_hygiene_bias") or 0.0) * 0.18
                         ),
                         4,
                     ),
@@ -3234,11 +3234,11 @@ class PlanningRuntimeMixin:
                     "why_uncertain": (
                         "Backlog pressure is visible, but the drive still needs to inspect whether the queue is blocked by stale work, review debt, or repeated low-yield candidates."
                     ),
-                    "observation_target": "queue_blockage",
+                    "observation_target": "governance_backlog_blockage",
                     "recommended_probe": "inspect stale, deferred, and pending-review endogenous tasks",
                     "evidence": [
-                        f"queue_blockage_state={reflection.get('queue_blockage_state')}",
-                        f"active_queue_count={int(perception.get('active_queue_count') or 0)}",
+                        f"governance_backlog_blockage_state={reflection.get('governance_backlog_blockage_state')}",
+                        f"governance_backlog_count={int(perception.get('governance_backlog_count') or 0)}",
                         f"pending_review_count={int(perception.get('pending_review_count') or 0)}",
                     ],
                 }
@@ -3282,7 +3282,7 @@ class PlanningRuntimeMixin:
         if (
             autonomy_alignment_requests > 0
             or autonomy_readiness <= 0.45
-            or dominant_constraint in {"weak_learning_yield", "historical_underdelivery", "queue_blockage"}
+            or dominant_constraint in {"weak_learning_yield", "historical_underdelivery", "governance_backlog_blockage"}
         ):
             risk = self._clamp_endogenous_ratio(
                 max(0.0, 0.58 - autonomy_readiness) * 0.75
@@ -4083,7 +4083,7 @@ class PlanningRuntimeMixin:
         self,
         *,
         deliberation: Dict[str, Any],
-        idle_window: Dict[str, Any],
+        activity_guards: Dict[str, Any],
         candidate_items: list[Dict[str, Any]],
     ) -> list[Dict[str, Any]]:
         if not candidate_items:
@@ -4244,13 +4244,13 @@ class PlanningRuntimeMixin:
                         "signals": list(deliberation.get("signals") or []),
                     },
                     "drive_judgement": judgement,
-                    "idle_context": {
+                    "activity_guard_context": {
                         "user_mode": dict(deliberation.get("perception") or {}).get("user_mode"),
                         "system_posture": dict(deliberation.get("perception") or {}).get("system_posture"),
                         "active_sessions": dict(deliberation.get("perception") or {}).get("active_sessions"),
                         "correction_signals": dict(deliberation.get("perception") or {}).get("correction_signals"),
-                        "queue_count": dict(deliberation.get("perception") or {}).get("active_queue_count"),
-                        "autonomous_chain_gate_active": bool(idle_window.get("autonomous_chain_gate_active")),
+                        "governance_backlog_count": dict(deliberation.get("perception") or {}).get("governance_backlog_count"),
+                        "autonomous_chain_gate_active": bool(activity_guards.get("autonomous_chain_gate_active")),
                     },
                 }
             )
@@ -4277,7 +4277,7 @@ class PlanningRuntimeMixin:
         self,
         *,
         deliberation: Dict[str, Any],
-        idle_window: Dict[str, Any],
+        activity_guards: Dict[str, Any],
         governance_channels: Dict[str, Any],
         self_regulation: Dict[str, Any],
         candidate_items: list[Dict[str, Any]],
@@ -4289,7 +4289,7 @@ class PlanningRuntimeMixin:
         try:
             annotated_items = self._annotate_endogenous_drive_candidates(
                 deliberation=deliberation,
-                idle_window=idle_window,
+                activity_guards=activity_guards,
                 candidate_items=candidate_items,
             )
             governance_event_stream = self._record_endogenous_governance_events(
@@ -4540,7 +4540,7 @@ class PlanningRuntimeMixin:
             "truthfulness": "truthfulness",
             "learning_expansion": "learning_frontier",
             "memory_continuity": "memory_continuity",
-            "queue_hygiene": "governance_queue",
+            "governance_hygiene": "governance_backlog",
             "body_growth": "body_growth",
             "observation": "grounding",
         }
@@ -4560,7 +4560,7 @@ class PlanningRuntimeMixin:
             why_not_improvement.append(
                 f"Delay direct body improvement while {dominant_constraint} remains dominant."
             )
-        if focus in {"truthfulness", "observation", "queue_hygiene", "memory_continuity"}:
+        if focus in {"truthfulness", "observation", "governance_hygiene", "memory_continuity"}:
             why_not_improvement.append(
                 f"Prioritize {focus} governance before direct body improvement."
             )
@@ -4711,7 +4711,7 @@ class PlanningRuntimeMixin:
             source=payload.get("source"),
         )
 
-    def _idle_window_request_profile(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    def _activity_guard_request_profile(self, request: Dict[str, Any]) -> Dict[str, Any]:
         return derive_runtime_task_profile(
             governance_task_type=request.get("governance_task_type"),
             task_family=request.get("task_family"),
@@ -5165,7 +5165,7 @@ class PlanningRuntimeMixin:
             "activity": snapshot,
         }
 
-    async def evaluate_idle_window(self, request: dict | None = None):
+    async def evaluate_activity_guards(self, request: dict | None = None):
         request = request or {}
         snapshot = await self._fetch_gateway_activity_snapshot()
 
@@ -5185,22 +5185,22 @@ class PlanningRuntimeMixin:
         user_idle_threshold = int(
             request.get(
                 "user_idle_seconds",
-                getattr(service_cfg, "idle_window_user_seconds", 600),
+                getattr(service_cfg, "activity_guard_user_seconds", 600),
             )
         )
         memory_idle_threshold = int(
             request.get(
                 "memory_idle_seconds",
-                getattr(service_cfg, "idle_window_memory_seconds", 600),
+                getattr(service_cfg, "activity_guard_memory_seconds", 600),
             )
         )
         workflow_idle_threshold = int(
             request.get(
                 "workflow_idle_seconds",
-                getattr(service_cfg, "idle_window_workflow_seconds", 600),
+                getattr(service_cfg, "activity_guard_workflow_seconds", 600),
             )
         )
-        requested_task_profile = self._idle_window_request_profile(request)
+        requested_task_profile = self._activity_guard_request_profile(request)
         requested_governance_task_type = str(requested_task_profile["governance_task_type"])
         requested_task_family = str(requested_task_profile["task_family"])
 
@@ -5255,15 +5255,15 @@ class PlanningRuntimeMixin:
         except (TypeError, ValueError):
             uncertainty_count = 0
         # Decay: a half-life of 4 hours reduces the count toward 0 unless new
-        # signals keep arriving.  This keeps truthfulness candidates from
-        # being permanently produced by one old error long after the system
-        # has self-corrected.  We use the user-idle window as a coarse proxy
-        # for "how long has the system been calm" — when the user has been
-        # idle for a long time, an old error should weigh less, since a
-        # working session would have produced new activity.  This is a
-        # best-effort heuristic (Gateway does not expose per-signal
-        # timestamps) and matches the architectural baseline §4.2
-        # "activity facts come from gateway" without requiring a new field.
+        # signals keep arriving. This keeps truthfulness candidates from being
+        # permanently produced by one old error long after the system has
+        # self-corrected. We use recent user-chain quiet time as a coarse proxy
+        # for "how long has the system been calm" — when the user chain has
+        # been quiet for a long time, an old error should weigh less, since a
+        # working session would have produced new activity. This is a
+        # best-effort heuristic (Gateway does not expose per-signal timestamps)
+        # and matches the architectural baseline §4.2 "activity facts come
+        # from gateway" without requiring a new field.
         if user_idle_seconds is None:
             user_idle_hours = 24.0
         else:
@@ -5271,7 +5271,10 @@ class PlanningRuntimeMixin:
         decay_factor = max(0.0, 1.0 - user_idle_hours / 4.0)
         correction_signals = int(round((error_count + uncertainty_count) * decay_factor))
 
-        has_user_idle = user_idle_seconds is None or user_idle_seconds >= user_idle_threshold
+        user_chain_quiet = (
+            user_idle_seconds is None
+            or user_idle_seconds >= user_idle_threshold
+        )
         has_memory_idle = memory_idle_seconds is None or memory_idle_seconds >= memory_idle_threshold
         has_agent_idle = agent_idle_seconds is None or agent_idle_seconds >= workflow_idle_threshold
         has_self_learning_idle = (
@@ -5295,14 +5298,18 @@ class PlanningRuntimeMixin:
         # execution window and the "wait for the user to be idle" gate have
         # been removed. Supervisor self-evolution runs on isolated subagents
         # editing shell-slot code, so it does not disturb the user's CLI.
-        # User activity is now a SOFT signal (it down-weights candidate utility
-        # in the cognition layer via active_sessions) rather than a hard gate.
-        # `in_execution_window` is kept as a constant True for backward compat
-        # with downstream readers / UI that still look the key up; it no longer
-        # gates anything. The remaining has_*_idle checks below are retained as
-        # anti-self-collision concurrency guards (don't double-dispatch the same
-        # subsystem's in-flight work) — they are NOT "wait for the user" gates.
-        in_execution_window = True
+        # User activity is now a SOFT signal (observability + cognition input)
+        # rather than a hard gate. The remaining has_*_idle checks below are
+        # anti-self-collision concurrency guards — they are NOT "wait for the
+        # user" gates.
+        active_sessions = int(snapshot.get("active_sessions") or 0)
+        user_chain_signal = {
+            "scope": "soft_signal_only",
+            "active_sessions": active_sessions,
+            "is_quiet": bool(user_chain_quiet and active_sessions <= 0),
+            "recent_user_idle_seconds": user_idle_seconds,
+            "quiet_after_seconds": user_idle_threshold,
+        }
         governance_task_type_decisions = {
             "user": {
                 "eligible_for_planning": True,
@@ -5395,17 +5402,14 @@ class PlanningRuntimeMixin:
                     dict(snapshot.get("active_cli_executor") or {}).get("stale_after_seconds")
                 ),
             },
+            "user_chain_signal": user_chain_signal,
             "checks": {
-                "has_user_idle": has_user_idle,
                 "has_memory_idle": has_memory_idle,
                 "has_agent_idle": has_agent_idle,
                 "has_self_learning_idle": has_self_learning_idle,
                 "has_self_evolution_plan_idle": has_self_evolution_plan_idle,
                 "has_self_evolution_execute_idle": has_self_evolution_execute_idle,
                 "has_self_evolution_idle": has_self_evolution_idle,
-                # Historical compatibility flag: always True under whole-day
-                # execution and no longer a live time-window gate.
-                "in_execution_window": in_execution_window,
             },
             "governance_task_type_decisions": governance_task_type_decisions,
             "task_family_decisions": task_family_decisions,
@@ -5464,17 +5468,17 @@ class PlanningRuntimeMixin:
         """Evaluate the endogenous cognition state and queue-compatible projections."""
 
         request = request or {}
-        idle_window_request = dict(request.get("idle_window") or {})
-        idle_window_request.setdefault(
+        activity_guard_request = dict(request.get("activity_guards") or {})
+        activity_guard_request.setdefault(
             "autonomous_chain_gate_active",
             getattr(getattr(self, "_service_runtime", None), "autonomous_chain_gate_active", False),
         )
         record_activity = bool(request.get("record_activity", True))
         persist_evaluation = bool(request.get("persist_evaluation", True))
-        idle_window = await self.evaluate_idle_window(idle_window_request)
+        activity_guards = await self.evaluate_activity_guards(activity_guard_request)
         persisted_self_regulation = self._load_endogenous_self_regulation()
-        idle_window["queued_tasks"] = self._drive_queue_task_summaries(limit=24)
-        idle_window["endogenous_drive_policy"] = {
+        activity_guards["governance_backlog_tasks"] = self._drive_queue_task_summaries(limit=24)
+        activity_guards["endogenous_drive_policy"] = {
             "learning_topic_cooldown_hours": int(
                 getattr(
                     self.config.service_runtime,
@@ -5525,7 +5529,7 @@ class PlanningRuntimeMixin:
                 ) or 5
             ),
         }
-        idle_window["drive_history"] = self._history_for_endogenous_drive(
+        activity_guards["drive_history"] = self._history_for_endogenous_drive(
             self._load_endogenous_drive_history()
         )
         self_regulation = dict(persisted_self_regulation)
@@ -5535,7 +5539,7 @@ class PlanningRuntimeMixin:
             "dynamic_truthfulness_bias_boost",
             "dynamic_learning_expansion_suppression",
         ):
-            idle_window["endogenous_drive_policy"][key] = float(
+            activity_guards["endogenous_drive_policy"][key] = float(
                 self_regulation.get(key) or 0.0
             )
         max_candidates = int(
@@ -5575,11 +5579,11 @@ class PlanningRuntimeMixin:
                 return []
 
         deliberation = self._endogenous_drive_engine.build_deliberation_report(
-            idle_window=idle_window,
+            activity_guards=activity_guards,
         )
         deliberation_dict = deliberation.to_dict()
         candidates = self._endogenous_drive_engine.generate_candidates(
-            idle_window=idle_window,
+            activity_guards=activity_guards,
             existing_drive_keys=self._existing_endogenous_drive_keys(),
             max_candidates=max_candidates,
             deliberation_report=deliberation,
@@ -5587,7 +5591,7 @@ class PlanningRuntimeMixin:
         queue_items = _candidate_queue_items(candidates)
         lm_reasoning_state = self._lm_reasoning_state_for_current_cycle()
         cognitive_self_regulation = self._derive_cognitive_self_regulation(
-            drive_history=idle_window["drive_history"],
+            drive_history=activity_guards["drive_history"],
             lm_reasoning_state=lm_reasoning_state,
             deliberation=deliberation_dict,
         )
@@ -5596,7 +5600,7 @@ class PlanningRuntimeMixin:
             cognitive_self_regulation=cognitive_self_regulation,
             deliberation=deliberation_dict,
             lm_reasoning_state=lm_reasoning_state,
-            drive_history=idle_window["drive_history"],
+            drive_history=activity_guards["drive_history"],
         )
         combined_self_regulation = dict(self_regulation)
         for key in (
@@ -5627,7 +5631,7 @@ class PlanningRuntimeMixin:
             "dynamic_truthfulness_bias_boost",
             "dynamic_learning_expansion_suppression",
         ):
-            idle_window["endogenous_drive_policy"][key] = float(
+            activity_guards["endogenous_drive_policy"][key] = float(
                 combined_self_regulation.get(key) or 0.0
             )
 
@@ -5638,11 +5642,11 @@ class PlanningRuntimeMixin:
             "dynamic_learning_expansion_suppression",
         )):
             deliberation = self._endogenous_drive_engine.build_deliberation_report(
-                idle_window=idle_window,
+                activity_guards=activity_guards,
             )
             deliberation_dict = deliberation.to_dict()
             candidates = self._endogenous_drive_engine.generate_candidates(
-                idle_window=idle_window,
+                activity_guards=activity_guards,
                 existing_drive_keys=self._existing_endogenous_drive_keys(),
                 max_candidates=max_candidates,
                 deliberation_report=deliberation,
@@ -5656,7 +5660,7 @@ class PlanningRuntimeMixin:
         if persist_evaluation:
             persisted_evaluation = self._persist_endogenous_evaluation_for_candidates(
                 deliberation=deliberation_dict,
-                idle_window=idle_window,
+                activity_guards=activity_guards,
                 governance_channels=governance_channels,
                 self_regulation=combined_self_regulation,
                 candidate_items=queue_items,
@@ -5694,7 +5698,7 @@ class PlanningRuntimeMixin:
             "status": "evaluated",
             "enabled": self.config.service_runtime.endogenous_drive_enabled,
             "core_values": CORE_VALUES,
-            "idle_window": idle_window,
+            "activity_guards": activity_guards,
             "deliberation": deliberation_dict,
             "candidates": queue_items,
             "count": len(candidates),
@@ -5925,7 +5929,7 @@ class PlanningRuntimeMixin:
 
         allowed_candidate_kinds = {
             "truthfulness_review",
-            "queue_hygiene_review",
+            "governance_hygiene_review",
         }
         kept: list[Dict[str, Any]] = []
         deferred: list[Dict[str, Any]] = []
@@ -6013,7 +6017,7 @@ class PlanningRuntimeMixin:
                 "status": "idle",
                 "planned": 0,
                 "tasks": [],
-                "idle_window": evaluation.get("idle_window"),
+                "activity_guards": evaluation.get("activity_guards"),
                 "drive_posture": drive_posture,
                 "governance_channels": governance_channels,
                 "governance_event_stream": governance_event_stream,
@@ -6025,7 +6029,7 @@ class PlanningRuntimeMixin:
         persistence_cognition_snapshot = self._load_endogenous_cognition_state()
         persisted_evaluation = self._persist_endogenous_evaluation_for_candidates(
             deliberation=dict(evaluation.get("deliberation") or {}),
-            idle_window=dict(evaluation.get("idle_window") or {}),
+            activity_guards=dict(evaluation.get("activity_guards") or {}),
             governance_channels=governance_channels,
             self_regulation=dict(evaluation.get("self_regulation") or {}),
             candidate_items=candidate_items,
@@ -6084,7 +6088,7 @@ class PlanningRuntimeMixin:
             "status": "planned",
             "planned": len(created_tasks),
             "tasks": created_tasks,
-            "idle_window": evaluation.get("idle_window"),
+            "activity_guards": evaluation.get("activity_guards"),
             "drive_posture": drive_posture,
             "governance_channels": governance_channels,
             "governance_event_stream": governance_event_stream,
@@ -6119,7 +6123,7 @@ class PlanningRuntimeMixin:
         self,
         *,
         task: SelfEvolutionTask,
-        idle_window: Dict[str, Any],
+        activity_guards: Dict[str, Any],
         autonomous_chain_gate_active: bool = False,
     ) -> tuple[str, str]:
         task_type = self._task_governance_type(task)
@@ -6142,24 +6146,24 @@ class PlanningRuntimeMixin:
             )
 
         # With the autonomous-chain gate active, self_learning and
-        # memory_maintenance can execute without waiting for user-idle style
+        # memory_maintenance can execute without waiting for user-chain quiet
         # signals. Other task families still follow their runtime decisions.
         if autonomous_chain_gate_active:
             if task_type == "self_learning":
                 return (
                     "approved",
-                    "Autonomous-chain gate active: self-learning task approved without waiting for idle-window signals. Learn-only constraints still apply.",
+                    "Autonomous-chain gate active: self-learning task approved without waiting for user-chain quiet signals. Learn-only constraints still apply.",
                 )
             if task_type == "memory_maintenance":
                 return (
                     "approved",
-                    "Autonomous-chain gate active: memory-maintenance task approved without waiting for idle-window signals.",
+                    "Autonomous-chain gate active: memory-maintenance task approved without waiting for user-chain quiet signals.",
                 )
 
         decision = (
-            idle_window.get("task_family_decisions", {}).get(task_family)
-            or idle_window.get("governance_task_type_decisions", {}).get(task_type)
-            or idle_window["decisions"]
+            activity_guards.get("task_family_decisions", {}).get(task_family)
+            or activity_guards.get("governance_task_type_decisions", {}).get(task_type)
+            or activity_guards["decisions"]
         )
 
         if decision["eligible_for_execution"]:
@@ -6460,7 +6464,7 @@ class PlanningRuntimeMixin:
                 or task.evidence.get("probe_report_ref")
                 or task.evidence.get("probe_report_path")
             ),
-            idle_window_evidence=dict(decision_context.get("idle_window") or {}),
+            activity_guard_evidence=dict(decision_context.get("activity_guards") or {}),
             governor_decision=governor_decision,
             rollback_plan=rollback_plan,
         )
@@ -6541,8 +6545,6 @@ class PlanningRuntimeMixin:
     def _build_lm_governance_review_snapshot(
         self,
         tasks: list[SelfEvolutionTask],
-        *,
-        idle_window: Dict[str, Any],
     ) -> list[Dict[str, Any]]:
         snapshot: list[Dict[str, Any]] = []
         for task in tasks:
@@ -6632,7 +6634,7 @@ class PlanningRuntimeMixin:
         self,
         tasks: list[SelfEvolutionTask],
         *,
-        idle_window: Dict[str, Any],
+        activity_guards: Dict[str, Any],
     ) -> Dict[str, Dict[str, Any]]:
         if not tasks:
             return {}
@@ -6646,11 +6648,11 @@ class PlanningRuntimeMixin:
         except Exception:
             return {}
 
-        queue_snapshot = self._build_lm_governance_review_snapshot(tasks, idle_window=idle_window)
+        queue_snapshot = self._build_lm_governance_review_snapshot(tasks)
         prompt = (
             "你是 VoidCube 的监督者任务治理层。你的职责不是产出新任务，"
             "而是治理当前任务列表。\n\n"
-            "请基于当前 idle_window、任务列表快照和用户优先级，"
+            "请基于当前 activity_guards、任务列表快照和用户优先级，"
             "为每个任务给出一个结构化动作建议。你可以使用以下动作：\n"
             "- approve: 建议当前任务本轮放行\n"
             "- defer: 建议当前任务继续等待\n"
@@ -6674,7 +6676,7 @@ class PlanningRuntimeMixin:
             '    {"task_id": "...", "action": "approve|defer|cancel|pause|retire|merge|reprioritize", "reason": "...", "merge_into": "...", "priority": "..."}\n'
             "  ]\n"
             "}\n\n"
-            f"【idle_window】\n{json.dumps(idle_window, ensure_ascii=False, default=str)[:3000]}\n\n"
+            f"【activity_guards】\n{json.dumps(activity_guards, ensure_ascii=False, default=str)[:3000]}\n\n"
             f"【tasks】\n{json.dumps(queue_snapshot, ensure_ascii=False, default=str)[:5000]}"
         )
 
@@ -6887,20 +6889,20 @@ class PlanningRuntimeMixin:
         decision_context: Dict[str, Any] = {}
 
         if normalized is None or normalized == "auto":
-            idle_window_request = dict(request.get("idle_window") or {})
-            idle_window_request.setdefault("task_family", self._task_runtime_family(task))
+            activity_guard_request = dict(request.get("activity_guards") or {})
+            activity_guard_request.setdefault("task_family", self._task_runtime_family(task))
             task_execution_kind = self._task_execution_kind(task)
             if task_execution_kind is not None:
-                idle_window_request.setdefault("execution_kind", task_execution_kind)
-            idle_window = await self.evaluate_idle_window(idle_window_request)
+                activity_guard_request.setdefault("execution_kind", task_execution_kind)
+            activity_guards = await self.evaluate_activity_guards(activity_guard_request)
             normalized, auto_reason = self._build_self_evolution_auto_decision(
                 task=task,
-                idle_window=idle_window,
+                activity_guards=activity_guards,
                 autonomous_chain_gate_active=getattr(
                     getattr(self, "_service_runtime", None), "autonomous_chain_gate_active", False
                 ),
             )
-            decision_context["idle_window"] = idle_window
+            decision_context["activity_guards"] = activity_guards
             reason = str(request.get("reason") or auto_reason)
         else:
             reason = str(request.get("reason") or f"Task marked as {normalized} by supervisor decision.")
@@ -7020,18 +7022,18 @@ class PlanningRuntimeMixin:
                 raise HTTPException(status_code=400, detail=f"Unsupported review status: {status}")
             normalized_statuses.append(normalized)
 
-        idle_window_request = dict(request.get("idle_window") or {})
-        idle_window = await self.evaluate_idle_window(idle_window_request)
+        activity_guard_request = dict(request.get("activity_guards") or {})
+        activity_guards = await self.evaluate_activity_guards(activity_guard_request)
         requested_task_family = self._normalize_runtime_task_family(
-            idle_window_request.get("execution_kind") or idle_window_request.get("task_family")
+            activity_guard_request.get("execution_kind") or activity_guard_request.get("task_family")
         )
         requested_governance_task_type = self._normalize_runtime_task_type(requested_task_family)
         review_decision = (
-            idle_window.get("task_family_decisions", {}).get(requested_task_family)
-            or idle_window.get("governance_task_type_decisions", {}).get(
+            activity_guards.get("task_family_decisions", {}).get(requested_task_family)
+            or activity_guards.get("governance_task_type_decisions", {}).get(
                 requested_governance_task_type
             )
-            or idle_window["decisions"]
+            or activity_guards["decisions"]
         )
         default_review_status = (
             "approved" if review_decision["eligible_for_execution"] else "deferred"
@@ -7046,7 +7048,7 @@ class PlanningRuntimeMixin:
 
         lm_governance_actions = await self._lm_review_task_governance(
             candidate_tasks,
-            idle_window=idle_window,
+            activity_guards=activity_guards,
         )
         reserved_schedule_tokens = self._build_schedule_conflict_index(
             exclude_task_ids={task.task_id for task in candidate_tasks}
@@ -7055,24 +7057,24 @@ class PlanningRuntimeMixin:
         reviewed = []
         reviewed_statuses = []
         for task in candidate_tasks:
-            task_idle_window = idle_window
+            task_activity_guards = activity_guards
             task_family = self._task_runtime_family(task)
-            if idle_window.get("task_family") != task_family:
-                task_idle_window_request = dict(idle_window_request)
-                task_idle_window_request["task_family"] = task_family
+            if activity_guards.get("task_family") != task_family:
+                task_activity_guard_request = dict(activity_guard_request)
+                task_activity_guard_request["task_family"] = task_family
                 task_execution_kind = self._task_execution_kind(task)
-                task_idle_window_request.pop("execution_kind", None)
+                task_activity_guard_request.pop("execution_kind", None)
                 if task_execution_kind is not None:
-                    task_idle_window_request["execution_kind"] = task_execution_kind
-                task_idle_window = await self.evaluate_idle_window(task_idle_window_request)
+                    task_activity_guard_request["execution_kind"] = task_execution_kind
+                task_activity_guards = await self.evaluate_activity_guards(task_activity_guard_request)
             target_status, default_reason = self._build_self_evolution_auto_decision(
                 task=task,
-                idle_window=task_idle_window,
+                activity_guards=task_activity_guards,
                 autonomous_chain_gate_active=getattr(
                     getattr(self, "_service_runtime", None), "autonomous_chain_gate_active", False
                 ),
             )
-            decision_context: Dict[str, Any] = {"idle_window": task_idle_window}
+            decision_context: Dict[str, Any] = {"activity_guards": task_activity_guards}
             lm_action = lm_governance_actions.get(task.task_id)
             reprioritized = False
             if lm_action:
@@ -7162,7 +7164,7 @@ class PlanningRuntimeMixin:
                             decision_id=decision_id,
                             actor=str(request.get("actor", "supervisor")),
                             reason=str(request.get("reason") or default_reason),
-                            decision_context={"idle_window": task_idle_window},
+                            decision_context={"activity_guards": task_activity_guards},
                         )
                     except ValueError:
                         updated = self._update_task_status(
@@ -7267,7 +7269,7 @@ class PlanningRuntimeMixin:
             "reviewed_statuses": unique_statuses,
             "tasks": [self._serialize_self_evolution_task(task) for task in reviewed],
             "count": len(reviewed),
-            "idle_window": idle_window,
+            "activity_guards": activity_guards,
         }
 
     async def submit_self_learning_conclusion(self, request: dict | None = None):
@@ -8096,3 +8098,7 @@ class PlanningRuntimeMixin:
             })
         except Exception:
             logger.warning("Failed to emit switch_suggestion event for slot %s", slot_id)
+
+
+
+

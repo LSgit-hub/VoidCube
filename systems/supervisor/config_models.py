@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional
 
 from pydantic import BaseModel, Field
-from systems.runtime_thresholds import DEFAULT_IDLE_WINDOW_SECONDS
+from systems.runtime_thresholds import DEFAULT_ACTIVITY_GUARD_SECONDS
 
 
 class EndogenousDriveCognitiveControlPolicyConfig(BaseModel):
@@ -118,7 +118,7 @@ class EndogenousDriveCognitiveContextLayeringPolicyConfig(BaseModel):
         "top_self_iteration_hypothesis",
         "primary_evidence_nodes",
         "primary_agenda_nodes",
-        "queue_state_summary",
+        "governance_backlog_summary",
         "cognitive_posture",
         "decision_summary",
     ]
@@ -151,7 +151,7 @@ class EndogenousDrivePromptAttentionPolicyConfig(BaseModel):
         "decision_core",
         "supporting_detail",
         "long_tail_context",
-        "queue_state_snapshot",
+        "governance_backlog_snapshot",
         "perception",
         "world_model",
         "reflection",
@@ -184,14 +184,14 @@ class EndogenousDrivePromptAttentionPolicyConfig(BaseModel):
         "plans",
         "queued_learning_titles",
         "queued_body_improvement_titles",
-        "queued_tasks",
+        "governance_backlog_tasks",
         "shell_slot",
     ]
     structure_keys: list[str] = [
         "decision_core",
         "supporting_detail",
         "long_tail_context",
-        "queue_state_snapshot",
+        "governance_backlog_snapshot",
     ]
     trim_stage_order: list[str] = [
         "primary_context_compaction",
@@ -262,9 +262,9 @@ class SupervisorServiceRuntimeConfig(BaseModel):
     health_check_interval: int = 30
     self_evolution_review_interval: int = 300
     self_evolution_dispatch_limit_per_cycle: int = 1
-    idle_window_user_seconds: int = DEFAULT_IDLE_WINDOW_SECONDS
-    idle_window_memory_seconds: int = DEFAULT_IDLE_WINDOW_SECONDS
-    idle_window_workflow_seconds: int = DEFAULT_IDLE_WINDOW_SECONDS
+    activity_guard_user_seconds: int = DEFAULT_ACTIVITY_GUARD_SECONDS
+    activity_guard_memory_seconds: int = DEFAULT_ACTIVITY_GUARD_SECONDS
+    activity_guard_workflow_seconds: int = DEFAULT_ACTIVITY_GUARD_SECONDS
     # Deprecated: compression is now owned by MemoryService (baseline §3.4).
     # Kept for config-file compatibility; no longer read by the supervisor.
     memory_compression_interval: int = 3600
@@ -330,3 +330,5 @@ class SupervisorConfig(BaseModel):
     ui_path: str = "/ui"
     soul_store_path: Optional[str] = None
     self_evolution_queue_path: Optional[str] = None
+
+

@@ -2462,7 +2462,8 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   margin: -8px 0 14px; line-height: 1.5;
 }
 /* 自主链路观测 */
-.lane-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.lane-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 720px) { .lane-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 560px) { .lane-grid { grid-template-columns: 1fr; } }
 .lane-col {
   border-radius: 12px; padding: 12px;
@@ -2471,6 +2472,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 }
 .lane-col.supervisor { border-top: 2px solid var(--gold); }
 .lane-col.agent { border-top: 2px solid var(--mint); }
+.lane-col.mem { border-top: 2px solid var(--coral); }
 .lane-col-head {
   font-size: 11px; font-weight: 700; color: var(--text-primary);
   display: flex; align-items: center; gap: 6px; margin-bottom: 4px;
@@ -3234,30 +3236,53 @@ function renderAutonomousLoop(loop, options) {
 /* ── 🚦 自主链路观测总览 ── */
 function renderAutonomousDrawer(state) {
   const obs = state.autonomous_observation || {};
+  const guards = state.activity_guards || {};
+  const userSignal = guards.user_chain_signal || {};
   const apiB = obs.api_b || {};
   const apiA = obs.api_a || {};
+  const mem = obs.mem || {};
   const counts = obs.counts || {};
+  const loop = obs.loop || {};
 
   function activeBlock(task) {
     if (!task) return '<div class="lane-active" style="color:var(--text-muted);">空闲 · 无活跃执行</div>';
     return '<div class="lane-active"><div class="la-title">' + esc(String(task.title || '未命名').substring(0, 48)) +
       '</div><div style="margin-top:3px;">状态: ' + esc(task.display_status || task.status || '—') + '</div></div>';
   }
+  function latestWritebackBlock(item) {
+    if (!item) return '<div class="lane-active" style="color:var(--text-muted);">暂无新的 Mem 写回</div>';
+    return '<div class="lane-active"><div class="la-title">' + esc(String(item.title || '未命名').substring(0, 48)) +
+      '</div><div style="margin-top:3px;">状态: ' + esc(item.status_label || item.status || '—') +
+      (item.summary ? ' · ' + esc(String(item.summary).substring(0, 60)) : '') + '</div></div>';
+  }
   function laneCol(cls, icon, name, tag, section) {
     return '<div class="lane-col ' + cls + '">' +
       '<div class="lane-col-head">' + icon + ' ' + name + ' <span class="lane-col-tag">' + tag + '</span></div>' +
-      '<div class="lane-metric"><span>待观察任务</span><b>' + (section.pending_count || 0) + '</b></div>' +
+      '<div class="lane-metric"><span>链路在途</span><b>' + (section.pending_count || 0) + '</b></div>' +
       '<div class="lane-metric"><span>观测范围</span><b>' + esc(section.scope || '—') + '</b></div>' +
       activeBlock(section.active) + '</div>';
   }
+  const userState = userSignal.is_quiet ? '安静软信号' : '活跃软信号';
+  const activeSessions = userSignal.active_sessions != null ? userSignal.active_sessions : 0;
+  const quietAfter = userSignal.quiet_after_seconds != null ? userSignal.quiet_after_seconds : '—';
 
-  let html = '<div class="drawer-sub">Web 小屋只观察 API-B 内生驱动、自主任务状态和执行回报；不承担用户链路聊天监控，也不作为任务队列管理台。</div>';
+  let html = '<div class="drawer-sub">Web 小屋只观察 API-B 内生驱动、自主任务状态和执行回报；用户链路只作为软感知信号进入治理判断，不展示聊天内容。</div>';
+  html += renderAutonomousLoop(loop, {showWritebacks: true});
+  html += '<div class="drawer-sub" style="margin-top:10px;">用户链路感知: ' + esc(userState) +
+    ' · active_sessions ' + esc(activeSessions) +
+    ' · quiet_after ' + esc(quietAfter) + 's' +
+    ' · gate ' + (guards.autonomous_chain_gate_active ? 'on' : 'off') + '</div>';
   html += '<div class="lane-grid">' +
     laneCol('supervisor', '🧠', 'API-B 判断', '内生驱动 / 记忆', apiB) +
     laneCol('agent', '🤖', 'API-A 自主执行', '学习 / 替身改进', apiA) +
+    '<div class="lane-col mem"><div class="lane-col-head">💾 Mem 写回 <span class="lane-col-tag">结果回流</span></div>' +
+      '<div class="lane-metric"><span>最近写回</span><b>' + (mem.recent_count || 0) + '</b></div>' +
+      '<div class="lane-metric"><span>观测范围</span><b>' + esc(mem.scope || '—') + '</b></div>' +
+      latestWritebackBlock(mem.latest) + '</div>' +
     '</div>';
   html += '<div class="drawer-sub" style="margin-top:10px;">候选 ' + (counts.candidates || 0) +
-    ' · 活跃执行 ' + (counts.active || 0) + ' · 观测任务 ' + (counts.pending || 0) + '</div>';
+    ' · 活跃执行 ' + (counts.active || 0) + ' · 链路回流 ' + (counts.pending || 0) +
+    ' · Mem 写回 ' + (counts.writebacks || 0) + '</div>';
   els.drawerBody.innerHTML = html;
 }
 
@@ -3279,10 +3304,10 @@ function renderProvenanceDrawer(state) {
 
   let chain = '<div class="prov-chain">';
   chain += '<div class="prov-node"><div class="prov-node-label">👁 感知 PERCEPTION</div><div class="prov-node-body">' +
-    '系统姿态 ' + esc(p.system_posture || '—') + ' · 治理积压 ' + (p.active_queue_count || 0) +
+    '系统姿态 ' + esc(p.system_posture || '—') + ' · 用户姿态 ' + esc(p.user_mode || '—') + ' · 治理在途 ' + (p.governance_backlog_count || 0) +
     ' · 近期错误 ' + (p.recent_errors || 0) + ' · 修正信号 ' + (p.correction_signals || 0) + '</div></div>';
   chain += '<div class="prov-node"><div class="prov-node-label">🌍 世界模型 WORLD MODEL</div><div class="prov-node-body">' +
-    '治理健康 ' + esc(wm.queue_health || '—') + ' · 记忆压力 ' + pct(wm.memory_pressure) +
+    '治理健康 ' + esc(wm.governance_load_state || '—') + ' · 记忆压力 ' + pct(wm.memory_pressure) +
     ' · 真实性压力 ' + pct(wm.truthfulness_pressure) + ' · 学习动量 ' + pct(wm.learning_momentum) + '</div></div>';
   // needs
   let needBody = needs.length
@@ -3390,7 +3415,7 @@ function renderTasksPanel(state) {
     body.append(sec);
   }
 
-  addSection('🧠 API-B 当前判断', apiB.active || null, '当前没有 API-B 自维护执行');
+  addSection('🧠 API-B 当前判断', apiB.active || null, '当前没有 API-B 内部治理执行');
   addSection('🤖 API-A 自主执行', apiA.active || null, '当前没有 API-A 自主任务执行');
 
   const pending = []
@@ -3400,12 +3425,12 @@ function renderTasksPanel(state) {
   pendingSec.style.cssText = 'display:grid;gap:6px;';
   const pendingHdr = document.createElement('div');
   pendingHdr.style.cssText = 'font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;padding:0 2px;';
-  pendingHdr.textContent = '👁 自主链路观测任务';
+  pendingHdr.textContent = '🛰 自主链路回流 / 待观察';
   pendingSec.append(pendingHdr);
   if (!pending.length) {
     const empty = document.createElement('div');
     empty.className = 'game-card rarity-common';
-    empty.innerHTML = '<div class="game-card-sub" style="text-align:center;color:var(--text-muted);">暂无待观察任务</div>';
+    empty.innerHTML = '<div class="game-card-sub" style="text-align:center;color:var(--text-muted);">暂无新的链路回流任务</div>';
     pendingSec.append(empty);
   } else {
     pending.slice(0, 8).forEach(t => pendingSec.append(buildGameCard(t)));
@@ -3417,7 +3442,7 @@ function renderTasksPanel(state) {
   candSec.style.cssText = 'display:grid;gap:6px;';
   const candHdr = document.createElement('div');
   candHdr.style.cssText = 'font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;padding:0 2px;';
-  candHdr.textContent = '💡 内生驱动候选';
+  candHdr.textContent = '💡 API-B 新候选判断';
   candSec.append(candHdr);
   const candidates = Array.isArray(obs.candidates) ? obs.candidates : [];
   if (!candidates.length) {
@@ -3459,7 +3484,7 @@ function buildGameCard(task, isCandidate) {
     if (gh) hints.push(gh);
   }
   if (task.summary) hints.push(String(task.summary).substring(0, 100));
-  if (!hints.length) hints.push(isCandidate ? '等待监督者治理' : typeLabel(task));
+  if (!hints.length) hints.push(isCandidate ? '等待 API-B 判断' : typeLabel(task));
   sub.textContent = hints.join(' · ').substring(0, 160);
   card.append(sub);
 
@@ -3472,7 +3497,7 @@ function buildGameCard(task, isCandidate) {
   const lane = taskLane(task);
   const laneTag = document.createElement('span');
   laneTag.className = 'game-card-tag ' + (lane === 'agent' ? 'creativity' : 'memory');
-  laneTag.textContent = lane === 'agent' ? 'API-A 创造' : '监督者治理';
+  laneTag.textContent = lane === 'agent' ? 'API-A 执行' : 'API-B 治理';
   tags.append(laneTag);
   if (task.governance_task_type) {
     const typeTag = document.createElement('span');
@@ -3635,11 +3660,15 @@ function renderCognitionPanel(state) {
   const percStep = document.createElement('div');
   percStep.className = 'cog-step';
   percStep.innerHTML = '<div class="cog-step-label">👁 感知</div><div class="cog-step-content"><div class="cog-step-title">' +
-    '姿势: ' + (perception.system_posture || '—') + ' · 治理积压: ' + (perception.active_queue_count || 0) + ' · 错误: ' + (perception.recent_errors || 0) +
+    '姿势: ' + (perception.system_posture || '—') + ' · 用户姿态: ' + (perception.user_mode || '—') + ' · 错误: ' + (perception.recent_errors || 0) +
     '</div><div class="cog-step-detail">' +
-    '学习质量: ' + (perception.learning_quality != null ? Math.round(perception.learning_quality) + '%' : '—') +
-    ' · 修正信号: ' + (perception.correction_signals || 0) +
-    ' · 闲置: ' + ((perception.idle_seconds || {}).user_idle || '—') + 's' +
+    '治理在途: ' + (perception.governance_backlog_count || 0) +
+    ' · active_sessions: ' + (perception.active_sessions != null ? perception.active_sessions : '—') +
+    ' · 学习质量: ' + (perception.learning_quality != null ? Math.round(perception.learning_quality) + '%' : '—') +
+    '</div><div class="cog-step-detail">' +
+    '修正信号: ' + (perception.correction_signals || 0) +
+    ' · 用户静默: ' + ((perception.idle_seconds || {}).user || '—') + 's' +
+    ' · 记忆静默: ' + ((perception.idle_seconds || {}).memory || '—') + 's' +
     '</div></div>';
   flow.append(percStep);
 
@@ -3647,7 +3676,7 @@ function renderCognitionPanel(state) {
   const wmStep = document.createElement('div');
   wmStep.className = 'cog-step';
   wmStep.innerHTML = '<div class="cog-step-label">🌍 世界模型</div><div class="cog-step-content"><div class="cog-step-title">' +
-    '治理健康: ' + (worldModel.queue_health || '—') + ' · 记忆压力: ' + (worldModel.memory_pressure != null ? Math.round(worldModel.memory_pressure * 100) + '%' : '—') +
+    '治理健康: ' + (worldModel.governance_load_state || '—') + ' · 记忆压力: ' + (worldModel.memory_pressure != null ? Math.round(worldModel.memory_pressure * 100) + '%' : '—') +
     '</div><div class="cog-step-detail">' +
     '真实压力: ' + (worldModel.truthfulness_pressure != null ? Math.round(worldModel.truthfulness_pressure * 100) + '%' : '—') +
     ' · 学习动量: ' + (worldModel.learning_momentum != null ? Math.round(worldModel.learning_momentum * 100) + '%' : '—') +
@@ -3727,6 +3756,8 @@ function renderObservationPanel(state) {
   body.replaceChildren();
 
   const obs = state.autonomous_observation || {};
+  const guards = state.activity_guards || {};
+  const userSignal = guards.user_chain_signal || {};
   const m = state.metrics || {};
   const loop = obs.loop || {};
 
@@ -3744,11 +3775,12 @@ function renderObservationPanel(state) {
   const summary = document.createElement('div');
   summary.style.cssText = 'display:flex;gap:12px;flex-wrap:wrap;padding:4px 0;margin-bottom:8px;';
   [
-    {label:'观测任务', value: m.observed_task_total || 0, color:'var(--text-primary)'},
+    {label:'链路回流', value: m.observed_task_total || 0, color:'var(--text-primary)'},
     {label:'自主任务', value: m.autonomous_task_total || 0, color:'var(--mint)'},
     {label:'API-B 任务', value: m.api_b_task_total || 0, color:'var(--gold)'},
     {label:'运行中', value: m.running_count || 0, color:'var(--accent-blue)'},
     {label:'候选', value: m.drive_candidates || 0, color:'var(--plum)'},
+    {label:'Mem 写回', value: ((obs.counts || {}).writebacks || 0), color:'var(--coral)'},
     {label:'错误', value: m.error_count || 0, color:(m.error_count||0) > 0 ? 'var(--coral)' : 'var(--text-muted)'},
   ].forEach(s => {
     const chip = document.createElement('div');
@@ -3758,10 +3790,21 @@ function renderObservationPanel(state) {
   });
   body.append(summary);
 
+  const signalRow = document.createElement('div');
+  signalRow.className = 'game-card rarity-common';
+  signalRow.innerHTML =
+    '<div class="game-card-head"><div class="game-card-title">用户链路软感知</div>' +
+    '<span class="game-card-badge ' + (userSignal.is_quiet ? 'approved' : 'deferred') + '">' +
+    (userSignal.is_quiet ? '安静软信号' : '活跃软信号') + '</span></div>' +
+    '<div class="game-card-sub">active_sessions ' + esc(userSignal.active_sessions != null ? userSignal.active_sessions : 0) +
+    ' · quiet_after ' + esc(userSignal.quiet_after_seconds != null ? userSignal.quiet_after_seconds : '—') + 's' +
+    ' · scope ' + esc(guards.scope || '—') + '</div>';
+  body.append(signalRow);
+
   const observed = Array.isArray(obs.observed_tasks) ? obs.observed_tasks : [];
   const observedSec = document.createElement('div');
   observedSec.style.cssText = 'display:grid;gap:6px;';
-  observedSec.innerHTML = '<div class="lm-section-label">👁 只读观测任务</div>';
+  observedSec.innerHTML = '<div class="lm-section-label">👁 链路回流 / 只读观测</div>';
   if (!observed.length) {
     observedSec.innerHTML += '<div class="game-card-sub" style="text-align:center;color:var(--text-muted);padding:12px;">暂无任务状态</div>';
   } else {
@@ -4210,9 +4253,9 @@ class SupervisorUIMixin:
 
         drive_candidates: List[Dict[str, Any]] = self._latest_drive_candidate_snapshot()
         drive_available = True
-        idle_snapshot: Dict[str, Any] = {}
+        activity_guard_snapshot: Dict[str, Any] = {}
         try:
-            idle_snapshot = await self.evaluate_idle_window({})
+            activity_guard_snapshot = await self.evaluate_activity_guards({})
         except Exception:
             drive_available = False
         if (
@@ -4233,11 +4276,11 @@ class SupervisorUIMixin:
                 pass
 
         # Extract metrics from gateway activity for richer UI expression
-        activity = dict(idle_snapshot.get("activity") or {})
+        activity = dict(activity_guard_snapshot.get("activity") or {})
         counts = dict(activity.get("counts") or {})
         error_count = int(counts.get("error_count") or 0)
 
-        # ── Body status (direct from registry snapshot, not task queue) ──
+        # ── Body status (direct from registry snapshot, not governance-task projection) ──
         body_status: Dict[str, Any] = {}
         try:
             registry = self._body_registry.load_registry()
@@ -4362,7 +4405,9 @@ class SupervisorUIMixin:
             # Build perception summary
             cognition["perception"] = {
                 "system_posture": perception.get("system_posture", "balanced"),
-                "active_queue_count": perception.get("active_queue_count", 0),
+                "user_mode": perception.get("user_mode", "unknown"),
+                "governance_backlog_count": perception.get("governance_backlog_count", 0),
+                "active_sessions": perception.get("active_sessions", 0),
                 "recent_errors": perception.get("recent_errors", 0),
                 "learning_quality": perception.get("learning_quality", 0),
                 "correction_signals": perception.get("correction_signals", 0),
@@ -4370,7 +4415,7 @@ class SupervisorUIMixin:
             }
             # Build world model summary
             cognition["world_model"] = {
-                "queue_health": world_model.get("queue_health", "unknown"),
+                "governance_load_state": world_model.get("governance_load_state", "unknown"),
                 "memory_pressure": world_model.get("memory_pressure", 0),
                 "truthfulness_pressure": world_model.get("truthfulness_pressure", 0),
                 "learning_momentum": world_model.get("learning_momentum", 0),
@@ -4417,7 +4462,7 @@ class SupervisorUIMixin:
                 "learning_expansion_bias": raw_policy.get("learning_expansion_bias", 0),
                 "truthfulness_bias": raw_policy.get("truthfulness_bias", 0),
                 "memory_continuity_bias": raw_policy.get("memory_continuity_bias", 0),
-                "queue_hygiene_bias": raw_policy.get("queue_hygiene_bias", 0),
+                "governance_hygiene_bias": raw_policy.get("governance_hygiene_bias", 0),
                 "body_growth_bias": raw_policy.get("body_growth_bias", 0),
                 "observation_bias": raw_policy.get("observation_bias", 0),
                 "candidate_throttle": raw_policy.get("candidate_throttle", 1.0),
@@ -4428,6 +4473,17 @@ class SupervisorUIMixin:
             }
         except Exception:
             pass
+
+        ui_activity_guards = {
+            "scope": "user_chain_soft_signal_only",
+            "checks": dict(activity_guard_snapshot.get("checks") or {}),
+            "decisions": dict(activity_guard_snapshot.get("decisions") or {}),
+            "thresholds": dict(activity_guard_snapshot.get("thresholds") or {}),
+            "user_chain_signal": dict(activity_guard_snapshot.get("user_chain_signal") or {}),
+            "autonomous_chain_gate_active": bool(
+                activity_guard_snapshot.get("autonomous_chain_gate_active", False)
+            ),
+        }
 
         return {
             "status": "ok",
@@ -4446,7 +4502,7 @@ class SupervisorUIMixin:
             "drive_available": drive_available,
             "error_count": error_count,
             "active_sessions": int(activity.get("active_sessions") or 0),
-            "active_sessions_scope": "user_chain_idle_signal_only",
+            "activity_guards": ui_activity_guards,
             "timeline": await self._recent_supervisor_observation_timeline(limit=10),
             "lm_input": lm_input,
             "cognition": cognition,
@@ -4734,12 +4790,19 @@ class SupervisorUIMixin:
                 "pending": api_a_pending[:8],
                 "pending_count": len(api_a_pending),
             },
+            "mem": {
+                "scope": "writeback_memory",
+                "latest": recent_writebacks[0] if recent_writebacks else None,
+                "recent": recent_writebacks[:3],
+                "recent_count": len(recent_writebacks),
+            },
             "observed_tasks": observed_tasks[:12],
             "candidates": candidates[:8],
             "counts": {
                 "pending": len(observed_tasks),
                 "active": sum(1 for task in (supervisor_active, agent_active) if task),
                 "candidates": len(candidates),
+                "writebacks": len(recent_writebacks),
             },
         }
 
@@ -5066,3 +5129,5 @@ class SupervisorUIMixin:
         timer = threading.Timer(delay, open_later)
         timer.daemon = True
         timer.start()
+
+

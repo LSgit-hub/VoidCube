@@ -152,6 +152,8 @@ def test_supervisor_mounts_built_in_room_ui_when_enabled(tmp_path):
     assert "/runtime/timeline" in route_paths
     assert "/runtime/traces" in route_paths
     assert "/runtime/traces/{trace_id}" in route_paths
+    assert "/runtime/activity-guards/evaluate" in route_paths
+    assert "/runtime/idle-window/evaluate" not in route_paths
 
     with TestClient(supervisor.app) as client:
         page = client.get("/ui")
@@ -498,11 +500,22 @@ async def test_supervisor_room_state_maps_memory_task_to_memory_scene(tmp_path):
 async def test_supervisor_room_state_read_does_not_create_timeline_events(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor.get_runtime_timeline = AsyncMock(return_value={"timeline": []})  # type: ignore[method-assign]
-    supervisor.evaluate_idle_window = AsyncMock(
+    supervisor.evaluate_activity_guards = AsyncMock(
         return_value={
             "checks": {},
             "idle_seconds": {},
             "activity": {"active_sessions": 2, "counts": {}},
+            "thresholds": {"user_idle_seconds": 600},
+            "user_chain_signal": {
+                "scope": "soft_signal_only",
+                "active_sessions": 2,
+                "is_quiet": False,
+                "quiet_after_seconds": 600,
+            },
+            "decisions": {
+                "eligible_for_planning": True,
+                "eligible_for_execution": False,
+            },
             "task_family_decisions": {
                 "memory_maintenance": {"eligible_for_planning": True},
                 "self_learning": {"eligible_for_planning": True},
@@ -522,7 +535,9 @@ async def test_supervisor_room_state_read_does_not_create_timeline_events(tmp_pa
     assert state["timeline"] == []
     assert "in_execution_window" not in state
     assert state["active_sessions"] == 2
-    assert state["active_sessions_scope"] == "user_chain_idle_signal_only"
+    assert state["activity_guards"]["scope"] == "user_chain_soft_signal_only"
+    assert state["activity_guards"]["user_chain_signal"]["active_sessions"] == 2
+    assert state["activity_guards"]["user_chain_signal"]["is_quiet"] is False
 
 
 @pytest.mark.unit
@@ -562,7 +577,7 @@ async def test_supervisor_room_state_exposes_governance_preview_for_shadow_revie
 
     supervisor._fetch_gateway_activity_snapshot = idle_snapshot  # type: ignore[method-assign]
 
-    async def fake_lm_review(tasks, *, idle_window):
+    async def fake_lm_review(tasks, *, activity_guards):
         return {
             tasks_by_title["Duplicate learning branch"]: {
                 "action": "merge",
@@ -579,7 +594,7 @@ async def test_supervisor_room_state_exposes_governance_preview_for_shadow_revie
 
     await supervisor.review_self_evolution_tasks(
         {
-            "idle_window": {"now": "2026-05-25T01:00:00"},
+            "activity_guards": {"now": "2026-05-25T01:00:00"},
         }
     )
 
@@ -624,7 +639,7 @@ async def test_supervisor_room_state_exposes_applied_priority_updates(tmp_path, 
 
     supervisor._fetch_gateway_activity_snapshot = idle_snapshot  # type: ignore[method-assign]
 
-    async def fake_lm_review(tasks, *, idle_window):
+    async def fake_lm_review(tasks, *, activity_guards):
         return {
             task_id: {
                 "action": "reprioritize",
@@ -637,7 +652,7 @@ async def test_supervisor_room_state_exposes_applied_priority_updates(tmp_path, 
 
     await supervisor.review_self_evolution_tasks(
         {
-            "idle_window": {"now": "2026-05-25T01:00:00"},
+            "activity_guards": {"now": "2026-05-25T01:00:00"},
         }
     )
 
@@ -690,9 +705,9 @@ async def test_supervisor_room_state_exposes_task_identity_for_body_improvement(
 async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
-    supervisor.evaluate_idle_window = AsyncMock(  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = AsyncMock(  # type: ignore[method-assign]
         return_value={
-            "checks": {"in_execution_window": True},
+            "checks": {},
             "idle_seconds": {},
             "activity": {"active_sessions": 0, "counts": {}},
             "task_family_decisions": {
@@ -781,9 +796,9 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
 @pytest.mark.unit
 async def test_supervisor_room_state_observed_candidates_deduplicate_tasks_by_key(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    supervisor.evaluate_idle_window = AsyncMock(  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = AsyncMock(  # type: ignore[method-assign]
         return_value={
-            "checks": {"in_execution_window": False},
+            "checks": {},
             "idle_seconds": {},
             "activity": {"active_sessions": 0, "counts": {}},
             "task_family_decisions": {
@@ -892,9 +907,9 @@ async def test_supervisor_room_state_keeps_supervisor_idle_when_only_agent_task_
     supervisor.evaluate_endogenous_drive = AsyncMock(  # type: ignore[method-assign]
         return_value={"candidates": []}
     )
-    supervisor.evaluate_idle_window = AsyncMock(  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = AsyncMock(  # type: ignore[method-assign]
         return_value={
-            "checks": {"in_execution_window": True},
+            "checks": {},
             "idle_seconds": {},
             "activity": {"active_sessions": 0, "counts": {}},
             "task_family_decisions": {
@@ -1029,7 +1044,7 @@ async def test_supervisor_self_evolution_cycle_dispatches_approved_formal_task(t
     )
     task_id = planned["tasks"][0]["task_id"]
 
-    supervisor.evaluate_idle_window = AsyncMock(  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = AsyncMock(  # type: ignore[method-assign]
         return_value={
             "decisions": {
                 "eligible_for_planning": True,
@@ -1090,7 +1105,7 @@ async def test_dispatch_unknown_executor_status_retries_instead_of_completing(tm
     )
     task_id = planned["tasks"][0]["task_id"]
 
-    supervisor.evaluate_idle_window = AsyncMock(  # type: ignore[method-assign]
+    supervisor.evaluate_activity_guards = AsyncMock(  # type: ignore[method-assign]
         return_value={
             "decisions": {
                 "eligible_for_planning": True,
@@ -1375,3 +1390,4 @@ async def test_supervisor_accepts_self_learning_conclusion_submission_into_queue
             "conclusion_id": conclusion.conclusion_id,
         },
     )
+

@@ -3,7 +3,7 @@ VoidCube Live Dashboard — supervisor execution visibility and activity signals
 
 Fetches real-time data from Gateway (:6000) and Supervisor (:6002)
 to surface what is happening and how the supervisor currently evaluates
-execution readiness.
+autonomous-chain activity guards.
 """
 
 from __future__ import annotations
@@ -84,22 +84,22 @@ def fetch_gateway_activity() -> Dict[str, Any]:
 
 
 def fetch_supervisor_state() -> Dict[str, Any]:
-    """Return supervisor UI state (tasks, drive, idle window)."""
+    """Return supervisor UI state."""
     return _get_json(f"{SUPERVISOR_URL}/ui/state") or {}
 
 
 def fetch_supervisor_tasks(status_filter: str = "") -> Dict[str, Any]:
-    """Return task queue from supervisor."""
+    """Return the supervisor governance task list."""
     url = f"{SUPERVISOR_URL}/self-evolution/tasks"
     if status_filter:
         url += f"?status={status_filter}"
     return _get_json(url) or {}
 
 
-def fetch_idle_window(task_family: str = "general_self_evolution") -> Dict[str, Any]:
-    """Fetch the supervisor runtime-activity evaluation for a task family."""
+def fetch_activity_guards(task_family: str = "general_self_evolution") -> Dict[str, Any]:
+    """Fetch supervisor runtime activity guards for a task family."""
     return _post_json(
-        f"{SUPERVISOR_URL}/runtime/idle-window/evaluate",
+        f"{SUPERVISOR_URL}/runtime/activity-guards/evaluate",
         {"task_family": task_family},
     ) or {}
 
@@ -145,7 +145,7 @@ def build_dashboard() -> Dict[str, Any]:
     services = fetch_gateway_services()
     activity = fetch_gateway_activity()
     state = fetch_supervisor_state()
-    idle = fetch_idle_window("general_self_evolution")
+    guards = fetch_activity_guards("general_self_evolution")
     tasks_data = fetch_supervisor_tasks()
 
     # ── Services ────────────────────────────────────────────────────
@@ -176,20 +176,21 @@ def build_dashboard() -> Dict[str, Any]:
     se_exec_idle_s = idle_since(last_se_exec)
 
     # ── Idle window from supervisor ─────────────────────────────────
-    checks = idle.get("checks", {})
-    idle_secs = idle.get("idle_seconds", {})
-    thresholds = idle.get("thresholds", {})
-    decisions = idle.get("decisions", {})
+    checks = guards.get("checks", {})
+    idle_secs = guards.get("idle_seconds", {})
+    thresholds = guards.get("thresholds", {})
+    decisions = guards.get("decisions", {})
 
     user_threshold = int(thresholds.get("user_idle_seconds", 600))
     memory_threshold = int(thresholds.get("memory_idle_seconds", 600))
     workflow_threshold = int(thresholds.get("workflow_idle_seconds", 600))
+    user_chain_signal = guards.get("user_chain_signal", {})
     # ── Countdowns ──────────────────────────────────────────────────
     # When will each activity signal next cross its configured threshold?
     countdowns: Dict[str, Any] = {}
 
     for label, idle_val, thresh in [
-        ("user_idle", user_idle_s, user_threshold),
+        ("user_chain_quiet", user_idle_s, user_threshold),
         ("agent_idle", agent_idle_s, workflow_threshold),
         ("memory_idle", memory_idle_s, memory_threshold),
         ("se_plan_idle", se_plan_idle_s, workflow_threshold),
@@ -207,14 +208,12 @@ def build_dashboard() -> Dict[str, Any]:
                 "threshold_s": thresh,
             }
 
-    # Execution-window gating has been retired. Keep a compatibility banner so
-    # operators can tell the supervisor now runs continuously.
-    countdowns["execution_window"] = {
+    countdowns["autonomous_chain"] = {
         "remaining_s": 0.0,
-        "display": "always on",
+        "display": "continuous",
         "met": True,
-        "in_window": True,
-        "window": "24x7",
+        "scope": "soft_signal_only",
+        "summary": "API-B 24x7 self-governance; user chain is soft signal only",
     }
 
     # Overall execution eligibility follows the supervisor's current decision,
@@ -271,11 +270,12 @@ def build_dashboard() -> Dict[str, Any]:
                 for t in pending[:5]
             ],
         },
-        "idle_window": {
+        "activity_guards": {
             "checks": checks,
             "idle_seconds": idle_secs,
+            "user_chain_signal": user_chain_signal,
             "thresholds": {
-                "user_idle_s": user_threshold,
+                "user_chain_quiet_s": user_threshold,
                 "memory_idle_s": memory_threshold,
                 "workflow_idle_s": workflow_threshold,
             },
@@ -288,11 +288,9 @@ def build_dashboard() -> Dict[str, Any]:
         },
         "next_review_cycle_s": next_review_s,
         "next_review_cycle_display": _fmt_countdown(next_review_s),
-        "execution_window": {
-            "start_hour": 0,
-            "end_hour": 24,
-            "in_window": True,
+        "autonomous_chain_policy": {
             "label": "continuous",
+            "scope": "soft_signal_only",
         },
     }
 
@@ -395,7 +393,7 @@ def print_dashboard() -> None:
     tasks = db["tasks"]
     cds = db["countdowns"]
     elig = db["eligibility"]
-    ew = db["execution_window"]
+    policy = db["autonomous_chain_policy"]
 
     # ── Header ──────────────────────────────────────────────────────
     print()
@@ -411,7 +409,7 @@ def print_dashboard() -> None:
     mem_ok = "✓" if svc["memory"] else "✗"
     print(f"  ║  Services   Gateway ✓  Super {sup_ok}  Memory {mem_ok}  Agents {agent_n:<3}         ║")
 
-    # ── Task queue ──────────────────────────────────────────────────
+    # ── Governance tasks ────────────────────────────────────────────
     print(f"  ╠══════════════════════════════════════════════════════════╣")
     print(f"  ║  Tasks      {tasks['approved']} approved  ·  {tasks['pending']} pending                            ║")
 
@@ -428,7 +426,7 @@ def print_dashboard() -> None:
     print(f"  ║  Runtime Activity Signals                               ║")
 
     conds = [
-        ("User idle", "user_idle"),
+        ("User quiet", "user_chain_quiet"),
         ("Agent idle", "agent_idle"),
         ("Memory idle", "memory_idle"),
         ("Plan idle", "se_plan_idle"),
@@ -440,9 +438,9 @@ def print_dashboard() -> None:
         display = c.get("display", "?")
         print(f"  ║    {icon} {label:<14s} {display:>8s}  (need {c.get('threshold_s', '?')}s)                    ║")
 
-    # Continuous execution banner
-    ew_cd = cds.get("execution_window", {})
-    print(f"  ║    ✓ Exec lane    {ew_cd.get('display', '?'):>8s}  ({ew_cd.get('window', '?')})                    ║")
+    # Continuous autonomous-chain banner
+    policy_cd = cds.get("autonomous_chain", {})
+    print(f"  ║    ✓ Auto chain   {policy_cd.get('display', '?'):>8s}  ({policy.get('scope', '?')})              ║")
 
     # ── Eligibility ─────────────────────────────────────────────────
     print(f"  ╠══════════════════════════════════════════════════════════╣")

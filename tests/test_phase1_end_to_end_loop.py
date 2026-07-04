@@ -224,7 +224,7 @@ class TestPhase1IdleWindowGovernance:
         # Auto-decide
         decision = await sv.decide_self_evolution_task(
             mem_task["task_id"],
-            {"decision": "auto", "idle_window": {"now": "2026-06-20T02:00:00"}},
+            {"decision": "auto", "activity_guards": {"now": "2026-06-20T02:00:00"}},
         )
         assert decision["status"] == "approved", f"Expected approved, got {decision}"
 
@@ -246,7 +246,7 @@ class TestPhase1IdleWindowGovernance:
 
         decision = await sv.decide_self_evolution_task(
             mem_task["task_id"],
-            {"decision": "auto", "idle_window": {"now": "2026-06-20T14:00:00"}},
+            {"decision": "auto", "activity_guards": {"now": "2026-06-20T14:00:00"}},
         )
         assert decision["status"] == "approved", f"Expected approval under whole-day execution, got {decision}"
 
@@ -263,7 +263,7 @@ class TestPhase1IdleWindowGovernance:
         snapshot["last_self_evolution_execute_at"] = "2026-06-20T02:00:00"  # recent
         sv._fetch_gateway_activity_snapshot = AsyncMock(return_value=snapshot)
 
-        idle = await sv.evaluate_idle_window({
+        idle = await sv.evaluate_activity_guards({
             "now": "2026-06-20T02:15:00",
             "task_family": "memory_maintenance",
         })
@@ -289,7 +289,7 @@ class TestPhase1IdleWindowGovernance:
         snapshot["last_self_learning_activity_at"] = "2026-06-20T01:00:00"  # 75min ago → idle
         sv._fetch_gateway_activity_snapshot = AsyncMock(return_value=snapshot)
 
-        idle = await sv.evaluate_idle_window({
+        idle = await sv.evaluate_activity_guards({
             "now": "2026-06-20T02:15:00",
             "task_family": "body_upgrade",
         })
@@ -339,10 +339,8 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
             return {
                 "status": "evaluated",
                 "checks": {
-                    "has_user_idle": True,
                     "has_agent_idle": True,
                     "has_memory_idle": True,
-                    "in_execution_window": True,
                 },
                 "task_family_decisions": {
                     "memory_maintenance": {
@@ -377,7 +375,7 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
                     "eligible_for_execution": True,
                 },
             }
-        sv.evaluate_idle_window = fake_idle_for_dispatch  # type: ignore[method-assign]
+        sv.evaluate_activity_guards = fake_idle_for_dispatch  # type: ignore[method-assign]
 
         # Run full review + dispatch cycle
         result = await sv._run_self_evolution_cycle()
@@ -407,7 +405,7 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
         )
         await sv.decide_self_evolution_task(
             mem_task["task_id"],
-            {"decision": "auto", "idle_window": {"now": "2026-06-20T02:00:00"}},
+            {"decision": "auto", "activity_guards": {"now": "2026-06-20T02:00:00"}},
         )
 
         # First dispatch
@@ -454,8 +452,8 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
             return {
                 "status": "evaluated",
                 "checks": {
-                    "has_user_idle": True, "has_agent_idle": True,
-                    "has_memory_idle": True, "in_execution_window": True,
+                    "has_agent_idle": True,
+                    "has_memory_idle": True,
                 },
                 "task_family_decisions": {
                     "general_self_evolution": {
@@ -474,7 +472,7 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
                     "eligible_for_execution": True,
                 },
             }
-        sv.evaluate_idle_window = fake_idle  # type: ignore[method-assign]
+        sv.evaluate_activity_guards = fake_idle  # type: ignore[method-assign]
 
         await sv._run_self_evolution_cycle()
 
@@ -510,7 +508,7 @@ class TestPhase1TimezoneSafety:
         )
 
         # Must not raise TypeError
-        result = await sv.evaluate_idle_window({
+        result = await sv.evaluate_activity_guards({
             "now": "2026-06-20T02:15:00",
             "task_family": "self_learning",
         })
@@ -551,7 +549,7 @@ class TestPhase1GatewayErrorTracking:
             return_value=_idle_snapshot(error_count=5, uncertainty_high_count=3)
         )
 
-        idle = await sv.evaluate_idle_window({
+        idle = await sv.evaluate_activity_guards({
             "now": "2026-06-20T02:15:00",
             "task_family": "self_learning",
         })
@@ -562,7 +560,7 @@ class TestPhase1GatewayErrorTracking:
     def test_endogenous_drive_reads_canonical_gateway_field_names(self):
         """Endogenous drive prefers error_count and uncertainty_high_count."""
         engine = EndogenousDriveEngine()
-        idle_window = {
+        activity_guards = {
             "activity": {
                 "active_sessions": 0,
                 "counts": {
@@ -573,7 +571,7 @@ class TestPhase1GatewayErrorTracking:
                     "high_uncertainty": 0,
                 },
             },
-            "checks": {"has_user_idle": True},
+            "checks": {},
             "idle_seconds": {"user": 900},
             "task_family_decisions": {
                 "self_learning": {"eligible_for_planning": True},
@@ -584,7 +582,7 @@ class TestPhase1GatewayErrorTracking:
             "decisions": {"eligible_for_planning": True, "eligible_for_execution": True},
         }
         candidates = engine.generate_candidates(
-            idle_window=idle_window,
+            activity_guards=activity_guards,
             existing_drive_keys=set(),
             max_candidates=10,
         )
@@ -647,7 +645,7 @@ class TestPhase1GovernorMode:
         async def fake_idle(_request=None):
             return {
                 "status": "evaluated",
-                "checks": {"has_user_idle": True, "has_agent_idle": True, "has_memory_idle": True, "in_execution_window": True},
+                "checks": {"has_agent_idle": True, "has_memory_idle": True},
                 "task_family_decisions": {
                     "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
                 },
@@ -656,7 +654,7 @@ class TestPhase1GovernorMode:
                 },
                 "decisions": {"eligible_for_planning": True, "eligible_for_execution": True},
             }
-        sv.evaluate_idle_window = fake_idle  # type: ignore[method-assign]
+        sv.evaluate_activity_guards = fake_idle  # type: ignore[method-assign]
 
         # Create an approved self_learning task
         sv._self_evolution_queue.create_task(
@@ -682,7 +680,7 @@ class TestPhase1GovernorMode:
 
     @pytest.mark.asyncio
     @pytest.mark.unit
-    async def test_autonomous_chain_gate_idle_window_override(self, tmp_path):
+    async def test_autonomous_chain_gate_activity_guard_override(self, tmp_path):
         """Supervisor autonomous-chain gate keeps self_learning planning eligible while the user is active."""
         sv = _make_supervisor(tmp_path)
         sv._service_runtime.autonomous_chain_gate_active = True
@@ -690,7 +688,7 @@ class TestPhase1GovernorMode:
             user_idle=False  # user IS active
         ))
 
-        idle = await sv.evaluate_idle_window({"task_family": "self_learning"})
+        idle = await sv.evaluate_activity_guards({"task_family": "self_learning"})
         assert idle["autonomous_chain_gate_active"] is True
         # self_learning planning should be eligible despite user being active
         assert idle["task_family_decisions"]["self_learning"]["eligible_for_planning"] is True
@@ -734,3 +732,5 @@ class TestPhase1LearningTopicExtraction:
         engine = EndogenousDriveEngine()
         assert engine._extract_learning_topic({}) == ""
         assert engine._extract_learning_topic({"recent_metadata": {}}) == ""
+
+

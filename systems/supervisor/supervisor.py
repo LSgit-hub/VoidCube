@@ -117,7 +117,7 @@ class Supervisor(
         self.app.add_api_route("/runtime/timeline", self.get_runtime_timeline, methods=["GET"])
         self.app.add_api_route("/runtime/traces", self.list_runtime_traces, methods=["GET"])
         self.app.add_api_route("/runtime/traces/{trace_id}", self.get_runtime_trace, methods=["GET"])
-        self.app.add_api_route("/runtime/idle-window/evaluate", self.evaluate_idle_window, methods=["POST"])
+        self.app.add_api_route("/runtime/activity-guards/evaluate", self.evaluate_activity_guards, methods=["POST"])
         self.app.add_api_route("/runtime/endogenous-drive/evaluate", self.evaluate_endogenous_drive, methods=["POST"])
         self.app.add_api_route("/runtime/endogenous-drive/events", self.get_endogenous_governance_events, methods=["GET"])
         self.app.add_api_route("/runtime/endogenous-drive/self-regulation", self.get_endogenous_self_regulation, methods=["GET"])
