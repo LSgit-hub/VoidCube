@@ -64,7 +64,7 @@ class PlanningRuntimeMixin:
     _ENDOGENOUS_DRIVE_HISTORY_LIMIT = 240
     _ENDOGENOUS_GOVERNANCE_EVENT_LIMIT = 240
 
-    _LM_QUEUE_ACTION_TO_STATUS: Dict[str, str] = {
+    _LM_GOVERNANCE_ACTION_TO_STATUS: Dict[str, str] = {
         "approve": "approved",
         "approved": "approved",
         "defer": "deferred",
@@ -74,7 +74,7 @@ class PlanningRuntimeMixin:
         "pause": "paused",
         "paused": "paused",
     }
-    _LM_QUEUE_SHADOW_ACTIONS: frozenset[str] = frozenset(
+    _LM_GOVERNANCE_SHADOW_ACTIONS: frozenset[str] = frozenset(
         {"retire", "merge"}
     )
 
@@ -4114,12 +4114,61 @@ class PlanningRuntimeMixin:
             evidence = dict(row.get("evidence") or {})
             endogenous_evidence = dict(evidence.get("endogenous_drive") or {})
             judgement = dict(metadata.get("drive_judgement") or {})
+            if not judgement:
+                candidate_kind = str(
+                    dict(metadata.get("score_breakdown") or {}).get("candidate_kind")
+                    or dict(endogenous_evidence.get("score_breakdown") or {}).get("candidate_kind")
+                    or ""
+                ).strip()
+                deliberation_intents = [
+                    dict(intent)
+                    for intent in list(deliberation.get("intents") or [])
+                    if isinstance(intent, dict)
+                ]
+                selected_intents = [
+                    intent
+                    for intent in deliberation_intents
+                    if str(intent.get("candidate_kind") or "").strip() == candidate_kind
+                ] or deliberation_intents[:3]
+                source_need_types = {
+                    str(need_type).strip()
+                    for intent in selected_intents
+                    for need_type in list(intent.get("source_needs") or [])
+                    if str(need_type).strip()
+                }
+                deliberation_needs = [
+                    dict(need)
+                    for need in list(deliberation.get("needs") or [])
+                    if isinstance(need, dict)
+                ]
+                linked_needs = [
+                    need
+                    for need in deliberation_needs
+                    if not source_need_types
+                    or str(need.get("need_type") or "").strip() in source_need_types
+                ][:4]
+                judgement = {
+                    "perception": dict(deliberation.get("perception") or {}),
+                    "world_model": dict(deliberation.get("world_model") or {}),
+                    "reflection": dict(deliberation.get("reflection") or {}),
+                    "adaptive_policy": dict(deliberation.get("adaptive_policy") or {}),
+                    "intent": selected_intents[0] if selected_intents else {},
+                    "intents": selected_intents,
+                    "needs": linked_needs,
+                }
+                metadata["drive_judgement"] = judgement
             judgement_id = str(uuid.uuid4())
 
             metadata["endogenous_evaluation_id"] = evaluation_id
             metadata["endogenous_judgement_id"] = judgement_id
             row["metadata"] = metadata
 
+            if metadata.get("endogenous_drive_key") and not endogenous_evidence.get("stable_key"):
+                endogenous_evidence["stable_key"] = metadata.get("endogenous_drive_key")
+            if metadata.get("core_values") and not endogenous_evidence.get("core_values"):
+                endogenous_evidence["core_values"] = list(metadata.get("core_values") or [])
+            if metadata.get("utility") is not None and endogenous_evidence.get("utility") is None:
+                endogenous_evidence["utility"] = metadata.get("utility")
             endogenous_evidence["evaluation_id"] = evaluation_id
             endogenous_evidence["judgement_id"] = judgement_id
             evidence["endogenous_drive"] = endogenous_evidence
@@ -6117,30 +6166,30 @@ class PlanningRuntimeMixin:
             if task_type == "self_learning":
                 return (
                     "approved",
-                    "Task approved for learn-only follow-up because the user path is idle and no conflicting workflow activity is active. Execution-window gating is not required for self-learning evidence work.",
+                    "Task approved for learn-only follow-up because no conflicting internal workflow activity is active. User-chain activity remains a soft signal only; execution-window gating is not required for self-learning evidence work.",
                 )
             if task_type == "memory_maintenance":
                 return (
                     "approved",
-                    "Task approved for memory maintenance because the required user, runtime, memory, and workflow idle requirements are satisfied.",
+                    "Task approved for memory maintenance because the required runtime and memory concurrency guards are satisfied. User-chain activity remains a soft signal only.",
                 )
             return (
                 "approved",
-                "Task approved for the next execution handoff because the required runtime activity and idle requirements are satisfied.",
+                "Task approved for the next execution handoff because the required runtime concurrency guards are satisfied.",
             )
         if task_type == "self_learning":
             return (
                 "deferred",
-                "Task deferred because the user path or another internal workflow is still active. Self-learning follow-up stays queued until the system is idle enough for learn-only work.",
+                "Task deferred because an internal workflow or subsystem already has in-flight work. User-chain activity is only a soft signal; this defer is caused by concurrency guards, not by a user-idle gate.",
             )
         if task_type == "memory_maintenance":
             return (
                 "deferred",
-                "Task deferred because memory maintenance still requires idle user, runtime, memory, and workflow facts before the supervisor will execute it.",
+                "Task deferred because memory maintenance still sees in-flight runtime or memory work. User-chain activity remains a soft signal and is not the execution gate here.",
             )
         return (
             "deferred",
-            "Task deferred because the current runtime activity signals are not yet satisfied. The task remains queued for future review.",
+            "Task deferred because the current runtime concurrency guards are not yet satisfied. The task remains queued for future review.",
         )
 
     def _has_pending_self_learning_prerequisite(
@@ -6452,15 +6501,15 @@ class PlanningRuntimeMixin:
             if isinstance(latest, dict):
                 latest_context = dict(latest.get("context") or {})
         governance_preview: Dict[str, Any] = {}
-        lm_review = latest_context.get("lm_queue_review")
+        lm_review = latest_context.get("lm_governance_review")
         if isinstance(lm_review, dict):
-            governance_preview["lm_queue_review"] = dict(lm_review)
-        lm_shadow = latest_context.get("lm_queue_shadow")
+            governance_preview["lm_governance_review"] = dict(lm_review)
+        lm_shadow = latest_context.get("lm_governance_shadow")
         if isinstance(lm_shadow, dict):
-            governance_preview["lm_queue_shadow"] = dict(lm_shadow)
-        lm_priority = latest_context.get("lm_queue_priority")
+            governance_preview["lm_governance_shadow"] = dict(lm_shadow)
+        lm_priority = latest_context.get("lm_governance_priority")
         if isinstance(lm_priority, dict):
-            governance_preview["lm_queue_priority"] = dict(lm_priority)
+            governance_preview["lm_governance_priority"] = dict(lm_priority)
         if governance_preview:
             payload["governance_preview"] = governance_preview
         display_kind = (
@@ -6489,7 +6538,7 @@ class PlanningRuntimeMixin:
         }
         return payload
 
-    def _build_lm_queue_review_snapshot(
+    def _build_lm_governance_review_snapshot(
         self,
         tasks: list[SelfEvolutionTask],
         *,
@@ -6542,7 +6591,7 @@ class PlanningRuntimeMixin:
             )
         return snapshot
 
-    def _coerce_lm_queue_action(
+    def _coerce_lm_governance_action(
         self,
         action: Any,
         *,
@@ -6550,7 +6599,7 @@ class PlanningRuntimeMixin:
     ) -> Optional[str]:
         if not isinstance(action, str):
             return None
-        normalized = self._LM_QUEUE_ACTION_TO_STATUS.get(action.strip().lower())
+        normalized = self._LM_GOVERNANCE_ACTION_TO_STATUS.get(action.strip().lower())
         if normalized is None:
             return None
         if current_status in {"completed", "failed", "cancelled"}:
@@ -6559,7 +6608,7 @@ class PlanningRuntimeMixin:
 
     def _extract_lm_shadow_recommendation(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         action = str(item.get("action") or "").strip().lower()
-        if action not in self._LM_QUEUE_SHADOW_ACTIONS:
+        if action not in self._LM_GOVERNANCE_SHADOW_ACTIONS:
             return None
 
         recommendation: Dict[str, Any] = {
@@ -6579,7 +6628,7 @@ class PlanningRuntimeMixin:
             return None
         return priority
 
-    async def _lm_review_task_queue(
+    async def _lm_review_task_governance(
         self,
         tasks: list[SelfEvolutionTask],
         *,
@@ -6597,9 +6646,9 @@ class PlanningRuntimeMixin:
         except Exception:
             return {}
 
-        queue_snapshot = self._build_lm_queue_review_snapshot(tasks, idle_window=idle_window)
+        queue_snapshot = self._build_lm_governance_review_snapshot(tasks, idle_window=idle_window)
         prompt = (
-            "你是 VoidCube 的监督者队列治理层。你的职责不是产出新任务，"
+            "你是 VoidCube 的监督者任务治理层。你的职责不是产出新任务，"
             "而是治理当前任务列表。\n\n"
             "请基于当前 idle_window、任务列表快照和用户优先级，"
             "为每个任务给出一个结构化动作建议。你可以使用以下动作：\n"
@@ -6617,8 +6666,8 @@ class PlanningRuntimeMixin:
             "4. 优先考虑避免重复、无证据、陈旧或与当前系统状态冲突的任务\n"
             "5. body_improvement 只有在学习证据足够时才建议 approve\n\n"
             "6. 同一个 scheduled_for / preset_time 只能保留一个活跃任务；"
-            "如果时间重叠，按先后顺序只保留一个，不能与定时队列内任务重复，其余建议 defer 或 cancel；"
-            "该保留/顺延建议由监督者 LM 裁定\n\n"
+            "如果时间重叠，按先后顺序只保留一个，不能与现有定时任务重复，其余建议 defer 或 cancel；"
+            "该保留/顺延建议由监督者 LM 治理判断\n\n"
             "输出 JSON 对象，格式为：\n"
             "{\n"
             '  "actions": [\n'
@@ -6637,7 +6686,7 @@ class PlanningRuntimeMixin:
                         "你是 VoidCube 的监督者身份。你管理任务列表生命周期，"
                         "但不能绕过确定性状态机。你的回答必须保守、结构化、可审计。"
                     ),
-                    user_payload={"queue_review": prompt},
+                    user_payload={"governance_review": prompt},
                     task="scholar.revision",
                 ),
                 timeout=8.0,
@@ -6995,7 +7044,7 @@ class PlanningRuntimeMixin:
             candidate_tasks.append(task)
         candidate_tasks.sort(key=self._task_sort_key)
 
-        lm_queue_actions = await self._lm_review_task_queue(
+        lm_governance_actions = await self._lm_review_task_governance(
             candidate_tasks,
             idle_window=idle_window,
         )
@@ -7024,12 +7073,12 @@ class PlanningRuntimeMixin:
                 ),
             )
             decision_context: Dict[str, Any] = {"idle_window": task_idle_window}
-            lm_action = lm_queue_actions.get(task.task_id)
+            lm_action = lm_governance_actions.get(task.task_id)
             reprioritized = False
             if lm_action:
                 shadow_recommendation = lm_action.get("shadow")
                 if isinstance(shadow_recommendation, dict):
-                    decision_context["lm_queue_shadow"] = shadow_recommendation
+                    decision_context["lm_governance_shadow"] = shadow_recommendation
                 priority_recommendation = self._extract_lm_priority_recommendation(lm_action)
                 if priority_recommendation is not None and priority_recommendation != str(task.priority):
                     task = self._self_evolution_queue.update_priority(
@@ -7037,22 +7086,22 @@ class PlanningRuntimeMixin:
                         priority=priority_recommendation,
                         actor=str(request.get("actor", "supervisor")),
                         reason=(
-                            f"LM queue governance reprioritized task to {priority_recommendation}."
+                            f"LM governance reprioritized task to {priority_recommendation}."
                         ),
                         context={
                             **decision_context,
-                            "lm_queue_priority": {
+                            "lm_governance_priority": {
                                 "priority": priority_recommendation,
                                 "reason": str(lm_action.get("reason") or "").strip(),
                             },
                         },
                     )
-                    decision_context["lm_queue_priority"] = {
+                    decision_context["lm_governance_priority"] = {
                         "priority": priority_recommendation,
                         "reason": str(lm_action.get("reason") or "").strip(),
                     }
                     reprioritized = True
-                suggested_status = self._coerce_lm_queue_action(
+                suggested_status = self._coerce_lm_governance_action(
                     lm_action.get("action"),
                     current_status=str(task.status),
                 )
@@ -7063,7 +7112,7 @@ class PlanningRuntimeMixin:
                         and self._is_agent_pull_task(task)
                     )
                     if preserve_agent_pull_approval:
-                        decision_context["lm_queue_shadow"] = {
+                        decision_context["lm_governance_shadow"] = {
                             "action": suggested_status,
                             "reason": str(lm_action.get("reason") or "").strip(),
                             "preserved_status": target_status,
@@ -7072,21 +7121,21 @@ class PlanningRuntimeMixin:
                         target_status = suggested_status
                     lm_reason = str(lm_action.get("reason") or "").strip()
                     if lm_reason:
-                        default_reason = f"LM queue governance: {lm_reason}"
-                    decision_context["lm_queue_review"] = {
+                        default_reason = f"LM governance: {lm_reason}"
+                    decision_context["lm_governance_review"] = {
                         "action": suggested_status,
                         "reason": lm_reason,
                     }
                 elif isinstance(shadow_recommendation, dict):
                     default_reason = (
                         str(request.get("reason"))
-                        or f"LM queue governance shadow recommendation recorded: "
+                        or f"LM governance shadow recommendation recorded: "
                         f"{shadow_recommendation.get('action', 'review')}."
                     )
                 elif reprioritized and not str(request.get("reason") or "").strip():
                     default_reason = (
-                        f"LM queue governance reprioritized task to "
-                        f"{decision_context['lm_queue_priority']['priority']}."
+                        f"LM governance reprioritized task to "
+                        f"{decision_context['lm_governance_priority']['priority']}."
                     )
             schedule_token = self._task_schedule_token(task)
             if target_status == "approved" and schedule_token:
@@ -7160,14 +7209,14 @@ class PlanningRuntimeMixin:
                 if not task.decision_history:
                     continue
                 latest_context = dict(task.decision_history[-1].context or {})
-                shadow = latest_context.get("lm_queue_shadow")
+                shadow = latest_context.get("lm_governance_shadow")
                 if not isinstance(shadow, dict):
                     pass
                 else:
                     shadow_recommendation_count += 1
                     action = str(shadow.get("action") or "unknown")
                     shadow_action_counts[action] = shadow_action_counts.get(action, 0) + 1
-                if isinstance(latest_context.get("lm_queue_priority"), dict):
+                if isinstance(latest_context.get("lm_governance_priority"), dict):
                     priority_update_count += 1
             self._record_supervisor_ui_activity(
                 "tasks_reviewed",

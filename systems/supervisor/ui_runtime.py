@@ -1615,194 +1615,6 @@ body:has(.status:not(.collapsed)) .status-toggle {
 .metric.error .metric-value { color: var(--accent-red); }
 .metric.ok .metric-value   { color: var(--accent-green); }
 .metric.warn .metric-value { color: var(--accent-yellow); }
-.schedule {
-  margin-top: 8px;
-  padding: 8px 10px;
-  border-radius: 10px;
-  border: 1px solid rgba(255,255,255,.06);
-  background: rgba(255,255,255,.035);
-}
-.schedule-label {
-  font-size: 10px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: .04em;
-  margin-bottom: 3px;
-}
-.schedule-countdown {
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--accent-blue);
-  font-variant-numeric: tabular-nums;
-}
-.queue-stack {
-  display: grid;
-  gap: 12px;
-}
-.queue-section {
-  display: grid;
-  gap: 8px;
-  padding: 10px;
-  border-radius: 12px;
-  border: 1px solid rgba(255,255,255,.06);
-  background: rgba(255,255,255,.035);
-}
-.section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.section-label {
-  font-size: 11px;
-  color: var(--text-muted);
-  letter-spacing: .04em;
-}
-.window-pill {
-  min-width: 76px;
-  padding: 3px 10px;
-  border-radius: 999px;
-  text-align: center;
-  font-size: 10px;
-  color: var(--text-secondary);
-  background: rgba(255,255,255,.06);
-}
-.window-pill.open {
-  color: var(--accent-green);
-  background: rgba(111,198,160,.14);
-}
-.window-pill.closed {
-  color: var(--accent-yellow);
-  background: rgba(226,176,74,.14);
-}
-.queue-slot {
-  display: grid;
-  gap: 8px;
-}
-.queue-card {
-  display: grid;
-  gap: 6px;
-  min-height: 56px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(255,255,255,.06);
-  background: rgba(255,255,255,.04);
-}
-.queue-card.supervisor {
-  box-shadow: inset 3px 0 0 rgba(111,198,160,.5);
-}
-.queue-card.agent {
-  box-shadow: inset 3px 0 0 rgba(167,138,212,.6);
-}
-.queue-card.empty {
-  min-height: 44px;
-  color: var(--text-muted);
-  background: rgba(255,255,255,.025);
-}
-.queue-card-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.queue-card-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-primary);
-  line-height: 1.35;
-}
-.queue-card-subtitle {
-  font-size: 10px;
-  color: rgba(244,228,188,.75);
-  line-height: 1.35;
-}
-.queue-card-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.queue-tag {
-  font-size: 10px;
-  color: var(--text-muted);
-  letter-spacing: .03em;
-  text-transform: uppercase;
-}
-.queue-empty-text {
-  font-size: 11px;
-  color: var(--text-muted);
-}
-.timed-list {
-  display: grid;
-  gap: 7px;
-  max-height: 230px;
-  overflow-y: auto;
-}
-.timed-item {
-  display: grid;
-  grid-template-columns: 10px 1fr auto;
-  align-items: center;
-  gap: 8px;
-  min-height: 36px;
-  padding: 7px 10px;
-  border-radius: 9px;
-  border: 1px solid rgba(255,255,255,.06);
-  background: rgba(255,255,255,.035);
-}
-.timed-item.supervisor {
-  background: rgba(111,198,160,.08);
-}
-.timed-item.agent {
-  background: rgba(167,138,212,.08);
-}
-.timed-item-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.timed-item-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11.5px;
-}
-.timed-item-subtitle {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 10px;
-  color: rgba(244,228,188,.72);
-}
-.candidate-card {
-  display: grid;
-  gap: 6px;
-  min-height: 56px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(226,176,74,.18);
-  background: rgba(226,176,74,.08);
-}
-.candidate-card.empty {
-  border-color: rgba(255,255,255,.06);
-  background: rgba(255,255,255,.025);
-}
-.candidate-card-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.candidate-utility {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--gold);
-}
-.candidate-tags {
-  font-size: 10px;
-  color: rgba(244,228,188,.72);
-}
-
 .task {
   display: grid; grid-template-columns: 10px 1fr auto; align-items: center;
   gap: 8px; min-height: 32px; padding: 6px 10px;
@@ -2313,6 +2125,83 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 .game-card-tag.truthfulness { background: rgba(106,158,232,.14); color: var(--accent-blue); }
 .game-card-tag.creativity   { background: rgba(167,138,212,.14); color: var(--plum); }
 
+.autonomous-loop {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.06);
+  background: rgba(255,255,255,.035);
+}
+.autonomous-loop-boundary {
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+.autonomous-loop-stages {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+@media (max-width: 720px) {
+  .autonomous-loop-stages {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.autonomous-loop-stage {
+  display: grid;
+  gap: 5px;
+  padding: 9px 10px;
+  border-radius: 9px;
+  border: 1px solid rgba(255,255,255,.05);
+  background: rgba(255,255,255,.03);
+}
+.autonomous-loop-stage.active {
+  border-color: rgba(106,158,232,.35);
+  background: rgba(106,158,232,.08);
+}
+.autonomous-loop-stage.ready {
+  border-color: rgba(111,198,160,.28);
+  background: rgba(111,198,160,.08);
+}
+.autonomous-loop-stage.idle {
+  opacity: .82;
+}
+.autonomous-loop-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.autonomous-loop-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: .04em;
+}
+.autonomous-loop-owner {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+.autonomous-loop-status {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+.autonomous-loop-summary {
+  font-size: 10px;
+  color: rgba(244,228,188,.78);
+  line-height: 1.45;
+}
+.autonomous-loop-writebacks {
+  display: grid;
+  gap: 5px;
+}
+.autonomous-loop-writeback {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
 /* score bar */
 .game-score-bar {
   height: 5px; border-radius: 3px;
@@ -2418,31 +2307,6 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 .cog-need-tag.severity-high { background: rgba(232,130,110,.2); color: var(--coral); }
 .cog-need-tag.severity-mid  { background: rgba(226,176,74,.18); color: var(--gold); }
 .cog-need-tag.severity-low  { background: rgba(111,198,160,.14); color: var(--mint); }
-
-/* ── 队列面板专用 ── */
-.queue-filter-row {
-  display: flex; gap: 6px; flex-wrap: wrap;
-}
-.queue-filter-chip {
-  padding: 4px 12px;
-  border-radius: 99px;
-  font-size: 10px; font-weight: 600;
-  border: 1px solid rgba(255,255,255,.08);
-  background: rgba(255,255,255,.03);
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: all .2s;
-  font-family: inherit;
-}
-.queue-filter-chip:hover {
-  background: rgba(255,255,255,.07);
-  color: var(--text-primary);
-}
-.queue-filter-chip.active {
-  background: rgba(226,176,74,.15);
-  border-color: rgba(226,176,74,.3);
-  color: var(--gold);
-}
 
 /* ── 角色迷你状态条(Dock 左侧) ── */
 .dock-char-strip {
@@ -2597,7 +2461,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   font-size: 10px; color: var(--text-muted);
   margin: -8px 0 14px; line-height: 1.5;
 }
-/* 双泳道 */
+/* 自主链路观测 */
 .lane-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 @media (max-width: 560px) { .lane-grid { grid-template-columns: 1fr; } }
 .lane-col {
@@ -2899,10 +2763,10 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
     <!-- 面板层(在 Dock 上方滑出) -->
     <div class="dock-panels" id="dockPanels">
 
-      <!-- 📋 任务面板 -->
+      <!-- 📋 自主链路观测 -->
       <div class="dock-panel" id="panelTasks">
         <div class="panel-header">
-          <div class="panel-title"><span class="pt-icon">📋</span>任务看板</div>
+          <div class="panel-title"><span class="pt-icon">📋</span>自主链路观测</div>
           <button class="panel-close" data-panel="tasks">×</button>
         </div>
         <div class="panel-body" id="panelTasksBody">
@@ -2929,13 +2793,13 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
         </div>
       </div>
 
-      <!-- ⚙️ 队列面板 -->
-      <div class="dock-panel" id="panelQueue">
+      <!-- ⚙️ API-B 观测面板 -->
+      <div class="dock-panel" id="panelObservation">
         <div class="panel-header">
-          <div class="panel-title"><span class="pt-icon">⚙️</span>队列治理</div>
-          <button class="panel-close" data-panel="queue">×</button>
+          <div class="panel-title"><span class="pt-icon">⚙️</span>API-B 观测</div>
+          <button class="panel-close" data-panel="observation">×</button>
         </div>
-        <div class="panel-body" id="panelQueueBody">
+        <div class="panel-body" id="panelObservationBody">
         </div>
       </div>
 
@@ -2966,9 +2830,9 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
         <div class="dcs-hp-bar"><div class="dcs-hp-fill good" id="dcsHpFill" style="width:100%"></div></div>
       </div>
 
-      <button class="dock-btn" data-panel="tasks" title="任务看板">
+      <button class="dock-btn" data-panel="tasks" title="自主链路观测">
         <span class="db-icon">📋</span>
-        <span class="db-label">任务</span>
+        <span class="db-label">链路</span>
       </button>
       <span class="dock-sep"></span>
       <button class="dock-btn" data-panel="lminput" title="LM 输入">
@@ -2981,9 +2845,9 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
         <span class="db-label">认知</span>
       </button>
       <span class="dock-sep"></span>
-      <button class="dock-btn" data-panel="queue" title="队列治理">
+      <button class="dock-btn" data-panel="observation" title="API-B 观测">
         <span class="db-icon">⚙️</span>
-        <span class="db-label">队列</span>
+        <span class="db-label">观测</span>
       </button>
       <span class="dock-sep"></span>
       <button class="dock-btn" data-panel="stats" title="运行统计">
@@ -3063,7 +2927,7 @@ const els = {
   panelTasksBody: $('#panelTasksBody'),
   panelLMInputBody: $('#panelLMInputBody'),
   panelCognitionBody: $('#panelCognitionBody'),
-  panelQueueBody: $('#panelQueueBody'),
+  panelObservationBody: $('#panelObservationBody'),
   panelStatsBody: $('#panelStatsBody'),
   /* drill-down drawer */
   drawer: $('#detailDrawer'),
@@ -3118,8 +2982,8 @@ function taskIdentityHint(t) {
 }
 function governanceHint(t) {
   const preview = t.governance_preview || {};
-  const direct = preview.lm_queue_review || null;
-  const shadow = preview.lm_queue_shadow || null;
+  const direct = preview.lm_governance_review || null;
+  const shadow = preview.lm_governance_shadow || null;
   if (direct && direct.action) return '监督者已裁定: ' + String(direct.action) + ' · ' + String(direct.reason || '').slice(0, 80);
   if (shadow && shadow.action) {
     let extra = '';
@@ -3201,7 +3065,7 @@ function openPanel(name) {
     if (name === 'tasks') renderTasksPanel(lastState);
     if (name === 'lminput') renderLMInputPanel(lastState);
     if (name === 'cognition') renderCognitionPanel(lastState);
-    if (name === 'queue') renderQueuePanel(lastState);
+    if (name === 'observation') renderObservationPanel(lastState);
     if (name === 'stats') renderStatsPanel(lastState);
   }
 }
@@ -3260,10 +3124,10 @@ document.addEventListener('click', e => {
 /* ═══════════════════════════════════════════
    drill-down 详情抽屉
    ═══════════════════════════════════════════ */
-let drawerOpen = null;  // 当前抽屉类型: 'lanes' | 'provenance' | 'health' | null
+let drawerOpen = null;  // 当前抽屉类型: 'autonomous' | 'provenance' | 'health' | null
 
 const DRAWER_META = {
-  lanes:      { icon: '🚦', title: '双泳道治理总览' },
+  autonomous: { icon: '🚦', title: '自主链路观测总览' },
   provenance: { icon: '🔎', title: '内生驱动决策溯源' },
   health:     { icon: '💗', title: '身体 / 记忆健康度' },
 };
@@ -3285,7 +3149,7 @@ function closeDrawer() {
 function renderDrawer() {
   if (!drawerOpen || !els.drawerBody) return;
   const state = lastState || {};
-  if (drawerOpen === 'lanes') renderLanesDrawer(state);
+  if (drawerOpen === 'autonomous') renderAutonomousDrawer(state);
   else if (drawerOpen === 'provenance') renderProvenanceDrawer(state);
   else if (drawerOpen === 'health') renderHealthDrawer(state);
 }
@@ -3322,48 +3186,78 @@ function esc(s) {
 }
 function pct(v) { return (v != null && !isNaN(v)) ? Math.round(v * 100) + '%' : '—'; }
 
-/* ── 🚦 双泳道治理总览 ── */
-function renderLanesDrawer(state) {
-  const layout = state.queue_layout || {};
-  const win = layout.window || {};
-  const timed = Array.isArray(layout.timed_queue) ? layout.timed_queue : [];
-  const cands = Array.isArray(layout.candidate_list) ? layout.candidate_list : [];
+function autonomousLoopStatusLabel(status) {
+  const map = {
+    active: '当前在途',
+    ready: '已观察到',
+    idle: '等待中',
+  };
+  return map[String(status || '').trim()] || '等待中';
+}
 
-  // 按 lane 归类定时队列
-  function isAgentLane(t) {
-    const lane = String((t || {}).lane || '').trim();
-    if (lane) return lane === 'agent';
-    const gov = String((t || {}).governance_task_type || '').trim();
-    const ek = String((t || {}).execution_kind || '').trim();
-    return gov === 'self_learning' || ek === 'body_improvement';
+function renderAutonomousLoop(loop, options) {
+  const opts = options || {};
+  const stages = Array.isArray(loop.stages) ? loop.stages : [];
+  const writebacks = Array.isArray(loop.recent_writebacks) ? loop.recent_writebacks : [];
+  if (!stages.length) return '';
+
+  let html = '<div class="autonomous-loop">';
+  if (loop.boundary) {
+    html += '<div class="autonomous-loop-boundary">' + esc(loop.boundary) + '</div>';
   }
-  const supQueued = timed.filter(t => !isAgentLane(t));
-  const agtQueued = timed.filter(isAgentLane);
-  const supCand = cands.filter(c => !isAgentLane(c));
-  const agtCand = cands.filter(isAgentLane);
+  html += '<div class="autonomous-loop-stages">';
+  html += stages.map(stage => {
+    const status = String(stage.status || 'idle').trim() || 'idle';
+    const summary = String(stage.summary || '暂无信号').trim() || '暂无信号';
+    return '<div class="autonomous-loop-stage ' + esc(status) + '">' +
+      '<div class="autonomous-loop-topline"><span class="autonomous-loop-label">' + esc(stage.label || '阶段') +
+      '</span><span class="autonomous-loop-owner">' + esc(stage.owner || '—') + '</span></div>' +
+      '<div class="autonomous-loop-status">' + autonomousLoopStatusLabel(status) + '</div>' +
+      '<div class="autonomous-loop-summary">' + esc(summary).substring(0, 120) + '</div>' +
+      '</div>';
+  }).join('');
+  html += '</div>';
+  if (opts.showWritebacks && writebacks.length) {
+    html += '<div class="autonomous-loop-writebacks">' +
+      writebacks.slice(0, 3).map(item =>
+        '<div class="autonomous-loop-writeback">Mem 写回: ' +
+        esc(item.title || '未命名') + ' · ' + esc(item.status_label || '—') +
+        (item.summary ? ' · ' + esc(String(item.summary).substring(0, 80)) : '') +
+        '</div>'
+      ).join('') +
+      '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+/* ── 🚦 自主链路观测总览 ── */
+function renderAutonomousDrawer(state) {
+  const obs = state.autonomous_observation || {};
+  const apiB = obs.api_b || {};
+  const apiA = obs.api_a || {};
+  const counts = obs.counts || {};
 
   function activeBlock(task) {
-    if (!task) return '<div class="lane-active" style="color:var(--text-muted);">空闲 · 无活跃任务</div>';
+    if (!task) return '<div class="lane-active" style="color:var(--text-muted);">空闲 · 无活跃执行</div>';
     return '<div class="lane-active"><div class="la-title">' + esc(String(task.title || '未命名').substring(0, 48)) +
       '</div><div style="margin-top:3px;">状态: ' + esc(task.display_status || task.status || '—') + '</div></div>';
   }
-  function laneCol(cls, icon, name, tag, active, queuedN, candN) {
+  function laneCol(cls, icon, name, tag, section) {
     return '<div class="lane-col ' + cls + '">' +
       '<div class="lane-col-head">' + icon + ' ' + name + ' <span class="lane-col-tag">' + tag + '</span></div>' +
-      '<div class="lane-metric"><span>定时队列</span><b>' + queuedN + '</b></div>' +
-      '<div class="lane-metric"><span>待治理候选</span><b>' + candN + '</b></div>' +
-      activeBlock(active) + '</div>';
+      '<div class="lane-metric"><span>待观察任务</span><b>' + (section.pending_count || 0) + '</b></div>' +
+      '<div class="lane-metric"><span>观测范围</span><b>' + esc(section.scope || '—') + '</b></div>' +
+      activeBlock(section.active) + '</div>';
   }
 
-  const winColor = win.open ? 'var(--mint)' : 'var(--gold)';
-  let html = '<div class="drawer-sub">监督者本体只处理自身维护(记忆 / 演化)。学习与替身改进委派给 API-A agent 执行。' +
-    '执行模式: <span style="color:' + winColor + ';">' + esc(win.range || '全天候') + ' · ' + esc(win.status_text || '') + '</span></div>';
+  let html = '<div class="drawer-sub">Web 小屋只观察 API-B 内生驱动、自主任务状态和执行回报；不承担用户链路聊天监控，也不作为任务队列管理台。</div>';
   html += '<div class="lane-grid">' +
-    laneCol('supervisor', '🧠', '监督者自维护', 'API-B · 记忆/演化',
-      layout.supervisor_active, supQueued.length, supCand.length) +
-    laneCol('agent', '🤖', 'Agent 执行', 'API-A · 学习/替身改进',
-      layout.agent_active, agtQueued.length, agtCand.length) +
+    laneCol('supervisor', '🧠', 'API-B 判断', '内生驱动 / 记忆', apiB) +
+    laneCol('agent', '🤖', 'API-A 自主执行', '学习 / 替身改进', apiA) +
     '</div>';
+  html += '<div class="drawer-sub" style="margin-top:10px;">候选 ' + (counts.candidates || 0) +
+    ' · 活跃执行 ' + (counts.active || 0) + ' · 观测任务 ' + (counts.pending || 0) + '</div>';
   els.drawerBody.innerHTML = html;
 }
 
@@ -3375,8 +3269,8 @@ function renderProvenanceDrawer(state) {
   const needs = Array.isArray(cog.needs) ? cog.needs : [];
   const intents = Array.isArray(cog.intents) ? cog.intents : [];
   const policy = cog.adaptive_policy || {};
-  const cands = Array.isArray((state.queue_layout || {}).candidate_list)
-    ? state.queue_layout.candidate_list : [];
+  const cands = Array.isArray((state.autonomous_observation || {}).candidates)
+    ? state.autonomous_observation.candidates : [];
 
   if (!Object.keys(p).length && !needs.length) {
     els.drawerBody.innerHTML = '<div class="drawer-sub">认知状态尚未初始化。激活 Governor 模式后内生驱动会填充感知→意图链。</div>';
@@ -3385,10 +3279,10 @@ function renderProvenanceDrawer(state) {
 
   let chain = '<div class="prov-chain">';
   chain += '<div class="prov-node"><div class="prov-node-label">👁 感知 PERCEPTION</div><div class="prov-node-body">' +
-    '系统姿态 ' + esc(p.system_posture || '—') + ' · 活跃队列 ' + (p.active_queue_count || 0) +
+    '系统姿态 ' + esc(p.system_posture || '—') + ' · 治理积压 ' + (p.active_queue_count || 0) +
     ' · 近期错误 ' + (p.recent_errors || 0) + ' · 修正信号 ' + (p.correction_signals || 0) + '</div></div>';
   chain += '<div class="prov-node"><div class="prov-node-label">🌍 世界模型 WORLD MODEL</div><div class="prov-node-body">' +
-    '队列健康 ' + esc(wm.queue_health || '—') + ' · 记忆压力 ' + pct(wm.memory_pressure) +
+    '治理健康 ' + esc(wm.queue_health || '—') + ' · 记忆压力 ' + pct(wm.memory_pressure) +
     ' · 真实性压力 ' + pct(wm.truthfulness_pressure) + ' · 学习动量 ' + pct(wm.learning_momentum) + '</div></div>';
   // needs
   let needBody = needs.length
@@ -3469,7 +3363,14 @@ function renderTasksPanel(state) {
   const body = els.panelTasksBody;
   if (!body) return;
   body.replaceChildren();
-  const layout = state.queue_layout || {};
+  const obs = state.autonomous_observation || {};
+  const apiB = obs.api_b || {};
+  const apiA = obs.api_a || {};
+  const loop = obs.loop || {};
+
+  const loopSec = document.createElement('div');
+  loopSec.innerHTML = renderAutonomousLoop(loop, {showWritebacks: true});
+  if (loopSec.innerHTML) body.append(loopSec.firstElementChild);
 
   function addSection(label, task, emptyText) {
     const sec = document.createElement('div');
@@ -3489,28 +3390,27 @@ function renderTasksPanel(state) {
     body.append(sec);
   }
 
-  addSection('⚡ 监督者执行', layout.supervisor_active || null, '当前没有监督者任务');
-  addSection('🎨 Agent 执行', layout.agent_active || null, '当前没有创造类任务');
+  addSection('🧠 API-B 当前判断', apiB.active || null, '当前没有 API-B 自维护执行');
+  addSection('🤖 API-A 自主执行', apiA.active || null, '当前没有 API-A 自主任务执行');
 
-  // 定时队列
-  const timedSec = document.createElement('div');
-  timedSec.style.cssText = 'display:grid;gap:6px;';
-  const timedHdr = document.createElement('div');
-  timedHdr.style.cssText = 'font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;padding:0 2px;display:flex;justify-content:space-between;';
-  const winInfo = layout.window || {};
-  const winColor = winInfo.open ? 'var(--mint)' : 'var(--gold)';
-  timedHdr.innerHTML = '⏳ 定时队列 <span style="font-size:9px;color:' + winColor + ';">' + (winInfo.range || '00:00-06:00') + ' · ' + (winInfo.status_text || '') + '</span>';
-  timedSec.append(timedHdr);
-  const timed = Array.isArray(layout.timed_queue) ? layout.timed_queue : [];
-  if (!timed.length) {
+  const pending = []
+    .concat(Array.isArray(apiB.pending) ? apiB.pending : [])
+    .concat(Array.isArray(apiA.pending) ? apiA.pending : []);
+  const pendingSec = document.createElement('div');
+  pendingSec.style.cssText = 'display:grid;gap:6px;';
+  const pendingHdr = document.createElement('div');
+  pendingHdr.style.cssText = 'font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;padding:0 2px;';
+  pendingHdr.textContent = '👁 自主链路观测任务';
+  pendingSec.append(pendingHdr);
+  if (!pending.length) {
     const empty = document.createElement('div');
     empty.className = 'game-card rarity-common';
-    empty.innerHTML = '<div class="game-card-sub" style="text-align:center;color:var(--text-muted);">定时队列为空</div>';
-    timedSec.append(empty);
+    empty.innerHTML = '<div class="game-card-sub" style="text-align:center;color:var(--text-muted);">暂无待观察任务</div>';
+    pendingSec.append(empty);
   } else {
-    timed.slice(0, 8).forEach(t => timedSec.append(buildGameCard(t)));
+    pending.slice(0, 8).forEach(t => pendingSec.append(buildGameCard(t)));
   }
-  body.append(timedSec);
+  body.append(pendingSec);
 
   // 内生驱动候选
   const candSec = document.createElement('div');
@@ -3519,11 +3419,11 @@ function renderTasksPanel(state) {
   candHdr.style.cssText = 'font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;padding:0 2px;';
   candHdr.textContent = '💡 内生驱动候选';
   candSec.append(candHdr);
-  const candidates = Array.isArray(layout.candidate_list) ? layout.candidate_list : [];
+  const candidates = Array.isArray(obs.candidates) ? obs.candidates : [];
   if (!candidates.length) {
     const empty = document.createElement('div');
     empty.className = 'game-card rarity-common';
-    empty.innerHTML = '<div class="game-card-sub" style="text-align:center;color:var(--text-muted);">当前没有待治理投影</div>';
+    empty.innerHTML = '<div class="game-card-sub" style="text-align:center;color:var(--text-muted);">当前没有 API-B 候选判断</div>';
     candSec.append(empty);
   } else {
     candidates.forEach(c => candSec.append(buildGameCard(c, true)));
@@ -3735,7 +3635,7 @@ function renderCognitionPanel(state) {
   const percStep = document.createElement('div');
   percStep.className = 'cog-step';
   percStep.innerHTML = '<div class="cog-step-label">👁 感知</div><div class="cog-step-content"><div class="cog-step-title">' +
-    '姿势: ' + (perception.system_posture || '—') + ' · 队列: ' + (perception.active_queue_count || 0) + ' · 错误: ' + (perception.recent_errors || 0) +
+    '姿势: ' + (perception.system_posture || '—') + ' · 治理积压: ' + (perception.active_queue_count || 0) + ' · 错误: ' + (perception.recent_errors || 0) +
     '</div><div class="cog-step-detail">' +
     '学习质量: ' + (perception.learning_quality != null ? Math.round(perception.learning_quality) + '%' : '—') +
     ' · 修正信号: ' + (perception.correction_signals || 0) +
@@ -3747,7 +3647,7 @@ function renderCognitionPanel(state) {
   const wmStep = document.createElement('div');
   wmStep.className = 'cog-step';
   wmStep.innerHTML = '<div class="cog-step-label">🌍 世界模型</div><div class="cog-step-content"><div class="cog-step-title">' +
-    '队列健康: ' + (worldModel.queue_health || '—') + ' · 记忆压力: ' + (worldModel.memory_pressure != null ? Math.round(worldModel.memory_pressure * 100) + '%' : '—') +
+    '治理健康: ' + (worldModel.queue_health || '—') + ' · 记忆压力: ' + (worldModel.memory_pressure != null ? Math.round(worldModel.memory_pressure * 100) + '%' : '—') +
     '</div><div class="cog-step-detail">' +
     '真实压力: ' + (worldModel.truthfulness_pressure != null ? Math.round(worldModel.truthfulness_pressure * 100) + '%' : '—') +
     ' · 学习动量: ' + (worldModel.learning_momentum != null ? Math.round(worldModel.learning_momentum * 100) + '%' : '—') +
@@ -3820,27 +3720,33 @@ function renderCognitionPanel(state) {
   }
 }
 
-/* ── ⚙️ 队列面板 ── */
-function renderQueuePanel(state) {
-  const body = els.panelQueueBody;
+/* ── ⚙️ API-B 观测面板 ── */
+function renderObservationPanel(state) {
+  const body = els.panelObservationBody;
   if (!body) return;
   body.replaceChildren();
 
-  const layout = state.queue_layout || {};
+  const obs = state.autonomous_observation || {};
   const m = state.metrics || {};
+  const loop = obs.loop || {};
 
   const drill = document.createElement('div');
   drill.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:6px;';
-  drill.innerHTML = drillButton('lanes', '双泳道总览');
+  drill.innerHTML = drillButton('autonomous', '链路总览');
   body.append(drill);
+
+  const loopSec = document.createElement('div');
+  loopSec.style.cssText = 'margin-bottom:10px;';
+  loopSec.innerHTML = renderAutonomousLoop(loop, {showWritebacks: true});
+  if (loopSec.innerHTML) body.append(loopSec);
 
   // 统计摘要
   const summary = document.createElement('div');
   summary.style.cssText = 'display:flex;gap:12px;flex-wrap:wrap;padding:4px 0;margin-bottom:8px;';
   [
-    {label:'总数', value: m.queue_total || 0, color:'var(--text-primary)'},
-    {label:'学习中', value: m.learning_total || 0, color:'var(--mint)'},
-    {label:'维护中', value: m.maintenance_total || 0, color:'var(--gold)'},
+    {label:'观测任务', value: m.observed_task_total || 0, color:'var(--text-primary)'},
+    {label:'自主任务', value: m.autonomous_task_total || 0, color:'var(--mint)'},
+    {label:'API-B 任务', value: m.api_b_task_total || 0, color:'var(--gold)'},
     {label:'运行中', value: m.running_count || 0, color:'var(--accent-blue)'},
     {label:'候选', value: m.drive_candidates || 0, color:'var(--plum)'},
     {label:'错误', value: m.error_count || 0, color:(m.error_count||0) > 0 ? 'var(--coral)' : 'var(--text-muted)'},
@@ -3852,20 +3758,18 @@ function renderQueuePanel(state) {
   });
   body.append(summary);
 
-  // 定时队列
-  const timedSec = document.createElement('div');
-  timedSec.style.cssText = 'display:grid;gap:6px;';
-  timedSec.innerHTML = '<div class="lm-section-label">⏳ 定时队列</div>';
-  const timed = Array.isArray(layout.timed_queue) ? layout.timed_queue : [];
-  if (!timed.length) {
-    timedSec.innerHTML += '<div class="game-card-sub" style="text-align:center;color:var(--text-muted);padding:12px;">队列为空</div>';
+  const observed = Array.isArray(obs.observed_tasks) ? obs.observed_tasks : [];
+  const observedSec = document.createElement('div');
+  observedSec.style.cssText = 'display:grid;gap:6px;';
+  observedSec.innerHTML = '<div class="lm-section-label">👁 只读观测任务</div>';
+  if (!observed.length) {
+    observedSec.innerHTML += '<div class="game-card-sub" style="text-align:center;color:var(--text-muted);padding:12px;">暂无任务状态</div>';
   } else {
-    timed.forEach(t => timedSec.append(buildGameCard(t)));
+    observed.slice(0, 10).forEach(t => observedSec.append(buildGameCard(t)));
   }
-  body.append(timedSec);
+  body.append(observedSec);
 
-  // 全部候选
-  const candidates = Array.isArray(layout.candidate_list) ? layout.candidate_list : [];
+  const candidates = Array.isArray(obs.candidates) ? obs.candidates : [];
   if (candidates.length) {
     const candSec = document.createElement('div');
     candSec.style.cssText = 'display:grid;gap:6px;';
@@ -3933,7 +3837,7 @@ function renderStatsPanel(state) {
   [
     {icon:'🔮', label:'自主链路', value: gate.autonomous_chain_gate_active ? '✅ 已激活' : '⏸ 未激活'},
     {icon:'🌐', label:'执行模式', value: '全天候'},
-    {icon:'👥', label:'活跃会话', value: state.active_sessions || 0},
+    {icon:'👁', label:'用户链路感知', value: state.active_sessions || 0},
     {icon:'📡', label:'驱动可用', value: state.drive_available ? '✅' : '⚠️ 不可用'},
     {icon:'📋', label:'活跃执行', value: (state.active_executions || []).length || 0},
   ].forEach(s => {
@@ -4021,7 +3925,7 @@ function applyState(state) {
   if (panelOpen === 'tasks') renderTasksPanel(state);
   if (panelOpen === 'lminput') renderLMInputPanel(state);
   if (panelOpen === 'cognition') renderCognitionPanel(state);
-  if (panelOpen === 'queue') renderQueuePanel(state);
+  if (panelOpen === 'observation') renderObservationPanel(state);
   if (panelOpen === 'stats') renderStatsPanel(state);
 
   // 抽屉打开时随状态刷新
@@ -4304,9 +4208,6 @@ class SupervisorUIMixin:
         ]
         visible_tasks.sort(key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
 
-        # ── Grouped task panels by execution path ──
-        panels = self._build_task_panels(visible_tasks)
-
         drive_candidates: List[Dict[str, Any]] = self._latest_drive_candidate_snapshot()
         drive_available = True
         idle_snapshot: Dict[str, Any] = {}
@@ -4334,13 +4235,7 @@ class SupervisorUIMixin:
         # Extract metrics from gateway activity for richer UI expression
         activity = dict(idle_snapshot.get("activity") or {})
         counts = dict(activity.get("counts") or {})
-        checks = dict(idle_snapshot.get("checks") or {})
         error_count = int(counts.get("error_count") or 0)
-        # Whole-day execution (baseline §6): there is no longer a time-of-day
-        # execution window. This compatibility flag is pinned to True so the
-        # room theme stays in its "active/day" state and downstream readers
-        # can keep rendering an always-on lane without reviving old gating.
-        in_execution_window = True
 
         # ── Body status (direct from registry snapshot, not task queue) ──
         body_status: Dict[str, Any] = {}
@@ -4392,27 +4287,25 @@ class SupervisorUIMixin:
         except Exception:
             pass
 
-        # ── Metrics panel (upgraded with per-path stats) ──
-        queue_layout = self._build_governance_queue_layout(
+        # ── Web room observation model ──
+        autonomous_observation = self._build_autonomous_observation(
             visible_tasks,
             drive_candidates=drive_candidates,
-            in_execution_window=in_execution_window,
+            history_tasks=all_serialized_tasks,
         )
         metrics = self._build_ui_metrics(
             all_serialized_tasks,
             visible_tasks=visible_tasks,
-            queue_layout=queue_layout,
+            autonomous_observation=autonomous_observation,
             body_status=body_status,
             error_count=error_count,
         )
 
         scene, title, summary = self._map_supervisor_scene(
-            panels=panels,
             all_tasks=visible_tasks,
             drive_candidates=drive_candidates,
             drive_available=drive_available,
             error_count=error_count,
-            in_execution_window=in_execution_window,
             memory_active=tier1_stats.get("memory_active", False),
         )
 
@@ -4542,9 +4435,8 @@ class SupervisorUIMixin:
             "title": title,
             "summary": summary,
             "generated_at": datetime.utcnow().isoformat(),
-            "panels": panels,
             "tasks": visible_tasks[:12],
-            "queue_layout": queue_layout,
+            "autonomous_observation": autonomous_observation,
             "schedule": schedule,
             "metrics": metrics,
             "mem_usage": mem_usage,
@@ -4553,10 +4445,8 @@ class SupervisorUIMixin:
             "drive_candidates": drive_candidates,
             "drive_available": drive_available,
             "error_count": error_count,
-            # Historical compatibility field: always True under whole-day
-            # execution; callers must not treat it as a live gating result.
-            "in_execution_window": in_execution_window,
             "active_sessions": int(activity.get("active_sessions") or 0),
+            "active_sessions_scope": "user_chain_idle_signal_only",
             "timeline": await self._recent_supervisor_observation_timeline(limit=10),
             "lm_input": lm_input,
             "cognition": cognition,
@@ -4586,13 +4476,13 @@ class SupervisorUIMixin:
         updated = str(task.get("updated_at") or task.get("created_at") or "")
         return (order.get(status, 9), updated)
 
-    def _queue_fifo_sort_key(self, task: Dict[str, Any]) -> tuple[str, str, str]:
-        scheduled_for = self._queue_schedule_token(task) or "9999-12-31T23:59:59"
+    def _observation_sort_key(self, task: Dict[str, Any]) -> tuple[str, str, str]:
+        scheduled_for = self._observation_schedule_token(task) or "9999-12-31T23:59:59"
         created = str(task.get("created_at") or "")
         updated = str(task.get("updated_at") or "")
         return (scheduled_for, created or updated, updated or created)
 
-    def _queue_display_status(self, task: Dict[str, Any]) -> str:
+    def _observation_display_status(self, task: Dict[str, Any]) -> str:
         status = str(task.get("status") or "").strip().lower()
         mapping = {
             "planned": "待审核",
@@ -4603,18 +4493,10 @@ class SupervisorUIMixin:
         }
         return mapping.get(status, status or "待定")
 
-    def _timed_queue_display_status(self, task: Dict[str, Any]) -> str:
-        status = str(task.get("status") or "").strip().lower()
-        if status == "paused":
-            return "已挂起"
-        if status == "deferred":
-            return "已顺延"
-        return "预设时间"
-
-    def _queue_role_tag(self, task: Dict[str, Any]) -> str:
+    def _observation_role_tag(self, task: Dict[str, Any]) -> str:
         return "agent" if self._is_creativity_ui_task(task) else "supervisor"
 
-    def _queue_schedule_token(self, payload: Dict[str, Any]) -> str:
+    def _observation_schedule_token(self, payload: Dict[str, Any]) -> str:
         if not isinstance(payload, dict):
             return ""
         nested_sources = [
@@ -4641,21 +4523,22 @@ class SupervisorUIMixin:
                     return value
         return ""
 
-    def _build_governance_queue_layout(
+    def _build_autonomous_observation(
         self,
         all_tasks: List[Dict[str, Any]],
         *,
         drive_candidates: List[Dict[str, Any]],
-        in_execution_window: bool,
+        history_tasks: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
-        # `in_execution_window` is retained as a compatibility parameter for
-        # older render-chain signatures. Under the current baseline it is an
-        # always-on display flag, not a scheduling gate.
-        creativity_tasks = [task for task in all_tasks if self._is_creativity_ui_task(task)]
-        supervisor_tasks = [task for task in all_tasks if not self._is_creativity_ui_task(task)]
+        creativity_tasks = [
+            task for task in all_tasks if self._is_creativity_ui_task(task)
+        ]
+        supervisor_tasks = [
+            task for task in all_tasks if not self._is_creativity_ui_task(task)
+        ]
 
-        creativity_sorted = sorted(creativity_tasks, key=self._queue_fifo_sort_key)
-        supervisor_sorted = sorted(supervisor_tasks, key=self._queue_fifo_sort_key)
+        creativity_sorted = sorted(creativity_tasks, key=self._observation_sort_key)
+        supervisor_sorted = sorted(supervisor_tasks, key=self._observation_sort_key)
 
         def pick_active(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
             running = [
@@ -4663,13 +4546,13 @@ class SupervisorUIMixin:
                 if str(row.get("status") or "").strip().lower() == "running"
             ]
             if running:
-                return sorted(running, key=self._queue_fifo_sort_key)[0]
+                return sorted(running, key=self._observation_sort_key)[0]
             approved = [
                 row for row in rows
                 if str(row.get("status") or "").strip().lower() == "approved"
             ]
             if approved:
-                return sorted(approved, key=self._queue_fifo_sort_key)[0]
+                return sorted(approved, key=self._observation_sort_key)[0]
             return None
 
         supervisor_active = pick_active(supervisor_sorted)
@@ -4680,33 +4563,28 @@ class SupervisorUIMixin:
             for task in (supervisor_active, agent_active)
             if isinstance(task, dict) and task.get("task_id")
         }
-        timed_queue = [
+
+        observed_tasks = [
             {
                 **task,
-                "lane": self._queue_role_tag(task),
-                "display_status": self._timed_queue_display_status(task),
+                "lane": self._observation_role_tag(task),
+                "display_status": self._observation_display_status(task),
             }
-            for task in sorted(all_tasks, key=self._queue_fifo_sort_key)
+            for task in sorted(all_tasks, key=self._observation_sort_key)
             if task.get("task_id") not in active_ids
         ]
 
         seen_keys = {
             str(task.get("metadata", {}).get("endogenous_drive_key") or "").strip()
-            for task in timed_queue
+            for task in observed_tasks
             if isinstance(task, dict)
         }
         seen_titles = {
             str(task.get("title") or "").strip()
-            for task in timed_queue
+            for task in observed_tasks
             if isinstance(task, dict)
         }
-        seen_schedule_tokens = {
-            self._queue_schedule_token(task)
-            for task in timed_queue
-            if isinstance(task, dict)
-        }
-        seen_schedule_tokens.discard("")
-        candidate_list: List[Dict[str, Any]] = []
+        candidates: List[Dict[str, Any]] = []
         for candidate in drive_candidates:
             if not isinstance(candidate, dict):
                 continue
@@ -4716,72 +4594,176 @@ class SupervisorUIMixin:
                 or ""
             ).strip()
             candidate_title = str(candidate.get("title") or "").strip()
-            candidate_schedule = self._queue_schedule_token(candidate)
             if candidate_key and candidate_key in seen_keys:
                 continue
             if candidate_title and candidate_title in seen_titles:
                 continue
-            if candidate_schedule and candidate_schedule in seen_schedule_tokens:
-                continue
-            candidate_list.append(
+            candidates.append(
                 {
                     **candidate,
-                    "display_status": "等待监督者治理",
+                    "display_status": "API-B 候选判断",
                 }
             )
             if candidate_key:
                 seen_keys.add(candidate_key)
             if candidate_title:
                 seen_titles.add(candidate_title)
-            if candidate_schedule:
-                seen_schedule_tokens.add(candidate_schedule)
+
+        api_b_pending = [
+            task for task in observed_tasks if task.get("lane") == "supervisor"
+        ]
+        api_a_pending = [
+            task for task in observed_tasks if task.get("lane") == "agent"
+        ]
+        completed_tasks = [
+            task
+            for task in (history_tasks or all_tasks)
+            if str(task.get("status") or "").strip().lower() in {"completed", "failed"}
+        ]
+        recent_writebacks = [
+            self._build_autonomous_writeback_summary(task)
+            for task in completed_tasks[:3]
+        ]
+
+        if drive_candidates or supervisor_active or api_b_pending:
+            api_b_summary = (
+                f"{len(candidates)} 个候选待裁决"
+                if candidates
+                else f"{1 if supervisor_active else len(api_b_pending)} 个监督者治理任务在途"
+            )
+            api_b_status = "active"
+        else:
+            api_b_summary = "当前没有新的 API-B 判断信号"
+            api_b_status = "idle"
+
+        if agent_active:
+            api_a_status = "active"
+            api_a_summary = f"{str(agent_active.get('title') or '自主任务').strip()} 正在由 API-A 自主执行面处理"
+        elif api_a_pending:
+            api_a_status = "ready"
+            api_a_summary = f"{len(api_a_pending)} 个自主任务等待 API-A 自主执行面拉取"
+        else:
+            api_a_status = "idle"
+            api_a_summary = "当前没有等待 API-A 自主执行的任务"
+
+        if recent_writebacks:
+            writeback_status = "ready"
+            writeback_summary = f"{recent_writebacks[0]['title']} 的结果已形成 Mem 写回记录"
+        else:
+            writeback_status = "idle"
+            writeback_summary = "尚未观察到新的任务结果写回"
+
+        if recent_writebacks and (drive_candidates or supervisor_active or api_b_pending):
+            reread_status = "active"
+            reread_summary = "API-B 正结合最新写回和当前候选继续管理下一轮判断"
+        elif recent_writebacks:
+            reread_status = "ready"
+            reread_summary = "最新写回已可供下一轮 API-B 再读取"
+        else:
+            reread_status = "idle"
+            reread_summary = "等待新的 Mem 写回结果进入下一轮判断"
 
         return {
-            "window": {
-                "label": "执行模式",
-                "range": "全天候",
-                "open": True,
-                "status_text": "全天候自动执行中",
+            "mode": {
+                "label": "观测模式",
+                "scope": "api_b_autonomous_chain_only",
+                "status_text": "只读观测 API-B 与自主任务",
             },
-            "supervisor_active": (
-                {
-                    **supervisor_active,
-                    "lane": "supervisor",
-                    "display_status": self._queue_display_status(supervisor_active),
-                }
-                if supervisor_active
-                else None
-            ),
-            "agent_active": (
-                {
-                    **agent_active,
-                    "lane": "agent",
-                    "display_status": self._queue_display_status(agent_active),
-                }
-                if agent_active
-                else None
-            ),
-            "timed_queue": timed_queue,
-            "candidate_list": candidate_list,
+            "loop": {
+                "boundary": (
+                    "自主链路闭环只展示 API-B 判断、API-A 自主执行、Mem 写回和 API-B 再读取；"
+                    "用户链路只作为软感知信号，不展示聊天内容。"
+                ),
+                "stages": [
+                    {
+                        "key": "api_b_judgement",
+                        "label": "API-B 判断",
+                        "owner": "API-B",
+                        "status": api_b_status,
+                        "summary": api_b_summary,
+                    },
+                    {
+                        "key": "api_a_execution",
+                        "label": "API-A 自主执行",
+                        "owner": "API-A",
+                        "status": api_a_status,
+                        "summary": api_a_summary,
+                    },
+                    {
+                        "key": "mem_writeback",
+                        "label": "Mem 写回",
+                        "owner": "Mem",
+                        "status": writeback_status,
+                        "summary": writeback_summary,
+                    },
+                    {
+                        "key": "api_b_reread",
+                        "label": "API-B 再读取",
+                        "owner": "API-B",
+                        "status": reread_status,
+                        "summary": reread_summary,
+                    },
+                ],
+                "recent_writebacks": recent_writebacks,
+            },
+            "api_b": {
+                "scope": "supervisor_governance",
+                "active": (
+                    {
+                        **supervisor_active,
+                        "lane": "supervisor",
+                        "display_status": self._observation_display_status(supervisor_active),
+                    }
+                    if supervisor_active
+                    else None
+                ),
+                "pending": api_b_pending[:8],
+                "pending_count": len(api_b_pending),
+            },
+            "api_a": {
+                "scope": "autonomous_executor",
+                "active": (
+                    {
+                        **agent_active,
+                        "lane": "agent",
+                        "display_status": self._observation_display_status(agent_active),
+                    }
+                    if agent_active
+                    else None
+                ),
+                "pending": api_a_pending[:8],
+                "pending_count": len(api_a_pending),
+            },
+            "observed_tasks": observed_tasks[:12],
+            "candidates": candidates[:8],
+            "counts": {
+                "pending": len(observed_tasks),
+                "active": sum(1 for task in (supervisor_active, agent_active) if task),
+                "candidates": len(candidates),
+            },
         }
 
-    def _build_task_panels(self, all_tasks: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Group tasks by execution path for panel display."""
-        learning: List[Dict[str, Any]] = []
-        maintenance: List[Dict[str, Any]] = []
-        evolution: List[Dict[str, Any]] = []
-        for task in all_tasks:
-            tf = str(task.get("task_family") or task.get("governance_task_type") or "")
-            if "learning" in tf:
-                learning.append(task)
-            elif "memory" in tf:
-                maintenance.append(task)
-            else:
-                evolution.append(task)
+    def _build_autonomous_writeback_summary(
+        self,
+        task: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        metadata = dict(task.get("metadata") or {})
+        execution_result = dict(metadata.get("execution_result") or {})
+        summary = (
+            execution_result.get("outcome_summary")
+            or execution_result.get("summary")
+            or execution_result.get("final_response")
+            or task.get("decision_reason")
+            or task.get("summary")
+            or ""
+        )
         return {
-            "learning": {"label": "学习", "count": len(learning), "tasks": learning},
-            "maintenance": {"label": "维护", "count": len(maintenance), "tasks": maintenance},
-            "evolution": {"label": "进化", "count": len(evolution), "tasks": evolution},
+            "task_id": task.get("task_id"),
+            "title": str(task.get("title") or "未命名"),
+            "lane": self._observation_role_tag(task),
+            "status": str(task.get("status") or "").strip().lower() or "completed",
+            "status_label": self._observation_display_status(task),
+            "summary": str(summary).strip()[:120],
         }
 
     async def _fetch_tier1_stats(self) -> Dict[str, Any]:
@@ -4859,14 +4841,18 @@ class SupervisorUIMixin:
         all_tasks: List[Dict[str, Any]],
         *,
         visible_tasks: List[Dict[str, Any]],
-        queue_layout: Dict[str, Any],
+        autonomous_observation: Dict[str, Any],
         body_status: Dict[str, Any],
         error_count: int,
     ) -> Dict[str, Any]:
-        """Build top-card metrics for the 5-section governance layout."""
-        queue_total = len(all_tasks)
-        learning_total = sum(1 for t in all_tasks if self._is_creativity_ui_task(t))
-        maintenance_total = sum(1 for t in all_tasks if not self._is_creativity_ui_task(t))
+        """Build metrics for the autonomous-chain observation panels."""
+        observed_task_total = len(all_tasks)
+        autonomous_task_total = sum(
+            1 for t in all_tasks if self._is_creativity_ui_task(t)
+        )
+        api_b_task_total = sum(
+            1 for t in all_tasks if not self._is_creativity_ui_task(t)
+        )
         evolution_total = sum(
             1
             for t in all_tasks
@@ -4884,32 +4870,35 @@ class SupervisorUIMixin:
         priority_updates = 0
         for task in all_tasks:
             preview = dict(task.get("governance_preview") or {})
-            lm_shadow = preview.get("lm_queue_shadow")
+            lm_shadow = preview.get("lm_governance_shadow")
             if isinstance(lm_shadow, dict):
                 shadow_recommendations += 1
                 action = str(lm_shadow.get("action") or "unknown")
                 shadow_actions[action] = shadow_actions.get(action, 0) + 1
-            lm_review = preview.get("lm_queue_review")
+            lm_review = preview.get("lm_governance_review")
             if isinstance(lm_review, dict):
                 direct_lm_actions += 1
-            if isinstance(preview.get("lm_queue_priority"), dict):
+            if isinstance(preview.get("lm_governance_priority"), dict):
                 priority_updates += 1
 
         return {
-            "queue_total": queue_total,
-            "learning_total": learning_total,
-            "maintenance_total": maintenance_total,
+            "observed_task_total": observed_task_total,
+            "autonomous_task_total": autonomous_task_total,
+            "api_b_task_total": api_b_task_total,
             "evolution_total": evolution_total,
             "by_path": {
-                "learning": learning_total,
-                "maintenance": maintenance_total,
+                "learning": autonomous_task_total,
+                "maintenance": api_b_task_total,
                 "evolution": evolution_total,
             },
             "learning_results": {
                 "completed": learning_completed,
                 "failed": learning_failed,
             },
-            "drive_candidates": len(queue_layout.get("candidate_list") or []),
+            "drive_candidates": int(
+                dict(autonomous_observation.get("counts") or {}).get("candidates")
+                or 0
+            ),
             "slot_overview": self._format_slot_overview(body_status),
             "error_count": error_count,
             "running_count": sum(1 for t in visible_tasks if t.get("status") == "running"),
@@ -4938,12 +4927,10 @@ class SupervisorUIMixin:
     def _map_supervisor_scene(
         self,
         *,
-        panels: Dict[str, Any],
         all_tasks: List[Dict[str, Any]],
         drive_candidates: List[Dict[str, Any]],
         drive_available: bool,
         error_count: int = 0,
-        in_execution_window: bool = True,
         memory_active: bool = False,
     ) -> tuple[str, str, str]:
         """Map current supervisor activity to one of SUPERVISOR_LEGAL_SCENES.
@@ -4985,7 +4972,7 @@ class SupervisorUIMixin:
             return (
                 "dispatch",
                 f"已派发任务{error_note}",
-                f"「{rtitle}」已派发，代理或执行器正在运行，监督者等待结果。",
+                f"「{rtitle}」已交给 API-A 自主执行面或执行器处理，结果将写回 Mem 供下一轮监督者判断。",
             )
 
         # 2. Supervisor-governed tasks that are ready now.
@@ -4996,7 +4983,7 @@ class SupervisorUIMixin:
             and str(t.get("status") or "").strip().lower() == "approved"
         ]
         if supervisor_pending:
-            lp = sorted(supervisor_pending, key=self._queue_fifo_sort_key)[0]
+            lp = sorted(supervisor_pending, key=self._observation_sort_key)[0]
             if "memory" in str(lp.get("task_family") or ""):
                 return (
                     "maintenance",
@@ -5052,7 +5039,7 @@ class SupervisorUIMixin:
         return (
             "idle",
             f"在窗边休息{error_note}",
-            f"没有待处理的工作。{window_mood}核心价值保持警觉但平静。",
+            f"没有待处理的工作。{window_mood}自主链路闭环保持待命，核心价值仍在持续感知。",
         )
 
     def _format_slot_overview(self, body_status: Dict[str, Any]) -> str:

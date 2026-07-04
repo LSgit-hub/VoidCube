@@ -163,13 +163,13 @@ def test_supervisor_mounts_built_in_room_ui_when_enabled(tmp_path):
     assert state.status_code == 200
     payload = state.json()
     assert payload["status"] == "ok"
-    assert payload["scene"] in {"idle", "drive", "maintenance", "learning", "body_switch", "execution"}
+    assert payload["scene"] in {"idle", "planning", "drive", "memory", "maintenance", "dispatch"}
     assert "timeline" in payload
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_supervisor_runtime_trace_view_aggregates_queue_activity_governance_and_gateway(tmp_path):
+async def test_supervisor_runtime_trace_view_aggregates_autonomous_activity_governance_and_gateway(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
@@ -502,7 +502,7 @@ async def test_supervisor_room_state_read_does_not_create_timeline_events(tmp_pa
         return_value={
             "checks": {},
             "idle_seconds": {},
-            "activity": {"active_sessions": 0, "counts": {}},
+            "activity": {"active_sessions": 2, "counts": {}},
             "task_family_decisions": {
                 "memory_maintenance": {"eligible_for_planning": True},
                 "self_learning": {"eligible_for_planning": True},
@@ -520,6 +520,17 @@ async def test_supervisor_room_state_read_does_not_create_timeline_events(tmp_pa
 
     assert state["drive_candidates"]
     assert state["timeline"] == []
+    assert "in_execution_window" not in state
+    assert state["active_sessions"] == 2
+    assert state["active_sessions_scope"] == "user_chain_idle_signal_only"
+
+
+@pytest.mark.unit
+def test_supervisor_room_labels_active_sessions_as_user_chain_idle_signal():
+    ui_source = Path("systems/supervisor/ui_runtime.py").read_text(encoding="utf-8")
+
+    assert "用户链路感知" in ui_source
+    assert "label:'活跃会话'" not in ui_source
 
 
 @pytest.mark.asyncio
@@ -564,7 +575,7 @@ async def test_supervisor_room_state_exposes_governance_preview_for_shadow_revie
             }
         }
 
-    monkeypatch.setattr(supervisor, "_lm_review_task_queue", fake_lm_review)
+    monkeypatch.setattr(supervisor, "_lm_review_task_governance", fake_lm_review)
 
     await supervisor.review_self_evolution_tasks(
         {
@@ -574,7 +585,13 @@ async def test_supervisor_room_state_exposes_governance_preview_for_shadow_revie
 
     state = await supervisor.get_supervisor_ui_state()
     duplicate = next(task for task in state["tasks"] if task["title"] == "Duplicate learning branch")
-    preview = duplicate["governance_preview"]["lm_queue_shadow"]
+    assert "lm_queue_shadow" not in duplicate["governance_preview"]
+    assert all(
+        "lm_queue_shadow" not in dict(entry.get("context") or {})
+        for entry in duplicate.get("decision_history", [])
+        if isinstance(entry, dict)
+    )
+    preview = duplicate["governance_preview"]["lm_governance_shadow"]
     assert preview["action"] == "merge"
     assert preview["merge_into"] == tasks_by_title["Canonical learning branch"]
     assert state["metrics"]["governance"]["shadow_recommendations"] >= 1
@@ -616,7 +633,7 @@ async def test_supervisor_room_state_exposes_applied_priority_updates(tmp_path, 
             }
         }
 
-    monkeypatch.setattr(supervisor, "_lm_review_task_queue", fake_lm_review)
+    monkeypatch.setattr(supervisor, "_lm_review_task_governance", fake_lm_review)
 
     await supervisor.review_self_evolution_tasks(
         {
@@ -627,7 +644,13 @@ async def test_supervisor_room_state_exposes_applied_priority_updates(tmp_path, 
     state = await supervisor.get_supervisor_ui_state()
     task = next(item for item in state["tasks"] if item["task_id"] == task_id)
     assert task["priority"] == "high"
-    assert task["governance_preview"]["lm_queue_priority"]["priority"] == "high"
+    assert "lm_queue_priority" not in task["governance_preview"]
+    assert all(
+        "lm_queue_priority" not in dict(entry.get("context") or {})
+        for entry in task.get("decision_history", [])
+        if isinstance(entry, dict)
+    )
+    assert task["governance_preview"]["lm_governance_priority"]["priority"] == "high"
     assert state["metrics"]["governance"]["priority_updates"] >= 1
 
 
@@ -664,7 +687,7 @@ async def test_supervisor_room_state_exposes_task_identity_for_body_improvement(
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_supervisor_room_state_uses_single_slot_governance_layout(tmp_path):
+async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
     supervisor.evaluate_idle_window = AsyncMock(  # type: ignore[method-assign]
@@ -732,24 +755,31 @@ async def test_supervisor_room_state_uses_single_slot_governance_layout(tmp_path
     )
 
     state = await supervisor.get_supervisor_ui_state()
-    layout = state["queue_layout"]
-    timed_titles = [item["title"] for item in layout["timed_queue"]]
+    observation = state["autonomous_observation"]
+    observed_titles = [item["title"] for item in observation["observed_tasks"]]
 
-    assert layout["supervisor_active"]["title"] == "Supervisor first task"
-    assert layout["supervisor_active"]["display_status"] == "待执行"
-    assert layout["agent_active"]["title"] == "Agent first creative task"
-    assert layout["agent_active"]["display_status"] == "待执行"
-    assert timed_titles == ["Supervisor second task", "Agent second creative task"]
-    assert [item["display_status"] for item in layout["timed_queue"]] == ["预设时间", "预设时间"]
-    assert [item["lane"] for item in layout["timed_queue"]] == ["supervisor", "agent"]
-    assert layout["window"]["label"] == "执行模式"
-    assert layout["window"]["status_text"] == "全天候自动执行中"
+    assert "queue_layout" not in state
+    assert "panels" not in state
+    assert observation["mode"]["scope"] == "api_b_autonomous_chain_only"
+    assert observation["loop"]["stages"][0]["key"] == "api_b_judgement"
+    assert observation["loop"]["stages"][1]["key"] == "api_a_execution"
+    assert observation["loop"]["recent_writebacks"] == []
+    assert observation["api_b"]["active"]["title"] == "Supervisor first task"
+    assert observation["api_b"]["active"]["display_status"] == "待执行"
+    assert observation["api_a"]["active"]["title"] == "Agent first creative task"
+    assert observation["api_a"]["active"]["display_status"] == "待执行"
+    assert observed_titles == ["Supervisor second task", "Agent second creative task"]
+    assert [item["display_status"] for item in observation["observed_tasks"]] == ["待审核", "待审核"]
+    assert [item["lane"] for item in observation["observed_tasks"]] == ["supervisor", "agent"]
     assert state["metrics"]["slot_overview"] == "slot-A / slot-B"
+    assert state["metrics"]["observed_task_total"] == 4
+    assert state["metrics"]["autonomous_task_total"] == 2
+    assert state["metrics"]["api_b_task_total"] == 2
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_supervisor_room_state_candidate_list_deduplicates_timed_queue_by_schedule(tmp_path):
+async def test_supervisor_room_state_observed_candidates_deduplicate_tasks_by_key(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor.evaluate_idle_window = AsyncMock(  # type: ignore[method-assign]
         return_value={
@@ -795,19 +825,64 @@ async def test_supervisor_room_state_candidate_list_deduplicates_timed_queue_by_
 
     await supervisor.plan_self_evolution_task(
         {
-            "title": "Existing timed queue task",
+            "title": "Existing observed governance task",
             "metadata": {
+                "endogenous_drive_key": "candidate-dup",
                 "scheduled_for": "2026-06-28T01:00:00",
             },
         }
     )
 
     state = await supervisor.get_supervisor_ui_state()
-    layout = state["queue_layout"]
+    observation = state["autonomous_observation"]
 
-    assert layout["timed_queue"][0]["title"] == "Existing timed queue task"
-    assert [item["title"] for item in layout["candidate_list"]] == ["Unique scheduled candidate"]
-    assert layout["candidate_list"][0]["display_status"] == "等待监督者治理"
+    assert observation["observed_tasks"][0]["title"] == "Existing observed governance task"
+    assert [item["title"] for item in observation["candidates"]] == ["Unique scheduled candidate"]
+    assert observation["candidates"][0]["display_status"] == "API-B 候选判断"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_exposes_recent_mem_writebacks_in_autonomous_loop(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
+
+    planned = await supervisor.plan_self_evolution_task(
+        {
+            "title": "Completed autonomous learning writeback",
+            "task_family": "self_learning",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+                "execution_result": {
+                    "summary": "Summarized learning result for Mem writeback.",
+                },
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+    supervisor._self_evolution_queue.update_status(
+        task_id,
+        status="approved",
+        reason="Approved autonomous learning writeback.",
+    )
+    supervisor._self_evolution_queue.update_status(
+        task_id,
+        status="running",
+        reason="Autonomous learning writeback running.",
+    )
+    supervisor._self_evolution_queue.update_status(
+        task_id,
+        status="completed",
+        reason="Completed autonomous learning writeback.",
+    )
+
+    state = await supervisor.get_supervisor_ui_state()
+    writeback = state["autonomous_observation"]["loop"]["recent_writebacks"][0]
+
+    assert writeback["title"] == "Completed autonomous learning writeback"
+    assert writeback["lane"] == "agent"
+    assert writeback["status"] == "completed"
 
 
 @pytest.mark.asyncio
@@ -849,8 +924,8 @@ async def test_supervisor_room_state_keeps_supervisor_idle_when_only_agent_task_
     state = await supervisor.get_supervisor_ui_state()
 
     assert state["scene"] == "idle"
-    assert state["queue_layout"]["supervisor_active"] is None
-    assert state["queue_layout"]["agent_active"]["title"] == "Agent waiting creative task"
+    assert state["autonomous_observation"]["api_b"]["active"] is None
+    assert state["autonomous_observation"]["api_a"]["active"]["title"] == "Agent waiting creative task"
 
 
 @pytest.mark.asyncio

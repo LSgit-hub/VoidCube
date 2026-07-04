@@ -1707,6 +1707,185 @@ async def test_endogenous_drive_history_outcome_persists_lm_cognitive_assessment
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_planned_outcome_does_not_synthesize_cognitive_assessment_from_drive_judgement(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    task = supervisor._self_evolution_queue.create_task(
+        title="Review planned judgement boundary",
+        summary="Planned outcomes should not create synthetic cognition memory.",
+        source="endogenous_drive",
+        metadata={
+            "endogenous_drive_key": "truthfulness:planned-boundary",
+            "endogenous_preferred_focus": "truthfulness",
+            "drive_judgement": {
+                "reflection": {"dominant_constraint": "historical_underdelivery"},
+                "adaptive_policy": {"preferred_focus": "truthfulness"},
+                "intents": [
+                    {
+                        "intent_type": "review_truthfulness_signals",
+                        "candidate_kind": "truthfulness_review",
+                        "rationale": "review corrections before acting",
+                    }
+                ],
+                "needs": [{"need_type": "repair_truthfulness"}],
+            },
+        },
+        evidence={},
+    )
+
+    supervisor._record_endogenous_drive_outcome(task, event_type="planned")
+    history = supervisor._load_endogenous_drive_history()
+    recorded = next(
+        outcome
+        for outcome in history["outcomes"]
+        if outcome["task_id"] == task.task_id and outcome["event_type"] == "planned"
+    )
+
+    assert "llm_cognitive_assessment" not in recorded
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_terminal_outcome_synthesizes_canonical_cognitive_assessment_from_drive_judgement(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    task = supervisor._self_evolution_queue.create_task(
+        title="Review terminal judgement boundary",
+        summary="Terminal outcomes should preserve canonical cognition memory.",
+        source="endogenous_drive",
+        metadata={
+            "endogenous_drive_key": "truthfulness:terminal-boundary",
+            "endogenous_preferred_focus": "truthfulness",
+            "drive_judgement": {
+                "reflection": {
+                    "dominant_constraint": "historical_underdelivery",
+                },
+                "adaptive_policy": {"preferred_focus": "truthfulness"},
+                "intents": [
+                    {
+                        "intent_type": "review_truthfulness_signals",
+                        "candidate_kind": "truthfulness_review",
+                        "rationale": "review corrections before acting",
+                    }
+                ],
+                "needs": [
+                    {
+                        "need_type": "repair_truthfulness",
+                        "rationale": "correction pressure is elevated",
+                    }
+                ],
+            },
+        },
+        evidence={},
+    )
+    approved = supervisor._self_evolution_queue.update_status(
+        task.task_id,
+        status="approved",
+        actor="supervisor",
+        reason="approve boundary test",
+    )
+    running = supervisor._self_evolution_queue.update_status(
+        approved.task_id,
+        status="running",
+        actor="supervisor",
+        reason="run boundary test",
+    )
+    completed = supervisor._self_evolution_queue.update_status(
+        running.task_id,
+        status="completed",
+        actor="api_a_autonomous_executor",
+        reason="complete boundary test",
+    )
+
+    supervisor._record_endogenous_drive_outcome(completed, event_type="decision")
+    history = supervisor._load_endogenous_drive_history()
+    recorded = next(
+        outcome
+        for outcome in history["outcomes"]
+        if outcome["task_id"] == task.task_id and outcome["event_type"] == "decision"
+    )
+
+    assessment = recorded["llm_cognitive_assessment"]
+    assert assessment["current_judgement"] == (
+        "truthfulness focus selected under historical_underdelivery"
+    )
+    assert assessment["primary_grounding_gaps"] == ["repair_truthfulness"]
+    assert assessment["why_this_task_type_now"] == [
+        "review corrections before acting",
+        "correction pressure is elevated",
+    ]
+    assert "Prioritize truthfulness governance before direct body improvement." in (
+        assessment["why_not_improvement_now"]
+    )
+
+
+@pytest.mark.unit
+def test_candidate_annotation_adds_canonical_drive_judgement_and_evidence_context(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    prepared = supervisor._annotate_endogenous_drive_candidates(
+        deliberation={
+            "perception": {
+                "user_mode": "idle_window",
+                "system_posture": "stable",
+            },
+            "world_model": {
+                "truthfulness_pressure": 0.7,
+            },
+            "reflection": {
+                "dominant_constraint": "historical_underdelivery",
+            },
+            "adaptive_policy": {
+                "preferred_focus": "truthfulness",
+            },
+            "intents": [
+                {
+                    "intent_type": "review_truthfulness_signals",
+                    "candidate_kind": "truthfulness_review",
+                    "source_needs": ["repair_truthfulness"],
+                    "rationale": "review corrections before acting",
+                }
+            ],
+            "needs": [
+                {
+                    "need_type": "repair_truthfulness",
+                    "rationale": "correction pressure is elevated",
+                }
+            ],
+            "signals": [],
+        },
+        idle_window={"autonomous_chain_gate_active": True},
+        candidate_items=[
+            {
+                "title": "Review correction signals",
+                "summary": "Review the truthfulness queue.",
+                "priority": "high",
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+                "execution_kind": None,
+                "metadata": {
+                    "endogenous_drive_key": "truthfulness:annotation-boundary",
+                    "score_breakdown": {"candidate_kind": "truthfulness_review"},
+                    "core_values": ["truthfulness"],
+                    "utility": 0.81,
+                },
+                "evidence": {"endogenous_drive": {}},
+                "constraints": {},
+            }
+        ],
+    )
+
+    row = prepared[0]
+    judgement = row["metadata"]["drive_judgement"]
+    endogenous_evidence = row["evidence"]["endogenous_drive"]
+
+    assert judgement["adaptive_policy"]["preferred_focus"] == "truthfulness"
+    assert judgement["intents"][0]["intent_type"] == "review_truthfulness_signals"
+    assert judgement["needs"][0]["need_type"] == "repair_truthfulness"
+    assert endogenous_evidence["stable_key"] == "truthfulness:annotation-boundary"
+    assert endogenous_evidence["evaluation_id"]
+    assert endogenous_evidence["judgement_id"] == row["metadata"]["endogenous_judgement_id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_run_endogenous_drive_cycle_exposes_drive_posture(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
@@ -15956,7 +16135,13 @@ async def test_endogenous_drive_fallback_learning_targets_shell_codebase_without
     assert learning_task["constraints"]["baseline_slot_id"] == "slot-B"
     assert learning_task["metadata"]["learning_branch"] == "codebase_baseline"
     assert learning_task["metadata"]["self_learning_mode"] == "shell_codebase_baseline"
+    assert learning_task["metadata"]["drive_judgement"]["adaptive_policy"]["preferred_focus"]
+    assert learning_task["metadata"]["drive_judgement"]["intents"]
     assert learning_task["evidence"]["learning_branch"] == "codebase_baseline"
+    assert learning_task["evidence"]["endogenous_drive"]["evaluation_id"]
+    assert learning_task["evidence"]["endogenous_drive"]["judgement_id"] == (
+        learning_task["metadata"]["endogenous_judgement_id"]
+    )
     assert "slot-B" in learning_task["summary"]
 
 
@@ -16181,7 +16366,7 @@ async def test_endogenous_drive_still_plans_learning_candidates_with_active_sess
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_batch_review_accepts_lm_queue_governance_override(tmp_path, monkeypatch):
+async def test_batch_review_accepts_lm_governance_override(tmp_path, monkeypatch):
     supervisor = _make_supervisor(tmp_path)
     planned = await supervisor.plan_self_evolution_task(
         {
@@ -16216,7 +16401,7 @@ async def test_batch_review_accepts_lm_queue_governance_override(tmp_path, monke
             }
         }
 
-    monkeypatch.setattr(supervisor, "_lm_review_task_queue", fake_lm_review)
+    monkeypatch.setattr(supervisor, "_lm_review_task_governance", fake_lm_review)
 
     result = await supervisor.review_self_evolution_tasks(
         {
@@ -16227,7 +16412,7 @@ async def test_batch_review_accepts_lm_queue_governance_override(tmp_path, monke
     tasks = {task["title"]: task for task in result["tasks"]}
     assert tasks["Learn unresolved architecture issue"]["status"] == "approved"
     assert tasks["Weak duplicate follow-up"]["status"] == "cancelled"
-    lm_context = tasks["Weak duplicate follow-up"]["decision_history"][-1]["context"]["lm_queue_review"]
+    lm_context = tasks["Weak duplicate follow-up"]["decision_history"][-1]["context"]["lm_governance_review"]
     assert lm_context["action"] == "cancelled"
     assert "Duplicate and low-evidence task" in lm_context["reason"]
 
@@ -16269,7 +16454,7 @@ async def test_autonomous_chain_gate_preserves_agent_pull_task_approval_when_lm_
             }
         }
 
-    monkeypatch.setattr(supervisor, "_lm_review_task_queue", fake_lm_review)
+    monkeypatch.setattr(supervisor, "_lm_review_task_governance", fake_lm_review)
 
     result = await supervisor.review_self_evolution_tasks(
         {
@@ -16279,8 +16464,8 @@ async def test_autonomous_chain_gate_preserves_agent_pull_task_approval_when_lm_
 
     assert result["tasks"][0]["status"] == "approved"
     latest_context = result["tasks"][0]["decision_history"][-1]["context"]
-    assert latest_context["lm_queue_review"]["action"] == "deferred"
-    assert latest_context["lm_queue_shadow"]["preserved_status"] == "approved"
+    assert latest_context["lm_governance_review"]["action"] == "deferred"
+    assert latest_context["lm_governance_shadow"]["preserved_status"] == "approved"
 
 
 @pytest.mark.asyncio
@@ -16318,7 +16503,7 @@ async def test_batch_review_preserves_agent_pull_task_approval_without_autonomou
             }
         }
 
-    monkeypatch.setattr(supervisor, "_lm_review_task_queue", fake_lm_review)
+    monkeypatch.setattr(supervisor, "_lm_review_task_governance", fake_lm_review)
 
     result = await supervisor.review_self_evolution_tasks(
         {
@@ -16328,8 +16513,8 @@ async def test_batch_review_preserves_agent_pull_task_approval_without_autonomou
 
     assert result["tasks"][0]["status"] == "approved"
     latest_context = result["tasks"][0]["decision_history"][-1]["context"]
-    assert latest_context["lm_queue_review"]["action"] == "deferred"
-    assert latest_context["lm_queue_shadow"]["preserved_status"] == "approved"
+    assert latest_context["lm_governance_review"]["action"] == "deferred"
+    assert latest_context["lm_governance_shadow"]["preserved_status"] == "approved"
 
 
 @pytest.mark.asyncio
@@ -16569,7 +16754,7 @@ async def test_batch_review_records_shadow_governance_actions_without_mutating_s
             },
         }
 
-    monkeypatch.setattr(supervisor, "_lm_review_task_queue", fake_lm_review)
+    monkeypatch.setattr(supervisor, "_lm_review_task_governance", fake_lm_review)
 
     result = await supervisor.review_self_evolution_tasks(
         {
@@ -16580,8 +16765,8 @@ async def test_batch_review_records_shadow_governance_actions_without_mutating_s
     tasks = {task["title"]: task for task in result["tasks"]}
     assert tasks["Duplicate learning branch"]["status"] == "approved"
     assert tasks["Canonical learning branch"]["status"] == "approved"
-    duplicate_shadow = tasks["Duplicate learning branch"]["decision_history"][-1]["context"]["lm_queue_shadow"]
-    canonical_shadow = tasks["Canonical learning branch"]["decision_history"][-1]["context"]["lm_queue_shadow"]
+    duplicate_shadow = tasks["Duplicate learning branch"]["decision_history"][-1]["context"]["lm_governance_shadow"]
+    canonical_shadow = tasks["Canonical learning branch"]["decision_history"][-1]["context"]["lm_governance_shadow"]
     assert duplicate_shadow["action"] == "merge"
     assert duplicate_shadow["merge_into"] == tasks_by_title["Canonical learning branch"]
     assert canonical_shadow["action"] == "reprioritize"
@@ -16622,7 +16807,7 @@ async def test_batch_review_can_apply_lm_reprioritize_to_real_task_priority(tmp_
             }
         }
 
-    monkeypatch.setattr(supervisor, "_lm_review_task_queue", fake_lm_review)
+    monkeypatch.setattr(supervisor, "_lm_review_task_governance", fake_lm_review)
 
     result = await supervisor.review_self_evolution_tasks(
         {
@@ -16632,7 +16817,7 @@ async def test_batch_review_can_apply_lm_reprioritize_to_real_task_priority(tmp_
 
     task = result["tasks"][0]
     assert task["priority"] == "high"
-    priority_context = task["decision_history"][-1]["context"]["lm_queue_priority"]
+    priority_context = task["decision_history"][-1]["context"]["lm_governance_priority"]
     assert priority_context["priority"] == "high"
     assert "blocks higher-value evolution work" in priority_context["reason"]
 
@@ -17187,7 +17372,7 @@ async def test_memory_maintenance_auto_decision_defers_when_memory_activity_is_r
     assert result["task"]["decision_history"][-1]["governance_task_type"] == "memory_maintenance"
     assert result["task"]["decision_history"][-1]["task_family"] == "memory_maintenance"
     assert result["task"]["decision_history"][-1]["execution_kind"] == "memory_maintenance"
-    assert "memory maintenance still requires idle user, runtime, memory, and workflow facts" in result["task"]["decision_reason"]
+    assert "memory maintenance still sees in-flight runtime or memory work" in result["task"]["decision_reason"]
 
 
 @pytest.mark.asyncio

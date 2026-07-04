@@ -155,6 +155,12 @@ class InternalGateway:
             },
             "agent": {
                 "scene": "idle",
+                "scene_projection_scope": "legacy_last_writer_agent_scene",
+                "canonical_lanes": ["supervisor_task", "user_chat"],
+                "lane_contract": {
+                    "supervisor_task": "autonomous_chain_observation",
+                    "user_chat": "user_chain_status",
+                },
                 "scene_task_id": None,
                 "subagent_foreground_count": 0,
                 "subagent_background_count": 0,
@@ -289,18 +295,45 @@ class InternalGateway:
             return None
         snapshot = self._serialize_agent_session_metadata(session_id)
         agent_scene = self._scenes_cache.get("agent") or {}
-        if agent_scene.get("source_service") == "cli_agent":
-            snapshot["scene"] = agent_scene.get("scene")
-            snapshot["scene_task_id"] = agent_scene.get("scene_task_id")
-            snapshot["scene_changed_at"] = agent_scene.get("scene_changed_at")
-            snapshot["subagent_foreground_count"] = agent_scene.get("subagent_foreground_count", 0)
-            snapshot["subagent_background_count"] = agent_scene.get("subagent_background_count", 0)
-            snapshot["subagent_total_count"] = agent_scene.get("subagent_total_count", 0)
-            snapshot["subagent_focus_task_id"] = agent_scene.get("subagent_focus_task_id")
-            snapshot["subagent_focus_tool"] = agent_scene.get("subagent_focus_tool")
-            snapshot["subagent_focus_preview"] = agent_scene.get("subagent_focus_preview")
+        lanes = agent_scene.get("lanes") if isinstance(agent_scene.get("lanes"), dict) else {}
+        lane_key = self._agent_session_lane.get(session_id)
+        lane = lanes.get(lane_key) if lane_key else None
+        if isinstance(lane, dict):
+            self._apply_agent_scene_projection_to_snapshot(
+                snapshot,
+                lane,
+                projection_scope="agent_lane",
+                agent_lane=lane_key,
+            )
+        elif agent_scene.get("source_service") == "cli_agent":
+            self._apply_agent_scene_projection_to_snapshot(
+                snapshot,
+                agent_scene,
+                projection_scope="legacy_last_writer_agent_scene",
+                agent_lane=None,
+            )
         snapshot.update(self._build_session_lease_snapshot(session_id))
         return snapshot
+
+    @staticmethod
+    def _apply_agent_scene_projection_to_snapshot(
+        snapshot: Dict[str, Any],
+        source: Dict[str, Any],
+        *,
+        projection_scope: str,
+        agent_lane: Optional[str],
+    ) -> None:
+        snapshot["scene"] = source.get("scene")
+        snapshot["scene_task_id"] = source.get("scene_task_id")
+        snapshot["scene_changed_at"] = source.get("scene_changed_at") or source.get("last_fetched_at")
+        snapshot["subagent_foreground_count"] = source.get("subagent_foreground_count", 0)
+        snapshot["subagent_background_count"] = source.get("subagent_background_count", 0)
+        snapshot["subagent_total_count"] = source.get("subagent_total_count", 0)
+        snapshot["subagent_focus_task_id"] = source.get("subagent_focus_task_id")
+        snapshot["subagent_focus_tool"] = source.get("subagent_focus_tool")
+        snapshot["subagent_focus_preview"] = source.get("subagent_focus_preview")
+        snapshot["scene_projection_scope"] = projection_scope
+        snapshot["agent_lane"] = agent_lane
 
     def _build_session_lease_snapshot(self, session_id: str) -> Dict[str, Any]:
         session = dict(self._agent_session_cache.get(session_id) or {})

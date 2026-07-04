@@ -51,7 +51,7 @@ TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD = 3
 
 @dataclass(frozen=True, slots=True)
 class EndogenousTaskCandidate:
-    """Compatibility projection for queueable work, not the drive's judgement core."""
+    """Queue projection for autonomous-chain work, not the drive's judgement core."""
 
     stable_key: str
     title: str
@@ -2057,6 +2057,64 @@ class EndogenousDriveEngine:
             "reflection": report["reflection"],
             "adaptive_policy": report["adaptive_policy"],
             "intent": intent_dict,
+            "intents": [intent_dict] if intent_dict else [],
+            "needs": linked_needs,
+        }
+
+    def _drive_judgement_metadata(
+        self,
+        *,
+        intent: Optional[DriveIntent],
+        candidate_kind: str,
+        all_intents: List[DriveIntent],
+        needs: List[DriveNeed],
+        perception: DrivePerceptionSnapshot,
+        world_model: DriveWorldModel,
+        reflection: DriveReflection,
+        adaptive_policy: DriveAdaptivePolicy,
+    ) -> Dict[str, Any]:
+        if intent is not None:
+            return self._intent_metadata(
+                intent=intent,
+                needs=needs,
+                perception=perception,
+                world_model=world_model,
+                reflection=reflection,
+                adaptive_policy=adaptive_policy,
+            )
+
+        matching_intents = [
+            item
+            for item in all_intents
+            if str(item.candidate_kind or "").strip() == candidate_kind
+        ]
+        selected_intents = matching_intents or list(all_intents[:3])
+        report = DriveDeliberationReport(
+            perception=perception,
+            world_model=world_model,
+            reflection=reflection,
+            adaptive_policy=adaptive_policy,
+            needs=needs,
+            intents=selected_intents,
+        ).to_dict()
+        source_need_types = {
+            need_type
+            for intent_row in report["intents"]
+            for need_type in list(intent_row.get("source_needs") or [])
+            if str(need_type).strip()
+        }
+        linked_needs = [
+            need
+            for need in report["needs"]
+            if not source_need_types or need["need_type"] in source_need_types
+        ][:4]
+        return {
+            "perception": report["perception"],
+            "world_model": report["world_model"],
+            "reflection": report["reflection"],
+            "adaptive_policy": report["adaptive_policy"],
+            "intent": report["intents"][0] if report["intents"] else {},
+            "intents": list(report["intents"]),
             "needs": linked_needs,
         }
 
@@ -2423,20 +2481,18 @@ class EndogenousDriveEngine:
                             adaptive_policy=adaptive_policy,
                         ),
                     },
-                    metadata=(
-                        {
-                            "drive_judgement": self._intent_metadata(
-                                intent=memory_intent,
-                                needs=needs,
-                                perception=perception,
-                                world_model=world_model,
-                                reflection=reflection,
-                                adaptive_policy=adaptive_policy,
-                            )
-                        }
-                        if memory_intent is not None
-                        else None
-                    ),
+                    metadata={
+                        "drive_judgement": self._drive_judgement_metadata(
+                            intent=memory_intent,
+                            candidate_kind="memory_maintenance",
+                            all_intents=intents,
+                            needs=needs,
+                            perception=perception,
+                            world_model=world_model,
+                            reflection=reflection,
+                            adaptive_policy=adaptive_policy,
+                        )
+                    },
                     evidence={
                         "idle_window_checks": dict(idle_window.get("checks") or {}),
                         "idle_seconds": dict(idle_window.get("idle_seconds") or {}),
@@ -2486,20 +2542,18 @@ class EndogenousDriveEngine:
                             adaptive_policy=adaptive_policy,
                         ),
                     },
-                    metadata=(
-                        {
-                            "drive_judgement": self._intent_metadata(
-                                intent=truth_intent,
-                                needs=needs,
-                                perception=perception,
-                                world_model=world_model,
-                                reflection=reflection,
-                                adaptive_policy=adaptive_policy,
-                            )
-                        }
-                        if truth_intent is not None
-                        else None
-                    ),
+                    metadata={
+                        "drive_judgement": self._drive_judgement_metadata(
+                            intent=truth_intent,
+                            candidate_kind="truthfulness_review",
+                            all_intents=intents,
+                            needs=needs,
+                            perception=perception,
+                            world_model=world_model,
+                            reflection=reflection,
+                            adaptive_policy=adaptive_policy,
+                        )
+                    },
                     evidence={
                         "recent_errors": recent_errors,
                         "uncertainty_high_count": uncertainty_count,
@@ -2553,17 +2607,15 @@ class EndogenousDriveEngine:
                         trigger="bootstrap_shell_baseline",
                         drive_context=drive_context,
                         bootstrap=True,
-                        drive_judgement=(
-                            self._intent_metadata(
-                                intent=shell_baseline_intent,
-                                needs=needs,
-                                perception=perception,
-                                world_model=world_model,
-                                reflection=reflection,
-                                adaptive_policy=adaptive_policy,
-                            )
-                            if shell_baseline_intent is not None
-                            else None
+                        drive_judgement=self._drive_judgement_metadata(
+                            intent=shell_baseline_intent,
+                            candidate_kind="shell_baseline_learning",
+                            all_intents=intents,
+                            needs=needs,
+                            perception=perception,
+                            world_model=world_model,
+                            reflection=reflection,
+                            adaptive_policy=adaptive_policy,
                         ),
                         adaptive_policy=adaptive_policy,
                     )
@@ -2615,19 +2667,15 @@ class EndogenousDriveEngine:
                         metadata={
                             "learning_branch": "exploratory",
                             "self_learning_mode": "no_dependency_exploration",
-                            **(
-                                {
-                                    "drive_judgement": self._intent_metadata(
-                                        intent=learning_intent,
-                                        needs=needs,
-                                        perception=perception,
-                                        world_model=world_model,
-                                        reflection=reflection,
-                                        adaptive_policy=adaptive_policy,
-                                    )
-                                }
-                                if learning_intent is not None
-                                else {}
+                            "drive_judgement": self._drive_judgement_metadata(
+                                intent=learning_intent,
+                                candidate_kind="exploratory_learning",
+                                all_intents=intents,
+                                needs=needs,
+                                perception=perception,
+                                world_model=world_model,
+                                reflection=reflection,
+                                adaptive_policy=adaptive_policy,
                             ),
                         },
                         evidence={
@@ -2712,17 +2760,15 @@ class EndogenousDriveEngine:
                                 "self_learning_mode": "endogenous_cognition_review",
                                 "cognitive_assessment_target": target,
                                 "llm_cognitive_assessment": dict(cognitive_assessment_memory),
-                                "drive_judgement": (
-                                    self._intent_metadata(
-                                        intent=learning_intent,
-                                        needs=needs,
-                                        perception=perception,
-                                        world_model=world_model,
-                                        reflection=reflection,
-                                        adaptive_policy=adaptive_policy,
-                                    )
-                                    if learning_intent is not None
-                                    else {}
+                                "drive_judgement": self._drive_judgement_metadata(
+                                    intent=learning_intent,
+                                    candidate_kind="exploratory_learning",
+                                    all_intents=intents,
+                                    needs=needs,
+                                    perception=perception,
+                                    world_model=world_model,
+                                    reflection=reflection,
+                                    adaptive_policy=adaptive_policy,
                                 ),
                             },
                             evidence={
@@ -2782,20 +2828,18 @@ class EndogenousDriveEngine:
                             adaptive_policy=adaptive_policy,
                         ),
                     },
-                    metadata=(
-                        {
-                            "drive_judgement": self._intent_metadata(
-                                intent=queue_intent,
-                                needs=needs,
-                                perception=perception,
-                                world_model=world_model,
-                                reflection=reflection,
-                                adaptive_policy=adaptive_policy,
-                            )
-                        }
-                        if queue_intent is not None
-                        else None
-                    ),
+                    metadata={
+                        "drive_judgement": self._drive_judgement_metadata(
+                            intent=queue_intent,
+                            candidate_kind="queue_hygiene_review",
+                            all_intents=intents,
+                            needs=needs,
+                            perception=perception,
+                            world_model=world_model,
+                            reflection=reflection,
+                            adaptive_policy=adaptive_policy,
+                        )
+                    },
                     evidence={
                         "trigger": "supervisor_queue_governance",
                     },
@@ -4972,19 +5016,15 @@ class EndogenousDriveEngine:
                         "reference_alignment": reference_alignment,
                         "cognitive_alignment": cognitive_alignment,
                         "supervisor_advisory": supervisor_advisory,
-                        **(
-                            {
-                                "drive_judgement": self._intent_metadata(
-                                    intent=intent,
-                                    needs=list(deliberation.needs),
-                                    perception=deliberation.perception,
-                                    world_model=deliberation.world_model,
-                                    reflection=deliberation.reflection,
-                                    adaptive_policy=deliberation.adaptive_policy,
-                                )
-                            }
-                            if intent is not None
-                            else {}
+                        "drive_judgement": self._drive_judgement_metadata(
+                            intent=intent,
+                            candidate_kind=candidate_kind,
+                            all_intents=list(deliberation.intents),
+                            needs=list(deliberation.needs),
+                            perception=deliberation.perception,
+                            world_model=deliberation.world_model,
+                            reflection=deliberation.reflection,
+                            adaptive_policy=deliberation.adaptive_policy,
                         ),
                     },
                     evidence={

@@ -898,15 +898,15 @@ def test_autonomous_panel_shows_no_api_a_executable_task_reason(monkeypatch):
     monkeypatch.setattr(VoidcubeCLI, "_get_tui_terminal_width", staticmethod(lambda default=(80, 24): 80))
     cli._fetch_supervisor_status = lambda: {
         "timeline": [],
-        "tasks": [],
+        "tasks": [
+            {"task_id": "deferred-1", "title": "Deferred task", "status": "deferred", "task_family": "self_learning"},
+        ],
         "active_executions": [],
-        "panels": {
-            "learning": {
-                "count": 2,
-                "tasks": [
-                    {"task_id": "done-1", "title": "Done task", "status": "completed"},
-                    {"task_id": "deferred-1", "title": "Deferred task", "status": "deferred"},
-                ],
+        "autonomous_observation": {
+            "api_a": {
+                "pending": [
+                    {"task_id": "deferred-1", "title": "Deferred task", "status": "deferred", "lane": "agent"}
+                ]
             }
         },
     }

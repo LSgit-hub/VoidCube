@@ -395,6 +395,10 @@ def test_gateway_agent_scene_touch_updates_scene_cache_and_prefers_cli_agent():
     assert response.status_code == 200
     scenes = client.get("/admin/scenes").json()["scenes"]
     assert scenes["agent"]["scene"] == "learning"
+    assert scenes["agent"]["scene_projection_scope"] == "legacy_last_writer_agent_scene"
+    assert scenes["agent"]["canonical_lanes"] == ["supervisor_task", "user_chat"]
+    assert scenes["agent"]["lane_contract"]["supervisor_task"] == "autonomous_chain_observation"
+    assert scenes["agent"]["lane_contract"]["user_chat"] == "user_chain_status"
     assert scenes["agent"]["scene_task_id"] == "learn-1"
     assert scenes["agent"]["source_service"] == "cli_agent"
     assert scenes["agent"]["subagent_foreground_count"] == 2
@@ -406,6 +410,8 @@ def test_gateway_agent_scene_touch_updates_scene_cache_and_prefers_cli_agent():
     assert active_cli["session_id"] == "cli-session-1"
     assert active_cli["is_active_cli_executor"] is True
     assert active_cli["scene"] == "learning"
+    assert active_cli["scene_projection_scope"] == "agent_lane"
+    assert active_cli["agent_lane"] == "supervisor_task"
     assert active_cli["subagent_foreground_count"] == 2
     assert active_cli["subagent_background_count"] == 1
     assert active_cli["subagent_focus_preview"] == "read_file"
@@ -946,6 +952,7 @@ def test_gateway_agent_lanes_keep_supervisor_and_user_chat_separate():
 
     agent_scene = client.get("/admin/scenes").json()["scenes"]["agent"]
     assert agent_scene["scene"] == "executing"
+    assert agent_scene["scene_projection_scope"] == "legacy_last_writer_agent_scene"
     assert agent_scene["subagent_focus_tool"] == "grep"
 
     lanes = agent_scene["lanes"]
@@ -957,6 +964,12 @@ def test_gateway_agent_lanes_keep_supervisor_and_user_chat_separate():
     # user_chat lane holds its own data
     assert lanes["user_chat"]["scene"] == "executing"
     assert lanes["user_chat"]["subagent_foreground_count"] == 1
+
+    active_cli = client.get("/").json()["active_cli_executor"]
+    assert active_cli["session_id"] == "user-session"
+    assert active_cli["scene_projection_scope"] == "agent_lane"
+    assert active_cli["agent_lane"] == "user_chat"
+    assert active_cli["subagent_focus_tool"] == "grep"
 
 
 def test_gateway_agent_lane_scene_heuristic_fallback_without_role():

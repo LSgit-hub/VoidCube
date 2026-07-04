@@ -126,7 +126,7 @@ async def test_supervisor_idle_window_uses_configured_thresholds_and_reports_cli
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_supervisor_idle_window_blocks_execution_when_recent_user_activity_exists(tmp_path):
+async def test_supervisor_idle_window_blocks_execution_when_recent_workflow_activity_exists(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
     async def fake_snapshot():
@@ -148,6 +148,7 @@ async def test_supervisor_idle_window_blocks_execution_when_recent_user_activity
     )
 
     assert result["checks"]["has_user_idle"] is False
+    assert result["checks"]["has_agent_idle"] is False
     assert result["decisions"]["eligible_for_planning"] is True
     assert result["decisions"]["eligible_for_execution"] is False
 
@@ -249,12 +250,12 @@ async def test_supervisor_idle_window_exposes_body_switch_family_without_collaps
     )
 
     assert result["governance_task_type"] == "self_evolution"
-    assert result["task_family"] == "body_upgrade"
-    assert result["execution_kind"] == "body_upgrade"
+    assert result["task_family"] == "body_switch"
+    assert result["execution_kind"] == "body_switch"
     assert result["task_profile"] == {
         "governance_task_type": "self_evolution",
-        "task_family": "body_upgrade",
-        "execution_kind": "body_upgrade",
+        "task_family": "body_switch",
+        "execution_kind": "body_switch",
     }
     assert result["governance_task_type_decisions"]["self_evolution"] == result["decisions"]
-    assert result["task_family_decisions"]["body_upgrade"] == result["decisions"]
+    assert result["task_family_decisions"]["body_switch"] == result["decisions"]

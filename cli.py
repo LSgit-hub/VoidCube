@@ -2845,21 +2845,33 @@ class VoidcubeCLI:
         )
 
     def _resolve_autonomous_no_task_reason(self, supervisor_state: Dict[str, Any]) -> tuple[str, str]:
-        panels = dict(supervisor_state.get("panels") or {})
-        learning_panel = dict(panels.get("learning") or {})
-        learning_tasks = list(learning_panel.get("tasks") or [])
+        observation = dict(supervisor_state.get("autonomous_observation") or {})
+        api_a = dict(observation.get("api_a") or {})
+        learning_tasks = list(api_a.get("pending") or [])
+        if not learning_tasks:
+            learning_tasks = [
+                dict(task)
+                for task in list(supervisor_state.get("tasks") or [])
+                if self._autonomous_task_execution_kind(dict(task)) in {"self_learning", "body_improvement"}
+            ]
         if learning_tasks:
-            completed = [task for task in learning_tasks if str(task.get("status") or "").strip().lower() == "completed"]
-            deferred = [task for task in learning_tasks if str(task.get("status") or "").strip().lower() == "deferred"]
-            if deferred and not completed:
+            approved = [
+                task for task in learning_tasks
+                if str(task.get("status") or "").strip().lower() == "approved"
+            ]
+            deferred = [
+                task for task in learning_tasks
+                if str(task.get("status") or "").strip().lower() == "deferred"
+            ]
+            if deferred and not approved:
                 return (
                     "class:auto-panel-warn",
-                    "队列: 当前学习任务大多被监督者延后，暂时没有已批准的 API-A 可执行任务",
+                    "队列: 当前学习任务大多被监督者延后，当前没有已批准的 API-A 可执行任务",
                 )
             if deferred:
                 return (
                     "class:auto-panel-dim",
-                    "队列: 当前没有已批准的 API-A 可执行任务；最近学习任务多处于 deferred/completed",
+                    "队列: 当前没有已批准的 API-A 可执行任务；最近自主任务多处于 deferred/待观察",
                 )
 
         active_executions = list(supervisor_state.get("active_executions") or [])
