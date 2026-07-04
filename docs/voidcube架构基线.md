@@ -1270,7 +1270,7 @@ Mem 中长期记忆 + 网关活动快照（7 个时间戳 + 错误/不确定性�
 
 终端 dashboard / Web 小屋应优先消费 Supervisor 提供的 `autonomous_observation.queue.sections / board.current_cards / primary_focus` 读模型；其中 `queue.sections` 是程序侧主协议。观测板暂不可用时可以显示空态，但不应回退成旧 `/self-evolution/tasks` 队列管理视角。
 
-Web 小屋前端内部主面板也应以 `chain`/“自主链路总览”作为主语，而不是继续沿用 `tasks`/任务台命名；默认展开内容应先展示焦点、四段闭环和链路队列，再展示更细的任务卡。
+Web 小屋前端内部主面板也应以 `chain`/“自主链路总览”作为主语，而不是继续沿用 `tasks`/任务台命名；默认展开内容应先展示焦点、四段闭环和链路片段观察，再展示更细的任务卡。这里的“片段观察”是对自主链路四段流动的只读投影，不是旧式队列管理台。
 
 对应地，Supervisor 的 `/ui/state` 不应再把顶层 `tasks`、`drive_candidates` 这类原始治理/候选切片作为前端主协议返回；前端应围绕 `autonomous_observation` 读模型取数。
 
@@ -1278,7 +1278,7 @@ Web 小屋前端内部主面板也应以 `chain`/“自主链路总览”作为�
 
 进一步地，`metrics`、`activity_guards`、`active_sessions` 这类辅助观测数据也不应继续散落在 `/ui/state` 顶层；应并入 `autonomous_observation.metrics` 与 `autonomous_observation.runtime.activity_guards / user_chain_signal / eligibility`，保证 Web/CLI/dashboard 都围绕同一棵状态树读取。
 
-如果需要展示“队列管理”，也应把它理解成自主链路的观测投影，而不是旧任务台。推荐主协议为 `autonomous_observation.queue.sections`，显式区分 `api_b_backlog`、`api_a_ready`、`api_b_candidates`、`mem_recent` 四类队列视图；前端应直接消费这些分段，而不是再额外维护一层旧展示别名。每个 section 还应允许携带 `recent_events` 一类最近链路事件摘要，以及 `recent_traces` 一类按 `trace_id` 聚合的轻量 trace 摘要；当某条 recent trace 值得展开时，还应允许内联少量 `detail`（如 source 分布、任务家族、timeline preview，以及有限条数的 `timeline_events` 事件流），并支持按 source 过滤事件流，便于 Web 小屋顺着这一段继续钻取最近的 timeline / trace。
+如果需要展示“队列管理”，也应把它理解成自主链路的观测投影，而不是旧任务台。推荐主协议为 `autonomous_observation.queue.sections`，显式区分 `api_b_backlog`、`api_a_ready`、`api_b_candidates`、`mem_recent` 四类链路片段；前端应直接消费这些分段，而不是再额外维护一层旧展示别名。每个 section 还应允许携带 `recent_events` 一类最近链路事件摘要，以及 `recent_traces` 一类按 `trace_id` 聚合的轻量 trace 摘要；Web 小屋优先使用 Supervisor 本地记录来生成这些摘要，避免观测页刷新反向依赖慢速 live 探活。当某条 recent trace 值得展开时，还应允许内联少量 `detail`（如 source 分布、任务家族、timeline preview，以及有限条数的 `timeline_events` 事件流），并支持按 source 过滤事件流，便于 Web 小屋顺着这一段继续钻取最近的 timeline / trace。
 
 同样地，Supervisor 底层的任务列表存储虽然目前仍由 `systems/supervisor/task_queue.py` 承载，但程序消费层不应继续把它当成一个无差别“总队列”。推荐底层统一围绕三类投影读取：
 

@@ -304,7 +304,7 @@ class TraceRuntimeMixin:
             params["trace_id"] = trace_id
         async with aiohttp.ClientSession() as session:
             url = f"{execution_config.gateway_address}/admin/activity/log"
-            async with session.get(url, params=params, timeout=10) as response:
+            async with session.get(url, params=params, timeout=2) as response:
                 if response.status != 200:
                     raise RuntimeError(
                         f"Gateway activity log endpoint returned status {response.status}"

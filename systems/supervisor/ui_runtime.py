@@ -5021,15 +5021,42 @@ class SupervisorUIMixin:
         self,
         *,
         limit: int = 12,
-        timeout_seconds: float = 0.8,
     ) -> List[Dict[str, Any]]:
         try:
-            return await asyncio.wait_for(
-                self._recent_supervisor_observation_timeline(limit=limit),
-                timeout=max(float(timeout_seconds), 0.05),
-            )
+            return self._recent_local_supervisor_observation_timeline(limit=limit)
         except Exception:
             return self._recent_supervisor_ui_activity(limit=limit)
+
+    def _collect_ui_trace_records(
+        self,
+        *,
+        trace_id: Optional[str] = None,
+        limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        records: List[Dict[str, Any]] = []
+        records.extend(self._collect_trace_records_from_tasks(trace_id=trace_id))
+        records.extend(self._collect_trace_records_from_supervisor_activity(trace_id=trace_id))
+        records.extend(
+            self._collect_trace_records_from_governor_history(
+                trace_id=trace_id,
+                limit=max(int(limit), 1),
+            )
+        )
+        return records
+
+    def _recent_local_supervisor_observation_timeline(
+        self,
+        *,
+        limit: int = 12,
+    ) -> List[Dict[str, Any]]:
+        records = self._collect_ui_trace_records(limit=max(int(limit) * 4, 24))
+        timeline = [
+            dict(record)
+            for record in self._build_trace_timeline(records)
+            if str(record.get("trace_id") or "").strip()
+        ]
+        timeline.reverse()
+        return timeline[: max(int(limit), 0)]
 
     async def get_supervisor_ui_state(self) -> Dict[str, Any]:
         backlog_tasks = list(self._self_evolution_queue.list_governance_backlog_tasks())
@@ -5123,7 +5150,7 @@ class SupervisorUIMixin:
         try:
             autonomous_observation = await asyncio.wait_for(
                 self._attach_recent_trace_details_to_observation(autonomous_observation),
-                timeout=1.0,
+                timeout=2.0,
             )
         except Exception:
             pass
@@ -5585,20 +5612,11 @@ class SupervisorUIMixin:
                 break
 
         async def _load(trace_id: str) -> tuple[str, Dict[str, Any]]:
-            try:
-                payload = await self.get_runtime_trace(trace_id)
-            except Exception:
-                return trace_id, {
-                    "trace_id": trace_id,
-                    "found": False,
-                    "timeline_preview": [],
-                }
-
-            summary = dict(payload.get("summary") or {})
+            records = self._collect_ui_trace_records(trace_id=trace_id, limit=200)
+            summary = self._summarize_single_trace(trace_id, records)
             timeline = [
                 dict(event)
-                for event in list(payload.get("timeline") or [])
-                if isinstance(event, dict)
+                for event in self._build_trace_timeline(records)
             ]
             preview = [
                 {
@@ -5624,7 +5642,7 @@ class SupervisorUIMixin:
             ]
             return trace_id, {
                 "trace_id": trace_id,
-                "found": bool(payload.get("found")),
+                "found": bool(summary.get("record_count")),
                 "record_count": int(summary.get("record_count") or 0),
                 "first_seen_at": summary.get("first_seen_at"),
                 "last_seen_at": summary.get("last_seen_at"),
