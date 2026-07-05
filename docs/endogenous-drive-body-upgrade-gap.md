@@ -11,7 +11,7 @@
 | 1 | `continuity:memory_maintenance_sweep` | Maintain long-term memory continuity | 0.92 | memory_maintenance | 无 |
 | 2 | `truthfulness:review_correction_signals` | Review recent uncertainty and correction signals | 0.65~0.95 | self_learning | learn_only |
 | 3 | `creativity:idle_learning:{hash}` | Research: {topic} | 0.58~0.72 | self_learning | **learn_only, must_not_modify_active_body** |
-| 4 | `continuity:queue_hygiene_review` | Review self-evolution queue hygiene | 0.52 | general_self_evolution | must_not_execute_without_review |
+| 4 | `continuity:queue_hygiene_review` | Review autonomous-chain governance hygiene | 0.52 | general_self_evolution | must_not_execute_without_review |
 
 **关键发现**：全部 4 种候选都与替身代码编辑无关。创造力候选（唯一可能导向代码改进的任务）明确禁止编辑身体：
 

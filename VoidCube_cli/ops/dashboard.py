@@ -93,8 +93,8 @@ def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
     presentation = dict(observation.get("presentation") or {})
     counts = dict(observation.get("counts") or {})
     board = dict(observation.get("board") or {})
-    queue = dict(observation.get("queue") or {})
-    queue_label_fallback = {
+    chain = dict(observation.get("chain") or {})
+    segment_label_fallback = {
         "api_b_backlog": "API-B",
         "api_a_ready": "API-A",
         "api_b_candidates": "候选",
@@ -105,8 +105,8 @@ def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
         for item in list(board.get("current_cards") or [])
         if isinstance(item, dict)
     ]
-    queue_sections = []
-    for section in list(queue.get("sections") or []):
+    chain_segments = []
+    for section in list(chain.get("segments") or []):
         if not isinstance(section, dict):
             continue
         items = [
@@ -115,13 +115,13 @@ def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
             if isinstance(item, dict)
         ]
         head_item = items[0] if items else {}
-        queue_sections.append(
+        chain_segments.append(
             {
                 "key": str(section.get("key") or "").strip(),
                 "label": str(
                     section.get("label")
                     or section.get("owner")
-                    or queue_label_fallback.get(str(section.get("key") or "").strip(), "?")
+                    or segment_label_fallback.get(str(section.get("key") or "").strip(), "?")
                 ),
                 "owner": str(section.get("owner") or "").strip(),
                 "stage_label": str(section.get("stage_label") or "").strip(),
@@ -140,7 +140,7 @@ def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
             }
         )
 
-    if not current_cards and not queue_sections:
+    if not current_cards and not chain_segments:
         return {}
 
     return {
@@ -156,9 +156,9 @@ def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
             }
             for item in current_cards[:4]
         ],
-        "queue_sections": queue_sections[:4],
+        "segments": chain_segments[:4],
         "headline": str(presentation.get("headline") or board.get("headline") or "自主链路闭环观测"),
-        "queue_headline": str(queue.get("headline") or "自主链路片段观察"),
+        "segments_headline": str(chain.get("headline") or "自主链路分段观察"),
     }
 
 
@@ -288,8 +288,8 @@ def build_dashboard() -> Dict[str, Any]:
             "candidates": chain_snapshot.get("candidates", 0),
             "writebacks": chain_snapshot.get("writebacks", 0),
             "current_cards": list(chain_snapshot.get("current_cards") or []),
-            "queue_sections": list(chain_snapshot.get("queue_sections") or []),
-            "queue_headline": chain_snapshot.get("queue_headline", "自主链路片段观察"),
+            "segments": list(chain_snapshot.get("segments") or []),
+            "segments_headline": chain_snapshot.get("segments_headline", "自主链路分段观察"),
         }
     else:
         chain_view = {
@@ -301,8 +301,8 @@ def build_dashboard() -> Dict[str, Any]:
             "candidates": 0,
             "writebacks": 0,
             "current_cards": [],
-            "queue_sections": [],
-            "queue_headline": "自主链路片段观察",
+            "segments": [],
+            "segments_headline": "自主链路分段观察",
         }
 
     # ── Next review cycle estimate ──────────────────────────────────
@@ -466,6 +466,9 @@ def print_dashboard() -> None:
             f"  ║  {chain.get('headline', '自主链路闭环观测')[:46]:<46s}          ║"
         )
         print(
+            f"  ║  {chain.get('segments_headline', '自主链路分段观察')[:46]:<46s}          ║"
+        )
+        print(
             f"  ║  API-B {chain.get('api_b_backlog', 0)}  ·  API-A {chain.get('api_a_ready', 0)}  ·  "
             f"候选 {chain.get('candidates', 0)}  ·  写回 {chain.get('writebacks', 0)}              ║"
         )
@@ -473,7 +476,7 @@ def print_dashboard() -> None:
             title = str(item.get("title") or "?")[:28]
             status = str(item.get("status") or "?")[:12]
             print(f"  ║  ↻ {title:<28s} {status:<12s}                          ║")
-        for item in list(chain.get("queue_sections") or [])[:4]:
+        for item in list(chain.get("segments") or [])[:4]:
             group = str(item.get("label") or item.get("owner") or "?")[:12]
             title = str(item.get("title") or "?")[:28]
             status = str(item.get("status") or "?")[:10]
@@ -494,8 +497,8 @@ def print_dashboard() -> None:
         ("User quiet", "user_chain_quiet"),
         ("Agent idle", "agent_idle"),
         ("Memory idle", "memory_idle"),
-        ("Plan idle", "se_plan_idle"),
-        ("Exec idle", "se_exec_idle"),
+        ("Plan idle", "autonomous_chain_plan_idle"),
+        ("Exec idle", "autonomous_chain_execute_idle"),
     ]
     for label, key in conds:
         c = cds.get(key, {})

@@ -2442,19 +2442,19 @@ class VoidcubeCLI:
         return dict(observation.get("board") or {})
 
     @staticmethod
-    def _autonomous_observation_queue(state: Dict[str, Any]) -> Dict[str, Any]:
+    def _autonomous_observation_chain(state: Dict[str, Any]) -> Dict[str, Any]:
         observation = dict(state.get("autonomous_observation") or {})
-        return dict(observation.get("queue") or {})
+        return dict(observation.get("chain") or {})
 
     def _autonomous_observation_group_items(
         self,
         state: Dict[str, Any],
         group_key: str,
     ) -> list[Dict[str, Any]]:
-        queue = self._autonomous_observation_queue(state)
+        chain = self._autonomous_observation_chain(state)
         groups = [
             dict(item)
-            for item in list(queue.get("sections") or [])
+            for item in list(chain.get("segments") or [])
             if isinstance(item, dict)
         ]
         for group in groups:
@@ -2501,7 +2501,11 @@ class VoidcubeCLI:
         presentation = dict(observation.get("presentation") or {})
         api_a_execution = dict(presentation.get("api_a_execution") or {})
         hinted_focus = dict(api_a_execution.get("focus_task") or {})
-        hinted_stage = str(api_a_execution.get("stage") or "").strip()
+        hinted_stage = str(
+            api_a_execution.get("cli_focus_stage")
+            or api_a_execution.get("stage")
+            or ""
+        ).strip()
         if hinted_focus.get("task_id"):
             hinted_focus["_presentation_stage"] = hinted_stage
             return hinted_focus
@@ -2540,6 +2544,32 @@ class VoidcubeCLI:
             return "running_elsewhere"
         return "idle"
 
+    @staticmethod
+    def _supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[str, Any]:
+        observation = dict(supervisor_state.get("autonomous_observation") or {})
+        presentation = dict(observation.get("presentation") or {})
+        return dict(presentation.get("api_a_execution") or {})
+
+    def _resolve_supervisor_stage_descriptor(
+        self,
+        supervisor_state: Dict[str, Any],
+        focus_stage: str,
+    ) -> Dict[str, str]:
+        api_a_execution = self._supervisor_api_a_execution_hint(supervisor_state)
+        hinted_stage = str(
+            api_a_execution.get("cli_focus_stage")
+            or api_a_execution.get("stage")
+            or ""
+        ).strip()
+        if not hinted_stage or hinted_stage != focus_stage:
+            return {}
+        return {
+            "status_label": str(api_a_execution.get("status_label") or "").strip(),
+            "chain_reason": str(api_a_execution.get("chain_reason") or "").strip(),
+            "activity_text": str(api_a_execution.get("activity_text") or "").strip(),
+            "reason_style": str(api_a_execution.get("reason_style") or "").strip().lower(),
+        }
+
     def _build_autonomous_execution_panel_rows(self) -> list[tuple[str, str]]:
         width = self._get_tui_terminal_width()
         inner_width = max(34, min(width - 4, 92))
@@ -2549,6 +2579,10 @@ class VoidcubeCLI:
         gateway_state = self._fetch_autonomous_gateway_status()
         focus_task = self._resolve_autonomous_panel_focus_task(supervisor_state)
         focus_stage = self._resolve_autonomous_panel_focus_stage(focus_task)
+        supervisor_descriptor = self._resolve_supervisor_stage_descriptor(
+            supervisor_state,
+            focus_stage,
+        )
 
         if focus_stage == "claimed_running":
             status_label = "执行中"
@@ -2563,13 +2597,13 @@ class VoidcubeCLI:
             status_label = "模型处理中"
             status_style = "class:auto-panel-good"
         elif focus_stage == "approved_waiting_claim":
-            status_label = "已放行待认领"
+            status_label = str(supervisor_descriptor.get("status_label") or "已放行待认领")
             status_style = "class:auto-panel-warn"
         elif focus_stage == "running_elsewhere":
-            status_label = "他处执行中"
+            status_label = str(supervisor_descriptor.get("status_label") or "他处执行中")
             status_style = "class:auto-panel-info"
         else:
-            status_label = "待命拉单"
+            status_label = str(supervisor_descriptor.get("status_label") or "待命拉单")
             status_style = "class:auto-panel-warn"
 
         rows.append(("class:auto-panel-title", f"Autonomous Executor · 会话 {session_short}"))
@@ -2619,7 +2653,10 @@ class VoidcubeCLI:
                     (
                         "class:auto-panel-warn",
                         self._trim_status_bar_text(
-                            "链路: 监督者已放行该任务，等待 API-A 自主执行面认领",
+                            str(
+                                supervisor_descriptor.get("chain_reason")
+                                or "链路: 监督者已放行该任务，等待 API-A 自主执行面认领"
+                            ),
                             inner_width,
                         ),
                     )
@@ -2629,7 +2666,10 @@ class VoidcubeCLI:
                     (
                         "class:auto-panel-info",
                         self._trim_status_bar_text(
-                            "链路: 该任务已被其他 API-A 自主执行面认领",
+                            str(
+                                supervisor_descriptor.get("chain_reason")
+                                or "链路: 该任务已被其他 API-A 自主执行面认领"
+                            ),
                             inner_width,
                         ),
                     )
@@ -2649,11 +2689,20 @@ class VoidcubeCLI:
         elif focus_stage == "claimed_waiting_writeback":
             activity_text = "执行流: API-A 自主执行面已结束本轮执行，等待写回任务状态"
         elif focus_stage == "approved_waiting_claim":
-            activity_text = "执行流: 监督者已放行任务，等待 API-A 自主执行面认领"
+            activity_text = str(
+                supervisor_descriptor.get("activity_text")
+                or "执行流: 监督者已放行任务，等待 API-A 自主执行面认领"
+            )
         elif focus_stage == "running_elsewhere":
-            activity_text = "执行流: 任务正在其他 API-A 自主执行面中运行"
+            activity_text = str(
+                supervisor_descriptor.get("activity_text")
+                or "执行流: 任务正在其他 API-A 自主执行面中运行"
+            )
         else:
-            activity_text = "执行流: 等待监督者放行任务或等待下一轮拉单"
+            activity_text = str(
+                supervisor_descriptor.get("activity_text")
+                or "执行流: 等待监督者放行任务或等待下一轮拉单"
+            )
         rows.append(("class:auto-panel-text", self._trim_status_bar_text(activity_text, inner_width)))
 
         latest_supervisor = ""
@@ -2916,8 +2965,7 @@ class VoidcubeCLI:
 
     def _resolve_autonomous_no_task_reason(self, supervisor_state: Dict[str, Any]) -> tuple[str, str]:
         observation = dict(supervisor_state.get("autonomous_observation") or {})
-        presentation = dict(observation.get("presentation") or {})
-        api_a_execution = dict(presentation.get("api_a_execution") or {})
+        api_a_execution = self._supervisor_api_a_execution_hint(supervisor_state)
         hinted_reason = str(api_a_execution.get("chain_reason") or "").strip()
         hinted_style = str(api_a_execution.get("reason_style") or "").strip().lower()
         if hinted_reason and str(api_a_execution.get("stage") or "").strip() not in {
@@ -5408,11 +5456,17 @@ class VoidcubeCLI:
         by_path = dict(metrics.get("by_path") or {})
         governance = dict(metrics.get("governance") or {})
         board = dict(observation.get("board") or {})
+        chain = dict(observation.get("chain") or {})
         presentation = dict(observation.get("presentation") or {})
         focus = dict(presentation.get("focus") or board.get("primary_focus") or {})
         current_cards = [
             dict(item)
             for item in list(board.get("current_cards") or [])
+            if isinstance(item, dict)
+        ]
+        chain_segments = [
+            dict(item)
+            for item in list(chain.get("segments") or [])
             if isinstance(item, dict)
         ]
         timeline = list(state.get("timeline") or [])
@@ -5445,6 +5499,14 @@ class VoidcubeCLI:
                 f"{focus.get('title', 'unknown')} "
                 f"({focus.get('status') or 'unknown'})"
             )
+
+        if chain_segments:
+            segment_parts: list[str] = []
+            for segment in chain_segments[:4]:
+                label = str(segment.get("label") or segment.get("owner") or "?").strip() or "?"
+                count = int(segment.get("count") or len(list(segment.get("items") or [])) or 0)
+                segment_parts.append(f"{label}={count}")
+            lines.append("Chain Segments: " + ", ".join(segment_parts))
 
         execution_card = self._autonomous_observation_current_card(
             state,

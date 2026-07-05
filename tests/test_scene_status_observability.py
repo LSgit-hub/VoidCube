@@ -254,9 +254,9 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
                         },
                     },
                 },
-                "queue": {
-                    "headline": "自主链路片段观察",
-                    "sections": [
+                "chain": {
+                    "headline": "自主链路分段观察",
+                    "segments": [
                         {
                             "key": "api_b_backlog",
                             "items": [{"title": "Governance backlog task", "display_status": "待审核"}],
@@ -303,7 +303,86 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
     assert built["chain"]["api_a_ready"] == 2
     assert built["chain"]["candidates"] == 3
     assert built["chain"]["writebacks"] == 1
-    assert built["chain"]["queue_headline"] == "自主链路片段观察"
+    assert built["chain"]["segments_headline"] == "自主链路分段观察"
     assert built["chain"]["current_cards"][0]["title"] == "API-B judgement"
-    assert built["chain"]["queue_sections"][0]["label"] == "API-B"
-    assert built["chain"]["queue_sections"][0]["title"] == "Governance backlog task"
+    assert built["chain"]["segments"][0]["label"] == "API-B"
+    assert built["chain"]["segments"][0]["title"] == "Governance backlog task"
+
+
+def test_print_dashboard_uses_autonomous_chain_countdown_keys(monkeypatch, capsys):
+    monkeypatch.setattr(
+        dashboard,
+        "build_dashboard",
+        lambda: {
+            "services": {"agents": 0, "supervisor": True, "memory": True},
+            "chain": {
+                "mode": "observation_unavailable",
+                "headline": "自主链路观测暂不可用",
+                "summary": "等待 Supervisor 观测板数据",
+            },
+            "countdowns": {
+                "user_chain_quiet": {"display": "10s", "met": False, "threshold_s": 600},
+                "agent_idle": {"display": "20s", "met": False, "threshold_s": 600},
+                "memory_idle": {"display": "30s", "met": False, "threshold_s": 600},
+                "autonomous_chain_plan_idle": {"display": "40s", "met": False, "threshold_s": 600},
+                "autonomous_chain_execute_idle": {"display": "50s", "met": False, "threshold_s": 600},
+                "autonomous_chain": {"display": "continuous", "scope": "soft_signal_only"},
+            },
+            "eligibility": {
+                "can_execute": False,
+                "eligible_for_planning": True,
+                "eligible_for_execution": False,
+            },
+            "next_review_cycle_display": "4m00s",
+            "autonomous_chain_policy": {"label": "continuous", "scope": "soft_signal_only"},
+        },
+    )
+    monkeypatch.setattr(dashboard, "print_three_segment_status_bar", lambda: None)
+
+    dashboard.print_dashboard()
+    output = capsys.readouterr().out
+
+    assert "Plan idle" in output and "40s" in output
+    assert "Exec idle" in output and "50s" in output
+
+
+def test_print_dashboard_shows_chain_segments_headline(monkeypatch, capsys):
+    monkeypatch.setattr(
+        dashboard,
+        "build_dashboard",
+        lambda: {
+            "services": {"agents": 0, "supervisor": True, "memory": True},
+            "chain": {
+                "mode": "autonomous_chain_board",
+                "headline": "自主链路闭环观测",
+                "segments_headline": "自主链路分段观察",
+                "api_b_backlog": 1,
+                "api_a_ready": 0,
+                "candidates": 2,
+                "writebacks": 0,
+                "current_cards": [],
+                "segments": [],
+            },
+            "countdowns": {
+                "user_chain_quiet": {"display": "10s", "met": False, "threshold_s": 600},
+                "agent_idle": {"display": "20s", "met": False, "threshold_s": 600},
+                "memory_idle": {"display": "30s", "met": False, "threshold_s": 600},
+                "autonomous_chain_plan_idle": {"display": "40s", "met": False, "threshold_s": 600},
+                "autonomous_chain_execute_idle": {"display": "50s", "met": False, "threshold_s": 600},
+                "autonomous_chain": {"display": "continuous", "scope": "soft_signal_only"},
+            },
+            "eligibility": {
+                "can_execute": False,
+                "eligible_for_planning": True,
+                "eligible_for_execution": False,
+            },
+            "next_review_cycle_display": "4m00s",
+            "autonomous_chain_policy": {"label": "continuous", "scope": "soft_signal_only"},
+        },
+    )
+    monkeypatch.setattr(dashboard, "print_three_segment_status_bar", lambda: None)
+
+    dashboard.print_dashboard()
+    output = capsys.readouterr().out
+
+    assert "自主链路分段观察" in output

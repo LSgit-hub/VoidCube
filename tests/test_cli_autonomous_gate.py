@@ -899,8 +899,8 @@ def test_autonomous_panel_shows_no_api_a_executable_task_reason(monkeypatch):
     cli._fetch_supervisor_status = lambda: {
         "timeline": [],
         "autonomous_observation": {
-            "queue": {
-                "sections": [
+            "chain": {
+                "segments": [
                     {
                         "key": "api_a_ready",
                         "items": [
@@ -958,8 +958,8 @@ def test_autonomous_panel_prefers_board_current_task_when_present(monkeypatch):
     cli._fetch_supervisor_status = lambda: {
         "timeline": [],
         "autonomous_observation": {
-            "queue": {
-                "sections": [
+            "chain": {
+                "segments": [
                     {
                         "key": "api_a_ready",
                         "items": [
@@ -1030,8 +1030,8 @@ def test_autonomous_panel_shows_approved_task_waiting_for_claim(monkeypatch):
     cli._fetch_supervisor_status = lambda: {
         "timeline": [],
         "autonomous_observation": {
-            "queue": {
-                "sections": [
+            "chain": {
+                "segments": [
                     {
                         "key": "api_a_ready",
                         "items": [
@@ -1077,6 +1077,58 @@ def test_autonomous_panel_shows_approved_task_waiting_for_claim(monkeypatch):
     assert "执行流: 监督者已放行任务，等待 API-A 自主执行面认领" in rendered
 
 
+def test_autonomous_panel_prefers_supervisor_presentation_for_non_local_reasoning(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._autonomous_gate_active = True
+    cli._agent_running = False
+    cli._spinner_text = ""
+    cli.session_id = "cli-session-local"
+    cli._current_autonomous_task = None
+    cli._current_autonomous_task_started_at = 0.0
+    cli._autonomous_execution_events = []
+    cli._autonomous_last_supervisor_event_key = ""
+
+    monkeypatch.setattr(VoidcubeCLI, "_get_tui_terminal_width", staticmethod(lambda default=(80, 24): 80))
+    cli._fetch_supervisor_status = lambda: {
+        "timeline": [],
+        "autonomous_observation": {
+            "presentation": {
+                "api_a_execution": {
+                    "stage": "approved_waiting_claim",
+                    "cli_focus_stage": "approved_waiting_claim",
+                    "status_label": "已放行待认领",
+                    "chain_reason": "链路: Supervisor 已放行该任务，等待自主执行位认领",
+                    "activity_text": "执行流: Supervisor 等待某个自主执行位开始接单",
+                    "reason_style": "warn",
+                    "focus_task": {
+                        "task_id": "learn-approved-presentation-1",
+                        "title": "Presentation driven task",
+                        "task_type": "self_learning",
+                        "status": "approved",
+                        "lane": "agent",
+                    },
+                }
+            }
+        },
+    }
+    cli._fetch_autonomous_gateway_status = lambda: {
+        "active_cli_executor": {
+            "session_id": "cli-session-local",
+            "lease_status": "healthy",
+            "is_stale": False,
+            "idle_seconds": 2,
+            "scene": "idle",
+        }
+    }
+
+    rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
+
+    assert "状态: 已放行待认领" in rendered
+    assert "Presentation driven task" in rendered
+    assert "链路: Supervisor 已放行该任务，等待自主执行位认领" in rendered
+    assert "执行流: Supervisor 等待某个自主执行位开始接单" in rendered
+
+
 def test_autonomous_panel_shows_running_task_owned_elsewhere(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._autonomous_gate_active = True
@@ -1092,8 +1144,8 @@ def test_autonomous_panel_shows_running_task_owned_elsewhere(monkeypatch):
     cli._fetch_supervisor_status = lambda: {
         "timeline": [],
         "autonomous_observation": {
-            "queue": {
-                "sections": [
+            "chain": {
+                "segments": [
                     {
                         "key": "api_a_ready",
                         "items": [
@@ -1655,7 +1707,15 @@ def test_cli_formats_supervisor_status_snapshot():
                             "observation_role": "mem_writeback",
                         }
                     ],
-                }
+                },
+                "chain": {
+                    "segments": [
+                        {"label": "API-B 治理在途", "count": 1},
+                        {"label": "API-A 待拉取", "count": 2},
+                        {"label": "API-B 候选判断", "count": 3},
+                        {"label": "Mem 最近写回", "count": 1},
+                    ]
+                },
             },
             "timeline": [
                 {
@@ -1670,6 +1730,7 @@ def test_cli_formats_supervisor_status_snapshot():
     assert any("learning=2" in line and "evolution=3" in line for line in lines)
     assert any("priority_updates=1" in line for line in lines)
     assert any("Autonomous Focus: Review self-evolution governance hygiene (当前在途)" in line for line in lines)
+    assert any("Chain Segments: API-B 治理在途=1, API-A 待拉取=2, API-B 候选判断=3, Mem 最近写回=1" in line for line in lines)
     assert any("Improve shell body" in line for line in lines)
     assert any("tasks_reviewed" in line for line in lines)
 

@@ -52,8 +52,8 @@ def _find_autonomous_observation_task(state: dict, *, title: str = "", task_id: 
         _append(section.get("current"))
         _append(section.get("active"))
         _append_many(section.get("pending"))
-    queue = dict(observation.get("queue") or {})
-    for section in list(queue.get("sections") or []):
+    chain = dict(observation.get("chain") or {})
+    for section in list(chain.get("segments") or []):
         if isinstance(section, dict):
             _append_many(section.get("items"))
 
@@ -66,8 +66,8 @@ def _find_autonomous_observation_task(state: dict, *, title: str = "", task_id: 
 
 
 def _observation_section(observation: dict, key: str) -> dict:
-    queue = dict(observation.get("queue") or {})
-    for section in list(queue.get("sections") or []):
+    chain = dict(observation.get("chain") or {})
+    for section in list(chain.get("segments") or []):
         if isinstance(section, dict) and str(section.get("key") or "").strip() == key:
             return section
     raise AssertionError(f"section not found: {key!r}")
@@ -931,13 +931,13 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
     observation = state["autonomous_observation"]
     board_roles = [item["observation_role"] for item in observation["board"]["current_cards"]]
     board_titles = [item["title"] for item in observation["board"]["current_cards"]]
-    group_keys = [group["key"] for group in observation["queue"]["sections"]]
+    group_keys = [group["key"] for group in observation["chain"]["segments"]]
     api_b_backlog = _observation_section(observation, "api_b_backlog")
     api_a_ready = _observation_section(observation, "api_a_ready")
 
     assert "queue_layout" not in state
     assert "panels" not in state
-    assert observation["read_model_version"] == 3
+    assert observation["read_model_version"] == 4
     assert "observed_tasks" not in observation
     assert "candidates" not in observation
     assert observation["mode"]["scope"] == "api_b_autonomous_chain_only"
@@ -955,7 +955,8 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
     assert board_titles[0] == "Supervisor first task"
     assert board_titles[1] == "Agent first creative task"
     assert group_keys == ["api_b_backlog", "api_a_ready", "api_b_candidates", "mem_recent"]
-    assert observation["queue"]["headline"] == "自主链路片段观察"
+    assert "queue" not in observation
+    assert observation["chain"]["headline"] == "自主链路分段观察"
     assert observation["presentation"]["headline"] == "自主链路闭环观测"
     assert observation["presentation"]["focus"]["title"] == "Supervisor first task"
     assert observation["presentation"]["hero_pills"][0]["text"].startswith("当前焦点 · ")
@@ -967,28 +968,39 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
     assert "queue_preview" not in observation["presentation"]
     assert "api_a_note" not in observation["presentation"]
     assert observation["presentation"]["api_a_execution"]["stage"] == "approved_waiting_claim"
+    assert observation["presentation"]["api_a_execution"]["cli_focus_stage"] == "approved_waiting_claim"
     assert observation["presentation"]["api_a_execution"]["focus_task"]["title"] == "Agent first creative task"
-    assert [group["key"] for group in observation["queue"]["sections"]] == group_keys
-    assert observation["queue"]["sections"][0]["owner"] == "API-B"
-    assert observation["queue"]["sections"][0]["stage_label"] == "判断与治理"
-    assert isinstance(observation["queue"]["sections"][0]["recent_events"], list)
-    assert observation["queue"]["sections"][0]["recent_event_count"] >= 1
-    assert isinstance(observation["queue"]["sections"][0]["recent_traces"], list)
-    assert observation["queue"]["sections"][0]["recent_traces"][0]["trace_id"] == supervisor_task_1["tasks"][0]["trace_id"]
-    assert observation["queue"]["sections"][0]["recent_traces"][0]["detail"]["record_count"] >= 1
+    assert [group["key"] for group in observation["chain"]["segments"]] == group_keys
+    assert observation["chain"]["segments"][0]["owner"] == "API-B"
+    assert observation["chain"]["segments"][0]["stage_label"] == "判断与治理"
+    assert observation["chain"]["segments"][0]["segment_kind"] == "governance_backlog"
+    assert observation["chain"]["segments"][0]["projection_scope"] == "chain_segment_projection"
+    assert observation["chain"]["segments"][0]["payload_count"] == 1
+    assert observation["chain"]["segments"][0]["event_count"] >= 1
+    assert observation["chain"]["segments"][0]["trace_count"] >= 1
+    assert observation["chain"]["segments"][0]["segment_status"] in {"active", "ready"}
+    assert observation["chain"]["segments"][0]["segment_status_label"] in {"当前有流动", "已有观测"}
+    assert observation["chain"]["segments"][0]["focus_item"]["observation_role"] == "api_b_judgement"
+    assert observation["chain"]["segments"][0]["latest_item"]["title"] == "Supervisor second task"
+    assert observation["chain"]["segments"][0]["latest_summary"]
+    assert isinstance(observation["chain"]["segments"][0]["recent_events"], list)
+    assert observation["chain"]["segments"][0]["recent_event_count"] >= 1
+    assert isinstance(observation["chain"]["segments"][0]["recent_traces"], list)
+    assert observation["chain"]["segments"][0]["recent_traces"][0]["trace_id"] == supervisor_task_1["tasks"][0]["trace_id"]
+    assert observation["chain"]["segments"][0]["recent_traces"][0]["detail"]["record_count"] >= 1
     assert isinstance(
-        observation["queue"]["sections"][0]["recent_traces"][0]["detail"]["source_counts"],
+        observation["chain"]["segments"][0]["recent_traces"][0]["detail"]["source_counts"],
         dict,
     )
     assert isinstance(
-        observation["queue"]["sections"][0]["recent_traces"][0]["detail"]["timeline_preview"],
+        observation["chain"]["segments"][0]["recent_traces"][0]["detail"]["timeline_preview"],
         list,
     )
     assert isinstance(
-        observation["queue"]["sections"][0]["recent_traces"][0]["detail"]["timeline_events"],
+        observation["chain"]["segments"][0]["recent_traces"][0]["detail"]["timeline_events"],
         list,
     )
-    assert observation["queue"]["sections"][0]["latest_trace_detail"]["trace_id"] == supervisor_task_1["tasks"][0]["trace_id"]
+    assert observation["chain"]["segments"][0]["latest_trace_detail"]["trace_id"] == supervisor_task_1["tasks"][0]["trace_id"]
     assert observation["api_b"]["active"]["title"] == "Supervisor first task"
     assert observation["api_b"]["active"]["display_status"] == "待执行"
     assert observation["api_b"]["current"]["display_status"] == "当前在途"
@@ -1117,7 +1129,7 @@ async def test_supervisor_room_state_exposes_recent_mem_writebacks_in_autonomous
     state = await supervisor.get_supervisor_ui_state()
     writeback = state["autonomous_observation"]["loop"]["recent_writebacks"][0]
     mem_current = state["autonomous_observation"]["mem"]["current"]
-    mem_recent = state["autonomous_observation"]["queue"]["sections"][3]["items"][0]
+    mem_recent = state["autonomous_observation"]["chain"]["segments"][3]["items"][0]
 
     assert writeback["title"] == "Completed autonomous learning writeback"
     assert writeback["lane"] == "agent"
