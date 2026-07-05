@@ -167,8 +167,8 @@ def test_build_dashboard_uses_supervisor_execution_eligibility_without_local_win
             "last_user_request_at": None,
             "last_agent_work_at": None,
             "last_memory_task_at": None,
-            "last_self_evolution_plan_at": None,
-            "last_self_evolution_execute_at": None,
+            "last_autonomous_chain_plan_at": None,
+            "last_autonomous_chain_execute_at": None,
         },
     )
     monkeypatch.setattr(
@@ -213,8 +213,8 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
             "last_user_request_at": None,
             "last_agent_work_at": None,
             "last_memory_task_at": None,
-            "last_self_evolution_plan_at": None,
-            "last_self_evolution_execute_at": None,
+            "last_autonomous_chain_plan_at": None,
+            "last_autonomous_chain_execute_at": None,
         },
     )
     monkeypatch.setattr(
@@ -242,6 +242,17 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
                             "observation_role": "api_a_execution",
                         },
                     ],
+                },
+                "presentation": {
+                    "headline": "自主链路闭环观测",
+                    "api_a_execution": {
+                        "stage": "approved_waiting_claim",
+                        "focus_task": {
+                            "task_id": "auto-ready-1",
+                            "title": "Autonomous ready task",
+                            "status": "approved",
+                        },
+                    },
                 },
                 "queue": {
                     "headline": "自主链路片段观察",
@@ -294,4 +305,5 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
     assert built["chain"]["writebacks"] == 1
     assert built["chain"]["queue_headline"] == "自主链路片段观察"
     assert built["chain"]["current_cards"][0]["title"] == "API-B judgement"
-    assert built["chain"]["queue_preview"][0]["group"] == "API-B"
+    assert built["chain"]["queue_sections"][0]["label"] == "API-B"
+    assert built["chain"]["queue_sections"][0]["title"] == "Governance backlog task"

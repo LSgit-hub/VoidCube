@@ -131,7 +131,7 @@ class TestServiceRuntimeLifecycle:
         sv._execution_facade.list_body_slots = Mock(return_value={"slots": {}})
         sv._endogenous_drive_task = None
         sv._run_endogenous_drive_cycle = AsyncMock(return_value={"status": "idle", "planned": 0})
-        sv._run_self_evolution_cycle = AsyncMock(return_value={"reviewed": 0, "dispatched": []})
+        sv._run_autonomous_chain_review_cycle = AsyncMock(return_value={"reviewed": 0, "dispatched": []})
         sv._touch_gateway_activity = AsyncMock()
         sv._memory_maintenance_executor = Mock()
         sv._ensure_watch_window_task = Mock()
@@ -172,7 +172,7 @@ class TestServiceRuntimeLifecycle:
         sv._execution_facade.get_body_registry = Mock(return_value={})
         sv._execution_facade.list_body_slots = Mock(return_value={"slots": {}})
         sv._endogenous_drive_task = None
-        sv._run_self_evolution_cycle = AsyncMock(side_effect=ValueError("transient"))
+        sv._run_autonomous_chain_review_cycle = AsyncMock(side_effect=ValueError("transient"))
         sv._run_endogenous_drive_cycle = AsyncMock(return_value={"status": "idle", "planned": 0})
         sv._touch_gateway_activity = AsyncMock()
         sv._memory_maintenance_executor = Mock()
@@ -207,8 +207,8 @@ class TestCLIExecutorCanonicalPath:
         )
 
         async def _run():
-            from systems.supervisor.task_queue import SelfEvolutionExecutionRequest
-            req = SelfEvolutionExecutionRequest(
+            from systems.supervisor.autonomous_chain_store import AutonomousChainExecutionRequest
+            req = AutonomousChainExecutionRequest(
                 task_id="t1", kind="general_self_evolution",
                 git_lineage={"candidate_commit": "abc", "rollback_commit": "def", "changed_files": ["agent/x.py"]},
                 target_slot_id="slot-B",
@@ -217,11 +217,11 @@ class TestCLIExecutorCanonicalPath:
             assert result["status"] == "formal_self_evolution_executed"
             assert result["execution_metadata"]["execution_kind"] == "general_self_evolution"
 
-            req2 = SelfEvolutionExecutionRequest(task_id="t2", kind="memory_maintenance")
+            req2 = AutonomousChainExecutionRequest(task_id="t2", kind="memory_maintenance")
             result2 = await facade.execute_self_evolution_request(req2.model_dump(mode="json"))
             assert result2["execution_metadata"]["execution_kind"] == "memory_maintenance"
 
-            req3 = SelfEvolutionExecutionRequest(
+            req3 = AutonomousChainExecutionRequest(
                 task_id="t3", kind="general_self_evolution",
                 git_lineage={"candidate_commit": "abc", "rollback_commit": "def", "changed_files": ["agent/x.py"]},
                 target_slot_id="slot-B",
@@ -1215,5 +1215,7 @@ class TestSelfLearningConclusionStoreLifecycle:
 
         submission = svc.build_supervisor_submission(conclusion)
         assert submission.conclusion_id == conclusion.conclusion_id
+
+
 
 

@@ -1029,14 +1029,35 @@ def test_autonomous_panel_shows_approved_task_waiting_for_claim(monkeypatch):
     monkeypatch.setattr(VoidcubeCLI, "_get_tui_terminal_width", staticmethod(lambda default=(80, 24): 80))
     cli._fetch_supervisor_status = lambda: {
         "timeline": [],
-        "tasks": [
-            {
-                "task_id": "learn-approved-1",
-                "title": "Approved waiting task",
-                "task_type": "self_learning",
-                "status": "approved",
-            }
-        ],
+        "autonomous_observation": {
+            "queue": {
+                "sections": [
+                    {
+                        "key": "api_a_ready",
+                        "items": [
+                            {
+                                "task_id": "learn-approved-1",
+                                "title": "Approved waiting task",
+                                "task_type": "self_learning",
+                                "status": "approved",
+                                "lane": "agent",
+                            }
+                        ],
+                    }
+                ]
+            },
+            "api_a": {
+                "pending": [
+                    {
+                        "task_id": "learn-approved-1",
+                        "title": "Approved waiting task",
+                        "task_type": "self_learning",
+                        "status": "approved",
+                        "lane": "agent",
+                    }
+                ]
+            },
+        },
     }
     cli._fetch_autonomous_gateway_status = lambda: {
         "active_cli_executor": {
@@ -1070,14 +1091,35 @@ def test_autonomous_panel_shows_running_task_owned_elsewhere(monkeypatch):
     monkeypatch.setattr(VoidcubeCLI, "_get_tui_terminal_width", staticmethod(lambda default=(80, 24): 80))
     cli._fetch_supervisor_status = lambda: {
         "timeline": [],
-        "tasks": [
-            {
-                "task_id": "learn-running-2",
-                "title": "Running elsewhere task",
-                "task_type": "self_learning",
-                "status": "running",
-            }
-        ],
+        "autonomous_observation": {
+            "queue": {
+                "sections": [
+                    {
+                        "key": "api_a_ready",
+                        "items": [
+                            {
+                                "task_id": "learn-running-2",
+                                "title": "Running elsewhere task",
+                                "task_type": "self_learning",
+                                "status": "running",
+                                "lane": "agent",
+                            }
+                        ],
+                    }
+                ]
+            },
+            "api_a": {
+                "pending": [
+                    {
+                        "task_id": "learn-running-2",
+                        "title": "Running elsewhere task",
+                        "task_type": "self_learning",
+                        "status": "running",
+                        "lane": "agent",
+                    }
+                ]
+            },
+        },
     }
     cli._fetch_autonomous_gateway_status = lambda: {
         "active_cli_executor": {

@@ -422,7 +422,7 @@ class LearningQualityScore(BaseModel):
 ```python
 def _calculate_learning_quality_score(self) -> float:
     """计算学习成果累积质量评分（替代简单的数量计数）"""
-    recent_tasks = self._self_evolution_queue.list_tasks(
+    recent_tasks = self._autonomous_chain_store.list_tasks(
         status="completed",
         task_family="self_learning",
         time_window_days=30,
@@ -892,7 +892,7 @@ elif shell.health_score >= active.health_score + 15:
 | `self._git_client` | `_verify_commit_ownership` | 使用 `BodyRegistry._git_head_for_path(worktree)` 或 `subprocess.run(["git","log","--format=%H"])` |
 | `self._git_client` | `_rollback_to_healthy_commit` | 使用 `subprocess.run(["git","reset","--hard",commit_hash])` 在 worktree 中执行 |
 | `self._mem_client.get_item()` | `_llm_review_diff` | 使用 HTTP GET `{memory_service}/compressed/{mem_id}` |
-| `list_tasks(status, task_family, time_window)` | `_calculate_learning_quality_score` | 扩展 `SelfEvolutionTaskQueue.list_tasks()` 增加过滤参数，或先获取全部再手动过滤 |
+| `list_tasks(status, task_family, time_window)` | `_calculate_learning_quality_score` | 扩展 `AutonomousChainStore.list_tasks()` 增加过滤参数，或先获取全部再手动过滤 |
 
 这些在 P0 阶段一次性补齐。
 
@@ -927,12 +927,12 @@ class BodySlotMeta(BaseModel):
     decay_applied_at: Optional[str] = None         # 上次应用衰减的时间（ISO）
 ```
 
-### 11.8 `SelfEvolutionTaskStatus` 扩展
+### 11.8 `AutonomousChainTaskStatus` 扩展
 
-当前任务状态（[task_queue.py:17](file:///f:/My_code/Traecode/VoidCube/systems/supervisor/task_queue.py#L17)）缺少方案中需要的状态：
+当前任务状态（[autonomous_chain_store.py:17](file:///f:/My_code/Traecode/VoidCube/systems/supervisor/autonomous_chain_store.py#L17)）缺少方案中需要的状态：
 
 ```python
-SelfEvolutionTaskStatus = Literal[
+AutonomousChainTaskStatus = Literal[
     "planned", "deferred", "approved", "running", "paused",
     "cancelled", "completed", "failed", "awaiting_review", "retry"
 ]
@@ -1008,7 +1008,7 @@ def _apply_cumulative_decay(self, slot_meta: BodySlotMeta):
 
 | 方法 | 用途 | 依赖 |
 |------|------|------|
-| `_update_task_status(task_id, status, reason)` | 更新任务状态 | `SelfEvolutionTaskQueue` |
+| `_update_task_status(task_id, status, reason)` | 更新任务状态 | `AutonomousChainStore` |
 | `_classify_evolution_changes(changed_files)` | 演化边界细粒度评分（0-20） | `evolution_boundary.py` |
 | `_calc_file_repeat_penalty(slot_id, changed_files)` | 同一文件重复改进惩罚 | `BodySlotMeta.health_history` |
 | `_calc_learning_freshness(learning_refs)` | 学习成果新鲜度分数（0-20） | 无 |
@@ -1055,3 +1055,4 @@ def get_active_slot(self) -> Optional[BodySlotMeta]:
 ---
 
 *文档版本：修正版 v1.0 | 最后更新：2026-06-25*
+

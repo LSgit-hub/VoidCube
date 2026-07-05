@@ -3,7 +3,7 @@ from systems.self_learning import (
     SupervisorTaskProposal,
 )
 from systems.self_learning.conclusion_store import SelfLearningConclusionStore
-from systems.supervisor.task_queue import SelfEvolutionTaskQueue
+from systems.supervisor.autonomous_chain_store import AutonomousChainStore
 
 
 def test_self_learning_conclusion_store_persists_conclusion_and_only_builds_payload(tmp_path):
@@ -54,7 +54,7 @@ def test_self_learning_conclusion_store_persists_conclusion_and_only_builds_payl
 
 def test_self_learning_conclusion_store_can_submit_recommendations_into_supervisor_queue(tmp_path):
     store = SelfLearningConclusionStore(tmp_path / "self-learning")
-    queue = SelfEvolutionTaskQueue(tmp_path / "queue" / "self_evolution_queue.json")
+    queue = AutonomousChainStore(tmp_path / "queue" / "autonomous_chain_store.json")
 
     topic = store.create_topic(
         title="Probe retry tuning",
@@ -137,7 +137,7 @@ def test_self_learning_conclusion_store_marks_experiment_followups_as_self_learn
 
 def test_self_learning_queue_payload_prefers_canonical_runtime_profile_over_broad_task_type(tmp_path):
     store = SelfLearningConclusionStore(tmp_path / "self-learning")
-    queue = SelfEvolutionTaskQueue(tmp_path / "queue" / "self_evolution_queue.json")
+    queue = AutonomousChainStore(tmp_path / "queue" / "autonomous_chain_store.json")
 
     proposal = SupervisorTaskProposal(
         title="Promote body candidate",
@@ -165,3 +165,4 @@ def test_self_learning_queue_payload_prefers_canonical_runtime_profile_over_broa
     assert created["governance_task_type"] == "self_evolution"
     assert created["task_family"] == "body_switch"
     assert created["execution_kind"] == "body_switch"
+

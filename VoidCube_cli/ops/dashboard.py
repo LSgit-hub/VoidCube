@@ -88,65 +88,66 @@ def fetch_supervisor_state() -> Dict[str, Any]:
     return _get_json(f"{SUPERVISOR_URL}/ui/state") or {}
 
 
-def _observation_queue_groups(state: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
-    observation = dict(state.get("autonomous_observation") or {})
-    queue = dict(observation.get("queue") or {})
-    sections = list(queue.get("sections") or [])
-    result: Dict[str, List[Dict[str, Any]]] = {}
-    for group in sections:
-        if not isinstance(group, dict):
-            continue
-        key = str(group.get("key") or "").strip()
-        if not key:
-            continue
-        result[key] = [
-            dict(item)
-            for item in list(group.get("items") or [])
-            if isinstance(item, dict)
-        ]
-    return result
-
-
 def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
     observation = dict(state.get("autonomous_observation") or {})
+    presentation = dict(observation.get("presentation") or {})
     counts = dict(observation.get("counts") or {})
     board = dict(observation.get("board") or {})
     queue = dict(observation.get("queue") or {})
+    queue_label_fallback = {
+        "api_b_backlog": "API-B",
+        "api_a_ready": "API-A",
+        "api_b_candidates": "候选",
+        "mem_recent": "Mem",
+    }
     current_cards = [
         dict(item)
         for item in list(board.get("current_cards") or [])
         if isinstance(item, dict)
     ]
-    groups = _observation_queue_groups(state)
+    queue_sections = []
+    for section in list(queue.get("sections") or []):
+        if not isinstance(section, dict):
+            continue
+        items = [
+            dict(item)
+            for item in list(section.get("items") or [])
+            if isinstance(item, dict)
+        ]
+        head_item = items[0] if items else {}
+        queue_sections.append(
+            {
+                "key": str(section.get("key") or "").strip(),
+                "label": str(
+                    section.get("label")
+                    or section.get("owner")
+                    or queue_label_fallback.get(str(section.get("key") or "").strip(), "?")
+                ),
+                "owner": str(section.get("owner") or "").strip(),
+                "stage_label": str(section.get("stage_label") or "").strip(),
+                "count": len(items),
+                "title": str(
+                    head_item.get("title")
+                    or section.get("empty_text")
+                    or section.get("summary")
+                    or "暂无可见任务"
+                ),
+                "status": str(
+                    head_item.get("display_status")
+                    or head_item.get("status")
+                    or ("空" if not items else "?")
+                ),
+            }
+        )
 
-    if not current_cards and not groups:
+    if not current_cards and not queue_sections:
         return {}
 
-    def _group_label(key: str) -> str:
-        mapping = {
-            "api_b_backlog": "API-B",
-            "api_a_ready": "API-A",
-            "api_b_candidates": "候选",
-            "mem_recent": "Mem",
-        }
-        return mapping.get(key, key)
-
-    queue_preview: List[Dict[str, Any]] = []
-    for key in ("api_b_backlog", "api_a_ready", "api_b_candidates", "mem_recent"):
-        for item in groups.get(key, [])[:3]:
-            queue_preview.append(
-                {
-                    "title": str(item.get("title") or "?"),
-                    "status": str(item.get("display_status") or item.get("status") or "?"),
-                    "group": _group_label(key),
-                }
-            )
-
     return {
-        "api_b_backlog": int(counts.get("api_b_backlog") or len(groups.get("api_b_backlog", []))),
-        "api_a_ready": int(counts.get("api_a_ready") or len(groups.get("api_a_ready", []))),
-        "candidates": int(counts.get("candidates") or len(groups.get("api_b_candidates", []))),
-        "writebacks": int(counts.get("writebacks") or len(groups.get("mem_recent", []))),
+        "api_b_backlog": int(counts.get("api_b_backlog") or 0),
+        "api_a_ready": int(counts.get("api_a_ready") or 0),
+        "candidates": int(counts.get("candidates") or 0),
+        "writebacks": int(counts.get("writebacks") or 0),
         "current_cards": [
             {
                 "title": str(item.get("title") or "?"),
@@ -155,8 +156,8 @@ def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
             }
             for item in current_cards[:4]
         ],
-        "queue_preview": queue_preview[:8],
-        "headline": str(board.get("headline") or "自主链路闭环观测"),
+        "queue_sections": queue_sections[:4],
+        "headline": str(presentation.get("headline") or board.get("headline") or "自主链路闭环观测"),
         "queue_headline": str(queue.get("headline") or "自主链路片段观察"),
     }
 
@@ -221,8 +222,8 @@ def build_dashboard() -> Dict[str, Any]:
     last_user = _parse_iso(activity.get("last_user_request_at"))
     last_agent = _parse_iso(activity.get("last_agent_work_at"))
     last_memory = _parse_iso(activity.get("last_memory_task_at"))
-    last_se_plan = _parse_iso(activity.get("last_self_evolution_plan_at"))
-    last_se_exec = _parse_iso(activity.get("last_self_evolution_execute_at"))
+    last_chain_plan = _parse_iso(activity.get("last_autonomous_chain_plan_at"))
+    last_chain_exec = _parse_iso(activity.get("last_autonomous_chain_execute_at"))
 
     # ── Idle seconds ────────────────────────────────────────────────
     def idle_since(dt: Optional[datetime]) -> Optional[float]:
@@ -233,8 +234,8 @@ def build_dashboard() -> Dict[str, Any]:
     user_idle_s = idle_since(last_user)
     agent_idle_s = idle_since(last_agent)
     memory_idle_s = idle_since(last_memory)
-    se_plan_idle_s = idle_since(last_se_plan)
-    se_exec_idle_s = idle_since(last_se_exec)
+    chain_plan_idle_s = idle_since(last_chain_plan)
+    chain_exec_idle_s = idle_since(last_chain_exec)
 
     # ── Activity guard read model from supervisor state ─────────────
     user_threshold = int(thresholds.get("user_idle_seconds", 600))
@@ -248,8 +249,8 @@ def build_dashboard() -> Dict[str, Any]:
         ("user_chain_quiet", user_idle_s, user_threshold),
         ("agent_idle", agent_idle_s, workflow_threshold),
         ("memory_idle", memory_idle_s, memory_threshold),
-        ("se_plan_idle", se_plan_idle_s, workflow_threshold),
-        ("se_exec_idle", se_exec_idle_s, workflow_threshold),
+        ("autonomous_chain_plan_idle", chain_plan_idle_s, workflow_threshold),
+        ("autonomous_chain_execute_idle", chain_exec_idle_s, workflow_threshold),
     ]:
         if idle_val is None:
             countdowns[label] = {"remaining_s": None, "display": "no data", "met": True}
@@ -287,7 +288,7 @@ def build_dashboard() -> Dict[str, Any]:
             "candidates": chain_snapshot.get("candidates", 0),
             "writebacks": chain_snapshot.get("writebacks", 0),
             "current_cards": list(chain_snapshot.get("current_cards") or []),
-            "queue_preview": list(chain_snapshot.get("queue_preview") or []),
+            "queue_sections": list(chain_snapshot.get("queue_sections") or []),
             "queue_headline": chain_snapshot.get("queue_headline", "自主链路片段观察"),
         }
     else:
@@ -300,15 +301,15 @@ def build_dashboard() -> Dict[str, Any]:
             "candidates": 0,
             "writebacks": 0,
             "current_cards": [],
-            "queue_preview": [],
+            "queue_sections": [],
             "queue_headline": "自主链路片段观察",
         }
 
     # ── Next review cycle estimate ──────────────────────────────────
     review_interval = 300  # default 5 min
-    next_review_s = max(0.0, review_interval - (se_plan_idle_s or review_interval))
-    if se_plan_idle_s is not None and se_plan_idle_s < review_interval:
-        next_review_s = review_interval - se_plan_idle_s
+    next_review_s = max(0.0, review_interval - (chain_plan_idle_s or review_interval))
+    if chain_plan_idle_s is not None and chain_plan_idle_s < review_interval:
+        next_review_s = review_interval - chain_plan_idle_s
     else:
         next_review_s = review_interval
 
@@ -472,11 +473,11 @@ def print_dashboard() -> None:
             title = str(item.get("title") or "?")[:28]
             status = str(item.get("status") or "?")[:12]
             print(f"  ║  ↻ {title:<28s} {status:<12s}                          ║")
-        for item in list(chain.get("queue_preview") or [])[:4]:
-            group = str(item.get("group") or "?")[:6]
+        for item in list(chain.get("queue_sections") or [])[:4]:
+            group = str(item.get("label") or item.get("owner") or "?")[:12]
             title = str(item.get("title") or "?")[:28]
             status = str(item.get("status") or "?")[:10]
-            print(f"  ║  • {group:<6s} {title:<28s} {status:<10s}                    ║")
+            print(f"  ║  • {group:<12s} {title:<28s} {status:<10s}              ║")
     else:
         print(
             f"  ║  {chain.get('headline', '自主链路观测暂不可用')[:46]:<46s}          ║"

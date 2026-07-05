@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict
 
-from systems.supervisor.task_queue import SelfEvolutionExecutionRequest
+from systems.supervisor.autonomous_chain_store import AutonomousChainExecutionRequest
 
 
 @dataclass(slots=True)
@@ -44,7 +44,7 @@ class VoidCubeExecutionFacade:
         return await self.body_upgrade.execute_body_upgrade(request)
 
     async def execute_self_evolution_request(self, request: dict) -> Dict[str, Any]:
-        execution_request = SelfEvolutionExecutionRequest.model_validate(request)
+        execution_request = AutonomousChainExecutionRequest.model_validate(request)
         execution_request_payload = execution_request.model_dump(mode="json")
         execution_metadata = {
             "request_id": execution_request.request_id,
@@ -147,3 +147,4 @@ class VoidCubeExecutionFacade:
             return await self.supervisor._planning_runtime._review_body_improvement(request)
         except Exception as e:
             return {"status": "error", "reason": str(e)}
+

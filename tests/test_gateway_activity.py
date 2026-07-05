@@ -21,34 +21,34 @@ def test_gateway_activity_touch_endpoint_updates_snapshot():
     initial = response.json()
     assert initial["last_user_request_at"] is None
     assert initial["last_self_learning_activity_at"] is None
-    assert initial["last_self_evolution_activity_at"] is None
+    assert initial["last_autonomous_chain_activity_at"] is None
     assert initial["counts"]["self_learning_activity_count"] == 0
-    assert initial["counts"]["self_evolution_activity_count"] == 0
+    assert initial["counts"]["autonomous_chain_activity_count"] == 0
 
     touch_response = client.post(
         "/admin/activity/touch",
         json={
-            "activity_kind": "self_evolution",
+            "activity_kind": "autonomous_chain",
             "source_service": "supervisor",
         },
     )
     assert touch_response.status_code == 200
 
     updated = client.get("/admin/activity").json()
-    assert updated["last_self_evolution_activity_at"] is not None
-    assert updated["counts"]["self_evolution_activity_count"] == 1
+    assert updated["last_autonomous_chain_activity_at"] is not None
+    assert updated["counts"]["autonomous_chain_activity_count"] == 1
 
     plan_response = client.post(
         "/admin/activity/touch",
         json={
-            "activity_kind": "self_evolution_plan",
+            "activity_kind": "autonomous_chain_plan",
             "source_service": "supervisor",
         },
     )
     execute_response = client.post(
         "/admin/activity/touch",
         json={
-            "activity_kind": "self_evolution_execute",
+            "activity_kind": "autonomous_chain_execute",
             "source_service": "executor",
         },
     )
@@ -56,14 +56,14 @@ def test_gateway_activity_touch_endpoint_updates_snapshot():
     assert plan_response.status_code == 200
     assert execute_response.status_code == 200
     refined = client.get("/admin/activity").json()
-    assert refined["last_self_evolution_plan_at"] is not None
-    assert refined["last_self_evolution_execute_at"] is not None
-    assert refined["counts"]["self_evolution_activity_count"] == 3
-    assert refined["counts"]["self_evolution_plan_count"] == 1
-    assert refined["counts"]["self_evolution_execute_count"] == 1
-    assert refined["recent_metadata"]["self_evolution"]["source_service"] == "executor"
-    assert refined["recent_metadata"]["self_evolution_plan"]["source_service"] == "supervisor"
-    assert refined["recent_metadata"]["self_evolution_execute"]["source_service"] == "executor"
+    assert refined["last_autonomous_chain_plan_at"] is not None
+    assert refined["last_autonomous_chain_execute_at"] is not None
+    assert refined["counts"]["autonomous_chain_activity_count"] == 3
+    assert refined["counts"]["autonomous_chain_plan_count"] == 1
+    assert refined["counts"]["autonomous_chain_execute_count"] == 1
+    assert refined["recent_metadata"]["autonomous_chain"]["source_service"] == "executor"
+    assert refined["recent_metadata"]["autonomous_chain_plan"]["source_service"] == "supervisor"
+    assert refined["recent_metadata"]["autonomous_chain_execute"]["source_service"] == "executor"
 
 
 def test_gateway_activity_touch_derives_runtime_task_profile_from_broad_metadata():
@@ -73,7 +73,7 @@ def test_gateway_activity_touch_derives_runtime_task_profile_from_broad_metadata
     response = client.post(
         "/admin/activity/touch",
         json={
-            "activity_kind": "self_evolution_plan",
+            "activity_kind": "autonomous_chain_plan",
             "source_service": "supervisor",
             "metadata": {
                 "trace_id": "trace-plan-1",
@@ -86,7 +86,7 @@ def test_gateway_activity_touch_derives_runtime_task_profile_from_broad_metadata
 
     assert response.status_code == 200
     activity = client.get("/admin/activity").json()
-    metadata = activity["recent_metadata"]["self_evolution_plan"]
+    metadata = activity["recent_metadata"]["autonomous_chain_plan"]
     assert metadata["trace_id"] == "trace-plan-1"
     assert metadata["task_type"] == "self_evolution"
     assert metadata["governance_task_type"] == "self_evolution"
@@ -104,7 +104,7 @@ def test_gateway_activity_touch_derives_runtime_task_profile_from_nested_runtime
     response = client.post(
         "/admin/activity/touch",
         json={
-            "activity_kind": "self_evolution_execute",
+            "activity_kind": "autonomous_chain_execute",
             "source_service": "executor",
             "metadata": {
                 "trace_id": "trace-exec-2",
@@ -120,7 +120,7 @@ def test_gateway_activity_touch_derives_runtime_task_profile_from_nested_runtime
 
     assert response.status_code == 200
     activity = client.get("/admin/activity").json()
-    metadata = activity["recent_metadata"]["self_evolution_execute"]
+    metadata = activity["recent_metadata"]["autonomous_chain_execute"]
     assert metadata["trace_id"] == "trace-exec-2"
     assert metadata["governance_task_type"] == "memory_maintenance"
     assert metadata["task_family"] == "memory_maintenance"
@@ -135,7 +135,7 @@ def test_gateway_activity_log_is_bounded_and_trace_filterable():
     first = client.post(
         "/admin/activity/touch",
         json={
-            "activity_kind": "self_evolution_plan",
+            "activity_kind": "autonomous_chain_plan",
             "source_service": "supervisor",
             "metadata": {
                 "trace_id": "trace-log-1",
@@ -167,7 +167,7 @@ def test_gateway_activity_log_is_bounded_and_trace_filterable():
     third = client.post(
         "/admin/activity/touch",
         json={
-            "activity_kind": "self_evolution_execute",
+            "activity_kind": "autonomous_chain_execute",
             "source_service": "executor",
             "metadata": {
                 "trace_id": "trace-log-1",
@@ -187,7 +187,7 @@ def test_gateway_activity_log_is_bounded_and_trace_filterable():
     assert log["activity_log_limit"] == 2
     assert log["count"] == 2
     assert [event["activity_kind"] for event in log["events"]] == [
-        "self_evolution_execute",
+        "autonomous_chain_execute",
         "self_learning",
     ]
     assert all(event["metadata"].get("trace_id") != "trace-ignored" for event in log["events"])
@@ -197,7 +197,7 @@ def test_gateway_activity_log_is_bounded_and_trace_filterable():
         params={"trace_id": "trace-log-1", "limit": 10},
     ).json()
     assert filtered["count"] == 1
-    assert filtered["events"][0]["activity_kind"] == "self_evolution_execute"
+    assert filtered["events"][0]["activity_kind"] == "autonomous_chain_execute"
     assert filtered["events"][0]["metadata"]["trace_id"] == "trace-log-1"
     assert filtered["events"][0]["metadata"]["task_family"] == "body_switch"
     assert filtered["events"][0]["metadata"]["execution_kind"] == "body_switch"
@@ -600,7 +600,7 @@ def test_gateway_task_decision_forwards_metadata_to_supervisor(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert captured["url"].endswith("/self-evolution/tasks/learn-9/decision")
+    assert captured["url"].endswith("/autonomous-chain/tasks/learn-9/decision")
     assert captured["json"]["metadata"]["owner_session_id"] == "cli-session-1"
     assert captured["json"]["metadata"]["execution_source"] == "cli_agent_pull"
 
@@ -890,19 +890,19 @@ def test_gateway_executor_route_updates_execute_activity_even_when_upstream_fail
 
     assert response.status_code in {500, 504}
     activity = client.get("/admin/activity").json()
-    assert activity["last_self_evolution_execute_at"] is not None
-    assert activity["last_self_evolution_activity_at"] is not None
-    assert activity["counts"]["self_evolution_execute_count"] == 1
-    assert activity["counts"]["self_evolution_activity_count"] == 1
-    assert activity["recent_metadata"]["self_evolution_execute"]["trace_id"] == "trace-exec-1"
-    assert activity["recent_metadata"]["self_evolution_execute"]["task_type"] == "self_evolution"
-    assert activity["recent_metadata"]["self_evolution_execute"]["governance_task_type"] == "self_evolution"
-    assert activity["recent_metadata"]["self_evolution_execute"]["task_family"] == "body_switch"
-    assert activity["recent_metadata"]["self_evolution_execute"]["execution_kind"] == "body_switch"
-    assert activity["recent_metadata"]["self_evolution_execute"]["decision_id"] == "decision-exec-1"
-    assert activity["recent_metadata"]["self_evolution_execute"]["task_id"] == "task-exec-1"
-    assert activity["recent_metadata"]["self_evolution_execute"]["task_identity"]["display_kind"] == "body_switch"
-    assert activity["recent_metadata"]["self_evolution_execute"]["task_identity"]["requested_kind"] == "body_switch"
+    assert activity["last_autonomous_chain_execute_at"] is not None
+    assert activity["last_autonomous_chain_activity_at"] is not None
+    assert activity["counts"]["autonomous_chain_execute_count"] == 1
+    assert activity["counts"]["autonomous_chain_activity_count"] == 1
+    assert activity["recent_metadata"]["autonomous_chain_execute"]["trace_id"] == "trace-exec-1"
+    assert activity["recent_metadata"]["autonomous_chain_execute"]["task_type"] == "self_evolution"
+    assert activity["recent_metadata"]["autonomous_chain_execute"]["governance_task_type"] == "self_evolution"
+    assert activity["recent_metadata"]["autonomous_chain_execute"]["task_family"] == "body_switch"
+    assert activity["recent_metadata"]["autonomous_chain_execute"]["execution_kind"] == "body_switch"
+    assert activity["recent_metadata"]["autonomous_chain_execute"]["decision_id"] == "decision-exec-1"
+    assert activity["recent_metadata"]["autonomous_chain_execute"]["task_id"] == "task-exec-1"
+    assert activity["recent_metadata"]["autonomous_chain_execute"]["task_identity"]["display_kind"] == "body_switch"
+    assert activity["recent_metadata"]["autonomous_chain_execute"]["task_identity"]["requested_kind"] == "body_switch"
 
 
 def _post_agent_scene(client, session_id, metadata):
@@ -1158,7 +1158,7 @@ def test_completed_task_writeback_records_finding_to_tier1(monkeypatch):
     assert recorded["text"] == "Findings: X improves Y."
     assert recorded["metadata"]["task_id"] == "learn-42"
     assert recorded["metadata"]["execution_kind"] == "self_learning"
-    assert forwarded["url"].endswith("/self-evolution/tasks/learn-42/decision")
+    assert forwarded["url"].endswith("/autonomous-chain/tasks/learn-42/decision")
     assert forwarded["json"]["final_response"] == "Findings: X improves Y."
 
 

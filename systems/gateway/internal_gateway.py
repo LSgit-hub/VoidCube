@@ -11,6 +11,11 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from systems.runtime_task_profile import derive_runtime_task_profile
+from systems.supervisor.autonomous_chain_contract import (
+    AUTONOMOUS_CHAIN_TASKS_ROUTE,
+    autonomous_chain_task_decision_route,
+    autonomous_chain_task_route,
+)
 from systems.runtime_thresholds import (
     DEFAULT_ACTIVE_CLI_STALE_AFTER_SECONDS,
     DEFAULT_CLI_SESSION_TTL_SECONDS,
@@ -114,16 +119,16 @@ class InternalGateway:
             "last_agent_work_at": None,
             "last_memory_task_at": None,
             "last_self_learning_activity_at": None,
-            "last_self_evolution_activity_at": None,
-            "last_self_evolution_plan_at": None,
-            "last_self_evolution_execute_at": None,
+            "last_autonomous_chain_activity_at": None,
+            "last_autonomous_chain_plan_at": None,
+            "last_autonomous_chain_execute_at": None,
             "user_request_count": 0,
             "agent_work_count": 0,
             "memory_task_count": 0,
             "self_learning_activity_count": 0,
-            "self_evolution_activity_count": 0,
-            "self_evolution_plan_count": 0,
-            "self_evolution_execute_count": 0,
+            "autonomous_chain_activity_count": 0,
+            "autonomous_chain_plan_count": 0,
+            "autonomous_chain_execute_count": 0,
             "memory_write_failure_count": 0,
             "last_memory_write_failure_at": None,
             "error_count": 0,
@@ -133,9 +138,9 @@ class InternalGateway:
                 "agent_work": None,
                 "memory_task": None,
                 "self_learning": None,
-                "self_evolution": None,
-                "self_evolution_plan": None,
-                "self_evolution_execute": None,
+                "autonomous_chain": None,
+                "autonomous_chain_plan": None,
+                "autonomous_chain_execute": None,
                 "memory_write_failure": None,
             },
         }
@@ -203,6 +208,34 @@ class InternalGateway:
             self.config.activity_log_path = str(run_dir / "gateway-activity.json")
         self._setup_routes()
         self._load_activity_state()
+
+    @staticmethod
+    def _legacy_autonomous_chain_state_key_map() -> Dict[str, str]:
+        return {
+            "last_self_evolution_activity_at": "last_autonomous_chain_activity_at",
+            "last_self_evolution_plan_at": "last_autonomous_chain_plan_at",
+            "last_self_evolution_execute_at": "last_autonomous_chain_execute_at",
+            "self_evolution_activity_count": "autonomous_chain_activity_count",
+            "self_evolution_plan_count": "autonomous_chain_plan_count",
+            "self_evolution_execute_count": "autonomous_chain_execute_count",
+        }
+
+    @staticmethod
+    def _legacy_autonomous_chain_recent_metadata_key_map() -> Dict[str, str]:
+        return {
+            "self_evolution": "autonomous_chain",
+            "self_evolution_plan": "autonomous_chain_plan",
+            "self_evolution_execute": "autonomous_chain_execute",
+        }
+
+    @classmethod
+    def _normalize_gateway_activity_kind(cls, activity_kind: str) -> str:
+        normalized = str(activity_kind or "").strip().lower()
+        return {
+            "self_evolution": "autonomous_chain",
+            "self_evolution_plan": "autonomous_chain_plan",
+            "self_evolution_execute": "autonomous_chain_execute",
+        }.get(normalized, normalized)
 
     def _setup_routes(self):
         self.app.add_api_route("/", self.health_check, methods=["GET"])
@@ -506,19 +539,19 @@ class InternalGateway:
                 if self._activity_state["last_self_learning_activity_at"]
                 else None
             ),
-            "last_self_evolution_activity_at": (
-                self._activity_state["last_self_evolution_activity_at"].isoformat()
-                if self._activity_state["last_self_evolution_activity_at"]
+            "last_autonomous_chain_activity_at": (
+                self._activity_state["last_autonomous_chain_activity_at"].isoformat()
+                if self._activity_state["last_autonomous_chain_activity_at"]
                 else None
             ),
-            "last_self_evolution_plan_at": (
-                self._activity_state["last_self_evolution_plan_at"].isoformat()
-                if self._activity_state["last_self_evolution_plan_at"]
+            "last_autonomous_chain_plan_at": (
+                self._activity_state["last_autonomous_chain_plan_at"].isoformat()
+                if self._activity_state["last_autonomous_chain_plan_at"]
                 else None
             ),
-            "last_self_evolution_execute_at": (
-                self._activity_state["last_self_evolution_execute_at"].isoformat()
-                if self._activity_state["last_self_evolution_execute_at"]
+            "last_autonomous_chain_execute_at": (
+                self._activity_state["last_autonomous_chain_execute_at"].isoformat()
+                if self._activity_state["last_autonomous_chain_execute_at"]
                 else None
             ),
             "last_memory_write_failure_at": (
@@ -531,9 +564,9 @@ class InternalGateway:
                 "agent_work_count": self._activity_state["agent_work_count"],
                 "memory_task_count": self._activity_state["memory_task_count"],
                 "self_learning_activity_count": self._activity_state["self_learning_activity_count"],
-                "self_evolution_activity_count": self._activity_state["self_evolution_activity_count"],
-                "self_evolution_plan_count": self._activity_state["self_evolution_plan_count"],
-                "self_evolution_execute_count": self._activity_state["self_evolution_execute_count"],
+                "autonomous_chain_activity_count": self._activity_state["autonomous_chain_activity_count"],
+                "autonomous_chain_plan_count": self._activity_state["autonomous_chain_plan_count"],
+                "autonomous_chain_execute_count": self._activity_state["autonomous_chain_execute_count"],
                 "memory_write_failure_count": self._activity_state["memory_write_failure_count"],
                 "error_count": self._activity_state["error_count"],
                 "uncertainty_high_count": self._activity_state["uncertainty_high_count"],
@@ -650,24 +683,24 @@ class InternalGateway:
             self._activity_state["last_self_learning_activity_at"] = now
             self._activity_state["self_learning_activity_count"] += 1
             self._activity_state["recent_metadata"]["self_learning"] = activity_metadata
-        elif normalized == "self_evolution":
-            self._activity_state["last_self_evolution_activity_at"] = now
-            self._activity_state["self_evolution_activity_count"] += 1
-            self._activity_state["recent_metadata"]["self_evolution"] = activity_metadata
-        elif normalized == "self_evolution_plan":
-            self._activity_state["last_self_evolution_activity_at"] = now
-            self._activity_state["last_self_evolution_plan_at"] = now
-            self._activity_state["self_evolution_activity_count"] += 1
-            self._activity_state["self_evolution_plan_count"] += 1
-            self._activity_state["recent_metadata"]["self_evolution"] = activity_metadata
-            self._activity_state["recent_metadata"]["self_evolution_plan"] = activity_metadata
-        elif normalized == "self_evolution_execute":
-            self._activity_state["last_self_evolution_activity_at"] = now
-            self._activity_state["last_self_evolution_execute_at"] = now
-            self._activity_state["self_evolution_activity_count"] += 1
-            self._activity_state["self_evolution_execute_count"] += 1
-            self._activity_state["recent_metadata"]["self_evolution"] = activity_metadata
-            self._activity_state["recent_metadata"]["self_evolution_execute"] = activity_metadata
+        elif normalized == "autonomous_chain":
+            self._activity_state["last_autonomous_chain_activity_at"] = now
+            self._activity_state["autonomous_chain_activity_count"] += 1
+            self._activity_state["recent_metadata"]["autonomous_chain"] = activity_metadata
+        elif normalized == "autonomous_chain_plan":
+            self._activity_state["last_autonomous_chain_activity_at"] = now
+            self._activity_state["last_autonomous_chain_plan_at"] = now
+            self._activity_state["autonomous_chain_activity_count"] += 1
+            self._activity_state["autonomous_chain_plan_count"] += 1
+            self._activity_state["recent_metadata"]["autonomous_chain"] = activity_metadata
+            self._activity_state["recent_metadata"]["autonomous_chain_plan"] = activity_metadata
+        elif normalized == "autonomous_chain_execute":
+            self._activity_state["last_autonomous_chain_activity_at"] = now
+            self._activity_state["last_autonomous_chain_execute_at"] = now
+            self._activity_state["autonomous_chain_activity_count"] += 1
+            self._activity_state["autonomous_chain_execute_count"] += 1
+            self._activity_state["recent_metadata"]["autonomous_chain"] = activity_metadata
+            self._activity_state["recent_metadata"]["autonomous_chain_execute"] = activity_metadata
         elif normalized == "agent_error":
             self._activity_state["error_count"] += 1
             self._activity_state["recent_metadata"]["agent_error"] = activity_metadata
@@ -705,11 +738,22 @@ class InternalGateway:
             return
         saved_state = raw.get("state")
         if isinstance(saved_state, dict):
+            normalized_state = dict(saved_state)
+            for legacy_key, canonical_key in self._legacy_autonomous_chain_state_key_map().items():
+                if canonical_key not in normalized_state and legacy_key in normalized_state:
+                    normalized_state[canonical_key] = normalized_state.get(legacy_key)
+            saved_recent_metadata = normalized_state.get("recent_metadata")
+            if isinstance(saved_recent_metadata, dict):
+                normalized_recent_metadata = dict(saved_recent_metadata)
+                for legacy_key, canonical_key in self._legacy_autonomous_chain_recent_metadata_key_map().items():
+                    if canonical_key not in normalized_recent_metadata and legacy_key in normalized_recent_metadata:
+                        normalized_recent_metadata[canonical_key] = normalized_recent_metadata.get(legacy_key)
+                normalized_state["recent_metadata"] = normalized_recent_metadata
             # Timestamp fields are stored as ISO strings; restore to datetime
             _ts_fields = {k for k in self._activity_state if k.startswith("last_")}
             for key in self._activity_state:
-                if key in saved_state:
-                    value = saved_state[key]
+                if key in normalized_state:
+                    value = normalized_state[key]
                     if key in _ts_fields and isinstance(value, str):
                         try:
                             value = datetime.fromisoformat(value)
@@ -722,7 +766,11 @@ class InternalGateway:
             limit = max(int(self.config.activity_log_limit), 1)
             for event in reversed(saved_events[-limit:]):
                 if isinstance(event, dict):
-                    self._activity_log.appendleft(event)
+                    normalized_event = dict(event)
+                    normalized_event["activity_kind"] = self._normalize_gateway_activity_kind(
+                        normalized_event.get("activity_kind") or ""
+                    )
+                    self._activity_log.appendleft(normalized_event)
         # Counters are runtime-only — reset on restart to avoid stale
         # accumulation.  Timestamps and log events survive for idle-window
         # continuity after a quick restart.
@@ -945,17 +993,17 @@ class InternalGateway:
         self._activity_state["last_agent_work_at"] = None
         self._activity_state["last_memory_task_at"] = None
         self._activity_state["last_self_learning_activity_at"] = None
-        self._activity_state["last_self_evolution_activity_at"] = None
-        self._activity_state["last_self_evolution_plan_at"] = None
-        self._activity_state["last_self_evolution_execute_at"] = None
+        self._activity_state["last_autonomous_chain_activity_at"] = None
+        self._activity_state["last_autonomous_chain_plan_at"] = None
+        self._activity_state["last_autonomous_chain_execute_at"] = None
         self._activity_state["last_memory_write_failure_at"] = None
         self._activity_state["user_request_count"] = 0
         self._activity_state["agent_work_count"] = 0
         self._activity_state["memory_task_count"] = 0
         self._activity_state["self_learning_activity_count"] = 0
-        self._activity_state["self_evolution_activity_count"] = 0
-        self._activity_state["self_evolution_plan_count"] = 0
-        self._activity_state["self_evolution_execute_count"] = 0
+        self._activity_state["autonomous_chain_activity_count"] = 0
+        self._activity_state["autonomous_chain_plan_count"] = 0
+        self._activity_state["autonomous_chain_execute_count"] = 0
         self._activity_state["memory_write_failure_count"] = 0
         self._activity_state["error_count"] = 0
         self._activity_state["uncertainty_high_count"] = 0
@@ -964,9 +1012,9 @@ class InternalGateway:
             "agent_work": None,
             "memory_task": None,
             "self_learning": None,
-            "self_evolution": None,
-            "self_evolution_plan": None,
-            "self_evolution_execute": None,
+            "autonomous_chain": None,
+            "autonomous_chain_plan": None,
+            "autonomous_chain_execute": None,
             "memory_write_failure": None,
         }
         self._activity_log.clear()
@@ -1399,9 +1447,9 @@ class InternalGateway:
             elif target_service.service_type == "agent":
                 self._touch_activity("agent_work", source_service="gateway", metadata=activity_metadata)
             elif target_service.service_type == "supervisor":
-                self._touch_activity("self_evolution_plan", source_service="gateway", metadata=activity_metadata)
+                self._touch_activity("autonomous_chain_plan", source_service="gateway", metadata=activity_metadata)
             elif target_service.service_type == "executor":
-                self._touch_activity("self_evolution_execute", metadata=activity_metadata)
+                self._touch_activity("autonomous_chain_execute", metadata=activity_metadata)
             
             url = f"{target_service.address}/{path}"
             logger.debug(f"Routing request {request_id}: {path} -> {url}")
@@ -1560,7 +1608,7 @@ class InternalGateway:
             logger.warning(detail)
             raise HTTPException(status_code=503, detail=detail)
 
-        url = f"{supervisor_service.address}/self-evolution/tasks"
+        url = f"{supervisor_service.address}{AUTONOMOUS_CHAIN_TASKS_ROUTE}"
         params = {"status": "approved"}
         if task_type:
             params["task_type"] = task_type
@@ -1714,7 +1762,7 @@ class InternalGateway:
             logger.warning(detail)
             raise HTTPException(status_code=503, detail=detail)
 
-        url = f"{supervisor_service.address}/self-evolution/tasks/{task_id}/decision"
+        url = f"{supervisor_service.address}{autonomous_chain_task_decision_route(task_id)}"
 
         try:
             body = await request.body()
@@ -1738,7 +1786,7 @@ class InternalGateway:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    f"{supervisor_service.address}/self-evolution/tasks/{task_id}",
+                    f"{supervisor_service.address}{autonomous_chain_task_route(task_id)}",
                     timeout=aiohttp.ClientTimeout(total=30),
                 ) as task_resp:
                     if task_resp.status != 200:
@@ -1839,7 +1887,7 @@ class InternalGateway:
                         raise HTTPException(status_code=resp.status, detail=f"Supervisor returned {resp.status}")
                     result = await resp.json()
             self._touch_activity(
-                "self_evolution",
+                "autonomous_chain",
                 source_service="gateway",
                 metadata={"task_id": report.get("task_id"), "slot_id": report.get("slot_id")},
             )

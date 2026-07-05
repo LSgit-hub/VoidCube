@@ -329,6 +329,7 @@ class SupervisorConfig(BaseModel):
     ui_activity_buffer_size: int = 100
     ui_path: str = "/ui"
     soul_store_path: Optional[str] = None
-    self_evolution_queue_path: Optional[str] = None
+    autonomous_chain_store_path: Optional[str] = None
+
 
 

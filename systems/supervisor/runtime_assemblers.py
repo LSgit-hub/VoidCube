@@ -17,7 +17,7 @@ from systems.execution import (
 from systems.lifecycle import BodyLifecycleExecutor
 from systems.probe import ProbeExecutor, ProbeRunner
 from systems.supervisor.endogenous_drive import EndogenousDriveEngine
-from systems.supervisor.task_queue import SelfEvolutionTaskQueue
+from systems.supervisor.autonomous_chain_store import AutonomousChainStore
 
 
 def assemble_supervisor_runtime_state(supervisor: Any) -> None:
@@ -37,9 +37,9 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
     )
     supervisor._runtime_root = runtime_root
     supervisor._governor = MemGovernorBridge(storage_root=runtime_root)
-    supervisor._self_evolution_queue = SelfEvolutionTaskQueue(
-        supervisor.config.self_evolution_queue_path
-        or (runtime_root / "self_evolution_queue.json")
+    supervisor._autonomous_chain_store = AutonomousChainStore(
+        supervisor.config.autonomous_chain_store_path
+        or (runtime_root / "autonomous_chain_store.json")
     )
     supervisor._endogenous_drive_history_path = runtime_root / "endogenous_drive_history.json"
     supervisor._endogenous_drive_engine = EndogenousDriveEngine(config=supervisor.config)
@@ -100,3 +100,5 @@ def assemble_supervisor_execution_runtime(supervisor: Any) -> None:
         memory_maintenance=supervisor._memory_maintenance_executor,
         supervisor=supervisor,
     )
+
+

@@ -23,10 +23,10 @@ from systems.supervisor.endogenous_drive import (
     CORE_VALUES,
     TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD,
 )
-from systems.supervisor.task_queue import (
-    SelfEvolutionExecutionRequest,
-    SelfEvolutionGitLineage,
-    SelfEvolutionTask,
+from systems.supervisor.autonomous_chain_store import (
+    AutonomousChainExecutionRequest,
+    AutonomousChainGitLineage,
+    AutonomousChainTask,
 )
 
 logger = logging.getLogger("supervisor")
@@ -60,7 +60,7 @@ SUPERVISOR_LEGAL_SCENES: frozenset[str] = frozenset(
 
 
 class PlanningRuntimeMixin:
-    """Supervisor planning, activity-guard evaluation, and self-evolution orchestration."""
+    """Supervisor planning, activity-guard evaluation, and autonomous-chain orchestration."""
     _ENDOGENOUS_DRIVE_HISTORY_LIMIT = 240
     _ENDOGENOUS_GOVERNANCE_EVENT_LIMIT = 240
 
@@ -4039,7 +4039,7 @@ class PlanningRuntimeMixin:
         *,
         deliberation: Optional[Dict[str, Any]] = None,
         judgement: Optional[Dict[str, Any]] = None,
-        task: Optional[SelfEvolutionTask] = None,
+        task: Optional[AutonomousChainTask] = None,
     ) -> str:
         if task is not None:
             metadata = dict(task.metadata or {})
@@ -4327,7 +4327,7 @@ class PlanningRuntimeMixin:
 
     def _record_endogenous_drive_outcome(
         self,
-        task: SelfEvolutionTask,
+        task: AutonomousChainTask,
         *,
         event_type: str,
     ) -> None:
@@ -4599,7 +4599,7 @@ class PlanningRuntimeMixin:
     def _normalize_runtime_task_type(self, value: Optional[str]) -> str:
         return str(normalize_runtime_task_type(value, default="self_evolution"))
 
-    def _task_runtime_family(self, task: SelfEvolutionTask) -> str:
+    def _task_runtime_family(self, task: AutonomousChainTask) -> str:
         execution = dict(task.metadata.get("execution_request") or {})
         runtime_task_profile = derive_runtime_task_profile(
             task_type=task.task_type,
@@ -4623,7 +4623,7 @@ class PlanningRuntimeMixin:
         )
         return str(runtime_task_profile["task_family"] or "general_self_evolution")
 
-    def _task_execution_kind(self, task: SelfEvolutionTask) -> Optional[str]:
+    def _task_execution_kind(self, task: AutonomousChainTask) -> Optional[str]:
         execution = dict(task.metadata.get("execution_request") or {})
         explicit_execution_kind = (
             execution.get("execution_kind")
@@ -4649,7 +4649,7 @@ class PlanningRuntimeMixin:
             return task_family
         return normalized_explicit_kind
 
-    def _task_runtime_profile(self, task: SelfEvolutionTask) -> Dict[str, Any]:
+    def _task_runtime_profile(self, task: AutonomousChainTask) -> Dict[str, Any]:
         execution = dict(task.metadata.get("execution_request") or {})
         return derive_runtime_task_profile(
             task_type=task.task_type,
@@ -4719,10 +4719,10 @@ class PlanningRuntimeMixin:
             default_task_family="general_self_evolution",
         )
 
-    def _task_governance_type(self, task: SelfEvolutionTask) -> str:
+    def _task_governance_type(self, task: AutonomousChainTask) -> str:
         return str(self._task_runtime_profile(task)["governance_task_type"])
 
-    def _task_requires_execution_request(self, task: SelfEvolutionTask) -> bool:
+    def _task_requires_execution_request(self, task: AutonomousChainTask) -> bool:
         execution_kind = self._task_execution_kind(task)
         if execution_kind == "body_improvement":
             return False
@@ -4778,7 +4778,7 @@ class PlanningRuntimeMixin:
                     return scheduled_for
         return None
 
-    def _task_schedule_token(self, task: SelfEvolutionTask) -> Optional[str]:
+    def _task_schedule_token(self, task: AutonomousChainTask) -> Optional[str]:
         execution = dict(task.metadata.get("execution_request") or {})
         evidence = dict(task.evidence or {})
         endogenous_drive = dict(evidence.get("endogenous_drive") or {})
@@ -4812,7 +4812,7 @@ class PlanningRuntimeMixin:
     def _occupied_scheduled_for_tokens(self) -> set[str]:
         terminal = {"completed", "failed", "cancelled"}
         occupied: set[str] = set()
-        for task in self._self_evolution_queue.list_governance_backlog_tasks():
+        for task in self._autonomous_chain_store.list_governance_backlog_tasks():
             if str(task.status or "").strip().lower() in terminal:
                 continue
             token = self._task_schedule_token(task)
@@ -4898,7 +4898,7 @@ class PlanningRuntimeMixin:
             prepared[row_index]["metadata"]["scheduled_for"] = token
         return prepared
 
-    def _task_sort_key(self, task: SelfEvolutionTask) -> tuple[int, str, str]:
+    def _task_sort_key(self, task: AutonomousChainTask) -> tuple[int, str, str]:
         status = str(task.status or "").strip().lower()
         order = {
             "running": 0,
@@ -4920,12 +4920,12 @@ class PlanningRuntimeMixin:
         self,
         *,
         exclude_task_ids: Optional[set[str]] = None,
-    ) -> Dict[str, SelfEvolutionTask]:
+    ) -> Dict[str, AutonomousChainTask]:
         terminal = {"completed", "failed", "cancelled"}
         excluded = exclude_task_ids or set()
-        conflicts: Dict[str, SelfEvolutionTask] = {}
+        conflicts: Dict[str, AutonomousChainTask] = {}
         for task in sorted(
-            self._self_evolution_queue.list_governance_backlog_tasks(),
+            self._autonomous_chain_store.list_governance_backlog_tasks(),
             key=self._task_sort_key,
         ):
             if task.task_id in excluded:
@@ -4938,7 +4938,7 @@ class PlanningRuntimeMixin:
             conflicts.setdefault(schedule_token, task)
         return conflicts
 
-    def _task_activity_metadata(self, task: SelfEvolutionTask) -> Dict[str, Any]:
+    def _task_activity_metadata(self, task: AutonomousChainTask) -> Dict[str, Any]:
         profile = self._task_runtime_profile(task)
         metadata: Dict[str, Any] = {
             "task_id": task.task_id,
@@ -4955,9 +4955,9 @@ class PlanningRuntimeMixin:
             metadata["scheduled_for"] = scheduled_for
         return metadata
 
-    def _build_self_evolution_activity_metadata(
+    def _build_autonomous_chain_activity_metadata(
         self,
-        tasks: list[SelfEvolutionTask],
+        tasks: list[AutonomousChainTask],
         *,
         action: str,
         extra: Optional[Dict[str, Any]] = None,
@@ -5037,7 +5037,7 @@ class PlanningRuntimeMixin:
 
     def _completed_learning_task_summaries(self, limit: int = 8) -> list[Dict[str, Any]]:
         rows: list[tuple[str, Dict[str, Any]]] = []
-        for task in self._self_evolution_queue.list_writeback_history(status="completed"):
+        for task in self._autonomous_chain_store.list_writeback_history(status="completed"):
             if self._task_runtime_family(task) != "self_learning":
                 continue
             metadata = dict(task.metadata or {})
@@ -5064,7 +5064,7 @@ class PlanningRuntimeMixin:
 
     def _governance_backlog_task_summaries(self, limit: int = 20) -> list[Dict[str, Any]]:
         rows: list[tuple[str, Dict[str, Any]]] = []
-        for task in self._self_evolution_queue.list_governance_backlog_tasks():
+        for task in self._autonomous_chain_store.list_governance_backlog_tasks():
             rows.append(
                 (
                     str(getattr(task, "updated_at", None) or getattr(task, "created_at", None) or ""),
@@ -5108,8 +5108,8 @@ class PlanningRuntimeMixin:
         if normalized == "self_learning":
             return "self_learning"
         if normalized in {"self_evolution", "memory_maintenance"}:
-            return "self_evolution_plan"
-        return "self_evolution_plan"
+            return "autonomous_chain_plan"
+        return "autonomous_chain_plan"
 
     async def _fetch_gateway_activity_snapshot(self) -> Dict[str, Any]:
         import asyncio
@@ -5213,29 +5213,29 @@ class PlanningRuntimeMixin:
         last_self_learning_activity_at = self._parse_activity_timestamp(
             snapshot.get("last_self_learning_activity_at")
         )
-        last_self_evolution_plan_at = self._parse_activity_timestamp(
-            snapshot.get("last_self_evolution_plan_at")
+        last_autonomous_chain_plan_at = self._parse_activity_timestamp(
+            snapshot.get("last_autonomous_chain_plan_at")
         )
-        last_self_evolution_execute_at = self._parse_activity_timestamp(
-            snapshot.get("last_self_evolution_execute_at")
+        last_autonomous_chain_execute_at = self._parse_activity_timestamp(
+            snapshot.get("last_autonomous_chain_execute_at")
         )
-        last_self_evolution_activity_at = self._parse_activity_timestamp(
-            snapshot.get("last_self_evolution_activity_at")
+        last_autonomous_chain_activity_at = self._parse_activity_timestamp(
+            snapshot.get("last_autonomous_chain_activity_at")
         )
 
         user_idle_seconds = self._idle_seconds_since(last_user_request_at, now=now)
         agent_idle_seconds = self._idle_seconds_since(last_agent_work_at, now=now)
         memory_idle_seconds = self._idle_seconds_since(last_memory_task_at, now=now)
         self_learning_idle_seconds = self._idle_seconds_since(last_self_learning_activity_at, now=now)
-        self_evolution_plan_idle_seconds = self._idle_seconds_since(
-            last_self_evolution_plan_at,
+        autonomous_chain_plan_idle_seconds = self._idle_seconds_since(
+            last_autonomous_chain_plan_at,
             now=now,
         )
-        self_evolution_execute_idle_seconds = self._idle_seconds_since(
-            last_self_evolution_execute_at,
+        autonomous_chain_execute_idle_seconds = self._idle_seconds_since(
+            last_autonomous_chain_execute_at,
             now=now,
         )
-        self_evolution_idle_seconds = self._idle_seconds_since(last_self_evolution_activity_at, now=now)
+        autonomous_chain_idle_seconds = self._idle_seconds_since(last_autonomous_chain_activity_at, now=now)
 
         # ── correction_signals for truthfulness drive ──
         # Source of truth: Gateway activity_state (architectural baseline §4.2
@@ -5284,22 +5284,22 @@ class PlanningRuntimeMixin:
             self_learning_idle_seconds is None
             or self_learning_idle_seconds >= workflow_idle_threshold
         )
-        has_self_evolution_plan_idle = (
-            self_evolution_plan_idle_seconds is None
-            or self_evolution_plan_idle_seconds >= workflow_idle_threshold
+        has_autonomous_chain_plan_idle = (
+            autonomous_chain_plan_idle_seconds is None
+            or autonomous_chain_plan_idle_seconds >= workflow_idle_threshold
         )
-        has_self_evolution_execute_idle = (
-            self_evolution_execute_idle_seconds is None
-            or self_evolution_execute_idle_seconds >= workflow_idle_threshold
+        has_autonomous_chain_execute_idle = (
+            autonomous_chain_execute_idle_seconds is None
+            or autonomous_chain_execute_idle_seconds >= workflow_idle_threshold
         )
-        has_self_evolution_idle = (
-            self_evolution_idle_seconds is None
-            or self_evolution_idle_seconds >= workflow_idle_threshold
+        has_autonomous_chain_idle = (
+            autonomous_chain_idle_seconds is None
+            or autonomous_chain_idle_seconds >= workflow_idle_threshold
         )
 
         # Whole-day automatic execution (baseline §6): the time-of-day
         # execution window and the "wait for the user to be idle" gate have
-        # been removed. Supervisor self-evolution runs on isolated subagents
+        # been removed. Supervisor autonomous-chain review runs on isolated subagents
         # editing shell-slot code, so it does not disturb the user's CLI.
         # User activity is now a SOFT signal (observability + cognition input)
         # rather than a hard gate. The remaining has_*_idle checks below are
@@ -5324,7 +5324,7 @@ class PlanningRuntimeMixin:
                     has_agent_idle
                     and has_memory_idle
                     and has_self_learning_idle
-                    and has_self_evolution_plan_idle
+                    and has_autonomous_chain_plan_idle
                 ),
             },
             "memory_maintenance": {
@@ -5336,13 +5336,13 @@ class PlanningRuntimeMixin:
             },
             "self_evolution": {
                 "eligible_for_planning": (
-                    has_self_evolution_plan_idle
+                    has_autonomous_chain_plan_idle
                 ),
                 "eligible_for_execution": (
                     has_agent_idle
                     and has_memory_idle
-                    and has_self_evolution_plan_idle
-                    and has_self_evolution_execute_idle
+                    and has_autonomous_chain_plan_idle
+                    and has_autonomous_chain_execute_idle
                 ),
             },
         }
@@ -5393,9 +5393,9 @@ class PlanningRuntimeMixin:
                 "agent": agent_idle_seconds,
                 "memory": memory_idle_seconds,
                 "self_learning": self_learning_idle_seconds,
-                "self_evolution_plan": self_evolution_plan_idle_seconds,
-                "self_evolution_execute": self_evolution_execute_idle_seconds,
-                "self_evolution": self_evolution_idle_seconds,
+                "autonomous_chain_plan": autonomous_chain_plan_idle_seconds,
+                "autonomous_chain_execute": autonomous_chain_execute_idle_seconds,
+                "autonomous_chain": autonomous_chain_idle_seconds,
             },
             "thresholds": {
                 "user_idle_seconds": user_idle_threshold,
@@ -5410,9 +5410,9 @@ class PlanningRuntimeMixin:
                 "has_memory_idle": has_memory_idle,
                 "has_agent_idle": has_agent_idle,
                 "has_self_learning_idle": has_self_learning_idle,
-                "has_self_evolution_plan_idle": has_self_evolution_plan_idle,
-                "has_self_evolution_execute_idle": has_self_evolution_execute_idle,
-                "has_self_evolution_idle": has_self_evolution_idle,
+                "has_autonomous_chain_plan_idle": has_autonomous_chain_plan_idle,
+                "has_autonomous_chain_execute_idle": has_autonomous_chain_execute_idle,
+                "has_autonomous_chain_idle": has_autonomous_chain_idle,
             },
             "governance_task_type_decisions": governance_task_type_decisions,
             "task_family_decisions": task_family_decisions,
@@ -5459,7 +5459,7 @@ class PlanningRuntimeMixin:
         """
         terminal = {"completed", "failed", "cancelled"}
         keys: set[str] = set()
-        for task in self._self_evolution_queue.list_governance_backlog_tasks():
+        for task in self._autonomous_chain_store.list_governance_backlog_tasks():
             if task.status in terminal:
                 continue
             key = task.metadata.get("endogenous_drive_key")
@@ -6042,7 +6042,7 @@ class PlanningRuntimeMixin:
         governance_event_stream = dict(persisted_evaluation["governance_event_stream"])
 
         try:
-            plan_result = await self.plan_self_evolution_task({"items": candidate_items})
+            plan_result = await self.plan_autonomous_chain_task({"items": candidate_items})
         except Exception:
             self._restore_endogenous_evaluation_snapshots(
                 drive_history=persistence_history_snapshot,
@@ -6076,7 +6076,7 @@ class PlanningRuntimeMixin:
                 },
             )
             await self._touch_gateway_activity(
-                "self_evolution_plan",
+                "autonomous_chain_plan",
                 metadata={
                     "action": "endogenous_drive",
                     "count": len(created_tasks),
@@ -6098,7 +6098,7 @@ class PlanningRuntimeMixin:
             "deferred_candidates": deferred_candidates,
         }
 
-    def _normalize_self_evolution_decision(self, decision: Optional[str]) -> Optional[str]:
+    def _normalize_autonomous_chain_decision(self, decision: Optional[str]) -> Optional[str]:
         if decision is None:
             return None
         normalized = decision.strip().lower()
@@ -6122,10 +6122,10 @@ class PlanningRuntimeMixin:
         }
         return mapping.get(normalized)
 
-    def _build_self_evolution_auto_decision(
+    def _build_autonomous_chain_auto_decision(
         self,
         *,
-        task: SelfEvolutionTask,
+        task: AutonomousChainTask,
         activity_guards: Dict[str, Any],
         autonomous_chain_gate_active: bool = False,
     ) -> tuple[str, str]:
@@ -6201,10 +6201,10 @@ class PlanningRuntimeMixin:
 
     def _has_pending_self_learning_prerequisite(
         self,
-        body_task: Optional[SelfEvolutionTask] = None,
+        body_task: Optional[AutonomousChainTask] = None,
     ) -> bool:
         queued_self_learning = False
-        for task in self._self_evolution_queue.list_governance_backlog_tasks():
+        for task in self._autonomous_chain_store.list_governance_backlog_tasks():
             if self._task_governance_type(task) != "self_learning":
                 continue
             if task.status not in {"planned", "approved", "running"}:
@@ -6224,7 +6224,7 @@ class PlanningRuntimeMixin:
         )
         return prior_self_learning_deferrals == 0
 
-    def _is_agent_pull_task(self, task: SelfEvolutionTask) -> bool:
+    def _is_agent_pull_task(self, task: AutonomousChainTask) -> bool:
         execution_kind = self._task_execution_kind(task)
         return (
             self._task_governance_type(task) == "self_learning"
@@ -6276,7 +6276,7 @@ class PlanningRuntimeMixin:
 
     async def _recover_orphaned_agent_pull_tasks(self) -> int:
         recovered = 0
-        for task in self._self_evolution_queue.list_execution_dispatch_tasks(status="running"):
+        for task in self._autonomous_chain_store.list_execution_dispatch_tasks(status="running"):
             if not self._is_agent_pull_task(task):
                 continue
             metadata = dict(task.metadata or {})
@@ -6290,7 +6290,7 @@ class PlanningRuntimeMixin:
                     "owner_session_id is missing, so ownership is unknown.",
                     task.task_id,
                 )
-                self._self_evolution_queue.update_metadata(
+                self._autonomous_chain_store.update_metadata(
                     task.task_id,
                     metadata={
                         "owner_session_missing_seen_at": datetime.now(timezone.utc).isoformat(),
@@ -6332,7 +6332,7 @@ class PlanningRuntimeMixin:
                 },
                 event_type="recovery",
             )
-            self._self_evolution_queue.update_metadata(
+            self._autonomous_chain_store.update_metadata(
                 task.task_id,
                 metadata={
                     "recovered_from_orphaned_running": True,
@@ -6356,7 +6356,7 @@ class PlanningRuntimeMixin:
     def _ensure_agent_pull_task_owner(
         self,
         *,
-        task: SelfEvolutionTask,
+        task: AutonomousChainTask,
         request: Dict[str, Any],
         decision: str,
         actor: str,
@@ -6407,22 +6407,22 @@ class PlanningRuntimeMixin:
             )
         return session_id
 
-    def _get_self_evolution_cycle_lock(self) -> asyncio.Lock:
+    def _get_autonomous_chain_cycle_lock(self) -> asyncio.Lock:
         lock = getattr(self, "_self_evolution_cycle_lock", None)
         if lock is None:
             lock = asyncio.Lock()
             setattr(self, "_self_evolution_cycle_lock", lock)
         return lock
 
-    def _build_self_evolution_execution_request(
+    def _build_autonomous_chain_execution_request(
         self,
-        task: SelfEvolutionTask,
+        task: AutonomousChainTask,
         *,
         decision_id: str,
         actor: str,
         reason: str,
         decision_context: Dict[str, Any],
-    ) -> Optional[SelfEvolutionExecutionRequest]:
+    ) -> Optional[AutonomousChainExecutionRequest]:
         execution = dict(task.metadata.get("execution_request") or {})
         raw_kind = self._task_execution_kind(task) or "general_self_evolution"
         kind = "memory_maintenance" if raw_kind == "memory_maintenance" else "general_self_evolution"
@@ -6446,7 +6446,7 @@ class PlanningRuntimeMixin:
         if "governor_decision" in task.evidence:
             governor_decision["evidence_decision"] = task.evidence["governor_decision"]
 
-        return SelfEvolutionExecutionRequest(
+        return AutonomousChainExecutionRequest(
             task_id=task.task_id,
             trace_id=task.trace_id,
             task_type=task.task_type,
@@ -6461,7 +6461,7 @@ class PlanningRuntimeMixin:
                 or task.metadata.get("target_slot_id")
                 or task.constraints.get("target_slot_id")
             ),
-            git_lineage=SelfEvolutionGitLineage.model_validate(git_lineage),
+            git_lineage=AutonomousChainGitLineage.model_validate(git_lineage),
             probe_report_ref=(
                 execution.get("probe_report_ref")
                 or task.evidence.get("probe_report_ref")
@@ -6472,7 +6472,7 @@ class PlanningRuntimeMixin:
             rollback_plan=rollback_plan,
         )
 
-    def _serialize_self_evolution_task(self, task: SelfEvolutionTask) -> Dict[str, Any]:
+    def _serialize_autonomous_chain_task(self, task: AutonomousChainTask) -> Dict[str, Any]:
         payload = task.model_dump(mode="json")
         runtime_profile = self._task_runtime_profile(task)
         execution = dict(task.metadata.get("execution_request") or {})
@@ -6547,7 +6547,7 @@ class PlanningRuntimeMixin:
 
     def _build_lm_governance_review_snapshot(
         self,
-        tasks: list[SelfEvolutionTask],
+        tasks: list[AutonomousChainTask],
     ) -> list[Dict[str, Any]]:
         snapshot: list[Dict[str, Any]] = []
         for task in tasks:
@@ -6635,7 +6635,7 @@ class PlanningRuntimeMixin:
 
     async def _lm_review_task_governance(
         self,
-        tasks: list[SelfEvolutionTask],
+        tasks: list[AutonomousChainTask],
         *,
         activity_guards: Dict[str, Any],
     ) -> Dict[str, Dict[str, Any]]:
@@ -6722,14 +6722,14 @@ class PlanningRuntimeMixin:
                 reviewed[task_id]["shadow"] = shadow
         return reviewed
 
-    def _self_evolution_task_git_lineage(self, task: SelfEvolutionTask) -> Dict[str, Any]:
+    def _autonomous_chain_task_git_lineage(self, task: AutonomousChainTask) -> Dict[str, Any]:
         execution = dict(task.metadata.get("execution_request") or {})
         return {
             **dict(task.evidence.get("git_lineage") or {}),
             **dict(execution.get("git_lineage") or {}),
         }
 
-    async def list_self_evolution_tasks(
+    async def list_autonomous_chain_tasks(
         self,
         status: Optional[str] = None,
         task_type: Optional[str] = None,
@@ -6737,10 +6737,10 @@ class PlanningRuntimeMixin:
     ):
         normalized_status = None
         if status is not None:
-            normalized_status = self._normalize_self_evolution_decision(status)
+            normalized_status = self._normalize_autonomous_chain_decision(status)
             if normalized_status is None or normalized_status == "auto":
                 raise HTTPException(status_code=400, detail=f"Unsupported task status filter: {status}")
-        tasks = self._self_evolution_queue.list_chain_projection_tasks(
+        tasks = self._autonomous_chain_store.list_chain_projection_tasks(
             status=normalized_status,
             include_cancelled=True,
         )
@@ -6753,7 +6753,7 @@ class PlanningRuntimeMixin:
             for task in tasks:
                 task_execution_kind = str(self._task_execution_kind(task) or "").strip().lower()
                 serialized_execution_kind = str(
-                    self._serialize_self_evolution_task(task).get("execution_kind") or ""
+                    self._serialize_autonomous_chain_task(task).get("execution_kind") or ""
                 ).strip().lower()
                 if task_execution_kind == explicit_execution_kind:
                     filtered_tasks.append(task)
@@ -6765,27 +6765,27 @@ class PlanningRuntimeMixin:
                     filtered_tasks.append(task)
             tasks = filtered_tasks
         return {
-            "tasks": [self._serialize_self_evolution_task(task) for task in tasks],
+            "tasks": [self._serialize_autonomous_chain_task(task) for task in tasks],
             "count": len(tasks),
         }
 
-    async def get_self_evolution_task(self, task_id: str):
-        task = self._self_evolution_queue.get_task(task_id)
+    async def get_autonomous_chain_task(self, task_id: str):
+        task = self._autonomous_chain_store.get_task(task_id)
         if task is None:
-            raise HTTPException(status_code=404, detail=f"Self-evolution task not found: {task_id}")
-        return self._serialize_self_evolution_task(task)
+            raise HTTPException(status_code=404, detail=f"Autonomous-chain task not found: {task_id}")
+        return self._serialize_autonomous_chain_task(task)
 
-    async def clear_self_evolution_runtime(self, request: dict | None = None):
+    async def clear_autonomous_chain_runtime(self, request: dict | None = None):
         del request
         # Administrative clear needs the entire storage snapshot, including records
         # that are no longer part of the autonomous-chain projections.
-        tasks = list(self._self_evolution_queue.list_tasks())
+        tasks = list(self._autonomous_chain_store.list_tasks())
         cleared_counts: Dict[str, int] = {}
         for task in tasks:
             status = str(task.status)
             cleared_counts[status] = cleared_counts.get(status, 0) + 1
 
-        self._self_evolution_queue.clear_tasks()
+        self._autonomous_chain_store.clear_tasks()
 
         if hasattr(self, "_clear_supervisor_ui_activity"):
             self._clear_supervisor_ui_activity()
@@ -6825,7 +6825,7 @@ class PlanningRuntimeMixin:
             "tasks_remaining": 0,
         }
 
-    async def plan_self_evolution_task(self, request: dict | None = None):
+    async def plan_autonomous_chain_task(self, request: dict | None = None):
         request = request or {}
         items = request.get("items")
 
@@ -6836,7 +6836,7 @@ class PlanningRuntimeMixin:
                 if not title:
                     raise HTTPException(status_code=400, detail="Each task item must include a title.")
                 request_metadata = self._request_task_metadata(item)
-                task = self._self_evolution_queue.create_task(
+                task = self._autonomous_chain_store.create_task(
                     title=title,
                     summary=str(item.get("summary", "")),
                     trace_id=str(item.get("trace_id") or uuid.uuid4()),
@@ -6854,7 +6854,7 @@ class PlanningRuntimeMixin:
                 raise HTTPException(status_code=400, detail="title is required")
             request_metadata = self._request_task_metadata(request)
             created.append(
-                self._self_evolution_queue.create_task(
+                self._autonomous_chain_store.create_task(
                     title=title,
                     summary=str(request.get("summary", "")),
                     trace_id=str(request.get("trace_id") or uuid.uuid4()),
@@ -6868,8 +6868,8 @@ class PlanningRuntimeMixin:
             )
 
         await self._touch_gateway_activity(
-            "self_evolution_plan",
-            metadata=self._build_self_evolution_activity_metadata(created, action="plan"),
+            "autonomous_chain_plan",
+            metadata=self._build_autonomous_chain_activity_metadata(created, action="plan"),
         )
         if created:
             for task in created:
@@ -6878,22 +6878,22 @@ class PlanningRuntimeMixin:
                 "tasks_planned",
                 scene="planning",
                 summary=f"Supervisor queued {len(created)} task(s).",
-                metadata=self._build_self_evolution_activity_metadata(created, action="plan"),
+                metadata=self._build_autonomous_chain_activity_metadata(created, action="plan"),
             )
 
         return {
             "status": "planned",
-            "tasks": [self._serialize_self_evolution_task(task) for task in created],
+            "tasks": [self._serialize_autonomous_chain_task(task) for task in created],
             "count": len(created),
         }
 
-    async def decide_self_evolution_task(self, task_id: str, request: dict | None = None):
+    async def decide_autonomous_chain_task(self, task_id: str, request: dict | None = None):
         request = request or {}
-        task = self._self_evolution_queue.get_task(task_id)
+        task = self._autonomous_chain_store.get_task(task_id)
         if task is None:
-            raise HTTPException(status_code=404, detail=f"Self-evolution task not found: {task_id}")
+            raise HTTPException(status_code=404, detail=f"Autonomous-chain task not found: {task_id}")
 
-        normalized = self._normalize_self_evolution_decision(request.get("decision"))
+        normalized = self._normalize_autonomous_chain_decision(request.get("decision"))
         decision_context: Dict[str, Any] = {}
 
         if normalized is None or normalized == "auto":
@@ -6903,7 +6903,7 @@ class PlanningRuntimeMixin:
             if task_execution_kind is not None:
                 activity_guard_request.setdefault("execution_kind", task_execution_kind)
             activity_guards = await self.evaluate_activity_guards(activity_guard_request)
-            normalized, auto_reason = self._build_self_evolution_auto_decision(
+            normalized, auto_reason = self._build_autonomous_chain_auto_decision(
                 task=task,
                 activity_guards=activity_guards,
                 autonomous_chain_gate_active=getattr(
@@ -6925,7 +6925,7 @@ class PlanningRuntimeMixin:
         if task.status == "cancelled":
             return {
                 "status": "unchanged",
-                "task": self._serialize_self_evolution_task(task),
+                "task": self._serialize_autonomous_chain_task(task),
                 "reason": "Cancelled tasks are terminal and cannot be re-decided by the supervisor.",
             }
 
@@ -6940,7 +6940,7 @@ class PlanningRuntimeMixin:
         execution_request = None
         if normalized == "approved" and self._task_requires_execution_request(task):
             try:
-                execution_request = self._build_self_evolution_execution_request(
+                execution_request = self._build_autonomous_chain_execution_request(
                     task,
                     decision_id=decision_id,
                     actor=actor,
@@ -6995,11 +6995,11 @@ class PlanningRuntimeMixin:
             enriched_metadata.setdefault("execution_source", "cli_agent_pull")
             decision_metadata = enriched_metadata
         if isinstance(decision_metadata, dict) and decision_metadata:
-            self._self_evolution_queue.update_metadata(task_id, metadata=decision_metadata)
+            self._autonomous_chain_store.update_metadata(task_id, metadata=decision_metadata)
 
         await self._touch_gateway_activity(
             self._planning_activity_kind_for_task(task.task_type),
-            metadata=self._build_self_evolution_activity_metadata(
+            metadata=self._build_autonomous_chain_activity_metadata(
                 [updated_task],
                 action="decision",
                 extra={"status": normalized},
@@ -7017,15 +7017,15 @@ class PlanningRuntimeMixin:
 
         return {
             "status": normalized,
-            "task": self._serialize_self_evolution_task(updated_task),
+            "task": self._serialize_autonomous_chain_task(updated_task),
         }
 
-    async def review_self_evolution_tasks(self, request: dict | None = None):
+    async def review_autonomous_chain_tasks(self, request: dict | None = None):
         request = request or {}
         statuses = request.get("statuses") or ["planned", "deferred", "paused"]
         normalized_statuses = []
         for status in statuses:
-            normalized = self._normalize_self_evolution_decision(str(status))
+            normalized = self._normalize_autonomous_chain_decision(str(status))
             if normalized is None or normalized == "auto":
                 raise HTTPException(status_code=400, detail=f"Unsupported review status: {status}")
             normalized_statuses.append(normalized)
@@ -7047,8 +7047,8 @@ class PlanningRuntimeMixin:
             "approved" if review_decision["eligible_for_execution"] else "deferred"
         )
 
-        candidate_tasks: list[SelfEvolutionTask] = []
-        for task in self._self_evolution_queue.list_governance_backlog_tasks():
+        candidate_tasks: list[AutonomousChainTask] = []
+        for task in self._autonomous_chain_store.list_governance_backlog_tasks():
             if task.status not in normalized_statuses or task.status == "cancelled":
                 continue
             candidate_tasks.append(task)
@@ -7075,7 +7075,7 @@ class PlanningRuntimeMixin:
                 if task_execution_kind is not None:
                     task_activity_guard_request["execution_kind"] = task_execution_kind
                 task_activity_guards = await self.evaluate_activity_guards(task_activity_guard_request)
-            target_status, default_reason = self._build_self_evolution_auto_decision(
+            target_status, default_reason = self._build_autonomous_chain_auto_decision(
                 task=task,
                 activity_guards=task_activity_guards,
                 autonomous_chain_gate_active=getattr(
@@ -7091,7 +7091,7 @@ class PlanningRuntimeMixin:
                     decision_context["lm_governance_shadow"] = shadow_recommendation
                 priority_recommendation = self._extract_lm_priority_recommendation(lm_action)
                 if priority_recommendation is not None and priority_recommendation != str(task.priority):
-                    task = self._self_evolution_queue.update_priority(
+                    task = self._autonomous_chain_store.update_priority(
                         task.task_id,
                         priority=priority_recommendation,
                         actor=str(request.get("actor", "supervisor")),
@@ -7167,7 +7167,7 @@ class PlanningRuntimeMixin:
                 if self._task_requires_execution_request(task):
                     decision_id = str(request.get("decision_id") or uuid.uuid4())
                     try:
-                        execution_request = self._build_self_evolution_execution_request(
+                        execution_request = self._build_autonomous_chain_execution_request(
                             task,
                             decision_id=decision_id,
                             actor=str(request.get("actor", "supervisor")),
@@ -7244,7 +7244,7 @@ class PlanningRuntimeMixin:
                         else ""
                     )
                 ),
-                metadata=self._build_self_evolution_activity_metadata(
+                metadata=self._build_autonomous_chain_activity_metadata(
                     reviewed,
                     action="review",
                     extra={
@@ -7256,8 +7256,8 @@ class PlanningRuntimeMixin:
                 ),
             )
             await self._touch_gateway_activity(
-                "self_evolution_plan",
-                metadata=self._build_self_evolution_activity_metadata(
+                "autonomous_chain_plan",
+                metadata=self._build_autonomous_chain_activity_metadata(
                     reviewed,
                     action="review",
                     extra={
@@ -7275,7 +7275,7 @@ class PlanningRuntimeMixin:
             "status": "reviewed",
             "decision": default_review_status,
             "reviewed_statuses": unique_statuses,
-            "tasks": [self._serialize_self_evolution_task(task) for task in reviewed],
+            "tasks": [self._serialize_autonomous_chain_task(task) for task in reviewed],
             "count": len(reviewed),
             "activity_guards": activity_guards,
         }
@@ -7306,7 +7306,7 @@ class PlanningRuntimeMixin:
                 "execution_kind": proposal.execution_kind,
                 "metadata": proposal_metadata,
             }
-            task = self._self_evolution_queue.create_task(
+            task = self._autonomous_chain_store.create_task(
                 title=proposal.title,
                 summary=proposal.summary,
                 trace_id=str(submission.metadata.get("trace_id") or submission.conclusion_id or uuid.uuid4()),
@@ -7320,7 +7320,7 @@ class PlanningRuntimeMixin:
                 },
                 constraints=dict(proposal.constraints),
             )
-            created.append(self._serialize_self_evolution_task(task))
+            created.append(self._serialize_autonomous_chain_task(task))
 
         if created:
             self._record_supervisor_ui_activity(
@@ -7351,9 +7351,9 @@ class PlanningRuntimeMixin:
             "tasks": created,
         }
 
-    async def _dispatch_self_evolution_execution_request(
+    async def _dispatch_autonomous_chain_execution_request(
         self,
-        task: SelfEvolutionTask,
+        task: AutonomousChainTask,
         *,
         max_retries: int = 3,
     ) -> Optional[Dict[str, Any]]:
@@ -7373,7 +7373,7 @@ class PlanningRuntimeMixin:
             reason="Execution request dispatched",
             event_type="dispatch",
         )
-        self._self_evolution_queue.update_metadata(
+        self._autonomous_chain_store.update_metadata(
             task.task_id,
             metadata={
                 "executed_at": datetime.now(timezone.utc).isoformat(),
@@ -7446,7 +7446,7 @@ class PlanningRuntimeMixin:
                         ),
                         event_type="dispatch_failure",
                     )
-                self._self_evolution_queue.update_metadata(
+                self._autonomous_chain_store.update_metadata(
                     task.task_id,
                     metadata={
                         "execution_failed": True,
@@ -7464,7 +7464,7 @@ class PlanningRuntimeMixin:
                     reason=f"Execution retry {failure_count}/{max_retries}",
                     event_type="dispatch_retry",
                 )
-                self._self_evolution_queue.update_metadata(
+                self._autonomous_chain_store.update_metadata(
                     task.task_id,
                     metadata={
                         "execution_failed": True,
@@ -7474,7 +7474,7 @@ class PlanningRuntimeMixin:
                 )
             else:
                 # Permanent failure — keep dispatched so it's not retried
-                self._self_evolution_queue.update_metadata(
+                self._autonomous_chain_store.update_metadata(
                     task.task_id,
                     metadata={
                         "execution_failed": True,
@@ -7504,7 +7504,7 @@ class PlanningRuntimeMixin:
         elif task_governance_type == "self_evolution":
             actor = "supervisor_executor"
             completion_reason = (
-                "Self-evolution task completed by the supervisor's body "
+                "Autonomous-chain task completed by the supervisor's body "
                 f"executor. executor_status={str(result_status)[:60] if result_status else 'ok'}"
             )
         else:
@@ -7519,12 +7519,12 @@ class PlanningRuntimeMixin:
             reason=completion_reason,
             event_type="dispatch_completed",
         )
-        self._self_evolution_queue.update_metadata(
+        self._autonomous_chain_store.update_metadata(
             task.task_id,
             metadata={"execution_result": result},
         )
         await self._touch_gateway_activity(
-            "self_evolution_execute",
+            "autonomous_chain_execute",
             metadata={
                 **self._task_activity_metadata(task),
                 "decision_id": execution_request.decision_id,
@@ -7544,10 +7544,10 @@ class PlanningRuntimeMixin:
         )
         return result
 
-    async def _run_self_evolution_cycle(self) -> Dict[str, Any]:
-        cycle_lock = self._get_self_evolution_cycle_lock()
+    async def _run_autonomous_chain_review_cycle(self) -> Dict[str, Any]:
+        cycle_lock = self._get_autonomous_chain_cycle_lock()
         if cycle_lock.locked():
-            logger.info("Skipping self-evolution cycle because another cycle is already running.")
+            logger.info("Skipping autonomous-chain review cycle because another cycle is already running.")
             return {
                 "reviewed": 0,
                 "dispatched": [],
@@ -7558,9 +7558,9 @@ class PlanningRuntimeMixin:
                 "skipped": "cycle_already_running",
             }
         async with cycle_lock:
-            return await self._run_self_evolution_cycle_locked()
+            return await self._run_autonomous_chain_review_cycle_locked()
 
-    async def _run_self_evolution_cycle_locked(self) -> Dict[str, Any]:
+    async def _run_autonomous_chain_review_cycle_locked(self) -> Dict[str, Any]:
         recovered_orphaned = await self._recover_orphaned_agent_pull_tasks()
         governance_consumption = self._consume_endogenous_governance_review_events()
         alignment_consumption = self._consume_endogenous_alignment_events()
@@ -7569,7 +7569,7 @@ class PlanningRuntimeMixin:
         # ── Cleanup: auto-fail tasks stuck in "running" > 30 min ──
         stale_running = 0
         now = datetime.now(timezone.utc)
-        for task in self._self_evolution_queue.list_execution_dispatch_tasks(status="running"):
+        for task in self._autonomous_chain_store.list_execution_dispatch_tasks(status="running"):
             started = task.metadata.get("executed_at") or task.metadata.get("execution_started_at")
             if started:
                 try:
@@ -7588,7 +7588,7 @@ class PlanningRuntimeMixin:
         if stale_running:
             logger.warning("Auto-failed %d stale running tasks", stale_running)
 
-        review_result = await self.review_self_evolution_tasks({})
+        review_result = await self.review_autonomous_chain_tasks({})
         dispatched = []
         dispatch_limit = int(
             getattr(self.config.service_runtime, "self_evolution_dispatch_limit_per_cycle", 1)
@@ -7606,7 +7606,7 @@ class PlanningRuntimeMixin:
                 continue
 
             task_payload_id = str(task_payload.get("task_id", "") or "")
-            task = self._self_evolution_queue.get_task(task_payload_id)
+            task = self._autonomous_chain_store.get_task(task_payload_id)
             if task is None:
                 continue
             dispatch_considered_ids.add(task.task_id)
@@ -7624,7 +7624,7 @@ class PlanningRuntimeMixin:
                 dispatch_budget_exhausted += 1
                 continue
 
-            result = await self._dispatch_self_evolution_execution_request(task)
+            result = await self._dispatch_autonomous_chain_execution_request(task)
             if result is not None:
                 dispatched.append(
                     {
@@ -7639,7 +7639,7 @@ class PlanningRuntimeMixin:
         # failure_count < max_retries).  Tasks in running state or
         # permanently failed are skipped here.
         dispatched_ids = {d["task_id"] for d in dispatched}
-        for task in self._self_evolution_queue.list_execution_dispatch_tasks(status="approved"):
+        for task in self._autonomous_chain_store.list_execution_dispatch_tasks(status="approved"):
             if task.task_id in dispatched_ids:
                 continue
             if task.task_id in dispatch_considered_ids:
@@ -7660,7 +7660,7 @@ class PlanningRuntimeMixin:
                 dispatch_budget_exhausted += 1
                 continue
 
-            result = await self._dispatch_self_evolution_execution_request(task)
+            result = await self._dispatch_autonomous_chain_execution_request(task)
             if result is not None:
                 dispatched.append(
                     {"task_id": task.task_id, "status": result.get("status")}
@@ -7711,9 +7711,9 @@ class PlanningRuntimeMixin:
         except Exception as exc:
             phases["drive"] = {"status": "error", "error": str(exc)}
 
-        # ── Phase 2: Self-evolution review → approve & dispatch ──
+        # ── Phase 2: autonomous-chain review → approve & dispatch ──
         try:
-            cycle_result = await self._run_self_evolution_cycle()
+            cycle_result = await self._run_autonomous_chain_review_cycle()
             phases["review"] = {
                 "reviewed": cycle_result.get("reviewed", 0),
                 "dispatched": [
@@ -7778,7 +7778,7 @@ class PlanningRuntimeMixin:
         freshness_sum = 0.0
         now = datetime.now(timezone.utc)
 
-        for task in self._self_evolution_queue.list_writeback_history(status="completed"):
+        for task in self._autonomous_chain_store.list_writeback_history(status="completed"):
             if self._task_runtime_family(task) != "self_learning":
                 continue
             completed_count += 1
@@ -7815,10 +7815,10 @@ class PlanningRuntimeMixin:
         actor: str = "supervisor",
         decision_id: Optional[str] = None,
         context: Optional[Dict[str, Any]] = None,
-        execution_request: Optional[SelfEvolutionExecutionRequest] = None,
+        execution_request: Optional[AutonomousChainExecutionRequest] = None,
         event_type: str = "status_update",
-    ) -> SelfEvolutionTask:
-        task = self._self_evolution_queue.update_status(
+    ) -> AutonomousChainTask:
+        task = self._autonomous_chain_store.update_status(
             task_id,
             status=status,
             decision_id=decision_id,
@@ -8104,6 +8104,8 @@ class PlanningRuntimeMixin:
             })
         except Exception:
             logger.warning("Failed to emit switch_suggestion event for slot %s", slot_id)
+
+
 
 
 

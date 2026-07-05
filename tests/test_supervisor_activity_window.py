@@ -25,7 +25,7 @@ async def test_supervisor_activity_guard_allows_planning_and_execution_when_gate
             "last_user_request_at": "2026-05-25T00:00:00",
             "last_agent_work_at": "2026-05-25T00:00:00",
             "last_memory_task_at": "2026-05-25T00:00:00",
-            "last_self_evolution_activity_at": "2026-05-25T00:00:00",
+            "last_autonomous_chain_activity_at": "2026-05-25T00:00:00",
             "counts": {},
             "active_sessions": 0,
         }
@@ -63,7 +63,7 @@ async def test_supervisor_activity_guard_compares_gateway_naive_timestamps_as_ut
             "last_user_request_at": "2026-05-25T00:00:00",
             "last_agent_work_at": "2026-05-25T00:00:00",
             "last_memory_task_at": "2026-05-25T00:00:00",
-            "last_self_evolution_activity_at": "2026-05-25T00:00:00",
+            "last_autonomous_chain_activity_at": "2026-05-25T00:00:00",
             "counts": {},
             "active_sessions": 0,
         }
@@ -102,7 +102,7 @@ async def test_supervisor_activity_guard_uses_configured_thresholds_and_reports_
             "last_user_request_at": "2026-05-25T00:04:00",
             "last_agent_work_at": "2026-05-25T00:00:00",
             "last_memory_task_at": "2026-05-25T00:02:00",
-            "last_self_evolution_activity_at": "2026-05-25T00:02:00",
+            "last_autonomous_chain_activity_at": "2026-05-25T00:02:00",
             "counts": {},
             "active_sessions": 1,
             "active_cli_executor": {
@@ -134,7 +134,7 @@ async def test_supervisor_activity_guard_blocks_execution_when_recent_workflow_a
             "last_user_request_at": "2026-05-25T00:12:00",
             "last_agent_work_at": "2026-05-25T00:12:00",
             "last_memory_task_at": None,
-            "last_self_evolution_activity_at": None,
+            "last_autonomous_chain_activity_at": None,
             "counts": {},
             "active_sessions": 1,
         }
@@ -164,7 +164,7 @@ async def test_supervisor_activity_guard_allows_self_learning_followup_outside_e
             "last_agent_work_at": "2026-05-25T11:40:00",
             "last_memory_task_at": "2026-05-25T11:40:00",
             "last_self_learning_activity_at": "2026-05-25T11:40:00",
-            "last_self_evolution_activity_at": "2026-05-25T11:40:00",
+            "last_autonomous_chain_activity_at": "2026-05-25T11:40:00",
             "counts": {},
             "active_sessions": 0,
         }
@@ -199,7 +199,7 @@ async def test_supervisor_activity_guard_blocks_memory_maintenance_when_recent_m
             "last_agent_work_at": "2026-05-25T00:00:00",
             "last_memory_task_at": "2026-05-25T00:14:30",
             "last_self_learning_activity_at": "2026-05-25T00:00:00",
-            "last_self_evolution_activity_at": "2026-05-25T00:00:00",
+            "last_autonomous_chain_activity_at": "2026-05-25T00:00:00",
             "counts": {},
             "active_sessions": 0,
         }
@@ -233,9 +233,9 @@ async def test_supervisor_activity_guard_exposes_body_switch_family_without_coll
             "last_agent_work_at": "2026-05-25T00:00:00",
             "last_memory_task_at": "2026-05-25T00:00:00",
             "last_self_learning_activity_at": "2026-05-25T00:00:00",
-            "last_self_evolution_plan_at": "2026-05-25T00:00:00",
-            "last_self_evolution_execute_at": "2026-05-25T00:00:00",
-            "last_self_evolution_activity_at": "2026-05-25T00:00:00",
+            "last_autonomous_chain_plan_at": "2026-05-25T00:00:00",
+            "last_autonomous_chain_execute_at": "2026-05-25T00:00:00",
+            "last_autonomous_chain_activity_at": "2026-05-25T00:00:00",
             "counts": {},
             "active_sessions": 0,
         }

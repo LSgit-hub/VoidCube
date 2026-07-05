@@ -22,7 +22,7 @@ from systems.supervisor.supervisor import (
     Supervisor,
     SupervisorConfig,
 )
-from systems.supervisor.task_queue import SelfEvolutionTaskQueue
+from systems.supervisor.autonomous_chain_store import AutonomousChainStore
 
 
 # ---------------------------------------------------------------------------
@@ -82,17 +82,17 @@ def _idle_snapshot(
         "last_agent_work_at": old_time if user_idle else base_time,
         "last_memory_task_at": old_time if user_idle else base_time,
         "last_self_learning_activity_at": old_time if user_idle else base_time,
-        "last_self_evolution_plan_at": old_time if user_idle else base_time,
-        "last_self_evolution_execute_at": old_time if user_idle else base_time,
-        "last_self_evolution_activity_at": old_time if user_idle else base_time,
+        "last_autonomous_chain_plan_at": old_time if user_idle else base_time,
+        "last_autonomous_chain_execute_at": old_time if user_idle else base_time,
+        "last_autonomous_chain_activity_at": old_time if user_idle else base_time,
         "counts": {
             "user_request_count": 10,
             "agent_work_count": 10,
             "memory_task_count": 3,
             "self_learning_activity_count": 5,
-            "self_evolution_activity_count": 2,
-            "self_evolution_plan_count": 2,
-            "self_evolution_execute_count": 1,
+            "autonomous_chain_activity_count": 2,
+            "autonomous_chain_plan_count": 2,
+            "autonomous_chain_execute_count": 1,
             "error_count": error_count,
             "uncertainty_high_count": uncertainty_high_count,
         },
@@ -130,7 +130,7 @@ class TestPhase1EndogenousDriveToQueue:
         assert result["status"] == "planned", f"Expected planned, got {result}"
         assert result["planned"] >= 1, f"Expected at least one candidate, got {result['planned']}"
 
-        tasks = await sv.list_self_evolution_tasks()
+        tasks = await sv.list_autonomous_chain_tasks()
         keys = {
             t["metadata"].get("endogenous_drive_key")
             for t in tasks["tasks"]
@@ -159,9 +159,9 @@ class TestPhase1EndogenousDriveToQueue:
                 "last_agent_work_at": live_signal_at,
                 "last_memory_task_at": live_signal_at,
                 "last_self_learning_activity_at": live_signal_at,
-                "last_self_evolution_plan_at": live_signal_at,
-                "last_self_evolution_execute_at": live_signal_at,
-                "last_self_evolution_activity_at": live_signal_at,
+                "last_autonomous_chain_plan_at": live_signal_at,
+                "last_autonomous_chain_execute_at": live_signal_at,
+                "last_autonomous_chain_activity_at": live_signal_at,
             }
         )
 
@@ -215,14 +215,14 @@ class TestPhase1IdleWindowGovernance:
 
         # Create a memory_maintenance task via endogenous drive
         await sv._run_endogenous_drive_cycle()
-        tasks = await sv.list_self_evolution_tasks()
+        tasks = await sv.list_autonomous_chain_tasks()
         mem_task = next(
             t for t in tasks["tasks"]
             if t["governance_task_type"] == "memory_maintenance"
         )
 
         # Auto-decide
-        decision = await sv.decide_self_evolution_task(
+        decision = await sv.decide_autonomous_chain_task(
             mem_task["task_id"],
             {"decision": "auto", "activity_guards": {"now": "2026-06-20T02:00:00"}},
         )
@@ -238,13 +238,13 @@ class TestPhase1IdleWindowGovernance:
         )
 
         await sv._run_endogenous_drive_cycle()
-        tasks = await sv.list_self_evolution_tasks()
+        tasks = await sv.list_autonomous_chain_tasks()
         mem_task = next(
             t for t in tasks["tasks"]
             if t["governance_task_type"] == "memory_maintenance"
         )
 
-        decision = await sv.decide_self_evolution_task(
+        decision = await sv.decide_autonomous_chain_task(
             mem_task["task_id"],
             {"decision": "auto", "activity_guards": {"now": "2026-06-20T14:00:00"}},
         )
@@ -259,8 +259,8 @@ class TestPhase1IdleWindowGovernance:
         # Self-learning and self-evolution are active, but memory path is idle
         snapshot = _idle_snapshot()
         snapshot["last_self_learning_activity_at"] = "2026-06-20T02:00:00"  # recent
-        snapshot["last_self_evolution_plan_at"] = "2026-06-20T02:00:00"     # recent
-        snapshot["last_self_evolution_execute_at"] = "2026-06-20T02:00:00"  # recent
+        snapshot["last_autonomous_chain_plan_at"] = "2026-06-20T02:00:00"     # recent
+        snapshot["last_autonomous_chain_execute_at"] = "2026-06-20T02:00:00"  # recent
         sv._fetch_gateway_activity_snapshot = AsyncMock(return_value=snapshot)
 
         idle = await sv.evaluate_activity_guards({
@@ -285,7 +285,7 @@ class TestPhase1IdleWindowGovernance:
         # self_evolution_plan is VERY recent (only 60s ago → NOT idle),
         # but self_learning is old (idle)
         snapshot = _idle_snapshot()
-        snapshot["last_self_evolution_plan_at"] = "2026-06-20T02:14:00"  # 60s ago → NOT idle
+        snapshot["last_autonomous_chain_plan_at"] = "2026-06-20T02:14:00"  # 60s ago → NOT idle
         snapshot["last_self_learning_activity_at"] = "2026-06-20T01:00:00"  # 75min ago → idle
         sv._fetch_gateway_activity_snapshot = AsyncMock(return_value=snapshot)
 
@@ -296,9 +296,9 @@ class TestPhase1IdleWindowGovernance:
 
         # body_upgrade maps to self_evolution decisions
         se_decision = idle["governance_task_type_decisions"]["self_evolution"]
-        # has_self_evolution_plan_idle should be FALSE (the plan was active at 02:00)
-        assert idle["checks"]["has_self_evolution_plan_idle"] is False, (
-            "self_evolution_plan should NOT be idle when last_self_evolution_plan_at is recent"
+        # has_autonomous_chain_plan_idle should be FALSE (the plan was active at 02:00)
+        assert idle["checks"]["has_autonomous_chain_plan_idle"] is False, (
+            "autonomous_chain_plan should NOT be idle when last_autonomous_chain_plan_at is recent"
         )
         # Therefore execution should be blocked
         assert se_decision["eligible_for_execution"] is False, (
@@ -328,7 +328,7 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
 
         # Create all 4 candidates
         await sv._run_endogenous_drive_cycle()
-        tasks = await sv.list_self_evolution_tasks()
+        tasks = await sv.list_autonomous_chain_tasks()
         mem_task = next(
             t for t in tasks["tasks"]
             if t["governance_task_type"] == "memory_maintenance"
@@ -378,11 +378,11 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
         sv.evaluate_activity_guards = fake_idle_for_dispatch  # type: ignore[method-assign]
 
         # Run full review + dispatch cycle
-        result = await sv._run_self_evolution_cycle()
+        result = await sv._run_autonomous_chain_review_cycle()
         assert result["dispatched"], f"No tasks dispatched: {result}"
 
         # Verify execution was dispatched and completed
-        updated = await sv.get_self_evolution_task(mem_task["task_id"])
+        updated = await sv.get_autonomous_chain_task(mem_task["task_id"])
         assert updated["status"] in ("running", "completed"), (
             f"status not running/completed. status={updated.get('status')}, metadata={updated.get('metadata', {})}"
         )
@@ -398,22 +398,22 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
         )
 
         await sv._run_endogenous_drive_cycle()
-        tasks = await sv.list_self_evolution_tasks()
+        tasks = await sv.list_autonomous_chain_tasks()
         mem_task = next(
             t for t in tasks["tasks"]
             if t["governance_task_type"] == "memory_maintenance"
         )
-        await sv.decide_self_evolution_task(
+        await sv.decide_autonomous_chain_task(
             mem_task["task_id"],
             {"decision": "auto", "activity_guards": {"now": "2026-06-20T02:00:00"}},
         )
 
         # First dispatch
-        await sv._run_self_evolution_cycle()
+        await sv._run_autonomous_chain_review_cycle()
         call_count_before = sv._execution_facade.execute_self_evolution_request.call_count
 
         # Second dispatch attempt
-        await sv._run_self_evolution_cycle()
+        await sv._run_autonomous_chain_review_cycle()
         call_count_after = sv._execution_facade.execute_self_evolution_request.call_count
 
         # No additional calls — duplicate prevented
@@ -439,7 +439,7 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
 
         # Generate all 4 candidates
         await sv._run_endogenous_drive_cycle()
-        tasks = await sv.list_self_evolution_tasks()
+        tasks = await sv.list_autonomous_chain_tasks()
 
         # Pick the memory continuity task emitted by the current drive posture.
         task = next(
@@ -474,9 +474,9 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
             }
         sv.evaluate_activity_guards = fake_idle  # type: ignore[method-assign]
 
-        await sv._run_self_evolution_cycle()
+        await sv._run_autonomous_chain_review_cycle()
 
-        updated = await sv.get_self_evolution_task(task["task_id"])
+        updated = await sv.get_autonomous_chain_task(task["task_id"])
         assert updated["status"] in ("running", "completed"), (
             f"Task was not dispatched. status={updated.get('status')}, "
             f"metadata={updated.get('metadata')}"
@@ -498,9 +498,9 @@ class TestPhase1TimezoneSafety:
                 "last_agent_work_at": "2026-06-20T01:00:00Z",          # UTC suffix
                 "last_memory_task_at": "2026-06-20T01:00:00",          # naive
                 "last_self_learning_activity_at": None,
-                "last_self_evolution_plan_at": None,
-                "last_self_evolution_execute_at": None,
-                "last_self_evolution_activity_at": None,
+                "last_autonomous_chain_plan_at": None,
+                "last_autonomous_chain_execute_at": None,
+                "last_autonomous_chain_activity_at": None,
                 "counts": {"error_count": 0, "uncertainty_high_count": 0},
                 "active_sessions": 0,
                 "recent_metadata": {},
@@ -606,7 +606,7 @@ class TestPhase1GovernorMode:
         sv = _make_supervisor(tmp_path)
         sv._ensure_watch_window_task = Mock()
         sv.run_health_checks = AsyncMock(return_value={"results": []})
-        sv._run_self_evolution_cycle = AsyncMock(return_value={"reviewed": 0, "dispatched": []})
+        sv._run_autonomous_chain_review_cycle = AsyncMock(return_value={"reviewed": 0, "dispatched": []})
         sv._run_endogenous_drive_cycle = AsyncMock(return_value={"planned": 0})
         sv._fetch_gateway_activity_snapshot = AsyncMock(return_value={
             "last_agent_work_at": None, "counts": {}, "active_sessions": 0,
@@ -639,7 +639,7 @@ class TestPhase1GovernorMode:
         sv._dispatch_self_learning_followup = AsyncMock(
             return_value={"status": "self_learning_followup_executed"}
         )
-        sv._dispatch_self_evolution_execution_request = AsyncMock(
+        sv._dispatch_autonomous_chain_execution_request = AsyncMock(
             return_value={"status": "executed"}
         )
         async def fake_idle(_request=None):
@@ -657,7 +657,7 @@ class TestPhase1GovernorMode:
         sv.evaluate_activity_guards = fake_idle  # type: ignore[method-assign]
 
         # Create an approved self_learning task
-        sv._self_evolution_queue.create_task(
+        sv._autonomous_chain_store.create_task(
             title="Test learning task",
             summary="Test",
             trace_id="trace-1",
@@ -669,12 +669,12 @@ class TestPhase1GovernorMode:
                 "task_family": "self_learning",
             },
         )
-        task = sv._self_evolution_queue.list_tasks()[0]
-        sv._self_evolution_queue.update_status(
+        task = sv._autonomous_chain_store.list_tasks()[0]
+        sv._autonomous_chain_store.update_status(
             task.task_id, status="approved", actor="test", reason="test"
         )
 
-        await sv._run_self_evolution_cycle()
+        await sv._run_autonomous_chain_review_cycle()
         # Self-learning tasks are NOT dispatched by supervisor review — they wait for Agent pull.
         sv._dispatch_self_learning_followup.assert_not_awaited()
 
@@ -732,5 +732,7 @@ class TestPhase1LearningTopicExtraction:
         engine = EndogenousDriveEngine()
         assert engine._extract_learning_topic({}) == ""
         assert engine._extract_learning_topic({"recent_metadata": {}}) == ""
+
+
 
 

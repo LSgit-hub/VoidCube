@@ -296,11 +296,11 @@ class ServiceRuntimeMixin:
                 )
                 await asyncio.sleep(runtime_config.self_evolution_review_interval)
                 try:
-                    await self._run_self_evolution_cycle()
+                    await self._run_autonomous_chain_review_cycle()
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    logger.warning(f"Self-evolution review loop iteration failed: {exc}")
+                    logger.warning(f"Autonomous-chain review loop iteration failed: {exc}")
 
         self._self_evolution_review_task = asyncio.create_task(self_evolution_review_loop())
         logger.info("Autonomous chain: review loop started (interval=%ds)", runtime_config.self_evolution_review_interval)
@@ -308,7 +308,7 @@ class ServiceRuntimeMixin:
         # ── Immediate first review after drive has had time to produce candidates ──
         async def _immediate_first_review():
             await asyncio.sleep(5)  # wait for drive's immediate first-run
-            await self._run_self_evolution_cycle()
+            await self._run_autonomous_chain_review_cycle()
         asyncio.create_task(_immediate_first_review())
 
         if self._endogenous_drive_task:
@@ -444,3 +444,4 @@ class ServiceRuntimeMixin:
         self._structured_maintenance_task = None
 
         self._service_runtime_started = False
+

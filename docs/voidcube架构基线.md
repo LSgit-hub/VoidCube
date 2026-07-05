@@ -55,7 +55,7 @@ VoidCube 当前必须把两条执行链路作为一等架构边界，而不是�
 | 链路 | 简称 | 驱动源 | 执行面 | 观测面 | 记忆闭环 | 边界 |
 | --- | --- | --- | --- | --- | --- | --- |
 | API-B 内生驱动 → 任务列表 → API-A 自主执行体 → Mem → API-B 再读取 | **自主链路** | API-B（Mem / Supervisor）内生感知、判断、生成治理投影与任务 | API-A 域中的自主任务执行面；当前实现表现为由 `/auto` 临时门控的最小迷你 CLI / 子代理通道，供 API-A 子代理执行 `self_learning` 与 `body_improvement` | Web 监控只展示 API-B 的状态、反馈、任务治理、内生驱动与由 API-A 回报给 API-B 的自主任务状态 | 学习成果、替身改进报告、任务 outcome 必须写入 Mem，并由下一轮 API-B 内生驱动读取和管理 | 不能接管用户主 CLI，不能把 Web 监控变成用户聊天面，不能让 `/auto` 开关成为用户链路模式 |
-| 用户使用主 CLI → API-A 主 Agent → 工具 / 临时上下文 / 必要记忆访问 | **用户链路** | 用户输入 | 主 CLI + API-A 主 Agent 的 `user_chat` 泳道 | 主 CLI 输出与状态栏 | 按用户对话/长期价值规则写入 Mem；不依赖自主任务队列 | 不能被自主任务抢占、覆盖展示或用作监督者任务执行槽 |
+| 用户使用主 CLI → API-A 主 Agent → 工具 / 临时上下文 / 必要记忆访问 | **用户链路** | 用户输入 | 主 CLI + API-A 主 Agent 的 `user_chat` 泳道 | 主 CLI 输出与状态栏 | 按用户对话/长期价值规则写入 Mem；不依赖自主链路治理存储 | 不能被自主任务抢占、覆盖展示或用作监督者任务执行槽 |
 
 这两条链路共享 API-A 能力域和 Mem，但不共享“当前正在对谁服务”的交互语义。用户链路以用户主 CLI 的输入输出为准；自主链路以 API-B 的任务列表、治理事件、Mem 写回和 Web 监控观测为准。
 
@@ -113,9 +113,9 @@ CLI 运维入口应直接依赖 gateway / executor 标准面；当某条旧 fall
 - `last_agent_work_at`
 - `last_memory_task_at`
 - `last_self_learning_activity_at`
-- `last_self_evolution_plan_at`
-- `last_self_evolution_execute_at`
-- `last_self_evolution_activity_at`
+- `last_autonomous_chain_plan_at`
+- `last_autonomous_chain_execute_at`
+- `last_autonomous_chain_activity_at`
 
 后续所有“是否自撞”“是否有后台任务在途”“如何软性让路”的判断，应优先依据网关活动事实，而不是由各进程各自推断。用户是否正在使用主 CLI 不再作为自提升任务执行的硬门；用户状态由 `active_sessions` 等独立信号进入认知层软感知。
 
@@ -519,7 +519,7 @@ API-A 自主执行面（最小迷你 CLI / 子代理通道；当前由 `/auto` �
 
 **现状与目标的区分**：
 
-- **当前实现**：任务列表治理仍主要由 `evaluate_activity_guards()`、`review_self_evolution_tasks()`、`decide_self_evolution_task()` 和 `SelfEvolutionTaskQueue.update_status()` 的规则、阈值和合法状态迁移控制
+- **当前实现**：任务列表治理仍主要由 `evaluate_activity_guards()`、`review_autonomous_chain_tasks()`、`decide_autonomous_chain_task()` 和 `AutonomousChainStore.update_status()` 的规则、阈值和合法状态迁移控制
 - **目标设计**：让 LM 先对“整个列表应该怎么管”给出结构化治理建议，再由确定性状态机验证是否允许落地
 
 因此，正确的方向不是取消规则，而是做成“双层治理”：
@@ -587,7 +587,7 @@ API-A 自主执行面（最小迷你 CLI / 子代理通道；当前由 `/auto` �
 
 任务列表的定位：
 
-- **持有者**：监督者（属于 `systems/supervisor/` 的一部分，对应 `SelfEvolutionTaskQueue`）
+- **持有者**：监督者（属于 `systems/supervisor/` 的一部分，对应 `AutonomousChainStore`）
 - **生产者**：监督者治理输出中的兼容任务投影层（由内生驱动认知判断后落入任务列表）
 - **消费者**：API-A 自主执行面（最小迷你 CLI / 子代理通道，通过自主任务执行通道遍历并执行；当前由 `/auto` 临时启停）
 - **内容**：包含 `self_learning` 与 `body_improvement` 两类自主任务；`body_improvement` 的执行族是 `body_upgrade`，但 `body_switch` 身体切换机械流程不进入该自主任务列表
@@ -595,7 +595,7 @@ API-A 自主执行面（最小迷你 CLI / 子代理通道；当前由 `/auto` �
 
 任务列表不是独立服务，不需要独立进程、独立端口或独立注册。它是监督者模块内部的数据结构，通过网关暴露给 Agent 访问。
 
-当前代码中 `systems/supervisor/task_queue.py` 的 `SelfEvolutionTaskQueue` 已经是任务列表的正式实现骨架，现阶段仍需继续完善的是：
+当前代码中 `systems/supervisor/autonomous_chain_store.py` 的 `AutonomousChainStore` 已经是任务列表的正式实现骨架，现阶段仍需继续完善的是：
 
 - 在保持现有 pull 路径不回退的前提下，继续清理残留 push 兼容认知，避免后续会话再把旧路径当主逻辑
 - 在现有 `planned/approved/running/completed/failed/paused/cancelled` 生命周期基础上，补强“陈旧任务复审、合并、退休、重排”的治理语义
@@ -818,7 +818,7 @@ planned ──→ approved ──→ running ──→ completed
 用户 -> 主 CLI -> API-A 主 Agent (`user_chat`) -> 工具 / 必要记忆访问 -> 主 CLI
 ```
 
-主 CLI 是用户入口。实际用户任务执行由 API-A 主 Agent 完成。长期记忆访问通过受控记忆入口进入 Mem；该链路不依赖自主任务队列。
+主 CLI 是用户入口。实际用户任务执行由 API-A 主 Agent 完成。长期记忆访问通过受控记忆入口进入 Mem；该链路不依赖自主链路治理存储。
 
 ### 7.2 记忆链路
 
@@ -1268,11 +1268,11 @@ Mem 中长期记忆 + 网关活动快照（7 个时间戳 + 错误/不确定性�
 
 **gateway 双泳道展示/活动架构**：`user_chat` 与 `supervisor_task` 是同一 API-A 域下的两个工作泳道。用户链路的主 CLI 交互走 `user_chat`，自主链路中监督者放行的学习/改造任务走 `supervisor_task`；两者互不覆盖。dashboard / Web 监控只作为 API-B 观测面按 lane 读取自主链路状态，不能退回单槽 last-writer-wins，也不能变成用户聊天入口。
 
-终端 dashboard / Web 小屋应优先消费 Supervisor 提供的 `autonomous_observation.queue.sections / board.current_cards / primary_focus` 读模型；其中 `queue.sections` 是程序侧主协议。观测板暂不可用时可以显示空态，但不应回退成旧 `/self-evolution/tasks` 队列管理视角。
+终端 dashboard / Web 小屋应优先消费 Supervisor 提供的 `autonomous_observation.queue.sections / board.current_cards / primary_focus` 读模型；其中 `queue.sections` 是程序侧主协议，对应的治理 API 入口也应统一收口为 `/autonomous-chain/tasks`。观测板暂不可用时可以显示空态，但不应回退成旧 `/self-evolution/tasks` 队列管理视角。
 
 Web 小屋前端内部主面板也应以 `chain`/“自主链路总览”作为主语，而不是继续沿用 `tasks`/任务台命名；默认展开内容应先展示焦点、四段闭环和链路片段观察，再展示更细的任务卡。这里的“片段观察”是对自主链路四段流动的只读投影，不是旧式队列管理台。
 
-对应地，Supervisor 的 `/ui/state` 不应再把顶层 `tasks`、`drive_candidates` 这类原始治理/候选切片作为前端主协议返回；前端应围绕 `autonomous_observation` 读模型取数。
+对应地，Supervisor 的 `/ui/state` 不应再把顶层 `tasks`、`drive_candidates`，以及 `autonomous_observation.observed_tasks / autonomous_observation.candidates` 这类原始治理/候选切片作为前端主协议返回；前端应围绕 `autonomous_observation.queue.sections`、`board.current_cards` 与分 lane 当前态取数。
 
 同理，`drive_available`、`autonomous_chain_gate` 这类 Web 观测专用运行时信号也应优先下沉到 `autonomous_observation.runtime` 一类读模型分支，而不是继续作为顶层 UI 镜像字段长期保留。
 
@@ -1280,7 +1280,7 @@ Web 小屋前端内部主面板也应以 `chain`/“自主链路总览”作为�
 
 如果需要展示“队列管理”，也应把它理解成自主链路的观测投影，而不是旧任务台。推荐主协议为 `autonomous_observation.queue.sections`，显式区分 `api_b_backlog`、`api_a_ready`、`api_b_candidates`、`mem_recent` 四类链路片段；前端应直接消费这些分段，而不是再额外维护一层旧展示别名。每个 section 还应允许携带 `recent_events` 一类最近链路事件摘要，以及 `recent_traces` 一类按 `trace_id` 聚合的轻量 trace 摘要；Web 小屋优先使用 Supervisor 本地记录来生成这些摘要，避免观测页刷新反向依赖慢速 live 探活。当某条 recent trace 值得展开时，还应允许内联少量 `detail`（如 source 分布、任务家族、timeline preview，以及有限条数的 `timeline_events` 事件流），并支持按 source 过滤事件流，便于 Web 小屋顺着这一段继续钻取最近的 timeline / trace。
 
-同样地，Supervisor 底层的任务列表存储虽然目前仍由 `systems/supervisor/task_queue.py` 承载，但程序消费层不应继续把它当成一个无差别“总队列”。推荐底层统一围绕三类投影读取：
+同样地，Supervisor 底层的任务列表存储虽然目前仍由 `systems/supervisor/autonomous_chain_store.py` 承载，但程序消费层不应继续把它当成一个无差别“总存储”。推荐底层统一围绕三类投影读取：
 
 - `governance_backlog`: 仍在治理中的活跃任务
 - `execution_dispatch`: 已进入或准备进入执行分发链的任务
@@ -1351,3 +1351,5 @@ API-A 自主执行面（最小迷你 CLI / 子代理通道；当前由 `/auto` �
 | 13 | **健康值达标是建议；切换激活需用户同意** | shell 健康值超过 active 后产生"建议切换"事件，Governor 独立审查（否决权为程序前置门）。真正激活新替身（activate_slot）只能由用户同意后执行——健康值/Governor 都不是自动切换触发器（用户同意门为目标语义，待实现，见 §7.5） |
 | 14 | **LM 治理不能绕过程序护栏**        | 即使未来由 LM 参与任务列表治理，最终状态迁移、防自撞并发护栏、边界检查和审计落盘仍必须由确定性程序负责 |
 | 15 | **Web 监控只观测 API-B**        | Web 监控展示 API-B 的动作、状态、反馈、任务治理和自主任务回报，不成为用户聊天入口，不监控或接管用户链路 |
+
+

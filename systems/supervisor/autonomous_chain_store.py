@@ -14,15 +14,15 @@ from systems.runtime_task_profile import (
     normalize_runtime_task_type,
 )
 
-SelfEvolutionTaskStatus = Literal["planned", "deferred", "approved", "running", "paused", "cancelled", "completed", "failed", "awaiting_review", "retry"]
-SelfEvolutionExecutionRequestKind = Literal[
+AutonomousChainTaskStatus = Literal["planned", "deferred", "approved", "running", "paused", "cancelled", "completed", "failed", "awaiting_review", "retry"]
+AutonomousChainExecutionRequestKind = Literal[
     "memory_maintenance",
     "general_self_evolution",
 ]
-SelfEvolutionExecutionRequestStatus = Literal["approved_for_execution"]
+AutonomousChainExecutionRequestStatus = Literal["approved_for_execution"]
 
 
-class SelfEvolutionGitLineage(BaseModel):
+class AutonomousChainGitLineage(BaseModel):
     source_branch: Optional[str] = None
     source_commit: Optional[str] = None
     candidate_branch: Optional[str] = None
@@ -34,11 +34,11 @@ class SelfEvolutionGitLineage(BaseModel):
     changed_files: List[str] = Field(default_factory=list)
 
 
-class SelfEvolutionExecutionRequest(BaseModel):
+class AutonomousChainExecutionRequest(BaseModel):
     """Formal Mem/supervisor handoff contract consumed by executors.
 
     CLI and HTTP operations may test the executor surface, but a formal
-    self-evolution execution needs this governance snapshot.
+    autonomous-chain execution needs this governance snapshot.
     """
 
     request_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -49,14 +49,14 @@ class SelfEvolutionExecutionRequest(BaseModel):
     task_family: Optional[str] = None
     execution_kind: Optional[str] = None
     decision_id: Optional[str] = None
-    kind: SelfEvolutionExecutionRequestKind = "general_self_evolution"
-    status: SelfEvolutionExecutionRequestStatus = "approved_for_execution"
+    kind: AutonomousChainExecutionRequestKind = "general_self_evolution"
+    status: AutonomousChainExecutionRequestStatus = "approved_for_execution"
     source_actor: str = "mem_supervisor"
     source_service: Optional[str] = None
     target_slot_id: Optional[str] = None
     target_service: Optional[str] = None
     session_id: Optional[str] = None
-    git_lineage: SelfEvolutionGitLineage = Field(default_factory=SelfEvolutionGitLineage)
+    git_lineage: AutonomousChainGitLineage = Field(default_factory=AutonomousChainGitLineage)
     probe_report_ref: Optional[str] = None
     activity_guard_evidence: Dict[str, Any] = Field(default_factory=dict)
     governor_decision: Dict[str, Any] = Field(default_factory=dict)
@@ -64,7 +64,7 @@ class SelfEvolutionExecutionRequest(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     @model_validator(mode="after")
-    def _require_self_evolution_safety_evidence(self) -> "SelfEvolutionExecutionRequest":
+    def _normalize_execution_request_profile(self) -> "AutonomousChainExecutionRequest":
         runtime_task_profile = derive_runtime_task_profile(
             task_type=self.task_type,
             governance_task_type=self.governance_task_type,
@@ -79,9 +79,9 @@ class SelfEvolutionExecutionRequest(BaseModel):
         return self
 
 
-class SelfEvolutionTaskDecision(BaseModel):
+class AutonomousChainTaskDecision(BaseModel):
     decision_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    status: SelfEvolutionTaskStatus
+    status: AutonomousChainTaskStatus
     task_type: str = "self_evolution"
     governance_task_type: Optional[str] = None
     task_family: Optional[str] = None
@@ -93,7 +93,7 @@ class SelfEvolutionTaskDecision(BaseModel):
     context: Dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _normalize_runtime_profile(self) -> "SelfEvolutionTaskDecision":
+    def _normalize_runtime_profile(self) -> "AutonomousChainTaskDecision":
         runtime_task_profile = derive_runtime_task_profile(
             task_type=self.task_type,
             governance_task_type=self.governance_task_type,
@@ -107,7 +107,7 @@ class SelfEvolutionTaskDecision(BaseModel):
         return self
 
 
-class SelfEvolutionTask(BaseModel):
+class AutonomousChainTask(BaseModel):
     task_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     trace_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     title: str
@@ -118,18 +118,18 @@ class SelfEvolutionTask(BaseModel):
     execution_kind: Optional[str] = None
     source: str = "self_learning"
     priority: str = "normal"
-    status: SelfEvolutionTaskStatus = "planned"
+    status: AutonomousChainTaskStatus = "planned"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     evidence: Dict[str, Any] = Field(default_factory=dict)
     constraints: Dict[str, Any] = Field(default_factory=dict)
     decision_reason: str = ""
-    decision_history: List[SelfEvolutionTaskDecision] = Field(default_factory=list)
-    execution_request: Optional[SelfEvolutionExecutionRequest] = None
+    decision_history: List[AutonomousChainTaskDecision] = Field(default_factory=list)
+    execution_request: Optional[AutonomousChainExecutionRequest] = None
 
     @model_validator(mode="after")
-    def _normalize_runtime_profile(self) -> "SelfEvolutionTask":
+    def _normalize_runtime_profile(self) -> "AutonomousChainTask":
         explicit_governance_task_type = (
             self.metadata.get("governance_task_type")
             or self.governance_task_type
@@ -159,17 +159,17 @@ class SelfEvolutionTask(BaseModel):
 
 
 
-# NOTE(SB-02): The self-evolution queue JSON file is runtime coordination state,
-# not an authoritative store.  It can be rebuilt from Mem governance history
-# if lost.  The Mem repository (governance_event table) is the true source of
-# record for governance decisions.  See state-boundary.md §4.
+# NOTE(SB-02): The autonomous-chain store JSON file is runtime coordination
+# state, not an authoritative store. It can be rebuilt from Mem governance
+# history if lost. The Mem repository (governance_event table) is the true
+# source of record for governance decisions. See state-boundary.md §4.
 
-class SelfEvolutionTaskQueueSnapshot(BaseModel):
+class AutonomousChainStoreSnapshot(BaseModel):
     version: int = 1
-    tasks: List[SelfEvolutionTask] = Field(default_factory=list)
+    tasks: List[AutonomousChainTask] = Field(default_factory=list)
 
 
-class SelfEvolutionTaskQueue:
+class AutonomousChainStore:
     _GOVERNANCE_BACKLOG_STATUSES: frozenset[str] = frozenset(
         {
             "planned",
@@ -200,9 +200,9 @@ class SelfEvolutionTaskQueue:
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         if not self.storage_path.exists():
-            self._write_snapshot(SelfEvolutionTaskQueueSnapshot())
+            self._write_snapshot(AutonomousChainStoreSnapshot())
 
-    def list_tasks(self, *, status: Optional[SelfEvolutionTaskStatus] = None) -> List[SelfEvolutionTask]:
+    def list_tasks(self, *, status: Optional[AutonomousChainTaskStatus] = None) -> List[AutonomousChainTask]:
         snapshot = self._load_snapshot()
         tasks = snapshot.tasks
         if status is not None:
@@ -212,8 +212,8 @@ class SelfEvolutionTaskQueue:
     def list_governance_backlog_tasks(
         self,
         *,
-        status: Optional[SelfEvolutionTaskStatus] = None,
-    ) -> List[SelfEvolutionTask]:
+        status: Optional[AutonomousChainTaskStatus] = None,
+    ) -> List[AutonomousChainTask]:
         """Return live governance backlog items still participating in the chain."""
         allowed = self._status_filter(
             status=status,
@@ -224,8 +224,8 @@ class SelfEvolutionTaskQueue:
     def list_execution_dispatch_tasks(
         self,
         *,
-        status: Optional[SelfEvolutionTaskStatus] = None,
-    ) -> List[SelfEvolutionTask]:
+        status: Optional[AutonomousChainTaskStatus] = None,
+    ) -> List[AutonomousChainTask]:
         """Return tasks that are in or approaching the execution-dispatch lane."""
         allowed = self._status_filter(
             status=status,
@@ -236,8 +236,8 @@ class SelfEvolutionTaskQueue:
     def list_writeback_history(
         self,
         *,
-        status: Optional[SelfEvolutionTaskStatus] = None,
-    ) -> List[SelfEvolutionTask]:
+        status: Optional[AutonomousChainTaskStatus] = None,
+    ) -> List[AutonomousChainTask]:
         """Return outcome records that already formed a writeback-worthy history."""
         allowed = self._status_filter(
             status=status,
@@ -248,9 +248,9 @@ class SelfEvolutionTaskQueue:
     def list_chain_projection_tasks(
         self,
         *,
-        status: Optional[SelfEvolutionTaskStatus] = None,
+        status: Optional[AutonomousChainTaskStatus] = None,
         include_cancelled: bool = False,
-    ) -> List[SelfEvolutionTask]:
+    ) -> List[AutonomousChainTask]:
         """Return autonomous-chain task records without exposing raw storage semantics."""
         normalized_status = self._normalized_status_value(status)
         if normalized_status:
@@ -268,7 +268,7 @@ class SelfEvolutionTaskQueue:
             allowed_statuses.add("cancelled")
         return self._list_tasks_by_statuses(frozenset(allowed_statuses))
 
-    def get_task(self, task_id: str) -> Optional[SelfEvolutionTask]:
+    def get_task(self, task_id: str) -> Optional[AutonomousChainTask]:
         snapshot = self._load_snapshot()
         for task in snapshot.tasks:
             if task.task_id == task_id:
@@ -277,7 +277,7 @@ class SelfEvolutionTaskQueue:
 
     def clear_tasks(self) -> None:
         with self._lock:
-            self._write_snapshot(SelfEvolutionTaskQueueSnapshot())
+            self._write_snapshot(AutonomousChainStoreSnapshot())
 
     def create_task(
         self,
@@ -291,10 +291,10 @@ class SelfEvolutionTaskQueue:
         metadata: Optional[Dict[str, Any]] = None,
         evidence: Optional[Dict[str, Any]] = None,
         constraints: Optional[Dict[str, Any]] = None,
-    ) -> SelfEvolutionTask:
+    ) -> AutonomousChainTask:
         with self._lock:
             snapshot = self._load_snapshot()
-            task = SelfEvolutionTask(
+            task = AutonomousChainTask(
                 title=title,
                 summary=summary,
                 trace_id=trace_id or str(uuid.uuid4()),
@@ -313,13 +313,13 @@ class SelfEvolutionTaskQueue:
         self,
         task_id: str,
         *,
-        status: SelfEvolutionTaskStatus,
+        status: AutonomousChainTaskStatus,
         decision_id: Optional[str] = None,
         actor: str = "supervisor",
         reason: str = "",
         context: Optional[Dict[str, Any]] = None,
-        execution_request: Optional[SelfEvolutionExecutionRequest] = None,
-    ) -> SelfEvolutionTask:
+        execution_request: Optional[AutonomousChainExecutionRequest] = None,
+    ) -> AutonomousChainTask:
         # ── Validate state transition ──
         _LEGAL_TRANSITIONS: dict[str, set[str]] = {
             "planned": {"approved", "paused", "cancelled", "deferred", "awaiting_review"},
@@ -366,7 +366,7 @@ class SelfEvolutionTaskQueue:
                 task.updated_at = datetime.utcnow()
                 task.decision_reason = reason
                 task.decision_history.append(
-                    SelfEvolutionTaskDecision(
+                    AutonomousChainTaskDecision(
                         decision_id=decision_id or str(uuid.uuid4()),
                         status=status,
                         task_type=task.task_type,
@@ -391,8 +391,8 @@ class SelfEvolutionTaskQueue:
         task_id: str,
         *,
         metadata: Optional[Dict[str, Any]] = None,
-        execution_request: Optional[SelfEvolutionExecutionRequest] = None,
-    ) -> SelfEvolutionTask:
+        execution_request: Optional[AutonomousChainExecutionRequest] = None,
+    ) -> AutonomousChainTask:
         with self._lock:
             snapshot = self._load_snapshot()
             for index, task in enumerate(snapshot.tasks):
@@ -416,7 +416,7 @@ class SelfEvolutionTaskQueue:
         actor: str = "supervisor",
         reason: str = "",
         context: Optional[Dict[str, Any]] = None,
-    ) -> SelfEvolutionTask:
+    ) -> AutonomousChainTask:
         normalized_priority = str(priority or "").strip().lower() or "normal"
         with self._lock:
             snapshot = self._load_snapshot()
@@ -427,7 +427,7 @@ class SelfEvolutionTaskQueue:
                 task.updated_at = datetime.utcnow()
                 task.decision_reason = reason or f"Priority updated to {normalized_priority}"
                 task.decision_history.append(
-                    SelfEvolutionTaskDecision(
+                    AutonomousChainTaskDecision(
                         decision_id=str(uuid.uuid4()),
                         status=task.status,
                         task_type=task.task_type,
@@ -445,15 +445,15 @@ class SelfEvolutionTaskQueue:
                 return task
         raise KeyError(task_id)
 
-    def _load_snapshot(self) -> SelfEvolutionTaskQueueSnapshot:
+    def _load_snapshot(self) -> AutonomousChainStoreSnapshot:
         if not self.storage_path.exists():
-            return SelfEvolutionTaskQueueSnapshot()
+            return AutonomousChainStoreSnapshot()
         raw = self.storage_path.read_text(encoding="utf-8").strip()
         if not raw:
-            return SelfEvolutionTaskQueueSnapshot()
-        return SelfEvolutionTaskQueueSnapshot.model_validate_json(raw)
+            return AutonomousChainStoreSnapshot()
+        return AutonomousChainStoreSnapshot.model_validate_json(raw)
 
-    def _write_snapshot(self, snapshot: SelfEvolutionTaskQueueSnapshot) -> None:
+    def _write_snapshot(self, snapshot: AutonomousChainStoreSnapshot) -> None:
         atomic_json_write(
             self.storage_path,
             snapshot.model_dump(mode="json"),
@@ -462,7 +462,7 @@ class SelfEvolutionTaskQueue:
     def _list_tasks_by_statuses(
         self,
         allowed_statuses: frozenset[str],
-    ) -> List[SelfEvolutionTask]:
+    ) -> List[AutonomousChainTask]:
         snapshot = self._load_snapshot()
         return [
             task for task in snapshot.tasks
@@ -470,19 +470,20 @@ class SelfEvolutionTaskQueue:
         ]
 
     @staticmethod
-    def _normalized_status(task: SelfEvolutionTask) -> str:
+    def _normalized_status(task: AutonomousChainTask) -> str:
         return str(task.status or "").strip().lower()
 
     @staticmethod
-    def _normalized_status_value(status: Optional[SelfEvolutionTaskStatus]) -> str:
+    def _normalized_status_value(status: Optional[AutonomousChainTaskStatus]) -> str:
         return str(status or "").strip().lower()
 
     @staticmethod
     def _status_filter(
         *,
-        status: Optional[SelfEvolutionTaskStatus],
+        status: Optional[AutonomousChainTaskStatus],
         default_statuses: frozenset[str],
     ) -> frozenset[str]:
         if status is None:
             return default_statuses
         return frozenset({str(status).strip().lower()})
+

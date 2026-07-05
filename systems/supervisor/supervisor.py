@@ -10,6 +10,14 @@ from pydantic import BaseModel
 
 from systems.body_registry import BodyImprovementReport
 from systems.governor import GovernorRequest
+from systems.supervisor.autonomous_chain_contract import (
+    AUTONOMOUS_CHAIN_CYCLE_ROUTE,
+    AUTONOMOUS_CHAIN_TASKS_ROUTE,
+    AUTONOMOUS_CHAIN_TASK_CLEAR_ROUTE,
+    AUTONOMOUS_CHAIN_TASK_REVIEW_ROUTE,
+    autonomous_chain_task_decision_route,
+    autonomous_chain_task_route,
+)
 from systems.supervisor.config_models import (
     SupervisorBodyRuntimeConfig,
     SupervisorConfig,
@@ -123,16 +131,16 @@ class Supervisor(
         self.app.add_api_route("/runtime/endogenous-drive/self-regulation", self.get_endogenous_self_regulation, methods=["GET"])
         self.app.add_api_route("/runtime/endogenous-drive/cognition", self.get_endogenous_cognition_state, methods=["GET"])
         self.app.add_api_route("/runtime/endogenous-drive/state", self.get_endogenous_governance_state, methods=["GET"])
-        self.app.add_api_route("/self-evolution/tasks", self.list_self_evolution_tasks, methods=["GET"])
-        self.app.add_api_route("/self-evolution/tasks", self.plan_self_evolution_task, methods=["POST"])
+        self.app.add_api_route(AUTONOMOUS_CHAIN_TASKS_ROUTE, self.list_autonomous_chain_tasks, methods=["GET"])
+        self.app.add_api_route(AUTONOMOUS_CHAIN_TASKS_ROUTE, self.plan_autonomous_chain_task, methods=["POST"])
         self.app.add_api_route(
-            "/self-evolution/tasks/clear",
-            self.clear_self_evolution_runtime,
+            AUTONOMOUS_CHAIN_TASK_CLEAR_ROUTE,
+            self.clear_autonomous_chain_runtime,
             methods=["POST"],
         )
         self.app.add_api_route(
-            "/self-evolution/tasks/review",
-            self.review_self_evolution_tasks,
+            AUTONOMOUS_CHAIN_TASK_REVIEW_ROUTE,
+            self.review_autonomous_chain_tasks,
             methods=["POST"],
         )
         self.app.add_api_route(
@@ -140,10 +148,10 @@ class Supervisor(
             self.submit_self_learning_conclusion,
             methods=["POST"],
         )
-        self.app.add_api_route("/self-evolution/tasks/{task_id}", self.get_self_evolution_task, methods=["GET"])
+        self.app.add_api_route(autonomous_chain_task_route("{task_id}"), self.get_autonomous_chain_task, methods=["GET"])
         self.app.add_api_route(
-            "/self-evolution/tasks/{task_id}/decision",
-            self.decide_self_evolution_task,
+            autonomous_chain_task_decision_route("{task_id}"),
+            self.decide_autonomous_chain_task,
             methods=["POST"],
         )
         self.app.add_api_route("/health/check", self.run_health_checks, methods=["POST"])
@@ -156,7 +164,7 @@ class Supervisor(
         self.app.add_api_route("/body/improvement-report", self.receive_improvement_report, methods=["POST"])
         self.app.add_api_route("/body/{slot_id}/health", self.get_slot_health, methods=["GET"])
         self.app.add_api_route(
-            "/self-evolution/autonomous-cycle",
+            AUTONOMOUS_CHAIN_CYCLE_ROUTE,
             self.run_autonomous_cycle,
             methods=["POST"],
         )
@@ -271,3 +279,4 @@ if __name__ == "__main__":
     
     import asyncio
     asyncio.run(supervisor.start())
+

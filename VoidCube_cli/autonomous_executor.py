@@ -7,6 +7,8 @@ import urllib.request
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
+from systems.supervisor.autonomous_chain_contract import AUTONOMOUS_CHAIN_TASKS_ROUTE
+
 
 AUTONOMOUS_LEARNING_TASK_PREFIX = "[Autonomous Learning Task]"
 AUTONOMOUS_BODY_IMPROVEMENT_TASK_PREFIX = "[Autonomous Body Improvement Task]"
@@ -159,7 +161,7 @@ class AutonomousExecutorRuntime:
         try:
             resp = json.loads(
                 urllib.request.urlopen(
-                    f"{supervisor_url}/self-evolution/tasks?status=running",
+                    f"{supervisor_url}{AUTONOMOUS_CHAIN_TASKS_ROUTE}?status=running",
                     timeout=10,
                 ).read()
             )

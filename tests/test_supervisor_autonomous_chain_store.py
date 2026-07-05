@@ -314,16 +314,16 @@ async def _plan_and_write_back_endogenous_cycle(
             return evaluation
         assert candidates
 
-    planned = await supervisor.plan_self_evolution_task(candidates[0])
+    planned = await supervisor.plan_autonomous_chain_task(candidates[0])
     task_id = planned["tasks"][0]["task_id"]
 
     if outcome_status == "deferred":
-        await supervisor.decide_self_evolution_task(
+        await supervisor.decide_autonomous_chain_task(
             task_id,
             {"decision": "deferred", "reason": reason},
         )
     elif outcome_status == "completed":
-        await supervisor.decide_self_evolution_task(
+        await supervisor.decide_autonomous_chain_task(
             task_id,
             {"decision": "approved", "reason": f"{reason}: approved"},
         )
@@ -342,7 +342,7 @@ async def _plan_and_write_back_endogenous_cycle(
             event_type="execution",
         )
     elif outcome_status == "failed":
-        await supervisor.decide_self_evolution_task(
+        await supervisor.decide_autonomous_chain_task(
             task_id,
             {"decision": "approved", "reason": f"{reason}: approved"},
         )
@@ -372,7 +372,7 @@ async def _plan_and_write_back_endogenous_cycle(
 async def test_planning_self_evolution_task_creates_planned_queue_entry(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    result = await supervisor.plan_self_evolution_task(
+    result = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Evaluate memory compaction heuristics",
             "summary": "Review whether current memory compression thresholds should be adjusted.",
@@ -454,7 +454,7 @@ async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_dupli
 
     first = await supervisor._run_endogenous_drive_cycle()
     second = await supervisor._run_endogenous_drive_cycle()
-    queued = await supervisor.list_self_evolution_tasks()
+    queued = await supervisor.list_autonomous_chain_tasks()
     timeline = supervisor._recent_supervisor_ui_activity(limit=10)
 
     assert first["status"] == "planned"
@@ -492,7 +492,7 @@ async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_dupli
 async def test_governance_backlog_task_summaries_include_constraints_for_runtime_cooldown_checks(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    await supervisor.plan_self_evolution_task(
+    await supervisor.plan_autonomous_chain_task(
         {
             "title": "Improve shell body after learning",
             "task_family": "body_upgrade",
@@ -806,15 +806,15 @@ async def test_evaluate_endogenous_drive_exposes_non_task_signals(tmp_path):
         }
 
     supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
-    await supervisor.plan_self_evolution_task(
+    await supervisor.plan_autonomous_chain_task(
         {
             "title": "Revisit deferred governance note",
             "task_family": "general_self_evolution",
             "execution_kind": "general_self_evolution",
         }
     )
-    task_id = supervisor._self_evolution_queue.list_tasks()[0].task_id
-    supervisor._self_evolution_queue.update_status(
+    task_id = supervisor._autonomous_chain_store.list_tasks()[0].task_id
+    supervisor._autonomous_chain_store.update_status(
         task_id,
         status="deferred",
         actor="test",
@@ -1136,7 +1136,7 @@ async def test_evaluate_endogenous_drive_exposes_alignment_signal_when_reflectio
         }
 
     supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
-    await supervisor.plan_self_evolution_task(
+    await supervisor.plan_autonomous_chain_task(
         {
             "title": "Stale endogenous queue item",
             "task_family": "general_self_evolution",
@@ -1147,8 +1147,8 @@ async def test_evaluate_endogenous_drive_exposes_alignment_signal_when_reflectio
             },
         }
     )
-    task_id = supervisor._self_evolution_queue.list_tasks()[0].task_id
-    supervisor._self_evolution_queue.update_status(
+    task_id = supervisor._autonomous_chain_store.list_tasks()[0].task_id
+    supervisor._autonomous_chain_store.update_status(
         task_id,
         status="deferred",
         actor="test",
@@ -1221,7 +1221,7 @@ async def test_endogenous_drive_history_records_planned_and_decision_outcomes(tm
     cycle = await supervisor._run_endogenous_drive_cycle()
     task_id = cycle["tasks"][0]["task_id"]
 
-    await supervisor.decide_self_evolution_task(
+    await supervisor.decide_autonomous_chain_task(
         task_id,
         {
             "decision": "defer",
@@ -1261,7 +1261,7 @@ async def test_completed_autonomous_task_finding_flows_into_next_drive_context(t
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     final_response = "Findings: prefer lane-specific observation before expanding autonomous tasks."
 
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Learn lane observation",
             "summary": "Learning result must be visible to the next endogenous drive cycle",
@@ -1276,11 +1276,11 @@ async def test_completed_autonomous_task_finding_flows_into_next_drive_context(t
     )
     task_id = planned["tasks"][0]["task_id"]
 
-    await supervisor.decide_self_evolution_task(
+    await supervisor.decide_autonomous_chain_task(
         task_id,
         {"decision": "approve", "actor": "supervisor", "reason": "ready"},
     )
-    await supervisor.decide_self_evolution_task(
+    await supervisor.decide_autonomous_chain_task(
         task_id,
         {
             "decision": "running",
@@ -1290,7 +1290,7 @@ async def test_completed_autonomous_task_finding_flows_into_next_drive_context(t
             "context": {"source": "cli_agent_pull", "execution_kind": "self_learning"},
         },
     )
-    await supervisor.decide_self_evolution_task(
+    await supervisor.decide_autonomous_chain_task(
         task_id,
         {
             "decision": "completed",
@@ -1334,10 +1334,10 @@ async def test_endogenous_drive_outcome_dedup_scans_full_retained_history_window
     supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     cycle = await supervisor._run_endogenous_drive_cycle()
     task_id = cycle["tasks"][0]["task_id"]
-    task = supervisor._self_evolution_queue.get_task(task_id)
+    task = supervisor._autonomous_chain_store.get_task(task_id)
     assert task is not None
 
-    await supervisor.decide_self_evolution_task(
+    await supervisor.decide_autonomous_chain_task(
         task_id,
         {
             "decision": "defer",
@@ -1375,7 +1375,7 @@ async def test_endogenous_drive_outcome_dedup_scans_full_retained_history_window
     history["strategy_memory"]["contextual_focus_stats"][context_key][preferred_focus]["dragging"] = 1
     supervisor._persist_endogenous_drive_history(history)
 
-    task = supervisor._self_evolution_queue.get_task(task_id)
+    task = supervisor._autonomous_chain_store.get_task(task_id)
     assert task is not None
     supervisor._record_endogenous_drive_outcome(task, event_type="decision")
 
@@ -1543,7 +1543,7 @@ async def test_single_evaluation_counts_focus_judged_once_even_with_multiple_can
 @pytest.mark.unit
 async def test_endogenous_drive_history_outcome_persists_reference_alignment(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    task = supervisor._self_evolution_queue.create_task(
+    task = supervisor._autonomous_chain_store.create_task(
         title="Audit evidence alignment",
         summary="Persist alignment details for the next endogenous cognition loop.",
         source="endogenous_drive",
@@ -1576,7 +1576,7 @@ async def test_endogenous_drive_history_outcome_persists_reference_alignment(tmp
 @pytest.mark.unit
 async def test_endogenous_drive_history_outcome_persists_cognitive_alignment(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    task = supervisor._self_evolution_queue.create_task(
+    task = supervisor._autonomous_chain_store.create_task(
         title="Audit proposal drift",
         summary="Persist cognitive alignment details for later self-correction.",
         source="endogenous_drive",
@@ -1608,7 +1608,7 @@ async def test_endogenous_drive_history_outcome_persists_cognitive_alignment(tmp
 @pytest.mark.unit
 async def test_endogenous_drive_history_outcome_persists_lm_posture_reasoning(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    task = supervisor._self_evolution_queue.create_task(
+    task = supervisor._autonomous_chain_store.create_task(
         title="Record posture reasoning",
         summary="Persist LM posture alignment and priority basis for future cognition loops.",
         source="endogenous_drive",
@@ -1644,7 +1644,7 @@ async def test_endogenous_drive_history_outcome_persists_lm_posture_reasoning(tm
 @pytest.mark.unit
 async def test_endogenous_drive_history_outcome_persists_lm_cognitive_assessment(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    task = supervisor._self_evolution_queue.create_task(
+    task = supervisor._autonomous_chain_store.create_task(
         title="Record LM cognitive assessment",
         summary="Persist batch-level LM judgement for future endogenous cognition loops.",
         source="endogenous_drive",
@@ -1690,7 +1690,7 @@ async def test_endogenous_drive_history_outcome_persists_lm_cognitive_assessment
 @pytest.mark.unit
 async def test_planned_outcome_does_not_synthesize_cognitive_assessment_from_drive_judgement(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    task = supervisor._self_evolution_queue.create_task(
+    task = supervisor._autonomous_chain_store.create_task(
         title="Review planned judgement boundary",
         summary="Planned outcomes should not create synthetic cognition memory.",
         source="endogenous_drive",
@@ -1728,7 +1728,7 @@ async def test_planned_outcome_does_not_synthesize_cognitive_assessment_from_dri
 @pytest.mark.unit
 async def test_terminal_outcome_synthesizes_canonical_cognitive_assessment_from_drive_judgement(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    task = supervisor._self_evolution_queue.create_task(
+    task = supervisor._autonomous_chain_store.create_task(
         title="Review terminal judgement boundary",
         summary="Terminal outcomes should preserve canonical cognition memory.",
         source="endogenous_drive",
@@ -1757,19 +1757,19 @@ async def test_terminal_outcome_synthesizes_canonical_cognitive_assessment_from_
         },
         evidence={},
     )
-    approved = supervisor._self_evolution_queue.update_status(
+    approved = supervisor._autonomous_chain_store.update_status(
         task.task_id,
         status="approved",
         actor="supervisor",
         reason="approve boundary test",
     )
-    running = supervisor._self_evolution_queue.update_status(
+    running = supervisor._autonomous_chain_store.update_status(
         approved.task_id,
         status="running",
         actor="supervisor",
         reason="run boundary test",
     )
-    completed = supervisor._self_evolution_queue.update_status(
+    completed = supervisor._autonomous_chain_store.update_status(
         running.task_id,
         status="completed",
         actor="api_a_autonomous_executor",
@@ -3173,7 +3173,7 @@ async def test_cognitive_self_regulation_tightens_when_proposal_explanations_are
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_self_evolution_cycle_consumes_governance_review_events(tmp_path):
+async def test_run_autonomous_chain_review_cycle_consumes_governance_review_events(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
     events_snapshot = supervisor._endogenous_governance_events_default()
@@ -3196,10 +3196,10 @@ async def test_run_self_evolution_cycle_consumes_governance_review_events(tmp_pa
     async def fake_review(request=None):
         return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "activity_guards": {}}
 
-    supervisor.review_self_evolution_tasks = fake_review  # type: ignore[method-assign]
+    supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
 
-    result = await supervisor._run_self_evolution_cycle()
+    result = await supervisor._run_autonomous_chain_review_cycle()
     updated_snapshot = supervisor._load_endogenous_governance_events()
 
     assert result["governance_consumption"]["count"] == 1
@@ -3210,7 +3210,7 @@ async def test_run_self_evolution_cycle_consumes_governance_review_events(tmp_pa
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_self_evolution_cycle_consumes_alignment_events_into_self_regulation(tmp_path):
+async def test_run_autonomous_chain_review_cycle_consumes_alignment_events_into_self_regulation(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
     events_snapshot = supervisor._endogenous_governance_events_default()
@@ -3233,10 +3233,10 @@ async def test_run_self_evolution_cycle_consumes_alignment_events_into_self_regu
     async def fake_review(request=None):
         return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "activity_guards": {}}
 
-    supervisor.review_self_evolution_tasks = fake_review  # type: ignore[method-assign]
+    supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
 
-    result = await supervisor._run_self_evolution_cycle()
+    result = await supervisor._run_autonomous_chain_review_cycle()
     regulation = supervisor._load_endogenous_self_regulation()
     updated_events = supervisor._load_endogenous_governance_events()
 
@@ -3277,10 +3277,10 @@ async def test_duplicate_governance_event_ids_are_deduped_before_consumption(tmp
     async def fake_review(request=None):
         return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "activity_guards": {}}
 
-    supervisor.review_self_evolution_tasks = fake_review  # type: ignore[method-assign]
+    supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
 
-    result = await supervisor._run_self_evolution_cycle()
+    result = await supervisor._run_autonomous_chain_review_cycle()
     regulation = supervisor._load_endogenous_self_regulation()
     updated_events = supervisor._load_endogenous_governance_events()
 
@@ -3433,7 +3433,7 @@ def test_repeated_governance_event_generation_keeps_unconsumed_semantic_events_s
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_self_evolution_cycle_consumes_truthfulness_alerts_into_corrective_mode(tmp_path):
+async def test_run_autonomous_chain_review_cycle_consumes_truthfulness_alerts_into_corrective_mode(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
     events_snapshot = supervisor._endogenous_governance_events_default()
@@ -3456,10 +3456,10 @@ async def test_run_self_evolution_cycle_consumes_truthfulness_alerts_into_correc
     async def fake_review(request=None):
         return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "activity_guards": {}}
 
-    supervisor.review_self_evolution_tasks = fake_review  # type: ignore[method-assign]
+    supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
 
-    result = await supervisor._run_self_evolution_cycle()
+    result = await supervisor._run_autonomous_chain_review_cycle()
     regulation = supervisor._load_endogenous_self_regulation()
     updated_events = supervisor._load_endogenous_governance_events()
 
@@ -3923,7 +3923,7 @@ async def test_cognition_state_attention_agenda_prioritizes_observe_before_actin
         }
 
     supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
-    await supervisor.plan_self_evolution_task(
+    await supervisor.plan_autonomous_chain_task(
         {
             "title": "Stale endogenous queue item",
             "task_family": "general_self_evolution",
@@ -3934,8 +3934,8 @@ async def test_cognition_state_attention_agenda_prioritizes_observe_before_actin
             },
         }
     )
-    task_id = supervisor._self_evolution_queue.list_tasks()[0].task_id
-    supervisor._self_evolution_queue.update_status(
+    task_id = supervisor._autonomous_chain_store.list_tasks()[0].task_id
+    supervisor._autonomous_chain_store.update_status(
         task_id,
         status="deferred",
         actor="test",
@@ -4546,14 +4546,14 @@ async def test_contextual_focus_history_does_not_leak_stable_truthfulness_bias_i
     }
     supervisor._persist_endogenous_drive_history(history)
 
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Queue debt probe",
             "summary": "probe",
         }
     )
     task_id = planned["tasks"][0]["task_id"]
-    supervisor._self_evolution_queue.update_status(task_id, status="deferred", reason="probe")
+    supervisor._autonomous_chain_store.update_status(task_id, status="deferred", reason="probe")
 
     async def fake_activity_guards(_request=None):
         return {
@@ -5383,14 +5383,14 @@ async def test_accumulated_focus_context_and_observation_stats_do_not_block_lear
     async def memory_governance_activity_guards(_request=None):
         return _build_activity_guards(quality_score=0.46)
 
-    planned = await memory_supervisor.plan_self_evolution_task(
+    planned = await memory_supervisor.plan_autonomous_chain_task(
         {
             "title": "Queue debt probe",
             "summary": "probe",
         }
     )
     memory_task_id = planned["tasks"][0]["task_id"]
-    memory_supervisor._self_evolution_queue.update_status(
+    memory_supervisor._autonomous_chain_store.update_status(
         memory_task_id,
         status="deferred",
         reason="probe",
@@ -6054,9 +6054,9 @@ async def test_governance_consumption_survives_drive_plan_failure_and_context_sw
     async def fake_review(_request=None):
         return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "activity_guards": {}}
 
-    supervisor.review_self_evolution_tasks = fake_review  # type: ignore[method-assign]
+    supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
-    consumed = await supervisor._run_self_evolution_cycle()
+    consumed = await supervisor._run_autonomous_chain_review_cycle()
 
     consumed_events = supervisor._load_endogenous_governance_events()["events"]
     consumed_actions = {item.get("event_id"): item.get("consumed_action") for item in consumed_events}
@@ -6079,7 +6079,7 @@ async def test_governance_consumption_survives_drive_plan_failure_and_context_sw
         focus="truthfulness",
         self_regulation=current_self_regulation,
     )
-    original_plan = supervisor.plan_self_evolution_task
+    original_plan = supervisor.plan_autonomous_chain_task
 
     async def fake_evaluate_failed(_request=None):
         return failing_eval
@@ -6088,7 +6088,7 @@ async def test_governance_consumption_survives_drive_plan_failure_and_context_sw
         raise RuntimeError("plan failed after drive persistence")
 
     supervisor.evaluate_endogenous_drive = fake_evaluate_failed  # type: ignore[method-assign]
-    supervisor.plan_self_evolution_task = fail_plan  # type: ignore[method-assign]
+    supervisor.plan_autonomous_chain_task = fail_plan  # type: ignore[method-assign]
     history_before_failure = supervisor._load_endogenous_drive_history()
     events_before_failure = supervisor._load_endogenous_governance_events()
     cognition_before_failure = supervisor._load_endogenous_cognition_state()
@@ -6111,7 +6111,7 @@ async def test_governance_consumption_survives_drive_plan_failure_and_context_sw
         return successful_eval
 
     supervisor.evaluate_endogenous_drive = fake_evaluate_success  # type: ignore[method-assign]
-    supervisor.plan_self_evolution_task = original_plan  # type: ignore[method-assign]
+    supervisor.plan_autonomous_chain_task = original_plan  # type: ignore[method-assign]
     result = await supervisor._run_endogenous_drive_cycle()
 
     history = supervisor._load_endogenous_drive_history()
@@ -6141,7 +6141,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
     async def fake_review(_request=None):
         return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "activity_guards": {}}
 
-    supervisor.review_self_evolution_tasks = fake_review  # type: ignore[method-assign]
+    supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
 
     first_events = supervisor._endogenous_governance_events_default()
@@ -6173,7 +6173,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
     ]
     supervisor._persist_endogenous_governance_events(first_events)
 
-    first_consumed = await supervisor._run_self_evolution_cycle()
+    first_consumed = await supervisor._run_autonomous_chain_review_cycle()
     events_after_first_consumption = supervisor._load_endogenous_governance_events()["events"]
     first_consumed_at = {
         item.get("event_id"): item.get("consumed_at")
@@ -6197,7 +6197,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
         focus="truthfulness",
         self_regulation=current_self_regulation,
     )
-    original_plan = supervisor.plan_self_evolution_task
+    original_plan = supervisor.plan_autonomous_chain_task
 
     async def fake_evaluate_first_failure(_request=None):
         return first_failure_eval
@@ -6206,7 +6206,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
         raise RuntimeError("first drive plan failed")
 
     supervisor.evaluate_endogenous_drive = fake_evaluate_first_failure  # type: ignore[method-assign]
-    supervisor.plan_self_evolution_task = fail_plan_first  # type: ignore[method-assign]
+    supervisor.plan_autonomous_chain_task = fail_plan_first  # type: ignore[method-assign]
     history_before_first_failure = supervisor._load_endogenous_drive_history()
     events_before_first_failure = supervisor._load_endogenous_governance_events()
 
@@ -6224,7 +6224,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
         return first_success_eval
 
     supervisor.evaluate_endogenous_drive = fake_evaluate_first_success  # type: ignore[method-assign]
-    supervisor.plan_self_evolution_task = original_plan  # type: ignore[method-assign]
+    supervisor.plan_autonomous_chain_task = original_plan  # type: ignore[method-assign]
     first_drive_result = await supervisor._run_endogenous_drive_cycle()
     assert first_drive_result["planned"] == 1
 
@@ -6259,7 +6259,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
     )
     supervisor._persist_endogenous_governance_events(second_events)
 
-    second_consumed = await supervisor._run_self_evolution_cycle()
+    second_consumed = await supervisor._run_autonomous_chain_review_cycle()
     events_after_second_consumption = supervisor._load_endogenous_governance_events()["events"]
     consumed_by_id = {item.get("event_id"): item for item in events_after_second_consumption}
     assert second_consumed["governance_consumption"]["count"] == 1
@@ -6290,7 +6290,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
         raise RuntimeError("second drive plan failed")
 
     supervisor.evaluate_endogenous_drive = fake_evaluate_second_failure  # type: ignore[method-assign]
-    supervisor.plan_self_evolution_task = fail_plan_second  # type: ignore[method-assign]
+    supervisor.plan_autonomous_chain_task = fail_plan_second  # type: ignore[method-assign]
     history_before_second_failure = supervisor._load_endogenous_drive_history()
     events_before_second_failure = supervisor._load_endogenous_governance_events()
     cognition_before_second_failure = supervisor._load_endogenous_cognition_state()
@@ -6312,7 +6312,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
         return second_success_eval
 
     supervisor.evaluate_endogenous_drive = fake_evaluate_second_success  # type: ignore[method-assign]
-    supervisor.plan_self_evolution_task = original_plan  # type: ignore[method-assign]
+    supervisor.plan_autonomous_chain_task = original_plan  # type: ignore[method-assign]
     second_drive_result = await supervisor._run_endogenous_drive_cycle()
 
     history = supervisor._load_endogenous_drive_history()
@@ -12585,14 +12585,14 @@ async def test_cleared_historical_underdelivery_shifts_to_memory_continuity_when
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Queue debt probe",
             "summary": "probe",
         }
     )
     task_id = planned["tasks"][0]["task_id"]
-    supervisor._self_evolution_queue.update_status(task_id, status="deferred", reason="probe")
+    supervisor._autonomous_chain_store.update_status(task_id, status="deferred", reason="probe")
 
     async def fake_activity_guards(_request=None):
         return {
@@ -12700,14 +12700,14 @@ async def test_cleared_historical_underdelivery_with_light_queue_debt_does_not_j
     ]
     supervisor._persist_endogenous_drive_history(history)
 
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Queue debt probe",
             "summary": "probe",
         }
     )
     task_id = planned["tasks"][0]["task_id"]
-    supervisor._self_evolution_queue.update_status(task_id, status="deferred", reason="probe")
+    supervisor._autonomous_chain_store.update_status(task_id, status="deferred", reason="probe")
 
     async def fake_activity_guards(_request=None):
         return {
@@ -15089,7 +15089,7 @@ async def test_governance_hygiene_candidate_survives_budget_trimming_when_observ
         },
     ]
     supervisor._persist_endogenous_drive_history(history)
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Queue hygiene debt A",
             "summary": "Review deferred self-evolution work.",
@@ -15099,7 +15099,7 @@ async def test_governance_hygiene_candidate_survives_budget_trimming_when_observ
         }
     )
     queued_task_id = planned["tasks"][0]["task_id"]
-    supervisor._self_evolution_queue.update_status(
+    supervisor._autonomous_chain_store.update_status(
         queued_task_id,
         status="deferred",
         actor="test",
@@ -15280,7 +15280,7 @@ async def test_governance_hygiene_candidate_materializes_once_real_governance_ba
         },
     ]
     supervisor._persist_endogenous_drive_history(history)
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Queue review debt A",
             "summary": "Review deferred self-evolution work.",
@@ -15290,7 +15290,7 @@ async def test_governance_hygiene_candidate_materializes_once_real_governance_ba
         }
     )
     queued_task_id = planned["tasks"][0]["task_id"]
-    supervisor._self_evolution_queue.update_status(
+    supervisor._autonomous_chain_store.update_status(
         queued_task_id,
         status="deferred",
         actor="test",
@@ -15931,7 +15931,7 @@ async def test_endogenous_drive_fallback_learning_targets_shell_codebase_without
 async def test_endogenous_drive_schedule_allocator_skips_occupied_slots(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    await supervisor.plan_self_evolution_task(
+    await supervisor.plan_autonomous_chain_task(
         {
             "title": "Occupied slot task",
             "scheduled_for": "2026-06-28T00:00:00",
@@ -15961,7 +15961,7 @@ async def test_endogenous_drive_schedule_allocator_skips_occupied_slots(tmp_path
 @pytest.mark.unit
 async def test_auto_decision_approves_task_when_activity_guards_allow_execution(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_self_evolution_task({"title": "Review body upgrade proposal"})
+    planned = await supervisor.plan_autonomous_chain_task({"title": "Review body upgrade proposal"})
     task_id = planned["tasks"][0]["task_id"]
 
     async def fake_snapshot():
@@ -15969,14 +15969,14 @@ async def test_auto_decision_approves_task_when_activity_guards_allow_execution(
             "last_user_request_at": "2026-05-25T00:00:00",
             "last_agent_work_at": "2026-05-25T00:00:00",
             "last_memory_task_at": "2026-05-25T00:00:00",
-            "last_self_evolution_activity_at": "2026-05-25T00:00:00",
+            "last_autonomous_chain_activity_at": "2026-05-25T00:00:00",
             "counts": {},
             "active_sessions": 0,
         }
 
     supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
 
-    result = await supervisor.decide_self_evolution_task(
+    result = await supervisor.decide_autonomous_chain_task(
         task_id,
         {
             "decision": "auto",
@@ -15997,7 +15997,7 @@ async def test_auto_decision_approves_task_when_activity_guards_allow_execution(
 @pytest.mark.unit
 async def test_batch_review_defers_tasks_when_activity_guards_are_not_ready(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    await supervisor.plan_self_evolution_task(
+    await supervisor.plan_autonomous_chain_task(
         {
             "items": [
                 {"title": "Evaluate tool scheduler backpressure"},
@@ -16011,14 +16011,14 @@ async def test_batch_review_defers_tasks_when_activity_guards_are_not_ready(tmp_
             "last_user_request_at": "2026-05-25T00:12:00",
             "last_agent_work_at": "2026-05-25T00:12:00",
             "last_memory_task_at": None,
-            "last_self_evolution_activity_at": None,
+            "last_autonomous_chain_activity_at": None,
             "counts": {},
             "active_sessions": 1,
         }
 
     supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
 
-    result = await supervisor.review_self_evolution_tasks(
+    result = await supervisor.review_autonomous_chain_tasks(
         {
             "activity_guards": {"now": "2026-05-25T00:15:00"},
         }
@@ -16034,7 +16034,7 @@ async def test_batch_review_defers_tasks_when_activity_guards_are_not_ready(tmp_
 @pytest.mark.unit
 async def test_batch_review_can_reapprove_deferred_tasks_on_later_cycle(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    await supervisor.plan_self_evolution_task(
+    await supervisor.plan_autonomous_chain_task(
         {
             "items": [
                 {"title": "Revisit idle learning thread"},
@@ -16048,14 +16048,14 @@ async def test_batch_review_can_reapprove_deferred_tasks_on_later_cycle(tmp_path
             "last_user_request_at": "2026-05-25T00:12:00",
             "last_agent_work_at": "2026-05-25T00:12:00",
             "last_memory_task_at": None,
-            "last_self_evolution_activity_at": None,
+            "last_autonomous_chain_activity_at": None,
             "counts": {},
             "active_sessions": 1,
         }
 
     supervisor._fetch_gateway_activity_snapshot = busy_snapshot  # type: ignore[method-assign]
 
-    first = await supervisor.review_self_evolution_tasks(
+    first = await supervisor.review_autonomous_chain_tasks(
         {
             "activity_guards": {"now": "2026-05-25T00:15:00"},
         }
@@ -16068,14 +16068,14 @@ async def test_batch_review_can_reapprove_deferred_tasks_on_later_cycle(tmp_path
             "last_agent_work_at": "2026-05-25T00:00:00",
             "last_memory_task_at": "2026-05-25T00:00:00",
             "last_self_learning_activity_at": "2026-05-25T00:00:00",
-            "last_self_evolution_activity_at": "2026-05-25T00:00:00",
+            "last_autonomous_chain_activity_at": "2026-05-25T00:00:00",
             "counts": {},
             "active_sessions": 0,
         }
 
     supervisor._fetch_gateway_activity_snapshot = idle_snapshot  # type: ignore[method-assign]
 
-    second = await supervisor.review_self_evolution_tasks(
+    second = await supervisor.review_autonomous_chain_tasks(
         {
             "activity_guards": {"now": "2026-05-25T01:00:00"},
         }
@@ -16136,7 +16136,7 @@ async def test_endogenous_drive_still_plans_learning_candidates_with_active_sess
     supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
 
     result = await supervisor._run_endogenous_drive_cycle()
-    queued = await supervisor.list_self_evolution_tasks()
+    queued = await supervisor.list_autonomous_chain_tasks()
     keys = {
         task["metadata"]["endogenous_drive_key"]: task for task in queued["tasks"]
     }
@@ -16149,7 +16149,7 @@ async def test_endogenous_drive_still_plans_learning_candidates_with_active_sess
 @pytest.mark.unit
 async def test_batch_review_accepts_lm_governance_override(tmp_path, monkeypatch):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "items": [
                 {"title": "Learn unresolved architecture issue"},
@@ -16165,7 +16165,7 @@ async def test_batch_review_accepts_lm_governance_override(tmp_path, monkeypatch
             "last_agent_work_at": "2026-05-25T00:00:00",
             "last_memory_task_at": "2026-05-25T00:00:00",
             "last_self_learning_activity_at": "2026-05-25T00:00:00",
-            "last_self_evolution_activity_at": "2026-05-25T00:00:00",
+            "last_autonomous_chain_activity_at": "2026-05-25T00:00:00",
             "counts": {},
             "active_sessions": 0,
         }
@@ -16184,7 +16184,7 @@ async def test_batch_review_accepts_lm_governance_override(tmp_path, monkeypatch
 
     monkeypatch.setattr(supervisor, "_lm_review_task_governance", fake_lm_review)
 
-    result = await supervisor.review_self_evolution_tasks(
+    result = await supervisor.review_autonomous_chain_tasks(
         {
             "activity_guards": {"now": "2026-05-25T01:00:00"},
         }
@@ -16203,7 +16203,7 @@ async def test_batch_review_accepts_lm_governance_override(tmp_path, monkeypatch
 async def test_autonomous_chain_gate_preserves_agent_pull_task_approval_when_lm_suggests_defer(tmp_path, monkeypatch):
     supervisor = _make_supervisor(tmp_path)
     supervisor._service_runtime.autonomous_chain_gate_active = True
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Explore one unresolved learning thread",
             "task_family": "self_learning",
@@ -16218,7 +16218,7 @@ async def test_autonomous_chain_gate_preserves_agent_pull_task_approval_when_lm_
             "last_agent_work_at": "2026-05-25T00:00:00",
             "last_memory_task_at": "2026-05-25T00:00:00",
             "last_self_learning_activity_at": "2026-05-25T00:00:00",
-            "last_self_evolution_activity_at": "2026-05-25T00:00:00",
+            "last_autonomous_chain_activity_at": "2026-05-25T00:00:00",
             "counts": {},
             "active_sessions": 0,
         }
@@ -16237,7 +16237,7 @@ async def test_autonomous_chain_gate_preserves_agent_pull_task_approval_when_lm_
 
     monkeypatch.setattr(supervisor, "_lm_review_task_governance", fake_lm_review)
 
-    result = await supervisor.review_self_evolution_tasks(
+    result = await supervisor.review_autonomous_chain_tasks(
         {
             "activity_guards": {"now": "2026-05-25T01:00:00"},
         }
@@ -16253,7 +16253,7 @@ async def test_autonomous_chain_gate_preserves_agent_pull_task_approval_when_lm_
 @pytest.mark.unit
 async def test_batch_review_preserves_agent_pull_task_approval_without_autonomous_chain_gate(tmp_path, monkeypatch):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Explore one unresolved learning thread",
             "task_family": "self_learning",
@@ -16267,7 +16267,7 @@ async def test_batch_review_preserves_agent_pull_task_approval_without_autonomou
             "last_user_request_at": "2026-05-25T00:12:00",
             "last_agent_work_at": "2026-05-25T00:12:00",
             "last_memory_task_at": None,
-            "last_self_evolution_activity_at": None,
+            "last_autonomous_chain_activity_at": None,
             "counts": {},
             "active_sessions": 1,
         }
@@ -16286,7 +16286,7 @@ async def test_batch_review_preserves_agent_pull_task_approval_without_autonomou
 
     monkeypatch.setattr(supervisor, "_lm_review_task_governance", fake_lm_review)
 
-    result = await supervisor.review_self_evolution_tasks(
+    result = await supervisor.review_autonomous_chain_tasks(
         {
             "activity_guards": {"now": "2026-05-25T00:15:00"},
         }
@@ -16302,7 +16302,7 @@ async def test_batch_review_preserves_agent_pull_task_approval_without_autonomou
 @pytest.mark.unit
 async def test_batch_review_auto_approves_body_improvement_agent_pull_task(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Improve shell body after learning",
             "task_family": "body_upgrade",
@@ -16320,14 +16320,14 @@ async def test_batch_review_auto_approves_body_improvement_agent_pull_task(tmp_p
             "last_user_request_at": "2026-05-25T00:12:00",
             "last_agent_work_at": "2026-05-25T00:12:00",
             "last_memory_task_at": None,
-            "last_self_evolution_activity_at": None,
+            "last_autonomous_chain_activity_at": None,
             "counts": {},
             "active_sessions": 1,
         }
 
     supervisor._fetch_gateway_activity_snapshot = busy_snapshot  # type: ignore[method-assign]
 
-    result = await supervisor.review_self_evolution_tasks(
+    result = await supervisor.review_autonomous_chain_tasks(
         {
             "activity_guards": {"now": "2026-05-25T00:15:00"},
         }
@@ -16344,14 +16344,14 @@ async def test_batch_review_auto_approves_body_improvement_agent_pull_task(tmp_p
 @pytest.mark.unit
 async def test_batch_review_defers_body_improvement_until_self_learning_finishes(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    await supervisor.plan_self_evolution_task(
+    await supervisor.plan_autonomous_chain_task(
         {
             "title": "Understand current shell body baseline",
             "task_family": "self_learning",
             "source": "self_learning",
         }
     )
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Improve shell body after learning",
             "task_family": "body_upgrade",
@@ -16369,14 +16369,14 @@ async def test_batch_review_defers_body_improvement_until_self_learning_finishes
             "last_user_request_at": "2026-05-25T00:12:00",
             "last_agent_work_at": "2026-05-25T00:12:00",
             "last_memory_task_at": None,
-            "last_self_evolution_activity_at": None,
+            "last_autonomous_chain_activity_at": None,
             "counts": {},
             "active_sessions": 1,
         }
 
     supervisor._fetch_gateway_activity_snapshot = busy_snapshot  # type: ignore[method-assign]
 
-    result = await supervisor.review_self_evolution_tasks(
+    result = await supervisor.review_autonomous_chain_tasks(
         {
             "activity_guards": {"now": "2026-05-25T00:15:00"},
         }
@@ -16393,14 +16393,14 @@ async def test_batch_review_defers_body_improvement_until_self_learning_finishes
 @pytest.mark.unit
 async def test_batch_review_releases_body_improvement_after_one_self_learning_prereq_deferral(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    await supervisor.plan_self_evolution_task(
+    await supervisor.plan_autonomous_chain_task(
         {
             "title": "Understand current shell body baseline",
             "task_family": "self_learning",
             "source": "self_learning",
         }
     )
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Improve shell body after learning",
             "task_family": "body_upgrade",
@@ -16418,20 +16418,20 @@ async def test_batch_review_releases_body_improvement_after_one_self_learning_pr
             "last_user_request_at": "2026-05-25T00:12:00",
             "last_agent_work_at": "2026-05-25T00:12:00",
             "last_memory_task_at": None,
-            "last_self_evolution_activity_at": None,
+            "last_autonomous_chain_activity_at": None,
             "counts": {},
             "active_sessions": 1,
         }
 
     supervisor._fetch_gateway_activity_snapshot = busy_snapshot  # type: ignore[method-assign]
 
-    first = await supervisor.review_self_evolution_tasks(
+    first = await supervisor.review_autonomous_chain_tasks(
         {"activity_guards": {"now": "2026-05-25T00:15:00"}}
     )
     first_task = next(item for item in first["tasks"] if item["task_id"] == task_id)
     assert first_task["status"] == "deferred"
 
-    second = await supervisor.review_self_evolution_tasks(
+    second = await supervisor.review_autonomous_chain_tasks(
         {"activity_guards": {"now": "2026-05-25T00:16:00"}}
     )
     second_task = next(item for item in second["tasks"] if item["task_id"] == task_id)
@@ -16489,7 +16489,7 @@ async def test_gateway_activity_snapshot_retries_after_transient_failure(tmp_pat
 @pytest.mark.unit
 async def test_batch_review_records_shadow_governance_actions_without_mutating_state(tmp_path, monkeypatch):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "items": [
                 {"title": "Duplicate learning branch", "priority": "normal"},
@@ -16505,7 +16505,7 @@ async def test_batch_review_records_shadow_governance_actions_without_mutating_s
             "last_agent_work_at": "2026-05-25T00:00:00",
             "last_memory_task_at": "2026-05-25T00:00:00",
             "last_self_learning_activity_at": "2026-05-25T00:00:00",
-            "last_self_evolution_activity_at": "2026-05-25T00:00:00",
+            "last_autonomous_chain_activity_at": "2026-05-25T00:00:00",
             "counts": {},
             "active_sessions": 0,
         }
@@ -16537,7 +16537,7 @@ async def test_batch_review_records_shadow_governance_actions_without_mutating_s
 
     monkeypatch.setattr(supervisor, "_lm_review_task_governance", fake_lm_review)
 
-    result = await supervisor.review_self_evolution_tasks(
+    result = await supervisor.review_autonomous_chain_tasks(
         {
             "activity_guards": {"now": "2026-05-25T01:00:00"},
         }
@@ -16558,7 +16558,7 @@ async def test_batch_review_records_shadow_governance_actions_without_mutating_s
 @pytest.mark.unit
 async def test_batch_review_can_apply_lm_reprioritize_to_real_task_priority(tmp_path, monkeypatch):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Underweighted architecture follow-up",
             "priority": "low",
@@ -16572,7 +16572,7 @@ async def test_batch_review_can_apply_lm_reprioritize_to_real_task_priority(tmp_
             "last_agent_work_at": "2026-05-25T00:00:00",
             "last_memory_task_at": "2026-05-25T00:00:00",
             "last_self_learning_activity_at": "2026-05-25T00:00:00",
-            "last_self_evolution_activity_at": "2026-05-25T00:00:00",
+            "last_autonomous_chain_activity_at": "2026-05-25T00:00:00",
             "counts": {},
             "active_sessions": 0,
         }
@@ -16590,7 +16590,7 @@ async def test_batch_review_can_apply_lm_reprioritize_to_real_task_priority(tmp_
 
     monkeypatch.setattr(supervisor, "_lm_review_task_governance", fake_lm_review)
 
-    result = await supervisor.review_self_evolution_tasks(
+    result = await supervisor.review_autonomous_chain_tasks(
         {
             "activity_guards": {"now": "2026-05-25T01:00:00"},
         }
@@ -16608,7 +16608,7 @@ async def test_batch_review_can_apply_lm_reprioritize_to_real_task_priority(tmp_
 async def test_plan_task_normalizes_scheduled_for_into_runtime_payload(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Scheduled queue task",
             "scheduled_for": "2026-06-28T01:00:00",
@@ -16623,7 +16623,7 @@ async def test_plan_task_normalizes_scheduled_for_into_runtime_payload(tmp_path)
 @pytest.mark.unit
 def test_candidate_schedule_token_reallocates_when_live_queue_occupies_slot(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    supervisor._self_evolution_queue.create_task(
+    supervisor._autonomous_chain_store.create_task(
         title="Existing scheduled task",
         metadata={"scheduled_for": "2026-06-28T01:00:00"},
     )
@@ -16649,13 +16649,13 @@ def test_candidate_schedule_token_reallocates_when_live_queue_occupies_slot(tmp_
 async def test_batch_review_defers_second_task_when_scheduled_for_conflicts(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    await supervisor.plan_self_evolution_task(
+    await supervisor.plan_autonomous_chain_task(
         {
             "title": "First scheduled task",
             "scheduled_for": "2026-06-28T01:00:00",
         }
     )
-    await supervisor.plan_self_evolution_task(
+    await supervisor.plan_autonomous_chain_task(
         {
             "title": "Second scheduled task",
             "scheduled_for": "2026-06-28T01:00:00",
@@ -16668,14 +16668,14 @@ async def test_batch_review_defers_second_task_when_scheduled_for_conflicts(tmp_
             "last_agent_work_at": "2026-05-25T00:00:00",
             "last_memory_task_at": "2026-05-25T00:00:00",
             "last_self_learning_activity_at": "2026-05-25T00:00:00",
-            "last_self_evolution_activity_at": "2026-05-25T00:00:00",
+            "last_autonomous_chain_activity_at": "2026-05-25T00:00:00",
             "counts": {},
             "active_sessions": 0,
         }
 
     supervisor._fetch_gateway_activity_snapshot = idle_snapshot  # type: ignore[method-assign]
 
-    result = await supervisor.review_self_evolution_tasks(
+    result = await supervisor.review_autonomous_chain_tasks(
         {
             "activity_guards": {"now": "2026-05-25T01:00:00"},
         }
@@ -16695,7 +16695,7 @@ async def test_batch_review_defers_second_task_when_scheduled_for_conflicts(tmp_
 @pytest.mark.skip(reason="Boundary violation defer removed — body_upgrade/body_switch no longer driven by task queue")
 async def test_batch_review_defers_body_task_with_boundary_violations(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    await supervisor.plan_self_evolution_task(
+    await supervisor.plan_autonomous_chain_task(
         {
             "title": "Reject boundary-violating body candidate during review",
             "metadata": {
@@ -16720,14 +16720,14 @@ async def test_batch_review_defers_body_task_with_boundary_violations(tmp_path):
             "last_user_request_at": "2026-05-25T00:00:00",
             "last_agent_work_at": "2026-05-25T00:00:00",
             "last_memory_task_at": "2026-05-25T00:00:00",
-            "last_self_evolution_activity_at": "2026-05-25T00:00:00",
+            "last_autonomous_chain_activity_at": "2026-05-25T00:00:00",
             "counts": {},
             "active_sessions": 0,
         }
 
     supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
 
-    result = await supervisor.review_self_evolution_tasks(
+    result = await supervisor.review_autonomous_chain_tasks(
         {
             "activity_guards": {"now": "2026-05-25T00:15:00"},
         }
@@ -16755,7 +16755,7 @@ async def test_batch_review_defers_body_task_with_boundary_violations(tmp_path):
 @pytest.mark.skip(reason="Boundary defer removed — body_upgrade/body_switch no longer driven by task queue")
 async def test_batch_review_boundary_defer_does_not_depend_on_mem_write_success(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    await supervisor.plan_self_evolution_task(
+    await supervisor.plan_autonomous_chain_task(
         {
             "title": "Boundary defer should survive governance log failure",
             "metadata": {
@@ -16777,7 +16777,7 @@ async def test_batch_review_boundary_defer_does_not_depend_on_mem_write_success(
             "last_user_request_at": "2026-05-25T00:00:00",
             "last_agent_work_at": "2026-05-25T00:00:00",
             "last_memory_task_at": "2026-05-25T00:00:00",
-            "last_self_evolution_activity_at": "2026-05-25T00:00:00",
+            "last_autonomous_chain_activity_at": "2026-05-25T00:00:00",
             "counts": {},
             "active_sessions": 0,
         }
@@ -16789,7 +16789,7 @@ async def test_batch_review_boundary_defer_does_not_depend_on_mem_write_success(
 
     supervisor._governor.record_boundary_defer = failing_record_boundary_defer  # type: ignore[method-assign]
 
-    result = await supervisor.review_self_evolution_tasks(
+    result = await supervisor.review_autonomous_chain_tasks(
         {
             "activity_guards": {"now": "2026-05-25T00:15:00"},
         }
@@ -16805,10 +16805,10 @@ async def test_batch_review_boundary_defer_does_not_depend_on_mem_write_success(
 @pytest.mark.unit
 async def test_cancelled_task_is_terminal_for_supervisor_decisioning(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_self_evolution_task({"title": "Prepare guarded runtime experiment"})
+    planned = await supervisor.plan_autonomous_chain_task({"title": "Prepare guarded runtime experiment"})
     task_id = planned["tasks"][0]["task_id"]
 
-    cancel_result = await supervisor.decide_self_evolution_task(
+    cancel_result = await supervisor.decide_autonomous_chain_task(
         task_id,
         {
             "decision": "cancel",
@@ -16817,7 +16817,7 @@ async def test_cancelled_task_is_terminal_for_supervisor_decisioning(tmp_path):
     )
     assert cancel_result["status"] == "cancelled"
 
-    follow_up = await supervisor.decide_self_evolution_task(
+    follow_up = await supervisor.decide_autonomous_chain_task(
         task_id,
         {
             "decision": "approve",
@@ -16831,7 +16831,7 @@ async def test_cancelled_task_is_terminal_for_supervisor_decisioning(tmp_path):
 @pytest.mark.unit
 async def test_body_self_evolution_approval_builds_formal_execution_request(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Promote cultivated body slot",
             "metadata": {
@@ -16858,7 +16858,7 @@ async def test_body_self_evolution_approval_builds_formal_execution_request(tmp_
     )
     task_id = planned["tasks"][0]["task_id"]
 
-    result = await supervisor.decide_self_evolution_task(
+    result = await supervisor.decide_autonomous_chain_task(
         task_id,
         {
             "decision": "approve",
@@ -16889,7 +16889,7 @@ async def test_body_self_evolution_approval_builds_formal_execution_request(tmp_
 @pytest.mark.skip(reason="evolution_boundary removed — body switching validation no longer in task queue path")
 async def test_body_self_evolution_task_api_exposes_boundary_summary_before_approval(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Review candidate boundary before approval",
             "metadata": {
@@ -16910,8 +16910,8 @@ async def test_body_self_evolution_task_api_exposes_boundary_summary_before_appr
     )
     task_id = planned["tasks"][0]["task_id"]
 
-    listed = await supervisor.list_self_evolution_tasks()
-    fetched = await supervisor.get_self_evolution_task(task_id)
+    listed = await supervisor.list_autonomous_chain_tasks()
+    fetched = await supervisor.get_autonomous_chain_task(task_id)
 
     planned_boundary = planned["tasks"][0]["evolution_boundary"]
     listed_boundary = listed["tasks"][0]["evolution_boundary"]
@@ -16934,7 +16934,7 @@ async def test_body_self_evolution_task_api_exposes_boundary_summary_before_appr
 @pytest.mark.skip(reason="Body boundary validation removed — body_upgrade not driven by task queue")
 async def test_body_self_evolution_approval_rejects_mother_system_changes(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Reject mixed mother-system body proposal",
             "metadata": {
@@ -16965,7 +16965,7 @@ async def test_body_self_evolution_approval_rejects_mother_system_changes(tmp_pa
     task_id = planned["tasks"][0]["task_id"]
 
     with pytest.raises(Exception) as exc_info:
-        await supervisor.decide_self_evolution_task(
+        await supervisor.decide_autonomous_chain_task(
             task_id,
             {
                 "decision": "approve",
@@ -16975,17 +16975,17 @@ async def test_body_self_evolution_approval_rejects_mother_system_changes(tmp_pa
 
     assert "outside the child-agent boundary" in str(exc_info.value)
     assert "systems/body_registry.py" in str(exc_info.value)
-    queued = await supervisor.get_self_evolution_task(task_id)
+    queued = await supervisor.get_autonomous_chain_task(task_id)
     assert queued["status"] == "planned"
     assert queued["execution_request"] is None
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-@pytest.mark.skip(reason="Body validation removed — SelfEvolutionExecutionRequest no longer validates git_lineage")
+@pytest.mark.skip(reason="Body validation removed — AutonomousChainExecutionRequest no longer validates git_lineage")
 async def test_body_self_evolution_approval_requires_git_lineage_and_rollback(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Unsafe body switch proposal",
             "metadata": {
@@ -17002,7 +17002,7 @@ async def test_body_self_evolution_approval_requires_git_lineage_and_rollback(tm
     task_id = planned["tasks"][0]["task_id"]
 
     with pytest.raises(Exception) as exc_info:
-        await supervisor.decide_self_evolution_task(
+        await supervisor.decide_autonomous_chain_task(
             task_id,
             {
                 "decision": "approve",
@@ -17011,17 +17011,17 @@ async def test_body_self_evolution_approval_requires_git_lineage_and_rollback(tm
         )
 
     assert "git_lineage.rollback_commit" in str(exc_info.value)
-    queued = await supervisor.get_self_evolution_task(task_id)
+    queued = await supervisor.get_autonomous_chain_task(task_id)
     assert queued["status"] == "planned"
     assert queued["execution_request"] is None
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-@pytest.mark.skip(reason="Body validation removed — SelfEvolutionExecutionRequest no longer validates changed_files")
+@pytest.mark.skip(reason="Body validation removed — AutonomousChainExecutionRequest no longer validates changed_files")
 async def test_body_self_evolution_approval_requires_changed_files(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Unsafe body switch without auditable diff",
             "metadata": {
@@ -17039,7 +17039,7 @@ async def test_body_self_evolution_approval_requires_changed_files(tmp_path):
     task_id = planned["tasks"][0]["task_id"]
 
     with pytest.raises(Exception) as exc_info:
-        await supervisor.decide_self_evolution_task(
+        await supervisor.decide_autonomous_chain_task(
             task_id,
             {
                 "decision": "approve",
@@ -17048,7 +17048,7 @@ async def test_body_self_evolution_approval_requires_changed_files(tmp_path):
         )
 
     assert "git_lineage.changed_files" in str(exc_info.value)
-    queued = await supervisor.get_self_evolution_task(task_id)
+    queued = await supervisor.get_autonomous_chain_task(task_id)
     assert queued["status"] == "planned"
     assert queued["execution_request"] is None
 
@@ -17057,7 +17057,7 @@ async def test_body_self_evolution_approval_requires_changed_files(tmp_path):
 @pytest.mark.unit
 async def test_self_learning_followup_auto_approval_does_not_build_execution_request(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Review newly collected learning evidence",
             "task_family": "self_learning",
@@ -17072,14 +17072,14 @@ async def test_self_learning_followup_auto_approval_does_not_build_execution_req
             "last_agent_work_at": "2026-05-25T11:40:00",
             "last_memory_task_at": "2026-05-25T11:40:00",
             "last_self_learning_activity_at": "2026-05-25T11:40:00",
-            "last_self_evolution_activity_at": "2026-05-25T11:40:00",
+            "last_autonomous_chain_activity_at": "2026-05-25T11:40:00",
             "counts": {},
             "active_sessions": 0,
         }
 
     supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
 
-    result = await supervisor.decide_self_evolution_task(
+    result = await supervisor.decide_autonomous_chain_task(
         task_id,
         {
             "decision": "auto",
@@ -17113,7 +17113,7 @@ async def test_self_learning_followup_auto_approval_does_not_build_execution_req
 @pytest.mark.unit
 async def test_memory_maintenance_auto_decision_defers_when_memory_activity_is_recent(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Run memory compression sweep",
             "execution_kind": "memory_maintenance",
@@ -17127,14 +17127,14 @@ async def test_memory_maintenance_auto_decision_defers_when_memory_activity_is_r
             "last_agent_work_at": "2026-05-25T00:00:00",
             "last_memory_task_at": "2026-05-25T00:14:30",
             "last_self_learning_activity_at": "2026-05-25T00:00:00",
-            "last_self_evolution_activity_at": "2026-05-25T00:00:00",
+            "last_autonomous_chain_activity_at": "2026-05-25T00:00:00",
             "counts": {},
             "active_sessions": 0,
         }
 
     supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
 
-    result = await supervisor.decide_self_evolution_task(
+    result = await supervisor.decide_autonomous_chain_task(
         task_id,
         {
             "decision": "auto",
@@ -17161,7 +17161,7 @@ async def test_memory_maintenance_auto_decision_defers_when_memory_activity_is_r
 async def test_body_upgrade_and_body_switch_keep_distinct_task_family_metadata(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    result = await supervisor.plan_self_evolution_task(
+    result = await supervisor.plan_autonomous_chain_task(
         {
             "items": [
                 {
@@ -17193,7 +17193,7 @@ async def test_body_upgrade_and_body_switch_keep_distinct_task_family_metadata(t
 async def test_runtime_profile_prefers_canonical_task_fields_over_broad_task_type(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Canonical body switch should survive serialization",
             "task_type": "self_evolution",
@@ -17207,8 +17207,8 @@ async def test_runtime_profile_prefers_canonical_task_fields_over_broad_task_typ
     )
 
     task = planned["tasks"][0]
-    listed = await supervisor.list_self_evolution_tasks()
-    fetched = await supervisor.get_self_evolution_task(task["task_id"])
+    listed = await supervisor.list_autonomous_chain_tasks()
+    fetched = await supervisor.get_autonomous_chain_task(task["task_id"])
 
     assert task["task_type"] == "self_evolution"
     assert task["governance_task_type"] == "self_evolution"
@@ -17222,10 +17222,10 @@ async def test_runtime_profile_prefers_canonical_task_fields_over_broad_task_typ
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_list_self_evolution_tasks_can_filter_body_improvement_agent_tasks(tmp_path):
+async def test_list_autonomous_chain_tasks_can_filter_body_improvement_agent_tasks(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    await supervisor.plan_self_evolution_task(
+    await supervisor.plan_autonomous_chain_task(
         {
             "title": "Improve shell body after learning",
             "task_family": "body_upgrade",
@@ -17237,20 +17237,20 @@ async def test_list_self_evolution_tasks_can_filter_body_improvement_agent_tasks
         }
     )
 
-    listed = await supervisor.list_self_evolution_tasks(
+    listed = await supervisor.list_autonomous_chain_tasks(
         status="approved",
         execution_kind="body_improvement",
     )
 
     assert listed["count"] == 0
 
-    task_id = supervisor._self_evolution_queue.list_tasks()[0].task_id
-    await supervisor.decide_self_evolution_task(
+    task_id = supervisor._autonomous_chain_store.list_tasks()[0].task_id
+    await supervisor.decide_autonomous_chain_task(
         task_id,
         {"decision": "approve", "actor": "supervisor", "reason": "ready for agent pull"},
     )
 
-    listed = await supervisor.list_self_evolution_tasks(
+    listed = await supervisor.list_autonomous_chain_tasks(
         status="approved",
         execution_kind="body_improvement",
     )
@@ -17262,27 +17262,27 @@ async def test_list_self_evolution_tasks_can_filter_body_improvement_agent_tasks
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_list_self_evolution_tasks_reads_chain_projection_views_instead_of_raw_total_queue(tmp_path):
+async def test_list_autonomous_chain_tasks_reads_chain_projection_views_instead_of_raw_total_queue(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    planned = await supervisor.plan_self_evolution_task({"title": "Projected backlog task"})
-    completed = await supervisor.plan_self_evolution_task({"title": "Projected writeback task"})
-    cancelled = await supervisor.plan_self_evolution_task({"title": "Projected cancelled task"})
+    planned = await supervisor.plan_autonomous_chain_task({"title": "Projected backlog task"})
+    completed = await supervisor.plan_autonomous_chain_task({"title": "Projected writeback task"})
+    cancelled = await supervisor.plan_autonomous_chain_task({"title": "Projected cancelled task"})
 
     completed_id = completed["tasks"][0]["task_id"]
-    supervisor._self_evolution_queue.update_status(
+    supervisor._autonomous_chain_store.update_status(
         completed_id,
         status="approved",
         actor="test",
         reason="approved for dispatch",
     )
-    supervisor._self_evolution_queue.update_status(
+    supervisor._autonomous_chain_store.update_status(
         completed_id,
         status="running",
         actor="test",
         reason="dispatch in progress",
     )
-    supervisor._self_evolution_queue.update_status(
+    supervisor._autonomous_chain_store.update_status(
         completed_id,
         status="completed",
         actor="test",
@@ -17290,16 +17290,16 @@ async def test_list_self_evolution_tasks_reads_chain_projection_views_instead_of
     )
 
     cancelled_id = cancelled["tasks"][0]["task_id"]
-    supervisor._self_evolution_queue.update_status(
+    supervisor._autonomous_chain_store.update_status(
         cancelled_id,
         status="cancelled",
         actor="test",
         reason="cancelled during governance review",
     )
 
-    listed = await supervisor.list_self_evolution_tasks()
-    completed_only = await supervisor.list_self_evolution_tasks(status="completed")
-    cancelled_only = await supervisor.list_self_evolution_tasks(status="cancelled")
+    listed = await supervisor.list_autonomous_chain_tasks()
+    completed_only = await supervisor.list_autonomous_chain_tasks(status="completed")
+    cancelled_only = await supervisor.list_autonomous_chain_tasks(status="cancelled")
 
     assert listed["count"] == 3
     assert [task["title"] for task in listed["tasks"]] == [
@@ -17317,10 +17317,10 @@ async def test_list_self_evolution_tasks_reads_chain_projection_views_instead_of
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_self_evolution_cycle_recovers_orphaned_agent_pull_running_task(tmp_path):
+async def test_run_autonomous_chain_review_cycle_recovers_orphaned_agent_pull_running_task(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Recover abandoned learning task",
             "summary": "Ensure orphaned autonomous tasks return to approved",
@@ -17334,20 +17334,20 @@ async def test_run_self_evolution_cycle_recovers_orphaned_agent_pull_running_tas
     )
     task_id = planned["tasks"][0]["task_id"]
 
-    supervisor._self_evolution_queue.update_status(
+    supervisor._autonomous_chain_store.update_status(
         task_id,
         status="approved",
         actor="test",
         reason="ready",
     )
-    supervisor._self_evolution_queue.update_status(
+    supervisor._autonomous_chain_store.update_status(
         task_id,
         status="running",
         actor="cli_agent",
         reason="Agent pulled task for execution in the autonomous chain.",
         context={"session_id": "stale-cli-session"},
     )
-    supervisor._self_evolution_queue.update_metadata(
+    supervisor._autonomous_chain_store.update_metadata(
         task_id,
         metadata={
             "owner_session_id": "stale-cli-session",
@@ -17369,10 +17369,10 @@ async def test_run_self_evolution_cycle_recovers_orphaned_agent_pull_running_tas
         return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "activity_guards": {}}
 
     supervisor._fetch_gateway_cli_session = fake_owner_session  # type: ignore[method-assign]
-    supervisor.review_self_evolution_tasks = fake_review  # type: ignore[method-assign]
+    supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
 
-    result = await supervisor._run_self_evolution_cycle()
-    updated = await supervisor.get_self_evolution_task(task_id)
+    result = await supervisor._run_autonomous_chain_review_cycle()
+    updated = await supervisor.get_autonomous_chain_task(task_id)
 
     assert result["recovered_orphaned"] == 1
     assert updated["status"] == "approved"
@@ -17390,7 +17390,7 @@ async def test_recovery_skipped_when_gateway_owner_session_fetch_fails(tmp_path)
     # (which would cause mass false recovery → double execution).
     supervisor = _make_supervisor(tmp_path)
 
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Running learning task owned by a live CLI",
             "summary": "Must NOT be recovered while gateway is unreachable",
@@ -17403,15 +17403,15 @@ async def test_recovery_skipped_when_gateway_owner_session_fetch_fails(tmp_path)
         }
     )
     task_id = planned["tasks"][0]["task_id"]
-    supervisor._self_evolution_queue.update_status(
+    supervisor._autonomous_chain_store.update_status(
         task_id, status="approved", actor="test", reason="ready",
     )
-    supervisor._self_evolution_queue.update_status(
+    supervisor._autonomous_chain_store.update_status(
         task_id, status="running", actor="cli_agent",
         reason="Agent pulled task for execution in the autonomous chain.",
         context={"session_id": "live-cli-session"},
     )
-    supervisor._self_evolution_queue.update_metadata(
+    supervisor._autonomous_chain_store.update_metadata(
         task_id,
         metadata={
             "owner_session_id": "live-cli-session",
@@ -17425,7 +17425,7 @@ async def test_recovery_skipped_when_gateway_owner_session_fetch_fails(tmp_path)
     supervisor._fetch_gateway_cli_session = failing_owner_session  # type: ignore[method-assign]
 
     recovered = await supervisor._recover_orphaned_agent_pull_tasks()
-    updated = await supervisor.get_self_evolution_task(task_id)
+    updated = await supervisor.get_autonomous_chain_task(task_id)
 
     assert recovered == 0
     assert updated["status"] == "running"
@@ -17437,7 +17437,7 @@ async def test_recovery_skipped_when_gateway_owner_session_fetch_fails(tmp_path)
 async def test_recovery_recovers_when_owner_session_missing_from_gateway(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Running learning task owned by deleted CLI",
             "summary": "Should recover when gateway no longer has the owner session",
@@ -17450,17 +17450,17 @@ async def test_recovery_recovers_when_owner_session_missing_from_gateway(tmp_pat
         }
     )
     task_id = planned["tasks"][0]["task_id"]
-    supervisor._self_evolution_queue.update_status(
+    supervisor._autonomous_chain_store.update_status(
         task_id, status="approved", actor="test", reason="ready",
     )
-    supervisor._self_evolution_queue.update_status(
+    supervisor._autonomous_chain_store.update_status(
         task_id,
         status="running",
         actor="cli_agent",
         reason="Agent pulled task for execution in the autonomous chain.",
         context={"session_id": "deleted-cli-session"},
     )
-    supervisor._self_evolution_queue.update_metadata(
+    supervisor._autonomous_chain_store.update_metadata(
         task_id,
         metadata={
             "owner_session_id": "deleted-cli-session",
@@ -17475,7 +17475,7 @@ async def test_recovery_recovers_when_owner_session_missing_from_gateway(tmp_pat
     supervisor._fetch_gateway_cli_session = missing_owner_session  # type: ignore[method-assign]
 
     recovered = await supervisor._recover_orphaned_agent_pull_tasks()
-    updated = await supervisor.get_self_evolution_task(task_id)
+    updated = await supervisor.get_autonomous_chain_task(task_id)
 
     assert recovered == 1
     assert updated["status"] == "approved"
@@ -17486,7 +17486,7 @@ async def test_recovery_recovers_when_owner_session_missing_from_gateway(tmp_pat
 @pytest.mark.unit
 async def test_orphan_recovery_skips_running_agent_pull_task_without_owner(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Running learning task missing owner",
             "summary": "Unknown ownership must not be recovered every cycle",
@@ -17499,22 +17499,22 @@ async def test_orphan_recovery_skips_running_agent_pull_task_without_owner(tmp_p
         }
     )
     task_id = planned["tasks"][0]["task_id"]
-    supervisor._self_evolution_queue.update_status(
+    supervisor._autonomous_chain_store.update_status(
         task_id, status="approved", actor="test", reason="ready",
     )
-    supervisor._self_evolution_queue.update_status(
+    supervisor._autonomous_chain_store.update_status(
         task_id,
         status="running",
         actor="cli_agent",
         reason="Agent pulled task without persisted owner metadata.",
     )
-    supervisor._self_evolution_queue.update_metadata(
+    supervisor._autonomous_chain_store.update_metadata(
         task_id,
         metadata={"execution_source": "cli_agent_pull"},
     )
 
     recovered = await supervisor._recover_orphaned_agent_pull_tasks()
-    updated = await supervisor.get_self_evolution_task(task_id)
+    updated = await supervisor.get_autonomous_chain_task(task_id)
 
     assert recovered == 0
     assert updated["status"] == "running"
@@ -17526,7 +17526,7 @@ async def test_orphan_recovery_skips_running_agent_pull_task_without_owner(tmp_p
 @pytest.mark.unit
 async def test_late_agent_pull_completion_from_approved_reconciles_with_owner(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Late learning completion",
             "summary": "Completion should survive approved recovery race",
@@ -17539,11 +17539,11 @@ async def test_late_agent_pull_completion_from_approved_reconciles_with_owner(tm
         }
     )
     task_id = planned["tasks"][0]["task_id"]
-    await supervisor.decide_self_evolution_task(
+    await supervisor.decide_autonomous_chain_task(
         task_id,
         {"decision": "approve", "actor": "supervisor", "reason": "ready"},
     )
-    supervisor._self_evolution_queue.update_metadata(
+    supervisor._autonomous_chain_store.update_metadata(
         task_id,
         metadata={
             "owner_session_id": "cli-session-owner",
@@ -17551,7 +17551,7 @@ async def test_late_agent_pull_completion_from_approved_reconciles_with_owner(tm
         },
     )
 
-    result = await supervisor.decide_self_evolution_task(
+    result = await supervisor.decide_autonomous_chain_task(
         task_id,
         {
             "decision": "completed",
@@ -17571,7 +17571,7 @@ async def test_late_agent_pull_completion_from_approved_reconciles_with_owner(tm
 @pytest.mark.unit
 async def test_agent_pull_running_noop_rejects_different_owner(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Owned learning task",
             "summary": "Only the owning CLI may refresh a running agent-pull task",
@@ -17584,12 +17584,12 @@ async def test_agent_pull_running_noop_rejects_different_owner(tmp_path):
         }
     )
     task_id = planned["tasks"][0]["task_id"]
-    await supervisor.decide_self_evolution_task(
+    await supervisor.decide_autonomous_chain_task(
         task_id,
         {"decision": "approve", "actor": "supervisor", "reason": "ready"},
     )
 
-    first = await supervisor.decide_self_evolution_task(
+    first = await supervisor.decide_autonomous_chain_task(
         task_id,
         {
             "decision": "running",
@@ -17599,11 +17599,11 @@ async def test_agent_pull_running_noop_rejects_different_owner(tmp_path):
         },
     )
     assert first["status"] == "running"
-    after_first_claim = await supervisor.get_self_evolution_task(task_id)
+    after_first_claim = await supervisor.get_autonomous_chain_task(task_id)
     assert after_first_claim["metadata"]["owner_session_id"] == "cli-owner-1"
 
     with pytest.raises(HTTPException) as exc:
-        await supervisor.decide_self_evolution_task(
+        await supervisor.decide_autonomous_chain_task(
             task_id,
             {
                 "decision": "running",
@@ -17614,19 +17614,19 @@ async def test_agent_pull_running_noop_rejects_different_owner(tmp_path):
         )
 
     assert exc.value.status_code == 409
-    updated = await supervisor.get_self_evolution_task(task_id)
+    updated = await supervisor.get_autonomous_chain_task(task_id)
     assert updated["status"] == "running"
     assert updated["metadata"]["owner_session_id"] == "cli-owner-1"
 
 
-def test_self_evolution_queue_has_explicit_review_and_retry_transitions(tmp_path):
+def test_autonomous_chain_store_has_explicit_review_and_retry_transitions(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    task = supervisor._self_evolution_queue.create_task(
+    task = supervisor._autonomous_chain_store.create_task(
         title="Review state coverage",
         summary="Exercise non-terminal review states",
     )
 
-    awaiting = supervisor._self_evolution_queue.update_status(
+    awaiting = supervisor._autonomous_chain_store.update_status(
         task.task_id,
         status="awaiting_review",
         actor="test",
@@ -17634,7 +17634,7 @@ def test_self_evolution_queue_has_explicit_review_and_retry_transitions(tmp_path
     )
     assert awaiting.status == "awaiting_review"
 
-    approved = supervisor._self_evolution_queue.update_status(
+    approved = supervisor._autonomous_chain_store.update_status(
         task.task_id,
         status="approved",
         actor="test",
@@ -17642,7 +17642,7 @@ def test_self_evolution_queue_has_explicit_review_and_retry_transitions(tmp_path
     )
     assert approved.status == "approved"
 
-    running = supervisor._self_evolution_queue.update_status(
+    running = supervisor._autonomous_chain_store.update_status(
         task.task_id,
         status="running",
         actor="test",
@@ -17650,7 +17650,7 @@ def test_self_evolution_queue_has_explicit_review_and_retry_transitions(tmp_path
     )
     assert running.status == "running"
 
-    retry = supervisor._self_evolution_queue.update_status(
+    retry = supervisor._autonomous_chain_store.update_status(
         task.task_id,
         status="retry",
         actor="test",
@@ -17658,7 +17658,7 @@ def test_self_evolution_queue_has_explicit_review_and_retry_transitions(tmp_path
     )
     assert retry.status == "retry"
 
-    back_to_approved = supervisor._self_evolution_queue.update_status(
+    back_to_approved = supervisor._autonomous_chain_store.update_status(
         task.task_id,
         status="approved",
         actor="test",
@@ -17666,13 +17666,13 @@ def test_self_evolution_queue_has_explicit_review_and_retry_transitions(tmp_path
     )
     assert back_to_approved.status == "approved"
 
-    completed = supervisor._self_evolution_queue.update_status(
+    completed = supervisor._autonomous_chain_store.update_status(
         task.task_id,
         status="running",
         actor="test",
         reason="dispatch again",
     )
-    completed = supervisor._self_evolution_queue.update_status(
+    completed = supervisor._autonomous_chain_store.update_status(
         task.task_id,
         status="completed",
         actor="test",
@@ -17681,7 +17681,7 @@ def test_self_evolution_queue_has_explicit_review_and_retry_transitions(tmp_path
     assert completed.status == "completed"
 
     with pytest.raises(ValueError, match="terminal"):
-        supervisor._self_evolution_queue.update_status(
+        supervisor._autonomous_chain_store.update_status(
             task.task_id,
             status="awaiting_review",
             actor="test",
@@ -17689,9 +17689,9 @@ def test_self_evolution_queue_has_explicit_review_and_retry_transitions(tmp_path
         )
 
 
-def test_self_evolution_queue_exposes_backlog_dispatch_and_writeback_projections(tmp_path):
+def test_autonomous_chain_store_exposes_backlog_dispatch_and_writeback_projections(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    queue = supervisor._self_evolution_queue
+    queue = supervisor._autonomous_chain_store
 
     planned = queue.create_task(title="Planned backlog task", summary="backlog")
     running = queue.create_task(title="Running dispatch task", summary="dispatch")
@@ -17766,9 +17766,9 @@ def test_self_evolution_queue_exposes_backlog_dispatch_and_writeback_projections
     assert writeback_titles == ["Completed writeback task", "Failed writeback task"]
 
 
-def test_self_evolution_queue_exposes_chain_projection_without_raw_total_queue_semantics(tmp_path):
+def test_autonomous_chain_store_exposes_chain_projection_without_raw_total_queue_semantics(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    queue = supervisor._self_evolution_queue
+    queue = supervisor._autonomous_chain_store
 
     planned = queue.create_task(title="Planned backlog task", summary="backlog")
     completed = queue.create_task(title="Completed writeback task", summary="writeback")
@@ -17826,29 +17826,29 @@ def test_self_evolution_queue_exposes_chain_projection_without_raw_total_queue_s
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_self_evolution_cycle_skips_when_cycle_already_running(tmp_path):
+async def test_run_autonomous_chain_review_cycle_skips_when_cycle_already_running(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    supervisor.review_self_evolution_tasks = AsyncMock(  # type: ignore[method-assign]
+    supervisor.review_autonomous_chain_tasks = AsyncMock(  # type: ignore[method-assign]
         return_value={"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": []}
     )
 
-    lock = supervisor._get_self_evolution_cycle_lock()
+    lock = supervisor._get_autonomous_chain_cycle_lock()
     await lock.acquire()
     try:
-        result = await supervisor._run_self_evolution_cycle()
+        result = await supervisor._run_autonomous_chain_review_cycle()
     finally:
         lock.release()
 
     assert result["skipped"] == "cycle_already_running"
-    supervisor.review_self_evolution_tasks.assert_not_awaited()  # type: ignore[attr-defined]
+    supervisor.review_autonomous_chain_tasks.assert_not_awaited()  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_self_evolution_cycle_times_out_agent_pull_execution_started_at(tmp_path):
+async def test_run_autonomous_chain_review_cycle_times_out_agent_pull_execution_started_at(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    planned = await supervisor.plan_self_evolution_task(
+    planned = await supervisor.plan_autonomous_chain_task(
         {
             "title": "Timeout stale agent-pull task",
             "summary": "Agent-pull running tasks use execution_started_at",
@@ -17861,13 +17861,13 @@ async def test_run_self_evolution_cycle_times_out_agent_pull_execution_started_a
         }
     )
     task_id = planned["tasks"][0]["task_id"]
-    supervisor._self_evolution_queue.update_status(
+    supervisor._autonomous_chain_store.update_status(
         task_id,
         status="approved",
         actor="test",
         reason="ready",
     )
-    supervisor._self_evolution_queue.update_status(
+    supervisor._autonomous_chain_store.update_status(
         task_id,
         status="running",
         actor="cli_agent",
@@ -17875,7 +17875,7 @@ async def test_run_self_evolution_cycle_times_out_agent_pull_execution_started_a
         context={"session_id": "live-cli-session"},
     )
     started_at = (datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat()
-    supervisor._self_evolution_queue.update_metadata(
+    supervisor._autonomous_chain_store.update_metadata(
         task_id,
         metadata={
             "owner_session_id": "live-cli-session",
@@ -17891,12 +17891,12 @@ async def test_run_self_evolution_cycle_times_out_agent_pull_execution_started_a
             "lease_status": "healthy",
         }
     )
-    supervisor.review_self_evolution_tasks = AsyncMock(  # type: ignore[method-assign]
+    supervisor.review_autonomous_chain_tasks = AsyncMock(  # type: ignore[method-assign]
         return_value={"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": []}
     )
 
-    result = await supervisor._run_self_evolution_cycle()
-    updated = await supervisor.get_self_evolution_task(task_id)
+    result = await supervisor._run_autonomous_chain_review_cycle()
+    updated = await supervisor.get_autonomous_chain_task(task_id)
 
     assert result["recovered_orphaned"] == 0
     assert updated["status"] == "failed"
@@ -17906,11 +17906,11 @@ async def test_run_self_evolution_cycle_times_out_agent_pull_execution_started_a
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_self_evolution_cycle_limits_formal_dispatches_per_cycle(tmp_path):
+async def test_run_autonomous_chain_review_cycle_limits_formal_dispatches_per_cycle(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     task_ids = []
     for idx in range(3):
-        planned = await supervisor.plan_self_evolution_task(
+        planned = await supervisor.plan_autonomous_chain_task(
             {
                 "title": f"Formal dispatch budget task {idx}",
                 "metadata": {
@@ -17921,7 +17921,7 @@ async def test_run_self_evolution_cycle_limits_formal_dispatches_per_cycle(tmp_p
         )
         task_id = planned["tasks"][0]["task_id"]
         task_ids.append(task_id)
-        await supervisor.decide_self_evolution_task(
+        await supervisor.decide_autonomous_chain_task(
             task_id,
             {
                 "decision": "approve",
@@ -17948,10 +17948,10 @@ async def test_run_self_evolution_cycle_limits_formal_dispatches_per_cycle(tmp_p
         dispatched.append(task.task_id)
         return {"status": "ok"}
 
-    supervisor.review_self_evolution_tasks = fake_review  # type: ignore[method-assign]
-    supervisor._dispatch_self_evolution_execution_request = fake_dispatch  # type: ignore[method-assign]
+    supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
+    supervisor._dispatch_autonomous_chain_execution_request = fake_dispatch  # type: ignore[method-assign]
 
-    result = await supervisor._run_self_evolution_cycle()
+    result = await supervisor._run_autonomous_chain_review_cycle()
 
     assert dispatched == [task_ids[0]]
     assert [item["task_id"] for item in result["dispatched"]] == [task_ids[0]]
@@ -17996,6 +17996,9 @@ async def test_fetch_tier1_stats_reports_memory_service_unavailable(tmp_path, mo
     assert stats["memory_unavailable"] is True
     assert stats["memory_unavailable_reason"] == "memory_service_not_registered"
     assert stats["memory_active"] is False
+
+
+
 
 
 

@@ -74,16 +74,16 @@ class TraceRuntimeMixin:
         trace_id: Optional[str],
     ) -> List[Dict[str, Any]]:
         records: List[Dict[str, Any]] = []
-        for task in self._self_evolution_queue.list_chain_projection_tasks(
+        for task in self._autonomous_chain_store.list_chain_projection_tasks(
             include_cancelled=True,
         ):
             if trace_id and task.trace_id != trace_id:
                 continue
-            serialized = self._serialize_self_evolution_task(task)
+            serialized = self._serialize_autonomous_chain_task(task)
             profile = self._trace_runtime_profile_from_payload(serialized)
             records.append(
                 self._build_trace_record(
-                    source="self_evolution_queue",
+                    source="autonomous_chain_store",
                     event_type="task_snapshot",
                     trace_id=task.trace_id,
                     recorded_at=serialized.get("updated_at") or serialized.get("created_at"),
@@ -98,7 +98,7 @@ class TraceRuntimeMixin:
                 decision_payload = decision.model_dump(mode="json")
                 records.append(
                     self._build_trace_record(
-                        source="self_evolution_queue",
+                        source="autonomous_chain_store",
                         event_type="task_decision",
                         trace_id=decision.trace_id,
                         recorded_at=decision_payload.get("decided_at"),
@@ -113,7 +113,7 @@ class TraceRuntimeMixin:
                 execution_payload = task.execution_request.model_dump(mode="json")
                 records.append(
                     self._build_trace_record(
-                        source="self_evolution_queue",
+                        source="autonomous_chain_store",
                         event_type="execution_request",
                         trace_id=task.execution_request.trace_id,
                         recorded_at=execution_payload.get("created_at"),
@@ -258,9 +258,9 @@ class TraceRuntimeMixin:
             return False
         if activity_kind in {
             "self_learning",
-            "self_evolution",
-            "self_evolution_plan",
-            "self_evolution_execute",
+            "autonomous_chain",
+            "autonomous_chain_plan",
+            "autonomous_chain_execute",
             "memory_task",
             "memory_write_failure",
             "uncertainty_high",
@@ -444,3 +444,5 @@ class TraceRuntimeMixin:
             if extracted:
                 return extracted
         return None
+
+

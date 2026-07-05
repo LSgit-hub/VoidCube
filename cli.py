@@ -69,6 +69,7 @@ from VoidCube_cli.autonomous_executor import (
     autonomous_task_run_id_for_message,
     build_autonomous_task_prompt,
 )
+from systems.supervisor.autonomous_chain_contract import AUTONOMOUS_CHAIN_CYCLE_ROUTE
 
 logger = logging.getLogger(__name__)
 
@@ -2497,6 +2498,13 @@ class VoidcubeCLI:
         if current.get("task_id"):
             return current
         observation = dict(supervisor_state.get("autonomous_observation") or {})
+        presentation = dict(observation.get("presentation") or {})
+        api_a_execution = dict(presentation.get("api_a_execution") or {})
+        hinted_focus = dict(api_a_execution.get("focus_task") or {})
+        hinted_stage = str(api_a_execution.get("stage") or "").strip()
+        if hinted_focus.get("task_id"):
+            hinted_focus["_presentation_stage"] = hinted_stage
+            return hinted_focus
         api_a = dict(observation.get("api_a") or {})
         current_card = dict(api_a.get("current") or {})
         if current_card.get("task_id"):
@@ -2520,6 +2528,11 @@ class VoidcubeCLI:
             if getattr(self, "_last_agent_turn_result", None) is not None:
                 return "claimed_waiting_writeback"
             return "claimed_waiting_start"
+        hinted_stage = str(focus_task.get("_presentation_stage") or "").strip()
+        if hinted_stage == "approved_waiting_claim":
+            return "approved_waiting_claim"
+        if hinted_stage == "running_autonomous_task":
+            return "running_elsewhere"
         task_status = str(focus_task.get("status") or "").strip().lower()
         if task_status == "approved":
             return "approved_waiting_claim"
@@ -2903,6 +2916,22 @@ class VoidcubeCLI:
 
     def _resolve_autonomous_no_task_reason(self, supervisor_state: Dict[str, Any]) -> tuple[str, str]:
         observation = dict(supervisor_state.get("autonomous_observation") or {})
+        presentation = dict(observation.get("presentation") or {})
+        api_a_execution = dict(presentation.get("api_a_execution") or {})
+        hinted_reason = str(api_a_execution.get("chain_reason") or "").strip()
+        hinted_style = str(api_a_execution.get("reason_style") or "").strip().lower()
+        if hinted_reason and str(api_a_execution.get("stage") or "").strip() not in {
+            "",
+            "approved_waiting_claim",
+            "running_autonomous_task",
+        }:
+            style = {
+                "warn": "class:auto-panel-warn",
+                "info": "class:auto-panel-info",
+                "good": "class:auto-panel-good",
+                "dim": "class:auto-panel-dim",
+            }.get(hinted_style, "class:auto-panel-dim")
+            return (style, hinted_reason)
         api_a = dict(observation.get("api_a") or {})
         learning_tasks = list(api_a.get("pending") or [])
         if not learning_tasks:
@@ -3143,7 +3172,7 @@ class VoidcubeCLI:
 
         payload = _json.dumps({"focus": focus}).encode()
         request = _req.Request(
-            f"{supervisor_url}/self-evolution/autonomous-cycle",
+            f"{supervisor_url}{AUTONOMOUS_CHAIN_CYCLE_ROUTE}",
             data=payload,
             headers={"Content-Type": "application/json"},
             method="POST",
@@ -5379,7 +5408,8 @@ class VoidcubeCLI:
         by_path = dict(metrics.get("by_path") or {})
         governance = dict(metrics.get("governance") or {})
         board = dict(observation.get("board") or {})
-        focus = dict(board.get("primary_focus") or {})
+        presentation = dict(observation.get("presentation") or {})
+        focus = dict(presentation.get("focus") or board.get("primary_focus") or {})
         current_cards = [
             dict(item)
             for item in list(board.get("current_cards") or [])
@@ -7708,7 +7738,7 @@ class VoidcubeCLI:
     def _handle_auto_command(self, cmd: str):
         """Handle /auto [focus] — enable the autonomous chain.
 
-        Activates the endogenous drive and self-evolution review loops
+        Activates the endogenous drive and autonomous-chain review loops
         that run continuously at their configured intervals. The foreground
         CLI remains available for normal user interaction while the /auto gate is on.
         Use /auto-q to stop the autonomous chain.
@@ -12971,3 +13001,4 @@ def _get_language_preference_prompt() -> str:
 
 if __name__ == "__main__":
     fire.Fire(main)
+
