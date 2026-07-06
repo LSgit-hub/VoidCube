@@ -69,7 +69,38 @@ from VoidCube_cli.autonomous_executor import (
     autonomous_task_run_id_for_message,
     build_autonomous_task_prompt,
 )
-from systems.supervisor.autonomous_chain_contract import AUTONOMOUS_CHAIN_CYCLE_ROUTE
+from VoidCube_cli.autonomous_observation import (
+    format_supervisor_status_snapshot as _format_supervisor_status_snapshot_view,
+    observation_board as _autonomous_observation_board_view,
+    observation_chain as _autonomous_observation_chain_view,
+    observation_current_card as _autonomous_observation_current_card_view,
+    observation_current_cards as _autonomous_observation_current_cards_view,
+    observation_group_items as _autonomous_observation_group_items_view,
+    resolve_autonomous_no_task_reason as _resolve_autonomous_no_task_reason_view,
+    resolve_autonomous_panel_focus_stage as _resolve_autonomous_panel_focus_stage_view,
+    resolve_autonomous_panel_focus_task as _resolve_autonomous_panel_focus_task_view,
+    resolve_supervisor_stage_descriptor as _resolve_supervisor_stage_descriptor_view,
+    supervisor_api_a_execution_hint as _supervisor_api_a_execution_hint_view,
+)
+from VoidCube_cli.autonomous_panel import (
+    build_autonomous_execution_panel_rows as _build_autonomous_execution_panel_rows_view,
+    build_autonomous_executor_lease_row as _build_autonomous_executor_lease_row_view,
+    get_autonomous_execution_panel_fragments as _get_autonomous_execution_panel_fragments_view,
+    resolve_autonomous_waiting_start_cause as _resolve_autonomous_waiting_start_cause_view,
+)
+from VoidCube_cli.autonomous_gate import (
+    exit_autonomous_gate_fast as _exit_autonomous_gate_fast_view,
+    force_quit_autonomous_gate as _force_quit_autonomous_gate_view,
+    handle_auto_command as _handle_auto_command_view,
+    handle_auto_q_command as _handle_auto_q_command_view,
+    trigger_autonomous_cycle as _trigger_autonomous_cycle_view,
+)
+from VoidCube_cli.autonomous_presence import (
+    current_cli_agent_role as _current_cli_agent_role_view,
+    current_gateway_presence_snapshot as _current_gateway_presence_snapshot_view,
+    ensure_autonomous_executor_session as _ensure_autonomous_executor_session_view,
+    refresh_gateway_cli_presence as _refresh_gateway_cli_presence_view,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -2438,316 +2469,59 @@ class VoidcubeCLI:
 
     @staticmethod
     def _autonomous_observation_board(state: Dict[str, Any]) -> Dict[str, Any]:
-        observation = dict(state.get("autonomous_observation") or {})
-        return dict(observation.get("board") or {})
+        return _autonomous_observation_board_view(state)
 
     @staticmethod
     def _autonomous_observation_chain(state: Dict[str, Any]) -> Dict[str, Any]:
-        observation = dict(state.get("autonomous_observation") or {})
-        return dict(observation.get("chain") or {})
+        return _autonomous_observation_chain_view(state)
 
     def _autonomous_observation_group_items(
         self,
         state: Dict[str, Any],
         group_key: str,
     ) -> list[Dict[str, Any]]:
-        chain = self._autonomous_observation_chain(state)
-        groups = [
-            dict(item)
-            for item in list(chain.get("segments") or [])
-            if isinstance(item, dict)
-        ]
-        for group in groups:
-            if str(group.get("key") or "").strip() != group_key:
-                continue
-            return [
-                dict(item)
-                for item in list(group.get("items") or [])
-                if isinstance(item, dict)
-            ]
-        return []
+        return _autonomous_observation_group_items_view(state, group_key)
 
     def _autonomous_observation_current_cards(self, state: Dict[str, Any]) -> list[Dict[str, Any]]:
-        board = self._autonomous_observation_board(state)
-        return [
-            dict(item)
-            for item in list(board.get("current_cards") or [])
-            if isinstance(item, dict)
-        ]
+        return _autonomous_observation_current_cards_view(state)
 
     def _autonomous_observation_current_card(
         self,
         state: Dict[str, Any],
         *roles: str,
     ) -> Dict[str, Any]:
-        wanted = {
-            str(role or "").strip()
-            for role in roles
-            if str(role or "").strip()
-        }
-        if not wanted:
-            return {}
-        for item in self._autonomous_observation_current_cards(state):
-            role = str(item.get("observation_role") or "").strip()
-            if role in wanted:
-                return item
-        return {}
+        return _autonomous_observation_current_card_view(state, *roles)
 
     def _resolve_autonomous_panel_focus_task(self, supervisor_state: Dict[str, Any]) -> Dict[str, Any]:
-        current = getattr(self, "_current_autonomous_task", None) or {}
-        if current.get("task_id"):
-            return current
-        observation = dict(supervisor_state.get("autonomous_observation") or {})
-        presentation = dict(observation.get("presentation") or {})
-        api_a_execution = dict(presentation.get("api_a_execution") or {})
-        hinted_focus = dict(api_a_execution.get("focus_task") or {})
-        hinted_stage = str(
-            api_a_execution.get("cli_focus_stage")
-            or api_a_execution.get("stage")
-            or ""
-        ).strip()
-        if hinted_focus.get("task_id"):
-            hinted_focus["_presentation_stage"] = hinted_stage
-            return hinted_focus
-        api_a = dict(observation.get("api_a") or {})
-        current_card = dict(api_a.get("current") or {})
-        if current_card.get("task_id"):
-            return current_card
-        for task in self._autonomous_observation_group_items(
+        return _resolve_autonomous_panel_focus_task_view(
             supervisor_state,
-            "api_a_ready",
-        ):
-            task_status = str(task.get("status") or "").strip().lower()
-            if task_status in {"approved", "running"} and task.get("task_id"):
-                return task
-        return {}
+            getattr(self, "_current_autonomous_task", None),
+        )
 
     def _resolve_autonomous_panel_focus_stage(self, focus_task: Dict[str, Any]) -> str:
-        current_task = getattr(self, "_current_autonomous_task", None) or {}
-        current_task_id = str(current_task.get("task_id") or "").strip()
-        focus_task_id = str(focus_task.get("task_id") or "").strip()
-        if current_task_id and focus_task_id and current_task_id == focus_task_id:
-            if getattr(self, "_agent_running", False):
-                return "claimed_running"
-            if getattr(self, "_last_agent_turn_result", None) is not None:
-                return "claimed_waiting_writeback"
-            return "claimed_waiting_start"
-        hinted_stage = str(focus_task.get("_presentation_stage") or "").strip()
-        if hinted_stage == "approved_waiting_claim":
-            return "approved_waiting_claim"
-        if hinted_stage == "running_autonomous_task":
-            return "running_elsewhere"
-        task_status = str(focus_task.get("status") or "").strip().lower()
-        if task_status == "approved":
-            return "approved_waiting_claim"
-        if task_status == "running":
-            return "running_elsewhere"
-        return "idle"
+        return _resolve_autonomous_panel_focus_stage_view(
+            focus_task,
+            current_task=getattr(self, "_current_autonomous_task", None),
+            agent_running=bool(getattr(self, "_agent_running", False)),
+            last_agent_turn_result=getattr(self, "_last_agent_turn_result", None),
+        )
 
     @staticmethod
     def _supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[str, Any]:
-        observation = dict(supervisor_state.get("autonomous_observation") or {})
-        presentation = dict(observation.get("presentation") or {})
-        return dict(presentation.get("api_a_execution") or {})
+        return _supervisor_api_a_execution_hint_view(supervisor_state)
 
     def _resolve_supervisor_stage_descriptor(
         self,
         supervisor_state: Dict[str, Any],
         focus_stage: str,
     ) -> Dict[str, str]:
-        api_a_execution = self._supervisor_api_a_execution_hint(supervisor_state)
-        hinted_stage = str(
-            api_a_execution.get("cli_focus_stage")
-            or api_a_execution.get("stage")
-            or ""
-        ).strip()
-        if not hinted_stage or hinted_stage != focus_stage:
-            return {}
-        return {
-            "status_label": str(api_a_execution.get("status_label") or "").strip(),
-            "chain_reason": str(api_a_execution.get("chain_reason") or "").strip(),
-            "activity_text": str(api_a_execution.get("activity_text") or "").strip(),
-            "reason_style": str(api_a_execution.get("reason_style") or "").strip().lower(),
-        }
+        return _resolve_supervisor_stage_descriptor_view(supervisor_state, focus_stage)
 
     def _build_autonomous_execution_panel_rows(self) -> list[tuple[str, str]]:
-        width = self._get_tui_terminal_width()
-        inner_width = max(34, min(width - 4, 92))
-        session_short = str(getattr(self, "session_id", "") or "")[-8:] or "unknown"
-        rows: list[tuple[str, str]] = []
-        supervisor_state = self._fetch_supervisor_status()
-        gateway_state = self._fetch_autonomous_gateway_status()
-        focus_task = self._resolve_autonomous_panel_focus_task(supervisor_state)
-        focus_stage = self._resolve_autonomous_panel_focus_stage(focus_task)
-        supervisor_descriptor = self._resolve_supervisor_stage_descriptor(
-            supervisor_state,
-            focus_stage,
-        )
-
-        if focus_stage == "claimed_running":
-            status_label = "执行中"
-            status_style = "class:auto-panel-good"
-        elif focus_stage == "claimed_waiting_writeback":
-            status_label = "等待回写"
-            status_style = "class:auto-panel-good"
-        elif focus_stage == "claimed_waiting_start":
-            status_label = "已认领待起跑"
-            status_style = "class:auto-panel-warn"
-        elif getattr(self, "_agent_running", False):
-            status_label = "模型处理中"
-            status_style = "class:auto-panel-good"
-        elif focus_stage == "approved_waiting_claim":
-            status_label = str(supervisor_descriptor.get("status_label") or "已放行待认领")
-            status_style = "class:auto-panel-warn"
-        elif focus_stage == "running_elsewhere":
-            status_label = str(supervisor_descriptor.get("status_label") or "他处执行中")
-            status_style = "class:auto-panel-info"
-        else:
-            status_label = str(supervisor_descriptor.get("status_label") or "待命拉单")
-            status_style = "class:auto-panel-warn"
-
-        rows.append(("class:auto-panel-title", f"Autonomous Executor · 会话 {session_short}"))
-        rows.append((status_style, f"状态: {status_label}"))
-        rows.append(self._build_autonomous_executor_lease_row(gateway_state, inner_width))
-        task_id = str(focus_task.get("task_id") or "").strip()
-        task_title = str(focus_task.get("title") or "").strip()
-        execution_kind = str(
-            focus_task.get("execution_kind")
-            or focus_task.get("task_family")
-            or focus_task.get("task_type")
-            or ""
-        ).strip().lower()
-        if task_id:
-            label = "改进" if execution_kind == "body_improvement" else "学习"
-            task_text = f"任务: {label} · {task_id[:8]} · {task_title or '(untitled)'}"
-            if focus_task is getattr(self, "_current_autonomous_task", None):
-                started_at = float(getattr(self, "_current_autonomous_task_started_at", 0.0) or 0.0)
-                if started_at > 0:
-                    elapsed = max(0, int(time.time() - started_at))
-                    task_text += f" · {elapsed}s"
-            rows.append(("class:auto-panel-text", self._trim_status_bar_text(task_text, inner_width)))
-            if focus_stage == "claimed_waiting_start":
-                rows.append(
-                    (
-                        "class:auto-panel-warn",
-                        self._trim_status_bar_text(
-                            "链路: 自主执行面已认领该任务，等待进入首个模型或工具回合",
-                            inner_width,
-                        ),
-                    )
-                )
-                cause_style, cause_text = self._resolve_autonomous_waiting_start_cause()
-                rows.append((cause_style, self._trim_status_bar_text(cause_text, inner_width)))
-            elif focus_stage == "claimed_waiting_writeback":
-                rows.append(
-                    (
-                        "class:auto-panel-info",
-                        self._trim_status_bar_text(
-                            "链路: 自主执行面已完成执行，等待结果回写到任务链",
-                            inner_width,
-                        ),
-                    )
-                )
-            elif focus_stage == "approved_waiting_claim":
-                rows.append(
-                    (
-                        "class:auto-panel-warn",
-                        self._trim_status_bar_text(
-                            str(
-                                supervisor_descriptor.get("chain_reason")
-                                or "链路: 监督者已放行该任务，等待 API-A 自主执行面认领"
-                            ),
-                            inner_width,
-                        ),
-                    )
-                )
-            elif focus_stage == "running_elsewhere":
-                rows.append(
-                    (
-                        "class:auto-panel-info",
-                        self._trim_status_bar_text(
-                            str(
-                                supervisor_descriptor.get("chain_reason")
-                                or "链路: 该任务已被其他 API-A 自主执行面认领"
-                            ),
-                            inner_width,
-                        ),
-                    )
-                )
-        else:
-            rows.append(("class:auto-panel-dim", "任务: 当前没有被认领的自主任务"))
-            reason_style, reason_text = self._resolve_autonomous_no_task_reason(supervisor_state)
-            rows.append((reason_style, self._trim_status_bar_text(reason_text, inner_width)))
-
-        spinner_text = str(getattr(self, "_spinner_text", "") or "").strip()
-        if spinner_text:
-            activity_text = f"执行流: {spinner_text}"
-        elif focus_stage == "claimed_running" or getattr(self, "_agent_running", False):
-            activity_text = "执行流: 模型正在 API-A 自主执行面中工作"
-        elif focus_stage == "claimed_waiting_start":
-            activity_text = "执行流: API-A 自主执行面已认领任务，等待进入首个模型或工具回合"
-        elif focus_stage == "claimed_waiting_writeback":
-            activity_text = "执行流: API-A 自主执行面已结束本轮执行，等待写回任务状态"
-        elif focus_stage == "approved_waiting_claim":
-            activity_text = str(
-                supervisor_descriptor.get("activity_text")
-                or "执行流: 监督者已放行任务，等待 API-A 自主执行面认领"
-            )
-        elif focus_stage == "running_elsewhere":
-            activity_text = str(
-                supervisor_descriptor.get("activity_text")
-                or "执行流: 任务正在其他 API-A 自主执行面中运行"
-            )
-        else:
-            activity_text = str(
-                supervisor_descriptor.get("activity_text")
-                or "执行流: 等待监督者放行任务或等待下一轮拉单"
-            )
-        rows.append(("class:auto-panel-text", self._trim_status_bar_text(activity_text, inner_width)))
-
-        latest_supervisor = ""
-        timeline = list(supervisor_state.get("timeline") or [])
-        if timeline:
-            latest = dict(timeline[0] or {})
-            latest_supervisor = str(latest.get("summary") or latest.get("title") or "").strip()
-        if latest_supervisor:
-            rows.append(
-                (
-                    "class:auto-panel-info",
-                    self._trim_status_bar_text(f"监督: {latest_supervisor}", inner_width),
-                )
-            )
-
-        for event in list(getattr(self, "_autonomous_execution_events", []) or [])[-3:]:
-            tone = str(event.get("tone") or "info").strip().lower()
-            style = {
-                "success": "class:auto-panel-good",
-                "warn": "class:auto-panel-warn",
-                "error": "class:auto-panel-bad",
-            }.get(tone, "class:auto-panel-dim")
-            msg = f"{event.get('at', '--:--:--')} · {event.get('message', '')}"
-            rows.append((style, self._trim_status_bar_text(msg, inner_width)))
-
-        rows.append(("class:auto-panel-dim", "控制: /auto-q 退出"))
-        return rows
+        return _build_autonomous_execution_panel_rows_view(self)
 
     def _get_autonomous_execution_panel_fragments(self):
-        rows = self._build_autonomous_execution_panel_rows()
-        if not rows:
-            return []
-        width = self._get_tui_terminal_width()
-        inner_width = max(34, min(width - 4, 92))
-        lines = []
-        border_style = "class:auto-panel-border"
-
-        lines.append((border_style, "╭" + ("─" * (inner_width + 2)) + "╮\n"))
-        for style, text in rows:
-            padded = self._pad_status_bar_text(text, inner_width)
-            lines.append((border_style, "│ "))
-            lines.append((style, padded))
-            lines.append((border_style, " │\n"))
-        lines.append((border_style, "╰" + ("─" * (inner_width + 2)) + "╯"))
-        return lines
+        return _get_autonomous_execution_panel_fragments_view(self)
 
     def _spinner_widget_height(self, width: Optional[int] = None) -> int:
         """Return the visible height for the spinner/status text line above the status bar."""
@@ -2899,142 +2673,20 @@ class VoidcubeCLI:
         gateway_state: Dict[str, Any],
         inner_width: int,
     ) -> tuple[str, str]:
-        active = dict(gateway_state.get("active_cli_executor") or {})
-        current_session_id = str(getattr(self, "session_id", "") or "").strip()
-        active_session_id = str(active.get("session_id") or "").strip()
-        if not active_session_id:
-            text = "Executor: no live API-A autonomous executor registered yet"
-            return "class:auto-panel-warn", self._trim_status_bar_text(text, inner_width)
-
-        lease_status = str(active.get("lease_status") or "").strip().lower()
-        idle_seconds = int(active.get("idle_seconds") or 0)
-        scene = str(active.get("scene") or "idle").strip() or "idle"
-        owner_label = "this executor" if active_session_id == current_session_id else f"executor {active_session_id[-8:]}"
-        if lease_status == "stale" or bool(active.get("is_stale")):
-            text = f"Executor: {owner_label} stale ({idle_seconds}s idle, scene={scene})"
-            return "class:auto-panel-bad", self._trim_status_bar_text(text, inner_width)
-
-        text = f"Executor: {owner_label} healthy ({idle_seconds}s idle, scene={scene})"
-        if active_session_id != current_session_id:
-            return "class:auto-panel-warn", self._trim_status_bar_text(text, inner_width)
-        return "class:auto-panel-info", self._trim_status_bar_text(text, inner_width)
+        return _build_autonomous_executor_lease_row_view(
+            gateway_state,
+            inner_width,
+            session_id=str(getattr(self, "session_id", "") or ""),
+            trim_status_bar_text=self._trim_status_bar_text,
+        )
 
     def _resolve_autonomous_waiting_start_cause(self) -> tuple[str, str]:
-        events = list(getattr(self, "_autonomous_execution_events", []) or [])
-        if not events:
-            return (
-                "class:auto-panel-warn",
-                "近因: 已认领任务，但还没有收到后续执行事件",
-            )
-        latest = dict(events[-1] or {})
-        stage = str(latest.get("stage") or "").strip().lower()
-        if stage == "prompt_enqueue_failed":
-            return (
-                "class:auto-panel-bad",
-                "近因: 执行提示注入前台 CLI 失败，任务未真正起跑",
-            )
-        if stage == "prompt_enqueued":
-            return (
-                "class:auto-panel-info",
-                "近因: 执行提示已入队，正在等待首个模型响应",
-            )
-        if stage == "claim":
-            return (
-                "class:auto-panel-warn",
-                "近因: 任务刚被认领，执行提示尚未注入前台 CLI",
-            )
-        if stage == "tool_started":
-            return (
-                "class:auto-panel-info",
-                "近因: 已进入工具回合，等待工具返回结果",
-            )
-        if stage == "tool_completed":
-            return (
-                "class:auto-panel-info",
-                "近因: 工具已返回，等待模型继续后续回合",
-            )
-        if stage == "model_turn_finished":
-            return (
-                "class:auto-panel-info",
-                "近因: 模型回合已结束，等待任务写回阶段接管",
-            )
-        return (
-            "class:auto-panel-dim",
-            f"近因: {str(latest.get('message') or '暂无可用诊断').strip()}",
+        return _resolve_autonomous_waiting_start_cause_view(
+            list(getattr(self, "_autonomous_execution_events", []) or [])
         )
 
     def _resolve_autonomous_no_task_reason(self, supervisor_state: Dict[str, Any]) -> tuple[str, str]:
-        observation = dict(supervisor_state.get("autonomous_observation") or {})
-        api_a_execution = self._supervisor_api_a_execution_hint(supervisor_state)
-        hinted_reason = str(api_a_execution.get("chain_reason") or "").strip()
-        hinted_style = str(api_a_execution.get("reason_style") or "").strip().lower()
-        if hinted_reason and str(api_a_execution.get("stage") or "").strip() not in {
-            "",
-            "approved_waiting_claim",
-            "running_autonomous_task",
-        }:
-            style = {
-                "warn": "class:auto-panel-warn",
-                "info": "class:auto-panel-info",
-                "good": "class:auto-panel-good",
-                "dim": "class:auto-panel-dim",
-            }.get(hinted_style, "class:auto-panel-dim")
-            return (style, hinted_reason)
-        api_a = dict(observation.get("api_a") or {})
-        learning_tasks = list(api_a.get("pending") or [])
-        if not learning_tasks:
-            learning_tasks = self._autonomous_observation_group_items(
-                supervisor_state,
-                "api_a_ready",
-            )
-        if learning_tasks:
-            approved = [
-                task for task in learning_tasks
-                if str(task.get("status") or "").strip().lower() == "approved"
-            ]
-            deferred = [
-                task for task in learning_tasks
-                if str(task.get("status") or "").strip().lower() == "deferred"
-            ]
-            if deferred and not approved:
-                return (
-                    "class:auto-panel-warn",
-                    "链路: 当前学习任务大多被监督者延后，当前没有已批准的 API-A 可执行任务",
-                )
-            if deferred:
-                return (
-                    "class:auto-panel-dim",
-                    "链路: 当前没有已批准的 API-A 可执行任务；最近自主任务多处于 deferred/待观察",
-                )
-
-        current_cards = self._autonomous_observation_current_cards(supervisor_state)
-        if any(
-            str(card.get("observation_role") or "").strip()
-            in {"api_b_judgement", "mem_writeback", "api_b_reread"}
-            and str(card.get("status") or "").strip().lower() in {"active", "ready"}
-            for card in current_cards
-        ):
-            return (
-                "class:auto-panel-info",
-                "链路: 当前没有新的 API-A 可执行任务；API-B 正在判断、回收写回或推进下一轮再读取",
-            )
-
-        other_execution = self._autonomous_observation_current_card(
-            supervisor_state,
-            "api_b_judgement",
-            "mem_writeback",
-            "api_b_reread",
-        )
-        if other_execution:
-            return (
-                "class:auto-panel-info",
-                "链路: 当前没有新的 API-A 可执行任务；闭环当前焦点仍在 API-B 或 Mem 侧",
-            )
-
-        return (
-            "class:auto-panel-dim",
-            "链路: 当前没有已批准的 API-A 可执行任务",
-        )
+        return _resolve_autonomous_no_task_reason_view(supervisor_state)
 
     def _autonomous_executor_runtime(self) -> AutonomousExecutorRuntime:
         runtime = getattr(self, "_autonomous_executor_runtime_instance", None)
@@ -3081,43 +2733,10 @@ class VoidcubeCLI:
         self._autonomous_executor_runtime().clear_current_task_state()
 
     def _current_cli_agent_role(self) -> str:
-        active_turn_role = str(getattr(self, "_active_chat_agent_role", "") or "").strip()
-        if active_turn_role in {"supervisor_task", "user_chat"}:
-            return active_turn_role
-        if getattr(self, "_current_autonomous_task", None):
-            return "supervisor_task"
-        return "user_chat"
+        return _current_cli_agent_role_view(self)
 
     def _ensure_autonomous_executor_session(self) -> None:
-        session_id = str(getattr(self, "session_id", "") or "").strip()
-        if not session_id:
-            return
-        session_db = getattr(self, "_session_db", None)
-        if session_db is None:
-            return
-        try:
-            existing = session_db.get_session(session_id)
-            if existing is None:
-                session_db.create_session(
-                    session_id=session_id,
-                    source="cli_autonomous_executor",
-                    model=getattr(self, "model", None),
-                )
-                return
-            if existing.get("source") == "cli":
-                cursor = session_db._conn.execute(
-                    "SELECT COUNT(*) AS count FROM messages WHERE session_id = ?",
-                    (session_id,),
-                )
-                message_count = int((cursor.fetchone() or {"count": 0})["count"] or 0)
-                if message_count == 0:
-                    session_db._conn.execute(
-                        "UPDATE sessions SET source = ? WHERE id = ?",
-                        ("cli_autonomous_executor", session_id),
-                    )
-                    session_db._conn.commit()
-        except Exception as exc:
-            logger.debug("Could not persist autonomous executor session: %s", exc)
+        _ensure_autonomous_executor_session_view(self, logger_debug=logger.debug)
 
     def _report_current_autonomous_task_timeout_if_needed(
         self,
@@ -3205,88 +2824,24 @@ class VoidcubeCLI:
 
     def _trigger_autonomous_cycle(self, *, focus: str = "") -> Dict[str, Any] | None:
         """Run one synchronous supervisor cycle for immediate autonomous-chain responsiveness."""
-        import json as _json
-        import urllib.request as _req
-
-        try:
-            from VoidCube_cli.config import load_config
-            cfg = load_config()
-            sv_cfg = cfg.get("supervisor", {})
-            host = sv_cfg.get("host", "127.0.0.1")
-            port = sv_cfg.get("port", 6002)
-            supervisor_url = f"http://{host}:{port}"
-        except Exception:
-            supervisor_url = "http://127.0.0.1:6002"
-
-        payload = _json.dumps({"focus": focus}).encode()
-        request = _req.Request(
-            f"{supervisor_url}{AUTONOMOUS_CHAIN_CYCLE_ROUTE}",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        return _json.loads(_req.urlopen(request, timeout=30).read())
+        return _trigger_autonomous_cycle_view(focus=focus)
 
     def _current_gateway_presence_snapshot(self) -> tuple[str, str | None, str | None]:
         """Return the CLI scene the gateway should treat as the active executor."""
-        active_turn_role = str(getattr(self, "_active_chat_agent_role", "") or "").strip()
-        current = getattr(self, "_current_autonomous_task", None) or {}
-        if active_turn_role != "user_chat" and current:
-            task_id = str(current.get("task_id") or "").strip() or None
-            execution_kind = str(
-                current.get("execution_kind") or current.get("task_type") or ""
-            ).strip().lower() or None
-            if execution_kind == "body_improvement":
-                return "code_editing", task_id, execution_kind
-            if task_id:
-                return "learning", task_id, execution_kind
-            return "executing", None, None
-        if (
-            getattr(self, "_agent_running", False)
-            or getattr(self, "_command_running", False)
-            or getattr(self, "_stream_started", False)
-            or self._get_subagent_observability_snapshot().get("active")
-        ):
-            return "executing", None, None
-        return "idle", None, None
+        return _current_gateway_presence_snapshot_view(self)
 
     def _refresh_gateway_cli_presence(self, *, force: bool = False) -> None:
         """Keep the gateway's active CLI executor view aligned with the live session."""
-        session_id = str(getattr(self, "session_id", "") or "").strip()
-        if not session_id or not _is_gateway_running():
-            return
-
         import time as _time
 
-        now = _time.monotonic()
-        refresh_interval = float(getattr(self, "_gateway_presence_refresh_interval_seconds", 30.0) or 30.0)
-        last_refresh = float(getattr(self, "_last_gateway_presence_refresh_at", 0.0) or 0.0)
-        if not force and now - last_refresh < refresh_interval:
-            return
-
-        model = str(getattr(self, "model", "") or "")
-        provider = str(getattr(self, "provider", "") or "")
-        registered = _register_with_gateway(session_id, model, provider)
-
-        scene, task_id, execution_kind = self._current_gateway_presence_snapshot()
-        subagent_summary = self._get_subagent_observability_snapshot()
-        # Tag the gateway agent lane. A current autonomous task keeps ownership
-        # during fast gate cleanup, before the model turn has fully unwound.
-        agent_role = self._current_cli_agent_role()
-        scene_pushed = _push_cli_agent_scene(
-            scene,
-            session_id=session_id,
-            task_id=task_id,
-            execution_kind=execution_kind,
-            subagent_summary=subagent_summary,
-            agent_role=agent_role,
+        _refresh_gateway_cli_presence_view(
+            self,
+            force=force,
+            is_gateway_running=_is_gateway_running,
+            register_with_gateway=_register_with_gateway,
+            push_cli_agent_scene=_push_cli_agent_scene,
+            monotonic_time=_time.monotonic,
         )
-        if registered and scene_pushed:
-            self._last_gateway_presence_refresh_at = now
-            return
-
-        # Retry quickly on best-effort failures instead of suppressing presence for a full interval.
-        self._last_gateway_presence_refresh_at = max(0.0, now - refresh_interval + 2.0)
 
     def _execute_pending_input(self, user_input: Any, *, app=None) -> bool:
         """Execute one queued prompt/command using the same path as the interactive loop."""
@@ -5450,82 +5005,7 @@ class VoidcubeCLI:
         }
 
     def _format_supervisor_status_snapshot(self, state: Dict[str, Any]) -> list[str]:
-        lines: list[str] = []
-        observation = dict(state.get("autonomous_observation") or {})
-        metrics = dict(observation.get("metrics") or {})
-        by_path = dict(metrics.get("by_path") or {})
-        governance = dict(metrics.get("governance") or {})
-        board = dict(observation.get("board") or {})
-        chain = dict(observation.get("chain") or {})
-        presentation = dict(observation.get("presentation") or {})
-        focus = dict(presentation.get("focus") or board.get("primary_focus") or {})
-        current_cards = [
-            dict(item)
-            for item in list(board.get("current_cards") or [])
-            if isinstance(item, dict)
-        ]
-        chain_segments = [
-            dict(item)
-            for item in list(chain.get("segments") or [])
-            if isinstance(item, dict)
-        ]
-        timeline = list(state.get("timeline") or [])
-
-        lines.append(f"Scene: {state.get('scene', 'unknown')} — {state.get('title', '')}")
-        lines.append(
-            "Tasks: "
-            f"learning={by_path.get('learning', 0)}, "
-            f"maintenance={by_path.get('maintenance', 0)}, "
-            f"evolution={by_path.get('evolution', 0)}, "
-            f"running={metrics.get('running_count', 0)}"
-        )
-        lines.append(
-            "Governance: "
-            f"direct={governance.get('direct_lm_actions', 0)}, "
-            f"shadow={governance.get('shadow_recommendations', 0)}, "
-            f"priority_updates={governance.get('priority_updates', 0)}"
-        )
-
-        if current_cards:
-            primary = current_cards[0]
-            lines.append(
-                "Autonomous Focus: "
-                f"{primary.get('title', 'unknown')} "
-                f"({primary.get('display_status') or primary.get('status') or 'unknown'})"
-            )
-        elif focus:
-            lines.append(
-                "Autonomous Focus: "
-                f"{focus.get('title', 'unknown')} "
-                f"({focus.get('status') or 'unknown'})"
-            )
-
-        if chain_segments:
-            segment_parts: list[str] = []
-            for segment in chain_segments[:4]:
-                label = str(segment.get("label") or segment.get("owner") or "?").strip() or "?"
-                count = int(segment.get("count") or len(list(segment.get("items") or [])) or 0)
-                segment_parts.append(f"{label}={count}")
-            lines.append("Chain Segments: " + ", ".join(segment_parts))
-
-        execution_card = self._autonomous_observation_current_card(
-            state,
-            "api_a_execution",
-            "mem_writeback",
-        )
-        if execution_card:
-            lines.append(
-                f"Active Execution: {execution_card.get('title', 'unknown')} "
-                f"({execution_card.get('display_status') or execution_card.get('status') or 'task'})"
-            )
-
-        if timeline:
-            latest = timeline[0]
-            lines.append(
-                f"Latest Review/Event: {latest.get('event_type', latest.get('source', 'event'))} — "
-                f"{str(latest.get('summary') or latest.get('title') or '')[:120]}"
-            )
-        return lines
+        return _format_supervisor_status_snapshot_view(state)
 
     def _format_gateway_agent_activity_snapshot(self, state: Dict[str, Any]) -> list[str]:
         lines: list[str] = []
@@ -7798,343 +7278,38 @@ class VoidcubeCLI:
         return True
 
     def _handle_auto_command(self, cmd: str):
-        """Handle /auto [focus] — enable the autonomous chain.
-
-        Activates the endogenous drive and autonomous-chain review loops
-        that run continuously at their configured intervals. The foreground
-        CLI remains available for normal user interaction while the /auto gate is on.
-        Use /auto-q to stop the autonomous chain.
-
-        An optional focus area can be provided:
-        /auto security, /auto performance, etc.
-
-        Requires the VoidCube daemon stack (gateway + supervisor) to be running.
-        """
-        parts = cmd.strip().split(maxsplit=1)
-        focus = parts[1].strip() if len(parts) > 1 else ""
-
-        _cprint(f"  🧠 Activating autonomous chain...")
-        if focus:
-            _cprint(f"     Focus: {focus}")
-
-        import threading, json as _json
-
-        def _ensure_supervisor_runtime() -> bool:
-            try:
-                from VoidCube_cli.ops.serve import ensure_running
-            except ImportError:
-                return False
-
-            try:
-                result = ensure_running(silent=False)
-            except Exception:
-                return False
-
-            supervisor_state = dict(result.get("supervisor") or {})
-            return bool(
-                supervisor_state.get("healthy")
-                or supervisor_state.get("running")
-            )
-
-        def _call_activate_autonomous_chain_gate():
-            try:
-                from VoidCube_cli.config import load_config
-                cfg = load_config()
-                sv_cfg = cfg.get("supervisor", {})
-                host = sv_cfg.get("host", "127.0.0.1")
-                port = sv_cfg.get("port", 6002)
-                supervisor_url = f"http://{host}:{port}"
-            except Exception:
-                supervisor_url = "http://127.0.0.1:6002"
-
-            try:
-                import urllib.request as _req
-                payload = _json.dumps({"focus": focus}).encode()
-
-                def _activate_once():
-                    request = _req.Request(
-                        f"{supervisor_url}/autonomous-chain-gate/activate",
-                        data=payload,
-                        headers={"Content-Type": "application/json"},
-                        method="POST",
-                    )
-                    return _json.loads(_req.urlopen(request, timeout=30).read())
-
-                try:
-                    resp = _activate_once()
-                except Exception as first_exc:
-                    _cprint(f"     Supervisor unavailable, attempting daemon recovery...")
-                    if _ensure_supervisor_runtime():
-                        resp = _activate_once()
-                    else:
-                        raise first_exc
-            except Exception as exc:
-                self._autonomous_gate_active = False
-                _cprint(f"  ⚠️  Supervisor unreachable: {exc}")
-                _cprint(f"     Ensure daemons are running (auto-started in interactive mode).")
-                _cprint(f"     Or run: voidcube serve start")
-                return
-
-            try:
-                active = resp.get("autonomous_chain_gate_active", False)
-                if active:
-                    self._autonomous_gate_active = True
-                    self._ensure_autonomous_executor_session()
-                    self._append_autonomous_execution_event(
-                        "自主链路已激活，API-A 自主执行面等待任务",
-                        tone="success",
-                        stage="autonomous_gate",
-                    )
-                    self._refresh_gateway_cli_presence(force=True)
-                    cycle_result = None
-                    try:
-                        cycle_result = self._trigger_autonomous_cycle(focus=focus)
-                    except Exception as exc:
-                        _cprint(f"     ⚠️  Initial autonomous cycle failed: {exc}")
-                    try:
-                        self._poll_autonomous_workflow()
-                    except Exception:
-                        pass
-                    _cprint(f"  ✅ Autonomous chain [bold green]ACTIVE[/]")
-                    _cprint(f"     Drive loop:  {'running' if resp.get('drive_loop_running') else 'stopped'}")
-                    _cprint(f"     Review loop: {'running' if resp.get('review_loop_running') else 'stopped'}")
-                    if not resp.get("endogenous_drive_enabled", True):
-                        _cprint(f"     ⚠️  endogenous_drive_enabled=False in config — drive loop disabled")
-                    if isinstance(cycle_result, dict):
-                        summary = cycle_result.get("summary", {}) if isinstance(cycle_result, dict) else {}
-                        planned = summary.get("planned", 0)
-                        dispatched = summary.get("dispatched", 0)
-                        _cprint(f"     Initial cycle: planned={planned}, dispatched={dispatched}")
-                    snapshot = self._fetch_supervisor_status_snapshot()
-                    if snapshot:
-                        for line in self._format_supervisor_status_snapshot(snapshot)[:4]:
-                            _cprint(f"     {line}")
-                    _cprint(f"     Foreground CLI interaction remains available.")
-                    _cprint(f"     Use /auto-q to stop the autonomous chain.")
-                    _cprint(f"     Monitor: {supervisor_url}/ui")
-                else:
-                    _cprint(f"  ⚠️  Autonomous chain activation failed.")
-                    if not resp.get("endogenous_drive_enabled", True):
-                        _cprint(f"     endogenous_drive_enabled is False in config.")
-            except Exception:
-                pass  # best-effort reporting; the API call succeeded
-
-        threading.Thread(target=_call_activate_autonomous_chain_gate, daemon=True, name="autonomous-chain-gate-activate").start()
+        _handle_auto_command_view(
+            self,
+            cmd,
+            cprint=_cprint,
+            thread_factory=threading.Thread,
+        )
 
     def _handle_auto_q_command(self):
         """Handle /auto-q — stop the autonomous chain."""
-        _cprint(f"  🔄 Stopping autonomous chain...")
-
-        import threading, json as _json
-
-        def _call_deactivate_autonomous_chain_gate():
-            try:
-                from VoidCube_cli.config import load_config
-                cfg = load_config()
-                sv_cfg = cfg.get("supervisor", {})
-                host = sv_cfg.get("host", "127.0.0.1")
-                port = sv_cfg.get("port", 6002)
-                supervisor_url = f"http://{host}:{port}"
-            except Exception:
-                supervisor_url = "http://127.0.0.1:6002"
-
-            try:
-                import urllib.request as _req
-                r = _req.Request(
-                    f"{supervisor_url}/autonomous-chain-gate/deactivate",
-                    data=b"{}",
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                resp = _json.loads(_req.urlopen(r, timeout=30).read())
-            except Exception as exc:
-                _cprint(f"  ⚠️  Supervisor unreachable: {exc}")
-                return
-
-            active = resp.get("autonomous_chain_gate_active", True)
-            if not active:
-                self._interrupt_current_autonomous_task(
-                    reason="Autonomous chain exited by /auto-q; current task interrupted by user.",
-                    source="auto_q",
-                    timeout=5,
-                )
-                self._autonomous_gate_active = False
-                _push_cli_agent_scene(
-                    "idle",
-                    session_id=getattr(self, "session_id", None),
-                    agent_role="supervisor_task",
-                )
-                self._append_autonomous_execution_event("/auto 已退出", tone="warn")
-                _cprint(f"  💤 Autonomous chain [bold]STOPPED[/].")
-                _cprint(f"     The baseline health-check loop remains running.")
-                _cprint(f"     Use /auto to restart the autonomous chain.")
-            else:
-                _cprint(f"  ⚠️  Autonomous chain could not be stopped (still active).")
-
-        threading.Thread(target=_call_deactivate_autonomous_chain_gate, daemon=True, name="autonomous-chain-gate-deactivate").start()
+        _handle_auto_q_command_view(
+            self,
+            cprint=_cprint,
+            push_cli_agent_scene=_push_cli_agent_scene,
+            thread_factory=threading.Thread,
+        )
 
     def _exit_autonomous_gate_fast(self) -> bool:
-        """Fast-path synchronous exit from the autonomous chain; bypasses the message queue.
-
-        Called directly from the prompt_toolkit input handler so /auto-q takes
-        effect immediately even when the agent is blocked on an LLM call.
-        Returns True if the exit was successful.
-        """
-        if not self._autonomous_gate_active:
-            return True
-
-        _cprint(f"  🔄 Exiting autonomous chain (fast path)...")
-
-        # 1. Interrupt the running agent so the process loop can resume
-        if self._agent_running:
-            try:
-                self._interrupt_queue.put("__AUTONOMOUS_Q_EXIT__")
-            except Exception:
-                pass
-
-        # 2. Synchronously stop the autonomous chain
-        import json as _json
-        try:
-            from VoidCube_cli.config import load_config
-            cfg = load_config()
-            sv_cfg = cfg.get("supervisor", {})
-            host = sv_cfg.get("host", "127.0.0.1")
-            port = sv_cfg.get("port", 6002)
-            supervisor_url = f"http://{host}:{port}"
-        except Exception:
-            supervisor_url = "http://127.0.0.1:6002"
-
-        try:
-            import urllib.request as _req
-            r = _req.Request(
-                f"{supervisor_url}/autonomous-chain-gate/deactivate",
-                data=b"{}",
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            resp = _json.loads(_req.urlopen(r, timeout=10).read())
-            if not resp.get("autonomous_chain_gate_active", True):
-                self._interrupt_current_autonomous_task(
-                    reason="Autonomous chain exited via fast-path /auto-q; current task interrupted by user.",
-                    source="auto_q_fast_path",
-                    timeout=5,
-                )
-                self._autonomous_gate_active = False
-                _push_cli_agent_scene(
-                    "idle",
-                    session_id=getattr(self, "session_id", None),
-                    agent_role="supervisor_task",
-                )
-                self._append_autonomous_execution_event("/auto 已退出", tone="warn")
-                _cprint(f"  💤 Autonomous chain [bold]STOPPED[/].")
-                _cprint(f"     The baseline health-check loop remains running.")
-                _cprint(f"     Use /auto to restart the autonomous chain.")
-                self._record_supervisor_ui_activity_safe("autonomous_gate_exit", scene="idle",
-                    summary="Autonomous chain exited via fast-path /auto-q")
-                return True
-            else:
-                _cprint(f"  ⚠️  Autonomous chain could not be stopped (still active).")
-                return False
-        except Exception as exc:
-            # Supervisor unreachable — still exit local auto mode to unblock the user
-            self._interrupt_current_autonomous_task(
-                reason="Autonomous chain exited locally while supervisor was unreachable; current task interrupted by user.",
-                source="auto_q_local_exit",
-                timeout=5,
-            )
-            self._autonomous_gate_active = False
-            _push_cli_agent_scene(
-                "idle",
-                session_id=getattr(self, "session_id", None),
-                agent_role="supervisor_task",
-            )
-            self._append_autonomous_execution_event("/auto 本地已退出，但 supervisor 可能仍保持激活", tone="warn")
-            _cprint(f"  ⚠️  Supervisor unreachable: {exc}")
-            _cprint(f"     Local autonomous chain state deactivated (supervisor state may be stale).")
-            _cprint(f"     Run /auto to re-enter when supervisor is available.")
-            return True
+        """Fast-path synchronous exit from the autonomous chain; bypasses the message queue."""
+        return _exit_autonomous_gate_fast_view(
+            self,
+            cprint=_cprint,
+            push_cli_agent_scene=_push_cli_agent_scene,
+            record_supervisor_ui_activity_safe=self._record_supervisor_ui_activity_safe,
+        )
 
     def _force_quit_autonomous_gate(self) -> bool:
-        """Emergency force-quit: triple-Ctrl+C in the autonomous chain triggers safe exit.
-
-        Attempts every available path to exit cleanly:
-        1. Interrupt the running agent (non-blocking)
-        2. Synchronously stop the autonomous chain (with short timeout)
-        3. Mark any in-progress autonomous task as interrupted via Gateway
-        4. Unregister from Gateway session
-        Returns True if cleanup was attempted (best-effort).
-        """
-        _cprint(f"\n  🚨 FORCE QUIT AUTONOMOUS CHAIN — attempting emergency cleanup...")
-
-        # 1. Interrupt agent
-        if self._agent_running:
-            try:
-                self._interrupt_queue.put("__FORCE_QUIT__")
-            except Exception:
-                pass
-
-        # 2. Synchronous autonomous-chain deactivation (short timeout)
-        import json as _json
-        try:
-            from VoidCube_cli.config import load_config
-            cfg = load_config()
-            sv_cfg = cfg.get("supervisor", {})
-            host = sv_cfg.get("host", "127.0.0.1")
-            port = sv_cfg.get("port", 6002)
-            supervisor_url = f"http://{host}:{port}"
-        except Exception:
-            supervisor_url = "http://127.0.0.1:6002"
-
-        try:
-            import urllib.request as _req
-            r = _req.Request(
-                f"{supervisor_url}/autonomous-chain-gate/deactivate",
-                data=b"{}",
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            _json.loads(_req.urlopen(r, timeout=5).read())
-            _cprint(f"  ✅ Autonomous chain stopped")
-        except Exception as exc:
-            _cprint(f"  ⚠️  Autonomous chain deactivation failed: {exc}")
-
-        # 3. Report any in-progress autonomous task as interrupted via Gateway
-        current = getattr(self, '_current_autonomous_task', None)
-        if current is not None:
-            task_id = str(current.get("task_id") or "")
-            execution_kind = self._autonomous_task_execution_kind(current)
-            task_label = self._autonomous_task_label(execution_kind)
-            if self._interrupt_current_autonomous_task(
-                reason=f"Autonomous chain force-quit — {task_label} interrupted by user.",
-                source="force_quit",
-                timeout=5,
-            ):
-                _cprint(f"  ✅ Autonomous {task_label} {task_id[:8]}... marked interrupted")
-            else:
-                _cprint(f"  ⚠️  Could not report task completion to Gateway")
-
-        # 4. Unregister from Gateway
-        try:
-            session_id = getattr(self, 'session_id', '')
-            if session_id:
-                gateway_base = "http://127.0.0.1:6000"
-                r = _req.Request(
-                    f"{gateway_base}/v1/sessions/{session_id}",
-                    method="DELETE",
-                )
-                _req.urlopen(r, timeout=5)
-                _cprint(f"  ✅ Gateway session unregistered")
-        except Exception:
-            pass
-
-        self._autonomous_gate_active = False
-        _push_cli_agent_scene(
-            "idle",
-            session_id=getattr(self, "session_id", None),
-            agent_role="supervisor_task",
+        """Emergency force-quit: triple-Ctrl+C in the autonomous chain triggers safe exit."""
+        return _force_quit_autonomous_gate_view(
+            self,
+            cprint=_cprint,
+            push_cli_agent_scene=_push_cli_agent_scene,
         )
-        _cprint(f"  🛡️  Force quit complete — autonomous chain stopped.")
-        return True
 
     def _record_supervisor_ui_activity_safe(self, event_type: str, *, scene: str = "idle", summary: str = "") -> None:
         """Non-fatal UI activity recording — best-effort, never throws."""

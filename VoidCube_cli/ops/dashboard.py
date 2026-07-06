@@ -90,7 +90,6 @@ def fetch_supervisor_state() -> Dict[str, Any]:
 
 def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
     observation = dict(state.get("autonomous_observation") or {})
-    presentation = dict(observation.get("presentation") or {})
     counts = dict(observation.get("counts") or {})
     board = dict(observation.get("board") or {})
     chain = dict(observation.get("chain") or {})
@@ -157,7 +156,7 @@ def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
             for item in current_cards[:4]
         ],
         "segments": chain_segments[:4],
-        "headline": str(presentation.get("headline") or board.get("headline") or "自主链路闭环观测"),
+        "headline": str(board.get("headline") or "自主链路闭环观测"),
         "segments_headline": str(chain.get("headline") or "自主链路分段观察"),
     }
 

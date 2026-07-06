@@ -243,17 +243,6 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
                         },
                     ],
                 },
-                "presentation": {
-                    "headline": "自主链路闭环观测",
-                    "api_a_execution": {
-                        "stage": "approved_waiting_claim",
-                        "focus_task": {
-                            "task_id": "auto-ready-1",
-                            "title": "Autonomous ready task",
-                            "status": "approved",
-                        },
-                    },
-                },
                 "chain": {
                     "headline": "自主链路分段观察",
                     "segments": [

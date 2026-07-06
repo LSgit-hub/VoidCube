@@ -47,11 +47,12 @@ def _find_autonomous_observation_task(state: dict, *, title: str = "", task_id: 
         for item in list(items or []):
             _append(item)
 
-    for key in ("api_b", "api_a"):
-        section = dict(observation.get(key) or {})
-        _append(section.get("current"))
-        _append(section.get("active"))
-        _append_many(section.get("pending"))
+    board = dict(observation.get("board") or {})
+    _append_many(board.get("current_cards"))
+    loop = dict(observation.get("loop") or {})
+    for stage in list(loop.get("stages") or []):
+        if isinstance(stage, dict):
+            _append(stage.get("focus_task"))
     chain = dict(observation.get("chain") or {})
     for section in list(chain.get("segments") or []):
         if isinstance(section, dict):
@@ -71,6 +72,22 @@ def _observation_section(observation: dict, key: str) -> dict:
         if isinstance(section, dict) and str(section.get("key") or "").strip() == key:
             return section
     raise AssertionError(f"section not found: {key!r}")
+
+
+def _observation_board_card(observation: dict, role: str) -> dict:
+    board = dict(observation.get("board") or {})
+    for card in list(board.get("current_cards") or []):
+        if isinstance(card, dict) and str(card.get("observation_role") or "").strip() == role:
+            return card
+    raise AssertionError(f"board card not found: {role!r}")
+
+
+def _observation_loop_stage(observation: dict, key: str) -> dict:
+    loop = dict(observation.get("loop") or {})
+    for stage in list(loop.get("stages") or []):
+        if isinstance(stage, dict) and str(stage.get("key") or "").strip() == key:
+            return stage
+    raise AssertionError(f"loop stage not found: {key!r}")
 
 
 async def _trigger_memory_compression(supervisor: Supervisor, request: dict | None = None):
@@ -937,7 +954,7 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
 
     assert "queue_layout" not in state
     assert "panels" not in state
-    assert observation["read_model_version"] == 4
+    assert observation["read_model_version"] == 6
     assert "observed_tasks" not in observation
     assert "candidates" not in observation
     assert observation["mode"]["scope"] == "api_b_autonomous_chain_only"
@@ -957,19 +974,12 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
     assert group_keys == ["api_b_backlog", "api_a_ready", "api_b_candidates", "mem_recent"]
     assert "queue" not in observation
     assert observation["chain"]["headline"] == "自主链路分段观察"
-    assert observation["presentation"]["headline"] == "自主链路闭环观测"
-    assert observation["presentation"]["focus"]["title"] == "Supervisor first task"
-    assert observation["presentation"]["hero_pills"][0]["text"].startswith("当前焦点 · ")
-    assert observation["presentation"]["metric_cards"][0]["key"] == "api_b_backlog"
-    assert observation["presentation"]["observation_notes"][0]["key"] == "api_b_scope"
-    assert observation["presentation"]["observation_notes"][1]["key"] == "user_chain_signal"
-    assert observation["presentation"]["observation_notes"][2]["key"] == "api_a_feedback"
-    assert "queue_headline" not in observation["presentation"]
-    assert "queue_preview" not in observation["presentation"]
-    assert "api_a_note" not in observation["presentation"]
-    assert observation["presentation"]["api_a_execution"]["stage"] == "approved_waiting_claim"
-    assert observation["presentation"]["api_a_execution"]["cli_focus_stage"] == "approved_waiting_claim"
-    assert observation["presentation"]["api_a_execution"]["focus_task"]["title"] == "Agent first creative task"
+    assert "presentation" not in observation
+    assert observation["board"]["primary_focus"]["title"] == "Supervisor first task"
+    assert observation["board"]["primary_focus"]["status"] == "当前在途"
+    assert observation["board"]["primary_focus"]["observation_role"] == "api_b_judgement"
+    assert _observation_loop_stage(observation, "api_a_execution")["status"] == "active"
+    assert _observation_loop_stage(observation, "api_a_execution")["focus_task"]["title"] == "Agent first creative task"
     assert [group["key"] for group in observation["chain"]["segments"]] == group_keys
     assert observation["chain"]["segments"][0]["owner"] == "API-B"
     assert observation["chain"]["segments"][0]["stage_label"] == "判断与治理"
@@ -1001,12 +1011,17 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
         list,
     )
     assert observation["chain"]["segments"][0]["latest_trace_detail"]["trace_id"] == supervisor_task_1["tasks"][0]["trace_id"]
-    assert observation["api_b"]["active"]["title"] == "Supervisor first task"
-    assert observation["api_b"]["active"]["display_status"] == "待执行"
-    assert observation["api_b"]["current"]["display_status"] == "当前在途"
-    assert observation["api_a"]["active"]["title"] == "Agent first creative task"
-    assert observation["api_a"]["active"]["display_status"] == "待执行"
-    assert observation["api_a"]["current"]["display_status"] == "当前在途"
+    assert "api_b" not in observation
+    assert "api_a" not in observation
+    assert "mem" not in observation
+    assert "reread" not in observation
+    assert _observation_board_card(observation, "api_b_judgement")["display_status"] == "当前在途"
+    assert _observation_board_card(observation, "api_a_execution")["display_status"] == "当前在途"
+    assert _observation_board_card(observation, "mem_writeback")["display_status"] == "等待中"
+    assert _observation_loop_stage(observation, "api_b_judgement")["focus_task"]["title"] == "Supervisor first task"
+    assert _observation_loop_stage(observation, "api_b_judgement")["focus_task"]["display_status"] == "待执行"
+    assert _observation_loop_stage(observation, "api_a_execution")["focus_task"]["title"] == "Agent first creative task"
+    assert _observation_loop_stage(observation, "api_a_execution")["focus_task"]["display_status"] == "待执行"
     assert [item["title"] for item in api_b_backlog["items"]] == ["Supervisor second task"]
     assert [item["display_status"] for item in api_b_backlog["items"]] == ["待审核"]
     assert [item["lane"] for item in api_b_backlog["items"]] == ["supervisor"]
@@ -1128,14 +1143,16 @@ async def test_supervisor_room_state_exposes_recent_mem_writebacks_in_autonomous
 
     state = await supervisor.get_supervisor_ui_state()
     writeback = state["autonomous_observation"]["loop"]["recent_writebacks"][0]
-    mem_current = state["autonomous_observation"]["mem"]["current"]
+    mem_current = _observation_board_card(state["autonomous_observation"], "mem_writeback")
     mem_recent = state["autonomous_observation"]["chain"]["segments"][3]["items"][0]
+    mem_stage = _observation_loop_stage(state["autonomous_observation"], "mem_writeback")
 
     assert writeback["title"] == "Completed autonomous learning writeback"
     assert writeback["lane"] == "agent"
     assert writeback["status"] == "completed"
     assert mem_current["title"] == "Completed autonomous learning writeback"
     assert mem_current["display_status"] == "已观察到"
+    assert mem_stage["focus_task"]["title"] == "Completed autonomous learning writeback"
     assert mem_recent["lane"] == "mem"
 
 
@@ -1178,8 +1195,9 @@ async def test_supervisor_room_state_keeps_supervisor_idle_when_only_agent_task_
     state = await supervisor.get_supervisor_ui_state()
 
     assert state["scene"] == "idle"
-    assert state["autonomous_observation"]["api_b"]["active"] is None
-    assert state["autonomous_observation"]["api_a"]["active"]["title"] == "Agent waiting creative task"
+    assert "api_b" not in state["autonomous_observation"]
+    assert _observation_loop_stage(state["autonomous_observation"], "api_b_judgement")["focus_task"] is None
+    assert _observation_loop_stage(state["autonomous_observation"], "api_a_execution")["focus_task"]["title"] == "Agent waiting creative task"
 
 
 @pytest.mark.asyncio
