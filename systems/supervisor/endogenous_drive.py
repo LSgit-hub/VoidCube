@@ -4747,7 +4747,7 @@ class EndogenousDriveEngine:
         if not has_substantive_profile:
             return {
                 "available": False,
-                "summary": "No unified meta-cognition profile is available yet.",
+                "summary": "当前还没有可用的统一元认知画像。",
             }
 
         return {
@@ -6247,7 +6247,7 @@ class EndogenousDriveEngine:
         if not entry_count:
             return {
                 "available": False,
-                "summary": "No recent LM cognitive-assessment memory is available yet.",
+                "summary": "当前还没有可用的近期 LM 认知评估记忆。",
             }
 
         def _dominant(counts: Dict[str, int]) -> str:
@@ -6281,9 +6281,9 @@ class EndogenousDriveEngine:
             "grounding_gap_count": len(gap_counts),
             "entry_count": entry_count,
             "summary": (
-                "Recent LM cognitive assessments repeatedly judge "
-                f"{current_judgement or 'the current state as unsettled'}; "
-                f"dominant constraint={dominant_constraint or 'unknown'}."
+                "近期 LM 认知评估反复指向 "
+                f"{current_judgement or '当前状态仍未稳定'}；"
+                f"主约束={dominant_constraint or '未知'}。"
             ),
         }
 
@@ -6600,7 +6600,7 @@ class EndogenousDriveEngine:
         if not entry_count:
             return {
                 "available": False,
-                "summary": "No post-task effect memory is available yet.",
+                "summary": "当前还没有可用的任务后效记忆。",
             }
 
         def _avg(values: List[float]) -> float:
@@ -6740,7 +6740,7 @@ class EndogenousDriveEngine:
                 {
                     "target_domain": "self_model",
                     "hypothesis": (
-                        "expand self-understanding before escalating to irreversible body or strategy changes"
+                        "先扩展自我理解，再升级到不可逆的身体或策略变化"
                     ),
                     "priority": self._clamp01(
                         0.66
@@ -7141,17 +7141,17 @@ class EndogenousDriveEngine:
         )
 
         summary = (
-            f"Current self model sees dominant constraint={dominant_constraint}, "
-            f"preferred focus={preferred_focus}, body status={body_profile_status}, "
-            f"learning state={learning_state}, governance health={governance_load_state}."
+            f"当前自我模型看到：主约束={dominant_constraint}，"
+            f"偏好焦点={preferred_focus}，身体状态={body_profile_status}，"
+            f"学习状态={learning_state}，治理健康={governance_load_state}。"
         )
         if self_understanding_gaps:
-            summary += " Active self-understanding gaps: " + ", ".join(self_understanding_gaps[:4]) + "."
+            summary += " 当前自我理解缺口包括：" + "，".join(self_understanding_gaps[:4]) + "。"
 
         return {
             "identity_view": {
                 "role": "endogenous_supervisory_core",
-                "responsibility": "self-understanding before self-iteration",
+                "responsibility": "先自我理解，再推进自我迭代",
                 "execution_scope": "governance_only",
             },
             "current_state": {

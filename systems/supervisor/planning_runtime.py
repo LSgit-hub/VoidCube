@@ -2128,7 +2128,7 @@ class PlanningRuntimeMixin:
         if not entry_count:
             return {
                 "available": False,
-                "summary": "No recent LM cognitive-assessment memory is available yet.",
+                "summary": "当前还没有可用的近期 LM 认知评估记忆。",
             }
 
         def _dominant(counts: Dict[str, int]) -> str:
@@ -4561,8 +4561,8 @@ class PlanningRuntimeMixin:
             target = need_type
 
         current_judgement = (
-            f"{focus or 'endogenous'} focus selected"
-            + (f" under {dominant_constraint}" if dominant_constraint else "")
+            f"当前选择 {focus or 'endogenous'} 焦点"
+            + (f"，主约束为 {dominant_constraint}" if dominant_constraint else "")
         ).strip()
         if not focus and not dominant_constraint and not intent_type and not need_type:
             return {}
@@ -4570,15 +4570,15 @@ class PlanningRuntimeMixin:
         why_not_improvement: list[str] = []
         if dominant_constraint in {"user_service_priority", "historical_underdelivery"}:
             why_not_improvement.append(
-                f"Delay direct body improvement while {dominant_constraint} remains dominant."
+                f"当 {dominant_constraint} 仍是主约束时，应暂缓直接进行身体改进。"
             )
         if focus in {"truthfulness", "observation", "governance_hygiene", "memory_continuity"}:
             why_not_improvement.append(
-                f"Prioritize {focus} governance before direct body improvement."
+                f"在直接进行身体改进前，应优先处理 {focus} 治理。"
             )
         if status in {"failed", "deferred", "awaiting_review"}:
             why_not_improvement.append(
-                f"Recent outcome status {status} requires review before broader self-improvement."
+                f"最近结果状态为 {status}，在推进更大范围的自我改进前需要先复核。"
             )
 
         return {
@@ -4597,7 +4597,7 @@ class PlanningRuntimeMixin:
             "self_iteration_target": target,
             "self_iteration_hypothesis": (
                 str(primary_intent.get("rationale") or "").strip()
-                or f"Continue {target or focus or 'endogenous'} work until evidence changes."
+                or f"在证据发生变化前，继续围绕 {target or focus or 'endogenous'} 推进。"
             ),
             "stay_or_switch": "stay" if focus else "",
             "switch_reason": "",

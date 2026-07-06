@@ -1312,18 +1312,18 @@ async def test_supervisor_ui_state_projects_cognition_judgement_and_uncertainty_
                 "assessment_trace": {
                     "available": True,
                     "dominant_constraint": "governance_backlog_blockage",
-                    "current_judgement": "review should dominate until grounding is repaired",
-                    "why_not_improvement_now": "Prioritize truthfulness governance before direct body improvement.",
+                    "current_judgement": "在 grounding 修复前，复核应保持主导",
+                    "why_not_improvement_now": "在直接进行身体改进前，应优先处理 truthfulness 治理。",
                     "why_not_improvement_now_count": 1,
                     "self_iteration_target": "truthfulness",
-                    "self_iteration_hypothesis": "Repair truthfulness signals before body work.",
+                    "self_iteration_hypothesis": "先修补 truthfulness 信号，再推进身体工作。",
                 },
                 "meta_cognition_profile": {
                     "current_judgement": "",
                     "dominant_constraint": "",
                     "self_iteration_focus": {
                         "domain": "truthfulness",
-                        "hypothesis": "Repair truthfulness signals before body work.",
+                        "hypothesis": "先修补 truthfulness 信号，再推进身体工作。",
                     },
                 },
             },

@@ -1615,10 +1615,10 @@ async def test_endogenous_drive_history_outcome_persists_lm_posture_reasoning(tm
         metadata={
             "endogenous_drive_key": "lm:truthfulness:review:record-posture-reasoning",
             "llm_posture_alignment": [
-                "follows_truthfulness_first by prioritizing reference repair",
+                "遵循 truthfulness_first，优先修补引用对齐",
             ],
             "llm_priority_basis": [
-                "recent correction signals are elevated",
+                "近期纠偏信号正在抬高",
             ],
         },
         evidence={},
@@ -1633,10 +1633,10 @@ async def test_endogenous_drive_history_outcome_persists_lm_posture_reasoning(tm
     )
 
     assert recorded["llm_posture_alignment"] == [
-        "follows_truthfulness_first by prioritizing reference repair",
+        "遵循 truthfulness_first，优先修补引用对齐",
     ]
     assert recorded["llm_priority_basis"] == [
-        "recent correction signals are elevated",
+        "近期纠偏信号正在抬高",
     ]
 
 
@@ -1652,12 +1652,12 @@ async def test_endogenous_drive_history_outcome_persists_lm_cognitive_assessment
             "endogenous_drive_key": "lm:truthfulness:review:record-cognitive-assessment",
             "llm_cognitive_assessment": {
                 "current_judgement": "在 grounding 修复前，复核应保持主导",
-                "dominant_constraint": "weak self structure grounding",
+                "dominant_constraint": "self structure grounding 偏弱",
                 "primary_grounding_gaps": [
                     "missing_evidence:self_structure",
                 ],
                 "why_this_task_type_now": [
-                    "review is the safest way to repair the evidence graph",
+                    "复核是修补证据图谱最稳妥的方式",
                 ],
                 "why_not_improvement_now": [
                     "直接改进会跑在自我理解之前",
@@ -1676,13 +1676,13 @@ async def test_endogenous_drive_history_outcome_persists_lm_cognitive_assessment
     )
 
     assert recorded["llm_cognitive_assessment"]["current_judgement"] == (
-        "review should dominate until grounding is repaired"
+        "在 grounding 修复前，复核应保持主导"
     )
     assert recorded["llm_cognitive_assessment"]["dominant_constraint"] == (
-        "weak self structure grounding"
+        "self structure grounding 偏弱"
     )
     assert recorded["llm_cognitive_assessment"]["why_not_improvement_now"] == [
-        "improvement would run ahead of self-understanding",
+        "直接改进会跑在自我理解之前",
     ]
 
 
@@ -1704,7 +1704,7 @@ async def test_planned_outcome_does_not_synthesize_cognitive_assessment_from_dri
                     {
                         "intent_type": "review_truthfulness_signals",
                         "candidate_kind": "truthfulness_review",
-                        "rationale": "review corrections before acting",
+                        "rationale": "先复核纠偏信号，再决定动作",
                     }
                 ],
                 "needs": [{"need_type": "repair_truthfulness"}],
@@ -1744,13 +1744,13 @@ async def test_terminal_outcome_synthesizes_canonical_cognitive_assessment_from_
                     {
                         "intent_type": "review_truthfulness_signals",
                         "candidate_kind": "truthfulness_review",
-                        "rationale": "review corrections before acting",
+                        "rationale": "先复核纠偏信号，再决定动作",
                     }
                 ],
                 "needs": [
                     {
                         "need_type": "repair_truthfulness",
-                        "rationale": "correction pressure is elevated",
+                        "rationale": "当前纠偏压力正在抬高",
                     }
                 ],
             },
@@ -1786,14 +1786,14 @@ async def test_terminal_outcome_synthesizes_canonical_cognitive_assessment_from_
 
     assessment = recorded["llm_cognitive_assessment"]
     assert assessment["current_judgement"] == (
-        "truthfulness focus selected under historical_underdelivery"
+        "当前选择 truthfulness 焦点，主约束为 historical_underdelivery"
     )
     assert assessment["primary_grounding_gaps"] == ["repair_truthfulness"]
     assert assessment["why_this_task_type_now"] == [
-        "review corrections before acting",
-        "correction pressure is elevated",
+        "先复核纠偏信号，再决定动作",
+        "当前纠偏压力正在抬高",
     ]
-    assert "Prioritize truthfulness governance before direct body improvement." in (
+    assert "在直接进行身体改进前，应优先处理 truthfulness 治理。" in (
         assessment["why_not_improvement_now"]
     )
 
@@ -1821,13 +1821,13 @@ def test_candidate_annotation_adds_canonical_drive_judgement_and_evidence_contex
                     "intent_type": "review_truthfulness_signals",
                     "candidate_kind": "truthfulness_review",
                     "source_needs": ["repair_truthfulness"],
-                    "rationale": "review corrections before acting",
+                    "rationale": "先复核纠偏信号，再决定动作",
                 }
             ],
             "needs": [
                 {
                     "need_type": "repair_truthfulness",
-                    "rationale": "correction pressure is elevated",
+                    "rationale": "当前纠偏压力正在抬高",
                 }
             ],
             "signals": [],
@@ -6782,8 +6782,8 @@ async def test_prompt_packet_budget_preserves_backlog_state_snapshot_under_large
     large_packet = {
         "identity": {"role": "endogenous_supervisory_core"},
         "decision_core": {
-            "current_judgement": "review should dominate until grounding is repaired",
-            "dominant_constraint": "weak self structure grounding",
+            "current_judgement": "在 grounding 修复前，复核应保持主导",
+            "dominant_constraint": "self structure grounding 偏弱",
             "grounding_pressure": "high",
             "governance_posture": "observation_or_review",
             "secondary_task_shape_hint": "review",
@@ -6799,7 +6799,7 @@ async def test_prompt_packet_budget_preserves_backlog_state_snapshot_under_large
             "contradictory_topics": ["self_structure->external_research:contradicts"],
             "weak_or_missing_channels": ["recent_learning"],
             "self_understanding_gaps": ["missing_recent_learning_trace"],
-            "why_not_improvement_now": ["improvement would outrun grounding"],
+            "why_not_improvement_now": ["直接改进会跑在 grounding 之前"],
             "trend_state": "locked",
             "recent_effect_direction": "mixed",
             "summary": "Supporting detail summary",
@@ -6853,7 +6853,7 @@ async def test_prompt_packet_budget_preserves_backlog_state_snapshot_under_large
     compact = _prompt_facing_evidence_packet(large_packet)
     assert "decision_core" in compact
     assert compact["decision_core"]["current_judgement"] == (
-        "review should dominate until grounding is repaired"
+        "在 grounding 修复前，复核应保持主导"
     )
     assert "supporting_detail" in compact
     assert compact["supporting_detail"]["grounding_gaps"] == [
@@ -6912,7 +6912,7 @@ def test_prompt_packet_prefers_context_layers_and_keeps_compact_cognitive_memory
             },
             "supporting_detail": {
                 "grounding_gaps": ["missing_evidence:self_structure"],
-                "why_not_improvement_now": ["improvement would outrun grounding"],
+                "why_not_improvement_now": ["直接改进会跑在 grounding 之前"],
                 "summary": "supporting detail summary",
             },
             "long_tail_context": {
@@ -6966,7 +6966,7 @@ def test_prompt_packet_prefers_context_layers_and_keeps_compact_cognitive_memory
                     },
                     {
                         "target_domain": "expansion",
-                        "hypothesis": "legacy expansion should not amplify thin count",
+                        "hypothesis": "历史扩张线索不应继续放大薄样本计数",
                         "priority": 0.6,
                         "suggested_task_types": ["learning"],
                     },
@@ -7044,7 +7044,7 @@ def test_cognitive_briefing_renders_task_shape_hint_as_secondary_hint():
             },
             "supporting_detail": {
                 "grounding_gaps": ["missing_evidence:self_structure"],
-                "why_not_improvement_now": ["improvement would outrun grounding"],
+                "why_not_improvement_now": ["直接改进会跑在 grounding 之前"],
             },
         }
     )
@@ -7260,10 +7260,10 @@ async def test_endogenous_drive_builds_context_layers_in_evidence_packet(tmp_pat
                 "missing_agenda_nodes": ["focus:learning_expansion"],
             },
             "llm_cognitive_assessment": {
-                "current_judgement": "review should dominate until grounding is repaired",
-                "dominant_constraint": "weak self structure grounding",
+                "current_judgement": "在 grounding 修复前，复核应保持主导",
+                "dominant_constraint": "self structure grounding 偏弱",
                 "self_iteration_target": "grounding",
-                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "self_iteration_hypothesis": "在激进自我迭代前，先修补 evidence-to-agenda grounding",
             },
         }
     ]
@@ -7303,7 +7303,7 @@ async def test_endogenous_drive_builds_context_layers_in_evidence_packet(tmp_pat
         drive_context=drive_context,
         memory_plan={},
         self_learning_plan={},
-        self_evolution_plan={},
+        autonomous_improvement_plan={},
     )
 
     assert "decision_core" in evidence_packet
@@ -7343,12 +7343,12 @@ async def test_endogenous_drive_context_layers_follow_charter_layering_policy(tm
                 "missing_agenda_nodes": ["focus:learning_expansion"],
             },
             "llm_cognitive_assessment": {
-                "current_judgement": "review should dominate until grounding is repaired",
-                "dominant_constraint": "weak self structure grounding",
+                "current_judgement": "在 grounding 修复前，复核应保持主导",
+                "dominant_constraint": "self structure grounding 偏弱",
                 "self_iteration_target": "grounding",
-                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "self_iteration_hypothesis": "在激进自我迭代前，先修补 evidence-to-agenda grounding",
                 "why_not_improvement_now": [
-                    "improvement would outrun grounding",
+                    "直接改进会跑在 grounding 之前",
                 ],
             },
         }
@@ -7389,7 +7389,7 @@ async def test_endogenous_drive_context_layers_follow_charter_layering_policy(tm
         drive_context=drive_context,
         memory_plan={},
         self_learning_plan={},
-        self_evolution_plan={},
+        autonomous_improvement_plan={},
     )
 
     assert set(evidence_packet["decision_core"].keys()) == {
@@ -7485,7 +7485,7 @@ async def test_endogenous_drive_lm_evidence_packet_stays_on_slim_default_path(tm
         drive_context=drive_context,
         memory_plan={},
         self_learning_plan={},
-        self_evolution_plan={},
+        autonomous_improvement_plan={},
     )
 
     assert "evidence_attention" not in evidence_packet
@@ -7706,14 +7706,14 @@ async def test_endogenous_drive_cognitive_briefing_prefers_context_layers(tmp_pa
     payload = build_endogenous_task_generation_payload(
         evidence_packet={
             "decision_core": {
-                "current_judgement": "review should dominate until grounding is repaired",
-                "dominant_constraint": "weak self structure grounding",
+                "current_judgement": "在 grounding 修复前，复核应保持主导",
+                "dominant_constraint": "self structure grounding 偏弱",
                 "grounding_pressure": "high",
                 "governance_posture": "observation_or_review",
                 "secondary_task_shape_hint": "review",
                 "secondary_task_shape_score": 0.82,
                 "top_self_iteration_domain": "grounding",
-                "top_self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "top_self_iteration_hypothesis": "在激进自我迭代前，先修补 evidence-to-agenda grounding",
                 "primary_evidence_nodes": ["self_structure"],
                 "primary_agenda_nodes": ["focus:learning_expansion"],
                 "governance_backlog_summary": "治理在途 2 项；最近标题：Existing backlog task A。",
@@ -7728,7 +7728,7 @@ async def test_endogenous_drive_cognitive_briefing_prefers_context_layers(tmp_pa
                 "contradictory_topics": ["self_structure->external_research:contradicts"],
                 "weak_or_missing_channels": ["recent_learning"],
                 "self_understanding_gaps": ["missing_recent_learning_trace"],
-                "why_not_improvement_now": ["improvement would outrun grounding"],
+                "why_not_improvement_now": ["直接改进会跑在 grounding 之前"],
                 "trend_state": "locked",
                 "recent_effect_direction": "mixed",
                 "summary": "Supporting detail summary",
@@ -7758,10 +7758,10 @@ async def test_endogenous_drive_cognitive_briefing_prefers_context_layers(tmp_pa
     )
 
     assert "【认知简报】" in payload
-    assert "- 当前判断: review should dominate until grounding is repaired" in payload
-    assert "- 当前主约束: weak self structure grounding" in payload
+    assert "- 当前判断: 在 grounding 修复前，复核应保持主导" in payload
+    assert "- 当前主约束: self structure grounding 偏弱" in payload
     assert "- 当前首要自我迭代域: grounding" in payload
-    assert "- 当前不宜直接改进的原因: improvement would outrun grounding" in payload
+    assert "- 当前不宜直接改进的原因: 直接改进会跑在 grounding 之前" in payload
     assert "- 当前治理在途上下文: 治理在途 2 项；最近标题：Existing backlog task A。" in payload
 
 
@@ -8118,13 +8118,13 @@ async def test_endogenous_drive_prefers_conservative_review_over_weak_improvemen
     fake_client = _FakeLLMClient(
         {
             "cognitive_assessment": {
-                "current_judgement": "review should dominate until grounding is repaired",
-                "dominant_constraint": "weak grounding around self structure",
+                "current_judgement": "在 grounding 修复前，复核应保持主导",
+                "dominant_constraint": "self structure 周边 grounding 偏弱",
                 "primary_grounding_gaps": ["missing_evidence:self_structure"],
-                "why_this_task_type_now": ["review can repair grounding before risky action"],
-                "why_not_improvement_now": ["improvement would outrun current self-understanding"],
+                "why_this_task_type_now": ["先复核可以在高风险动作前修补 grounding"],
+                "why_not_improvement_now": ["直接改进会跑在当前自我理解之前"],
                 "self_iteration_target": "grounding",
-                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "self_iteration_hypothesis": "在激进自我迭代前，先修补 evidence-to-agenda grounding",
             },
             "proposals": [
                 {
@@ -8839,15 +8839,15 @@ def test_engine_auxiliary_memory_sources_stay_thin(tmp_path):
             "title": "Previous cognition",
             "event_type": "planned",
             "llm_cognitive_assessment": {
-                "current_judgement": "review should dominate until grounding is repaired",
-                "dominant_constraint": "weak self structure grounding",
+                "current_judgement": "在 grounding 修复前，复核应保持主导",
+                "dominant_constraint": "self structure grounding 偏弱",
                 "why_not_improvement_now": [
-                    "improvement would run ahead of self-understanding",
+                    "直接改进会跑在自我理解之前",
                 ],
                 "self_iteration_target": "grounding",
-                "self_iteration_hypothesis": "repair evidence-to-agenda grounding first",
+                "self_iteration_hypothesis": "先修补 evidence-to-agenda grounding",
                 "stay_or_switch": "stay",
-                "switch_reason": "grounding gaps still dominate",
+                "switch_reason": "grounding 缺口仍然占主导",
             },
         }
     ]
@@ -8860,7 +8860,7 @@ def test_engine_auxiliary_memory_sources_stay_thin(tmp_path):
         drive_context
     )
 
-    assert assessment["current_judgement"] == "review should dominate until grounding is repaired"
+    assert assessment["current_judgement"] == "在 grounding 修复前，复核应保持主导"
     assert assessment["current_judgement_count"] == 1
     assert assessment["why_not_improvement_now_count"] == 1
     assert assessment["self_iteration_target"] == "grounding"
@@ -8870,7 +8870,7 @@ def test_engine_auxiliary_memory_sources_stay_thin(tmp_path):
     assert "common_current_judgements" not in assessment
     assert "common_self_iteration_hypotheses" not in assessment
     assert trend["dominant_target"] == "grounding"
-    assert trend["dominant_hypothesis"] == "repair evidence-to-agenda grounding first"
+    assert trend["dominant_hypothesis"] == "先修补 evidence-to-agenda grounding"
     assert trend["target_count"] == 1
     assert trend["hypothesis_count"] == 1
     assert trend["dominant_stay_or_switch"] == "stay"
@@ -8889,15 +8889,15 @@ def test_runtime_auxiliary_memory_sources_stay_thin(tmp_path):
             "title": "Previous cognition",
             "event_type": "planned",
             "llm_cognitive_assessment": {
-                "current_judgement": "review should dominate until grounding is repaired",
-                "dominant_constraint": "weak self structure grounding",
+                "current_judgement": "在 grounding 修复前，复核应保持主导",
+                "dominant_constraint": "self structure grounding 偏弱",
                 "why_not_improvement_now": [
-                    "improvement would run ahead of self-understanding",
+                    "直接改进会跑在自我理解之前",
                 ],
                 "self_iteration_target": "grounding",
-                "self_iteration_hypothesis": "repair evidence-to-agenda grounding first",
+                "self_iteration_hypothesis": "先修补 evidence-to-agenda grounding",
                 "stay_or_switch": "switch",
-                "switch_reason": "old target stopped improving",
+                "switch_reason": "旧目标已经停止改进",
             },
         }
     ]
@@ -8909,18 +8909,18 @@ def test_runtime_auxiliary_memory_sources_stay_thin(tmp_path):
         history_snapshot=history
     )
 
-    assert assessment["current_judgement"] == "review should dominate until grounding is repaired"
+    assert assessment["current_judgement"] == "在 grounding 修复前，复核应保持主导"
     assert assessment["self_iteration_target"] == "grounding"
-    assert assessment["self_iteration_hypothesis"] == "repair evidence-to-agenda grounding first"
+    assert assessment["self_iteration_hypothesis"] == "先修补 evidence-to-agenda grounding"
     assert assessment["why_not_improvement_now_count"] == 1
     assert assessment["entry_count"] == 1
     assert "entries" not in assessment
     assert "common_current_judgements" not in assessment
     assert "common_self_iteration_targets" not in assessment
     assert trend["dominant_target"] == "grounding"
-    assert trend["dominant_hypothesis"] == "repair evidence-to-agenda grounding first"
+    assert trend["dominant_hypothesis"] == "先修补 evidence-to-agenda grounding"
     assert trend["dominant_stay_or_switch"] == "switch"
-    assert trend["dominant_switch_reason"] == "old target stopped improving"
+    assert trend["dominant_switch_reason"] == "旧目标已经停止改进"
     assert trend["entry_count"] == 1
     assert "entries" not in trend
     assert "common_targets" not in trend
@@ -8982,7 +8982,7 @@ def test_engine_self_iteration_hypotheses_use_thin_why_not_improvement_field(tmp
         proposal_drift_memory={"available": True, "drift_state": "stable"},
         cognitive_assessment_memory={
             "available": True,
-            "why_not_improvement_now": "improvement would outrun grounding",
+            "why_not_improvement_now": "直接改进会跑在 grounding 之前",
             "why_not_improvement_now_count": 1,
         },
         self_iteration_trend_memory={},
@@ -8996,7 +8996,7 @@ def test_engine_self_iteration_hypotheses_use_thin_why_not_improvement_field(tmp
         for row in hypotheses["hypotheses"]
         if row["target_domain"] == "improvement_readiness"
     )
-    assert readiness_hypothesis["evidence"] == ["improvement would outrun grounding"]
+    assert readiness_hypothesis["evidence"] == ["直接改进会跑在 grounding 之前"]
 
 
 @pytest.mark.asyncio
@@ -9115,14 +9115,14 @@ async def test_endogenous_drive_passes_cognitive_assessment_memory_to_lm(tmp_pat
             "title": "Previous review-first judgement",
             "event_type": "planned",
             "llm_cognitive_assessment": {
-                "current_judgement": "review should dominate until grounding is repaired",
-                "dominant_constraint": "weak self structure grounding",
+                "current_judgement": "在 grounding 修复前，复核应保持主导",
+                "dominant_constraint": "self structure grounding 偏弱",
                 "primary_grounding_gaps": [
                     "missing_evidence:self_structure",
                     "missing_agenda:focus:learning_expansion",
                 ],
                 "why_not_improvement_now": [
-                    "improvement would run ahead of self-understanding",
+                    "直接改进会跑在自我理解之前",
                 ],
             },
         }
@@ -9159,9 +9159,9 @@ async def test_endogenous_drive_passes_cognitive_assessment_memory_to_lm(tmp_pat
     assert fake_client.calls
     payload = fake_client.calls[0]["user_payload"]["task_generation"]
     assert "cognitive_assessment_memory" in payload
-    assert "review should dominate until grounding is repaired" in payload
-    assert "weak self structure grounding" in payload
-    assert "improvement would run ahead of self-understanding" in payload
+    assert "在 grounding 修复前，复核应保持主导" in payload
+    assert "self structure grounding 偏弱" in payload
+    assert "直接改进会跑在自我理解之前" in payload
     assert "\"common_current_judgements\":" not in payload
     assert "\"common_why_not_improvement_now\":" not in payload
     assert "\"common_grounding_gaps\":" not in payload
@@ -9189,12 +9189,12 @@ async def test_endogenous_drive_passes_self_iteration_hypotheses_to_lm(tmp_path)
             "title": "Previous cognition",
             "event_type": "planned",
             "llm_cognitive_assessment": {
-                "current_judgement": "review should dominate until grounding is repaired",
-                "dominant_constraint": "weak self structure grounding",
+                "current_judgement": "在 grounding 修复前，复核应保持主导",
+                "dominant_constraint": "self structure grounding 偏弱",
                 "self_iteration_target": "grounding",
-                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "self_iteration_hypothesis": "在激进自我迭代前，先修补 evidence-to-agenda grounding",
                 "why_not_improvement_now": [
-                    "improvement would run ahead of self-understanding",
+                    "直接改进会跑在自我理解之前",
                 ],
             },
         }
@@ -9261,7 +9261,7 @@ async def test_endogenous_drive_passes_self_iteration_trend_memory_to_lm(tmp_pat
             "event_type": "planned",
             "llm_cognitive_assessment": {
                 "self_iteration_target": "grounding",
-                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "self_iteration_hypothesis": "在激进自我迭代前，先修补 evidence-to-agenda grounding",
             },
         },
         {
@@ -9269,7 +9269,7 @@ async def test_endogenous_drive_passes_self_iteration_trend_memory_to_lm(tmp_pat
             "event_type": "planned",
             "llm_cognitive_assessment": {
                 "self_iteration_target": "grounding",
-                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "self_iteration_hypothesis": "在激进自我迭代前，先修补 evidence-to-agenda grounding",
             },
         },
         {
@@ -9277,7 +9277,7 @@ async def test_endogenous_drive_passes_self_iteration_trend_memory_to_lm(tmp_pat
             "event_type": "planned",
             "llm_cognitive_assessment": {
                 "self_iteration_target": "grounding",
-                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "self_iteration_hypothesis": "在激进自我迭代前，先修补 evidence-to-agenda grounding",
             },
         },
     ]
@@ -9496,12 +9496,12 @@ async def test_endogenous_drive_passes_meta_cognition_profile_to_lm(tmp_path):
                 "missing_agenda_nodes": ["focus:learning_expansion"],
             },
             "llm_cognitive_assessment": {
-                "current_judgement": "review should dominate until grounding is repaired",
-                "dominant_constraint": "weak self structure grounding",
+                "current_judgement": "在 grounding 修复前，复核应保持主导",
+                "dominant_constraint": "self structure grounding 偏弱",
                 "self_iteration_target": "grounding",
-                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "self_iteration_hypothesis": "在激进自我迭代前，先修补 evidence-to-agenda grounding",
                 "stay_or_switch": "stay",
-                "switch_reason": "grounding gaps still dominate the agenda",
+                "switch_reason": "grounding 缺口仍然主导当前议程",
             },
         }
     ]
@@ -9536,9 +9536,9 @@ async def test_endogenous_drive_passes_meta_cognition_profile_to_lm(tmp_path):
 
     payload = fake_client.calls[0]["user_payload"]["task_generation"]
     assert "meta_cognition_profile" in payload
-    assert "review should dominate until grounding is repaired" in payload
+    assert "在 grounding 修复前，复核应保持主导" in payload
     assert "\"grounding_pressure\": \"high\"" in payload or "\"grounding_pressure\": \"medium\"" in payload
-    assert "repair evidence-to-agenda grounding before aggressive self-iteration" in payload
+    assert "在激进自我迭代前，先修补 evidence-to-agenda grounding" in payload
 
 
 @pytest.mark.asyncio
@@ -10167,17 +10167,17 @@ async def test_endogenous_drive_records_cognitive_posture_in_lm_generation_conte
             "title": "Previous cognition",
             "event_type": "planned",
             "llm_cognitive_assessment": {
-                "current_judgement": "review should dominate until grounding is repaired",
-                "dominant_constraint": "weak self structure grounding",
+                "current_judgement": "在 grounding 修复前，复核应保持主导",
+                "dominant_constraint": "self structure grounding 偏弱",
                 "why_not_improvement_now": [
-                    "improvement would run ahead of self-understanding",
+                    "直接改进会跑在自我理解之前",
                 ],
                 "self_iteration_target": "grounding",
                 "self_iteration_hypothesis": (
-                    "repair evidence-to-agenda grounding before aggressive self-iteration"
+                    "在激进自我迭代前，先修补 evidence-to-agenda grounding"
                 ),
                 "stay_or_switch": "stay",
-                "switch_reason": "grounding gaps still dominate the agenda",
+                "switch_reason": "grounding 缺口仍然主导当前议程",
             },
         }
     ]
@@ -10226,7 +10226,7 @@ async def test_endogenous_drive_records_cognitive_posture_in_lm_generation_conte
     assert "common_switch_reasons" not in generation_trend_memory
     assessment_memory = state["cognitive_assessment_memory"]
     assert assessment_memory["current_judgement"] == (
-        "review should dominate until grounding is repaired"
+        "在 grounding 修复前，复核应保持主导"
     )
     assert assessment_memory["current_judgement_count"] == 1
     assert assessment_memory["why_not_improvement_now_count"] == 1
@@ -10243,7 +10243,7 @@ async def test_endogenous_drive_records_cognitive_posture_in_lm_generation_conte
         "在 grounding 修复前，复核应保持主导"
     )
     assert proposal_cognition["assessment_trace"]["why_not_improvement_now"] == (
-        "Prioritize truthfulness governance before direct body improvement."
+        "直接改进会跑在自我理解之前"
     )
     assert proposal_cognition["assessment_trace"]["why_not_improvement_now_count"] == 1
     assert proposal_cognition["assessment_trace"]["self_iteration_target"] == "grounding"
@@ -10292,17 +10292,17 @@ async def test_endogenous_drive_records_lm_cognitive_assessment_in_generation_co
     fake_client = _FakeLLMClient(
         {
             "cognitive_assessment": {
-                "current_judgement": "evidence is still incomplete, so review should dominate",
-                "dominant_constraint": "weak grounding around self structure",
+                "current_judgement": "当前证据仍不完整，因此应先保持复核主导",
+                "dominant_constraint": "self structure 周边 grounding 偏弱",
                 "primary_grounding_gaps": [
                     "missing_evidence:self_structure",
                     "missing_agenda:focus:learning_expansion",
                 ],
                 "why_this_task_type_now": [
-                    "review can repair evidence binding before risky action",
+                    "先复核可以在高风险动作前修补证据绑定",
                 ],
                 "why_not_improvement_now": [
-                    "improvement would outrun current self-understanding",
+                    "直接改进会跑在当前自我理解之前",
                 ],
             },
             "proposals": [],
@@ -10314,17 +10314,17 @@ async def test_endogenous_drive_records_lm_cognitive_assessment_in_generation_co
 
     state = supervisor._endogenous_drive_engine.get_latest_lm_task_generation_context()
     assessment = state["cognitive_assessment"]
-    assert assessment["current_judgement"] == "evidence is still incomplete, so review should dominate"
-    assert assessment["dominant_constraint"] == "weak grounding around self structure"
+    assert assessment["current_judgement"] == "当前证据仍不完整，因此应先保持复核主导"
+    assert assessment["dominant_constraint"] == "self structure 周边 grounding 偏弱"
     assert assessment["primary_grounding_gaps"] == [
         "missing_evidence:self_structure",
         "missing_agenda:focus:learning_expansion",
     ]
     assert assessment["why_this_task_type_now"] == [
-        "review can repair evidence binding before risky action",
+        "先复核可以在高风险动作前修补证据绑定",
     ]
     assert assessment["why_not_improvement_now"] == [
-        "improvement would outrun current self-understanding",
+        "直接改进会跑在当前自我理解之前",
     ]
 
 
@@ -10370,15 +10370,15 @@ async def test_endogenous_drive_records_self_iteration_fields_in_generation_cont
     fake_client = _FakeLLMClient(
         {
             "cognitive_assessment": {
-                "current_judgement": "review should dominate until grounding is repaired",
-                "dominant_constraint": "weak grounding around self structure",
+                "current_judgement": "在 grounding 修复前，复核应保持主导",
+                "dominant_constraint": "self structure 周边 grounding 偏弱",
                 "primary_grounding_gaps": ["missing_evidence:self_structure"],
-                "why_this_task_type_now": ["review can repair grounding"],
-                "why_not_improvement_now": ["improvement would outrun current self-understanding"],
+                "why_this_task_type_now": ["先复核可以修补 grounding"],
+                "why_not_improvement_now": ["直接改进会跑在当前自我理解之前"],
                 "self_iteration_target": "grounding",
-                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "self_iteration_hypothesis": "在激进自我迭代前，先修补 evidence-to-agenda grounding",
                 "stay_or_switch": "stay",
-                "switch_reason": "grounding gaps still dominate the agenda",
+                "switch_reason": "grounding 缺口仍然主导当前议程",
             },
             "proposals": [],
         }
@@ -10391,10 +10391,10 @@ async def test_endogenous_drive_records_self_iteration_fields_in_generation_cont
     assessment = state["cognitive_assessment"]
     assert assessment["self_iteration_target"] == "grounding"
     assert assessment["self_iteration_hypothesis"] == (
-        "repair evidence-to-agenda grounding before aggressive self-iteration"
+        "在激进自我迭代前，先修补 evidence-to-agenda grounding"
     )
     assert assessment["stay_or_switch"] == "stay"
-    assert assessment["switch_reason"] == "grounding gaps still dominate the agenda"
+    assert assessment["switch_reason"] == "grounding 缺口仍然主导当前议程"
 
 
 @pytest.mark.asyncio
@@ -10450,20 +10450,20 @@ async def test_endogenous_drive_keeps_lm_candidates_empty_when_weak_context_retu
     fake_client = _FakeLLMClient(
         {
             "cognitive_assessment": {
-                "current_judgement": "evidence is still incomplete, so review should dominate",
-                "dominant_constraint": "weak grounding around self structure",
+                "current_judgement": "当前证据仍不完整，因此应先保持复核主导",
+                "dominant_constraint": "self structure 周边 grounding 偏弱",
                 "primary_grounding_gaps": [
                     "missing_evidence:self_structure",
                     "missing_agenda:focus:learning_expansion",
                 ],
                 "why_this_task_type_now": [
-                    "review can repair evidence binding before risky action",
+                    "先复核可以在高风险动作前修补证据绑定",
                 ],
                 "why_not_improvement_now": [
-                    "improvement would outrun current self-understanding",
+                    "直接改进会跑在当前自我理解之前",
                 ],
                 "self_iteration_target": "grounding",
-                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "self_iteration_hypothesis": "在激进自我迭代前，先修补 evidence-to-agenda grounding",
             },
             "proposals": [],
         }
@@ -10495,7 +10495,7 @@ async def test_endogenous_drive_keeps_lm_candidates_empty_when_weak_context_retu
     assert state["proposal_count"] == 0
     assert "raw_candidate_kinds" not in state
     assert state["cognitive_assessment"]["why_not_improvement_now"] == [
-        "improvement would outrun current self-understanding",
+        "直接改进会跑在当前自我理解之前",
     ]
 
 
@@ -10511,9 +10511,9 @@ async def test_run_endogenous_drive_cycle_exposes_stay_switch_trend_memory(tmp_p
             "event_type": "planned",
             "llm_cognitive_assessment": {
                 "self_iteration_target": "grounding",
-                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "self_iteration_hypothesis": "在激进自我迭代前，先修补 evidence-to-agenda grounding",
                 "stay_or_switch": "stay",
-                "switch_reason": "grounding gaps still dominate the agenda",
+                "switch_reason": "grounding 缺口仍然主导当前议程",
             },
         },
         {
@@ -10521,9 +10521,9 @@ async def test_run_endogenous_drive_cycle_exposes_stay_switch_trend_memory(tmp_p
             "event_type": "planned",
             "llm_cognitive_assessment": {
                 "self_iteration_target": "grounding",
-                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "self_iteration_hypothesis": "在激进自我迭代前，先修补 evidence-to-agenda grounding",
                 "stay_or_switch": "stay",
-                "switch_reason": "grounding gaps still dominate the agenda",
+                "switch_reason": "grounding 缺口仍然主导当前议程",
             },
         },
         {
@@ -10531,7 +10531,7 @@ async def test_run_endogenous_drive_cycle_exposes_stay_switch_trend_memory(tmp_p
             "event_type": "planned",
             "llm_cognitive_assessment": {
                 "self_iteration_target": "self_model",
-                "self_iteration_hypothesis": "expand self-understanding before escalation",
+                "self_iteration_hypothesis": "先扩展自我理解，再继续升级",
                 "stay_or_switch": "switch",
                 "switch_reason": "self-model uncertainty has overtaken grounding pressure",
             },
@@ -10585,10 +10585,10 @@ async def test_run_endogenous_drive_cycle_exposes_cognitive_assessment_memory(tm
             "title": "Previous cognition",
             "event_type": "planned",
             "llm_cognitive_assessment": {
-                "current_judgement": "review should dominate until grounding is repaired",
-                "dominant_constraint": "weak self structure grounding",
+                "current_judgement": "在 grounding 修复前，复核应保持主导",
+                "dominant_constraint": "self structure grounding 偏弱",
                 "why_not_improvement_now": [
-                    "improvement would run ahead of self-understanding",
+                    "直接改进会跑在自我理解之前",
                 ],
             },
         }
@@ -10626,7 +10626,7 @@ async def test_run_endogenous_drive_cycle_exposes_cognitive_assessment_memory(tm
     assert "cognitive_assessment_memory" not in proposal_cognition
     assert proposal_cognition["assessment_trace"]["available"] is True
     assert proposal_cognition["assessment_trace"]["dominant_constraint"] == (
-        "weak self structure grounding"
+        "self structure grounding 偏弱"
     )
     assert proposal_cognition["assessment_trace"]["current_judgement"] == (
         "在 grounding 修复前，复核应保持主导"
@@ -10645,12 +10645,12 @@ async def test_proposal_cognition_fallback_self_iteration_hypotheses_stays_thin(
             "title": "Fallback cognition",
             "event_type": "planned",
             "llm_cognitive_assessment": {
-                "current_judgement": "review should dominate until grounding is repaired",
-                "dominant_constraint": "weak self structure grounding",
+                "current_judgement": "在 grounding 修复前，复核应保持主导",
+                "dominant_constraint": "self structure grounding 偏弱",
                 "self_iteration_target": "grounding",
-                "self_iteration_hypothesis": "repair evidence-to-agenda grounding first",
+                "self_iteration_hypothesis": "先修补 evidence-to-agenda grounding",
                 "why_not_improvement_now": [
-                    "improvement would run ahead of self-understanding",
+                    "直接改进会跑在自我理解之前",
                 ],
             },
         }
@@ -10666,7 +10666,7 @@ async def test_proposal_cognition_fallback_self_iteration_hypotheses_stays_thin(
     hypotheses_memory = result["auxiliary_memory"]["self_iteration_hypotheses"]
     assert hypotheses_memory["available"] is True
     assert hypotheses_memory["dominant_hypothesis"] == (
-        "repair evidence-to-agenda grounding first"
+        "先修补 evidence-to-agenda grounding"
     )
     assert hypotheses_memory["top_target_domain"] == "grounding"
     assert hypotheses_memory["hypothesis_count"] == 1
@@ -10752,7 +10752,7 @@ async def test_run_endogenous_drive_cycle_exposes_self_iteration_trend_memory(tm
             "event_type": "planned",
             "llm_cognitive_assessment": {
                 "self_iteration_target": "grounding",
-                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "self_iteration_hypothesis": "在激进自我迭代前，先修补 evidence-to-agenda grounding",
             },
         },
         {
@@ -10760,7 +10760,7 @@ async def test_run_endogenous_drive_cycle_exposes_self_iteration_trend_memory(tm
             "event_type": "planned",
             "llm_cognitive_assessment": {
                 "self_iteration_target": "grounding",
-                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "self_iteration_hypothesis": "在激进自我迭代前，先修补 evidence-to-agenda grounding",
             },
         },
         {
@@ -10768,7 +10768,7 @@ async def test_run_endogenous_drive_cycle_exposes_self_iteration_trend_memory(tm
             "event_type": "planned",
             "llm_cognitive_assessment": {
                 "self_iteration_target": "grounding",
-                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "self_iteration_hypothesis": "在激进自我迭代前，先修补 evidence-to-agenda grounding",
             },
         },
     ]
@@ -10959,12 +10959,12 @@ async def test_run_endogenous_drive_cycle_exposes_meta_cognition_profile(tmp_pat
                 "missing_agenda_nodes": ["focus:learning_expansion"],
             },
             "llm_cognitive_assessment": {
-                "current_judgement": "review should dominate until grounding is repaired",
-                "dominant_constraint": "weak self structure grounding",
+                "current_judgement": "在 grounding 修复前，复核应保持主导",
+                "dominant_constraint": "self structure grounding 偏弱",
                 "self_iteration_target": "grounding",
-                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "self_iteration_hypothesis": "在激进自我迭代前，先修补 evidence-to-agenda grounding",
                 "stay_or_switch": "stay",
-                "switch_reason": "grounding gaps still dominate the agenda",
+                "switch_reason": "grounding 缺口仍然主导当前议程",
             },
         }
     ]
@@ -10999,11 +10999,11 @@ async def test_run_endogenous_drive_cycle_exposes_meta_cognition_profile(tmp_pat
 
     profile = result["cognition_state"]["proposal_cognition"]["meta_cognition_profile"]
     assert profile["available"] is True
-    assert profile["current_judgement"] == "review should dominate until grounding is repaired"
+    assert profile["current_judgement"] == "在 grounding 修复前，复核应保持主导"
     assert profile["self_iteration_focus"]["domain"] == "grounding"
     assert profile["dominant_failure_mode"] in {
         "grounding_instability",
-        "weak self structure grounding",
+        "self structure grounding 偏弱",
         "proposal_selection_drift",
     }
     assert profile["governance_posture"] in {"observation_or_review", "review"}
@@ -11054,10 +11054,10 @@ async def test_endogenous_drive_builds_meta_cognition_profile_in_evidence_packet
                 "missing_agenda_nodes": ["focus:learning_expansion"],
             },
             "llm_cognitive_assessment": {
-                "current_judgement": "review should dominate until grounding is repaired",
-                "dominant_constraint": "weak self structure grounding",
+                "current_judgement": "在 grounding 修复前，复核应保持主导",
+                "dominant_constraint": "self structure grounding 偏弱",
                 "self_iteration_target": "grounding",
-                "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+                "self_iteration_hypothesis": "在激进自我迭代前，先修补 evidence-to-agenda grounding",
             },
         }
     ]
@@ -11097,12 +11097,12 @@ async def test_endogenous_drive_builds_meta_cognition_profile_in_evidence_packet
         drive_context=drive_context,
         memory_plan={},
         self_learning_plan={},
-        self_evolution_plan={},
+        autonomous_improvement_plan={},
     )
 
     profile = evidence_packet["meta_cognition_profile"]
     assert profile["available"] is True
-    assert profile["current_judgement"] == "review should dominate until grounding is repaired"
+    assert profile["current_judgement"] == "在 grounding 修复前，复核应保持主导"
     assert profile["top_self_iteration_domain"] == "grounding"
     assert "grounding_pressure" in profile
     assert profile["priority_signals"]
@@ -11120,19 +11120,19 @@ def test_meta_cognition_profile_does_not_let_task_prior_override_review_judgemen
         },
         self_iteration_hypotheses={
             "top_target_domain": "grounding",
-            "dominant_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+            "dominant_hypothesis": "在激进自我迭代前，先修补 evidence-to-agenda grounding",
             "hypotheses": [],
         },
         cognitive_assessment_memory={
-            "current_judgement": "review should dominate until grounding is repaired",
-            "dominant_constraint": "weak self structure grounding",
+            "current_judgement": "在 grounding 修复前，复核应保持主导",
+            "dominant_constraint": "self structure grounding 偏弱",
             "self_iteration_target": "grounding",
-            "self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
-            "why_not_improvement_now": "improvement would outrun current self-understanding",
+            "self_iteration_hypothesis": "在激进自我迭代前，先修补 evidence-to-agenda grounding",
+            "why_not_improvement_now": "直接改进会跑在当前自我理解之前",
         },
         self_iteration_trend_memory={
             "dominant_target": "grounding",
-            "dominant_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
+            "dominant_hypothesis": "在激进自我迭代前，先修补 evidence-to-agenda grounding",
             "dominant_stay_or_switch": "stay",
             "trend_state": "steady",
         },
@@ -11152,7 +11152,7 @@ def test_meta_cognition_profile_does_not_let_task_prior_override_review_judgemen
         },
     )
 
-    assert profile["current_judgement"] == "review should dominate until grounding is repaired"
+    assert profile["current_judgement"] == "在 grounding 修复前，复核应保持主导"
     assert profile["top_self_iteration_domain"] == "grounding"
     assert profile["governance_posture"] == "review"
     assert "secondary_task_shape_hint" not in profile
@@ -11179,9 +11179,9 @@ def test_lm_generation_context_snapshot_reads_thin_memory_fields_without_common_
                 "dominant_target": "grounding",
                 "trend_state": "steady",
                 "target_stability": "stable",
-                "dominant_hypothesis": "repair evidence grounding before expansion",
+                "dominant_hypothesis": "先修补证据 grounding，再谈扩张",
                 "stay_or_switch": "stay",
-                "switch_reason": "grounding is still the active constraint",
+                "switch_reason": "grounding 仍是当前主约束",
                 "target_count": 3,
                 "hypothesis_count": 2,
                 "stay_or_switch_count": 2,
@@ -11190,10 +11190,10 @@ def test_lm_generation_context_snapshot_reads_thin_memory_fields_without_common_
             "cognitive_assessment_memory": {
                 "available": True,
                 "dominant_constraint": "weak grounding",
-                "current_judgement": "review should remain primary",
-                "why_not_improvement_now": "improvement would outrun grounding",
+                "current_judgement": "当前仍应由复核保持主导",
+                "why_not_improvement_now": "直接改进会跑在 grounding 之前",
                 "self_iteration_target": "grounding",
-                "self_iteration_hypothesis": "repair evidence grounding first",
+                "self_iteration_hypothesis": "先修补证据 grounding",
                 "current_judgement_count": 4,
                 "why_not_improvement_now_count": 2,
                 "self_iteration_target_count": 3,
@@ -11201,7 +11201,7 @@ def test_lm_generation_context_snapshot_reads_thin_memory_fields_without_common_
             },
             "self_iteration_hypotheses": {
                 "available": True,
-                "dominant_hypothesis": "keep correction narrow",
+                "dominant_hypothesis": "保持纠偏范围收窄",
                 "top_target_domain": "grounding",
                 "hypothesis_count": 2,
                 "top_priority": 0.84,
@@ -11209,19 +11209,19 @@ def test_lm_generation_context_snapshot_reads_thin_memory_fields_without_common_
                 "hypotheses": [
                     {
                         "target_domain": "legacy-expansion",
-                        "hypothesis": "legacy expansion should not become dominant",
+                        "hypothesis": "历史扩张线索不应重新占据主导",
                         "priority": 0.33,
                         "suggested_task_types": ["learning"],
                     },
                     {
                         "target_domain": "legacy-memory",
-                        "hypothesis": "legacy memory detail should not amplify count",
+                        "hypothesis": "历史记忆细节不应继续放大计数权重",
                         "priority": 0.31,
                         "suggested_task_types": ["memory_maintenance"],
                     },
                     {
                         "target_domain": "legacy-extra",
-                        "hypothesis": "legacy extra detail should stay fallback only",
+                        "hypothesis": "历史额外细节应仅停留在 fallback 层",
                         "priority": 0.29,
                         "suggested_task_types": ["observation"],
                     },
@@ -11236,9 +11236,9 @@ def test_lm_generation_context_snapshot_reads_thin_memory_fields_without_common_
     )
 
     trend_memory = snapshot["self_iteration_trend_memory"]
-    assert trend_memory["dominant_hypothesis"] == "repair evidence grounding before expansion"
+    assert trend_memory["dominant_hypothesis"] == "先修补证据 grounding，再谈扩张"
     assert trend_memory["dominant_stay_or_switch"] == "stay"
-    assert trend_memory["dominant_switch_reason"] == "grounding is still the active constraint"
+    assert trend_memory["dominant_switch_reason"] == "grounding 仍是当前主约束"
     assert trend_memory["target_count"] == 3
     assert trend_memory["hypothesis_count"] == 2
     assert trend_memory["stay_or_switch_count"] == 2
@@ -11246,10 +11246,10 @@ def test_lm_generation_context_snapshot_reads_thin_memory_fields_without_common_
     assert "common_hypotheses" not in trend_memory
 
     assessment_memory = snapshot["cognitive_assessment_memory"]
-    assert assessment_memory["current_judgement"] == "review should remain primary"
-    assert assessment_memory["why_not_improvement_now"] == "improvement would outrun grounding"
+    assert assessment_memory["current_judgement"] == "当前仍应由复核保持主导"
+    assert assessment_memory["why_not_improvement_now"] == "直接改进会跑在 grounding 之前"
     assert assessment_memory["self_iteration_target"] == "grounding"
-    assert assessment_memory["self_iteration_hypothesis"] == "repair evidence grounding first"
+    assert assessment_memory["self_iteration_hypothesis"] == "先修补证据 grounding"
     assert assessment_memory["current_judgement_count"] == 4
     assert assessment_memory["why_not_improvement_now_count"] == 2
     assert assessment_memory["self_iteration_target_count"] == 3
@@ -11257,7 +11257,7 @@ def test_lm_generation_context_snapshot_reads_thin_memory_fields_without_common_
     assert "common_current_judgements" not in assessment_memory
 
     hypothesis_memory = snapshot["self_iteration_hypotheses"]
-    assert hypothesis_memory["dominant_hypothesis"] == "keep correction narrow"
+    assert hypothesis_memory["dominant_hypothesis"] == "保持纠偏范围收窄"
     assert hypothesis_memory["top_target_domain"] == "grounding"
     assert hypothesis_memory["hypothesis_count"] == 2
     assert hypothesis_memory["top_priority"] == 0.84
@@ -11290,7 +11290,7 @@ def test_meta_cognition_profile_is_unavailable_without_real_signals():
 
     assert profile == {
         "available": False,
-        "summary": "No unified meta-cognition profile is available yet.",
+        "summary": "当前还没有可用的统一元认知画像。",
     }
 
 
@@ -11303,10 +11303,10 @@ def test_meta_cognition_primary_string_fields_are_used_directly(tmp_path):
         grounding_focus={"grounding_gaps": [], "contradictory_topics": []},
         self_iteration_hypotheses={},
         cognitive_assessment_memory={
-            "current_judgement": "review should remain primary",
+            "current_judgement": "当前仍应由复核保持主导",
             "self_iteration_target": "grounding",
-            "self_iteration_hypothesis": "repair grounding first",
-            "why_not_improvement_now": "improvement would outrun grounding",
+            "self_iteration_hypothesis": "先修补 grounding",
+            "why_not_improvement_now": "直接改进会跑在 grounding 之前",
         },
         self_iteration_trend_memory={"dominant_stay_or_switch": "stay"},
         switch_self_regulation_memory={},
@@ -11315,18 +11315,18 @@ def test_meta_cognition_primary_string_fields_are_used_directly(tmp_path):
         task_type_priors={},
     )
 
-    assert profile["current_judgement"] == "review should remain primary"
+    assert profile["current_judgement"] == "当前仍应由复核保持主导"
     assert profile["top_self_iteration_domain"] == "grounding"
-    assert profile["top_self_iteration_hypothesis"] == "repair grounding first"
+    assert profile["top_self_iteration_hypothesis"] == "先修补 grounding"
     assert profile["stay_or_switch_bias"] == "stay"
 
     supervisor = _make_supervisor(tmp_path)
     runtime_profile = supervisor._build_recent_meta_cognition_profile_summary(
         cognitive_assessment_memory={
-            "current_judgement": "review should remain primary",
+            "current_judgement": "当前仍应由复核保持主导",
             "self_iteration_target": "grounding",
-            "self_iteration_hypothesis": "repair grounding first",
-            "why_not_improvement_now": "improvement would outrun grounding",
+            "self_iteration_hypothesis": "先修补 grounding",
+            "why_not_improvement_now": "直接改进会跑在 grounding 之前",
         },
         self_iteration_trend_memory={"dominant_stay_or_switch": "stay"},
         switch_self_regulation_memory={},
@@ -11336,9 +11336,9 @@ def test_meta_cognition_primary_string_fields_are_used_directly(tmp_path):
         recent_reference_alignment={},
     )
 
-    assert runtime_profile["current_judgement"] == "review should remain primary"
+    assert runtime_profile["current_judgement"] == "当前仍应由复核保持主导"
     assert runtime_profile["top_self_iteration_domain"] == "grounding"
-    assert runtime_profile["top_self_iteration_hypothesis"] == "repair grounding first"
+    assert runtime_profile["top_self_iteration_hypothesis"] == "先修补 grounding"
     assert runtime_profile["stay_or_switch_bias"] == "stay"
 
 
@@ -11476,7 +11476,7 @@ def test_detect_needs_sorts_primary_need_by_strength_instead_of_append_order():
         ),
         memory_plan={"eligible_for_planning": True},
         self_learning_plan={"eligible_for_planning": True},
-        self_evolution_plan={"eligible_for_planning": False},
+        autonomous_improvement_plan={"eligible_for_planning": False},
     )
 
     assert needs[0].need_type == "repair_truthfulness"
@@ -11550,7 +11550,7 @@ def test_detect_needs_prefers_observe_before_learning_when_historical_underdeliv
         ),
         memory_plan={"eligible_for_planning": True},
         self_learning_plan={"eligible_for_planning": True},
-        self_evolution_plan={"eligible_for_planning": True},
+        autonomous_improvement_plan={"eligible_for_planning": True},
     )
 
     assert needs[0].need_type == "observe_before_acting"
@@ -11623,7 +11623,7 @@ def test_detect_needs_does_not_let_memory_continuity_override_observation_under_
         ),
         memory_plan={"eligible_for_planning": True},
         self_learning_plan={"eligible_for_planning": True},
-        self_evolution_plan={"eligible_for_planning": True},
+        autonomous_improvement_plan={"eligible_for_planning": True},
     )
 
     assert needs[0].need_type == "observe_before_acting"
@@ -11696,7 +11696,7 @@ def test_detect_needs_keeps_memory_continuity_primary_before_observation_gate_tr
         ),
         memory_plan={"eligible_for_planning": True},
         self_learning_plan={"eligible_for_planning": True},
-        self_evolution_plan={"eligible_for_planning": True},
+        autonomous_improvement_plan={"eligible_for_planning": True},
     )
 
     assert needs[0].need_type == "stabilize_memory_continuity"
@@ -11769,7 +11769,7 @@ def test_detect_needs_enters_observation_when_historical_underdelivery_and_obser
         ),
         memory_plan={"eligible_for_planning": True},
         self_learning_plan={"eligible_for_planning": True},
-        self_evolution_plan={"eligible_for_planning": True},
+        autonomous_improvement_plan={"eligible_for_planning": True},
     )
 
     assert needs[0].need_type == "observe_before_acting"
@@ -11844,7 +11844,7 @@ def test_detect_needs_keeps_historical_underdelivery_boundary_deterministic_for_
             ),
             memory_plan={"eligible_for_planning": True},
             self_learning_plan={"eligible_for_planning": True},
-            self_evolution_plan={"eligible_for_planning": True},
+            autonomous_improvement_plan={"eligible_for_planning": True},
         )
 
     first = _run_once()
@@ -11923,7 +11923,7 @@ def test_detect_needs_crosses_from_memory_to_observation_monotonically_near_hist
             ),
             memory_plan={"eligible_for_planning": True},
             self_learning_plan={"eligible_for_planning": True},
-            self_evolution_plan={"eligible_for_planning": True},
+            autonomous_improvement_plan={"eligible_for_planning": True},
         )
         return needs
 
@@ -15842,7 +15842,7 @@ async def test_proposal_drift_memory_biases_program_task_type_priors_toward_obse
             drive_context=drive_context,
             memory_plan={},
             self_learning_plan={},
-            self_evolution_plan={},
+            autonomous_improvement_plan={},
         )
         priors = evidence_packet["task_type_priors"]
         assert priors["drift_state"] == "drifting"

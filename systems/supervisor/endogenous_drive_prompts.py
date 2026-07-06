@@ -42,9 +42,9 @@ def build_endogenous_core_mission_prompt(
     posture_priority_rules = _render_posture_priority_rules(posture_name)
     posture_block = (
         "【当前认知姿态】\n"
-        f"- posture={posture_name or 'balanced'}\n"
-        f"- selection_reason={posture_reason or 'unknown'}\n"
-        f"- summary={posture_summary or 'Use balanced evidence-grounded cognition.'}\n"
+        f"- 姿态标识: {posture_name or 'balanced'}\n"
+        f"- 选择原因: {posture_reason or '未知'}\n"
+        f"- 姿态摘要: {posture_summary or '以平衡、证据锚定的方式进行判断。'}\n"
         "【当前姿态下的任务排序要求】\n"
         f"{posture_priority_rules}\n\n"
     )
@@ -75,7 +75,7 @@ def build_endogenous_core_mission_prompt(
         "- 不得提出与当前证据明显冲突的任务\n"
         "- 不得提出超出允许任务类型的任务\n"
         "- 必须让任务类型、风险等级、证据等级、执行模式彼此一致\n"
-        "- 如果证据不足，优先返回 observation / review / learning 类提案\n"
+        "- 如果证据不足，优先返回 `observation` / `review` / `learning` 类提案\n"
     )
 
 
@@ -83,27 +83,27 @@ def _render_posture_priority_rules(posture_name: str) -> str:
     posture = str(posture_name or "").strip().lower()
     if posture == "observe_first":
         return (
-            "- 优先排序 observation 与 review，其次才是 learning。\n"
-            "- 除非证据极强，否则不要把 improvement 放在前列。"
+            "- 优先排序 `observation` 与 `review`，其次才是 `learning`。\n"
+            "- 除非证据极强，否则不要把 `improvement` 放在前列。"
         )
     if posture == "evidence_repair_first":
         return (
-            "- 优先排序 review 与 observation，用于修复证据链与引用稳定性。\n"
-            "- 只有在证据链已经补强时，才提升 learning 或 improvement 的优先级。"
+            "- 优先排序 `review` 与 `observation`，用来修复证据链与引用稳定性。\n"
+            "- 只有在证据链已经补强时，才提升 `learning` 或 `improvement` 的优先级。"
         )
     if posture == "truthfulness_first":
         return (
-            "- 优先排序 review，尤其是 truthfulness / correction / audit 相关任务。\n"
-            "- 当 truthfulness 风险未缓解时，不要优先输出 improvement。"
+            "- 优先排序 `review`，尤其是 `truthfulness` / `correction` / `audit` 相关任务。\n"
+            "- 当 `truthfulness` 风险未缓解时，不要优先输出 `improvement`。"
         )
     if posture == "conservative":
         return (
-            "- 优先排序 maintenance、observation、review。\n"
-            "- 默认压低 exploratory learning 与 improvement 的优先级。"
+            "- 优先排序 `maintenance`、`observation`、`review`。\n"
+            "- 默认压低 `exploratory learning` 与 `improvement` 的优先级。"
         )
     return (
-        "- 在证据充分时平衡 observation、review、learning、maintenance、improvement。\n"
-        "- 当证据不足时，仍应优先 observation 与 review。"
+        "- 在证据充分时平衡 `observation`、`review`、`learning`、`maintenance`、`improvement`。\n"
+        "- 当证据不足时，仍应优先 `observation` 与 `review`。"
     )
 
 
@@ -252,7 +252,7 @@ def build_endogenous_task_generation_payload(
         '      "blocking_factors":["..."],\n'
         '      "referenced_evidence_nodes":["self_structure","external_research"],\n'
         '      "referenced_agenda_nodes":["expand_learning_frontier","focus:learning_expansion"],\n'
-        '      "posture_alignment":["遵循 truthfulness_first，优先把 review 放在前列"],\n'
+        '      "posture_alignment":["遵循 `truthfulness_first`，优先把 `review` 放在前列"],\n'
         '      "priority_basis":["近期纠错信号正在抬高","引用对齐仍然偏弱"]\n'
         '    }\n'
         "  ]\n"
@@ -410,11 +410,11 @@ def _render_cognitive_briefing(packet: Dict[str, Any]) -> str:
         f"- 当前首要自我迭代假设: {dominant_iteration_hypothesis or '无'}",
         f"- 当前治理在途上下文: {governance_backlog_summary or '无'}",
         f"- 当前不宜直接改进的原因: {', '.join(why_not_improvement_now) or '无'}",
-        "- 先输出一个 cognitive_assessment，明确写出当前判断、主约束、grounding 缺口，以及为什么当前治理姿态成立。",
+        "- 先输出一个 `cognitive_assessment`，明确写出当前判断、主约束、grounding 缺口，以及为什么当前治理姿态成立。",
         "- 如果 evidence_packet 提供了 self_iteration_hypotheses，请在 cognitive_assessment 中写出 self_iteration_target 与 self_iteration_hypothesis。",
         "- 如果 evidence_packet 提供了 self_iteration_trend_memory，请在 cognitive_assessment 中写出 stay_or_switch 与 switch_reason。",
         "- 先基于主证据主题与主议程主题做判断，再决定是否需要形成任务投影以及投影强度。",
-        "- 如果 grounding 缺口或证据冲突明显，优先提出 observation / review / learning，而不是直接改进。",
+        "- 如果 grounding 缺口或证据冲突明显，优先提出 `observation` / `review` / `learning`，而不是直接改进。",
     ]
     if secondary_task_shape_hint and secondary_task_shape_hint != "未知":
         task_shape_line = (
