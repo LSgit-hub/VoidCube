@@ -26,22 +26,22 @@ def build_autonomous_executor_lease_row(
     current_session_id = str(session_id or "").strip()
     active_session_id = str(active.get("session_id") or "").strip()
     if not active_session_id:
-        text = "Executor: no live API-A autonomous executor registered yet"
+        text = "执行位: 当前还没有可见的 API-A 自主执行会话"
         return "class:auto-panel-warn", trim_status_bar_text(text, inner_width)
 
     lease_status = str(active.get("lease_status") or "").strip().lower()
     idle_seconds = int(active.get("idle_seconds") or 0)
     scene = str(active.get("scene") or "idle").strip() or "idle"
     owner_label = (
-        "this executor"
+        "当前执行位"
         if active_session_id == current_session_id
-        else f"executor {active_session_id[-8:]}"
+        else f"他处执行位 {active_session_id[-8:]}"
     )
     if lease_status == "stale" or bool(active.get("is_stale")):
-        text = f"Executor: {owner_label} stale ({idle_seconds}s idle, scene={scene})"
+        text = f"执行位: {owner_label} 已陈旧（静默 {idle_seconds}s，场景 {scene}）"
         return "class:auto-panel-bad", trim_status_bar_text(text, inner_width)
 
-    text = f"Executor: {owner_label} healthy ({idle_seconds}s idle, scene={scene})"
+    text = f"执行位: {owner_label} 正常（静默 {idle_seconds}s，场景 {scene}）"
     if active_session_id != current_session_id:
         return "class:auto-panel-warn", trim_status_bar_text(text, inner_width)
     return "class:auto-panel-info", trim_status_bar_text(text, inner_width)
@@ -57,15 +57,15 @@ def resolve_autonomous_waiting_start_cause(
         )
     latest = dict(events[-1] or {})
     stage = str(latest.get("stage") or "").strip().lower()
-    if stage == "prompt_enqueue_failed":
+    if stage == "execution_prompt_failed":
         return (
             "class:auto-panel-bad",
             "近因: 执行提示注入前台 CLI 失败，链路项未真正起跑",
         )
-    if stage == "prompt_enqueued":
+    if stage == "execution_prompt_injected":
         return (
             "class:auto-panel-info",
-            "近因: 执行提示已入队，正在等待首个模型响应",
+            "近因: 执行提示已注入前台 CLI，正在等待首个模型响应",
         )
     if stage == "claim":
         return (
@@ -157,7 +157,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
     ).strip().lower()
     if task_id:
         label = "改进" if execution_kind == "body_improvement" else "学习"
-        task_text = f"链路项: {label} · {task_id[:8]} · {task_title or '(untitled)'}"
+        task_text = f"链路项: {label} · {task_id[:8]} · {task_title or '未命名'}"
         current_task = getattr(host, "_current_autonomous_task", None)
         if focus_task is current_task:
             started_at = float(getattr(host, "_current_autonomous_task_started_at", 0.0) or 0.0)

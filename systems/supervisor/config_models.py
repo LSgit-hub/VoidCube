@@ -182,8 +182,8 @@ class EndogenousDrivePromptAttentionPolicyConfig(BaseModel):
         "checks",
         "idle_seconds",
         "plans",
-        "queued_learning_titles",
-        "queued_body_improvement_titles",
+        "learning_backlog_titles",
+        "body_improvement_backlog_titles",
         "governance_backlog_tasks",
         "shell_slot",
     ]
@@ -260,8 +260,8 @@ class SupervisorExecutionConfig(BaseModel):
 
 class SupervisorServiceRuntimeConfig(BaseModel):
     health_check_interval: int = 30
-    self_evolution_review_interval: int = 300
-    self_evolution_dispatch_limit_per_cycle: int = 1
+    autonomous_chain_review_interval: int = 300
+    self_evolution_handoff_limit_per_cycle: int = 1
     activity_guard_user_seconds: int = DEFAULT_ACTIVITY_GUARD_SECONDS
     activity_guard_memory_seconds: int = DEFAULT_ACTIVITY_GUARD_SECONDS
     activity_guard_workflow_seconds: int = DEFAULT_ACTIVITY_GUARD_SECONDS

@@ -12,7 +12,7 @@ logger = logging.getLogger("supervisor")
 @dataclass(slots=True)
 class ServiceRuntimeState:
     health_check_task: Optional[asyncio.Task[Any]] = None
-    self_evolution_review_task: Optional[asyncio.Task[Any]] = None
+    autonomous_chain_review_task: Optional[asyncio.Task[Any]] = None
     endogenous_drive_task: Optional[asyncio.Task[Any]] = None
     started: bool = False
     autonomous_chain_gate_active: bool = False
@@ -48,12 +48,12 @@ class ServiceRuntimeMixin:
         self._service_runtime.health_check_task = task
 
     @property
-    def _self_evolution_review_task(self) -> Optional[asyncio.Task[Any]]:
-        return self._service_runtime.self_evolution_review_task
+    def _autonomous_chain_review_task(self) -> Optional[asyncio.Task[Any]]:
+        return self._service_runtime.autonomous_chain_review_task
 
-    @_self_evolution_review_task.setter
-    def _self_evolution_review_task(self, task: Optional[asyncio.Task[Any]]) -> None:
-        self._service_runtime.self_evolution_review_task = task
+    @_autonomous_chain_review_task.setter
+    def _autonomous_chain_review_task(self, task: Optional[asyncio.Task[Any]]) -> None:
+        self._service_runtime.autonomous_chain_review_task = task
 
     @property
     def _endogenous_drive_task(self) -> Optional[asyncio.Task[Any]]:
@@ -284,17 +284,17 @@ class ServiceRuntimeMixin:
         await self._notify_gateway_autonomous_chain_gate(active=True)
         runtime_config = self.config.service_runtime
 
-        if self._self_evolution_review_task:
-            self._self_evolution_review_task.cancel()
+        if self._autonomous_chain_review_task:
+            self._autonomous_chain_review_task.cancel()
 
-        async def self_evolution_review_loop() -> None:
+        async def autonomous_chain_review_loop() -> None:
             while True:
                 now = datetime.now(timezone.utc)
                 self._service_runtime.last_review_at = now
                 self._service_runtime.next_review_at = now + timedelta(
-                    seconds=runtime_config.self_evolution_review_interval
+                    seconds=runtime_config.autonomous_chain_review_interval
                 )
-                await asyncio.sleep(runtime_config.self_evolution_review_interval)
+                await asyncio.sleep(runtime_config.autonomous_chain_review_interval)
                 try:
                     await self._run_autonomous_chain_review_cycle()
                 except asyncio.CancelledError:
@@ -302,8 +302,8 @@ class ServiceRuntimeMixin:
                 except Exception as exc:
                     logger.warning(f"Autonomous-chain review loop iteration failed: {exc}")
 
-        self._self_evolution_review_task = asyncio.create_task(self_evolution_review_loop())
-        logger.info("Autonomous chain: review loop started (interval=%ds)", runtime_config.self_evolution_review_interval)
+        self._autonomous_chain_review_task = asyncio.create_task(autonomous_chain_review_loop())
+        logger.info("Autonomous chain: review loop started (interval=%ds)", runtime_config.autonomous_chain_review_interval)
 
         # ── Immediate first review after drive has had time to produce candidates ──
         async def _immediate_first_review():
@@ -371,8 +371,8 @@ class ServiceRuntimeMixin:
             except Exception as exc:
                 logger.warning(f"Autonomous chain task exited with error during deactivation: {exc}")
 
-        await cancel_task(self._self_evolution_review_task)
-        self._self_evolution_review_task = None
+        await cancel_task(self._autonomous_chain_review_task)
+        self._autonomous_chain_review_task = None
 
         await cancel_task(self._endogenous_drive_task)
         self._endogenous_drive_task = None
@@ -387,8 +387,8 @@ class ServiceRuntimeMixin:
         return {
             "autonomous_chain_gate_active": self._service_runtime.autonomous_chain_gate_active,
             "review_loop_running": (
-                self._service_runtime.self_evolution_review_task is not None
-                and not self._service_runtime.self_evolution_review_task.done()
+                self._service_runtime.autonomous_chain_review_task is not None
+                and not self._service_runtime.autonomous_chain_review_task.done()
             ),
             "drive_loop_running": (
                 self._service_runtime.endogenous_drive_task is not None
@@ -429,8 +429,8 @@ class ServiceRuntimeMixin:
         await cancel_task(self._health_check_task)
         self._health_check_task = None
 
-        await cancel_task(self._self_evolution_review_task)
-        self._self_evolution_review_task = None
+        await cancel_task(self._autonomous_chain_review_task)
+        self._autonomous_chain_review_task = None
 
         await cancel_task(self._endogenous_drive_task)
         self._endogenous_drive_task = None

@@ -225,16 +225,16 @@ class SelfLearningConclusionStore:
                 proposal.pop("task_type", None)
         return payload
 
-    def submit_to_supervisor_queue(
+    def submit_to_supervisor_backlog(
         self,
         *,
         conclusion: LearningConclusion,
-        queue: Any,
+        backlog: Any,
     ) -> List[Dict[str, Any]]:
         submission = self.build_supervisor_submission(conclusion)
         created = []
         for proposal in submission.proposals:
-            task = queue.create_task(
+            task = backlog.create_task(
                 title=proposal.title,
                 summary=proposal.summary,
                 task_type=self._resolved_proposal_task_type(proposal),

@@ -1273,7 +1273,7 @@ class InternalGateway:
     # never reinterprets or rewrites a reporter's scene.
 
     SUPERVISOR_LEGAL_SCENES: frozenset = frozenset(
-        {"idle", "planning", "drive", "memory", "maintenance", "dispatch"}
+        {"idle", "planning", "drive", "memory", "maintenance", "handoff"}
     )
     AGENT_LEGAL_SCENES: frozenset = frozenset(
         {"idle", "learning", "code_editing", "executing"}

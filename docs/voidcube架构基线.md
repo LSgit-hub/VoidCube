@@ -302,7 +302,7 @@ Mem 的记忆架构采用**短长期双层设计**，从根本上解决"压缩�
 
 - **Tier 1 衰减管理**（memory\_service）：turns 在 30 天保留窗口内完整保留。超过 30 天后，先降 relevance\_score（指数衰减），再标记为压缩候选。**仅当 Tier 2 已生成对应的结构化记忆（Event/Scene）后，才将原始 turn 移至 archive 表。不压缩、不合并原始对话文本——只做时间窗口管理和衰减标记。**
 - **Tier 2 编年史压缩**（ChroniclePipeline）：将超过保留窗口的 turns 批量送入 ChroniclePipeline，**LLM 优先 + 启发式降级**。当 `DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY` 环境变量存在时，使用 `LLMEventExtractionBackend`（LLM 理解语义提取事件）和 `LLMScholarBackend`（LLM 生成场景/弧线/纪元摘要）。无 API 凭据时自动降级为 `HeuristicEventExtractionBackend`（关键词正则匹配）和 `HeuristicScholarBackend`（模板填充）。**LLM 压缩才能真正理解内容语义——区分"决定重构架构"和"嗯好的"，而不是仅靠关键词匹配。** 压缩不可逆，但通过 source\_turns 保留反向引用链路。
-- **Tier 2 结构化四级压缩**（MemoryMaintenanceEngine）：对 Event→Scene→Arc→Epoch 四层对象做分层压缩与替代（supersede），超期 Scene（>30天）压缩入父 Arc，超期 Arc（>180天）压缩入父 Epoch，超期 Epoch（>365天）进一步压缩。默认使用 LLMScholarBackend（API-B）生成自然压缩摘要，无 API 凭据时自动降级到 HeuristicScholarBackend。**已接入运行时**：可由监督者内生驱动→任务队列触发，也可由结构化记忆维护循环按周期自动执行。
+- **Tier 2 结构化四级压缩**（MemoryMaintenanceEngine）：对 Event→Scene→Arc→Epoch 四层对象做分层压缩与替代（supersede），超期 Scene（>30天）压缩入父 Arc，超期 Arc（>180天）压缩入父 Epoch，超期 Epoch（>365天）进一步压缩。默认使用 LLMScholarBackend（API-B）生成自然压缩摘要，无 API 凭据时自动降级到 HeuristicScholarBackend。**已接入运行时**：可由监督者内生驱动触发并落入治理在途存储，也可由结构化记忆维护循环按周期自动执行。
 - **压缩结果写回 SQLite**（`compressed_memories` 表）：Tier 2 压缩产出的 Event/Scene/Arc/Epoch **不仅存在于 Mem Pipeline 内存和 mem\_state.json 中，同时写回 SQLite 的** **`compressed_memories`** **表**。每条记录带 `source_turns`（反向引用原始 turn\_id）、`parent_id`（层级归属）、`compression_level`（压缩等级）、`status`（active/superseded/purged）、`weight`（查询权重）。这使得 SQLite 成为 Tier 1（原始会话）+ Tier 2（压缩记忆）的统一查询入口，不再需要分别访问两个存储系统。
 - **压缩等级递进与最终清退**（生命周期管理，LLM 全程参与）：`compressed_memories` 中的条目按时间自动逐级升档，**每级升级由 LLM 生成更高抽象层次的摘要**（非机械贴标签），最终清退前由 **LLM 终审**防误删：
 
@@ -423,7 +423,7 @@ API-A / API-B 的运行边界还必须补充两条硬约束：
 ```text
 监督者 (API-B, 内生驱动)
   → 产出自主任务（探索式学习任务 + 视证据累积触发的替身改进任务）
-  → 放入任务列表（监督者管理的任务队列）
+  → 放入任务列表（监督者管理的治理在途存储）
 
 API-A 自主执行面（最小迷你 CLI / 子代理通道；当前由 `/auto` 临时启停）
   → 通过网关遍历任务列表
@@ -527,7 +527,7 @@ API-A 自主执行面（最小迷你 CLI / 子代理通道；当前由 `/auto` �
 - **上层 LM 治理**：做合并、放行、推迟、拒绝、退休、优先级重排、陈旧任务复审
 - **下层程序护栏**：做状态机、防自撞并发护栏、边界限制、最终状态写入、超时失败和审计落盘
 
-监督者**不**生产身体切换任务——身体切换不由任务队列驱动。身体切换的触发路径是：
+监督者**不**生产身体切换任务——身体切换不由自主任务列表驱动。身体切换的触发路径是：
 
 ```text
 监督者内生驱动（治理输出中的创造类兼容投影）→ 产出学习任务 → 放入任务列表
@@ -547,7 +547,7 @@ API-A 自主执行面（最小迷你 CLI / 子代理通道；当前由 `/auto` �
 
 这里还要强调一点：**监督者的关键不只是“自动产任务”，而是“接管任务列表管理责任”。** 如果只有产出而缺少治理，那么系统仍然只是程序循环，不是最初设计里的“监督者身份”。
 
-正式身体切换不由任务队列驱动，而是由监督者在整理记忆后内生判断替身进展情况，形成"建议切换"裁决。
+正式身体切换不由自主任务列表驱动，而是由监督者在整理记忆后内生判断替身进展情况，形成"建议切换"裁决。
 
 **身体切换的用户同意门（目标语义，待实现）**：替身的代码改进与 probe 验证仍由监督者 / API-A 自主执行面全天候自主进行（改的是替身槽代码，不影响用户使用），但**真正激活新替身（activate_slot）这最后一步只能由用户同意后执行**。监督者/Governor 的裁决产出"建议切换"，系统据此置 `awaiting_user_consent` 并在监督者 Web 监控页暴露治理确认入口；用户同意后才由执行器激活。Governor 的独立审查（否决权）作为同意之前的程序前置门，与用户同意门叠加，而非替代。
 > 现状（待收口）：当前代码中 body_upgrade 流水线在 probe 通过后自动串接 switch_request，Governor 仅依据 probe_passed 自动批准、执行器直接 activate_slot，全链路无用户同意环节。详见 §7.5 与边界铁律第 13 条的"目标语义"标注。
@@ -583,7 +583,7 @@ API-A 自主执行面（最小迷你 CLI / 子代理通道；当前由 `/auto` �
 
 ### 3.8 任务列表
 
-任务列表（即"任务管理器"）不是独立的架构组件，而是由监督者直接管理的一个任务队列。监督者会把治理输出中适合交由 API-A 自主执行面执行的兼容任务投影放入此列表，API-A 自主执行面通过网关主动遍历此列表并执行。当前实现的 `/auto` 开关只临时决定自主链路是否启用，不改变任务列表的架构归属。
+任务列表（即监督者治理在途存储）不是独立的架构组件，而是由监督者直接管理的持久化链路存储。监督者会把治理输出中适合交由 API-A 自主执行面执行的兼容任务投影放入此列表，API-A 自主执行面通过网关主动遍历此列表并执行。当前实现的 `/auto` 开关只临时决定自主链路是否启用，不改变任务列表的架构归属。
 
 任务列表的定位：
 
@@ -592,6 +592,14 @@ API-A 自主执行面（最小迷你 CLI / 子代理通道；当前由 `/auto` �
 - **消费者**：API-A 自主执行面（最小迷你 CLI / 子代理通道，通过自主任务执行通道遍历并执行；当前由 `/auto` 临时启停）
 - **内容**：包含 `self_learning` 与 `body_improvement` 两类自主任务；`body_improvement` 的执行族是 `body_upgrade`，但 `body_switch` 身体切换机械流程不进入该自主任务列表
 - **治理者**：监督者；未来应由“LM 先给出结构化治理意见 + 程序状态机最终把关”共同完成
+
+当前基线下，这个存储不应再被理解成“旧式任务队列管理台”。程序和观测层都应优先围绕三类投影读取：
+
+- `governance_backlog`：仍在治理中的活跃链路项
+- `api_a_execution_lane`：已放行并进入 API-A 执行段的链路项；其中 `approved/retry` 属于待拉取窗口，`running` 属于执行中阶段
+- `writeback_history`：已完成并可回流 Mem 的写回历史
+
+Web 小屋只是这些投影的只读观测面，不承担人工队列管理职责。
 
 任务列表不是独立服务，不需要独立进程、独立端口或独立注册。它是监督者模块内部的数据结构，通过网关暴露给 Agent 访问。
 
@@ -628,7 +636,7 @@ CLI 是用户入口；网关是内部组件入口。二者不能混为一谈。
 
 Agent 是可替换执行体，不是长期身份载体。
 
-Agent 可以持有短期工作态，但长期身份、长期记忆、治理历史、演化谱系、任务队列和裁决依据都必须落到 Mem 或明确的持久任务存储中。
+Agent 可以持有短期工作态，但长期身份、长期记忆、治理历史、演化谱系、任务列表和裁决依据都必须落到 Mem 或明确的持久任务存储中。
 
 ### 4.5 学习与执行分离
 
@@ -741,7 +749,7 @@ Mem 记录“为什么演化”和“是否允许演化”；Git 记录“具体
 
 ### 6.4 任务状态（监督者任务列表）
 
-监督者管理的任务列表包含交由 API-A 自主执行面执行的自主任务，至少包括探索式学习任务（`self_learning`）和替身改进任务（`body_improvement`）。身体切换不由任务队列驱动。
+监督者管理的任务列表包含交由 API-A 自主执行面执行的自主任务，至少包括探索式学习任务（`self_learning`）和替身改进任务（`body_improvement`）。身体切换不由自主任务列表驱动。
 
 自主任务状态：
 
@@ -921,7 +929,7 @@ health_score = Σ(score_delta) - time_decay, [0, 100]
   - file_repeat_penalty         (同文件第N次改: (N-1)×5)
 ```
 
-**关键原则**：健康值达标是"建议"而非"自动"。Governor 保有否决权（程序前置门）；真正激活新替身（activate_slot）需**用户同意**（目标语义，待实现）。身体切换不由任务队列驱动。执行器只做切换的机械流程。
+**关键原则**：健康值达标是"建议"而非"自动"。Governor 保有否决权（程序前置门）；真正激活新替身（activate_slot）需**用户同意**（目标语义，待实现）。身体切换不由自主任务列表驱动。执行器只做切换的机械流程。
 
 ### 7.5 身体切换链路（Governor 裁决 + 用户同意 + 执行器执行）
 
@@ -941,7 +949,7 @@ Governor (API-B)
   → 执行结果写回 Mem
 ```
 
-身体切换不由任务队列驱动。替身代码改进与 probe 验证由监督者/Agent 全天候自主进行；Governor 在收到健康值达标的建议切换事件后独立裁决（否决权为程序前置门）。**真正激活新替身（activate_slot）只能由用户同意后执行**（目标语义，待实现）——这是用户对"换身体"这一不可逆动作保有的最终控制权。执行器只做切换的机械流程，不做升级、不做学习、不做判断。
+身体切换不由自主任务列表驱动。替身代码改进与 probe 验证由监督者/Agent 全天候自主进行；Governor 在收到健康值达标的建议切换事件后独立裁决（否决权为程序前置门）。**真正激活新替身（activate_slot）只能由用户同意后执行**（目标语义，待实现）——这是用户对"换身体"这一不可逆动作保有的最终控制权。执行器只做切换的机械流程，不做升级、不做学习、不做判断。
 
 > 现状（待收口）：当前代码尚无用户同意环节——body_upgrade 流水线 probe 通过后自动串接 switch_request，Governor 依据 probe_passed 自动批准，执行器直接 activate_slot。落地时需：(a) Governor 批准后停在 awaiting_user_consent 而非自动 upgrade_executed；(b) 监督者 Web 页提供确认入口并展示替身状况与进度；(c) 切断 body_upgrade → switch 的自动串接。
 
@@ -966,12 +974,12 @@ Governor (API-B)
 - `governance_task_type`、`task_family`、`execution_kind`
   - 用于 runtime policy、activity guards、治理裁决、execution handoff 与写回语义
 
-这些 canonical runtime 字段的归一化入口应统一落在 [`systems/runtime_task_profile.py`](../systems/runtime_task_profile.py)；后续 queue、gateway activity、governor request、execution adapter、lifecycle writeback、Mem lineage 不应各自复制一套近似推导逻辑。
+这些 canonical runtime 字段的归一化入口应统一落在 [`systems/runtime_task_profile.py`](../systems/runtime_task_profile.py)；后续 governance backlog / execution lane 投影、gateway activity、governor request、execution adapter、lifecycle writeback、Mem lineage 不应各自复制一套近似推导逻辑。
 
 补充约束：
 
 - 一旦某条 canonical runtime surface 已稳定，需在同一轮删除旧残留与重复镜像字段，避免 supervisor / executor / gateway 长期并存两套近义表达。
-- formal execution handoff 中，broad `task_type` 可以保留在 formal contract、queue snapshot、trace lineage 里，但不应再作为 executor outward summary metadata 的重复主字段。
+- formal execution handoff 中，broad `task_type` 可以保留在 formal contract、backlog snapshot、trace lineage 里，但不应再作为 executor outward summary metadata 的重复主字段。
 
 这些任务语义属于 activity / trace / execution 事实层，而不是长期服务注册身份层；服务注册 metadata 应优先表达稳定服务身份与路由信息。
 
@@ -1018,7 +1026,7 @@ Governor (API-B)
    | <br />                      | <br />   | `drive`        | 内生驱动：产出候选          |
    | <br />                      | <br />   | `memory`       | 直接触摸长期记忆（Mem 内部操作） |
    | <br />                      | <br />   | `maintenance`  | 记忆维护/队列卫生          |
-   | <br />                      | <br />   | `dispatch`     | 发送执行请求到身体执行器       |
+   | <br />                      | <br />   | `handoff`      | 已完成执行交接，等待 API-A / 执行器处理 |
    | **API-A 自主执行面**         | 学习/升级执行体 | `idle`         | 无活动                |
    | <br />                      | <br />   | `learning`     | 正在执行 `self_learning` 学习任务 |
    | <br />                      | <br />   | `code_editing` | 正在执行 `body_improvement` / 编辑替身代码 |
@@ -1236,7 +1244,7 @@ Mem 中长期记忆 + 网关活动快照（7 个时间戳 + 错误/不确定性�
   │     │     ├── 无依赖探索学习任务
   │     │     └── 基于当前替身代码基座的学习任务
   │     └── body_improvement
-  └── 认知判断 4: queue_hygiene_review（延续，队列健康与服务连续性）
+  └── 认知判断 4: governance_hygiene_review（延续，治理卫生与服务连续性）
 ```
 
 其中，认知判断 3（创造类）不是单一学习任务，而是分成两个连续分支：
@@ -1246,7 +1254,7 @@ Mem 中长期记忆 + 网关活动快照（7 个时间戳 + 错误/不确定性�
   - **基于当前替身代码基座的学习任务**：围绕当前 shell 槽位代码本体开展代码分析、实验验证、差距评估，理解"现在的自己"与"下一步怎么学"
 - **`body_improvement`**：只在学习证据达到阈值后出现，把学习结果落实为 shell worktree 上的实际代码改进
 
-也就是说，进入任务列表供 API-A 自主执行面通过自主任务执行通道遍历执行的，不只是单一的探索学习，而是"先学习、后改进"这条创造类兼容链路。其余判断优先在监督者内部完成；队列卫生、错误复核和候选清退本身，未来可以由 LM 监督者先提出治理动作，再交由程序护栏落地。
+也就是说，进入任务列表供 API-A 自主执行面通过自主任务执行通道遍历执行的，不只是单一的探索学习，而是"先学习、后改进"这条创造类兼容链路。其余判断优先在监督者内部完成；治理卫生、错误复核和候选清退本身，未来可以由 LM 监督者先提出治理动作，再交由程序护栏落地。
 
 当前实现状态应明确区分为两层：
 
@@ -1285,7 +1293,7 @@ Web 小屋前端内部主面板也应以 `chain`/“自主链路总览”作为�
 同样地，Supervisor 底层的任务列表存储虽然目前仍由 `systems/supervisor/autonomous_chain_store.py` 承载，但程序消费层不应继续把它当成一个无差别“总存储”。推荐底层统一围绕三类投影读取：
 
 - `governance_backlog`: 仍在治理中的活跃任务
-- `execution_dispatch`: 已进入或准备进入执行分发链的任务
+- `api_a_execution_lane`: 已进入或准备进入 API-A 执行段的任务；其中 `approved/retry` 属于待拉取窗口，`running` 属于执行中阶段
 - `writeback_history`: 已产出结果并可回流 Mem 的历史记录
 
 即使暂时保留旧类名/文件名，新的 runtime、UI、dashboard 和 planning 路径也应优先消费这三类投影，而不是到处直接 `list_tasks()`。
@@ -1349,7 +1357,7 @@ API-A 自主执行面（最小迷你 CLI / 子代理通道；当前由 `/auto` �
 | 9  | **用户服务绝对优先**            | 自主链路不能抢占用户链路；用户主 CLI / 主 Agent 与 API-A 自主执行面通过双槽隔离。`/auto` 只是当前自主链路临时门控，不得限制用户输入或主 Agent 交互 |
 | 10 | **内生驱动器只输出治理投影，不直接执行** | 不直接执行，不编辑代码，不执行切换。四类治理投影各走各的处置路径                    |
 | 11 | **API-A 自主执行面编辑替身代码，执行器只切换** | 身体升级（代码编辑）由 API-A 自主执行面执行，身体切换机械流程由执行器执行                   |
-| 12 | **身体切换不由任务队列驱动**        | 监督者整理记忆后内生判断替身进展，Governor 裁决建议切换，用户同意后交由执行器执行激活（用户同意门为目标语义，见 §7.5） |
+| 12 | **身体切换不由自主任务列表驱动**    | 监督者整理记忆后内生判断替身进展，Governor 裁决建议切换，用户同意后交由执行器执行激活（用户同意门为目标语义，见 §7.5） |
 | 13 | **健康值达标是建议；切换激活需用户同意** | shell 健康值超过 active 后产生"建议切换"事件，Governor 独立审查（否决权为程序前置门）。真正激活新替身（activate_slot）只能由用户同意后执行——健康值/Governor 都不是自动切换触发器（用户同意门为目标语义，待实现，见 §7.5） |
 | 14 | **LM 治理不能绕过程序护栏**        | 即使未来由 LM 参与任务列表治理，最终状态迁移、防自撞并发护栏、边界检查和审计落盘仍必须由确定性程序负责 |
 | 15 | **Web 监控只观测 API-B**        | Web 监控展示 API-B 的动作、状态、反馈、任务治理和自主任务回报，不成为用户聊天入口，不监控或接管用户链路 |

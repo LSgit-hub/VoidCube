@@ -70,7 +70,7 @@ def test_execution_service_health_describes_execution_only_boundary():
     assert payload["direct_executor_prefix"] == "/executor"
     assert payload["executor_access_policy"]["failure_mode"] == "executor_required"
     assert "/body/upgrade/execute" in payload["routes"]["body_upgrade"]
-    assert "/self-evolution/execute" in payload["routes"]["formal_self_evolution"]
+    assert "/autonomous-chain/execute" in payload["routes"]["autonomous_chain_execution"]
     assert "/body/watch-window/status" in payload["routes"]["body_lifecycle"]
     assert "self_learning" not in payload["routes"]
     assert "compatibility_notes" not in payload
@@ -137,12 +137,12 @@ def test_execution_service_delegates_body_lifecycle_and_upgrade_routes():
 
 
 @pytest.mark.unit
-def test_execution_service_accepts_only_formal_self_evolution_handoff_for_execution():
+def test_execution_service_accepts_only_autonomous_chain_execution_handoff():
     service, adapters = _make_service()
     client = TestClient(service.app)
 
     response = client.post(
-        "/executor/self-evolution/execute",
+        "/executor/autonomous-chain/execute",
         json={
             "task_id": "task-1",
             "trace_id": "trace-http-1",
@@ -160,7 +160,7 @@ def test_execution_service_accepts_only_formal_self_evolution_handoff_for_execut
     )
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == "formal_self_evolution_executed"
+    assert payload["status"] == "autonomous_chain_execution_executed"
     assert payload["execution_metadata"]["trace_id"] == "trace-http-1"
     assert payload["execution_metadata"]["governance_task_type"] == "self_evolution"
     assert payload["execution_metadata"]["task_family"] == "general_self_evolution"

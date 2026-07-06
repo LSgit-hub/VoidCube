@@ -12,7 +12,7 @@ Current VoidCube integration should follow this boundary:
 - keep existing lightweight governor history as a temporary adapter that follows the future Mem contract
 - do not let unfinished Mem retrieval or self-learning features block body switching, executor handoff, or developer-managed VoidCube changes until those features are mature
 - continue improving MemAI as an independent mainline until schema, query, governance-event indexing, and failure-sample reuse are stable
-- connect MemAI back into VoidCube's formal self-evolution governance chain according to the contract, not by changing the target architecture
+- connect MemAI back into VoidCube's autonomous-chain governance loop according to the contract, not by changing the target architecture
 
 In short: MemAI is not being dropped or bypassed. It should be completed deliberately so it can become the memory soul of VoidCube's autonomous evolution loop.
 

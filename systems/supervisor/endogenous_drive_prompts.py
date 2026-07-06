@@ -182,7 +182,7 @@ def build_endogenous_task_generation_payload(
         "4. task_type 只能是：observation, review, learning, maintenance, improvement\n"
         "5. risk_level 只能是：low, medium, high\n"
         "6. evidence_level 只能是：weak, moderate, strong\n"
-        "7. execution_mode 只能是：observe_only, review_then_queue, guarded_execution\n"
+        "7. execution_mode 只能是：observe_only, review_then_backlog, guarded_execution\n"
         "8. observation_required 必须是布尔值\n"
         "9. blocking_factors 必须是字符串数组；没有则返回空数组\n"
         "10. referenced_evidence_nodes 必须是字符串数组；用于说明你主要引用了哪些 evidence graph / evidence channel 主题\n"
@@ -248,7 +248,7 @@ def build_endogenous_task_generation_payload(
         '      "risk_level":"low",\n'
         '      "evidence_level":"moderate",\n'
         '      "observation_required":false,\n'
-        '      "execution_mode":"review_then_queue",\n'
+        '      "execution_mode":"review_then_backlog",\n'
         '      "blocking_factors":["..."],\n'
         '      "referenced_evidence_nodes":["self_structure","external_research"],\n'
         '      "referenced_agenda_nodes":["expand_learning_frontier","focus:learning_expansion"],\n'

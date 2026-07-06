@@ -48,7 +48,7 @@ class VoidCubeExecutionService:
         self.app.add_api_route(f"{prefix}/body/upgrade/execute", self.execute_body_upgrade, methods=["POST"])
         self.app.add_api_route(f"{prefix}/body/probe/report", self.record_body_probe_report, methods=["POST"])
         self.app.add_api_route(f"{prefix}/body/probe/run", self.run_body_probe, methods=["POST"])
-        self.app.add_api_route(f"{prefix}/self-evolution/execute", self.execute_self_evolution_request, methods=["POST"])
+        self.app.add_api_route(f"{prefix}/autonomous-chain/execute", self.execute_autonomous_chain_request, methods=["POST"])
         self.app.add_api_route(f"{prefix}/memory/compress", self.trigger_memory_compression, methods=["POST"])
         self.app.add_api_route(f"{prefix}/body/improvement-report", self.submit_body_improvement_report, methods=["POST"])
         self.app.add_api_route(f"{prefix}/body/slots/{{slot_id}}/health", self.get_slot_health, methods=["GET"])
@@ -83,7 +83,7 @@ class VoidCubeExecutionService:
                     "/body/watch-window/evaluate",
                 ],
                 "body_upgrade": ["/body/upgrade/execute"],
-                "formal_self_evolution": ["/self-evolution/execute"],
+                "autonomous_chain_execution": ["/autonomous-chain/execute"],
                 "memory_maintenance": ["/memory/compress"],
             },
         }
@@ -173,9 +173,9 @@ class VoidCubeExecutionService:
     async def execute_body_upgrade(self, request: Optional[dict] = Body(default=None)) -> Dict[str, Any]:
         return await self.facade.execute_body_upgrade(request)
 
-    async def execute_self_evolution_request(self, request: dict = Body(default_factory=dict)) -> Dict[str, Any]:
+    async def execute_autonomous_chain_request(self, request: dict = Body(default_factory=dict)) -> Dict[str, Any]:
         try:
-            return await self.facade.execute_self_evolution_request(request)
+            return await self.facade.execute_autonomous_chain_request(request)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 

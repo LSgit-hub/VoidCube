@@ -115,7 +115,8 @@ def test_supervisor_room_frontend_uses_chain_panel_contract():
     assert 'data-panel="chain"' in UI_HTML
     assert 'renderChainPanel' in UI_HTML
     assert 'chain-stage-rail' in UI_HTML
-    assert 'API-B LM 观察' in UI_HTML
+    assert 'API-B 判断输入' in UI_HTML
+    assert '认知状态 · 感知到意图' in UI_HTML
     assert 'data-chain-group="' in UI_HTML
     assert 'data-chain-trace="' in UI_HTML
     assert 'data-chain-trace-expanded="' in UI_HTML
@@ -137,7 +138,7 @@ def test_supervisor_exposes_segmented_runtime_config_views_and_uses_them_for_exe
         service_runtime=SupervisorServiceRuntimeConfig(
             health_check_interval=45,
             memory_compression_interval=7200,
-            self_evolution_review_interval=900,
+            autonomous_chain_review_interval=900,
             endogenous_drive_enabled=True,
             endogenous_drive_interval=600,
             endogenous_drive_max_candidates=2,
@@ -157,7 +158,7 @@ def test_supervisor_exposes_segmented_runtime_config_views_and_uses_them_for_exe
     assert config.execution.probe_watch_window_seconds == 180
     assert config.service_runtime.health_check_interval == 45
     assert config.service_runtime.memory_compression_interval == 7200
-    assert config.service_runtime.self_evolution_review_interval == 900
+    assert config.service_runtime.autonomous_chain_review_interval == 900
     assert config.service_runtime.endogenous_drive_enabled is True
     assert config.service_runtime.endogenous_drive_interval == 600
     assert config.service_runtime.endogenous_drive_max_candidates == 2
@@ -234,7 +235,7 @@ def test_supervisor_mounts_built_in_room_ui_when_enabled(tmp_path):
     assert state.status_code == 200
     payload = state.json()
     assert payload["status"] == "ok"
-    assert payload["scene"] in {"idle", "planning", "drive", "memory", "maintenance", "dispatch"}
+    assert payload["scene"] in {"idle", "planning", "drive", "memory", "maintenance", "handoff"}
     assert "timeline" in payload
 
 
@@ -373,13 +374,13 @@ async def test_supervisor_runtime_trace_includes_writeback_and_cancelled_chain_r
         completed_id,
         status="approved",
         actor="test",
-        reason="approved for dispatch",
+        reason="approved for execution handoff",
     )
     supervisor._autonomous_chain_store.update_status(
         completed_id,
         status="running",
         actor="test",
-        reason="dispatch in progress",
+        reason="execution handoff in progress",
     )
     supervisor._autonomous_chain_store.update_status(
         completed_id,
@@ -943,7 +944,7 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
 
     assert "queue_layout" not in state
     assert "panels" not in state
-    assert observation["read_model_version"] == 7
+    assert observation["read_model_version"] == 8
     assert "observed_tasks" not in observation
     assert "candidates" not in observation
     assert observation["mode"]["scope"] == "api_b_autonomous_chain_only"
@@ -1133,7 +1134,7 @@ async def test_supervisor_room_state_observed_candidates_deduplicate_tasks_by_ke
 
     assert backlog["items"][0]["title"] == "Existing observed governance task"
     assert [item["title"] for item in candidates["items"]] == ["Unique scheduled candidate"]
-    assert candidates["items"][0]["display_status"] == "API-B 候选判断"
+    assert candidates["items"][0]["display_status"] == "候选形成"
 
 
 @pytest.mark.asyncio
@@ -1251,11 +1252,11 @@ async def test_supervisor_delegates_memory_compression_to_maintenance_adapter(tm
 async def test_supervisor_periodic_compression_runtime_does_not_route_through_execution_facade_helper(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._health_check_task = None
-    supervisor._self_evolution_review_task = None
+    supervisor._autonomous_chain_review_task = None
     supervisor._endogenous_drive_task = None
     supervisor._ensure_watch_window_task = Mock()  # type: ignore[method-assign]
     supervisor.run_health_checks = AsyncMock(return_value={"results": []})  # type: ignore[method-assign]
-    supervisor._run_autonomous_chain_review_cycle = AsyncMock(return_value={"reviewed": 0, "dispatched": []})  # type: ignore[method-assign]
+    supervisor._run_autonomous_chain_review_cycle = AsyncMock(return_value={"reviewed": 0, "handed_off": []})  # type: ignore[method-assign]
     supervisor._run_endogenous_drive_cycle = AsyncMock(return_value={"planned": 0})  # type: ignore[method-assign]
     supervisor._memory_maintenance_executor.trigger_memory_compression = AsyncMock(  # type: ignore[method-assign]
         side_effect=asyncio.CancelledError()
@@ -1295,7 +1296,7 @@ async def test_supervisor_periodic_compression_runtime_does_not_route_through_ex
         await supervisor._health_check_task
     # Review and drive loops are only started behind the supervisor autonomous-chain gate.
     # They remain disabled during baseline health-check startup.
-    assert supervisor._self_evolution_review_task is None, (
+    assert supervisor._autonomous_chain_review_task is None, (
         "Review loop should not be running before the supervisor autonomous-chain gate is enabled"
     )
     assert supervisor._endogenous_drive_task is None, (
@@ -1305,7 +1306,7 @@ async def test_supervisor_periodic_compression_runtime_does_not_route_through_ex
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_supervisor_self_evolution_cycle_dispatches_approved_formal_task(tmp_path):
+async def test_supervisor_self_evolution_cycle_hands_off_approved_formal_task(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._body_upgrade_executor.execute_body_upgrade = AsyncMock(  # type: ignore[method-assign]
         return_value={"status": "upgrade_executed"}
@@ -1313,7 +1314,7 @@ async def test_supervisor_self_evolution_cycle_dispatches_approved_formal_task(t
 
     planned = await supervisor.plan_autonomous_chain_task(
         {
-            "title": "Auto-dispatch formal body switch",
+            "title": "Auto-handoff formal body switch",
             "metadata": {
                 "execution_kind": "body_switch",
                 "target_slot_id": "slot-B",
@@ -1355,19 +1356,19 @@ async def test_supervisor_self_evolution_cycle_dispatches_approved_formal_task(t
 
     queued = await supervisor.get_autonomous_chain_task(task_id)
     assert cycle["reviewed"] == 1
-    assert cycle["dispatched"] == [{"task_id": task_id, "status": "formal_self_evolution_executed"}]
+    assert cycle["handed_off"] == [{"task_id": task_id, "status": "autonomous_chain_execution_executed"}]
     assert queued["status"] == "completed"
-    assert queued["metadata"]["execution_result"]["status"] == "formal_self_evolution_executed"
+    assert queued["metadata"]["execution_result"]["status"] == "autonomous_chain_execution_executed"
     supervisor._body_upgrade_executor.execute_body_upgrade.assert_awaited_once()  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_dispatch_unknown_executor_status_retries_instead_of_completing(tmp_path):
+async def test_execution_handoff_unknown_executor_status_retries_instead_of_completing(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
     class UnknownStatusFacade:
-        async def execute_self_evolution_request(self, _payload):
+        async def execute_autonomous_chain_request(self, _payload):
             return {"status": "accepted"}
 
     supervisor._execution_facade = UnknownStatusFacade()
@@ -1415,7 +1416,7 @@ async def test_dispatch_unknown_executor_status_retries_instead_of_completing(tm
     cycle = await supervisor._run_autonomous_chain_review_cycle()
     queued = await supervisor.get_autonomous_chain_task(task_id)
 
-    assert cycle["dispatched"] == [{"task_id": task_id, "status": "accepted"}]
+    assert cycle["handed_off"] == [{"task_id": task_id, "status": "accepted"}]
     assert queued["status"] == "approved"
     assert queued["metadata"]["execution_failed"] is True
     assert queued["metadata"]["execution_failure_count"] == 1
@@ -1427,7 +1428,7 @@ async def test_dispatch_unknown_executor_status_retries_instead_of_completing(tm
 async def test_supervisor_periodic_self_evolution_review_runtime_invokes_cycle(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._health_check_task = None
-    supervisor._self_evolution_review_task = None
+    supervisor._autonomous_chain_review_task = None
     supervisor._endogenous_drive_task = None
     supervisor._ensure_watch_window_task = Mock()  # type: ignore[method-assign]
     supervisor.run_health_checks = AsyncMock(return_value={"results": []})  # type: ignore[method-assign]
@@ -1438,7 +1439,7 @@ async def test_supervisor_periodic_self_evolution_review_runtime_invokes_cycle(t
     config = supervisor.config.model_copy(
         update={
             "service_runtime": supervisor.config.service_runtime.model_copy(
-                update={"self_evolution_review_interval": 0}
+                update={"autonomous_chain_review_interval": 0}
             )
         }
     )
@@ -1449,7 +1450,7 @@ async def test_supervisor_periodic_self_evolution_review_runtime_invokes_cycle(t
     await supervisor._start_autonomous_chain_gate()
 
     with pytest.raises(asyncio.CancelledError):
-        await supervisor._self_evolution_review_task
+        await supervisor._autonomous_chain_review_task
 
     supervisor._run_autonomous_chain_review_cycle.assert_awaited_once_with()  # type: ignore[attr-defined]
     supervisor._health_check_task.cancel()
@@ -1466,12 +1467,12 @@ async def test_supervisor_periodic_self_evolution_review_runtime_invokes_cycle(t
 async def test_supervisor_periodic_endogenous_drive_runtime_invokes_cycle(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._health_check_task = None
-    supervisor._self_evolution_review_task = None
+    supervisor._autonomous_chain_review_task = None
     supervisor._endogenous_drive_task = None
     supervisor._ensure_watch_window_task = Mock()  # type: ignore[method-assign]
     supervisor.run_health_checks = AsyncMock(return_value={"results": []})  # type: ignore[method-assign]
     supervisor._memory_maintenance_executor.trigger_memory_compression = AsyncMock(return_value={"status": "compressed"})  # type: ignore[method-assign]
-    supervisor._run_autonomous_chain_review_cycle = AsyncMock(return_value={"reviewed": 0, "dispatched": []})  # type: ignore[method-assign]
+    supervisor._run_autonomous_chain_review_cycle = AsyncMock(return_value={"reviewed": 0, "handed_off": []})  # type: ignore[method-assign]
     supervisor._run_endogenous_drive_cycle = AsyncMock(side_effect=asyncio.CancelledError())  # type: ignore[method-assign]
 
     config = supervisor.config.model_copy(
@@ -1495,9 +1496,9 @@ async def test_supervisor_periodic_endogenous_drive_runtime_invokes_cycle(tmp_pa
     with pytest.raises(asyncio.CancelledError):
         await supervisor._health_check_task
     # Review loop was also started by the autonomous-chain gate.
-    supervisor._self_evolution_review_task.cancel()
+    supervisor._autonomous_chain_review_task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await supervisor._self_evolution_review_task
+        await supervisor._autonomous_chain_review_task
 
 
 @pytest.mark.asyncio
@@ -1526,7 +1527,7 @@ async def test_start_autonomous_chain_gate_renotifies_gateway_when_already_activ
     await supervisor._start_autonomous_chain_gate()
 
     supervisor._notify_gateway_autonomous_chain_gate.assert_awaited_once_with(active=True)  # type: ignore[attr-defined]
-    assert supervisor._self_evolution_review_task is None
+    assert supervisor._autonomous_chain_review_task is None
     assert supervisor._endogenous_drive_task is None
 
 
@@ -1548,10 +1549,10 @@ def test_supervisor_fastapi_lifespan_starts_and_stops_periodic_runtime(tmp_path)
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_supervisor_self_evolution_review_loop_survives_iteration_exception(tmp_path):
+async def test_supervisor_autonomous_chain_review_loop_survives_iteration_exception(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._health_check_task = None
-    supervisor._self_evolution_review_task = None
+    supervisor._autonomous_chain_review_task = None
     supervisor._endogenous_drive_task = None
     supervisor._ensure_watch_window_task = Mock()  # type: ignore[method-assign]
     supervisor.run_health_checks = AsyncMock(return_value={"results": []})  # type: ignore[method-assign]
@@ -1564,7 +1565,7 @@ async def test_supervisor_self_evolution_review_loop_survives_iteration_exceptio
     config = supervisor.config.model_copy(
         update={
             "service_runtime": supervisor.config.service_runtime.model_copy(
-                update={"self_evolution_review_interval": 0}
+                update={"autonomous_chain_review_interval": 0}
             )
         }
     )
@@ -1575,7 +1576,7 @@ async def test_supervisor_self_evolution_review_loop_survives_iteration_exceptio
     await supervisor._start_autonomous_chain_gate()
 
     with pytest.raises(asyncio.CancelledError):
-        await supervisor._self_evolution_review_task
+        await supervisor._autonomous_chain_review_task
 
     assert supervisor._run_autonomous_chain_review_cycle.await_count == 2  # type: ignore[attr-defined]
     supervisor._health_check_task.cancel()
@@ -1644,13 +1645,13 @@ async def test_supervisor_accepts_self_learning_conclusion_submission_into_queue
         session=session,
         experiments=[experiment],
         comparisons=["gateway-facts > clock-only"],
-        summary="Promote gateway-backed idle judgement into the supervisor planning queue.",
+        summary="Promote gateway-backed idle judgement into the supervisor governance backlog.",
         verified=True,
         recommendations=[
             LearningRecommendation(
                 recommendation_type="propose_evolution_task",
                 title="Adopt gateway-backed idle judgement",
-                summary="Queue an evolution task instead of changing runtime directly.",
+                summary="Create a governance-backlog task instead of changing runtime directly.",
                 evidence={"priority_reason": "reduces false activity-guard approvals"},
             )
         ],

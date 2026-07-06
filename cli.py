@@ -73,9 +73,6 @@ from VoidCube_cli.autonomous_events import (
     autonomous_execution_panel_height as _autonomous_execution_panel_height_view,
     sync_autonomous_supervisor_event as _sync_autonomous_supervisor_event_view,
 )
-from VoidCube_cli.autonomous_observation import (
-    format_supervisor_status_snapshot as _format_supervisor_status_snapshot_view,
-)
 from VoidCube_cli.autonomous_panel import (
     build_autonomous_execution_panel_rows as _build_autonomous_execution_panel_rows_view,
     get_autonomous_execution_panel_fragments as _get_autonomous_execution_panel_fragments_view,
@@ -94,18 +91,10 @@ from VoidCube_cli.autonomous_presence import (
     refresh_gateway_cli_presence as _refresh_gateway_cli_presence_view,
 )
 from VoidCube_cli.autonomous_runtime_host import (
-    clear_current_autonomous_task_state as _clear_current_autonomous_task_state_view,
-    enqueue_autonomous_task_prompt as _enqueue_autonomous_task_prompt_view,
-    interrupt_current_autonomous_task as _interrupt_current_autonomous_task_view,
-    poll_autonomous_workflow as _poll_autonomous_workflow_view,
-    post_autonomous_task_decision as _post_autonomous_task_decision_view,
-    report_current_autonomous_task_timeout_if_needed as _report_current_autonomous_task_timeout_if_needed_view,
-    submit_body_improvement_report as _submit_body_improvement_report_view,
+    autonomous_executor_runtime as _autonomous_executor_runtime_view,
 )
 from VoidCube_cli.autonomous_status_host import (
     autonomous_observation_summary_sections as _autonomous_observation_summary_sections_view,
-    fetch_autonomous_gateway_status as _fetch_autonomous_gateway_status_view,
-    fetch_supervisor_status as _fetch_supervisor_status_view,
     refresh_autonomous_observation_surfaces as _refresh_autonomous_observation_surfaces_view,
 )
 
@@ -2500,12 +2489,13 @@ class VoidcubeCLI:
     _last_agent_turn_result: Dict[str, Any] | None = None
     _current_autonomous_task_run_id: str = ""
 
-    def _autonomous_bridge_kwargs(self) -> Dict[str, Any]:
-        return {
-            "push_cli_agent_scene": _push_cli_agent_scene,
-            "git_improvement_diff": _git_improvement_diff,
-            "cprint": _cprint,
-        }
+    def _autonomous_runtime(self):
+        return _autonomous_executor_runtime_view(
+            self,
+            push_cli_agent_scene=_push_cli_agent_scene,
+            git_improvement_diff=_git_improvement_diff,
+            cprint=_cprint,
+        )
 
     def _autonomous_task_execution_kind(self, task: Dict[str, Any]) -> str:
         return autonomous_task_execution_kind(task)
@@ -2520,13 +2510,11 @@ class VoidcubeCLI:
             git_head_commit=_git_head_commit,
         )
 
-    def _enqueue_autonomous_task_prompt(self, task: Dict[str, Any], execution_kind: str, *, recovered: bool = False) -> bool:
-        return _enqueue_autonomous_task_prompt_view(
-            self,
+    def _inject_autonomous_execution_prompt(self, task: Dict[str, Any], execution_kind: str, *, recovered: bool = False) -> bool:
+        return self._autonomous_runtime().inject_execution_prompt(
             task,
             execution_kind,
             recovered=recovered,
-            **self._autonomous_bridge_kwargs(),
         )
 
     def _autonomous_task_run_id_for_chat_message(self, message: Any) -> str:
@@ -2536,10 +2524,7 @@ class VoidcubeCLI:
         )
 
     def _clear_current_autonomous_task_state(self) -> None:
-        _clear_current_autonomous_task_state_view(
-            self,
-            **self._autonomous_bridge_kwargs(),
-        )
+        self._autonomous_runtime().clear_current_task_state()
 
     def _current_cli_agent_role(self) -> str:
         return _current_cli_agent_role_view(self)
@@ -2554,12 +2539,10 @@ class VoidcubeCLI:
         timeout: float = 15,
         now: float | None = None,
     ) -> bool:
-        return _report_current_autonomous_task_timeout_if_needed_view(
-            self,
+        return self._autonomous_runtime().report_current_task_timeout_if_needed(
             gateway_base=gateway_base,
             timeout=timeout,
             now=now,
-            **self._autonomous_bridge_kwargs(),
         )
 
     def _post_autonomous_task_decision(
@@ -2573,8 +2556,7 @@ class VoidcubeCLI:
         timeout: float = 15,
         gateway_base: str = "http://127.0.0.1:6000",
     ) -> bool:
-        return _post_autonomous_task_decision_view(
-            self,
+        return self._autonomous_runtime().post_task_decision(
             task_id,
             decision=decision,
             reason=reason,
@@ -2582,7 +2564,6 @@ class VoidcubeCLI:
             final_response=final_response,
             timeout=timeout,
             gateway_base=gateway_base,
-            **self._autonomous_bridge_kwargs(),
         )
 
     def _interrupt_current_autonomous_task(
@@ -2593,13 +2574,11 @@ class VoidcubeCLI:
         timeout: float = 5,
         gateway_base: str = "http://127.0.0.1:6000",
     ) -> bool:
-        return _interrupt_current_autonomous_task_view(
-            self,
+        return self._autonomous_runtime().interrupt_current_task(
             reason=reason,
             source=source,
             timeout=timeout,
             gateway_base=gateway_base,
-            **self._autonomous_bridge_kwargs(),
         )
 
     def _poll_autonomous_workflow(self) -> None:
@@ -2612,10 +2591,7 @@ class VoidcubeCLI:
 
         Architecture baseline: §3.3, §3.5, §3.6, §7.3, §7.5.
         """
-        _poll_autonomous_workflow_view(
-            self,
-            **self._autonomous_bridge_kwargs(),
-        )
+        self._autonomous_runtime().poll_workflow()
 
     def _submit_body_improvement_report(
         self,
@@ -2633,13 +2609,11 @@ class VoidcubeCLI:
         or a transport error just skips reporting — it never disturbs the
         already-completed decision writeback (P0-2 成果回流, body path).
         """
-        _submit_body_improvement_report_view(
-            self,
+        self._autonomous_runtime().submit_body_improvement_report(
             task,
             task_id,
             gateway_base,
             improvement_description=improvement_description,
-            **self._autonomous_bridge_kwargs(),
         )
 
     def _trigger_autonomous_cycle(self, *, focus: str = "") -> Dict[str, Any] | None:
@@ -2649,6 +2623,25 @@ class VoidcubeCLI:
     def _current_gateway_presence_snapshot(self) -> tuple[str, str | None, str | None]:
         """Return the CLI scene the gateway should treat as the active executor."""
         return _current_gateway_presence_snapshot_view(self)
+
+    def _publish_cli_agent_scene(
+        self,
+        scene: str,
+        *,
+        session_id: str | None = None,
+        task_id: str | None = None,
+        execution_kind: str | None = None,
+        subagent_summary: Dict[str, Any] | None = None,
+        agent_role: str | None = None,
+    ) -> bool:
+        return _push_cli_agent_scene(
+            scene,
+            session_id=session_id,
+            task_id=task_id,
+            execution_kind=execution_kind,
+            subagent_summary=subagent_summary,
+            agent_role=agent_role,
+        )
 
     def _refresh_gateway_cli_presence(self, *, force: bool = False) -> None:
         """Keep the gateway's active CLI executor view aligned with the live session."""
@@ -2870,7 +2863,7 @@ class VoidcubeCLI:
         # ── Fetch supervisor state once (cached 5s) ──
         sup: Dict[str, Any] = {}
         try:
-            sup = _fetch_supervisor_status_view(self)
+            sup = getattr(self, "_supervisor_state_cache", None) or {}
             # Update auto-mode execution indicator
         except Exception:
             pass
@@ -2944,18 +2937,18 @@ class VoidcubeCLI:
                 if ascii_mode:
                     scene_icons = {
                         "idle": "(-)", "planning": "(?)", "memory": "(M)",
-                        "drive": "(D)", "dispatch": "(>)", "maintenance": "(M)",
+                        "drive": "(D)", "handoff": "(>)", "maintenance": "(M)",
                         "body_switch": "(S)",
                     }
                 else:
                     scene_icons = {
                         "idle": "💤", "planning": "🤔", "memory": "🧠",
-                        "drive": "💡", "dispatch": "📤", "maintenance": "🔧",
+                        "drive": "💡", "handoff": "📤", "maintenance": "🔧",
                         "body_switch": "🔄",
                     }
                 scene_colors = {
                     "idle": "#8B8682", "planning": "#E07362", "memory": "#7CC9A0",
-                    "drive": "#E2B04A", "dispatch": "#A78BFA", "maintenance": "#60A5FA",
+                    "drive": "#E2B04A", "handoff": "#A78BFA", "maintenance": "#60A5FA",
                     "body_switch": "#C084FC",
                 }
                 icon = scene_icons.get(scene, "●")
@@ -2967,7 +2960,7 @@ class VoidcubeCLI:
                 # compact scene label
                 scene_labels = {
                     "idle": "休眠", "planning": "规划", "memory": "记忆",
-                    "drive": "驱动", "dispatch": "分发", "maintenance": "维护",
+                    "drive": "驱动", "handoff": "交接", "maintenance": "维护",
                     "body_switch": "切换",
                 }
                 label = scene_labels.get(scene, scene)
@@ -4772,16 +4765,8 @@ class VoidcubeCLI:
         else:
             lines.append("Subagents: idle")
 
-        lines.extend(
-            _autonomous_observation_summary_sections_view(
-                self,
-                format_supervisor_status_snapshot=self._format_supervisor_status_snapshot,
-            )
-        )
+        lines.extend(_autonomous_observation_summary_sections_view(self))
         self.console.print("\n".join(lines), highlight=False, markup=False)
-
-    def _format_supervisor_status_snapshot(self, state: Dict[str, Any]) -> list[str]:
-        return _format_supervisor_status_snapshot_view(state)
     
     def _fast_command_available(self) -> bool:
         try:
@@ -7041,7 +7026,6 @@ class VoidcubeCLI:
         _handle_auto_q_command_view(
             self,
             cprint=_cprint,
-            push_cli_agent_scene=_push_cli_agent_scene,
             thread_factory=threading.Thread,
         )
 
@@ -7050,8 +7034,6 @@ class VoidcubeCLI:
         return _exit_autonomous_gate_fast_view(
             self,
             cprint=_cprint,
-            push_cli_agent_scene=_push_cli_agent_scene,
-            record_supervisor_ui_activity_safe=self._record_supervisor_ui_activity_safe,
         )
 
     def _force_quit_autonomous_gate(self) -> bool:
@@ -7059,7 +7041,6 @@ class VoidcubeCLI:
         return _force_quit_autonomous_gate_view(
             self,
             cprint=_cprint,
-            push_cli_agent_scene=_push_cli_agent_scene,
         )
 
     def _record_supervisor_ui_activity_safe(self, event_type: str, *, scene: str = "idle", summary: str = "") -> None:

@@ -3107,10 +3107,10 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
         </div>
       </div>
 
-      <!-- 🧠 LM 输入面板 -->
+      <!-- 🧠 API-B 判断输入面板 -->
       <div class="dock-panel" id="panelLMInput">
         <div class="panel-header">
-          <div class="panel-title"><span class="pt-icon">🧠</span>API-B LM 观察</div>
+          <div class="panel-title"><span class="pt-icon">🧠</span>API-B 判断输入</div>
           <button class="panel-close" data-panel="lminput">×</button>
         </div>
         <div class="panel-body" id="panelLMInputBody">
@@ -3120,7 +3120,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
       <!-- 📊 认知面板 -->
       <div class="dock-panel" id="panelCognition">
         <div class="panel-header">
-          <div class="panel-title"><span class="pt-icon">📊</span>认知状态 · Perception → Intent</div>
+          <div class="panel-title"><span class="pt-icon">📊</span>认知状态 · 感知到意图</div>
           <button class="panel-close" data-panel="cognition">×</button>
         </div>
         <div class="panel-body" id="panelCognitionBody">
@@ -3169,9 +3169,9 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
         <span class="db-label">链路</span>
       </button>
       <span class="dock-sep"></span>
-      <button class="dock-btn" data-panel="lminput" title="API-B LM 观察">
+      <button class="dock-btn" data-panel="lminput" title="API-B 判断输入">
         <span class="db-icon">🧠</span>
-        <span class="db-label">LM输入</span>
+        <span class="db-label">判断输入</span>
       </button>
       <span class="dock-sep"></span>
       <button class="dock-btn" data-panel="cognition" title="认知状态">
@@ -3274,15 +3274,15 @@ const els = {
 /* ── 场景 → 动作自动映射 ── */
 const SCENE_TO_ACTION = {
   idle: 'rest', planning: 'work', drive: 'organize',
-  memory: 'organize', maintenance: 'organize', dispatch: 'write',
+  memory: 'organize', maintenance: 'organize', handoff: 'write',
 };
 const GLYPHS = {
   idle: '·', planning: '!', drive: '✦', memory: 'λ',
-  maintenance: '¶', dispatch: '⟩',
+  maintenance: '¶', handoff: '⟩',
 };
 const SCENE_ICONS = {
   idle: '🛋', planning: '💻', drive: '📚', memory: '🧠',
-  maintenance: '🔧', dispatch: '✍️',
+  maintenance: '🔧', handoff: '✍️',
 };
 
 /* ── 工具函数 ── */
@@ -3299,7 +3299,7 @@ function typeLabel(t) {
   if (observationRole === 'api_b_reread') return '再次判断';
   if (observationRole === 'api_b_judgement') return 'API-B 判断';
   if (observationRole === 'api_a_execution') return 'API-A 执行回报';
-  if (observationRole === 'candidate') return '候选判断';
+  if (observationRole === 'candidate') return '候选形成';
   const identity = t.task_identity || {};
   const displayKind = String(identity.display_kind || t.execution_kind || '').trim();
   const governance = String(t.governance_task_type || '').trim();
@@ -3324,12 +3324,22 @@ function governanceHint(t) {
   const preview = t.governance_preview || {};
   const direct = preview.lm_governance_review || null;
   const shadow = preview.lm_governance_shadow || null;
-  if (direct && direct.action) return '监督者已裁定: ' + String(direct.action) + ' · ' + String(direct.reason || '').slice(0, 80);
+  const actionLabel = action => ({
+    approve: '放行',
+    defer: '延后',
+    cancel: '清退',
+    pause: '暂停',
+    retire: '退休建议',
+    merge: '合并建议',
+    reprioritize: '重排优先级',
+    reprioritise: '重排优先级',
+  }[String(action || '').trim().toLowerCase()] || String(action || '').trim());
+  if (direct && direct.action) return '监督者已裁定: ' + actionLabel(direct.action) + ' · ' + String(direct.reason || '').slice(0, 80);
   if (shadow && shadow.action) {
     let extra = '';
     if (shadow.merge_into) extra = ' -> ' + String(shadow.merge_into).slice(0, 16);
     else if (shadow.priority) extra = ' -> ' + String(shadow.priority);
-    return '监督者建议: ' + String(shadow.action) + extra + ' · ' + String(shadow.reason || '').slice(0, 80);
+    return '监督者建议: ' + actionLabel(shadow.action) + extra + ' · ' + String(shadow.reason || '').slice(0, 80);
   }
   return '';
 }
@@ -3342,7 +3352,7 @@ function statusLabel(s) {
     ready:'已观察到',
     idle:'等待中',
     queued:'等待中',
-    candidate:'候选判断',
+    candidate:'候选形成',
     deferred:'已推迟',
     paused:'已暂停',
     completed:'已完成',
@@ -3610,6 +3620,8 @@ function renderAutonomousLoop(loop, options) {
     const focusTitle = autonomousLoopStageFocusTitle(stage);
     const reason = autonomousLoopStageReason(stage);
     const activity = autonomousLoopStageActivity(stage);
+    const readRule = String(stage.read_rule || '').trim();
+    const transitionHint = String(stage.transition_hint || '').trim();
     return '<div class="autonomous-loop-stage ' + esc(status) + '">' +
       '<div class="autonomous-loop-topline"><span class="autonomous-loop-label">' + esc(stage.label || '阶段') +
       '</span><span class="autonomous-loop-owner">' + esc(stage.owner || '—') + '</span></div>' +
@@ -3618,6 +3630,8 @@ function renderAutonomousLoop(loop, options) {
       '<div class="autonomous-loop-summary">' + esc(summary).substring(0, 120) + '</div>' +
       (reason && reason !== summary ? '<div class="autonomous-loop-reason">' + esc(reason).substring(0, 120) + '</div>' : '') +
       (activity && activity !== reason ? '<div class="autonomous-loop-activity">' + esc(activity).substring(0, 120) + '</div>' : '') +
+      (readRule ? '<div class="autonomous-loop-activity">' + esc(readRule).substring(0, 120) + '</div>' : '') +
+      (transitionHint ? '<div class="autonomous-loop-activity">下一跳: ' + esc(transitionHint).substring(0, 110) + '</div>' : '') +
       '</div>';
   }).join('');
   html += '</div>';
@@ -3702,6 +3716,8 @@ function observationLoopStageProjection(stage) {
       || row.activity_text
       || ''
     ).trim(),
+    read_rule: String(row.read_rule || '').trim(),
+    transition_hint: String(row.transition_hint || '').trim(),
     observation_role: loopStageObservationRole(row.key),
     lane,
     stage_key: String(row.key || '').trim(),
@@ -3769,26 +3785,28 @@ function derivedHeroPills(observation) {
     {
       key: 'focus',
       tone: 'accent',
-      text: '当前焦点 · ' + (focus.title || '自主链路闭环'),
+      text: '当前落点 · ' + (focus.title || '自主链路闭环'),
     },
     {
       key: 'chain_waiting',
       tone: creativityBacklog ? 'warn' : (intOrZero(counts.api_a_ready) ? 'accent' : 'info'),
       text: creativityBacklog
-        ? ('治理段待放行 · ' + creativityBacklog)
+        ? ('治理在途 · ' + creativityBacklog)
         : (intOrZero(counts.api_a_ready)
-            ? ('API-A 待拉取 · ' + intOrZero(counts.api_a_ready))
-            : ('Mem 最近写回 · ' + intOrZero(counts.writebacks))),
+            ? ('待拉取窗口 · ' + intOrZero(counts.api_a_ready))
+            : (intOrZero(counts.writebacks)
+                ? ('写回回流 · ' + intOrZero(counts.writebacks))
+                : '闭环当前较安静')),
     },
     {
       key: 'user_chain_signal',
       tone: userSignal.is_quiet ? 'good' : 'warn',
-      text: userSignal.is_quiet ? '用户链路安静软信号' : '用户链路活跃软信号',
+      text: userSignal.is_quiet ? '用户链路 · 安静软感知' : '用户链路 · 活跃软感知',
     },
     {
       key: 'autonomous_chain_gate',
       tone: 'info',
-      text: runtime.autonomous_chain_gate_active ? '临时开关 · 已开启' : '临时开关 · 已关闭',
+      text: runtime.autonomous_chain_gate_active ? '自主链路临时门控 · 已开启' : '自主链路临时门控 · 已关闭',
     },
   ];
 }
@@ -3796,10 +3814,10 @@ function derivedHeroPills(observation) {
 function derivedMetricCards(observation) {
   const counts = observationCounts(observation);
   return [
-    {key:'api_b_backlog', cls:'api-b', label:'API-B 判断', value:intOrZero(counts.api_b_backlog), note:'治理在途'},
-    {key:'api_a_ready', cls:'api-a', label:'API-A 待拉取', value:intOrZero(counts.api_a_ready), note:'自主执行面'},
-    {key:'api_b_candidates', cls:'candidate', label:'候选判断', value:intOrZero(counts.candidates), note:'待裁决'},
-    {key:'mem_recent', cls:'mem', label:'Mem 写回', value:intOrZero(counts.writebacks), note:'结果回流'},
+    {key:'api_b_candidates', cls:'candidate', label:'候选形成', value:intOrZero(counts.candidates), note:'API-B'},
+    {key:'api_b_backlog', cls:'api-b', label:'治理在途', value:intOrZero(counts.api_b_backlog), note:'API-B'},
+    {key:'api_a_ready', cls:'api-a', label:'待拉取窗口', value:intOrZero(counts.api_a_ready), note:'API-A'},
+    {key:'mem_recent', cls:'mem', label:'写回回流', value:intOrZero(counts.writebacks), note:'Mem'},
   ];
 }
 
@@ -3822,7 +3840,7 @@ function derivedLoopRailEntries(observation) {
       owner: String((stage || {}).owner || '—').trim() || '—',
       status: String((stage || {}).status || 'idle').trim().toLowerCase() || 'idle',
       state: autonomousLoopStageStatusText(stage),
-      note: autonomousLoopStageFocusTitle(stage) || String((stage || {}).summary || '').trim(),
+      note: autonomousLoopStageFocusTitle(stage) || String((stage || {}).summary || (stage || {}).read_rule || '').trim(),
       focus: isFocus,
     };
   });
@@ -3834,6 +3852,8 @@ function derivedObservationNotes(observation) {
   const userSignal = guards.user_chain_signal || {};
   const counts = observationCounts(observation);
   const focus = observationFocus(observation);
+  const board = (observation || {}).board || {};
+  const protocolNotes = Array.isArray(board.protocol_notes) ? board.protocol_notes : [];
   const creativityBacklog = creativityGovernanceBacklogCount(observation);
   const notes = [
     {
@@ -3845,8 +3865,8 @@ function derivedObservationNotes(observation) {
     {
       key:'api_a_feedback',
       tone:'accent',
-      title:'API-A 执行回报',
-      text:'当前待拉取 ' + intOrZero(counts.api_a_ready) +
+      title:'API-A 只作为执行段回报',
+      text:'当前待拉取窗口 ' + intOrZero(counts.api_a_ready) +
         ' · 当前焦点 ' + (focus.title || '暂无') +
         ' · Web 只把 API-A 视为自主链路执行与回报来源。',
     },
@@ -3854,9 +3874,16 @@ function derivedObservationNotes(observation) {
       key:'user_chain_signal',
       tone:userSignal.is_quiet ? 'good' : 'warn',
       title:'用户链路软感知',
-      text:'活跃会话 ' + intOrZero(userSignal.active_sessions) +
-        ' · 软静默阈值 ' + (userSignal.quiet_after_seconds != null ? userSignal.quiet_after_seconds : '—') +
+      text:'用户链路信号 ' + (userSignal.is_quiet ? '偏安静' : '偏活跃') +
+        ' · 会话数 ' + intOrZero(userSignal.active_sessions) +
+        ' · 让路参考阈值 ' + (userSignal.quiet_after_seconds != null ? userSignal.quiet_after_seconds : '—') +
         's · 只影响 API-B 判断让路，不展示用户聊天内容。',
+    },
+    {
+      key:'protocol_contract',
+      tone:'info',
+      title:'观测协议',
+      text:String(protocolNotes[0] || 'Web 小屋消费的是自主链路读模型，不直接暴露底层任务存储结构。').substring(0, 180),
     },
   ];
   if (creativityBacklog) {
@@ -3864,7 +3891,7 @@ function derivedObservationNotes(observation) {
       key:'governance_waiting',
       tone:'warn',
       title:'治理段待放行',
-      text:'仍有 ' + creativityBacklog + ' 个创造类链路项停留在 API-B 治理段，等待监督者补证、重排或放行后，才会进入 API-A 待拉取段。',
+      text:'仍有 ' + creativityBacklog + ' 个创造类链路项停留在 API-B 治理段，等待监督者补证、重排或放行后，才会进入 API-A 待拉取窗口。',
     });
   }
   return notes;
@@ -3886,6 +3913,13 @@ function autonomousEventTypeLabel(value) {
     task_decided: '链路裁决',
     tasks_reviewed: '批量复核',
     tasks_planned: '链路规划',
+    execution_handoff_started: '执行交接',
+    execution_handoff_completed: '交接完成',
+    execution_handoff_failed: '交接失败',
+    execution_handoff_retry: '交接重试',
+    endogenous_drive_evaluated: '内生驱动评估',
+    recovery: '链路恢复',
+    timeout: '执行超时',
     supervisor_activity: '监督活动',
     trace_marker: '轨迹标记',
     completed: '已完成',
@@ -3906,9 +3940,106 @@ function autonomousEventSourceLabel(value) {
     autonomous_chain_store: '链路存储',
     mem_governor_history: '治理历史',
     gateway_activity_log: '网关活动',
+    supervisor: '监督者',
+    agent: 'API-A',
+    executor: '执行器',
+    gateway: '网关',
     governor: '治理器',
   };
   return labels[normalized] || normalized || '未知来源';
+}
+
+function cognitionTypeLabel(kind, value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  const maps = {
+    system_posture: {
+      balanced: '平衡观察',
+      truth_guarded: '真实性优先',
+      exploratory: '探索扩张',
+      continuity_guarded: '连续性守护',
+    },
+    user_mode: {
+      quiet: '安静',
+      active: '活跃',
+      interrupted: '被打断',
+      unknown: '未识别',
+      unrecognized: '未识别',
+      '未识别': '未识别',
+    },
+    governance_load_state: {
+      calm: '平稳',
+      stable: '稳定',
+      busy: '繁忙',
+      strained: '紧张',
+      overloaded: '过载',
+      unknown: '未识别',
+      '未识别': '未识别',
+    },
+    need_type: {
+      clear_governance_backlog: '清理治理积压',
+      truthfulness_repair: '修补真实性风险',
+      exploratory_learning: '发起自主学习',
+      shell_baseline_learning: '替身基线学习',
+      governance_hygiene_review: '治理卫生复核',
+      body_improvement: '推进替身改进',
+      memory_continuity: '维护记忆连续性',
+      memory_maintenance: '记忆维护',
+      observation_expansion: '扩展观察覆盖',
+      '未分类需求': '未分类需求',
+    },
+    intent_type: {
+      review_governance_hygiene: '复核治理卫生',
+      expand_learning: '扩展学习',
+      protect_truthfulness: '保护真实性',
+      preserve_memory_continuity: '维持记忆连续性',
+      improve_body: '推动替身改进',
+      observe_only: '只观察',
+      '未命名意图': '未命名意图',
+    },
+    signal_type: {
+      correction_signal: '修正信号',
+      user_activity: '用户活动',
+      memory_pressure: '记忆压力',
+      governance_backlog: '治理积压',
+      truthfulness_alert: '真实性告警',
+      learning_followthrough: '学习跟进',
+      '未命名信号': '未命名信号',
+    },
+    output_channel: {
+      task_candidates: '候选池',
+      governance_review: '治理复核',
+      observation_only: '只读观察',
+      memory_maintenance: '记忆维护',
+      body_improvement: '替身改进',
+    },
+    target_horizon: {
+      immediate: '当前轮',
+      near_term: '短时段',
+      next_cycle: '下一轮',
+      medium_term: '中期',
+      current_round: '当前轮',
+      '当前轮': '当前轮',
+    },
+    preferred_focus: {
+      balanced: '平衡',
+      truthfulness: '真实性',
+      creativity: '创造学习',
+      continuity: '连续性',
+      body_growth: '替身成长',
+      observation: '观察覆盖',
+    },
+    core_value: {
+      continuity: '连续性',
+      creativity: '创造力',
+      truthfulness: '真实性',
+      alignment: '对齐',
+      observation: '观察',
+      body_growth: '替身成长',
+      governance_hygiene: '治理卫生',
+      memory_continuity: '记忆连续性',
+    },
+  };
+  return (maps[kind] || {})[normalized] || String(value || '').trim() || '未命名';
 }
 
 function shortClock(ts) {
@@ -3979,6 +4110,8 @@ function buildChainSectionBand(group, options) {
     || group.empty_text
     || '暂无链路信号'
   ).substring(0, 96);
+  const readRule = String(group.read_rule || '').trim();
+  const nextStep = String(group.next_step || '').trim();
 
   const head = document.createElement('div');
   head.className = 'watch-band-head';
@@ -4014,6 +4147,10 @@ function buildChainSectionBand(group, options) {
     '<div class="game-card-sub">' +
     esc(latestSummary || group.empty_text || '暂无链路信号') +
     '</div>' +
+    (readRule ? '<div class="game-card-sub" style="margin-top:6px;color:var(--text-muted);">读法: ' +
+      esc(String(readRule).substring(0, 120)) + '</div>' : '') +
+    (nextStep ? '<div class="game-card-sub" style="margin-top:4px;color:rgba(226,176,74,.86);">下一跳: ' +
+      esc(String(nextStep).substring(0, 120)) + '</div>' : '') +
     '<div class="game-card-meta"><div class="game-card-tags">' +
     '<span class="game-card-tag memory">载荷 ' + esc(payloadCount) + '</span>' +
     '<span class="game-card-tag truthfulness">事件 ' + esc(eventCount) + '</span>' +
@@ -4098,6 +4235,7 @@ function buildChainHero(state) {
   const board = obs.board || {};
   const chain = obs.chain || {};
   const loop = obs.loop || {};
+  const protocolNotes = Array.isArray(board.protocol_notes) ? board.protocol_notes : [];
   const focus = observationFocus(obs);
   const railEntries = derivedLoopRailEntries(obs);
   const focusStage = loopStageByKey(loop, focus.stage_key) || {};
@@ -4108,7 +4246,7 @@ function buildChainHero(state) {
   hero.innerHTML =
     '<div class="chain-hero-top">' +
       '<div class="chain-hero-main">' +
-        '<div class="chain-hero-label">自主链路读模型 · v' + esc(obs.read_model_version != null ? obs.read_model_version : 7) + '</div>' +
+        '<div class="chain-hero-label">自主链路观测协议 · v' + esc(obs.read_model_version != null ? obs.read_model_version : 8) + '</div>' +
         '<div class="chain-hero-title">' + esc(board.headline || '自主链路闭环观测') + '</div>' +
         '<div class="chain-hero-summary">' + esc(focus.summary || board.summary || chain.summary || 'Web 小屋以 API-B 为主视角，只观察判断、治理、Mem 回流与 API-A 执行回报。').substring(0, 220) + '</div>' +
       '</div>' +
@@ -4140,6 +4278,12 @@ function buildChainHero(state) {
     const pill = document.createElement('div');
     pill.className = 'chain-focus-pill ' + esc(item.tone || 'accent');
     pill.textContent = String(item.text || '');
+    meta.append(pill);
+  });
+  protocolNotes.slice(0, 3).forEach(note => {
+    const pill = document.createElement('div');
+    pill.className = 'chain-focus-pill info';
+    pill.textContent = String(note || '').substring(0, 80);
     meta.append(pill);
   });
   hero.append(meta);
@@ -4194,6 +4338,7 @@ function renderAutonomousDrawer(state) {
       || (group && group.empty_text)
       || '暂无链路信号'
     ).substring(0, 72);
+    const readRule = String((group && group.read_rule) || '').trim();
     const focusTitle = focusItem && focusItem.title
       ? String(focusItem.title).substring(0, 48)
       : (group.label || '链路分段');
@@ -4205,7 +4350,9 @@ function renderAutonomousDrawer(state) {
       '<div class="segment-metric"><span>最近轨迹</span><b>' + traceCount + '</b></div>' +
       '<div class="segment-active"><div class="la-title">' + esc(focusTitle) +
       '</div><div style="margin-top:3px;">' + esc(group.segment_status_label || '链路观察') +
-      (focusSummary ? ' · ' + esc(focusSummary) : '') + '</div></div></div>';
+      (focusSummary ? ' · ' + esc(focusSummary) : '') +
+      (readRule ? '<div style="margin-top:4px;color:var(--text-muted);">读法: ' + esc(String(readRule).substring(0, 66)) + '</div>' : '') +
+      '</div></div></div>';
   }
   const userState = userSignal.is_quiet ? '安静软信号' : '活跃软信号';
   const activeSessions = userSignal.active_sessions != null ? userSignal.active_sessions : 0;
@@ -4214,6 +4361,8 @@ function renderAutonomousDrawer(state) {
   let html = '<div class="drawer-sub">Web 小屋只观察 API-B 内生驱动、自主链路项状态和执行回报；用户链路只作为软感知信号进入治理判断，不展示聊天内容。</div>';
   if (focusGroup) {
     const focusItems = Array.isArray(focusGroup.items) ? focusGroup.items : [];
+    const focusReadRule = String(focusGroup.read_rule || '').trim();
+    const focusNextStep = String(focusGroup.next_step || '').trim();
     const focusTraceIds = [];
     focusEvents.forEach(event => {
       const traceId = String(event.trace_id || '').trim();
@@ -4226,6 +4375,12 @@ function renderAutonomousDrawer(state) {
       esc(focusGroup.stage_label || '链路阶段') + ' · ' +
       esc(focusGroup.summary || focusGroup.empty_text || '暂无链路说明') +
       '</div>' +
+      (focusReadRule
+        ? '<div class="drawer-sub" style="margin-top:8px;">读法: ' + esc(focusReadRule).substring(0, 140) + '</div>'
+        : '') +
+      (focusNextStep
+        ? '<div class="drawer-sub" style="margin-top:4px;">下一跳: ' + esc(focusNextStep).substring(0, 140) + '</div>'
+        : '') +
       '<div class="drawer-sub" style="margin-top:8px;">当前可见链路项 ' + focusItems.length +
       ' · 最近链路事件 ' + focusEvents.length +
       (focusTraceIds.length ? (' · 轨迹 ' + esc(focusTraceIds.slice(0, 3).join(' / '))) : '') +
@@ -4343,9 +4498,9 @@ function renderAutonomousDrawer(state) {
     }
   }
   html += renderAutonomousLoop(loop, {showWritebacks: true});
-  html += '<div class="drawer-sub" style="margin-top:10px;">用户链路感知: ' + esc(userState) +
-    ' · 活跃会话 ' + esc(activeSessions) +
-    ' · 软静默阈值 ' + esc(quietAfter) + 's' +
+  html += '<div class="drawer-sub" style="margin-top:10px;">用户链路软感知: ' + esc(userState) +
+    ' · 会话数 ' + esc(activeSessions) +
+    ' · 让路参考阈值 ' + esc(quietAfter) + 's' +
     ' · 临时开关 ' + (runtime.autonomous_chain_gate_active ? '已开启' : '已关闭') + '</div>';
   if (orderedGroups.length) {
     html += '<div class="segment-grid">' +
@@ -4379,30 +4534,30 @@ function renderProvenanceDrawer(state) {
   const cands = Array.isArray(candidateGroup.items) ? candidateGroup.items : [];
 
   if (!Object.keys(p).length && !needs.length) {
-    els.drawerBody.innerHTML = '<div class="drawer-sub">认知状态尚未初始化。激活 Governor 模式后内生驱动会填充感知→意图链。</div>';
+    els.drawerBody.innerHTML = '<div class="drawer-sub">认知状态尚未初始化。激活监督者内生驱动后会填充感知→意图链。</div>';
     return;
   }
 
   let chain = '<div class="prov-chain">';
-  chain += '<div class="prov-node"><div class="prov-node-label">👁 感知 PERCEPTION</div><div class="prov-node-body">' +
-    '系统姿态 ' + esc(p.system_posture || '—') + ' · 用户姿态 ' + esc(p.user_mode || '—') + ' · 治理在途 ' + (p.governance_backlog_count || 0) +
+  chain += '<div class="prov-node"><div class="prov-node-label">👁 感知</div><div class="prov-node-body">' +
+    '系统姿态 ' + esc(cognitionTypeLabel('system_posture', p.system_posture || '—')) + ' · 用户姿态 ' + esc(cognitionTypeLabel('user_mode', p.user_mode || '—')) + ' · 治理在途 ' + (p.governance_backlog_count || 0) +
     ' · 近期错误 ' + (p.recent_errors || 0) + ' · 修正信号 ' + (p.correction_signals || 0) + '</div></div>';
-  chain += '<div class="prov-node"><div class="prov-node-label">🌍 世界模型 WORLD MODEL</div><div class="prov-node-body">' +
-    '治理健康 ' + esc(wm.governance_load_state || '—') + ' · 记忆压力 ' + pct(wm.memory_pressure) +
+  chain += '<div class="prov-node"><div class="prov-node-label">🌍 世界模型</div><div class="prov-node-body">' +
+    '治理健康 ' + esc(cognitionTypeLabel('governance_load_state', wm.governance_load_state || '—')) + ' · 记忆压力 ' + pct(wm.memory_pressure) +
     ' · 真实性压力 ' + pct(wm.truthfulness_pressure) + ' · 学习动量 ' + pct(wm.learning_momentum) + '</div></div>';
   // needs
   let needBody = needs.length
-    ? needs.map(n => '· ' + esc(n.need_type || 'unknown') + ' (强度 ' + pct(n.severity) + (n.rationale ? ', ' + esc(String(n.rationale).substring(0, 60)) : '') + ')').join('<br>')
+    ? needs.map(n => '· ' + esc(cognitionTypeLabel('need_type', n.need_type || '未分类需求')) + ' (强度 ' + pct(n.severity) + (n.rationale ? ', ' + esc(String(n.rationale).substring(0, 60)) : '') + ')').join('<br>')
     : '无活跃需求(有判断地不行动)';
-  chain += '<div class="prov-node"><div class="prov-node-label">🎯 需求 NEEDS</div><div class="prov-node-body">' + needBody + '</div></div>';
+  chain += '<div class="prov-node"><div class="prov-node-label">🎯 需求</div><div class="prov-node-body">' + needBody + '</div></div>';
   // intents
   let intentBody = intents.length
-    ? intents.map(i => '· ' + esc(i.intent_type || 'intent') + ' → ' + esc(i.output_channel || '—') + ' (' + esc(i.target_horizon || '—') + ')').join('<br>')
+    ? intents.map(i => '· ' + esc(cognitionTypeLabel('intent_type', i.intent_type || '未命名意图')) + ' → ' + esc(cognitionTypeLabel('output_channel', i.output_channel || '—')) + ' (' + esc(cognitionTypeLabel('target_horizon', i.target_horizon || '—')) + ')').join('<br>')
     : '无活跃意图';
-  chain += '<div class="prov-node"><div class="prov-node-label">🧭 意图 INTENTS</div><div class="prov-node-body">' + intentBody + '</div></div>';
+  chain += '<div class="prov-node"><div class="prov-node-label">🧭 意图</div><div class="prov-node-body">' + intentBody + '</div></div>';
   // policy
-  chain += '<div class="prov-node"><div class="prov-node-label">🎚 策略 POLICY</div><div class="prov-node-body">' +
-    '偏好焦点 ' + esc(policy.preferred_focus || '—') + ' · 候选预算 ' + (policy.candidate_budget != null ? policy.candidate_budget : '—') +
+  chain += '<div class="prov-node"><div class="prov-node-label">🎚 策略</div><div class="prov-node-body">' +
+    '偏好焦点 ' + esc(cognitionTypeLabel('preferred_focus', policy.preferred_focus || '—')) + ' · 候选预算 ' + (policy.candidate_budget != null ? policy.candidate_budget : '—') +
     ' · 观察偏置 ' + pct(policy.observation_bias) + '</div></div>';
   chain += '</div>';
 
@@ -4415,7 +4570,7 @@ function renderProvenanceDrawer(state) {
       const meta = c && c.metadata ? c.metadata : {};
       const rawTags = Array.isArray(meta.core_values) ? meta.core_values : (Array.isArray(c.value_tags) ? c.value_tags : []);
       const rationale = c.rationale || meta.rationale || '';
-      const tags = rawTags.map(esc).join(' · ');
+      const tags = rawTags.map(tag => esc(cognitionTypeLabel('core_value', tag))).join(' · ');
       return '<div class="segment-active" style="margin-top:6px;"><div class="la-title">' + esc(String(c.title || '未命名').substring(0, 52)) + '</div>' +
         (rationale ? '<div style="margin-top:3px;">理由: ' + esc(String(rationale).substring(0, 120)) + '</div>' : '') +
         (tags ? '<div style="margin-top:3px;color:var(--text-muted);">价值标签: ' + tags + '</div>' : '') + '</div>';
@@ -4501,10 +4656,10 @@ function observationRoleStageLabel(task) {
   const role = String(task.observation_role || '').trim();
   const labels = {
     api_b_judgement: 'API-B 判断阶段',
-    api_a_execution: 'API-A 执行回报阶段',
+    api_a_execution: 'API-A 待拉取 / 执行回报阶段',
     mem_writeback: 'Mem 写回阶段',
     api_b_reread: 'API-B 再读取阶段',
-    candidate: 'API-B 候选判断',
+    candidate: '候选形成阶段',
   };
   return labels[role] || '自主链路观察';
 }
@@ -4606,6 +4761,9 @@ function buildObservationCard(task, options) {
 function buildStageCard(task) {
   const subtitle = [
     observationRoleStageLabel(task),
+    task.stage_owner ? ('责任侧: ' + String(task.stage_owner).substring(0, 24)) : '',
+    task.read_rule ? String(task.read_rule).substring(0, 88) : '',
+    task.transition_hint ? ('下一跳: ' + String(task.transition_hint).substring(0, 56)) : '',
     task.summary ? String(task.summary).substring(0, 100) : '',
   ].filter(Boolean).join(' · ') || '自主链路阶段观察';
   return buildObservationCard(task, {
@@ -4636,12 +4794,12 @@ function buildSectionCard(task) {
 
 function buildCandidateCard(task) {
   const subtitle = [
-    '内生驱动候选判断',
+    '内生驱动候选形成',
     task.summary ? String(task.summary).substring(0, 100) : '',
   ].filter(Boolean).join(' · ') || '等待 API-B 判断';
   return buildObservationCard(task, {
     subtitle,
-    extraTags: [{text: '候选判断', cls: 'creativity'}],
+    extraTags: [{text: '候选形成', cls: 'creativity'}],
     includeType: false,
     showUtility: true,
     showCandidateTags: true,
@@ -4737,7 +4895,7 @@ function renderLMInputPanel(state) {
     body.replaceChildren();
     const empty = document.createElement('div');
     empty.className = 'panel-empty';
-    empty.innerHTML = '<div class="pe-icon">🧠</div><div class="pe-text">LM 尚未产生调用记录</div><div style="font-size:10px;color:var(--text-muted);">激活 Governor 模式并启用 LM 候选生成后会出现数据</div>';
+    empty.innerHTML = '<div class="pe-icon">🧠</div><div class="pe-text">LM 尚未产生调用记录</div><div style="font-size:10px;color:var(--text-muted);">激活监督者内生驱动并启用 LM 候选生成后会出现数据</div>';
     body.append(empty);
   }
 }
@@ -4768,7 +4926,7 @@ function renderCognitionPanel(state) {
   const percStep = document.createElement('div');
   percStep.className = 'cog-step';
   percStep.innerHTML = '<div class="cog-step-label">👁 感知</div><div class="cog-step-content"><div class="cog-step-title">' +
-    '姿势: ' + (perception.system_posture || '—') + ' · 用户姿态: ' + (perception.user_mode || '—') + ' · 错误: ' + (perception.recent_errors || 0) +
+    '姿势: ' + cognitionTypeLabel('system_posture', perception.system_posture || '—') + ' · 用户姿态: ' + cognitionTypeLabel('user_mode', perception.user_mode || '—') + ' · 错误: ' + (perception.recent_errors || 0) +
     '</div><div class="cog-step-detail">' +
     '治理在途: ' + (perception.governance_backlog_count || 0) +
     ' · 用户会话: ' + (perception.active_sessions != null ? perception.active_sessions : '—') +
@@ -4784,7 +4942,7 @@ function renderCognitionPanel(state) {
   const wmStep = document.createElement('div');
   wmStep.className = 'cog-step';
   wmStep.innerHTML = '<div class="cog-step-label">🌍 世界模型</div><div class="cog-step-content"><div class="cog-step-title">' +
-    '治理健康: ' + (worldModel.governance_load_state || '—') + ' · 记忆压力: ' + (worldModel.memory_pressure != null ? Math.round(worldModel.memory_pressure * 100) + '%' : '—') +
+    '治理健康: ' + cognitionTypeLabel('governance_load_state', worldModel.governance_load_state || '—') + ' · 记忆压力: ' + (worldModel.memory_pressure != null ? Math.round(worldModel.memory_pressure * 100) + '%' : '—') +
     '</div><div class="cog-step-detail">' +
     '真实压力: ' + (worldModel.truthfulness_pressure != null ? Math.round(worldModel.truthfulness_pressure * 100) + '%' : '—') +
     ' · 学习动量: ' + (worldModel.learning_momentum != null ? Math.round(worldModel.learning_momentum * 100) + '%' : '—') +
@@ -4801,7 +4959,7 @@ function renderCognitionPanel(state) {
   } else {
     needs.forEach(n => {
       const sev = n.severity > 0.7 ? 'severity-high' : n.severity > 0.4 ? 'severity-mid' : 'severity-low';
-      needHtml += '<span class="cog-need-tag ' + sev + '">' + (n.need_type || 'unknown') + ' ' + Math.round((n.severity||0)*100) + '%</span>';
+      needHtml += '<span class="cog-need-tag ' + sev + '">' + cognitionTypeLabel('need_type', n.need_type || '未分类需求') + ' ' + Math.round((n.severity||0)*100) + '%</span>';
     });
   }
   needHtml += '</div>';
@@ -4816,7 +4974,7 @@ function renderCognitionPanel(state) {
     intentHtml += '<div class="cog-step-detail">无活跃意图</div>';
   } else {
     intents.forEach(i => {
-      intentHtml += '<div class="cog-step-title" style="font-size:10.5px;">📌 ' + (i.intent_type || 'intent') + ' → ' + (i.output_channel || '—') + ' (' + (i.target_horizon || '—') + ')</div>';
+      intentHtml += '<div class="cog-step-title" style="font-size:10.5px;">📌 ' + cognitionTypeLabel('intent_type', i.intent_type || '未命名意图') + ' → ' + cognitionTypeLabel('output_channel', i.output_channel || '—') + ' (' + cognitionTypeLabel('target_horizon', i.target_horizon || '—') + ')</div>';
     });
   }
   intentHtml += '</div>';
@@ -4828,7 +4986,7 @@ function renderCognitionPanel(state) {
     const sigStep = document.createElement('div');
     sigStep.className = 'cog-step';
     sigStep.innerHTML = '<div class="cog-step-label">📡 信号</div><div class="cog-step-content">' +
-      signals.slice(0, 3).map(s => '<div class="cog-step-detail">' + (s.signal_type || 'signal') + ': ' + String(s.message || '').substring(0, 100) + '</div>').join('') +
+      signals.slice(0, 3).map(s => '<div class="cog-step-detail">' + cognitionTypeLabel('signal_type', s.signal_type || '未命名信号') + ': ' + String(s.message || '').substring(0, 100) + '</div>').join('') +
       '</div>';
     flow.append(sigStep);
   }
@@ -4841,7 +4999,7 @@ function renderCognitionPanel(state) {
       '学习偏置: ' + (policy.learning_expansion_bias != null ? Math.round(policy.learning_expansion_bias * 100) + '%' : '—') +
       ' · 真实偏置: ' + (policy.truthfulness_bias != null ? Math.round(policy.truthfulness_bias * 100) + '%' : '—') +
       ' · 预算: ' + (policy.candidate_budget || '—') +
-      ' · 焦点: ' + (policy.preferred_focus || '—') +
+      ' · 焦点: ' + cognitionTypeLabel('preferred_focus', policy.preferred_focus || '—') +
       '</div></div>';
     flow.append(polStep);
   }
@@ -4852,7 +5010,7 @@ function renderCognitionPanel(state) {
     body.replaceChildren();
     const empty = document.createElement('div');
     empty.className = 'panel-empty';
-    empty.innerHTML = '<div class="pe-icon">📊</div><div class="pe-text">认知状态尚未初始化</div><div style="font-size:10px;color:var(--text-muted);">激活 Governor 模式后内生驱动会填充认知层</div>';
+    empty.innerHTML = '<div class="pe-icon">📊</div><div class="pe-text">认知状态尚未初始化</div><div style="font-size:10px;color:var(--text-muted);">激活监督者内生驱动后会填充认知层</div>';
     body.append(empty);
   }
 }
@@ -4916,8 +5074,8 @@ function renderObservationPanel(state) {
       '<div class="game-card-head"><div class="game-card-title">用户链路软感知输入</div>' +
       '<span class="game-card-badge ' + (userSignal.is_quiet ? 'approved' : 'deferred') + '">' +
       (userSignal.is_quiet ? '安静软信号' : '活跃软信号') + '</span></div>' +
-      '<div class="game-card-sub">活跃会话 ' + esc(userSignal.active_sessions != null ? userSignal.active_sessions : 0) +
-      ' · 软静默阈值 ' + esc(userSignal.quiet_after_seconds != null ? userSignal.quiet_after_seconds : '—') + 's' +
+      '<div class="game-card-sub">会话数 ' + esc(userSignal.active_sessions != null ? userSignal.active_sessions : 0) +
+      ' · 让路参考阈值 ' + esc(userSignal.quiet_after_seconds != null ? userSignal.quiet_after_seconds : '—') + 's' +
       ' · 仅影响 API-B 判断让路，不展示用户聊天内容</div>';
     body.append(signalRow);
   }
@@ -4932,7 +5090,7 @@ function renderObservationPanel(state) {
   appendChainSectionGrid(
     body,
     state,
-    ['api_b_candidates', 'api_b_backlog', 'mem_recent'],
+    ['api_b_candidates', 'api_b_backlog', 'api_a_ready', 'mem_recent'],
     {limit: 4}
   );
 
@@ -4956,7 +5114,8 @@ function renderStatsPanel(state) {
   const mem = state.mem_usage || {};
   const obs = state.autonomous_observation || {};
   const runtime = obs.runtime || {};
-  const userSignal = runtime.user_chain_signal || {};
+  const guards = runtime.activity_guards || {};
+  const userSignal = guards.user_chain_signal || {};
 
   const drill = document.createElement('div');
   drill.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:6px;';
@@ -5543,7 +5702,7 @@ class SupervisorUIMixin:
 
         # ── Schedule visibility ──
         schedule: Dict[str, Any] = {
-            "review_interval_seconds": self.config.service_runtime.self_evolution_review_interval,
+            "autonomous_chain_review_interval_seconds": self.config.service_runtime.autonomous_chain_review_interval,
             "drive_interval_seconds": self.config.service_runtime.endogenous_drive_interval,
         }
         if self._service_runtime.next_review_at is not None:
@@ -5658,7 +5817,7 @@ class SupervisorUIMixin:
             # Build perception summary
             cognition["perception"] = {
                 "system_posture": perception.get("system_posture", "balanced"),
-                "user_mode": perception.get("user_mode", "unknown"),
+                "user_mode": perception.get("user_mode", "未识别"),
                 "governance_backlog_count": perception.get("governance_backlog_count", 0),
                 "active_sessions": perception.get("active_sessions", 0),
                 "recent_errors": perception.get("recent_errors", 0),
@@ -5668,7 +5827,7 @@ class SupervisorUIMixin:
             }
             # Build world model summary
             cognition["world_model"] = {
-                "governance_load_state": world_model.get("governance_load_state", "unknown"),
+                "governance_load_state": world_model.get("governance_load_state", "未识别"),
                 "memory_pressure": world_model.get("memory_pressure", 0),
                 "truthfulness_pressure": world_model.get("truthfulness_pressure", 0),
                 "learning_momentum": world_model.get("learning_momentum", 0),
@@ -5679,7 +5838,7 @@ class SupervisorUIMixin:
             raw_needs = cog_snapshot.get("needs") or []
             cognition["needs"] = [
                 {
-                    "need_type": n.get("need_type", "unknown"),
+                    "need_type": n.get("need_type", "未分类需求"),
                     "severity": n.get("severity", 0),
                     "urgency": n.get("urgency", 0),
                     "confidence": n.get("confidence", 0),
@@ -5691,10 +5850,10 @@ class SupervisorUIMixin:
             raw_intents = cog_snapshot.get("intents") or []
             cognition["intents"] = [
                 {
-                    "intent_type": i.get("intent_type", "unknown"),
+                    "intent_type": i.get("intent_type", "未命名意图"),
                     "priority": i.get("priority", 0),
                     "output_channel": i.get("output_channel", "task_candidates"),
-                    "target_horizon": i.get("target_horizon", "immediate"),
+                    "target_horizon": i.get("target_horizon", "当前轮"),
                     "rationale": str(i.get("rationale", ""))[:150],
                 }
                 for i in raw_intents[:6]
@@ -5703,7 +5862,7 @@ class SupervisorUIMixin:
             raw_signals = cog_snapshot.get("signals") or []
             cognition["signals"] = [
                 {
-                    "signal_type": s.get("signal_type", "unknown"),
+                    "signal_type": s.get("signal_type", "未命名信号"),
                     "priority": s.get("priority", 0),
                     "message": str(s.get("message", ""))[:200],
                 }
@@ -5770,7 +5929,7 @@ class SupervisorUIMixin:
     def _observation_status_value(self, task: Dict[str, Any]) -> str:
         return str(task.get("status") or "").strip().lower()
 
-    def _is_api_a_dispatch_task(self, task: Dict[str, Any]) -> bool:
+    def _is_api_a_execution_lane_task(self, task: Dict[str, Any]) -> bool:
         return self._is_creativity_ui_task(task) and self._observation_status_value(task) in {
             "approved",
             "running",
@@ -5869,6 +6028,8 @@ class SupervisorUIMixin:
         summary: str = "",
         order: int = 0,
         segment_kind: str = "",
+        read_rule: str = "",
+        next_step: str = "",
     ) -> Dict[str, Any]:
         return {
             "key": key,
@@ -5880,6 +6041,8 @@ class SupervisorUIMixin:
             "summary": summary,
             "order": order,
             "segment_kind": segment_kind,
+            "read_rule": str(read_rule or "").strip(),
+            "next_step": str(next_step or "").strip(),
             "count": len(items),
             "items": list(items),
         }
@@ -6293,16 +6456,16 @@ class SupervisorUIMixin:
 
         creativity_sorted = sorted(creativity_tasks, key=self._observation_sort_key)
         supervisor_sorted = sorted(supervisor_tasks, key=self._observation_sort_key)
-        creativity_dispatch_source = [
-            task for task in creativity_sorted if self._is_api_a_dispatch_task(task)
+        creativity_api_a_lane_source = [
+            task for task in creativity_sorted if self._is_api_a_execution_lane_task(task)
         ]
         creativity_running_source = [
             task
-            for task in creativity_dispatch_source
+            for task in creativity_api_a_lane_source
             if self._observation_status_value(task) == "running"
         ]
         creativity_governance_source = [
-            task for task in creativity_sorted if not self._is_api_a_dispatch_task(task)
+            task for task in creativity_sorted if not self._is_api_a_execution_lane_task(task)
         ]
         api_b_governance_source = sorted(
             [*supervisor_sorted, *creativity_governance_source],
@@ -6336,20 +6499,20 @@ class SupervisorUIMixin:
             for task in api_b_governance_source
         ]
         api_b_pending = [task for task in api_b_pending if isinstance(task, dict)]
-        api_a_dispatch_items = [
+        api_a_lane_items = [
             self._build_observation_card(
                 task,
                 lane="agent",
                 observation_role="observed_task",
             )
-            for task in creativity_dispatch_source
+            for task in creativity_api_a_lane_source
         ]
-        api_a_dispatch_items = [
-            task for task in api_a_dispatch_items if isinstance(task, dict)
+        api_a_lane_items = [
+            task for task in api_a_lane_items if isinstance(task, dict)
         ]
         api_a_ready = [
             task
-            for task in api_a_dispatch_items
+            for task in api_a_lane_items
             if str(task.get("status") or "").strip().lower() in {"approved", "retry"}
         ]
         creativity_governance_cards = [
@@ -6358,12 +6521,12 @@ class SupervisorUIMixin:
 
         seen_keys = {
             str(task.get("metadata", {}).get("endogenous_drive_key") or "").strip()
-            for task in [*api_b_pending, *api_a_dispatch_items]
+            for task in [*api_b_pending, *api_a_lane_items]
             if isinstance(task, dict)
         }
         seen_titles = {
             str(task.get("title") or "").strip()
-            for task in [*api_b_pending, *api_a_dispatch_items]
+            for task in [*api_b_pending, *api_a_lane_items]
             if isinstance(task, dict)
         }
         candidates: List[Dict[str, Any]] = []
@@ -6383,7 +6546,7 @@ class SupervisorUIMixin:
             candidate_card = self._build_observation_card(
                 candidate,
                 lane="supervisor",
-                display_status="API-B 候选判断",
+                display_status="候选形成",
                 status="candidate",
                 observation_role="candidate",
             )
@@ -6476,11 +6639,11 @@ class SupervisorUIMixin:
             api_a_activity_text = "执行流: 监督者已放行链路项，等待 API-A 自主执行面认领"
             api_a_reason_style = "warn"
         elif deferred_api_a_governance:
-            api_a_chain_reason = "链路: 当前学习链路项大多仍停留在 API-B 治理段并被延后，尚未进入 API-A 待拉取段"
+            api_a_chain_reason = "链路: 当前学习链路项大多仍停留在 API-B 治理段并被延后，尚未进入 API-A 待拉取窗口"
             api_a_activity_text = "执行流: 等待 API-B 重新放行、重排或补充证据"
             api_a_reason_style = "warn"
         elif creativity_governance_cards:
-            api_a_chain_reason = "链路: 当前自主链路项仍停留在 API-B 治理段，尚未进入 API-A 待拉取段"
+            api_a_chain_reason = "链路: 当前自主链路项仍停留在 API-B 治理段，尚未进入 API-A 待拉取窗口"
             api_a_activity_text = "执行流: 等待 API-B 审核、放行或重新排序链路项"
             api_a_reason_style = "info"
         elif recent_writebacks or candidates or api_b_pending:
@@ -6562,20 +6725,22 @@ class SupervisorUIMixin:
         chain_segments = [
             self._build_observation_group(
                 key="api_b_candidates",
-                label="API-B 候选判断",
-                empty_text="当前没有新的 API-B 候选判断",
+                label="候选形成",
+                empty_text="当前没有新的候选形成信号",
                 items=candidates[:6],
                 emphasis="candidate",
                 owner="API-B",
-                stage_label="候选形成",
+                stage_label="刚形成",
                 summary="内生驱动刚形成、尚待 API-B 判断是否进入治理链路的候选。",
                 order=0,
                 segment_kind="candidate_judgement",
+                read_rule="这些只是 API-B 内生驱动刚形成的候选，不等于已经放行的自主链路项。",
+                next_step="等待 API-B 判断是否进入治理在途段。",
             ),
             self._build_observation_group(
                 key="api_b_backlog",
-                label="API-B 治理在途",
-                empty_text="当前没有新的 API-B 治理在途链路项",
+                label="治理在途",
+                empty_text="当前没有新的治理在途链路项",
                 items=api_b_pending[:6],
                 emphasis="supervisor",
                 owner="API-B",
@@ -6583,22 +6748,26 @@ class SupervisorUIMixin:
                 summary="仍停留在 API-B 审核、重排、延后或内部维护阶段的链路项。",
                 order=1,
                 segment_kind="governance_backlog",
+                read_rule="这些链路项仍由 API-B 判断、重排、延后或内部维护，尚未进入 API-A 执行窗口。",
+                next_step="只有被放行后才会进入 API-A 待拉取窗口。",
             ),
             self._build_observation_group(
                 key="api_a_ready",
-                label="API-A 待拉取",
+                label="待拉取窗口",
                 empty_text="当前没有进入 API-A 拉取窗口的自主链路项",
                 items=api_a_ready[:6],
                 emphasis="agent",
                 owner="API-A",
-                stage_label="自主执行",
+                stage_label="执行前窗口",
                 summary="已经放行、处于 API-A 拉取窗口的自主链路项。",
                 order=2,
                 segment_kind="execution_ready",
+                read_rule="这里只展示 approved 或 retry 的待拉取项，不包含已经 running 的执行中链路项。",
+                next_step="被 API-A 认领后，会转入闭环中的执行回报阶段。",
             ),
             self._build_observation_group(
                 key="mem_recent",
-                label="Mem 最近写回",
+                label="写回回流",
                 empty_text="尚未观察到新的 Mem 写回记录",
                 items=recent_writeback_cards[:4],
                 emphasis="mem",
@@ -6607,6 +6776,8 @@ class SupervisorUIMixin:
                 summary="最近完成并已经回流到 Mem 的自主链路结果记录。",
                 order=3,
                 segment_kind="mem_writeback",
+                read_rule="这里只看已经完成并回流 Mem 的结果记录，不代表新的放行动作。",
+                next_step="这些结果会供下一轮 API-B 再读取与重新判断。",
             ),
         ]
         chain_segments = self._attach_chain_section_activity(
@@ -6654,6 +6825,11 @@ class SupervisorUIMixin:
                 "Web 小屋以 API-B 为主视角，只观察判断、治理、Mem 回流与 API-A 执行回报；"
                 "用户链路只作为软感知信号。"
             ),
+            "protocol_notes": [
+                "Web 小屋只展示 API-B 主视角下的自主链路。",
+                "用户链路只作为软感知输入，不展示聊天内容。",
+                "API-A 在这里仅以待拉取窗口与执行回报出现。",
+            ],
             "primary_focus": {
                 "title": str((focus_card or {}).get("title") or "自主链路闭环").strip(),
                 "status": str((focus_card or {}).get("display_status") or "等待中").strip(),
@@ -6666,7 +6842,7 @@ class SupervisorUIMixin:
         }
 
         return {
-            "read_model_version": 7,
+            "read_model_version": 8,
             "mode": {
                 "label": "观测模式",
                 "scope": "api_b_autonomous_chain_only",
@@ -6678,7 +6854,7 @@ class SupervisorUIMixin:
             },
             "chain": {
                 "headline": "自主链路分段观察",
-                "summary": "显式展示 API-B 候选形成、API-B 治理在途、API-A 待拉取与 Mem 最近写回四段链路分段。",
+                "summary": "显式展示候选形成、治理在途、待拉取窗口与写回回流四段自主链路只读投影。",
                 "segments": chain_segments,
             },
             "board": board,
@@ -6694,6 +6870,8 @@ class SupervisorUIMixin:
                         "owner": "API-B",
                         "status": api_b_status,
                         "summary": api_b_summary,
+                        "read_rule": "这一段表示 API-B 正在判断候选、治理在途链路项或内部维护动作。",
+                        "transition_hint": "被放行的创造类链路项会进入 API-A 待拉取窗口。",
                         "focus_task": api_b_active_task or (candidates[0] if candidates else None) or (api_b_pending[0] if api_b_pending else None),
                     },
                     {
@@ -6706,6 +6884,8 @@ class SupervisorUIMixin:
                         "chain_reason": api_a_chain_reason,
                         "activity_text": api_a_activity_text,
                         "reason_style": api_a_reason_style,
+                        "read_rule": "这一段只展示 API-A 对 API-B 可见的待拉取窗口与执行回报，不展示用户聊天过程。",
+                        "transition_hint": "完成后的结果会被写回 Mem，进入回流阶段。",
                         "focus_task": api_a_active_task or api_a_ready_focus,
                     },
                     {
@@ -6714,6 +6894,8 @@ class SupervisorUIMixin:
                         "owner": "Mem",
                         "status": writeback_status,
                         "summary": writeback_summary,
+                        "read_rule": "这一段表示自主链路结果已经写回 Mem，开始形成可再读取的记忆证据。",
+                        "transition_hint": "写回结果会供下一轮 API-B 再读取。",
                         "focus_task": recent_writeback_cards[0] if recent_writeback_cards else None,
                     },
                     {
@@ -6722,6 +6904,8 @@ class SupervisorUIMixin:
                         "owner": "API-B",
                         "status": reread_status,
                         "summary": reread_summary,
+                        "read_rule": "这一段表示 API-B 正在读取写回结果，并决定是否继续形成新候选或结束本轮。",
+                        "transition_hint": "再读取后可能回到候选形成，也可能结束当前闭环。",
                         "focus_task": recent_writeback_cards[0] if recent_writeback_cards else None,
                     },
                 ],
@@ -6932,11 +7116,11 @@ class SupervisorUIMixin:
         Per architectural baseline §3.4/§3.6/§8.1, the supervisor (API-B)
         only MANAGES tasks — it never executes learning or body-upgrade
         code.  Therefore the supervisor's `scene` is restricted to:
-          idle, planning, drive, memory, maintenance, dispatch
+          idle, planning, drive, memory, maintenance, handoff
         The "learning", "code_editing", "executing", "body_switch" scenes
         belong to the Agent (API-A) or Executor, and are not legal
         returns from this method.  When the supervisor is judging a
-        body-switch request, it reports `dispatch` (it has decided to
+        body-switch request, it reports `handoff` (it has decided to
         hand off to the executor) — the executor then reports
         `body_switch` while mechanically executing the switch.
         """
@@ -6944,8 +7128,9 @@ class SupervisorUIMixin:
 
         # ── Scene priority: running > memory_active > drive > queued > idle ──
 
-        # 1. Active execution: dispatch if a task is running (we just dispatched it;
-        #    the actual execution is the Agent's / Executor's responsibility).
+        # 1. Active execution: handoff if a task is running (the supervisor has
+        #    already handed it over; the actual execution is the Agent's /
+        #    Executor's responsibility).
         running = [t for t in all_tasks if t.get("status") == "running"]
         if running:
             r = running[0]
@@ -6961,11 +7146,11 @@ class SupervisorUIMixin:
                     f"「{rtitle}」记忆维护任务正在执行。",
                 )
             # For learning / body-upgrade running tasks, the supervisor
-            # just dispatched them — show `dispatch` (NOT `learning` or
+            # has already handed them over — show `handoff` (NOT `learning` or
             # `body_switch`, which are Agent / Executor scenes).
             return (
-                "dispatch",
-                f"已派发任务{error_note}",
+                "handoff",
+                f"执行交接中{error_note}",
                 f"「{rtitle}」已交给 API-A 自主执行面或执行器处理，结果将写回 Mem 供下一轮监督者判断。",
             )
 

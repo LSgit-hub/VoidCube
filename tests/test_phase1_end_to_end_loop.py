@@ -3,7 +3,7 @@
 Validates the complete running cycle described in
 docs/phase1-core-loop-and-endogenous-drive.md:
 
-  endogenous_drive → plan → review → decide → dispatch → execute → trace
+  endogenous_drive → plan → review → decide → handoff → execute → trace
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ def _make_supervisor(tmp_path: Path) -> Supervisor:
         return_value=tmp_path / ".body-active.json"
     )
     sv._execution_facade = Mock()
-    sv._execution_facade.execute_self_evolution_request = AsyncMock(
+    sv._execution_facade.execute_autonomous_chain_request = AsyncMock(
         return_value={"status": "executed"}
     )
     sv._execution_facade.execute_self_learning_followup = AsyncMock(
@@ -105,8 +105,8 @@ def _idle_snapshot(
 # Phase 1 loop steps
 # ---------------------------------------------------------------------------
 
-class TestPhase1EndogenousDriveToQueue:
-    """Step ①: Endogenous drive evaluates and emits queue candidates/signals."""
+class TestPhase1EndogenousDriveToBacklog:
+    """Step ①: Endogenous drive evaluates and emits governance-backlog candidates/signals."""
 
     @pytest.mark.asyncio
     @pytest.mark.unit
@@ -181,7 +181,7 @@ class TestPhase1EndogenousDriveToQueue:
     @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_no_duplicate_candidates_across_cycles(self, tmp_path):
-        """Second drive cycle does not re-create already-queued candidates."""
+        """Second drive cycle does not re-create already-planned backlog candidates."""
         sv = _make_supervisor(tmp_path)
         sv.config = sv.config.model_copy(
             update={
@@ -308,12 +308,12 @@ class TestPhase1IdleWindowGovernance:
 
 
 class TestPhase1ExecutionDispatchAndTraceWriteback:
-    """Step ④-⑤: Dispatch to executor, trace_id flows through chain."""
+    """Step ④-⑤: Handoff to executor, trace_id flows through chain."""
 
     @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_execution_request_dispatched_for_approved_memory_task(self, tmp_path):
-        """Approved memory_maintenance task gets dispatched with execution_request."""
+        """Approved memory_maintenance task gets handed off with execution_request."""
         sv = _make_supervisor(tmp_path)
         sv.config = sv.config.model_copy(
             update={
@@ -377,11 +377,11 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
             }
         sv.evaluate_activity_guards = fake_idle_for_dispatch  # type: ignore[method-assign]
 
-        # Run full review + dispatch cycle
+        # Run full review + handoff cycle
         result = await sv._run_autonomous_chain_review_cycle()
-        assert result["dispatched"], f"No tasks dispatched: {result}"
+        assert result["handed_off"], f"No tasks handed off: {result}"
 
-        # Verify execution was dispatched and completed
+        # Verify execution was handed off and completed
         updated = await sv.get_autonomous_chain_task(mem_task["task_id"])
         assert updated["status"] in ("running", "completed"), (
             f"status not running/completed. status={updated.get('status')}, metadata={updated.get('metadata', {})}"
@@ -408,23 +408,23 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
             {"decision": "auto", "activity_guards": {"now": "2026-06-20T02:00:00"}},
         )
 
-        # First dispatch
+        # First handoff
         await sv._run_autonomous_chain_review_cycle()
-        call_count_before = sv._execution_facade.execute_self_evolution_request.call_count
+        call_count_before = sv._execution_facade.execute_autonomous_chain_request.call_count
 
-        # Second dispatch attempt
+        # Second handoff attempt
         await sv._run_autonomous_chain_review_cycle()
-        call_count_after = sv._execution_facade.execute_self_evolution_request.call_count
+        call_count_after = sv._execution_facade.execute_autonomous_chain_request.call_count
 
-        # No additional calls — duplicate prevented
+        # No additional calls — duplicate handoff prevented
         assert call_count_after == call_count_before, (
-            f"Duplicate dispatch not prevented: {call_count_before} → {call_count_after}"
+            f"Duplicate handoff not prevented: {call_count_before} → {call_count_after}"
         )
 
     @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_trace_id_flows_to_watch_window_state(self, tmp_path):
-        """Body upgrade dispatch writes trace_id to WatchWindowRuntimeState."""
+        """Body upgrade handoff writes trace_id to WatchWindowRuntimeState."""
         sv = _make_supervisor(tmp_path)
         sv.config = sv.config.model_copy(
             update={
@@ -478,7 +478,7 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
 
         updated = await sv.get_autonomous_chain_task(task["task_id"])
         assert updated["status"] in ("running", "completed"), (
-            f"Task was not dispatched. status={updated.get('status')}, "
+            f"Task was not handed off. status={updated.get('status')}, "
             f"metadata={updated.get('metadata')}"
         )
         assert "trace_id" in updated, "Task should have trace_id"
@@ -606,7 +606,7 @@ class TestPhase1GovernorMode:
         sv = _make_supervisor(tmp_path)
         sv._ensure_watch_window_task = Mock()
         sv.run_health_checks = AsyncMock(return_value={"results": []})
-        sv._run_autonomous_chain_review_cycle = AsyncMock(return_value={"reviewed": 0, "dispatched": []})
+        sv._run_autonomous_chain_review_cycle = AsyncMock(return_value={"reviewed": 0, "handed_off": []})
         sv._run_endogenous_drive_cycle = AsyncMock(return_value={"planned": 0})
         sv._fetch_gateway_activity_snapshot = AsyncMock(return_value={
             "last_agent_work_at": None, "counts": {}, "active_sessions": 0,
@@ -614,12 +614,12 @@ class TestPhase1GovernorMode:
 
         await sv._start_periodic_tasks()
         assert sv._service_runtime.autonomous_chain_gate_active is False
-        assert sv._self_evolution_review_task is None
+        assert sv._autonomous_chain_review_task is None
         assert sv._endogenous_drive_task is None
 
         await sv._start_autonomous_chain_gate()
         assert sv._service_runtime.autonomous_chain_gate_active is True
-        assert sv._self_evolution_review_task is not None
+        assert sv._autonomous_chain_review_task is not None
         assert sv._endogenous_drive_task is not None
 
         await sv._stop_autonomous_chain_gate()
@@ -639,7 +639,7 @@ class TestPhase1GovernorMode:
         sv._dispatch_self_learning_followup = AsyncMock(
             return_value={"status": "self_learning_followup_executed"}
         )
-        sv._dispatch_autonomous_chain_execution_request = AsyncMock(
+        sv._handoff_autonomous_chain_execution_request = AsyncMock(
             return_value={"status": "executed"}
         )
         async def fake_idle(_request=None):
@@ -675,7 +675,7 @@ class TestPhase1GovernorMode:
         )
 
         await sv._run_autonomous_chain_review_cycle()
-        # Self-learning tasks are NOT dispatched by supervisor review — they wait for Agent pull.
+        # Self-learning tasks are NOT handed off by supervisor review — they wait for Agent pull.
         sv._dispatch_self_learning_followup.assert_not_awaited()
 
     @pytest.mark.asyncio

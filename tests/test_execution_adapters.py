@@ -183,7 +183,7 @@ async def test_execution_facade_delegates_to_current_adapters():
     assert await facade.prepare_body_slot("slot-B", {}) == {"status": "slot_prepared"}
     assert await facade.mark_body_candidate("slot-B", {}) == {"status": "candidate_marked"}
     assert await facade.execute_body_upgrade({}) == {"status": "upgrade_executed"}
-    formal_result = await facade.execute_self_evolution_request(
+    formal_result = await facade.execute_autonomous_chain_request(
         {
             "task_id": "task-1",
             "kind": "general_self_evolution",
@@ -212,7 +212,7 @@ async def test_execution_facade_delegates_to_current_adapters():
             "execution_request": formal_result["execution_request"],
         }
     )
-    assert formal_result["status"] == "formal_self_evolution_executed"
+    assert formal_result["status"] == "autonomous_chain_execution_executed"
     memory_maintenance.trigger_memory_compression.assert_awaited_once_with({})
 
 

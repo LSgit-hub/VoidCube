@@ -45,7 +45,7 @@ logger = logging.getLogger("supervisor")
 #   planning     - deciding / approving / denying a task (managing list)
 #   memory       - actively touching long-term memory (Mem internal)
 #   drive        - endogenous drive: cognitive evaluation / governance output
-#   dispatch     - sending an execution request to the body executor
+#   handoff      - handing an approved execution request to API-A / executor
 #   maintenance  - memory-maintenance sweep (long-term memory hygiene)
 #   body_switch  - judging a body switch request
 #
@@ -54,7 +54,7 @@ logger = logging.getLogger("supervisor")
 #   "execution"  - the Agent or executor is doing work
 # ──────────────────────────────────────────────────────────────────────
 SUPERVISOR_LEGAL_SCENES: frozenset[str] = frozenset(
-    {"idle", "planning", "memory", "drive", "dispatch", "maintenance"}
+    {"idle", "planning", "memory", "drive", "handoff", "maintenance"}
 )
 
 
@@ -3211,10 +3211,10 @@ class PlanningRuntimeMixin:
                 }
             )
 
-        queue_pressure = float(reflection.get("governance_backlog_blockage_pressure") or 0.0)
-        if queue_pressure >= 0.28 or str(world_model.get("governance_load_state") or "").strip() in {"busy", "strained"}:
+        backlog_pressure = float(reflection.get("governance_backlog_blockage_pressure") or 0.0)
+        if backlog_pressure >= 0.28 or str(world_model.get("governance_load_state") or "").strip() in {"busy", "strained"}:
             risk = self._clamp_endogenous_ratio(
-                queue_pressure * 0.7
+                backlog_pressure * 0.7
                 + (0.2 if str(world_model.get("governance_load_state") or "").strip() == "strained" else 0.08)
             )
             entries.append(
@@ -3229,10 +3229,10 @@ class PlanningRuntimeMixin:
                         4,
                     ),
                     "hypothesis": (
-                        "Additional autonomous output may worsen queue drag before governance review debt is reduced."
+                        "Additional autonomous output may worsen backlog drag before governance review debt is reduced."
                     ),
                     "why_uncertain": (
-                        "Backlog pressure is visible, but the drive still needs to inspect whether the queue is blocked by stale work, review debt, or repeated low-yield candidates."
+                        "Backlog pressure is visible, but the drive still needs to inspect whether the backlog is blocked by stale work, review debt, or repeated low-yield candidates."
                     ),
                     "observation_target": "governance_backlog_blockage",
                     "recommended_probe": "inspect stale, deferred, and pending-review endogenous tasks",
@@ -3265,7 +3265,7 @@ class PlanningRuntimeMixin:
                         "Further learning expansion may create low-yield tasks before existing evidence is properly consolidated."
                     ),
                     "why_uncertain": (
-                        "The drive can see mixed or weak learning signals, but it lacks enough evidence to know whether the problem is topic choice, queue drag, or low follow-through."
+                        "The drive can see mixed or weak learning signals, but it lacks enough evidence to know whether the problem is topic choice, backlog drag, or low follow-through."
                     ),
                     "observation_target": "learning_yield",
                     "recommended_probe": "compare recent learning quality against downstream task completion and review outcomes",
@@ -4792,7 +4792,7 @@ class PlanningRuntimeMixin:
 
     def _schedule_slot_interval_seconds(self) -> int:
         review_interval = int(
-            getattr(self.config.service_runtime, "self_evolution_review_interval", 300) or 300
+            getattr(self.config.service_runtime, "autonomous_chain_review_interval", 300) or 300
         )
         return max(300, review_interval)
 
@@ -5468,7 +5468,7 @@ class PlanningRuntimeMixin:
         return keys
 
     async def evaluate_endogenous_drive(self, request: dict | None = None):
-        """Evaluate the endogenous cognition state and queue-compatible projections."""
+        """Evaluate the endogenous cognition state and governance-backlog projections."""
 
         request = request or {}
         activity_guard_request = dict(request.get("activity_guards") or {})
@@ -5552,9 +5552,9 @@ class PlanningRuntimeMixin:
             )
         )
 
-        def _candidate_queue_items(candidates: list[Any]) -> list[Dict[str, Any]]:
+        def _candidate_backlog_items(candidates: list[Any]) -> list[Dict[str, Any]]:
             return self._apply_scheduled_for_to_candidate_items(
-                [candidate.to_queue_item() for candidate in candidates],
+                [candidate.to_backlog_item() for candidate in candidates],
             )
 
         def _lm_proposals_for_second_candidate_pass() -> Optional[list[Dict[str, Any]]]:
@@ -5591,7 +5591,7 @@ class PlanningRuntimeMixin:
             max_candidates=max_candidates,
             deliberation_report=deliberation,
         )
-        queue_items = _candidate_queue_items(candidates)
+        candidate_items = _candidate_backlog_items(candidates)
         lm_reasoning_state = self._lm_reasoning_state_for_current_cycle()
         cognitive_self_regulation = self._derive_cognitive_self_regulation(
             drive_history=activity_guards["drive_history"],
@@ -5655,7 +5655,7 @@ class PlanningRuntimeMixin:
                 deliberation_report=deliberation,
                 lm_proposals_override=_lm_proposals_for_second_candidate_pass(),
             )
-            queue_items = _candidate_queue_items(candidates)
+            candidate_items = _candidate_backlog_items(candidates)
 
         governance_channels = self._governance_channels_from_deliberation(
             deliberation_dict
@@ -5666,10 +5666,10 @@ class PlanningRuntimeMixin:
                 activity_guards=activity_guards,
                 governance_channels=governance_channels,
                 self_regulation=combined_self_regulation,
-                candidate_items=queue_items,
+                candidate_items=candidate_items,
                 lm_reasoning_state=lm_reasoning_state,
             )
-            queue_items = list(persisted_evaluation["candidate_items"])
+            candidate_items = list(persisted_evaluation["candidate_items"])
             governance_event_stream = dict(persisted_evaluation["governance_event_stream"])
             cognition_state = dict(persisted_evaluation["cognition_state"])
         else:
@@ -5681,7 +5681,7 @@ class PlanningRuntimeMixin:
                 governance_channels=governance_channels,
                 governance_event_stream=governance_event_stream,
                 self_regulation=combined_self_regulation,
-                candidate_items=queue_items,
+                candidate_items=candidate_items,
                 lm_reasoning_state=lm_reasoning_state,
             )
         if record_activity:
@@ -5692,7 +5692,7 @@ class PlanningRuntimeMixin:
                 metadata={
                     "count": len(candidates),
                     "candidate_keys": [candidate.stable_key for candidate in candidates],
-                    "candidates": [dict(item) for item in queue_items],
+                    "candidates": [dict(item) for item in candidate_items],
                     "deliberation": deliberation_dict,
                     "cognition_state": cognition_state,
                 },
@@ -5703,7 +5703,7 @@ class PlanningRuntimeMixin:
             "core_values": CORE_VALUES,
             "activity_guards": activity_guards,
             "deliberation": deliberation_dict,
-            "candidates": queue_items,
+            "candidates": candidate_items,
             "count": len(candidates),
             "drive_posture": self._drive_posture_signal_from_deliberation(
                 deliberation_dict
@@ -5958,7 +5958,7 @@ class PlanningRuntimeMixin:
                     "stable_key": row.get("stable_key"),
                     "candidate_kind": candidate_kind,
                     "reason": (
-                        "Deferred before queue insertion because the endogenous drive "
+                        "Deferred before governance-backlog insertion because the endogenous drive "
                         "selected observation posture and this candidate is not a "
                         "stability-oriented governance action."
                     ),
@@ -5977,8 +5977,8 @@ class PlanningRuntimeMixin:
                         "stable_key": row.get("stable_key"),
                         "candidate_kind": str(score_breakdown.get("candidate_kind") or "").strip().lower(),
                         "reason": (
-                            "Deferred before queue insertion because observation posture "
-                            f"limits endogenous queue growth to budget {candidate_budget}."
+                            "Deferred before governance-backlog insertion because observation posture "
+                            f"limits endogenous backlog growth to budget {candidate_budget}."
                         ),
                     }
                 )
@@ -6061,7 +6061,7 @@ class PlanningRuntimeMixin:
             self._record_supervisor_ui_activity(
                 "endogenous_drive_planned",
                 scene="planning",
-                summary=f"Endogenous drive queued {len(created_tasks)} governance candidate(s).",
+                summary=f"Endogenous drive added {len(created_tasks)} governance backlog candidate(s).",
                 metadata={
                     "drive_posture": drive_posture,
                     "governance_channels": governance_channels,
@@ -6196,7 +6196,7 @@ class PlanningRuntimeMixin:
             )
         return (
             "deferred",
-            "Task deferred because the current runtime concurrency guards are not yet satisfied. The task remains queued for future review.",
+            "Task deferred because the current runtime concurrency guards are not yet satisfied. The task remains in the governance backlog for future review.",
         )
 
     def _has_pending_self_learning_prerequisite(
@@ -6276,7 +6276,7 @@ class PlanningRuntimeMixin:
 
     async def _recover_orphaned_agent_pull_tasks(self) -> int:
         recovered = 0
-        for task in self._autonomous_chain_store.list_execution_dispatch_tasks(status="running"):
+        for task in self._autonomous_chain_store.list_api_a_execution_lane_tasks(status="running"):
             if not self._is_agent_pull_task(task):
                 continue
             metadata = dict(task.metadata or {})
@@ -6651,7 +6651,7 @@ class PlanningRuntimeMixin:
         except Exception:
             return {}
 
-        queue_snapshot = self._build_lm_governance_review_snapshot(tasks)
+        backlog_snapshot = self._build_lm_governance_review_snapshot(tasks)
         prompt = (
             "你是 VoidCube 的监督者任务治理层。你的职责不是产出新任务，"
             "而是治理当前任务列表。\n\n"
@@ -6680,7 +6680,7 @@ class PlanningRuntimeMixin:
             "  ]\n"
             "}\n\n"
             f"【activity_guards】\n{json.dumps(activity_guards, ensure_ascii=False, default=str)[:3000]}\n\n"
-            f"【tasks】\n{json.dumps(queue_snapshot, ensure_ascii=False, default=str)[:5000]}"
+            f"【tasks】\n{json.dumps(backlog_snapshot, ensure_ascii=False, default=str)[:5000]}"
         )
 
         try:
@@ -6877,7 +6877,7 @@ class PlanningRuntimeMixin:
             self._record_supervisor_ui_activity(
                 "tasks_planned",
                 scene="planning",
-                summary=f"Supervisor queued {len(created)} task(s).",
+                summary=f"Supervisor added {len(created)} task(s) to the governance backlog.",
                 metadata=self._build_autonomous_chain_activity_metadata(created, action="plan"),
             )
 
@@ -7351,7 +7351,7 @@ class PlanningRuntimeMixin:
             "tasks": created,
         }
 
-    async def _dispatch_autonomous_chain_execution_request(
+    async def _handoff_autonomous_chain_execution_request(
         self,
         task: AutonomousChainTask,
         *,
@@ -7365,13 +7365,13 @@ class PlanningRuntimeMixin:
         if task.status == "running":
             return None
 
-        # ── Mark running BEFORE any await to prevent double-dispatch ──
+        # ── Mark running BEFORE any await to prevent duplicate handoff ──
         self._update_task_status(
             task.task_id,
             status="running",
             actor="supervisor",
-            reason="Execution request dispatched",
-            event_type="dispatch",
+            reason="Execution handoff started",
+            event_type="execution_handoff_started",
         )
         self._autonomous_chain_store.update_metadata(
             task.task_id,
@@ -7382,9 +7382,9 @@ class PlanningRuntimeMixin:
         )
 
         payload = execution_request.model_dump(mode="json")
-        result = await self._execution_facade.execute_self_evolution_request(payload)
+        result = await self._execution_facade.execute_autonomous_chain_request(payload)
 
-        # ── Failure recovery: clear dispatched flag so the task can be ──
+        # ── Failure recovery: restore approved state so the task can be ──
         # retried on the next cycle.  Only explicit success statuses close the
         # task; empty or unknown statuses mean the executor did not confirm
         # completion.
@@ -7404,8 +7404,8 @@ class PlanningRuntimeMixin:
                 "already_compressed",
                 "upgrade_executed",
                 "learn_only_completed",
-                "formal_self_evolution_executed",
-                "formal_self_evolution_recorded",
+                "autonomous_chain_execution_executed",
+                "autonomous_chain_execution_recorded",
             }
         )
         is_failure = (
@@ -7418,7 +7418,7 @@ class PlanningRuntimeMixin:
             # memory_maintenance tasks are handled by the supervisor's internal
             # memory service (baseline §3.4). API-A pull paths only see
             # autonomous-executor tasks, so retry keeps the task
-            # approved for the supervisor dispatcher instead of pushing it
+            # approved for the supervisor handoff lane instead of pushing it
             # through the API-A autonomous executor poll.
             if task_governance_type == "memory_maintenance":
                 if failure_count < max_retries:
@@ -7427,12 +7427,12 @@ class PlanningRuntimeMixin:
                         status="approved",
                         actor="supervisor_memory_service",
                         reason=(
-                            f"Memory-maintenance dispatch failed "
+                            f"Memory-maintenance handoff failed "
                             f"({failure_count}/{max_retries}); approved so the "
-                            f"supervisor's next cycle can re-dispatch. "
+                            f"supervisor's next cycle can re-handoff it. "
                             f"executor_status={str(result_status)[:60]}"
                         ),
-                        event_type="dispatch_failure",
+                        event_type="execution_handoff_failed",
                     )
                 else:
                     self._update_task_status(
@@ -7440,11 +7440,11 @@ class PlanningRuntimeMixin:
                         status="failed",
                         actor="supervisor_memory_service",
                         reason=(
-                            f"Memory-maintenance dispatch permanently failed "
+                            f"Memory-maintenance handoff permanently failed "
                             f"after {max_retries} retries. "
                             f"executor_status={str(result_status)[:60]}"
                         ),
-                        event_type="dispatch_failure",
+                        event_type="execution_handoff_failed",
                     )
                 self._autonomous_chain_store.update_metadata(
                     task.task_id,
@@ -7456,13 +7456,13 @@ class PlanningRuntimeMixin:
                 )
                 return result
             if failure_count < max_retries:
-                # Allow retry — set back to approved so it can be re-dispatched
+                # Allow retry — set back to approved so it can be re-handed off.
                 self._update_task_status(
                     task.task_id,
                     status="approved",
                     actor="supervisor",
-                    reason=f"Execution retry {failure_count}/{max_retries}",
-                    event_type="dispatch_retry",
+                    reason=f"Execution handoff retry {failure_count}/{max_retries}",
+                    event_type="execution_handoff_retry",
                 )
                 self._autonomous_chain_store.update_metadata(
                     task.task_id,
@@ -7473,7 +7473,7 @@ class PlanningRuntimeMixin:
                     },
                 )
             else:
-                # Permanent failure — keep dispatched so it's not retried
+                # Permanent failure — keep the failed lineage so it is not retried.
                 self._autonomous_chain_store.update_metadata(
                     task.task_id,
                     metadata={
@@ -7517,7 +7517,7 @@ class PlanningRuntimeMixin:
             status="completed",
             actor=actor,
             reason=completion_reason,
-            event_type="dispatch_completed",
+            event_type="execution_handoff_completed",
         )
         self._autonomous_chain_store.update_metadata(
             task.task_id,
@@ -7532,9 +7532,9 @@ class PlanningRuntimeMixin:
             },
         )
         self._record_supervisor_ui_activity(
-            "execution_dispatched",
-            scene="dispatch",
-            summary=f"Execution request dispatched for '{task.title}'.",
+            "execution_handoff_started",
+            scene="handoff",
+            summary=f"已把「{task.title}」交接给执行面处理。",
             metadata={
                 **self._task_activity_metadata(task),
                 "decision_id": execution_request.decision_id,
@@ -7550,7 +7550,7 @@ class PlanningRuntimeMixin:
             logger.info("Skipping autonomous-chain review cycle because another cycle is already running.")
             return {
                 "reviewed": 0,
-                "dispatched": [],
+                "handed_off": [],
                 "recovered_orphaned": 0,
                 "governance_consumption": {"count": 0, "consumed": []},
                 "alignment_consumption": {"count": 0, "consumed": []},
@@ -7569,7 +7569,7 @@ class PlanningRuntimeMixin:
         # ── Cleanup: auto-fail tasks stuck in "running" > 30 min ──
         stale_running = 0
         now = datetime.now(timezone.utc)
-        for task in self._autonomous_chain_store.list_execution_dispatch_tasks(status="running"):
+        for task in self._autonomous_chain_store.list_api_a_execution_lane_tasks(status="running"):
             started = task.metadata.get("executed_at") or task.metadata.get("execution_started_at")
             if started:
                 try:
@@ -7589,18 +7589,18 @@ class PlanningRuntimeMixin:
             logger.warning("Auto-failed %d stale running tasks", stale_running)
 
         review_result = await self.review_autonomous_chain_tasks({})
-        dispatched = []
-        dispatch_limit = int(
-            getattr(self.config.service_runtime, "self_evolution_dispatch_limit_per_cycle", 1)
+        handed_off = []
+        handoff_limit = int(
+            getattr(self.config.service_runtime, "self_evolution_handoff_limit_per_cycle", 1)
             or 0
         )
-        dispatch_budget_exhausted = 0
+        handoff_budget_exhausted = 0
 
-        def _dispatch_budget_available() -> bool:
-            return dispatch_limit <= 0 or len(dispatched) < dispatch_limit
+        def _handoff_budget_available() -> bool:
+            return handoff_limit <= 0 or len(handed_off) < handoff_limit
 
-        # Pass 1: dispatch tasks that were *just* approved in this review
-        dispatch_considered_ids: set[str] = set()
+        # Pass 1: hand off tasks that were *just* approved in this review.
+        handoff_considered_ids: set[str] = set()
         for task_payload in review_result.get("tasks", []):
             if task_payload.get("status") != "approved":
                 continue
@@ -7609,7 +7609,7 @@ class PlanningRuntimeMixin:
             task = self._autonomous_chain_store.get_task(task_payload_id)
             if task is None:
                 continue
-            dispatch_considered_ids.add(task.task_id)
+            handoff_considered_ids.add(task.task_id)
 
             gov_type = self._task_governance_type(task)
             execution_kind = self._task_execution_kind(task)
@@ -7620,29 +7620,29 @@ class PlanningRuntimeMixin:
             if task.execution_request is None:
                 continue
 
-            if not _dispatch_budget_available():
-                dispatch_budget_exhausted += 1
+            if not _handoff_budget_available():
+                handoff_budget_exhausted += 1
                 continue
 
-            result = await self._dispatch_autonomous_chain_execution_request(task)
+            result = await self._handoff_autonomous_chain_execution_request(task)
             if result is not None:
-                dispatched.append(
+                handed_off.append(
                     {
                         "task_id": task.task_id,
                         "status": result.get("status"),
                     }
                 )
 
-        # Pass 2: dispatch any previously-approved tasks that were never
-        # dispatched, PLUS tasks whose previous dispatch failed and were
+        # Pass 2: hand off any previously-approved tasks that were never
+        # handed off, PLUS tasks whose previous handoff failed and were
         # reset to approved for retry (execution_failed=True,
         # failure_count < max_retries).  Tasks in running state or
         # permanently failed are skipped here.
-        dispatched_ids = {d["task_id"] for d in dispatched}
-        for task in self._autonomous_chain_store.list_execution_dispatch_tasks(status="approved"):
-            if task.task_id in dispatched_ids:
+        handed_off_ids = {d["task_id"] for d in handed_off}
+        for task in self._autonomous_chain_store.list_api_a_execution_lane_tasks(status="approved"):
+            if task.task_id in handed_off_ids:
                 continue
-            if task.task_id in dispatch_considered_ids:
+            if task.task_id in handoff_considered_ids:
                 continue
             if task.status == "running":
                 continue  # already running or permanently failed
@@ -7656,29 +7656,29 @@ class PlanningRuntimeMixin:
             if task.execution_request is None:
                 continue
 
-            if not _dispatch_budget_available():
-                dispatch_budget_exhausted += 1
+            if not _handoff_budget_available():
+                handoff_budget_exhausted += 1
                 continue
 
-            result = await self._dispatch_autonomous_chain_execution_request(task)
+            result = await self._handoff_autonomous_chain_execution_request(task)
             if result is not None:
-                dispatched.append(
+                handed_off.append(
                     {"task_id": task.task_id, "status": result.get("status")}
                 )
 
         return {
             "reviewed": review_result.get("count", 0),
-            "dispatched": dispatched,
+            "handed_off": handed_off,
             "recovered_orphaned": recovered_orphaned,
             "governance_consumption": governance_consumption,
             "alignment_consumption": alignment_consumption,
             "truthfulness_consumption": truthfulness_consumption,
-            "dispatch_limit": dispatch_limit,
-            "dispatch_budget_exhausted": dispatch_budget_exhausted,
+            "handoff_limit": handoff_limit,
+            "handoff_budget_exhausted": handoff_budget_exhausted,
         }
 
     async def run_autonomous_cycle(self, request: dict | None = None) -> Dict[str, Any]:
-        """Execute one full autonomous cycle: drive → plan → review → dispatch.
+        """Execute one full autonomous cycle: drive → plan → review → handoff.
 
         This is the single-endpoint entry point used by the ``/auto`` switch.
         It runs the same pipeline as the periodic background loops, but is
@@ -7691,7 +7691,7 @@ class PlanningRuntimeMixin:
         focus = str(request.get("focus") or "").strip()
         phases: Dict[str, Any] = {}
 
-        # ── Phase 1: Endogenous drive → generate & queue candidates ──
+        # ── Phase 1: Endogenous drive → generate governance candidates ──
         try:
             drive_result = await self._run_endogenous_drive_cycle()
             phases["drive"] = {
@@ -7711,14 +7711,14 @@ class PlanningRuntimeMixin:
         except Exception as exc:
             phases["drive"] = {"status": "error", "error": str(exc)}
 
-        # ── Phase 2: autonomous-chain review → approve & dispatch ──
+        # ── Phase 2: autonomous-chain review → approve & handoff ──
         try:
             cycle_result = await self._run_autonomous_chain_review_cycle()
             phases["review"] = {
                 "reviewed": cycle_result.get("reviewed", 0),
-                "dispatched": [
+                "handed_off": [
                     dict(item) if isinstance(item, dict) else {"task_id": str(item)}
-                    for item in cycle_result.get("dispatched", [])
+                    for item in cycle_result.get("handed_off", [])
                 ],
                 "governance_consumption": dict(cycle_result.get("governance_consumption") or {}),
                 "alignment_consumption": dict(cycle_result.get("alignment_consumption") or {}),
@@ -7727,20 +7727,20 @@ class PlanningRuntimeMixin:
             now = datetime.now(timezone.utc)
             self._service_runtime.last_review_at = now
             self._service_runtime.next_review_at = now + timedelta(
-                seconds=self.config.service_runtime.self_evolution_review_interval
+                seconds=self.config.service_runtime.autonomous_chain_review_interval
             )
         except Exception as exc:
             phases["review"] = {"status": "error", "error": str(exc)}
 
         # ── Phase 3: Record supervisor UI activity ──
-        total_dispatched = len(phases.get("review", {}).get("dispatched", []))
+        total_handed_off = len(phases.get("review", {}).get("handed_off", []))
         total_planned = phases.get("drive", {}).get("planned", 0)
         self._record_supervisor_ui_activity(
             "autonomous_cycle_completed",
-            scene="dispatch" if total_dispatched > 0 else "planning",
+            scene="handoff" if total_handed_off > 0 else "planning",
             summary=(
                 f"Autonomous cycle complete: {total_planned} planned, "
-                f"{total_dispatched} dispatched for execution."
+                f"{total_handed_off} handed off for execution."
             ),
             metadata={
                 "phases": {
@@ -7748,7 +7748,7 @@ class PlanningRuntimeMixin:
                     for k, v in phases.items()
                 },
                 "total_planned": total_planned,
-                "total_dispatched": total_dispatched,
+                "total_handed_off": total_handed_off,
                 "focus": focus or None,
             },
         )
@@ -7758,7 +7758,7 @@ class PlanningRuntimeMixin:
             "phases": phases,
             "summary": {
                 "planned": total_planned,
-                "dispatched": total_dispatched,
+                "handed_off": total_handed_off,
                 "governance_consumed": int(
                     phases.get("review", {}).get("governance_consumption", {}).get("count", 0)
                 ),

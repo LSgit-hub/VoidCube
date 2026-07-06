@@ -29,18 +29,18 @@ REQUEST_TIMEOUT = 5  # seconds per HTTP call
 # first; the label map is purely cosmetic.
 SCENE_LABEL: Dict[str, str] = {
     # Supervisor (API-B)
-    "idle": "idle",
-    "planning": "planning",
-    "drive": "drive",
-    "memory": "memory",
-    "maintenance": "maintenance",
-    "dispatch": "dispatch",
+    "idle": "静置",
+    "planning": "治理安排",
+    "drive": "内生判断",
+    "memory": "记忆整理",
+    "maintenance": "连续性维护",
+    "handoff": "执行交接",
     # Agent (API-A)
-    "learning": "learning",
-    "code_editing": "code_editing",
-    "executing": "executing",
+    "learning": "自主学习",
+    "code_editing": "替身改进",
+    "executing": "执行中",
     # Executor
-    "body_switch": "body_switch",
+    "body_switch": "身体切换",
 }
 
 
@@ -95,10 +95,10 @@ def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
     chain = dict(observation.get("chain") or {})
     loop = dict(observation.get("loop") or {})
     segment_label_fallback = {
-        "api_b_backlog": "API-B",
-        "api_a_ready": "API-A",
-        "api_b_candidates": "候选",
-        "mem_recent": "Mem",
+        "api_b_backlog": "治理在途",
+        "api_a_ready": "待拉取窗口",
+        "api_b_candidates": "候选形成",
+        "mem_recent": "写回回流",
     }
     loop_stages = []
     for stage in list(loop.get("stages") or []):
@@ -195,6 +195,8 @@ def _human_dashboard_display(value: Optional[str]) -> str:
     return {
         "continuous": "持续运行",
         "no data": "暂无数据",
+        "unknown": "未知",
+        "now": "现在",
     }.get(text, text)
 
 
@@ -496,8 +498,8 @@ def print_dashboard() -> None:
             f"  ║  {chain.get('segments_headline', '自主链路分段观察')[:46]:<46s}          ║"
         )
         print(
-            f"  ║  API-B {chain.get('api_b_backlog', 0)}  ·  API-A {chain.get('api_a_ready', 0)}  ·  "
-            f"候选 {chain.get('candidates', 0)}  ·  写回 {chain.get('writebacks', 0)}              ║"
+            f"  ║  候选 {chain.get('candidates', 0)}  ·  治理 {chain.get('api_b_backlog', 0)}  ·  "
+            f"待拉取 {chain.get('api_a_ready', 0)}  ·  写回 {chain.get('writebacks', 0)}              ║"
         )
         for item in list(chain.get("loop_stages") or [])[:4]:
             title = str(item.get("title") or "?")[:28]

@@ -43,7 +43,7 @@ class VoidCubeExecutionFacade:
     async def execute_body_upgrade(self, request: dict | None = None) -> Dict[str, Any]:
         return await self.body_upgrade.execute_body_upgrade(request)
 
-    async def execute_self_evolution_request(self, request: dict) -> Dict[str, Any]:
+    async def execute_autonomous_chain_request(self, request: dict) -> Dict[str, Any]:
         execution_request = AutonomousChainExecutionRequest.model_validate(request)
         execution_request_payload = execution_request.model_dump(mode="json")
         execution_metadata = {
@@ -69,7 +69,7 @@ class VoidCubeExecutionFacade:
             # General self-evolution execution routed through body upgrade adapter.
             result = await self.body_upgrade.execute_body_upgrade(payload)
             return {
-                "status": "formal_self_evolution_executed",
+                "status": "autonomous_chain_execution_executed",
                 "execution_metadata": execution_metadata,
                 "execution_request": execution_request_payload,
                 "result": result,
@@ -82,14 +82,14 @@ class VoidCubeExecutionFacade:
                 }
             )
             return {
-                "status": "formal_self_evolution_executed",
+                "status": "autonomous_chain_execution_executed",
                 "execution_metadata": execution_metadata,
                 "execution_request": execution_request_payload,
                 "result": result,
             }
 
         return {
-            "status": "formal_self_evolution_recorded",
+            "status": "autonomous_chain_execution_recorded",
             "execution_metadata": execution_metadata,
             "execution_request": execution_request_payload,
         }

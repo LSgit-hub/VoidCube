@@ -137,10 +137,10 @@ def load_config_from_env() -> SystemConfig:
             config.supervisor.service_runtime.memory_compression_interval,
         )
     )
-    config.supervisor.service_runtime.self_evolution_review_interval = int(
+    config.supervisor.service_runtime.autonomous_chain_review_interval = int(
         os.getenv(
-            "SUPERVISOR_SELF_EVOLUTION_REVIEW_INTERVAL",
-            config.supervisor.service_runtime.self_evolution_review_interval,
+            "SUPERVISOR_AUTONOMOUS_CHAIN_REVIEW_INTERVAL",
+            config.supervisor.service_runtime.autonomous_chain_review_interval,
         )
     )
     config.supervisor.service_runtime.endogenous_drive_enabled = (

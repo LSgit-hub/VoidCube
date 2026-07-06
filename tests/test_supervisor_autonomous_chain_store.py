@@ -369,7 +369,7 @@ async def _plan_and_write_back_endogenous_cycle(
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_planning_self_evolution_task_creates_planned_queue_entry(tmp_path):
+async def test_planning_self_evolution_task_creates_planned_backlog_entry(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
     result = await supervisor.plan_autonomous_chain_task(
@@ -391,7 +391,7 @@ async def test_planning_self_evolution_task_creates_planned_queue_entry(tmp_path
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_duplicate_queue_spam(tmp_path):
+async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_duplicate_backlog_spam(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     supervisor.config = supervisor.config.model_copy(
@@ -3953,7 +3953,7 @@ async def test_cognition_state_attention_agenda_prioritizes_observe_before_actin
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_cognition_state_uncertainty_ledger_tracks_truthfulness_queue_and_learning_risks(tmp_path):
+async def test_cognition_state_uncertainty_ledger_tracks_truthfulness_backlog_and_learning_risks(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
@@ -4479,7 +4479,7 @@ async def test_strategy_memory_observation_history_does_not_reenter_observation_
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_contextual_focus_history_does_not_leak_stable_truthfulness_bias_into_degrading_queue_context(
+async def test_contextual_focus_history_does_not_leak_stable_truthfulness_bias_into_degrading_backlog_context(
     tmp_path,
 ):
     supervisor = _make_supervisor(tmp_path)
@@ -6236,7 +6236,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
                 "event_type": "governance_review_request",
                 "channel": "governance_review_requests",
                 "recorded_at": "2026-06-28T00:02:00+00:00",
-                "context_key": "user_chain_quiet|stable|queue_debt",
+                "context_key": "user_chain_quiet|stable|backlog_debt",
                 "preferred_focus": "governance_hygiene",
                 "priority": 0.79,
                 "message": "Governance hygiene should be reviewed after context switch.",
@@ -6248,12 +6248,12 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
                 "event_type": "autonomy_alignment_request",
                 "channel": "autonomy_alignment_requests",
                 "recorded_at": "2026-06-28T00:03:00+00:00",
-                "context_key": "user_chain_quiet|stable|queue_debt",
+                "context_key": "user_chain_quiet|stable|backlog_debt",
                 "preferred_focus": "governance_hygiene",
                 "priority": 0.81,
                 "message": "Context switch should keep self-regulation tight.",
                 "rationale": "governance context switched",
-                "payload": {"dominant_constraint": "queue_debt"},
+                "payload": {"dominant_constraint": "backlog_debt"},
             },
         ]
     )
@@ -6271,13 +6271,13 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
 
     second_self_regulation = supervisor._load_endogenous_self_regulation()
     second_failure_eval = _drive_cycle_failure_replay_evaluation(
-        context="user_chain_quiet|stable|queue_debt",
+        context="user_chain_quiet|stable|backlog_debt",
         key="truthfulness:review_failed_cycle_b",
         focus="truthfulness",
         self_regulation=second_self_regulation,
     )
     second_success_eval = _drive_cycle_failure_replay_evaluation(
-        context="user_chain_quiet|stable|queue_debt",
+        context="user_chain_quiet|stable|backlog_debt",
         key="continuity:governance_hygiene_cycle_b",
         focus="governance_hygiene",
         self_regulation=second_self_regulation,
@@ -6332,7 +6332,7 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
     assert focus_stats["truthfulness"]["judged"] == 1
     assert focus_stats["governance_hygiene"]["judged"] == 1
     assert contextual_stats["user_chain_quiet|strained|none"]["truthfulness"]["judged"] == 1
-    assert contextual_stats["user_chain_quiet|stable|queue_debt"]["governance_hygiene"]["judged"] == 1
+    assert contextual_stats["user_chain_quiet|stable|backlog_debt"]["governance_hygiene"]["judged"] == 1
     assert final_events["evt-align-cycle-a"]["consumed_at"] == first_consumed_at["evt-align-cycle-a"]
     assert final_events["evt-truth-cycle-a"]["consumed_at"] == first_consumed_at["evt-truth-cycle-a"]
     assert final_events["evt-review-cycle-b"]["consumed_action"] == "trigger_review_pass"
@@ -6649,7 +6649,7 @@ async def test_endogenous_drive_reuses_lm_proposals_when_cognitive_self_regulati
                     "risk_level": "medium",
                     "evidence_level": "moderate",
                     "observation_required": True,
-                    "execution_mode": "review_then_queue",
+                    "execution_mode": "review_then_backlog",
                     "blocking_factors": [],
                     "referenced_evidence_nodes": ["reference_alignment"],
                     "referenced_agenda_nodes": ["repair_truthfulness"],
@@ -6732,7 +6732,7 @@ async def test_endogenous_drive_prefers_lm_led_candidate_stream_with_small_heuri
         ),
         EndogenousTaskCandidate(
             stable_key="continuity:governance_hygiene_review",
-            title="Review self-evolution governance hygiene",
+            title="Review governance backlog hygiene",
             summary="Heuristic governance hygiene review",
             priority="normal",
             governance_task_type="self_evolution",
@@ -6771,7 +6771,7 @@ async def test_endogenous_drive_prefers_lm_led_candidate_stream_with_small_heuri
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_prompt_packet_budget_preserves_queue_state_snapshot_under_large_context(tmp_path):
+async def test_prompt_packet_budget_preserves_backlog_state_snapshot_under_large_context(tmp_path):
     from systems.supervisor.endogenous_drive_prompts import _prompt_facing_evidence_packet
 
     large_packet = {
@@ -6807,7 +6807,7 @@ async def test_prompt_packet_budget_preserves_queue_state_snapshot_under_large_c
         },
         "governance_backlog_tasks": [
             {
-                "title": "Existing queue task A",
+                "title": "Existing backlog task A",
                 "status": "queued",
                 "priority": "high",
                 "governance_task_type": "self_learning",
@@ -6815,7 +6815,7 @@ async def test_prompt_packet_budget_preserves_queue_state_snapshot_under_large_c
                 "execution_kind": None,
             },
             {
-                "title": "Existing queue task B",
+                "title": "Existing backlog task B",
                 "status": "deferred",
                 "priority": "normal",
                 "governance_task_type": "self_evolution",
@@ -6823,7 +6823,7 @@ async def test_prompt_packet_budget_preserves_queue_state_snapshot_under_large_c
                 "execution_kind": "general_self_evolution",
             },
         ],
-        "learning_backlog_titles": ["Existing queue task A"],
+        "learning_backlog_titles": ["Existing backlog task A"],
         "body_improvement_backlog_titles": ["Existing improvement task"],
         "recent_learning_evidence": [
             {"title": f"Learning {idx}", "summary": "x" * 400, "quality_score": 0.7}
@@ -6857,10 +6857,10 @@ async def test_prompt_packet_budget_preserves_queue_state_snapshot_under_large_c
     assert "long_tail_context" in compact
     assert "Learning A" in compact["long_tail_context"]["recent_learning_titles"]
     assert "governance_backlog_snapshot" in compact
-    queue_snapshot = compact["governance_backlog_snapshot"]
-    assert queue_snapshot["governance_backlog_task_count"] == 2
-    assert "Existing queue task A" in queue_snapshot["recent_titles"]
-    assert "guidance" in queue_snapshot
+    backlog_snapshot = compact["governance_backlog_snapshot"]
+    assert backlog_snapshot["governance_backlog_task_count"] == 2
+    assert "Existing backlog task A" in backlog_snapshot["recent_titles"]
+    assert "guidance" in backlog_snapshot
 
 
 @pytest.mark.unit
@@ -7711,7 +7711,7 @@ async def test_endogenous_drive_cognitive_briefing_prefers_context_layers(tmp_pa
                 "top_self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
                 "primary_evidence_nodes": ["self_structure"],
                 "primary_agenda_nodes": ["focus:learning_expansion"],
-                "governance_backlog_summary": "governance_backlog=2; recent_titles=Existing queue task A.",
+                "governance_backlog_summary": "governance_backlog=2; recent_titles=Existing backlog task A.",
                 "cognitive_posture": {
                     "name": "truthfulness_first",
                     "selection_reason": "grounding remains unstable",
@@ -7734,8 +7734,8 @@ async def test_endogenous_drive_cognitive_briefing_prefers_context_layers(tmp_pa
             },
             "governance_backlog_snapshot": {
                 "governance_backlog_task_count": 2,
-                "recent_titles": ["Existing queue task A"],
-                "summary": "governance_backlog=2; recent_titles=Existing queue task A.",
+                "recent_titles": ["Existing backlog task A"],
+                "summary": "governance_backlog=2; recent_titles=Existing backlog task A.",
             },
             "meta_cognition_profile": {
                 "summary": "stale fallback summary",
@@ -7757,7 +7757,7 @@ async def test_endogenous_drive_cognitive_briefing_prefers_context_layers(tmp_pa
     assert "- 当前主约束: weak self structure grounding" in payload
     assert "- 当前首要自我迭代域: grounding" in payload
     assert "- 当前不宜直接 improvement 的原因: improvement would outrun grounding" in payload
-    assert "- 当前治理在途上下文: governance_backlog=2; recent_titles=Existing queue task A." in payload
+    assert "- 当前治理在途上下文: governance_backlog=2; recent_titles=Existing backlog task A." in payload
 
 
 @pytest.mark.asyncio
@@ -7954,7 +7954,7 @@ async def test_endogenous_drive_constrains_high_risk_or_weak_evidence_lm_proposa
         "missing cross-check validation",
     ]
     assert candidate["metadata"]["supervisor_advisory"]["recommended_observation_required"] is True
-    assert candidate["metadata"]["supervisor_advisory"]["recommended_execution_mode"] == "review_then_queue"
+    assert candidate["metadata"]["supervisor_advisory"]["recommended_execution_mode"] == "review_then_backlog"
     assert "high_risk_requires_governance_review" in candidate["metadata"]["supervisor_advisory"]["advisory_reasons"]
     assert candidate["metadata"]["cognitive_alignment"]["quality"] in {"weak", "partial", "strong"}
 
@@ -8151,7 +8151,7 @@ async def test_endogenous_drive_prefers_conservative_review_over_weak_improvemen
                     "risk_level": "medium",
                     "evidence_level": "weak",
                     "observation_required": True,
-                    "execution_mode": "review_then_queue",
+                    "execution_mode": "review_then_backlog",
                     "blocking_factors": ["grounding gaps remain unresolved"],
                     "referenced_evidence_nodes": ["self_structure"],
                     "referenced_agenda_nodes": ["focus:learning_expansion"],
@@ -8276,7 +8276,7 @@ async def test_endogenous_drive_softly_weakens_lm_proposal_when_it_omits_graph_b
     assert "proposal_does_not_reference_evidence_graph" in cognitive_alignment["reasons"]
     assert "proposal_does_not_reference_agenda_graph" in cognitive_alignment["reasons"]
     assert advisory["recommended_observation_required"] is True
-    assert advisory["recommended_execution_mode"] == "review_then_queue"
+    assert advisory["recommended_execution_mode"] == "review_then_backlog"
     assert "reference_binding_is_not_grounded_enough" in advisory["advisory_reasons"] or (
         "primary_evidence_or_agenda_binding_is_missing" in advisory["advisory_reasons"]
     )
@@ -12235,7 +12235,7 @@ async def test_two_self_learning_recoveries_can_clear_historical_underdelivery(
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_cleared_historical_underdelivery_does_not_reenter_observation_from_single_queue_retry(
+async def test_cleared_historical_underdelivery_does_not_reenter_observation_from_single_backlog_retry(
     tmp_path,
 ):
     supervisor = _make_supervisor(tmp_path)
@@ -12430,7 +12430,7 @@ async def test_cleared_historical_underdelivery_allows_truthfulness_to_take_prim
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_cleared_historical_underdelivery_keeps_learning_primary_under_weak_truthfulness_without_real_queue_debt(
+async def test_cleared_historical_underdelivery_keeps_learning_primary_under_weak_truthfulness_without_real_backlog_debt(
     tmp_path,
 ):
     supervisor = _make_supervisor(tmp_path)
@@ -12535,7 +12535,7 @@ async def test_cleared_historical_underdelivery_keeps_learning_primary_under_wea
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_cleared_historical_underdelivery_shifts_to_memory_continuity_when_real_queue_debt_exists_below_truthfulness_threshold(
+async def test_cleared_historical_underdelivery_shifts_to_memory_continuity_when_real_backlog_debt_exists_below_truthfulness_threshold(
     tmp_path,
 ):
     supervisor = _make_supervisor(tmp_path)
@@ -12650,7 +12650,7 @@ async def test_cleared_historical_underdelivery_shifts_to_memory_continuity_when
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_cleared_historical_underdelivery_with_light_queue_debt_does_not_jump_to_observation_or_queue_primary_without_truthfulness_pressure(
+async def test_cleared_historical_underdelivery_with_light_backlog_debt_does_not_jump_to_observation_or_backlog_primary_without_truthfulness_pressure(
     tmp_path,
 ):
     supervisor = _make_supervisor(tmp_path)
@@ -15348,7 +15348,7 @@ async def test_governance_hygiene_candidate_materializes_once_real_governance_ba
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_observation_mode_prefers_candidate_with_stronger_drive_judgement_when_truthfulness_and_queue_review_both_exist(
+async def test_observation_mode_prefers_candidate_with_stronger_drive_judgement_when_truthfulness_and_backlog_review_both_exist(
     tmp_path,
 ):
     supervisor = _make_supervisor(tmp_path)
@@ -15374,7 +15374,7 @@ async def test_observation_mode_prefers_candidate_with_stronger_drive_judgement_
     )
     candidate_queue = EndogenousTaskCandidate(
         stable_key="continuity:governance_hygiene_review",
-        title="Review self-evolution governance hygiene",
+        title="Review governance backlog hygiene",
         summary="Governance hygiene review",
         priority="normal",
         governance_task_type="self_evolution",
@@ -15413,7 +15413,7 @@ async def test_observation_mode_prefers_candidate_with_stronger_drive_judgement_
 
 
 @pytest.mark.unit
-def test_observation_mode_tie_break_is_stable_across_input_order_when_truthfulness_and_queue_review_are_equally_scored():
+def test_observation_mode_tie_break_is_stable_across_input_order_when_truthfulness_and_backlog_review_are_equally_scored():
     from systems.supervisor.endogenous_drive import EndogenousDriveEngine
 
     engine = EndogenousDriveEngine()
@@ -15438,7 +15438,7 @@ def test_observation_mode_tie_break_is_stable_across_input_order_when_truthfulne
     )
     candidate_queue = EndogenousTaskCandidate(
         stable_key="continuity:governance_hygiene_review",
-        title="Review self-evolution governance hygiene",
+        title="Review governance backlog hygiene",
         summary="Governance hygiene review",
         priority="normal",
         governance_task_type="self_evolution",
@@ -15487,7 +15487,7 @@ def test_observation_mode_tie_break_is_stable_across_input_order_when_truthfulne
 
 
 @pytest.mark.unit
-def test_observation_mode_keeps_monotonic_switch_when_queue_review_becomes_slightly_stronger():
+def test_observation_mode_keeps_monotonic_switch_when_backlog_review_becomes_slightly_stronger():
     from systems.supervisor.endogenous_drive import EndogenousDriveEngine
 
     engine = EndogenousDriveEngine()
@@ -15526,7 +15526,7 @@ def test_observation_mode_keeps_monotonic_switch_when_queue_review_becomes_sligh
     )
     candidate_queue = EndogenousTaskCandidate(
         stable_key="continuity:governance_hygiene_review",
-        title="Review self-evolution governance hygiene",
+        title="Review governance backlog hygiene",
         summary="Governance hygiene review",
         priority="normal",
         governance_task_type="self_evolution",
@@ -16621,7 +16621,7 @@ async def test_plan_task_normalizes_scheduled_for_into_runtime_payload(tmp_path)
 
 
 @pytest.mark.unit
-def test_candidate_schedule_token_reallocates_when_live_queue_occupies_slot(tmp_path):
+def test_candidate_schedule_token_reallocates_when_live_backlog_occupies_slot(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._autonomous_chain_store.create_task(
         title="Existing scheduled task",
@@ -17274,13 +17274,13 @@ async def test_list_autonomous_chain_tasks_reads_chain_projection_views_instead_
         completed_id,
         status="approved",
         actor="test",
-        reason="approved for dispatch",
+        reason="approved for execution handoff",
     )
     supervisor._autonomous_chain_store.update_status(
         completed_id,
         status="running",
         actor="test",
-        reason="dispatch in progress",
+        reason="execution handoff in progress",
     )
     supervisor._autonomous_chain_store.update_status(
         completed_id,
@@ -17689,12 +17689,12 @@ def test_autonomous_chain_store_has_explicit_review_and_retry_transitions(tmp_pa
         )
 
 
-def test_autonomous_chain_store_exposes_backlog_dispatch_and_writeback_projections(tmp_path):
+def test_autonomous_chain_store_exposes_backlog_api_a_execution_lane_and_writeback_projections(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     queue = supervisor._autonomous_chain_store
 
     planned = queue.create_task(title="Planned backlog task", summary="backlog")
-    running = queue.create_task(title="Running dispatch task", summary="dispatch")
+    running = queue.create_task(title="Running API-A lane task", summary="api-a-lane")
     completed = queue.create_task(title="Completed writeback task", summary="writeback")
     failed = queue.create_task(title="Failed writeback task", summary="writeback")
     cancelled = queue.create_task(title="Cancelled task", summary="terminal without writeback")
@@ -17703,13 +17703,13 @@ def test_autonomous_chain_store_exposes_backlog_dispatch_and_writeback_projectio
         running.task_id,
         status="approved",
         actor="test",
-        reason="approved for dispatch",
+        reason="approved for API-A execution lane",
     )
     queue.update_status(
         running.task_id,
         status="running",
         actor="test",
-        reason="dispatch in progress",
+        reason="API-A execution lane in progress",
     )
 
     queue.update_status(
@@ -17754,19 +17754,19 @@ def test_autonomous_chain_store_exposes_backlog_dispatch_and_writeback_projectio
         cancelled.task_id,
         status="cancelled",
         actor="test",
-        reason="cancelled before dispatch",
+        reason="cancelled before execution handoff",
     )
 
     backlog_titles = [task.title for task in queue.list_governance_backlog_tasks()]
-    dispatch_titles = [task.title for task in queue.list_execution_dispatch_tasks()]
+    api_a_lane_titles = [task.title for task in queue.list_api_a_execution_lane_tasks()]
     writeback_titles = [task.title for task in queue.list_writeback_history()]
 
-    assert backlog_titles == ["Planned backlog task", "Running dispatch task"]
-    assert dispatch_titles == ["Running dispatch task"]
+    assert backlog_titles == ["Planned backlog task", "Running API-A lane task"]
+    assert api_a_lane_titles == ["Running API-A lane task"]
     assert writeback_titles == ["Completed writeback task", "Failed writeback task"]
 
 
-def test_autonomous_chain_store_exposes_chain_projection_without_raw_total_queue_semantics(tmp_path):
+def test_autonomous_chain_store_exposes_chain_projection_without_raw_total_backlog_semantics(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     queue = supervisor._autonomous_chain_store
 
@@ -17796,7 +17796,7 @@ def test_autonomous_chain_store_exposes_chain_projection_without_raw_total_queue
         cancelled.task_id,
         status="cancelled",
         actor="test",
-        reason="cancelled before dispatch",
+        reason="cancelled before execution handoff",
     )
 
     visible_titles = [task.title for task in queue.list_chain_projection_tasks()]
@@ -17906,13 +17906,13 @@ async def test_run_autonomous_chain_review_cycle_times_out_agent_pull_execution_
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_autonomous_chain_review_cycle_limits_formal_dispatches_per_cycle(tmp_path):
+async def test_run_autonomous_chain_review_cycle_limits_formal_execution_handoffs_per_cycle(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     task_ids = []
     for idx in range(3):
         planned = await supervisor.plan_autonomous_chain_task(
             {
-                "title": f"Formal dispatch budget task {idx}",
+                "title": f"Formal handoff budget task {idx}",
                 "metadata": {
                     "execution_kind": "body_switch",
                     "target_slot_id": f"slot-{idx}",
@@ -17942,21 +17942,21 @@ async def test_run_autonomous_chain_review_cycle_limits_formal_dispatches_per_cy
             "activity_guards": {},
         }
 
-    dispatched = []
+    handed_off = []
 
-    async def fake_dispatch(task):
-        dispatched.append(task.task_id)
+    async def fake_handoff(task):
+        handed_off.append(task.task_id)
         return {"status": "ok"}
 
     supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
-    supervisor._dispatch_autonomous_chain_execution_request = fake_dispatch  # type: ignore[method-assign]
+    supervisor._handoff_autonomous_chain_execution_request = fake_handoff  # type: ignore[method-assign]
 
     result = await supervisor._run_autonomous_chain_review_cycle()
 
-    assert dispatched == [task_ids[0]]
-    assert [item["task_id"] for item in result["dispatched"]] == [task_ids[0]]
-    assert result["dispatch_limit"] == 1
-    assert result["dispatch_budget_exhausted"] == 2
+    assert handed_off == [task_ids[0]]
+    assert [item["task_id"] for item in result["handed_off"]] == [task_ids[0]]
+    assert result["handoff_limit"] == 1
+    assert result["handoff_budget_exhausted"] == 2
 
 
 @pytest.mark.asyncio

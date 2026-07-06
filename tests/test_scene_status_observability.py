@@ -41,7 +41,7 @@ def test_dashboard_agent_segment_includes_subagent_summary():
         },
     )
 
-    assert "API-A: executing" in rendered
+    assert "API-A: 执行中" in rendered
     assert "链路项 learn-12" in rendered
     assert "SA 2+1" in rendered
     assert "read_file" in rendered
@@ -76,7 +76,7 @@ def test_dashboard_agent_segment_prefers_supervisor_task_lane():
         },
     )
 
-    assert "API-A: learning" in rendered
+    assert "API-A: 自主学习" in rendered
     assert "链路项 learn-su" in rendered
     assert "SA 3+1" in rendered
     assert "read_file" in rendered
@@ -107,7 +107,7 @@ def test_status_scene_bar_includes_subagent_summary(monkeypatch, capsys):
     cli_status._print_three_segment_scene_bar()
 
     output = capsys.readouterr().out
-    assert "🤖 API-A: executing" in output
+    assert "🤖 API-A: 执行中" in output
     assert "SA 2+1" in output
     assert "scan workspace" in output
 
@@ -151,7 +151,7 @@ def test_status_scene_bar_prefers_user_chat_lane(monkeypatch, capsys):
     cli_status._print_three_segment_scene_bar()
 
     output = capsys.readouterr().out
-    assert "🤖 API-A: executing" in output
+    assert "🤖 API-A: 执行中" in output
     assert "user-cha" in output
     assert "SA 1" in output
     assert "grep app.py" in output
@@ -262,7 +262,7 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
                         },
                         {
                             "key": "api_b_candidates",
-                            "items": [{"title": "Candidate decision", "display_status": "API-B 候选判断"}],
+                            "items": [{"title": "Candidate decision", "display_status": "候选形成"}],
                         },
                         {
                             "key": "mem_recent",
@@ -300,7 +300,7 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
     assert built["chain"]["writebacks"] == 1
     assert built["chain"]["segments_headline"] == "自主链路分段观察"
     assert built["chain"]["loop_stages"][0]["title"] == "API-B judgement"
-    assert built["chain"]["segments"][0]["label"] == "API-B"
+    assert built["chain"]["segments"][0]["label"] == "治理在途"
     assert built["chain"]["segments"][0]["title"] == "Governance backlog task"
 
 

@@ -181,7 +181,7 @@ class AutonomousChainStore:
             "retry",
         }
     )
-    _EXECUTION_DISPATCH_STATUSES: frozenset[str] = frozenset(
+    _API_A_EXECUTION_LANE_STATUSES: frozenset[str] = frozenset(
         {
             "approved",
             "running",
@@ -221,15 +221,15 @@ class AutonomousChainStore:
         )
         return self._list_tasks_by_statuses(allowed)
 
-    def list_execution_dispatch_tasks(
+    def list_api_a_execution_lane_tasks(
         self,
         *,
         status: Optional[AutonomousChainTaskStatus] = None,
     ) -> List[AutonomousChainTask]:
-        """Return tasks that are in or approaching the execution-dispatch lane."""
+        """Return tasks that are in or approaching the API-A execution lane."""
         allowed = self._status_filter(
             status=status,
-            default_statuses=self._EXECUTION_DISPATCH_STATUSES,
+            default_statuses=self._API_A_EXECUTION_LANE_STATUSES,
         )
         return self._list_tasks_by_statuses(allowed)
 

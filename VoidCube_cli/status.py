@@ -47,11 +47,11 @@ def check_mark(ok: bool) -> str:
 def _format_iso_timestamp(value) -> str:
     """Format ISO timestamps for status output, converting to local timezone."""
     if not value or not isinstance(value, str):
-        return "(unknown)"
+        return "（未知）"
     from datetime import datetime, timezone
     text = value.strip()
     if not text:
-        return "(unknown)"
+        return "（未知）"
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
     try:
@@ -132,17 +132,17 @@ def _print_three_segment_scene_bar() -> None:
     # raw scene name so misclassified scenes are still visible.
     scene_labels = {
         # supervisor (API-B)
-        "idle": "idle",
-        "planning": "planning",
-        "drive": "drive",
-        "memory": "memory",
-        "maintenance": "maintenance",
-        "dispatch": "dispatch",
-        "body_switch": "body_switch",
+        "idle": "静置",
+        "planning": "治理安排",
+        "drive": "内生判断",
+        "memory": "记忆整理",
+        "maintenance": "连续性维护",
+        "handoff": "执行交接",
+        "body_switch": "身体切换",
         # agent (API-A)
-        "learning": "learning",
-        "code_editing": "code_editing",
-        "executing": "executing",
+        "learning": "自主学习",
+        "code_editing": "替身改进",
+        "executing": "执行中",
     }
 
     def _render(key: str, name: str) -> str:
@@ -283,7 +283,7 @@ def show_status(args):
         f"{'logged in' if nous_logged_in else 'not logged in (run: VoidCube model)'}"
     )
     if nous_logged_in:
-        portal_url = nous_status.get("portal_base_url") or "(unknown)"
+        portal_url = nous_status.get("portal_base_url") or "（未知）"
         access_exp = _format_iso_timestamp(nous_status.get("access_expires_at"))
         key_exp = _format_iso_timestamp(nous_status.get("agent_key_expires_at"))
         refresh_label = "yes" if nous_status.get("has_refresh_token") else "no"

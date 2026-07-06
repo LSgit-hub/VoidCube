@@ -6,6 +6,8 @@ import time
 import urllib.request
 from typing import Any, Dict
 
+from VoidCube_cli.autonomous_observation import format_supervisor_status_snapshot
+
 
 def get_supervisor_url(host: Any) -> str:
     """Resolve supervisor UI state endpoint from config or defaults."""
@@ -168,8 +170,6 @@ def format_gateway_agent_activity_snapshot(state: Dict[str, Any]) -> list[str]:
 
 def autonomous_observation_summary_sections(
     host: Any,
-    *,
-    format_supervisor_status_snapshot: Any,
 ) -> list[str]:
     lines: list[str] = []
     supervisor_status = fetch_supervisor_status_snapshot(host)

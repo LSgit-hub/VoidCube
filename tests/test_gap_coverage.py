@@ -126,12 +126,12 @@ class TestServiceRuntimeLifecycle:
         sv._body_registry.load_registry = Mock()
         sv._body_registry.load_slot_meta = Mock()
         sv._execution_facade = Mock()
-        sv._execution_facade.execute_self_evolution_request = AsyncMock()
+        sv._execution_facade.execute_autonomous_chain_request = AsyncMock()
         sv._execution_facade.get_body_registry = Mock(return_value={})
         sv._execution_facade.list_body_slots = Mock(return_value={"slots": {}})
         sv._endogenous_drive_task = None
         sv._run_endogenous_drive_cycle = AsyncMock(return_value={"status": "idle", "planned": 0})
-        sv._run_autonomous_chain_review_cycle = AsyncMock(return_value={"reviewed": 0, "dispatched": []})
+        sv._run_autonomous_chain_review_cycle = AsyncMock(return_value={"reviewed": 0, "handed_off": []})
         sv._touch_gateway_activity = AsyncMock()
         sv._memory_maintenance_executor = Mock()
         sv._ensure_watch_window_task = Mock()
@@ -141,7 +141,7 @@ class TestServiceRuntimeLifecycle:
             await sv._start_periodic_tasks()
             assert sv._service_runtime_started is True
             assert sv._health_check_task is not None
-            assert sv._self_evolution_review_task is None, (
+            assert sv._autonomous_chain_review_task is None, (
                 "Review loop should not start before the supervisor autonomous-chain gate is enabled"
             )
             await sv._stop_periodic_tasks()
@@ -213,12 +213,12 @@ class TestCLIExecutorCanonicalPath:
                 git_lineage={"candidate_commit": "abc", "rollback_commit": "def", "changed_files": ["agent/x.py"]},
                 target_slot_id="slot-B",
             )
-            result = await facade.execute_self_evolution_request(req.model_dump(mode="json"))
-            assert result["status"] == "formal_self_evolution_executed"
+            result = await facade.execute_autonomous_chain_request(req.model_dump(mode="json"))
+            assert result["status"] == "autonomous_chain_execution_executed"
             assert result["execution_metadata"]["execution_kind"] == "general_self_evolution"
 
             req2 = AutonomousChainExecutionRequest(task_id="t2", kind="memory_maintenance")
-            result2 = await facade.execute_self_evolution_request(req2.model_dump(mode="json"))
+            result2 = await facade.execute_autonomous_chain_request(req2.model_dump(mode="json"))
             assert result2["execution_metadata"]["execution_kind"] == "memory_maintenance"
 
             req3 = AutonomousChainExecutionRequest(
@@ -226,7 +226,7 @@ class TestCLIExecutorCanonicalPath:
                 git_lineage={"candidate_commit": "abc", "rollback_commit": "def", "changed_files": ["agent/x.py"]},
                 target_slot_id="slot-B",
             )
-            result3 = await facade.execute_self_evolution_request(req3.model_dump(mode="json"))
+            result3 = await facade.execute_autonomous_chain_request(req3.model_dump(mode="json"))
             assert result3["execution_metadata"]["execution_kind"] == "general_self_evolution"
 
         asyncio.run(_run())
@@ -242,7 +242,7 @@ class TestConfigurationValidation:
         assert cfg.host == "127.0.0.1"
         assert cfg.port == 6002
         assert cfg.service_runtime.endogenous_drive_enabled is True
-        assert cfg.service_runtime.self_evolution_review_interval == 300
+        assert cfg.service_runtime.autonomous_chain_review_interval == 300
 
     def test_supervisor_config_segmented(self):
         from systems.supervisor.config_models import (
@@ -349,20 +349,20 @@ class TestEndogenousDriveErrorBridge:
         candidates = engine.generate_candidates(activity_guards=idle, existing_drive_keys=set(), max_candidates=3)
         memory_candidate = next(c for c in candidates if c.stable_key == "continuity:memory_maintenance_sweep")
         breakdown = memory_candidate.metadata.get("score_breakdown") or {}
-        queue_item = memory_candidate.to_queue_item()
-        endogenous_evidence = queue_item["evidence"]["endogenous_drive"]
+        backlog_item = memory_candidate.to_backlog_item()
+        endogenous_evidence = backlog_item["evidence"]["endogenous_drive"]
 
         assert breakdown["score_model"] == "endogenous_drive_v2"
         assert breakdown["candidate_kind"] == "memory_maintenance"
         assert "dimensions" in breakdown
         assert "penalties" in breakdown
-        assert "stable_key" not in queue_item
-        assert "value_tags" not in queue_item
-        assert "utility" not in queue_item
-        assert queue_item["rationale"]
-        assert queue_item["metadata"]["endogenous_drive_key"] == memory_candidate.stable_key
-        assert queue_item["metadata"]["core_values"] == memory_candidate.value_tags
-        assert queue_item["metadata"]["utility"] == memory_candidate.utility
+        assert "stable_key" not in backlog_item
+        assert "value_tags" not in backlog_item
+        assert "utility" not in backlog_item
+        assert backlog_item["rationale"]
+        assert backlog_item["metadata"]["endogenous_drive_key"] == memory_candidate.stable_key
+        assert backlog_item["metadata"]["core_values"] == memory_candidate.value_tags
+        assert backlog_item["metadata"]["utility"] == memory_candidate.utility
         assert endogenous_evidence["score_breakdown"]["utility"] == memory_candidate.utility
 
     def test_candidates_include_drive_judgement_layers(self):
@@ -468,7 +468,7 @@ class TestEndogenousDriveErrorBridge:
                     "task_family": "general_self_evolution",
                     "execution_kind": "general_self_evolution",
                     "updated_at": "2026-06-20T00:00:00+00:00",
-                    "metadata": {"endogenous_drive_key": "continuity:queue_hygiene_review"},
+                    "metadata": {"endogenous_drive_key": "continuity:governance_hygiene_review"},
                 },
                 {
                     "title": "Paused endogenous review B",
@@ -500,9 +500,9 @@ class TestEndogenousDriveErrorBridge:
         }
         report = engine.build_deliberation_report(activity_guards=idle).to_dict()
 
-        assert report["reflection"]["queue_blockage_state"] in {"dragging", "blocked"}
+        assert report["reflection"]["governance_backlog_blockage_state"] in {"dragging", "blocked"}
         assert report["reflection"]["dominant_constraint"] in {
-            "queue_blockage",
+            "governance_backlog_blockage",
             "weak_learning_yield",
         }
         assert any(need["need_type"] == "observe_before_acting" for need in report["needs"])
@@ -929,7 +929,7 @@ class TestEndogenousDriveErrorBridge:
                     "task_family": "general_self_evolution",
                     "execution_kind": "general_self_evolution",
                     "updated_at": "2026-06-20T00:00:00+00:00",
-                    "metadata": {"endogenous_drive_key": "continuity:queue_hygiene_review"},
+                    "metadata": {"endogenous_drive_key": "continuity:governance_hygiene_review"},
                 },
                 {
                     "title": "Paused endogenous review B",
@@ -969,7 +969,7 @@ class TestEndogenousDriveErrorBridge:
 
         assert report["adaptive_policy"]["preferred_focus"] in {
             "observation",
-            "queue_hygiene",
+            "governance_hygiene",
             "truthfulness",
         }
         assert report["adaptive_policy"]["observation_bias"] >= 0.58
@@ -1129,7 +1129,7 @@ class TestEndogenousDriveErrorBridge:
         exploratory = [c for c in candidates if c.governance_task_type == "self_learning"]
         assert exploratory == [], "recently completed topic should be cooled down instead of re-generated"
 
-    def test_body_improvement_candidate_respects_recent_queue_cooldown(self):
+    def test_body_improvement_candidate_respects_recent_backlog_cooldown(self):
         engine = EndogenousDriveEngine()
         idle = {
             "checks": {},
@@ -1148,7 +1148,7 @@ class TestEndogenousDriveErrorBridge:
             ],
             "governance_backlog_tasks": [
                 {
-                    "title": "Improve shell body: tighten queue review",
+                    "title": "Improve shell body: tighten backlog review",
                     "status": "approved",
                     "execution_kind": "body_improvement",
                     "constraints": {"target_slot_id": "slot-B"},

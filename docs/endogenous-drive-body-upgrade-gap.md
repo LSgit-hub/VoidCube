@@ -11,7 +11,7 @@
 | 1 | `continuity:memory_maintenance_sweep` | Maintain long-term memory continuity | 0.92 | memory_maintenance | 无 |
 | 2 | `truthfulness:review_correction_signals` | Review recent uncertainty and correction signals | 0.65~0.95 | self_learning | learn_only |
 | 3 | `creativity:idle_learning:{hash}` | Research: {topic} | 0.58~0.72 | self_learning | **learn_only, must_not_modify_active_body** |
-| 4 | `continuity:queue_hygiene_review` | Review autonomous-chain governance hygiene | 0.52 | general_self_evolution | must_not_execute_without_review |
+| 4 | `continuity:governance_hygiene_review` | Review autonomous-chain governance hygiene | 0.52 | general_self_evolution | must_not_execute_without_review |
 
 **关键发现**：全部 4 种候选都与替身代码编辑无关。创造力候选（唯一可能导向代码改进的任务）明确禁止编辑身体：
 
@@ -66,7 +66,7 @@ POST /body/upgrade/execute
     └── 6. execute switch              # active ↔ retired（旧路径；目标语义需先停在用户同意门）
 ```
 
-此路径**不由内生驱动触发，不由任务队列驱动**。必须手动调用 API。
+此路径**不由内生驱动触发，不由自主任务列表驱动**。必须手动调用 API。
 
 ## 4. 架构基线要求的链路
 
@@ -86,7 +86,7 @@ POST /body/upgrade/execute
                     → 执行器执行身体切换
 ```
 
-**架构约束（§3.8 / §7.5）**：身体切换不由任务队列驱动。Governor 保有否决权，但健康值/Governor 批准都只是“建议切换”的程序前置门；真正 `activate_slot` 需用户同意（目标语义，待实现）。
+**架构约束（§3.8 / §7.5）**：身体切换不由自主任务列表驱动。Governor 保有否决权，但健康值/Governor 批准都只是“建议切换”的程序前置门；真正 `activate_slot` 需用户同意（目标语义，待实现）。
 
 ## 5. 差距分析
 
@@ -105,7 +105,7 @@ POST /body/upgrade/execute
 
 | # | 缺失环节 | 描述 |
 |---|---------|------|
-| **1** | 学习→改进任务类型 | 任务队列没有 `body_improvement` 类型的任务。创造力候选是"只读研究"，不是"基于研究编辑代码" |
+| **1** | 学习→改进任务类型 | 当前自主任务列表缺少稳定的 `body_improvement` 闭环投影。创造力候选更偏"只读研究"，而不是"基于研究编辑代码" |
 | **2** | 学习成果→替身改进的触发 | Agent 完成学习任务后，没有机制驱动它去读 Mem、了解替身代码、编辑替身 |
 | **3** | 替身改进任务的自动生成 | 监督者不会定期扫描 Mem 中的学习成果，自动生成身体升级候选 |
 | **4** | 改进范围约束 | 没有定义 Agent 编辑替身代码时的边界（白名单目录/禁止模式） |

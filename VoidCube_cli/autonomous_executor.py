@@ -96,14 +96,14 @@ def build_autonomous_task_prompt(
     return "\n\n".join(part for part in prompt_parts if part)
 
 
-def bind_autonomous_task_prompt(
+def bind_autonomous_execution_prompt(
     task: Dict[str, Any],
     prompt: str,
 ) -> str:
     run_id = str(task.get("_autonomous_task_run_id") or "").strip() or str(uuid.uuid4())
     task["_autonomous_task_run_id"] = run_id
-    task["_autonomous_prompt_text"] = prompt
-    task["_autonomous_prompt_enqueued"] = True
+    task["_autonomous_execution_prompt_text"] = prompt
+    task["_autonomous_execution_prompt_injected"] = True
     return run_id
 
 
@@ -116,7 +116,7 @@ def autonomous_task_run_id_for_message(
     run_id = str(current_task.get("_autonomous_task_run_id") or "").strip()
     if not run_id:
         return ""
-    if message == str(current_task.get("_autonomous_prompt_text") or ""):
+    if message == str(current_task.get("_autonomous_execution_prompt_text") or ""):
         return run_id
     if message.startswith(AUTONOMOUS_LEARNING_TASK_PREFIX) or message.startswith(
         AUTONOMOUS_BODY_IMPROVEMENT_TASK_PREFIX
@@ -180,24 +180,24 @@ class AutonomousExecutorRuntime:
             return task
         return None
 
-    def enqueue_task_prompt(
+    def inject_execution_prompt(
         self,
         task: Dict[str, Any],
         execution_kind: str,
         *,
         recovered: bool = False,
     ) -> bool:
-        if task.get("_autonomous_prompt_enqueued"):
+        if task.get("_autonomous_execution_prompt_injected"):
             return True
         try:
             prompt = self.host._build_autonomous_task_prompt(task, execution_kind)
-            run_id = bind_autonomous_task_prompt(task, prompt)
+            run_id = bind_autonomous_execution_prompt(task, prompt)
             self.host._current_autonomous_task_run_id = run_id
             self.host._pending_input.put(prompt)
             self.host._append_autonomous_execution_event(
-                "恢复任务提示已重新注入前台 CLI，等待模型响应" if recovered else "执行提示已注入前台 CLI，等待模型响应",
+                "恢复链路项的执行提示已重新注入前台 CLI，等待模型响应" if recovered else "执行提示已注入前台 CLI，等待模型响应",
                 tone="warn" if recovered else "info",
-                stage="prompt_enqueued",
+                stage="execution_prompt_injected",
             )
             return True
         except Exception:
@@ -361,7 +361,7 @@ class AutonomousExecutorRuntime:
                         self.host._current_autonomous_task_started_at = 0.0
                 recovered_execution_kind = autonomous_task_execution_kind(recovered_task)
                 if not getattr(self.host, "_agent_running", False) and getattr(self.host, "_last_agent_turn_result", None) is None:
-                    if not self.enqueue_task_prompt(
+                    if not self.inject_execution_prompt(
                         self.host._current_autonomous_task,
                         recovered_execution_kind,
                         recovered=True,
@@ -369,9 +369,9 @@ class AutonomousExecutorRuntime:
                         writeback_ok = self.post_task_decision(
                             str(recovered_task.get("task_id") or ""),
                             decision="failed",
-                            reason="API-A autonomous executor recovered the task but failed to re-enqueue it for execution.",
+                            reason="API-A autonomous executor recovered the task but failed to reinject its execution prompt.",
                             context={
-                                "error": "recovered_prompt_enqueue_failed",
+                                "error": "recovered_execution_prompt_failed",
                                 "execution_kind": recovered_execution_kind,
                             },
                             timeout=15,
@@ -546,19 +546,19 @@ class AutonomousExecutorRuntime:
         except Exception:
             pass
 
-        if not self.enqueue_task_prompt(self.host._current_autonomous_task, execution_kind):
+        if not self.inject_execution_prompt(self.host._current_autonomous_task, execution_kind):
             task_label = autonomous_task_label(execution_kind)
-            self._cprint(f"  ⚠️  Failed to enqueue autonomous {task_label} {task_id[:8]}...")
+            self._cprint(f"  ⚠️  Failed to inject autonomous {task_label} execution prompt {task_id[:8]}...")
             self.host._append_autonomous_execution_event(
-                f"任务 {task_id[:8]} 入队失败",
+                f"任务 {task_id[:8]} 执行提示注入失败",
                 tone="error",
-                stage="prompt_enqueue_failed",
+                stage="execution_prompt_failed",
             )
             writeback_ok = self.post_task_decision(
                 task_id,
                 decision="failed",
-                reason="CLI Agent failed to enqueue task for execution.",
-                context={"error": "queue_put_failed", "execution_kind": execution_kind},
+                reason="CLI Agent failed to inject the execution prompt for this task.",
+                context={"error": "prompt_injection_failed", "execution_kind": execution_kind},
                 timeout=15,
                 gateway_base=gateway_base,
             )

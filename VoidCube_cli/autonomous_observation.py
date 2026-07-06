@@ -3,6 +3,26 @@ from __future__ import annotations
 from typing import Any, Dict
 
 
+_SCENE_LABELS = {
+    "idle": "静置",
+    "planning": "治理安排",
+    "drive": "内生判断",
+    "memory": "记忆整理",
+    "maintenance": "连续性维护",
+    "handoff": "执行交接",
+}
+
+
+def _display_text(value: Any, fallback: str = "未命名") -> str:
+    text = str(value or "").strip()
+    return text or fallback
+
+
+def _scene_label(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return _SCENE_LABELS.get(text, _display_text(value, "未识别"))
+
+
 def observation_board(state: Dict[str, Any]) -> Dict[str, Any]:
     observation = dict(state.get("autonomous_observation") or {})
     return dict(observation.get("board") or {})
@@ -186,7 +206,7 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
             "cli_focus_stage": "idle",
             "focus_task": {},
             "status_label": "待命拉单",
-            "chain_reason": "链路: 当前学习链路项大多仍停留在 API-B 治理段并被延后，尚未进入 API-A 待拉取段",
+            "chain_reason": "链路: 当前学习链路项大多仍停留在 API-B 治理段并被延后，尚未进入 API-A 待拉取窗口",
             "activity_text": "执行流: 等待 API-B 重新放行、重排或补充证据",
             "reason_style": "warn",
         }
@@ -196,7 +216,7 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
             "cli_focus_stage": "idle",
             "focus_task": {},
             "status_label": "待命拉单",
-            "chain_reason": "链路: 当前自主链路项仍停留在 API-B 治理段，尚未进入 API-A 待拉取段",
+            "chain_reason": "链路: 当前自主链路项仍停留在 API-B 治理段，尚未进入 API-A 待拉取窗口",
             "activity_text": "执行流: 等待 API-B 审核、放行或重新排序链路项",
             "reason_style": "info",
         }
@@ -339,11 +359,11 @@ def resolve_autonomous_no_task_reason(supervisor_state: Dict[str, Any]) -> tuple
         if deferred:
             return (
                 "class:auto-panel-warn",
-                "链路: 当前学习链路项大多仍停留在 API-B 治理段并被延后，尚未进入 API-A 待拉取段",
+                "链路: 当前学习链路项大多仍停留在 API-B 治理段并被延后，尚未进入 API-A 待拉取窗口",
             )
         return (
             "class:auto-panel-info",
-            "链路: 当前自主链路项仍停留在 API-B 治理段，尚未进入 API-A 待拉取段",
+            "链路: 当前自主链路项仍停留在 API-B 治理段，尚未进入 API-A 待拉取窗口",
         )
 
     stage_projections = observation_loop_stage_projections(supervisor_state)
@@ -397,9 +417,13 @@ def format_supervisor_status_snapshot(state: Dict[str, Any]) -> list[str]:
         "tasks_reviewed": "批量复核",
         "tasks_planned": "链路规划",
         "supervisor_activity": "监督活动",
+        "execution_handoff_started": "执行交接",
+        "execution_handoff_completed": "交接完成",
+        "execution_handoff_failed": "交接失败",
+        "execution_handoff_retry": "交接重试",
     }
 
-    lines.append(f"场景: {state.get('scene', 'unknown')} — {state.get('title', '')}")
+    lines.append(f"场景: {_scene_label(state.get('scene'))} — {_display_text(state.get('title'), '自主链路观测')}")
     lines.append(
         "链路统计: "
         f"learning={by_path.get('learning', 0)}, "
@@ -418,14 +442,14 @@ def format_supervisor_status_snapshot(state: Dict[str, Any]) -> list[str]:
         primary = stage_projections[0]
         lines.append(
             "闭环焦点: "
-            f"{primary.get('title', 'unknown')} "
-            f"({primary.get('display_status') or primary.get('status') or 'unknown'})"
+            f"{_display_text(primary.get('title'))} "
+            f"({_display_text(primary.get('display_status') or primary.get('status'), '等待中')})"
         )
     elif focus:
         lines.append(
             "闭环焦点: "
-            f"{focus.get('title', 'unknown')} "
-            f"({focus.get('status') or 'unknown'})"
+            f"{_display_text(focus.get('title'))} "
+            f"({_display_text(focus.get('status'), '等待中')})"
         )
 
     if chain_segments:
@@ -443,8 +467,8 @@ def format_supervisor_status_snapshot(state: Dict[str, Any]) -> list[str]:
     )
     if execution_card:
         lines.append(
-            f"执行焦点: {execution_card.get('title', 'unknown')} "
-            f"({execution_card.get('display_status') or execution_card.get('status') or '链路项'})"
+            f"执行焦点: {_display_text(execution_card.get('title'))} "
+            f"({_display_text(execution_card.get('display_status') or execution_card.get('status'), '链路项')})"
         )
 
     if timeline:

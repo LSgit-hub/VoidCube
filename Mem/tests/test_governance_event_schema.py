@@ -63,7 +63,7 @@ def test_governance_event_serializes_execution_outcome() -> None:
         event_type=GovernanceEventType.EXECUTION_OUTCOME,
         source_actor="executor",
         decision=GovernanceDecision.COMPLETED,
-        reason="Formal body self-evolution handoff completed.",
+        reason="Autonomous-chain execution handoff completed.",
         task_id="task-2",
         body_id="slot-B",
         risk_level=GovernanceRiskLevel.LOW,
@@ -74,7 +74,7 @@ def test_governance_event_serializes_execution_outcome() -> None:
             changed_files=["agent/stream_handler.py"],
         ),
         execution_result={
-            "status": "formal_self_evolution_executed",
+            "status": "autonomous_chain_execution_executed",
             "active_slot": "slot-B",
         },
     )
@@ -86,7 +86,7 @@ def test_governance_event_serializes_execution_outcome() -> None:
     assert payload["decision"] == "completed"
     assert payload["execution_result"]["active_slot"] == "slot-B"
     assert restored.execution_result is not None
-    assert restored.execution_result["status"] == "formal_self_evolution_executed"
+    assert restored.execution_result["status"] == "autonomous_chain_execution_executed"
 
 
 def test_governance_event_serializes_watch_window_rollback() -> None:

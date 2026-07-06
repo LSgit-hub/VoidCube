@@ -5,6 +5,8 @@ import urllib.request
 from typing import Any, Dict
 
 from systems.supervisor.autonomous_chain_contract import AUTONOMOUS_CHAIN_CYCLE_ROUTE
+from VoidCube_cli.autonomous_observation import format_supervisor_status_snapshot
+from VoidCube_cli.autonomous_status_host import fetch_supervisor_status_snapshot
 
 
 def _resolve_supervisor_url() -> str:
@@ -115,11 +117,11 @@ def handle_auto_command(
                 if isinstance(cycle_result, dict):
                     summary = cycle_result.get("summary", {}) if isinstance(cycle_result, dict) else {}
                     planned = summary.get("planned", 0)
-                    dispatched = summary.get("dispatched", 0)
-                    cprint(f"     首轮循环: planned={planned}, dispatched={dispatched}")
-                snapshot = host._fetch_supervisor_status_snapshot()
+                    handed_off = summary.get("handed_off", 0)
+                    cprint(f"     首轮循环: planned={planned}, handed_off={handed_off}")
+                snapshot = fetch_supervisor_status_snapshot(host)
                 if snapshot:
-                    for line in host._format_supervisor_status_snapshot(snapshot)[:4]:
+                    for line in format_supervisor_status_snapshot(snapshot)[:4]:
                         cprint(f"     {line}")
                 cprint("     前台主 CLI 交互仍保持可用。")
                 cprint("     使用 /auto-q 停止自主链路。")
@@ -142,7 +144,6 @@ def handle_auto_q_command(
     host: Any,
     *,
     cprint: Any,
-    push_cli_agent_scene: Any,
     thread_factory: Any,
 ) -> None:
     cprint("  🔄 正在停止自主链路...")
@@ -169,7 +170,7 @@ def handle_auto_q_command(
                 timeout=5,
             )
             host._autonomous_gate_active = False
-            push_cli_agent_scene(
+            host._publish_cli_agent_scene(
                 "idle",
                 session_id=getattr(host, "session_id", None),
                 agent_role="supervisor_task",
@@ -192,8 +193,6 @@ def exit_autonomous_gate_fast(
     host: Any,
     *,
     cprint: Any,
-    push_cli_agent_scene: Any,
-    record_supervisor_ui_activity_safe: Any,
 ) -> bool:
     if not host._autonomous_gate_active:
         return True
@@ -221,7 +220,7 @@ def exit_autonomous_gate_fast(
                 timeout=5,
             )
             host._autonomous_gate_active = False
-            push_cli_agent_scene(
+            host._publish_cli_agent_scene(
                 "idle",
                 session_id=getattr(host, "session_id", None),
                 agent_role="supervisor_task",
@@ -230,11 +229,14 @@ def exit_autonomous_gate_fast(
             cprint("  💤 自主链路 [bold]已停止[/].")
             cprint("     基线健康检查循环仍会继续运行。")
             cprint("     使用 /auto 可重新进入自主链路。")
-            record_supervisor_ui_activity_safe(
-                "autonomous_gate_exit",
-                scene="idle",
-                summary="自主链路已通过 fast-path /auto-q 退出",
-            )
+            try:
+                host._record_supervisor_ui_activity_safe(
+                    "autonomous_gate_exit",
+                    scene="idle",
+                    summary="自主链路已通过 fast-path /auto-q 退出",
+                )
+            except Exception:
+                pass
             return True
         cprint("  ⚠️  自主链路未能停止，当前仍处于激活状态。")
         return False
@@ -245,7 +247,7 @@ def exit_autonomous_gate_fast(
             timeout=5,
         )
         host._autonomous_gate_active = False
-        push_cli_agent_scene(
+        host._publish_cli_agent_scene(
             "idle",
             session_id=getattr(host, "session_id", None),
             agent_role="supervisor_task",
@@ -261,7 +263,6 @@ def force_quit_autonomous_gate(
     host: Any,
     *,
     cprint: Any,
-    push_cli_agent_scene: Any,
 ) -> bool:
     cprint("\n  🚨 强制退出自主链路 —— 正在尝试紧急清理...")
 
@@ -313,7 +314,7 @@ def force_quit_autonomous_gate(
         pass
 
     host._autonomous_gate_active = False
-    push_cli_agent_scene(
+    host._publish_cli_agent_scene(
         "idle",
         session_id=getattr(host, "session_id", None),
         agent_role="supervisor_task",

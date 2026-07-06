@@ -52,9 +52,9 @@ def test_self_learning_conclusion_store_persists_conclusion_and_only_builds_payl
     assert (tmp_path / "self-learning" / "conclusions" / f"{conclusion.conclusion_id}.json").exists()
 
 
-def test_self_learning_conclusion_store_can_submit_recommendations_into_supervisor_queue(tmp_path):
+def test_self_learning_conclusion_store_can_submit_recommendations_into_supervisor_backlog(tmp_path):
     store = SelfLearningConclusionStore(tmp_path / "self-learning")
-    queue = AutonomousChainStore(tmp_path / "queue" / "autonomous_chain_store.json")
+    backlog = AutonomousChainStore(tmp_path / "backlog" / "autonomous_chain_store.json")
 
     topic = store.create_topic(
         title="Probe retry tuning",
@@ -89,7 +89,7 @@ def test_self_learning_conclusion_store_can_submit_recommendations_into_supervis
         ],
     )
 
-    created = store.submit_to_supervisor_queue(conclusion=conclusion, queue=queue)
+    created = store.submit_to_supervisor_backlog(conclusion=conclusion, backlog=backlog)
 
     assert len(created) == 1
     assert created[0]["title"] == "Review bounded probe retry policy"
@@ -135,9 +135,9 @@ def test_self_learning_conclusion_store_marks_experiment_followups_as_self_learn
     assert payload["proposals"][0]["execution_kind"] is None
 
 
-def test_self_learning_queue_payload_prefers_canonical_runtime_profile_over_broad_task_type(tmp_path):
+def test_self_learning_backlog_payload_prefers_canonical_runtime_profile_over_broad_task_type(tmp_path):
     store = SelfLearningConclusionStore(tmp_path / "self-learning")
-    queue = AutonomousChainStore(tmp_path / "queue" / "autonomous_chain_store.json")
+    backlog = AutonomousChainStore(tmp_path / "backlog" / "autonomous_chain_store.json")
 
     proposal = SupervisorTaskProposal(
         title="Promote body candidate",
@@ -149,7 +149,7 @@ def test_self_learning_queue_payload_prefers_canonical_runtime_profile_over_broa
         source="self_learning",
     )
 
-    task = queue.create_task(
+    task = backlog.create_task(
         title=proposal.title,
         summary=proposal.summary,
         task_type=store._resolved_proposal_task_type(proposal),

@@ -4,7 +4,7 @@ from VoidCube_cli.autonomous_executor import (
     AUTONOMOUS_BODY_IMPROVEMENT_TASK_PREFIX,
     AUTONOMOUS_LEARNING_TASK_PREFIX,
     autonomous_task_run_id_for_message,
-    bind_autonomous_task_prompt,
+    bind_autonomous_execution_prompt,
     build_autonomous_task_prompt,
 )
 
@@ -17,7 +17,7 @@ def test_learning_prompt_uses_autonomous_prefix_and_binds_run_id():
     }
 
     prompt = build_autonomous_task_prompt(task, "self_learning")
-    run_id = bind_autonomous_task_prompt(task, prompt)
+    run_id = bind_autonomous_execution_prompt(task, prompt)
 
     assert prompt.startswith(f"{AUTONOMOUS_LEARNING_TASK_PREFIX} Learn queue boundaries")
     assert "Learning branch: exploratory" in prompt
