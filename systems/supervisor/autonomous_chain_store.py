@@ -345,7 +345,7 @@ class AutonomousChainStore:
                     if execution_request is not None:
                         task.execution_request = execution_request
                     if context:
-                        # Preserve fresh review/dispatch context without creating
+                        # Preserve fresh review/handoff context without creating
                         # an illegal no-op transition entry.
                         task.metadata.update({"last_decision_context": dict(context)})
                     task.updated_at = datetime.utcnow()

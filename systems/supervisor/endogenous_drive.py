@@ -341,7 +341,7 @@ class EndogenousDriveEngine:
 
     The drive engine does not execute work. It turns system facts, core values,
     and (when available) LLM-analyzed memory context into auditable
-    governance candidates that still pass through supervisor review.
+    governance-backlog projections that still pass through supervisor review.
 
     Without LLM: uses deterministic text extraction (first 80 chars).
     With LLM: reads compressed memory context to generate intelligent,
@@ -469,7 +469,7 @@ class EndogenousDriveEngine:
             decisions_by_family,
             decisions_by_governance,
         )
-        self_evolution_plan = self._decision_for(
+        autonomous_improvement_plan = self._decision_for(
             "general_self_evolution",
             decisions_by_family,
             decisions_by_governance,
@@ -517,7 +517,7 @@ class EndogenousDriveEngine:
             adaptive_policy=adaptive_policy,
             memory_plan=memory_plan,
             self_learning_plan=self_learning_plan,
-            self_evolution_plan=self_evolution_plan,
+            autonomous_improvement_plan=autonomous_improvement_plan,
         )
         intents = self._synthesize_intents(
             needs=needs,
@@ -1409,7 +1409,7 @@ class EndogenousDriveEngine:
         adaptive_policy: DriveAdaptivePolicy,
         memory_plan: Dict[str, Any],
         self_learning_plan: Dict[str, Any],
-        self_evolution_plan: Dict[str, Any],
+        autonomous_improvement_plan: Dict[str, Any],
     ) -> List[DriveNeed]:
         needs: List[DriveNeed] = []
         truthfulness_review_active = (
@@ -1462,7 +1462,7 @@ class EndogenousDriveEngine:
                         - memory_constraint_penalty * 0.32
                         + memory_recovery_bonus * 0.18
                     ),
-                    rationale="Memory continuity work remains a standing supervisory obligation under whole-day execution.",
+                    rationale="在全天候运行语义下，记忆连续性维护始终是监督者的常驻职责。",
                     source_evidence=[
                         f"memory_idle={perception.checks.get('has_memory_idle', False)}",
                         f"memory_continuity_bias={adaptive_policy.memory_continuity_bias:.2f}",
@@ -1494,7 +1494,7 @@ class EndogenousDriveEngine:
                         + adaptive_policy.truthfulness_bias * 0.24
                         + truthfulness_priority_bonus * 0.45
                     ),
-                    rationale="Recent errors and uncertainty signals indicate truthfulness debt that should be surfaced and reviewed.",
+                    rationale="近期错误与高不确定性信号说明真实性债务正在累积，应该尽快浮出并进入复核。",
                     source_evidence=[
                         f"correction_signals={perception.correction_signals}",
                         f"recent_errors={perception.recent_errors}",
@@ -1539,8 +1539,8 @@ class EndogenousDriveEngine:
                         - learning_constraint_penalty * 0.46
                     ),
                     rationale=(
-                        "Learning should expand when recent evidence still yields value, "
-                        "but it should cool down when governance backlog blockage suggests more output would only add pressure."
+                        "当近期证据仍有增益时，学习应继续扩展；"
+                        "但如果治理在途阻塞已说明继续产出只会加压，就应主动降温。"
                     ),
                     source_evidence=[
                         f"learning_quality={perception.learning_quality:.2f}",
@@ -1555,7 +1555,7 @@ class EndogenousDriveEngine:
                 )
             )
         if (
-            self_evolution_plan.get("eligible_for_planning")
+            autonomous_improvement_plan.get("eligible_for_planning")
             and perception.shell_slot_present
             and perception.learning_quality >= 60.0
             and not reflection.body_growth_blocked
@@ -1581,7 +1581,7 @@ class EndogenousDriveEngine:
                         + reflection.autonomy_readiness * 0.1
                         + adaptive_policy.body_growth_bias * 0.28
                     ),
-                    rationale="Body growth should only be prepared when recent learning has real yield and shell improvement is not already blocked by recent output pressure.",
+                    rationale="只有当近期学习确实产出有效收益，且替身改进没有被近期输出压力卡住时，才应准备自主改进。",
                     source_evidence=[
                         f"learning_quality={perception.learning_quality:.2f}",
                         f"shell_slot_present={perception.shell_slot_present}",
@@ -1591,7 +1591,7 @@ class EndogenousDriveEngine:
                     ],
                 )
             )
-        if self_evolution_plan.get("eligible_for_planning"):
+        if autonomous_improvement_plan.get("eligible_for_planning"):
             governance_review_active = self._has_governance_hygiene_review_signal(perception)
             backlog_need_score = self._clamp01(
                 0.2
@@ -1615,7 +1615,7 @@ class EndogenousDriveEngine:
                         + reflection.governance_backlog_blockage_pressure * 0.16
                         + adaptive_policy.governance_hygiene_bias * 0.22
                     ),
-                    rationale="Governance backlog hygiene becomes more important when repeated endogenous output is not closing loops and backlog pressure keeps accumulating.",
+                    rationale="当内生输出反复出现却没有真正闭环、治理压力持续累积时，治理卫生复核就应被抬高优先级。",
                     source_evidence=[
                         f"governance_backlog_count={perception.governance_backlog_count}",
                         f"stale_backlog_count={perception.stale_backlog_count}",
@@ -1681,7 +1681,7 @@ class EndogenousDriveEngine:
                         + adaptive_policy.observation_bias * 0.28
                         - observation_release_penalty * 0.32
                     ),
-                    rationale="The drive should slow itself down and observe when repeated output is meeting blockage or autonomy readiness is not yet strong enough.",
+                    rationale="当重复产出持续撞上阻塞，或自主就绪度还不够稳时，内生驱动应主动放慢并先补观察。",
                     source_evidence=[
                         f"governance_backlog_blockage_pressure={reflection.governance_backlog_blockage_pressure:.2f}",
                         f"autonomy_readiness={reflection.autonomy_readiness:.2f}",
@@ -2414,7 +2414,7 @@ class EndogenousDriveEngine:
             decisions_by_family,
             decisions_by_governance,
         )
-        self_evolution_plan = self._decision_for(
+        autonomous_improvement_plan = self._decision_for(
             "general_self_evolution",
             decisions_by_family,
             decisions_by_governance,
@@ -2441,7 +2441,7 @@ class EndogenousDriveEngine:
             drive_context=drive_context,
             memory_plan=memory_plan,
             self_learning_plan=self_learning_plan,
-            self_evolution_plan=self_evolution_plan,
+            autonomous_improvement_plan=autonomous_improvement_plan,
             proposals_override=lm_proposals_override,
         )
         candidates: List[EndogenousTaskCandidate] = []
@@ -2457,10 +2457,10 @@ class EndogenousDriveEngine:
             candidates.append(
                 self._build_scored_candidate(
                     stable_key="continuity:memory_maintenance_sweep",
-                    title="Maintain long-term memory continuity",
+                    title="维持长期记忆连续性",
                     summary=(
-                        "Inspect memory-maintenance needs during the current activity-guard "
-                        "interval so long-term identity, summaries, and governance traces stay usable."
+                        "在当前活动护栏周期内检查记忆维护需求，"
+                        "让长期身份、摘要与治理轨迹保持可用。"
                     ),
                     priority="high",
                     governance_task_type="memory_maintenance",
@@ -2515,10 +2515,10 @@ class EndogenousDriveEngine:
             candidates.append(
                 self._build_scored_candidate(
                     stable_key="truthfulness:review_correction_signals",
-                    title="Review recent uncertainty and correction signals",
+                    title="复核近期不确定性与纠偏信号",
                     summary=(
-                        "Turn recent errors or high-uncertainty answers into a bounded "
-                        "self-learning follow-up instead of letting them remain invisible."
+                        "把近期错误或高不确定性回答收成有边界的自学习跟进，"
+                        "而不是继续让它们停留在不可见状态。"
                     ),
                     priority="high",
                     governance_task_type="self_learning",
@@ -2793,7 +2793,7 @@ class EndogenousDriveEngine:
                     existing_keys.add(review_key)
 
         if (
-            self_evolution_plan.get("eligible_for_planning")
+            autonomous_improvement_plan.get("eligible_for_planning")
             and "continuity:governance_hygiene_review" not in existing_keys
             and not self._has_recent_static_governance_completion(
                 drive_context,
@@ -2808,10 +2808,10 @@ class EndogenousDriveEngine:
             candidates.append(
                 self._build_scored_candidate(
                     stable_key="continuity:governance_hygiene_review",
-                    title="Review governance backlog hygiene",
+                    title="复核治理积压卫生",
                     summary=(
-                        "Check whether planned, deferred, or paused governance-backlog work still "
-                        "has enough evidence, ownership clarity, and rollback constraints."
+                        "检查已规划、已延后或已暂停的治理积压工作是否仍具备"
+                        "足够证据、责任归属和回滚约束。"
                     ),
                     priority="normal",
                     governance_task_type="self_evolution",
@@ -2945,7 +2945,7 @@ class EndogenousDriveEngine:
         drive_context: Dict[str, Any],
         memory_plan: Dict[str, Any],
         self_learning_plan: Dict[str, Any],
-        self_evolution_plan: Dict[str, Any],
+        autonomous_improvement_plan: Dict[str, Any],
         proposals_override: Optional[List[Dict[str, Any]]] = None,
     ) -> List[EndogenousTaskCandidate]:
         service_runtime = getattr(self.config, "service_runtime", None)
@@ -2960,7 +2960,7 @@ class EndogenousDriveEngine:
             drive_context=drive_context,
             memory_plan=memory_plan,
             self_learning_plan=self_learning_plan,
-            self_evolution_plan=self_evolution_plan,
+            autonomous_improvement_plan=autonomous_improvement_plan,
         )
         if proposals_override is None:
             proposals = self._generate_lm_task_proposals(evidence_packet=evidence_packet)
@@ -2984,7 +2984,7 @@ class EndogenousDriveEngine:
         drive_context: Dict[str, Any],
         memory_plan: Dict[str, Any],
         self_learning_plan: Dict[str, Any],
-        self_evolution_plan: Dict[str, Any],
+        autonomous_improvement_plan: Dict[str, Any],
     ) -> Dict[str, Any]:
         cognition_charter = self._resolve_endogenous_cognition_charter(
             getattr(self.config, "service_runtime", None)
@@ -3163,7 +3163,7 @@ class EndogenousDriveEngine:
             "plans": {
                 "memory_maintenance": dict(memory_plan),
                 "self_learning": dict(self_learning_plan),
-                "self_evolution": dict(self_evolution_plan),
+                "self_evolution": dict(autonomous_improvement_plan),
             },
             "perception": perception,
             "world_model": world_model,
@@ -3219,12 +3219,12 @@ class EndogenousDriveEngine:
             for item in list(drive_context.get("learning_backlog_titles") or [])[:5]
             if str(item).strip()
         ]
-        queued_body_titles = [
+        body_improvement_backlog_titles = [
             str(item).strip()
             for item in list(drive_context.get("body_improvement_backlog_titles") or [])[:4]
             if str(item).strip()
         ]
-        if not governance_backlog_tasks and not learning_backlog_titles and not queued_body_titles:
+        if not governance_backlog_tasks and not learning_backlog_titles and not body_improvement_backlog_titles:
             return {}
 
         recent_titles = [
@@ -3240,17 +3240,17 @@ class EndogenousDriveEngine:
         return {
             "governance_backlog_task_count": len(governance_backlog_tasks),
             "learning_backlog_count": len(learning_backlog_titles),
-            "body_improvement_backlog_count": len(queued_body_titles),
+            "body_improvement_backlog_count": len(body_improvement_backlog_titles),
             "recent_titles": recent_titles,
             "recent_statuses": recent_statuses,
             "summary": (
-                f"governance_backlog={len(governance_backlog_tasks)}; "
-                f"learning_backlog={len(learning_backlog_titles)}; "
-                f"body_improvement_backlog={len(queued_body_titles)}; "
-                f"recent_titles={', '.join(recent_titles[:3]) or 'none'}."
+                f"治理在途 {len(governance_backlog_tasks)} 项；"
+                f"学习在途 {len(learning_backlog_titles)} 项；"
+                f"替身改进在途 {len(body_improvement_backlog_titles)} 项；"
+                f"最近标题：{', '.join(recent_titles[:3]) or '无'}。"
             ),
             "guidance": (
-                "Avoid proposing governance-backlog-equivalent work unless stronger evidence clearly justifies replacing it."
+                "除非出现更强的新证据足以证明应该替换当前治理方向，否则不要重复提出与现有治理在途等价的工作。"
             ),
         }
 
@@ -3336,12 +3336,12 @@ class EndogenousDriveEngine:
                 ).strip(),
             },
             "summary": (
-                "Decision core: "
-                f"judgement={str(meta_cognition_profile.get('current_judgement') or 'unknown').strip() or 'unknown'}; "
-                f"constraint={str(meta_cognition_profile.get('dominant_constraint') or 'unknown').strip() or 'unknown'}; "
-                f"governance_posture={str(meta_cognition_profile.get('governance_posture') or meta_cognition_profile.get('recommended_task_posture') or 'unknown').strip() or 'unknown'}; "
-                f"task_shape_hint={str(task_type_priors.get('top_priority_task_type') or 'unknown').strip() or 'unknown'}; "
-                f"self_iteration_domain={str(meta_cognition_profile.get('top_self_iteration_domain') or 'unknown').strip() or 'unknown'}."
+                "判断核心："
+                f"当前判断={str(meta_cognition_profile.get('current_judgement') or 'unknown').strip() or 'unknown'}；"
+                f"主约束={str(meta_cognition_profile.get('dominant_constraint') or 'unknown').strip() or 'unknown'}；"
+                f"治理姿态={str(meta_cognition_profile.get('governance_posture') or meta_cognition_profile.get('recommended_task_posture') or 'unknown').strip() or 'unknown'}；"
+                f"任务形态提示={str(task_type_priors.get('top_priority_task_type') or 'unknown').strip() or 'unknown'}；"
+                f"首要自我迭代域={str(meta_cognition_profile.get('top_self_iteration_domain') or 'unknown').strip() or 'unknown'}。"
             ),
         }
 
@@ -8612,7 +8612,7 @@ def _stable_key_for_topic(topic: str) -> str:
     """Generate a stable dedup key from a learning topic string.
 
     Uses a short hash so that genuinely different topics get different keys,
-    allowing multiple creativity candidates to coexist in the queue.
+    allowing multiple creativity candidates to coexist in the governance backlog.
     """
     import hashlib
     normalized = topic.strip().lower()

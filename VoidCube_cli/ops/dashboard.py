@@ -94,9 +94,10 @@ def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
     board = dict(observation.get("board") or {})
     chain = dict(observation.get("chain") or {})
     loop = dict(observation.get("loop") or {})
+    primary_focus = dict(board.get("primary_focus") or {})
     segment_label_fallback = {
         "api_b_backlog": "治理在途",
-        "api_a_ready": "待拉取窗口",
+        "api_a_ready": "待认领窗口",
         "api_b_candidates": "候选形成",
         "mem_recent": "写回回流",
     }
@@ -165,8 +166,35 @@ def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
         "writebacks": int(counts.get("writebacks") or 0),
         "loop_stages": loop_stages[:4],
         "segments": chain_segments[:4],
-        "headline": str(board.get("headline") or "自主链路闭环观测"),
-        "segments_headline": str(chain.get("headline") or "自主链路分段观察"),
+        "headline": str(board.get("headline") or "API-B 主视角自主闭环总览"),
+        "summary": str(
+            board.get("summary")
+            or chain.get("summary")
+            or "API-B 主视角下的判断、治理、执行回报、Mem 回流与再读取闭环。"
+        ),
+        "hero_summary": str(
+            board.get("hero_summary")
+            or board.get("summary")
+            or chain.get("summary")
+            or "Web 小屋与最小 dashboard 只消费 Supervisor 投影出的 API-B 主视角自主闭环读模型。"
+        ),
+        "primary_focus": {
+            "title": str(primary_focus.get("title") or "当前没有显著闭环焦点").strip()
+            or "当前没有显著闭环焦点",
+            "status": str(primary_focus.get("status") or "等待中").strip() or "等待中",
+            "summary": str(primary_focus.get("summary") or "").strip(),
+        },
+        "hero_pills": [
+            dict(item)
+            for item in list(board.get("hero_pills") or [])
+            if isinstance(item, dict)
+        ][:4],
+        "observation_notes": [
+            dict(item)
+            for item in list(board.get("observation_notes") or [])
+            if isinstance(item, dict)
+        ][:4],
+        "segments_headline": str(chain.get("headline") or "自主闭环分段观察"),
     }
 
 
@@ -209,19 +237,6 @@ def _human_policy_scope(value: Optional[str]) -> str:
     }.get(text, text)
 
 
-def _human_service_label(value: Optional[str]) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return "未知侧"
-    return {
-        "supervisor": "API-B",
-        "agent": "API-A",
-        "executor": "API-A 子执行面",
-        "memory": "Mem",
-        "gateway": "网关",
-    }.get(text, text)
-
-
 def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
     """Parse an ISO timestamp string, returning a naive UTC datetime."""
     if not ts:
@@ -235,92 +250,24 @@ def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
         return None
 
 
-def _recent_autonomous_activity(activity: Dict[str, Any]) -> Dict[str, Any]:
-    recent_metadata = dict(activity.get("recent_metadata") or {})
-    candidates = [
-        (
-            "autonomous_chain_execute",
-            _parse_iso(activity.get("last_autonomous_chain_execute_at")),
-            "执行回报",
-        ),
-        (
-            "autonomous_chain_plan",
-            _parse_iso(activity.get("last_autonomous_chain_plan_at")),
-            "治理放行",
-        ),
-        (
-            "self_learning",
-            _parse_iso(activity.get("last_self_learning_activity_at")),
-            "自主学习",
-        ),
-        (
-            "memory_write_failure",
-            _parse_iso(activity.get("last_memory_write_failure_at")),
-            "写回异常",
-        ),
-        (
-            "autonomous_chain",
-            _parse_iso(activity.get("last_autonomous_chain_activity_at")),
-            "最近动作",
-        ),
-    ]
-    newest = None
-    for kind, recorded_at, phase_label in candidates:
-        if recorded_at is None:
-            continue
-        metadata = dict(recent_metadata.get(kind) or {})
-        if not metadata:
-            continue
-        if newest is None or recorded_at > newest[1]:
-            newest = (kind, recorded_at, phase_label, metadata)
-
-    if newest is None:
-        return {
-            "kind": "unavailable",
-            "phase_label": "最近自主动作",
-            "title": "最近暂无自主链路动作",
-            "summary": "等待 API-B 形成新的治理、放行或写回回报。",
-            "source_label": "API-B",
-            "display_at": "暂无数据",
-        }
-
-    kind, recorded_at, phase_label, metadata = newest
-    identity = dict(metadata.get("task_identity") or {})
-    label = (
-        str(identity.get("display_label") or "").strip()
-        or str(metadata.get("execution_kind_label") or "").strip()
-        or str(metadata.get("task_family_label") or "").strip()
-        or str(metadata.get("governance_task_type_label") or "").strip()
-        or str(metadata.get("task_type_label") or "").strip()
-    )
-    summary = (
-        str(identity.get("summary") or "").strip()
-        or str(metadata.get("title") or metadata.get("task_title") or "").strip()
-        or label
-        or phase_label
-    )
-    source_label = _human_service_label(metadata.get("source_service"))
-
-    if kind == "autonomous_chain_execute":
-        detail = f"{source_label}已回报 {label or '自主链路项'} 的执行进展。"
-    elif kind == "autonomous_chain_plan":
-        detail = f"API-B 已完成 {label or '自主链路项'} 的治理判断或放行。"
-    elif kind == "self_learning":
-        detail = f"API-A 子执行面正在围绕 {label or '自主学习'} 回传学习进展。"
-    elif kind == "memory_write_failure":
-        detail = "最近一次 Mem 写回出现异常，当前链路需要重新写回或补偿。"
-    else:
-        detail = f"{source_label} 最近记下了一次自主链路相关动作。"
-
-    return {
-        "kind": kind,
-        "phase_label": phase_label,
-        "title": summary,
-        "summary": detail,
-        "source_label": source_label,
-        "recorded_at": recorded_at.isoformat(),
-        "display_at": recorded_at.strftime("%H:%M:%S"),
-    }
+def _supervisor_recent_autonomous_activity(state: Dict[str, Any]) -> Dict[str, Any]:
+    observation = dict(state.get("autonomous_observation") or {})
+    board = dict(observation.get("board") or {})
+    recent = dict(board.get("recent_activity") or {})
+    if not recent:
+        return {}
+    normalized = dict(recent)
+    normalized["phase_label"] = str(recent.get("phase_label") or "最近自主动作").strip() or "最近自主动作"
+    normalized["title"] = str(recent.get("title") or "最近暂无自主链路动作").strip() or "最近暂无自主链路动作"
+    normalized["summary"] = str(recent.get("summary") or "").strip()
+    normalized["source_label"] = str(recent.get("source_label") or "API-B").strip() or "API-B"
+    display_at = str(recent.get("display_at") or "").strip()
+    if not display_at:
+        recorded_at = _parse_iso(recent.get("recorded_at"))
+        if recorded_at is not None:
+            display_at = recorded_at.strftime("%H:%M:%S")
+    normalized["display_at"] = display_at or "暂无数据"
+    return normalized
 
 
 # ── Dashboard builder ──────────────────────────────────────────────────
@@ -339,7 +286,7 @@ def build_dashboard() -> Dict[str, Any]:
     decisions = dict(runtime.get("eligibility") or guards.get("decisions") or {})
     thresholds = dict(guards.get("thresholds") or {})
     chain_snapshot = _build_autonomous_chain_snapshot(state)
-    recent_activity = _recent_autonomous_activity(activity)
+    recent_activity = _supervisor_recent_autonomous_activity(state)
 
     # ── Services ────────────────────────────────────────────────────
     registered = services.get("services", {})
@@ -413,27 +360,42 @@ def build_dashboard() -> Dict[str, Any]:
     if chain_snapshot:
         chain_view = {
             "mode": "autonomous_chain_board",
-            "headline": chain_snapshot.get("headline", "自主链路闭环观测"),
+            "headline": chain_snapshot.get("headline", "API-B 主视角自主闭环总览"),
+            "hero_summary": chain_snapshot.get(
+                "hero_summary",
+                "Web 小屋与最小 dashboard 只消费 Supervisor 投影出的 API-B 主视角自主闭环读模型。",
+            ),
+            "summary": chain_snapshot.get(
+                "summary",
+                "API-B 主视角下的判断、治理、执行回报、Mem 回流与再读取闭环。",
+            ),
+            "primary_focus": dict(chain_snapshot.get("primary_focus") or {}),
+            "hero_pills": list(chain_snapshot.get("hero_pills") or []),
+            "observation_notes": list(chain_snapshot.get("observation_notes") or []),
             "api_b_backlog": chain_snapshot.get("api_b_backlog", 0),
             "api_a_ready": chain_snapshot.get("api_a_ready", 0),
             "candidates": chain_snapshot.get("candidates", 0),
             "writebacks": chain_snapshot.get("writebacks", 0),
             "loop_stages": list(chain_snapshot.get("loop_stages") or []),
             "segments": list(chain_snapshot.get("segments") or []),
-            "segments_headline": chain_snapshot.get("segments_headline", "自主链路分段观察"),
+            "segments_headline": chain_snapshot.get("segments_headline", "自主闭环分段观察"),
         }
     else:
         chain_view = {
             "mode": "observation_unavailable",
             "headline": "自主链路观测暂不可用",
-            "summary": "监督者尚未提供自主链路读模型",
+            "hero_summary": "监督者尚未提供 API-B 主视角的自主闭环总览投影。",
+            "summary": "监督者尚未提供 API-B 主视角的自主链路读模型。",
+            "primary_focus": {},
+            "hero_pills": [],
+            "observation_notes": [],
             "api_b_backlog": 0,
             "api_a_ready": 0,
             "candidates": 0,
             "writebacks": 0,
             "loop_stages": [],
             "segments": [],
-            "segments_headline": "自主链路分段观察",
+            "segments_headline": "自主闭环分段观察",
         }
 
     # ── Next review cycle estimate ──────────────────────────────────
@@ -481,10 +443,9 @@ def build_dashboard() -> Dict[str, Any]:
 
 # ── Three-segment scene bar (baseline §8.1) ──
 # Each reporter (supervisor / agent / executor) declares its own scene;
-# the CLI status bar surfaces all three side-by-side.  The legacy single
-# "API-B status" field that mixed the supervisor's scene with the agent's
-# has been split into per-reporter segments so the user can tell who is
-# actually doing the work.
+# the CLI status bar simply shows the three reporters side-by-side so the
+# user can distinguish API-B governance, API-A execution, and executor
+# activity without re-mixing them into one coarse status.
 
 REPORTER_SEGMENT: List[Dict[str, str]] = [
     {"key": "supervisor", "icon": "🧠", "name": "API-B"},
@@ -594,15 +555,22 @@ def print_dashboard() -> None:
     print(f"  ╠══════════════════════════════════════════════════════════╣")
     if chain.get("mode") == "autonomous_chain_board":
         print(
-            f"  ║  {chain.get('headline', '自主链路闭环观测')[:46]:<46s}          ║"
+            f"  ║  {chain.get('headline', 'API-B 主视角自主闭环总览')[:46]:<46s}          ║"
         )
         print(
-            f"  ║  {chain.get('segments_headline', '自主链路分段观察')[:46]:<46s}          ║"
+            f"  ║  {chain.get('segments_headline', '自主闭环分段观察')[:46]:<46s}          ║"
         )
         print(
             f"  ║  候选 {chain.get('candidates', 0)}  ·  治理 {chain.get('api_b_backlog', 0)}  ·  "
-            f"待拉取 {chain.get('api_a_ready', 0)}  ·  写回 {chain.get('writebacks', 0)}              ║"
+            f"待认领 {chain.get('api_a_ready', 0)}  ·  回流 {chain.get('writebacks', 0)}              ║"
         )
+        print(
+            f"  ║  {chain.get('hero_summary', chain.get('summary', 'API-B 主视角下的闭环观测'))[:54]:<54s}  ║"
+        )
+        focus = dict(chain.get("primary_focus") or {})
+        if focus:
+            focus_line = f"当前焦点 {focus.get('status', '等待中')} · {focus.get('title', '暂无')}"
+            print(f"  ║  {focus_line[:54]:<54s}  ║")
         for item in list(chain.get("loop_stages") or [])[:4]:
             title = str(item.get("title") or "?")[:28]
             status = str(item.get("status") or "?")[:12]
@@ -612,16 +580,23 @@ def print_dashboard() -> None:
             title = str(item.get("title") or "?")[:28]
             status = str(item.get("status") or "?")[:10]
             print(f"  ║  • {group:<12s} {title:<28s} {status:<10s}              ║")
+        hero_pills = [
+            str(item.get("text") or "").strip()
+            for item in list(chain.get("hero_pills") or [])
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        ]
+        if hero_pills:
+            print(f"  ║  {hero_pills[0][:54]:<54s}  ║")
     else:
         print(
             f"  ║  {chain.get('headline', '自主链路观测暂不可用')[:46]:<46s}          ║"
         )
         print(
-            f"  ║  {chain.get('summary', '等待 Supervisor 观测板数据')[:54]:<54s}  ║"
+            f"  ║  {chain.get('summary', '监督者尚未提供 API-B 主视角的自主链路读模型。')[:54]:<54s}  ║"
         )
     if recent_activity:
         phase = str(recent_activity.get("phase_label") or "最近动作")[:10]
-        title = str(recent_activity.get("title") or "最近暂无自主链路动作")[:30]
+        title = str(recent_activity.get("title") or "最近暂无自主闭环动作")[:30]
         display_at = str(recent_activity.get("display_at") or "?")[:8]
         summary = str(recent_activity.get("summary") or "")[:44]
         print(f"  ║  最近自主动作 {phase:<10s} {title:<30s} {display_at:>8s}    ║")

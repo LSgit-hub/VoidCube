@@ -174,7 +174,7 @@ def test_cli_autonomous_execution_prompt_injection_binds_local_run_id():
     assert ok is True
     assert task["_autonomous_task_run_id"]
     assert cli._current_autonomous_task_run_id == task["_autonomous_task_run_id"]
-    assert task["_autonomous_execution_prompt_text"] == prompts[0]
+    assert task["_autonomous_execution_start_text"] == prompts[0]
     cli._current_autonomous_task = task
     assert cli._autonomous_task_run_id_for_chat_message(prompts[0]) == task["_autonomous_task_run_id"]
     assert cli._autonomous_task_run_id_for_chat_message("ordinary background chat") == ""
@@ -305,8 +305,8 @@ def test_cli_autonomous_gate_pulls_body_improvement_tasks(monkeypatch):
                     "tasks": [
                         {
                             "task_id": "body-1",
-                            "title": "Improve shell body",
-                            "summary": "Apply learned refactor to shell body",
+                            "title": "改进 shell 替身",
+                            "summary": "把学习到的重构应用到 shell 替身",
                             "execution_kind": "body_improvement",
                             "constraints": {
                                 "worktree_path": "F:/tmp/worktree",
@@ -578,7 +578,7 @@ def test_cli_autonomous_gate_replays_recovered_running_task_prompt(monkeypatch):
     assert cli._current_autonomous_task["task_id"] == "learn-replay-1"
     assert prompts
     assert prompts[0].startswith("[Autonomous Learning Task] Replay recovered autonomous task")
-    assert cli._current_autonomous_task["_autonomous_execution_prompt_injected"] is True
+    assert cli._current_autonomous_task["_autonomous_execution_started"] is True
 
 
 def test_execute_pending_input_runs_agent_turn_and_cleans_runtime(monkeypatch):
@@ -612,10 +612,10 @@ def test_execute_pending_input_runs_agent_turn_and_cleans_runtime(monkeypatch):
     app = _FakeApp()
     cli.chat = fake_chat
 
-    handled = cli._execute_pending_input("[Autonomous Learning Task] Learn queue recovery", app=app)
+    handled = cli._execute_pending_input("[Autonomous Learning Task] Learn backlog recovery", app=app)
 
     assert handled is True
-    assert calls == [{"user_input": "[Autonomous Learning Task] Learn queue recovery", "images": None}]
+    assert calls == [{"user_input": "[Autonomous Learning Task] Learn backlog recovery", "images": None}]
     assert cli._agent_running is False
     assert cli._spinner_text == ""
     assert cli._tool_start_time == 0.0
@@ -922,10 +922,10 @@ def test_autonomous_panel_shows_no_api_a_executable_task_reason(monkeypatch):
                 "stages": [
                     {
                         "key": "api_b_judgement",
-                        "label": "API-B judgement",
+                        "label": "API-B 判断",
                         "owner": "API-B",
                         "status": "active",
-                        "summary": "API-B is still judging the next step.",
+                        "summary": "API-B 仍在判断下一步动作。",
                     }
                 ],
             },
@@ -1102,11 +1102,11 @@ def test_autonomous_panel_prefers_loop_stage_descriptor_for_non_local_reasoning(
                     {
                         "key": "api_a_execution",
                         "status": "ready",
-                        "stage": "approved_waiting_claim",
-                        "cli_focus_stage": "approved_waiting_claim",
+                        "stage": "waiting_api_a_claim",
+                        "cli_focus_stage": "waiting_api_a_claim",
                         "status_label": "已放行待认领",
-                        "chain_reason": "链路: 监督者已放行该链路项，等待自主执行位认领",
-                        "activity_text": "执行流: 监督者等待某个自主执行位开始接单",
+                        "chain_reason": "链路: 监督者已放行该链路项，等待自主执行面认领",
+                        "activity_text": "执行流: 监督者等待某个自主执行面开始处理该链路项",
                         "reason_style": "warn",
                         "focus_task": {
                             "task_id": "learn-approved-loop-stage-1",
@@ -1134,8 +1134,8 @@ def test_autonomous_panel_prefers_loop_stage_descriptor_for_non_local_reasoning(
 
     assert "状态: 已放行待认领" in rendered
     assert "Loop-stage driven task" in rendered
-    assert "链路: 监督者已放行该链路项，等待自主执行位认领" in rendered
-    assert "执行流: 监督者等待某个自主执行位开始接单" in rendered
+    assert "链路: 监督者已放行该链路项，等待自主执行面认领" in rendered
+    assert "执行流: 监督者等待某个自主执行面开始处理该链路项" in rendered
 
 
 def test_autonomous_panel_shows_running_task_owned_elsewhere(monkeypatch):
@@ -1241,7 +1241,7 @@ def test_autonomous_panel_shows_claimed_task_waiting_to_start(monkeypatch):
     assert "执行流: API-A 自主执行面已认领链路项，等待进入首个模型或工具回合" in rendered
 
 
-def test_autonomous_panel_shows_waiting_start_cause_after_execution_prompt_injected(monkeypatch):
+def test_autonomous_panel_shows_waiting_start_cause_after_autonomous_execution_started(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._autonomous_gate_active = True
     cli._agent_running = False
@@ -1257,9 +1257,9 @@ def test_autonomous_panel_shows_waiting_start_cause_after_execution_prompt_injec
     cli._autonomous_execution_events = [
         {
             "at": "12:00:00",
-            "message": "执行提示已注入前台 CLI，等待模型响应",
+            "message": "自主执行已起跑，等待模型响应",
             "tone": "info",
-            "stage": "execution_prompt_injected",
+            "stage": "autonomous_execution_started",
         }
     ]
     cli._autonomous_last_supervisor_event_key = ""
@@ -1279,7 +1279,7 @@ def test_autonomous_panel_shows_waiting_start_cause_after_execution_prompt_injec
     rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
 
     assert "状态: 已认领待起跑" in rendered
-    assert "近因: 执行提示已注入前台 CLI，正在等待首个模型响应" in rendered
+    assert "近因: 自主执行已起跑，正在等待首个模型响应" in rendered
 
 
 def test_autonomous_panel_shows_claimed_task_waiting_for_writeback(monkeypatch):
@@ -1697,14 +1697,14 @@ def test_cli_formats_supervisor_status_snapshot():
                     "by_path": {"learning": 2, "maintenance": 1, "evolution": 3},
                     "running_count": 1,
                     "governance": {
-                        "direct_lm_actions": 2,
-                        "shadow_recommendations": 1,
-                        "priority_updates": 1,
+                        "review_actions": 2,
+                        "followup_suggestions": 1,
+                        "priority_adjustments": 1,
                     },
                 },
                 "board": {
                     "primary_focus": {
-                        "title": "API-B judgement",
+                        "title": "复核治理积压卫生",
                         "status": "当前在途",
                     },
                 },
@@ -1712,11 +1712,11 @@ def test_cli_formats_supervisor_status_snapshot():
                     "stages": [
                         {
                             "key": "api_b_judgement",
-                            "label": "API-B judgement",
+                            "label": "API-B 判断",
                             "owner": "API-B",
                             "status": "active",
                             "focus_task": {
-                                "title": "Review governance backlog hygiene",
+                                "title": "复核治理积压卫生",
                                 "display_status": "当前在途",
                             },
                         },
@@ -1726,7 +1726,7 @@ def test_cli_formats_supervisor_status_snapshot():
                             "owner": "Mem",
                             "status": "ready",
                             "focus_task": {
-                                "title": "Improve shell body",
+                                "title": "改进 shell 替身",
                                 "display_status": "等待写回",
                             },
                         },
@@ -1735,7 +1735,7 @@ def test_cli_formats_supervisor_status_snapshot():
                 "chain": {
                     "segments": [
                         {"label": "治理在途", "count": 1},
-                        {"label": "待拉取窗口", "count": 2},
+                        {"label": "待认领窗口", "count": 2},
                         {"label": "候选形成", "count": 3},
                         {"label": "写回回流", "count": 1},
                     ]
@@ -1744,7 +1744,7 @@ def test_cli_formats_supervisor_status_snapshot():
             "timeline": [
                 {
                     "event_type": "tasks_reviewed",
-                    "summary": "Supervisor reviewed 3 task(s): approved. Priority updates: 1.",
+                    "summary": "监督者已复核 3 个链路项: approved。 优先级重排 1 次。",
                 }
             ],
         }
@@ -1752,11 +1752,11 @@ def test_cli_formats_supervisor_status_snapshot():
 
     assert any("场景: 治理安排" in line for line in lines)
     assert any("learning=2" in line and "evolution=3" in line for line in lines)
-    assert any("priority_updates=1" in line for line in lines)
-    assert any("闭环焦点: Review governance backlog hygiene (当前在途)" in line for line in lines)
-    assert any("链路分段: 治理在途=1, 待拉取窗口=2, 候选形成=3, 写回回流=1" in line for line in lines)
-    assert any("执行焦点: Improve shell body (等待写回)" in line for line in lines)
-    assert any("Improve shell body" in line for line in lines)
+    assert any("裁定=2" in line and "建议=1" in line and "重排=1" in line for line in lines)
+    assert any("闭环焦点: 复核治理积压卫生 (当前在途)" in line for line in lines)
+    assert any("闭环分段: 治理在途=1, 待认领窗口=2, 候选形成=3, 写回回流=1" in line for line in lines)
+    assert any("执行焦点: 改进 shell 替身 (等待写回)" in line for line in lines)
+    assert any("改进 shell 替身" in line for line in lines)
     assert any("最近监督/事件: 批量复核" in line for line in lines)
 
 
@@ -1770,11 +1770,11 @@ def test_cli_formats_gateway_agent_activity_snapshot():
                 "task_id": "body-1",
                 "task_identity": {
                     "task_id": "body-1",
-                    "summary": "Improve shell body (body_improvement)",
+                    "summary": "改进 shell 替身 (替身改进)",
                 },
             },
         }
     )
 
-    assert any("最近链路项: Improve shell body (body_improvement)" in line for line in lines)
+    assert any("最近链路项: 改进 shell 替身 (替身改进)" in line for line in lines)
     assert any("来源=cli_agent" in line and "次数=3" in line and "task_id=body-1" in line for line in lines)

@@ -57,20 +57,20 @@ def resolve_autonomous_waiting_start_cause(
         )
     latest = dict(events[-1] or {})
     stage = str(latest.get("stage") or "").strip().lower()
-    if stage == "execution_prompt_failed":
+    if stage == "autonomous_execution_start_failed":
         return (
             "class:auto-panel-bad",
-            "近因: 执行提示注入前台 CLI 失败，链路项未真正起跑",
+            "近因: 自主执行启动失败，链路项还没有真正进入首个执行回合",
         )
-    if stage == "execution_prompt_injected":
+    if stage == "autonomous_execution_started":
         return (
             "class:auto-panel-info",
-            "近因: 执行提示已注入前台 CLI，正在等待首个模型响应",
+            "近因: 自主执行已起跑，正在等待首个模型响应",
         )
     if stage == "claim":
         return (
             "class:auto-panel-warn",
-            "近因: 链路项刚被认领，执行提示尚未注入前台 CLI",
+            "近因: 链路项刚被认领，尚未进入首个执行回合",
         )
     if stage == "tool_started":
         return (
@@ -115,26 +115,26 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
         focus_stage,
     )
 
-    if focus_stage == "claimed_running":
+    if focus_stage == "local_claimed_active":
         status_label = "执行中"
         status_style = "class:auto-panel-good"
-    elif focus_stage == "claimed_waiting_writeback":
+    elif focus_stage == "local_claimed_waiting_writeback":
         status_label = "等待回写"
         status_style = "class:auto-panel-good"
-    elif focus_stage == "claimed_waiting_start":
+    elif focus_stage == "local_claimed_waiting_first_turn":
         status_label = "已认领待起跑"
         status_style = "class:auto-panel-warn"
     elif getattr(host, "_agent_running", False):
         status_label = "模型处理中"
         status_style = "class:auto-panel-good"
-    elif focus_stage == "approved_waiting_claim":
+    elif focus_stage == "waiting_api_a_claim":
         status_label = str(supervisor_descriptor.get("status_label") or "已放行待认领")
         status_style = "class:auto-panel-warn"
-    elif focus_stage == "running_elsewhere":
+    elif focus_stage == "running_on_other_api_a":
         status_label = str(supervisor_descriptor.get("status_label") or "他处执行中")
         status_style = "class:auto-panel-info"
     else:
-        status_label = str(supervisor_descriptor.get("status_label") or "待命拉单")
+        status_label = str(supervisor_descriptor.get("status_label") or "等待放行")
         status_style = "class:auto-panel-warn"
 
     rows.append(("class:auto-panel-title", f"API-A 自主执行面 · 会话 {session_short}"))
@@ -165,7 +165,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
                 elapsed = max(0, int(time.time() - started_at))
                 task_text += f" · {elapsed}s"
         rows.append(("class:auto-panel-text", host._trim_status_bar_text(task_text, inner_width)))
-        if focus_stage == "claimed_waiting_start":
+        if focus_stage == "local_claimed_waiting_first_turn":
             rows.append(
                 (
                     "class:auto-panel-warn",
@@ -179,7 +179,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
                 list(getattr(host, "_autonomous_execution_events", []) or [])
             )
             rows.append((cause_style, host._trim_status_bar_text(cause_text, inner_width)))
-        elif focus_stage == "claimed_waiting_writeback":
+        elif focus_stage == "local_claimed_waiting_writeback":
             rows.append(
                 (
                     "class:auto-panel-info",
@@ -189,7 +189,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
                     ),
                 )
             )
-        elif focus_stage == "approved_waiting_claim":
+        elif focus_stage == "waiting_api_a_claim":
             rows.append(
                 (
                     "class:auto-panel-warn",
@@ -202,7 +202,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
                     ),
                 )
             )
-        elif focus_stage == "running_elsewhere":
+        elif focus_stage == "running_on_other_api_a":
             rows.append(
                 (
                     "class:auto-panel-info",
@@ -223,18 +223,18 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
     spinner_text = str(getattr(host, "_spinner_text", "") or "").strip()
     if spinner_text:
         activity_text = f"执行流: {spinner_text}"
-    elif focus_stage == "claimed_running" or getattr(host, "_agent_running", False):
+    elif focus_stage == "local_claimed_active" or getattr(host, "_agent_running", False):
         activity_text = "执行流: 模型正在 API-A 自主执行面中工作"
-    elif focus_stage == "claimed_waiting_start":
+    elif focus_stage == "local_claimed_waiting_first_turn":
         activity_text = "执行流: API-A 自主执行面已认领链路项，等待进入首个模型或工具回合"
-    elif focus_stage == "claimed_waiting_writeback":
+    elif focus_stage == "local_claimed_waiting_writeback":
         activity_text = "执行流: API-A 自主执行面已结束本轮执行，等待写回链路状态"
-    elif focus_stage == "approved_waiting_claim":
+    elif focus_stage == "waiting_api_a_claim":
         activity_text = str(
             supervisor_descriptor.get("activity_text")
             or "执行流: 监督者已放行链路项，等待 API-A 自主执行面认领"
         )
-    elif focus_stage == "running_elsewhere":
+    elif focus_stage == "running_on_other_api_a":
         activity_text = str(
             supervisor_descriptor.get("activity_text")
             or "执行流: 链路项正在其他 API-A 自主执行面中运行"
@@ -242,7 +242,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
     else:
         activity_text = str(
             supervisor_descriptor.get("activity_text")
-            or "执行流: 等待监督者放行链路项或等待下一轮拉单"
+            or "执行流: 等待 API-B 放行链路项，或等待再读取后形成新的待认领窗口"
         )
     rows.append(("class:auto-panel-text", host._trim_status_bar_text(activity_text, inner_width)))
 

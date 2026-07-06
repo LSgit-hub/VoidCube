@@ -454,15 +454,15 @@ async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_dupli
 
     first = await supervisor._run_endogenous_drive_cycle()
     second = await supervisor._run_endogenous_drive_cycle()
-    queued = await supervisor.list_autonomous_chain_tasks()
+    backlog_snapshot = await supervisor.list_autonomous_chain_tasks()
     timeline = supervisor._recent_supervisor_ui_activity(limit=10)
 
     assert first["status"] == "planned"
     assert first["planned"] == 2
     assert second["status"] == "idle"
-    assert queued["count"] == 2
+    assert backlog_snapshot["count"] == 2
     tasks_by_key = {
-        task["metadata"]["endogenous_drive_key"]: task for task in queued["tasks"]
+        task["metadata"]["endogenous_drive_key"]: task for task in backlog_snapshot["tasks"]
     }
     assert "continuity:memory_maintenance_sweep" in tasks_by_key
     assert "truthfulness:review_correction_signals" in tasks_by_key
@@ -471,8 +471,8 @@ async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_dupli
         str(key).startswith("creativity:idle_learning:")
         for key in tasks_by_key
     )
-    assert any(task["governance_task_type"] == "self_learning" for task in queued["tasks"])
-    scheduled_tokens = [task.get("scheduled_for") for task in queued["tasks"]]
+    assert any(task["governance_task_type"] == "self_learning" for task in backlog_snapshot["tasks"])
+    scheduled_tokens = [task.get("scheduled_for") for task in backlog_snapshot["tasks"]]
     assert all(isinstance(token, str) and token for token in scheduled_tokens)
     assert len(set(scheduled_tokens)) == len(scheduled_tokens)
     memory_task = tasks_by_key["continuity:memory_maintenance_sweep"]
@@ -494,7 +494,7 @@ async def test_governance_backlog_task_summaries_include_constraints_for_runtime
 
     await supervisor.plan_autonomous_chain_task(
         {
-            "title": "Improve shell body after learning",
+            "title": "学习后改进 shell 替身",
             "task_family": "body_upgrade",
             "execution_kind": "body_improvement",
             "constraints": {
@@ -1651,7 +1651,7 @@ async def test_endogenous_drive_history_outcome_persists_lm_cognitive_assessment
         metadata={
             "endogenous_drive_key": "lm:truthfulness:review:record-cognitive-assessment",
             "llm_cognitive_assessment": {
-                "current_judgement": "review should dominate until grounding is repaired",
+                "current_judgement": "在 grounding 修复前，复核应保持主导",
                 "dominant_constraint": "weak self structure grounding",
                 "primary_grounding_gaps": [
                     "missing_evidence:self_structure",
@@ -1660,7 +1660,7 @@ async def test_endogenous_drive_history_outcome_persists_lm_cognitive_assessment
                     "review is the safest way to repair the evidence graph",
                 ],
                 "why_not_improvement_now": [
-                    "improvement would run ahead of self-understanding",
+                    "直接改进会跑在自我理解之前",
                 ],
             },
         },
@@ -3858,7 +3858,12 @@ async def test_supervisor_ui_state_does_not_refresh_drive_candidates_from_live_e
 
     ui_state = await supervisor.get_supervisor_ui_state()
 
-    assert ui_state["autonomous_observation"]["candidates"] == []
+    candidate_section = next(
+        section
+        for section in ui_state["autonomous_observation"]["chain"]["segments"]
+        if section["key"] == "api_b_candidates"
+    )
+    assert candidate_section["items"] == []
     assert "drive_candidates" not in ui_state
     assert "drive_available" not in ui_state
     assert ui_state["autonomous_observation"]["runtime"]["drive_available"] is True
@@ -6708,7 +6713,7 @@ async def test_endogenous_drive_prefers_lm_led_candidate_stream_with_small_heuri
     heuristic_candidates = [
         EndogenousTaskCandidate(
             stable_key="continuity:memory_maintenance_sweep",
-            title="Maintain long-term memory continuity",
+            title="维持长期记忆连续性",
             summary="Heuristic maintenance",
             priority="normal",
             governance_task_type="memory_maintenance",
@@ -6732,7 +6737,7 @@ async def test_endogenous_drive_prefers_lm_led_candidate_stream_with_small_heuri
         ),
         EndogenousTaskCandidate(
             stable_key="continuity:governance_hygiene_review",
-            title="Review governance backlog hygiene",
+            title="复核治理积压卫生",
             summary="Heuristic governance hygiene review",
             priority="normal",
             governance_task_type="self_evolution",
@@ -6786,7 +6791,7 @@ async def test_prompt_packet_budget_preserves_backlog_state_snapshot_under_large
             "top_self_iteration_domain": "grounding",
             "primary_evidence_nodes": ["self_structure"],
             "primary_agenda_nodes": ["focus:learning_expansion"],
-            "governance_backlog_summary": "governance_backlog=2",
+            "governance_backlog_summary": "治理在途 2 项",
             "summary": "Decision core summary",
         },
         "supporting_detail": {
@@ -6808,7 +6813,7 @@ async def test_prompt_packet_budget_preserves_backlog_state_snapshot_under_large
         "governance_backlog_tasks": [
             {
                 "title": "Existing backlog task A",
-                "status": "queued",
+                "status": "planned",
                 "priority": "high",
                 "governance_task_type": "self_learning",
                 "task_family": "self_learning",
@@ -6871,7 +6876,7 @@ def test_prompt_packet_priority_order_follows_charter_attention_policy():
         {
             "identity": {"role": "endogenous_supervisory_core"},
             "decision_core": {"current_judgement": "review first"},
-            "governance_backlog_snapshot": {"summary": "governance_backlog=1"},
+            "governance_backlog_snapshot": {"summary": "治理在途 1 项"},
             "supporting_detail": {"grounding_gaps": ["missing_evidence:self_structure"]},
         },
         cognition_charter={
@@ -7063,7 +7068,7 @@ def test_prompt_packet_trim_stage_order_follows_charter_attention_policy():
             "top_self_iteration_domain": "grounding",
             "primary_evidence_nodes": ["self_structure"] * 10,
             "primary_agenda_nodes": ["focus:learning_expansion"] * 10,
-            "governance_backlog_summary": "governance_backlog=2;" + ("q" * 500),
+                "governance_backlog_summary": "治理在途 2 项；" + ("q" * 500),
             "summary": "s" * 500,
         },
         "agenda_graph": {
@@ -7459,7 +7464,7 @@ async def test_endogenous_drive_lm_evidence_packet_stays_on_slim_default_path(tm
                     "endogenous_drive_external_research_enabled": True,
                     "endogenous_drive_external_research_entries": [
                         "Learning expansion repair::focus:learning_expansion missing_agenda evidence should be repaired first.",
-                        "Memory continuity note::Maintain archive coherence and old queue continuity.",
+                        "Memory continuity note::Maintain archive coherence and old backlog continuity.",
                     ],
                 }
             )
@@ -7711,7 +7716,7 @@ async def test_endogenous_drive_cognitive_briefing_prefers_context_layers(tmp_pa
                 "top_self_iteration_hypothesis": "repair evidence-to-agenda grounding before aggressive self-iteration",
                 "primary_evidence_nodes": ["self_structure"],
                 "primary_agenda_nodes": ["focus:learning_expansion"],
-                "governance_backlog_summary": "governance_backlog=2; recent_titles=Existing backlog task A.",
+                "governance_backlog_summary": "治理在途 2 项；最近标题：Existing backlog task A。",
                 "cognitive_posture": {
                     "name": "truthfulness_first",
                     "selection_reason": "grounding remains unstable",
@@ -7735,7 +7740,7 @@ async def test_endogenous_drive_cognitive_briefing_prefers_context_layers(tmp_pa
             "governance_backlog_snapshot": {
                 "governance_backlog_task_count": 2,
                 "recent_titles": ["Existing backlog task A"],
-                "summary": "governance_backlog=2; recent_titles=Existing backlog task A.",
+                "summary": "治理在途 2 项；最近标题：Existing backlog task A。",
             },
             "meta_cognition_profile": {
                 "summary": "stale fallback summary",
@@ -7756,8 +7761,8 @@ async def test_endogenous_drive_cognitive_briefing_prefers_context_layers(tmp_pa
     assert "- 当前判断: review should dominate until grounding is repaired" in payload
     assert "- 当前主约束: weak self structure grounding" in payload
     assert "- 当前首要自我迭代域: grounding" in payload
-    assert "- 当前不宜直接 improvement 的原因: improvement would outrun grounding" in payload
-    assert "- 当前治理在途上下文: governance_backlog=2; recent_titles=Existing backlog task A." in payload
+    assert "- 当前不宜直接改进的原因: improvement would outrun grounding" in payload
+    assert "- 当前治理在途上下文: 治理在途 2 项；最近标题：Existing backlog task A。" in payload
 
 
 @pytest.mark.asyncio
@@ -7917,18 +7922,18 @@ async def test_endogenous_drive_constrains_high_risk_or_weak_evidence_lm_proposa
         {
             "proposals": [
                 {
-                    "title": "Review queue anomalies conservatively",
-                    "summary": "Inspect queue anomalies first because the current evidence is weak.",
+                    "title": "Review backlog anomalies conservatively",
+                    "summary": "Inspect backlog anomalies first because the current evidence is weak.",
                     "candidate_kind": "governance_hygiene_review",
                     "task_type": "review",
-                    "rationale": "Queue anomalies may exist but supporting evidence is still weak.",
+                    "rationale": "Backlog anomalies may exist but supporting evidence is still weak.",
                     "evidence_summary": ["only one weak signal"],
                     "confidence": 0.31,
                     "risk_level": "high",
                     "evidence_level": "weak",
                     "observation_required": False,
                     "execution_mode": "guarded_execution",
-                    "blocking_factors": ["insufficient queue evidence", "missing cross-check validation"],
+                    "blocking_factors": ["insufficient backlog evidence", "missing cross-check validation"],
                 }
             ]
         }
@@ -7950,7 +7955,7 @@ async def test_endogenous_drive_constrains_high_risk_or_weak_evidence_lm_proposa
     assert candidate["constraints"]["lm_execution_mode"] == "guarded_execution"
     assert candidate["constraints"]["lm_observation_required"] is False
     assert candidate["constraints"]["lm_blocking_factors"] == [
-        "insufficient queue evidence",
+        "insufficient backlog evidence",
         "missing cross-check validation",
     ]
     assert candidate["metadata"]["supervisor_advisory"]["recommended_observation_required"] is True
@@ -8341,7 +8346,7 @@ async def test_endogenous_drive_passes_learning_and_shell_body_evidence_to_lm(tm
             "completed_learning_tasks": [
                 {
                     "title": "Trace planner bottlenecks",
-                    "summary": "Mapped queue and planner friction around learning follow-up.",
+                    "summary": "Mapped backlog and planner friction around learning follow-up.",
                     "quality_score": 0.91,
                     "completed_at": "2026-06-27T12:00:00+00:00",
                     "task_family": "self_learning",
@@ -10235,7 +10240,7 @@ async def test_endogenous_drive_records_cognitive_posture_in_lm_generation_conte
     assert runtime_trend_memory["stay_or_switch_count"] == 1
     assert runtime_trend_memory["switch_reason_count"] == 1
     assert proposal_cognition["assessment_trace"]["current_judgement"] == (
-        "review should dominate until grounding is repaired"
+        "在 grounding 修复前，复核应保持主导"
     )
     assert proposal_cognition["assessment_trace"]["why_not_improvement_now"] == (
         "Prioritize truthfulness governance before direct body improvement."
@@ -10624,7 +10629,7 @@ async def test_run_endogenous_drive_cycle_exposes_cognitive_assessment_memory(tm
         "weak self structure grounding"
     )
     assert proposal_cognition["assessment_trace"]["current_judgement"] == (
-        "review should dominate until grounding is repaired"
+        "在 grounding 修复前，复核应保持主导"
     )
     assert proposal_cognition["assessment_trace"]["why_not_improvement_now_count"] == 1
 
@@ -15103,9 +15108,9 @@ async def test_governance_hygiene_candidate_survives_budget_trimming_when_observ
             "execution_kind": "general_self_evolution",
         }
     )
-    queued_task_id = planned["tasks"][0]["task_id"]
+    planned_task_id = planned["tasks"][0]["task_id"]
     supervisor._autonomous_chain_store.update_status(
-        queued_task_id,
+        planned_task_id,
         status="deferred",
         actor="test",
         reason="probe governance hygiene review signal",
@@ -15294,9 +15299,9 @@ async def test_governance_hygiene_candidate_materializes_once_real_governance_ba
             "execution_kind": "general_self_evolution",
         }
     )
-    queued_task_id = planned["tasks"][0]["task_id"]
+    planned_task_id = planned["tasks"][0]["task_id"]
     supervisor._autonomous_chain_store.update_status(
-        queued_task_id,
+        planned_task_id,
         status="deferred",
         actor="test",
         reason="probe governance hygiene debt",
@@ -15379,7 +15384,7 @@ async def test_observation_mode_prefers_candidate_with_stronger_drive_judgement_
     )
     candidate_backlog_review = EndogenousTaskCandidate(
         stable_key="continuity:governance_hygiene_review",
-        title="Review governance backlog hygiene",
+        title="复核治理积压卫生",
         summary="Governance hygiene review",
         priority="normal",
         governance_task_type="self_evolution",
@@ -15443,7 +15448,7 @@ def test_observation_mode_tie_break_is_stable_across_input_order_when_truthfulne
     )
     candidate_backlog_review = EndogenousTaskCandidate(
         stable_key="continuity:governance_hygiene_review",
-        title="Review governance backlog hygiene",
+        title="复核治理积压卫生",
         summary="Governance hygiene review",
         priority="normal",
         governance_task_type="self_evolution",
@@ -15531,7 +15536,7 @@ def test_observation_mode_keeps_monotonic_switch_when_backlog_review_becomes_sli
     )
     candidate_backlog_review = EndogenousTaskCandidate(
         stable_key="continuity:governance_hygiene_review",
-        title="Review governance backlog hygiene",
+        title="复核治理积压卫生",
         summary="Governance hygiene review",
         priority="normal",
         governance_task_type="self_evolution",
@@ -16141,13 +16146,13 @@ async def test_endogenous_drive_still_plans_learning_candidates_with_active_sess
     supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
 
     result = await supervisor._run_endogenous_drive_cycle()
-    queued = await supervisor.list_autonomous_chain_tasks()
+    backlog_snapshot = await supervisor.list_autonomous_chain_tasks()
     keys = {
-            task["metadata"]["endogenous_drive_key"]: task for task in queued["tasks"]
+            task["metadata"]["endogenous_drive_key"]: task for task in backlog_snapshot["tasks"]
     }
 
     assert result["status"] == "planned"
-    assert any(task["governance_task_type"] == "self_learning" for task in queued["tasks"])
+    assert any(task["governance_task_type"] == "self_learning" for task in backlog_snapshot["tasks"])
 
 
 @pytest.mark.asyncio
@@ -16187,7 +16192,7 @@ async def test_batch_review_accepts_lm_governance_override(tmp_path, monkeypatch
             }
         }
 
-    monkeypatch.setattr(supervisor, "_lm_review_task_governance", fake_lm_review)
+    monkeypatch.setattr(supervisor, "_review_task_governance_with_supervisor", fake_lm_review)
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
@@ -16198,7 +16203,7 @@ async def test_batch_review_accepts_lm_governance_override(tmp_path, monkeypatch
     tasks = {task["title"]: task for task in result["tasks"]}
     assert tasks["Learn unresolved architecture issue"]["status"] == "approved"
     assert tasks["Weak duplicate follow-up"]["status"] == "cancelled"
-    lm_context = tasks["Weak duplicate follow-up"]["decision_history"][-1]["context"]["lm_governance_review"]
+    lm_context = tasks["Weak duplicate follow-up"]["decision_history"][-1]["context"]["supervisor_review_outcome"]
     assert lm_context["action"] == "cancelled"
     assert "Duplicate and low-evidence task" in lm_context["reason"]
 
@@ -16210,7 +16215,7 @@ async def test_autonomous_chain_gate_preserves_agent_pull_task_approval_when_lm_
     supervisor._service_runtime.autonomous_chain_gate_active = True
     planned = await supervisor.plan_autonomous_chain_task(
         {
-            "title": "Explore one unresolved learning thread",
+            "title": "探索一个尚未解决的学习线索",
             "task_family": "self_learning",
             "source": "self_learning",
         }
@@ -16240,7 +16245,7 @@ async def test_autonomous_chain_gate_preserves_agent_pull_task_approval_when_lm_
             }
         }
 
-    monkeypatch.setattr(supervisor, "_lm_review_task_governance", fake_lm_review)
+    monkeypatch.setattr(supervisor, "_review_task_governance_with_supervisor", fake_lm_review)
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
@@ -16250,8 +16255,8 @@ async def test_autonomous_chain_gate_preserves_agent_pull_task_approval_when_lm_
 
     assert result["tasks"][0]["status"] == "approved"
     latest_context = result["tasks"][0]["decision_history"][-1]["context"]
-    assert latest_context["lm_governance_review"]["action"] == "deferred"
-    assert latest_context["lm_governance_shadow"]["preserved_status"] == "approved"
+    assert latest_context["supervisor_review_outcome"]["action"] == "deferred"
+    assert latest_context["supervisor_followup_suggestion"]["preserved_status"] == "approved"
 
 
 @pytest.mark.asyncio
@@ -16260,7 +16265,7 @@ async def test_batch_review_preserves_agent_pull_task_approval_without_autonomou
     supervisor = _make_supervisor(tmp_path)
     planned = await supervisor.plan_autonomous_chain_task(
         {
-            "title": "Explore one unresolved learning thread",
+            "title": "探索一个尚未解决的学习线索",
             "task_family": "self_learning",
             "source": "self_learning",
         }
@@ -16289,7 +16294,7 @@ async def test_batch_review_preserves_agent_pull_task_approval_without_autonomou
             }
         }
 
-    monkeypatch.setattr(supervisor, "_lm_review_task_governance", fake_lm_review)
+    monkeypatch.setattr(supervisor, "_review_task_governance_with_supervisor", fake_lm_review)
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
@@ -16299,8 +16304,8 @@ async def test_batch_review_preserves_agent_pull_task_approval_without_autonomou
 
     assert result["tasks"][0]["status"] == "approved"
     latest_context = result["tasks"][0]["decision_history"][-1]["context"]
-    assert latest_context["lm_governance_review"]["action"] == "deferred"
-    assert latest_context["lm_governance_shadow"]["preserved_status"] == "approved"
+    assert latest_context["supervisor_review_outcome"]["action"] == "deferred"
+    assert latest_context["supervisor_followup_suggestion"]["preserved_status"] == "approved"
 
 
 @pytest.mark.asyncio
@@ -16309,7 +16314,7 @@ async def test_batch_review_auto_approves_body_improvement_agent_pull_task(tmp_p
     supervisor = _make_supervisor(tmp_path)
     planned = await supervisor.plan_autonomous_chain_task(
         {
-            "title": "Improve shell body after learning",
+            "title": "学习后改进 shell 替身",
             "task_family": "body_upgrade",
             "execution_kind": "body_improvement",
             "metadata": {
@@ -16358,7 +16363,7 @@ async def test_batch_review_defers_body_improvement_until_self_learning_finishes
     )
     planned = await supervisor.plan_autonomous_chain_task(
         {
-            "title": "Improve shell body after learning",
+            "title": "学习后改进 shell 替身",
             "task_family": "body_upgrade",
             "execution_kind": "body_improvement",
             "metadata": {
@@ -16407,7 +16412,7 @@ async def test_batch_review_releases_body_improvement_after_one_self_learning_pr
     )
     planned = await supervisor.plan_autonomous_chain_task(
         {
-            "title": "Improve shell body after learning",
+            "title": "学习后改进 shell 替身",
             "task_family": "body_upgrade",
             "execution_kind": "body_improvement",
             "metadata": {
@@ -16523,7 +16528,7 @@ async def test_batch_review_records_shadow_governance_actions_without_mutating_s
             tasks_by_title["Duplicate learning branch"]: {
                 "action": "merge",
                 "reason": "This task duplicates the stronger canonical branch.",
-                "shadow": {
+                "followup_suggestion": {
                     "action": "merge",
                     "reason": "This task duplicates the stronger canonical branch.",
                     "merge_into": tasks_by_title["Canonical learning branch"],
@@ -16532,7 +16537,7 @@ async def test_batch_review_records_shadow_governance_actions_without_mutating_s
             tasks_by_title["Canonical learning branch"]: {
                 "action": "reprioritize",
                 "reason": "Promote the canonical branch ahead of duplicates.",
-                "shadow": {
+                "followup_suggestion": {
                     "action": "reprioritize",
                     "reason": "Promote the canonical branch ahead of duplicates.",
                     "priority": "high",
@@ -16540,7 +16545,7 @@ async def test_batch_review_records_shadow_governance_actions_without_mutating_s
             },
         }
 
-    monkeypatch.setattr(supervisor, "_lm_review_task_governance", fake_lm_review)
+    monkeypatch.setattr(supervisor, "_review_task_governance_with_supervisor", fake_lm_review)
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
@@ -16551,12 +16556,12 @@ async def test_batch_review_records_shadow_governance_actions_without_mutating_s
     tasks = {task["title"]: task for task in result["tasks"]}
     assert tasks["Duplicate learning branch"]["status"] == "approved"
     assert tasks["Canonical learning branch"]["status"] == "approved"
-    duplicate_shadow = tasks["Duplicate learning branch"]["decision_history"][-1]["context"]["lm_governance_shadow"]
-    canonical_shadow = tasks["Canonical learning branch"]["decision_history"][-1]["context"]["lm_governance_shadow"]
-    assert duplicate_shadow["action"] == "merge"
-    assert duplicate_shadow["merge_into"] == tasks_by_title["Canonical learning branch"]
-    assert canonical_shadow["action"] == "reprioritize"
-    assert canonical_shadow["priority"] == "high"
+    duplicate_followup = tasks["Duplicate learning branch"]["decision_history"][-1]["context"]["supervisor_followup_suggestion"]
+    canonical_followup = tasks["Canonical learning branch"]["decision_history"][-1]["context"]["supervisor_followup_suggestion"]
+    assert duplicate_followup["action"] == "merge"
+    assert duplicate_followup["merge_into"] == tasks_by_title["Canonical learning branch"]
+    assert canonical_followup["action"] == "reprioritize"
+    assert canonical_followup["priority"] == "high"
 
 
 @pytest.mark.asyncio
@@ -16593,7 +16598,7 @@ async def test_batch_review_can_apply_lm_reprioritize_to_real_task_priority(tmp_
             }
         }
 
-    monkeypatch.setattr(supervisor, "_lm_review_task_governance", fake_lm_review)
+    monkeypatch.setattr(supervisor, "_review_task_governance_with_supervisor", fake_lm_review)
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
@@ -16603,7 +16608,7 @@ async def test_batch_review_can_apply_lm_reprioritize_to_real_task_priority(tmp_
 
     task = result["tasks"][0]
     assert task["priority"] == "high"
-    priority_context = task["decision_history"][-1]["context"]["lm_governance_priority"]
+    priority_context = task["decision_history"][-1]["context"]["supervisor_priority_adjustment"]
     assert priority_context["priority"] == "high"
     assert "blocks higher-value evolution work" in priority_context["reason"]
 
@@ -16980,9 +16985,9 @@ async def test_body_self_evolution_approval_rejects_mother_system_changes(tmp_pa
 
     assert "outside the child-agent boundary" in str(exc_info.value)
     assert "systems/body_registry.py" in str(exc_info.value)
-    queued = await supervisor.get_autonomous_chain_task(task_id)
-    assert queued["status"] == "planned"
-    assert queued["execution_request"] is None
+    planned_task = await supervisor.get_autonomous_chain_task(task_id)
+    assert planned_task["status"] == "planned"
+    assert planned_task["execution_request"] is None
 
 
 @pytest.mark.asyncio
@@ -17016,9 +17021,9 @@ async def test_body_self_evolution_approval_requires_git_lineage_and_rollback(tm
         )
 
     assert "git_lineage.rollback_commit" in str(exc_info.value)
-    queued = await supervisor.get_autonomous_chain_task(task_id)
-    assert queued["status"] == "planned"
-    assert queued["execution_request"] is None
+    planned_task = await supervisor.get_autonomous_chain_task(task_id)
+    assert planned_task["status"] == "planned"
+    assert planned_task["execution_request"] is None
 
 
 @pytest.mark.asyncio
@@ -17053,9 +17058,9 @@ async def test_body_self_evolution_approval_requires_changed_files(tmp_path):
         )
 
     assert "git_lineage.changed_files" in str(exc_info.value)
-    queued = await supervisor.get_autonomous_chain_task(task_id)
-    assert queued["status"] == "planned"
-    assert queued["execution_request"] is None
+    planned_task = await supervisor.get_autonomous_chain_task(task_id)
+    assert planned_task["status"] == "planned"
+    assert planned_task["execution_request"] is None
 
 
 @pytest.mark.asyncio
@@ -17232,7 +17237,7 @@ async def test_list_autonomous_chain_tasks_can_filter_body_improvement_agent_tas
 
     await supervisor.plan_autonomous_chain_task(
         {
-            "title": "Improve shell body after learning",
+            "title": "学习后改进 shell 替身",
             "task_family": "body_upgrade",
             "execution_kind": "body_improvement",
             "metadata": {

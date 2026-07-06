@@ -12,6 +12,8 @@ class TraceRuntimeMixin:
     @staticmethod
     def _trace_status_label(value: Any) -> str:
         normalized = str(value or "").strip().lower()
+        if normalized == "queued":
+            normalized = "planned"
         return {
             "planned": "待审核",
             "awaiting_review": "待审查",
@@ -31,11 +33,11 @@ class TraceRuntimeMixin:
         return {
             "task_snapshot": "链路项快照",
             "task_decision": "治理裁决",
-            "execution_request": "执行交接请求",
-            "trace_marker": "轨迹标记",
-            "tasks_planned": "治理入栈",
+            "execution_request": "自主交接请求",
+            "trace_marker": "回合标记",
+            "tasks_planned": "治理规划",
             "tasks_reviewed": "批量复核",
-            "endogenous_drive_planned": "内生候选入栈",
+            "endogenous_drive_planned": "候选进入治理",
             "endogenous_drive_evaluated": "内生驱动评估",
             "self_learning": "自主学习回报",
             "autonomous_chain": "自主链路活动",
@@ -66,7 +68,8 @@ class TraceRuntimeMixin:
             "self_evolution": "自主改进",
             "general_self_evolution": "通用自主改进",
             "body_improvement": "替身改进",
-            "body_switch": "替身切换",
+            "body_switch": "身体切换",
+            "body_upgrade": "替身升级",
             "memory_maintenance": "记忆维护",
         }.get(normalized, str(value or "").strip() or "")
 
@@ -218,7 +221,7 @@ class TraceRuntimeMixin:
                     task_id=metadata.get("task_id"),
                     decision_id=metadata.get("decision_id"),
                     profile=self._trace_runtime_profile_from_payload(metadata),
-                    summary=str(event.get("summary") or event.get("event_type") or "Supervisor activity"),
+                    summary=str(event.get("summary") or event.get("event_type") or "监督者活动"),
                     payload=event,
                 )
             )
@@ -253,7 +256,7 @@ class TraceRuntimeMixin:
                     task_id=request.get("task_id"),
                     decision_id=request.get("decision_id") or lineage.get("decision_id"),
                     profile=profile,
-                    summary=str(request.get("summary") or record.get("kind") or "Governance record"),
+                    summary=str(request.get("summary") or record.get("kind") or "治理记录"),
                     payload=record,
                 )
             )
@@ -276,7 +279,7 @@ class TraceRuntimeMixin:
                     task_id=None,
                     decision_id=None,
                     profile={},
-                    summary=f"Gateway activity snapshot unavailable: {exc}",
+                    summary=f"网关活动快照暂不可用：{exc}",
                     payload={"available": False},
                 )
             ]
@@ -313,16 +316,53 @@ class TraceRuntimeMixin:
 
     def _trace_gateway_activity_summary(self, event: Dict[str, Any]) -> str:
         activity_kind = str(event.get("activity_kind") or "").strip().lower()
-        labels = {
-            "self_learning": "网关记下了一次 API-A 自主学习回报。",
-            "autonomous_chain": "网关记下了一次自主链路活动回报。",
-            "autonomous_chain_plan": "网关记下了一次治理规划回报。",
-            "autonomous_chain_execute": "网关记下了一次执行结果回报。",
-            "memory_task": "网关记下了一次记忆维护回报。",
-            "memory_write_failure": "网关记下了一次记忆写回异常。",
-            "uncertainty_high": "网关记下了一次高不确定性告警。",
-        }
-        return labels.get(activity_kind, "网关记下了一次自主链路相关回报。")
+        metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        subject = self._trace_gateway_activity_subject(metadata)
+        label = self._trace_gateway_activity_label(metadata)
+        if activity_kind == "self_learning":
+            if subject:
+                return f"网关记下了 {subject} 的自主学习回报。"
+            return f"网关记下了一次 {label or '自主学习'} 回报。"
+        if activity_kind == "autonomous_chain":
+            if subject:
+                return f"网关记下了会影响 {subject} 下一跳的一次自主链路回报。"
+            return f"网关记下了一次 {label or '自主链路'} 活动回报。"
+        if activity_kind == "autonomous_chain_plan":
+            return f"网关记下了 {subject or (label or '自主链路项')} 的治理规划回报。"
+        if activity_kind == "autonomous_chain_execute":
+            return f"网关记下了 {subject or (label or '自主链路项')} 的执行回报。"
+        if activity_kind == "memory_task":
+            if subject:
+                return f"网关记下了 {subject} 的记忆维护回报。"
+            return f"网关记下了一次 {label or '记忆维护'} 回报。"
+        if activity_kind == "memory_write_failure":
+            return "网关记下了一次记忆写回异常。"
+        if activity_kind == "uncertainty_high":
+            return "网关记下了一次高不确定性告警。"
+        return f"网关记下了一次 {label or '自主链路'} 相关回报。"
+
+    @staticmethod
+    def _trace_gateway_activity_label(metadata: Dict[str, Any]) -> str:
+        task_identity = metadata.get("task_identity") if isinstance(metadata.get("task_identity"), dict) else {}
+        return (
+            str(task_identity.get("display_label") or "").strip()
+            or str(metadata.get("execution_kind_label") or "").strip()
+            or str(metadata.get("task_family_label") or "").strip()
+            or str(metadata.get("governance_task_type_label") or "").strip()
+        )
+
+    def _trace_gateway_activity_subject(self, metadata: Dict[str, Any]) -> str:
+        task_identity = metadata.get("task_identity") if isinstance(metadata.get("task_identity"), dict) else {}
+        summary = str(task_identity.get("summary") or "").strip()
+        title = str(task_identity.get("title") or metadata.get("title") or "").strip()
+        if summary:
+            return f"「{summary}」"
+        if title:
+            return f"「{title}」"
+        label = self._trace_gateway_activity_label(metadata)
+        if label:
+            return label
+        return ""
 
     @staticmethod
     def _gateway_activity_visible_to_supervisor_ui(event: Dict[str, Any]) -> bool:
@@ -387,7 +427,7 @@ class TraceRuntimeMixin:
             async with session.get(url, params=params, timeout=2) as response:
                 if response.status != 200:
                     raise RuntimeError(
-                        f"Gateway activity log endpoint returned status {response.status}"
+                        f"网关活动日志接口返回状态 {response.status}"
                     )
                 return await response.json()
 

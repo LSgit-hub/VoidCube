@@ -303,7 +303,7 @@ class TestEndogenousDriveErrorBridge:
                 "active_sessions": 0,
                 "recent_metadata": {
                     "user_request": {
-                        "text": "Investigate autonomous queue scheduling fairness across body improvement and learning tasks"
+                        "text": "Investigate autonomous backlog scheduling fairness across body improvement and learning tasks"
                     }
                 },
             },
@@ -554,7 +554,7 @@ class TestEndogenousDriveErrorBridge:
                 "active_sessions": 0,
                 "recent_metadata": {
                     "user_request": {
-                        "text": "Investigate supervisor queue scheduling fairness and duplicate learning output"
+                        "text": "Investigate supervisor backlog scheduling fairness and duplicate learning output"
                     }
                 },
             },
@@ -616,7 +616,7 @@ class TestEndogenousDriveErrorBridge:
                 "active_sessions": 0,
                 "recent_metadata": {
                     "user_request": {
-                        "text": "Investigate queue scheduling fairness and unresolved learning duplication"
+                        "text": "Investigate backlog scheduling fairness and unresolved learning duplication"
                     }
                 },
             },
@@ -917,7 +917,7 @@ class TestEndogenousDriveErrorBridge:
                 "active_sessions": 0,
                 "recent_metadata": {
                     "user_request": {
-                        "text": "Investigate queue scheduling fairness and duplicate learning output"
+                        "text": "Investigate backlog scheduling fairness and duplicate learning output"
                     }
                 },
             },
@@ -988,7 +988,7 @@ class TestEndogenousDriveErrorBridge:
             "activity": {"counts": {"error_count": 4, "uncertainty_high_count": 1}, "active_sessions": 0},
             "governance_backlog_tasks": [
                 {
-                    "title": "Revisit weak queue evidence",
+                    "title": "Revisit weak backlog evidence",
                     "status": "deferred",
                     "governance_task_type": "self_evolution",
                     "task_family": "general_self_evolution",
@@ -1148,7 +1148,7 @@ class TestEndogenousDriveErrorBridge:
             ],
             "governance_backlog_tasks": [
                 {
-                    "title": "Improve shell body: tighten backlog review",
+                    "title": "改进 shell 替身：收紧治理积压复核",
                     "status": "approved",
                     "execution_kind": "body_improvement",
                     "constraints": {"target_slot_id": "slot-B"},

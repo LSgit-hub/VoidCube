@@ -434,8 +434,9 @@ class InternalGateway:
         """Route an agent_scene report into its per-role lane (additive).
 
         Keeps the two reporters (supervisor-task CLI vs user-chat CLI) from
-        overwriting each other's subagent view. The top-level ``agent`` slot is
-        written separately and left as last-writer-wins for backward compat.
+        overwriting each other's subagent view. The top-level ``agent`` slot
+        still carries the most recent aggregate snapshot for coarse scene-bar
+        consumers, while ``lanes`` preserves the real separation.
         """
         lanes = self._scenes_cache["agent"].setdefault(
             "lanes",
@@ -811,6 +812,8 @@ class InternalGateway:
         task_identity = self._build_task_identity_summary(payload)
         if task_identity:
             payload["task_identity"] = task_identity
+        payload.pop("task_type", None)
+        payload.pop("task_type_label", None)
         if source_service:
             payload.setdefault("source_service", source_service)
         if session_id:
@@ -851,17 +854,6 @@ class InternalGateway:
         execution_kind_label = self._runtime_activity_label(execution_kind)
         requested_kind_label = self._runtime_activity_label(requested_kind)
 
-        label_parts = [part for part in (execution_kind, task_family, governance_task_type, task_type) if part]
-        label_texts = [
-            part
-            for part in (
-                execution_kind_label,
-                task_family_label,
-                governance_task_type_label,
-                task_type_label,
-            )
-            if part
-        ]
         display_kind = requested_kind or execution_kind or task_family or governance_task_type or task_type
         display_label = (
             requested_kind_label
@@ -885,21 +877,17 @@ class InternalGateway:
         return {
             "task_id": task_id,
             "title": title,
-            "task_type": task_type,
             "governance_task_type": governance_task_type,
             "task_family": task_family,
             "execution_kind": execution_kind,
             "requested_kind": requested_kind,
             "display_kind": display_kind,
-            "task_type_label": task_type_label,
             "governance_task_type_label": governance_task_type_label,
             "task_family_label": task_family_label,
             "execution_kind_label": execution_kind_label,
             "requested_kind_label": requested_kind_label,
             "display_label": display_label,
             "summary": summary,
-            "labels": label_parts,
-            "label_texts": label_texts,
         }
 
     def _extract_activity_metadata_from_payload(self, payload: Any) -> Dict[str, Any]:
@@ -958,6 +946,8 @@ class InternalGateway:
             label = self._runtime_activity_label(metadata.get(key))
             if label:
                 metadata[f"{key}_label"] = label
+        metadata.pop("task_type", None)
+        metadata.pop("task_type_label", None)
         return metadata
 
     def _is_memory_write_activity(self, path: str, method: str) -> bool:
@@ -1696,12 +1686,12 @@ class InternalGateway:
         if not session_id:
             raise HTTPException(
                 status_code=400,
-                detail="Agent-pull task decisions require session_id or context.session_id.",
+                detail="Agent pull 链路项裁决需要提供 session_id 或 context.session_id。",
             )
         if session_id not in self._agent_session_cache:
             raise HTTPException(
                 status_code=409,
-                detail=f"Unknown CLI session for task writeback: {session_id}",
+                detail=f"无法识别该链路写回对应的 CLI 会话: {session_id}",
             )
 
         metadata = dict(task.get("metadata") or {})
@@ -1711,8 +1701,7 @@ class InternalGateway:
                 raise HTTPException(
                     status_code=409,
                     detail=(
-                        f"Task {task_id} is already owned by CLI session "
-                        f"{owner_session_id}."
+                        f"链路项 {task_id} 已被 CLI 会话 {owner_session_id} 认领。"
                     ),
                 )
             return session_id
@@ -1721,16 +1710,16 @@ class InternalGateway:
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    f"Task {task_id} is running without owner_session_id; "
-                    "terminal writeback is rejected."
+                    f"链路项 {task_id} 处于运行中但缺少 owner_session_id；"
+                    "当前终态写回已被拒绝。"
                 ),
             )
         if owner_session_id != session_id:
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    f"Task {task_id} is owned by {owner_session_id}, "
-                    f"not requester {session_id}."
+                    f"链路项 {task_id} 当前归属 {owner_session_id}，"
+                    f"并非请求方 {session_id}。"
                 ),
             )
         return session_id

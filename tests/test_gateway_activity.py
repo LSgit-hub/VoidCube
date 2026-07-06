@@ -88,8 +88,6 @@ def test_gateway_activity_touch_derives_runtime_task_profile_from_broad_metadata
     activity = client.get("/admin/activity").json()
     metadata = activity["recent_metadata"]["autonomous_chain_plan"]
     assert metadata["trace_id"] == "trace-plan-1"
-    assert metadata["task_type"] == "self_evolution"
-    assert metadata["task_type_label"] == "自主改进"
     assert metadata["governance_task_type"] == "self_evolution"
     assert metadata["governance_task_type_label"] == "自主改进"
     assert metadata["task_family"] == "body_switch"
@@ -102,6 +100,8 @@ def test_gateway_activity_touch_derives_runtime_task_profile_from_broad_metadata
     assert metadata["task_identity"]["requested_kind"] == "body_switch"
     assert metadata["task_identity"]["requested_kind_label"] == "身体切换"
     assert metadata["task_identity"]["summary"] == "身体切换"
+    assert "task_type" not in metadata
+    assert "task_type_label" not in metadata
 
 
 def test_gateway_activity_touch_derives_runtime_task_profile_from_nested_runtime_profile():
@@ -348,7 +348,7 @@ def test_gateway_activity_touch_adds_task_identity_summary():
             "source_service": "cli_agent",
             "metadata": {
                 "task_id": "body-1",
-                "title": "Improve shell body",
+                "title": "改进 shell 替身",
                 "execution_kind": "body_improvement",
                 "task_family": "body_upgrade",
                 "governance_task_type": "self_evolution",
@@ -361,14 +361,16 @@ def test_gateway_activity_touch_adds_task_identity_summary():
     metadata = activity["recent_metadata"]["agent_work"]
     identity = metadata["task_identity"]
     assert identity["task_id"] == "body-1"
-    assert identity["title"] == "Improve shell body"
+    assert identity["title"] == "改进 shell 替身"
     assert identity["execution_kind"] == "body_improvement"
     assert identity["display_kind"] == "body_improvement"
     assert identity["governance_task_type_label"] == "自主改进"
     assert identity["task_family_label"] == "替身升级"
     assert identity["execution_kind_label"] == "替身改进"
     assert identity["display_label"] == "替身改进"
-    assert "Improve shell body (替身改进)" == identity["summary"]
+    assert "改进 shell 替身 (替身改进)" == identity["summary"]
+    assert "labels" not in identity
+    assert "label_texts" not in identity
 
 
 def test_gateway_agent_scene_touch_updates_scene_cache_and_prefers_cli_agent():
@@ -909,8 +911,6 @@ def test_gateway_executor_route_updates_execute_activity_even_when_upstream_fail
     assert activity["counts"]["autonomous_chain_execute_count"] == 1
     assert activity["counts"]["autonomous_chain_activity_count"] == 1
     assert activity["recent_metadata"]["autonomous_chain_execute"]["trace_id"] == "trace-exec-1"
-    assert activity["recent_metadata"]["autonomous_chain_execute"]["task_type"] == "self_evolution"
-    assert activity["recent_metadata"]["autonomous_chain_execute"]["task_type_label"] == "自主改进"
     assert activity["recent_metadata"]["autonomous_chain_execute"]["governance_task_type"] == "self_evolution"
     assert activity["recent_metadata"]["autonomous_chain_execute"]["governance_task_type_label"] == "自主改进"
     assert activity["recent_metadata"]["autonomous_chain_execute"]["task_family"] == "body_switch"
@@ -922,6 +922,8 @@ def test_gateway_executor_route_updates_execute_activity_even_when_upstream_fail
     assert activity["recent_metadata"]["autonomous_chain_execute"]["task_identity"]["display_kind"] == "body_switch"
     assert activity["recent_metadata"]["autonomous_chain_execute"]["task_identity"]["display_label"] == "身体切换"
     assert activity["recent_metadata"]["autonomous_chain_execute"]["task_identity"]["requested_kind"] == "body_switch"
+    assert "task_type" not in activity["recent_metadata"]["autonomous_chain_execute"]
+    assert "task_type_label" not in activity["recent_metadata"]["autonomous_chain_execute"]
 
 
 def _post_agent_scene(client, session_id, metadata):

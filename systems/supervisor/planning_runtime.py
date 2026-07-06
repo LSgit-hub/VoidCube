@@ -36,13 +36,13 @@ logger = logging.getLogger("supervisor")
 # Supervisor scene taxonomy (baseline §3.4 / §3.6 / §13.2)
 # ──────────────────────────────────────────────────────────────────────
 # The supervisor (API-B) is the governance identity of Mem.  It only
-# MANAGES the task list and runs endogenous drive — it never executes
+# MANAGES the governance backlog and runs endogenous drive — it never executes
 # learning or body-upgrade code.  Therefore the supervisor's `scene`
 # field is restricted to the values below.  The Agent (API-A) is the
 # only component that may surface "learning" / "execution" scenes.
 #
 #   idle         - at rest
-#   planning     - deciding / approving / denying a task (managing list)
+#   planning     - deciding / approving / denying a governance-backlog item
 #   memory       - actively touching long-term memory (Mem internal)
 #   drive        - endogenous drive: cognitive evaluation / governance output
 #   handoff      - handing an approved execution request to API-A / executor
@@ -5139,7 +5139,7 @@ class PlanningRuntimeMixin:
                         if response.status != 200:
                             raise HTTPException(
                                 status_code=503,
-                                detail=f"Gateway activity endpoint returned status {response.status}",
+                                detail=f"网关活动接口返回状态 {response.status}",
                             )
                         return await response.json()
             except HTTPException:
@@ -5151,7 +5151,7 @@ class PlanningRuntimeMixin:
                     continue
 
         logger.warning(f"Failed to fetch gateway activity snapshot: {last_error}")
-        raise HTTPException(status_code=503, detail="Gateway activity snapshot unavailable")
+        raise HTTPException(status_code=503, detail="网关活动快照暂不可用")
 
     def _parse_activity_timestamp(self, value: Any) -> Optional[datetime]:
         if not value or not isinstance(value, str):
@@ -5700,7 +5700,7 @@ class PlanningRuntimeMixin:
             self._record_supervisor_ui_activity(
                 "endogenous_drive_evaluated",
                 scene="planning",
-                summary=f"Endogenous drive completed a cognition evaluation over {len(candidates)} candidate(s).",
+                summary=f"内生驱动已完成一轮认知评估，并形成了 {len(candidates)} 个候选判断投影。",
                 metadata={
                     "count": len(candidates),
                     "candidate_keys": [candidate.stable_key for candidate in candidates],
@@ -6020,7 +6020,7 @@ class PlanningRuntimeMixin:
             self._record_supervisor_ui_activity(
                 "endogenous_drive_idle",
                 scene="idle",
-                summary="Endogenous drive found no new governance candidates.",
+                summary="内生驱动本轮未形成新的治理在途投影。",
                 metadata={
                     "drive_posture": drive_posture,
                     "governance_channels": governance_channels,
@@ -6073,7 +6073,7 @@ class PlanningRuntimeMixin:
             self._record_supervisor_ui_activity(
                 "endogenous_drive_planned",
                 scene="planning",
-                summary=f"Endogenous drive added {len(created_tasks)} governance backlog candidate(s).",
+                summary=f"内生驱动新增了 {len(created_tasks)} 个治理在途链路项投影。",
                 metadata={
                     "drive_posture": drive_posture,
                     "governance_channels": governance_channels,
@@ -6185,30 +6185,30 @@ class PlanningRuntimeMixin:
             if task_type == "self_learning":
                 return (
                     "approved",
-                    "Task approved for learn-only follow-up because no conflicting internal workflow activity is active. User-chain activity remains a soft signal only; execution-window gating is not required for self-learning evidence work.",
+                    "该学习链路项已获放行：当前没有冲突中的内部流程活动；用户链路只作为软感知信号，不构成自学习证据工作的硬门控。",
                 )
             if task_type == "memory_maintenance":
                 return (
                     "approved",
-                    "Task approved for memory maintenance because the required runtime and memory concurrency guards are satisfied. User-chain activity remains a soft signal only.",
+                    "该记忆维护链路项已获放行：当前运行时与记忆并发护栏满足要求；用户链路仍只作为软感知信号。",
                 )
             return (
                 "approved",
-                "Task approved for the next execution handoff because the required runtime concurrency guards are satisfied.",
+                "该链路项已获放行，将进入下一轮自主交接；当前运行时并发护栏满足要求。",
             )
         if task_type == "self_learning":
             return (
                 "deferred",
-                "Task deferred because an internal workflow or subsystem already has in-flight work. User-chain activity is only a soft signal; this defer is caused by concurrency guards, not by a user-idle gate.",
+                "该学习链路项暂缓：当前已有内部流程或子系统在途工作；这次延后来自并发护栏，而不是用户空闲门控。",
             )
         if task_type == "memory_maintenance":
             return (
                 "deferred",
-                "Task deferred because memory maintenance still sees in-flight runtime or memory work. User-chain activity remains a soft signal and is not the execution gate here.",
+                "该记忆维护链路项暂缓：当前仍有运行时或记忆侧工作在途；用户链路仍只作为软感知信号，并非这里的执行门。",
             )
         return (
             "deferred",
-            "Task deferred because the current runtime concurrency guards are not yet satisfied. The task remains in the governance backlog for future review.",
+            "该链路项暂缓：当前运行时并发护栏尚未满足；任务继续留在治理积压中等待后续复核。",
         )
 
     def _has_pending_self_learning_prerequisite(
@@ -6277,7 +6277,7 @@ class PlanningRuntimeMixin:
                 if response.status >= 400:
                     raise HTTPException(
                         status_code=503,
-                        detail=f"Gateway owner session query failed with status {response.status}",
+                        detail=f"网关 owner 会话查询失败，返回状态 {response.status}",
                     )
                 payload = await response.json()
         if not isinstance(payload, dict):
@@ -6298,8 +6298,8 @@ class PlanningRuntimeMixin:
                 continue
             if not owner_session_id:
                 logger.warning(
-                    "Skipping orphaned-task recovery for running agent-pull task %s: "
-                    "owner_session_id is missing, so ownership is unknown.",
+                    "跳过运行中 agent-pull 链路项 %s 的孤儿恢复："
+                    "owner_session_id 缺失，当前无法确认归属。",
                     task.task_id,
                 )
                 self._autonomous_chain_store.update_metadata(
@@ -6313,8 +6313,8 @@ class PlanningRuntimeMixin:
                 owner_session = await self._fetch_gateway_cli_session(owner_session_id)
             except Exception as exc:
                 logger.warning(
-                    "Skipping orphaned-task recovery for %s: could not determine "
-                    "owner CLI session %s from gateway (%s). Conservative no-op.",
+                    "跳过链路项 %s 的孤儿恢复：无法从网关确认 "
+                    "owner CLI 会话 %s（%s）；当前保守地不做恢复。",
                     task.task_id,
                     owner_session_id,
                     exc,
@@ -6395,8 +6395,8 @@ class PlanningRuntimeMixin:
                 raise HTTPException(
                     status_code=409,
                     detail=(
-                        "Agent-pull task is already owned by another CLI session "
-                        f"({owner_session_id})."
+                        "当前 agent-pull 链路项已被另一 CLI 会话认领 "
+                        f"({owner_session_id})。"
                     ),
                 )
             return session_id
@@ -6405,16 +6405,16 @@ class PlanningRuntimeMixin:
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "Agent-pull task is running without owner_session_id; completion/failure "
-                    "writeback is rejected because ownership is unknown."
+                    "当前 agent-pull 链路项处于运行中但缺少 owner_session_id；"
+                    "由于归属未知，完成/失败写回已被拒绝。"
                 ),
             )
         if owner_session_id != session_id:
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "Agent-pull task writeback rejected because requester session "
-                    f"{session_id} does not own task {task.task_id}."
+                    "当前 agent-pull 链路项写回已被拒绝：请求会话 "
+                    f"{session_id} 并不拥有链路项 {task.task_id}。"
                 ),
             )
         return session_id
@@ -6590,9 +6590,9 @@ class PlanningRuntimeMixin:
         governance_preview: Dict[str, Any] = {}
         notes: list[str] = []
 
-        lm_review = latest_context.get("lm_governance_review")
-        if isinstance(lm_review, dict):
-            review_payload = dict(lm_review)
+        review_context = latest_context.get("supervisor_review_outcome")
+        if isinstance(review_context, dict):
+            review_payload = dict(review_context)
             action_label = self._governance_action_label(review_payload.get("action"))
             review_payload["action_label"] = action_label
             review_payload["summary"] = (
@@ -6603,39 +6603,39 @@ class PlanningRuntimeMixin:
                     else ""
                 )
             )
-            governance_preview["lm_governance_review"] = review_payload
+            governance_preview["review_outcome"] = review_payload
             notes.append(str(review_payload["summary"]))
 
-        lm_shadow = latest_context.get("lm_governance_shadow")
-        if isinstance(lm_shadow, dict):
-            shadow_payload = dict(lm_shadow)
-            action_label = self._governance_action_label(shadow_payload.get("action"))
-            shadow_payload["action_label"] = action_label
+        followup_context = latest_context.get("supervisor_followup_suggestion")
+        if isinstance(followup_context, dict):
+            followup_payload = dict(followup_context)
+            action_label = self._governance_action_label(followup_payload.get("action"))
+            followup_payload["action_label"] = action_label
             merge_target_title = self._governance_merge_target_title(
-                shadow_payload.get("merge_into")
+                followup_payload.get("merge_into")
             )
             if merge_target_title:
-                shadow_payload["merge_into_title"] = merge_target_title
-            if shadow_payload.get("merge_into") and merge_target_title:
-                shadow_extra = f" · 并入 {merge_target_title}"
-            elif shadow_payload.get("merge_into"):
-                shadow_extra = f" · 并入 {str(shadow_payload.get('merge_into') or '')[:16]}"
+                followup_payload["merge_into_title"] = merge_target_title
+            if followup_payload.get("merge_into") and merge_target_title:
+                followup_extra = f" · 并入 {merge_target_title}"
+            elif followup_payload.get("merge_into"):
+                followup_extra = f" · 并入 {str(followup_payload.get('merge_into') or '')[:16]}"
             else:
-                shadow_extra = ""
-            shadow_payload["summary"] = (
-                f"监督者保留建议: {action_label}{shadow_extra}"
+                followup_extra = ""
+            followup_payload["summary"] = (
+                f"监督者保留建议: {action_label}{followup_extra}"
                 + (
-                    f" · {str(shadow_payload.get('reason') or '').strip()[:120]}"
-                    if str(shadow_payload.get("reason") or "").strip()
+                    f" · {str(followup_payload.get('reason') or '').strip()[:120]}"
+                    if str(followup_payload.get("reason") or "").strip()
                     else ""
                 )
             )
-            governance_preview["lm_governance_shadow"] = shadow_payload
-            notes.append(str(shadow_payload["summary"]))
+            governance_preview["followup_suggestion"] = followup_payload
+            notes.append(str(followup_payload["summary"]))
 
-        lm_priority = latest_context.get("lm_governance_priority")
-        if isinstance(lm_priority, dict):
-            priority_payload = dict(lm_priority)
+        priority_context = latest_context.get("supervisor_priority_adjustment")
+        if isinstance(priority_context, dict):
+            priority_payload = dict(priority_context)
             priority_label = self._governance_priority_label(priority_payload.get("priority"))
             priority_payload["priority_label"] = priority_label
             priority_payload["summary"] = (
@@ -6646,7 +6646,7 @@ class PlanningRuntimeMixin:
                     else ""
                 )
             )
-            governance_preview["lm_governance_priority"] = priority_payload
+            governance_preview["priority_adjustment"] = priority_payload
             notes.append(str(priority_payload["summary"]))
 
         if notes:
@@ -6656,7 +6656,7 @@ class PlanningRuntimeMixin:
             governance_preview["task_title"] = str(current_task.title or "").strip()
         return governance_preview
 
-    def _build_lm_governance_review_snapshot(
+    def _build_supervisor_review_snapshot(
         self,
         tasks: list[AutonomousChainTask],
     ) -> list[Dict[str, Any]]:
@@ -6707,7 +6707,7 @@ class PlanningRuntimeMixin:
             )
         return snapshot
 
-    def _coerce_lm_governance_action(
+    def _coerce_supervisor_review_action(
         self,
         action: Any,
         *,
@@ -6722,7 +6722,7 @@ class PlanningRuntimeMixin:
             return None
         return normalized
 
-    def _extract_lm_shadow_recommendation(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _extract_supervisor_followup_suggestion(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         action = str(item.get("action") or "").strip().lower()
         if action not in self._LM_GOVERNANCE_SHADOW_ACTIONS:
             return None
@@ -6735,7 +6735,7 @@ class PlanningRuntimeMixin:
             recommendation["merge_into"] = str(item.get("merge_into") or "").strip()[:200]
         return recommendation
 
-    def _extract_lm_priority_recommendation(self, item: Dict[str, Any]) -> Optional[str]:
+    def _extract_supervisor_priority_recommendation(self, item: Dict[str, Any]) -> Optional[str]:
         action = str(item.get("action") or "").strip().lower()
         if action not in {"reprioritize", "reprioritise"}:
             return None
@@ -6744,7 +6744,7 @@ class PlanningRuntimeMixin:
             return None
         return priority
 
-    async def _lm_review_task_governance(
+    async def _review_task_governance_with_supervisor(
         self,
         tasks: list[AutonomousChainTask],
         *,
@@ -6762,12 +6762,12 @@ class PlanningRuntimeMixin:
         except Exception:
             return {}
 
-        backlog_snapshot = self._build_lm_governance_review_snapshot(tasks)
+        backlog_snapshot = self._build_supervisor_review_snapshot(tasks)
         prompt = (
             "你是 VoidCube 的监督者任务治理层。你的职责不是产出新任务，"
-            "而是治理当前任务列表。\n\n"
-            "请基于当前 activity_guards、任务列表快照和用户优先级，"
-            "为每个任务给出一个结构化动作建议。你可以使用以下动作：\n"
+            "而是治理当前治理在途链路项。\n\n"
+            "请基于当前 activity_guards、治理在途快照和用户优先级，"
+            "为每个链路项给出一个结构化治理动作建议。你可以使用以下动作：\n"
             "- approve: 建议当前任务本轮放行\n"
             "- defer: 建议当前任务继续等待\n"
             "- cancel: 建议当前任务清退/取消\n"
@@ -6791,7 +6791,7 @@ class PlanningRuntimeMixin:
             "  ]\n"
             "}\n\n"
             f"【activity_guards】\n{json.dumps(activity_guards, ensure_ascii=False, default=str)[:3000]}\n\n"
-            f"【tasks】\n{json.dumps(backlog_snapshot, ensure_ascii=False, default=str)[:5000]}"
+            f"【governance_backlog】\n{json.dumps(backlog_snapshot, ensure_ascii=False, default=str)[:5000]}"
         )
 
         try:
@@ -6799,7 +6799,7 @@ class PlanningRuntimeMixin:
                 asyncio.to_thread(
                     llm_client.complete_json,
                     system_prompt=(
-                        "你是 VoidCube 的监督者身份。你管理任务列表生命周期，"
+                        "你是 VoidCube 的监督者身份。你管理治理在途链路项的生命周期，"
                         "但不能绕过确定性状态机。你的回答必须保守、结构化、可审计。"
                     ),
                     user_payload={"governance_review": prompt},
@@ -6828,9 +6828,12 @@ class PlanningRuntimeMixin:
                 "action": item.get("action"),
                 "reason": str(item.get("reason") or "").strip()[:500],
             }
-            shadow = self._extract_lm_shadow_recommendation(item)
-            if shadow is not None:
-                reviewed[task_id]["shadow"] = shadow
+            followup_suggestion = self._extract_supervisor_followup_suggestion(item)
+            if followup_suggestion is not None:
+                reviewed[task_id]["followup_suggestion"] = followup_suggestion
+            priority = self._extract_supervisor_priority_recommendation(item)
+            if priority is not None:
+                reviewed[task_id]["priority"] = priority
         return reviewed
 
     def _autonomous_chain_task_git_lineage(self, task: AutonomousChainTask) -> Dict[str, Any]:
@@ -6988,7 +6991,7 @@ class PlanningRuntimeMixin:
             self._record_supervisor_ui_activity(
                 "tasks_planned",
                 scene="planning",
-                summary=f"Supervisor added {len(created)} task(s) to the governance backlog.",
+                summary=f"监督者已把 {len(created)} 个链路项纳入治理在途存储。",
                 metadata=self._build_autonomous_chain_activity_metadata(created, action="plan"),
             )
 
@@ -7073,8 +7076,8 @@ class PlanningRuntimeMixin:
                 decision_id=str(uuid.uuid4()),
                 actor=actor,
                 reason=(
-                    "Accepted late agent-pull writeback after supervisor recovery reset "
-                    "the task to approved; restoring running state before terminal writeback."
+                    "监督者恢复过程曾把链路项重置为待执行；"
+                    "当前已接纳这次晚到的 agent-pull 写回，并在终态写回前恢复运行中状态。"
                 ),
                 context={
                     **decision_context,
@@ -7119,7 +7122,7 @@ class PlanningRuntimeMixin:
         self._record_supervisor_ui_activity(
             "task_decided",
             scene="planning",
-            summary=f"Task '{updated_task.title}' was marked {normalized}.",
+            summary=f"监督者已将「{updated_task.title}」更新为 {normalized} 状态。",
             metadata={
                 **self._task_activity_metadata(updated_task),
                 "status": normalized,
@@ -7165,7 +7168,7 @@ class PlanningRuntimeMixin:
             candidate_tasks.append(task)
         candidate_tasks.sort(key=self._task_sort_key)
 
-        lm_governance_actions = await self._lm_review_task_governance(
+        supervisor_review_actions = await self._review_task_governance_with_supervisor(
             candidate_tasks,
             activity_guards=activity_guards,
         )
@@ -7194,36 +7197,36 @@ class PlanningRuntimeMixin:
                 ),
             )
             decision_context: Dict[str, Any] = {"activity_guards": task_activity_guards}
-            lm_action = lm_governance_actions.get(task.task_id)
+            review_action = supervisor_review_actions.get(task.task_id)
             reprioritized = False
-            if lm_action:
-                shadow_recommendation = lm_action.get("shadow")
-                if isinstance(shadow_recommendation, dict):
-                    decision_context["lm_governance_shadow"] = shadow_recommendation
-                priority_recommendation = self._extract_lm_priority_recommendation(lm_action)
+            if review_action:
+                followup_suggestion = review_action.get("followup_suggestion")
+                if isinstance(followup_suggestion, dict):
+                    decision_context["supervisor_followup_suggestion"] = followup_suggestion
+                priority_recommendation = self._extract_supervisor_priority_recommendation(review_action)
                 if priority_recommendation is not None and priority_recommendation != str(task.priority):
                     task = self._autonomous_chain_store.update_priority(
                         task.task_id,
                         priority=priority_recommendation,
                         actor=str(request.get("actor", "supervisor")),
                         reason=(
-                            f"LM governance reprioritized task to {priority_recommendation}."
+                            f"Supervisor review reprioritized task to {priority_recommendation}."
                         ),
                         context={
                             **decision_context,
-                            "lm_governance_priority": {
+                            "supervisor_priority_adjustment": {
                                 "priority": priority_recommendation,
-                                "reason": str(lm_action.get("reason") or "").strip(),
+                                "reason": str(review_action.get("reason") or "").strip(),
                             },
                         },
                     )
-                    decision_context["lm_governance_priority"] = {
+                    decision_context["supervisor_priority_adjustment"] = {
                         "priority": priority_recommendation,
-                        "reason": str(lm_action.get("reason") or "").strip(),
+                        "reason": str(review_action.get("reason") or "").strip(),
                     }
                     reprioritized = True
-                suggested_status = self._coerce_lm_governance_action(
-                    lm_action.get("action"),
+                suggested_status = self._coerce_supervisor_review_action(
+                    review_action.get("action"),
                     current_status=str(task.status),
                 )
                 if suggested_status is not None:
@@ -7233,30 +7236,30 @@ class PlanningRuntimeMixin:
                         and self._is_agent_pull_task(task)
                     )
                     if preserve_agent_pull_approval:
-                        decision_context["lm_governance_shadow"] = {
+                        decision_context["supervisor_followup_suggestion"] = {
                             "action": suggested_status,
-                            "reason": str(lm_action.get("reason") or "").strip(),
+                            "reason": str(review_action.get("reason") or "").strip(),
                             "preserved_status": target_status,
                         }
                     else:
                         target_status = suggested_status
-                    lm_reason = str(lm_action.get("reason") or "").strip()
+                    lm_reason = str(review_action.get("reason") or "").strip()
                     if lm_reason:
-                        default_reason = f"LM governance: {lm_reason}"
-                    decision_context["lm_governance_review"] = {
+                        default_reason = f"Supervisor review: {lm_reason}"
+                    decision_context["supervisor_review_outcome"] = {
                         "action": suggested_status,
                         "reason": lm_reason,
                     }
-                elif isinstance(shadow_recommendation, dict):
+                elif isinstance(followup_suggestion, dict):
                     default_reason = (
                         str(request.get("reason"))
-                        or f"LM governance shadow recommendation recorded: "
-                        f"{shadow_recommendation.get('action', 'review')}."
+                        or f"Supervisor follow-up suggestion recorded: "
+                        f"{followup_suggestion.get('action', 'review')}."
                     )
                 elif reprioritized and not str(request.get("reason") or "").strip():
                     default_reason = (
-                        f"LM governance reprioritized task to "
-                        f"{decision_context['lm_governance_priority']['priority']}."
+                        f"Supervisor review reprioritized task to "
+                        f"{decision_context['supervisor_priority_adjustment']['priority']}."
                     )
             schedule_token = self._task_schedule_token(task)
             if target_status == "approved" and schedule_token:
@@ -7270,8 +7273,8 @@ class PlanningRuntimeMixin:
                         "occupied_by_status": str(occupied.status),
                     }
                     default_reason = (
-                        "Task deferred because this preset time is already occupied by "
-                        f"'{occupied.title}'. Only one live task may keep the same scheduled_for."
+                        "该链路项暂缓：当前预设时点已被 "
+                        f"「{occupied.title}」占用；同一个 scheduled_for 只能保留一个在途链路项。"
                     )
             execution_request = None
             if target_status == "approved":
@@ -7292,8 +7295,7 @@ class PlanningRuntimeMixin:
                             decision_id=decision_id,
                             actor=str(request.get("actor", "supervisor")),
                             reason=(
-                                "Task deferred because approved execution handoff lacks required "
-                                "lineage, target, or rollback evidence."
+                                "该链路项暂缓：当前自主交接缺少必要的谱系、目标槽位或回滚证据。"
                             ),
                             context=decision_context,
                             event_type="review",
@@ -7323,34 +7325,34 @@ class PlanningRuntimeMixin:
 
         if reviewed:
             unique_statuses = sorted(set(reviewed_statuses))
-            shadow_recommendation_count = 0
-            shadow_action_counts: Dict[str, int] = {}
+            followup_suggestion_count = 0
+            followup_action_counts: Dict[str, int] = {}
             priority_update_count = 0
             for task in reviewed:
                 if not task.decision_history:
                     continue
                 latest_context = dict(task.decision_history[-1].context or {})
-                shadow = latest_context.get("lm_governance_shadow")
-                if not isinstance(shadow, dict):
+                followup_suggestion = latest_context.get("supervisor_followup_suggestion")
+                if not isinstance(followup_suggestion, dict):
                     pass
                 else:
-                    shadow_recommendation_count += 1
-                    action = str(shadow.get("action") or "unknown")
-                    shadow_action_counts[action] = shadow_action_counts.get(action, 0) + 1
-                if isinstance(latest_context.get("lm_governance_priority"), dict):
+                    followup_suggestion_count += 1
+                    action = str(followup_suggestion.get("action") or "unknown")
+                    followup_action_counts[action] = followup_action_counts.get(action, 0) + 1
+                if isinstance(latest_context.get("supervisor_priority_adjustment"), dict):
                     priority_update_count += 1
             self._record_supervisor_ui_activity(
                 "tasks_reviewed",
                 scene="planning",
                 summary=(
-                    f"Supervisor reviewed {len(reviewed)} task(s): {', '.join(unique_statuses)}."
+                    f"监督者已复核 {len(reviewed)} 个链路项: {', '.join(unique_statuses)}。"
                     + (
-                        f" Shadow governance suggestions: {shadow_recommendation_count}."
-                        if shadow_recommendation_count > 0
+                        f" 保留建议 {followup_suggestion_count} 条。"
+                        if followup_suggestion_count > 0
                         else ""
                     )
                     + (
-                        f" Priority updates: {priority_update_count}."
+                        f" 优先级重排 {priority_update_count} 次。"
                         if priority_update_count > 0
                         else ""
                     )
@@ -7360,9 +7362,9 @@ class PlanningRuntimeMixin:
                     action="review",
                     extra={
                         "status": unique_statuses[0] if len(unique_statuses) == 1 else "mixed",
-                        "lm_shadow_recommendations": shadow_recommendation_count,
-                        "lm_shadow_action_counts": shadow_action_counts,
-                        "lm_priority_updates": priority_update_count,
+                        "supervisor_followup_suggestions": followup_suggestion_count,
+                        "supervisor_suggestion_action_counts": followup_action_counts,
+                        "supervisor_priority_adjustments": priority_update_count,
                     },
                 ),
             )
@@ -7373,9 +7375,9 @@ class PlanningRuntimeMixin:
                     action="review",
                     extra={
                         "status": unique_statuses[0] if len(unique_statuses) == 1 else "mixed",
-                        "lm_shadow_recommendations": shadow_recommendation_count,
-                        "lm_shadow_action_counts": shadow_action_counts,
-                        "lm_priority_updates": priority_update_count,
+                        "supervisor_followup_suggestions": followup_suggestion_count,
+                        "supervisor_suggestion_action_counts": followup_action_counts,
+                        "supervisor_priority_adjustments": priority_update_count,
                     },
                 ),
             )
@@ -7437,7 +7439,7 @@ class PlanningRuntimeMixin:
             self._record_supervisor_ui_activity(
                 "self_learning_submitted",
                 scene="drive",
-                summary=f"Self-learning submitted {len(created)} proposal task(s).",
+                summary=f"自主学习结论已提交 {len(created)} 个治理在途提案。",
                 metadata={
                     "count": len(created),
                     "conclusion_id": submission.conclusion_id,
@@ -7481,7 +7483,7 @@ class PlanningRuntimeMixin:
             task.task_id,
             status="running",
             actor="supervisor",
-            reason="Execution handoff started",
+            reason="自主交接已开始",
             event_type="execution_handoff_started",
         )
         self._autonomous_chain_store.update_metadata(
@@ -7538,9 +7540,9 @@ class PlanningRuntimeMixin:
                         status="approved",
                         actor="supervisor_memory_service",
                         reason=(
-                            f"Memory-maintenance handoff failed "
-                            f"({failure_count}/{max_retries}); approved so the "
-                            f"supervisor's next cycle can re-handoff it. "
+                            f"记忆维护自主交接失败 "
+                            f"({failure_count}/{max_retries})；已恢复为待执行，"
+                            f"等待监督者下一轮重新交接。"
                             f"executor_status={str(result_status)[:60]}"
                         ),
                         event_type="execution_handoff_failed",
@@ -7551,8 +7553,7 @@ class PlanningRuntimeMixin:
                         status="failed",
                         actor="supervisor_memory_service",
                         reason=(
-                            f"Memory-maintenance handoff permanently failed "
-                            f"after {max_retries} retries. "
+                            f"记忆维护自主交接在 {max_retries} 次重试后仍失败。"
                             f"executor_status={str(result_status)[:60]}"
                         ),
                         event_type="execution_handoff_failed",
@@ -7572,7 +7573,7 @@ class PlanningRuntimeMixin:
                     task.task_id,
                     status="approved",
                     actor="supervisor",
-                    reason=f"Execution handoff retry {failure_count}/{max_retries}",
+                    reason=f"自主交接重试 {failure_count}/{max_retries}",
                     event_type="execution_handoff_retry",
                 )
                 self._autonomous_chain_store.update_metadata(
@@ -7621,7 +7622,7 @@ class PlanningRuntimeMixin:
         else:
             actor = "supervisor"
             completion_reason = (
-                f"Execution request completed: {str(result_status)[:100]}"
+                f"自主交接已完成，执行结果：{str(result_status)[:100]}"
             )
         self._update_task_status(
             task.task_id,
@@ -7802,7 +7803,7 @@ class PlanningRuntimeMixin:
         focus = str(request.get("focus") or "").strip()
         phases: Dict[str, Any] = {}
 
-        # ── Phase 1: Endogenous drive → generate governance candidates ──
+        # ── Phase 1: Endogenous drive → form governance backlog projections ──
         try:
             drive_result = await self._run_endogenous_drive_cycle()
             phases["drive"] = {
@@ -7850,8 +7851,8 @@ class PlanningRuntimeMixin:
             "autonomous_cycle_completed",
             scene="handoff" if total_handed_off > 0 else "planning",
             summary=(
-                f"Autonomous cycle complete: {total_planned} planned, "
-                f"{total_handed_off} handed off for execution."
+                f"自主链路一轮完成：新增 {total_planned} 个候选，"
+                f"{total_handed_off} 个链路项已进入自主交接。"
             ),
             metadata={
                 "phases": {

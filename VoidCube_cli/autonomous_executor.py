@@ -96,14 +96,14 @@ def build_autonomous_task_prompt(
     return "\n\n".join(part for part in prompt_parts if part)
 
 
-def bind_autonomous_execution_prompt(
+def bind_autonomous_execution_start(
     task: Dict[str, Any],
     prompt: str,
 ) -> str:
     run_id = str(task.get("_autonomous_task_run_id") or "").strip() or str(uuid.uuid4())
     task["_autonomous_task_run_id"] = run_id
-    task["_autonomous_execution_prompt_text"] = prompt
-    task["_autonomous_execution_prompt_injected"] = True
+    task["_autonomous_execution_start_text"] = prompt
+    task["_autonomous_execution_started"] = True
     return run_id
 
 
@@ -116,7 +116,7 @@ def autonomous_task_run_id_for_message(
     run_id = str(current_task.get("_autonomous_task_run_id") or "").strip()
     if not run_id:
         return ""
-    if message == str(current_task.get("_autonomous_execution_prompt_text") or ""):
+    if message == str(current_task.get("_autonomous_execution_start_text") or ""):
         return run_id
     if message.startswith(AUTONOMOUS_LEARNING_TASK_PREFIX) or message.startswith(
         AUTONOMOUS_BODY_IMPROVEMENT_TASK_PREFIX
@@ -187,17 +187,17 @@ class AutonomousExecutorRuntime:
         *,
         recovered: bool = False,
     ) -> bool:
-        if task.get("_autonomous_execution_prompt_injected"):
+        if task.get("_autonomous_execution_started"):
             return True
         try:
             prompt = self.host._build_autonomous_task_prompt(task, execution_kind)
-            run_id = bind_autonomous_execution_prompt(task, prompt)
+            run_id = bind_autonomous_execution_start(task, prompt)
             self.host._current_autonomous_task_run_id = run_id
             self.host._pending_input.put(prompt)
             self.host._append_autonomous_execution_event(
-                "恢复链路项的执行提示已重新注入前台 CLI，等待模型响应" if recovered else "执行提示已注入前台 CLI，等待模型响应",
+                "恢复链路项的自主执行已重新起跑，等待模型响应" if recovered else "自主执行已起跑，等待模型响应",
                 tone="warn" if recovered else "info",
-                stage="execution_prompt_injected",
+                stage="autonomous_execution_started",
             )
             return True
         except Exception:
@@ -369,9 +369,9 @@ class AutonomousExecutorRuntime:
                         writeback_ok = self.post_task_decision(
                             str(recovered_task.get("task_id") or ""),
                             decision="failed",
-                            reason="API-A autonomous executor recovered the task but failed to reinject its execution prompt.",
+                            reason="API-A autonomous executor recovered the task but failed to restart autonomous execution.",
                             context={
-                                "error": "recovered_execution_prompt_failed",
+                                "error": "recovered_execution_start_failed",
                                 "execution_kind": recovered_execution_kind,
                             },
                             timeout=15,
@@ -548,17 +548,17 @@ class AutonomousExecutorRuntime:
 
         if not self.inject_execution_prompt(self.host._current_autonomous_task, execution_kind):
             task_label = autonomous_task_label(execution_kind)
-            self._cprint(f"  ⚠️  Failed to inject autonomous {task_label} execution prompt {task_id[:8]}...")
+            self._cprint(f"  ⚠️  Autonomous {task_label} execution failed to start {task_id[:8]}...")
             self.host._append_autonomous_execution_event(
-                f"任务 {task_id[:8]} 执行提示注入失败",
+                f"任务 {task_id[:8]} 自主执行启动失败",
                 tone="error",
-                stage="execution_prompt_failed",
+                stage="autonomous_execution_start_failed",
             )
             writeback_ok = self.post_task_decision(
                 task_id,
                 decision="failed",
-                reason="CLI Agent failed to inject the execution prompt for this task.",
-                context={"error": "prompt_injection_failed", "execution_kind": execution_kind},
+                reason="CLI Agent failed to start autonomous execution for this task.",
+                context={"error": "execution_start_failed", "execution_kind": execution_kind},
                 timeout=15,
                 gateway_base=gateway_base,
             )

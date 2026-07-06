@@ -9,7 +9,7 @@ _SCENE_LABELS = {
     "drive": "内生判断",
     "memory": "记忆整理",
     "maintenance": "连续性维护",
-    "handoff": "执行交接",
+    "handoff": "自主交接",
 }
 
 
@@ -170,9 +170,9 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
         "stage": "idle",
         "cli_focus_stage": "idle",
         "focus_task": {},
-        "status_label": "待命拉单",
+        "status_label": "等待放行",
         "chain_reason": "链路: 当前没有已批准的 API-A 可执行链路项",
-        "activity_text": "执行流: 等待监督者放行链路项或等待下一轮拉单",
+        "activity_text": "执行流: 等待 API-B 放行链路项，或等待再读取后形成新的待认领窗口",
         "reason_style": "dim",
     }
     approved_focus = (
@@ -182,8 +182,8 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
     )
     if focus_task.get("task_id") and focus_status == "running":
         hint = {
-            "stage": "running_autonomous_task",
-            "cli_focus_stage": "running_elsewhere",
+            "stage": "running_on_other_api_a",
+            "cli_focus_stage": "running_on_other_api_a",
             "focus_task": dict(focus_task),
             "status_label": "他处执行中",
             "chain_reason": "链路: 该链路项已被其他 API-A 自主执行面认领",
@@ -192,8 +192,8 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
         }
     elif approved_focus.get("task_id"):
         hint = {
-            "stage": "approved_waiting_claim",
-            "cli_focus_stage": "approved_waiting_claim",
+            "stage": "waiting_api_a_claim",
+            "cli_focus_stage": "waiting_api_a_claim",
             "focus_task": approved_focus,
             "status_label": "已放行待认领",
             "chain_reason": "链路: 监督者已放行该链路项，等待 API-A 自主执行面认领",
@@ -205,9 +205,9 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
             "stage": "governance_waiting",
             "cli_focus_stage": "idle",
             "focus_task": {},
-            "status_label": "待命拉单",
-            "chain_reason": "链路: 当前学习链路项大多仍停留在 API-B 治理段并被延后，尚未进入 API-A 待拉取窗口",
-            "activity_text": "执行流: 等待 API-B 重新放行、重排或补充证据",
+            "status_label": "等待放行",
+            "chain_reason": "链路: 当前学习链路项大多仍停留在 API-B 治理段并被延后，尚未进入 API-A 待认领窗口",
+            "activity_text": "执行流: 等待 API-B 重新放行、重排或补充证据后形成待认领窗口",
             "reason_style": "warn",
         }
     elif creativity_governance:
@@ -215,9 +215,9 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
             "stage": "governance_waiting",
             "cli_focus_stage": "idle",
             "focus_task": {},
-            "status_label": "待命拉单",
-            "chain_reason": "链路: 当前自主链路项仍停留在 API-B 治理段，尚未进入 API-A 待拉取窗口",
-            "activity_text": "执行流: 等待 API-B 审核、放行或重新排序链路项",
+            "status_label": "等待放行",
+            "chain_reason": "链路: 当前自主链路项仍停留在 API-B 治理段，尚未进入 API-A 待认领窗口",
+            "activity_text": "执行流: 等待 API-B 审核、放行或重新排序链路项后形成待认领窗口",
             "reason_style": "info",
         }
     elif chain_focus_cards:
@@ -225,9 +225,9 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
             "stage": "api_b_or_mem_focus",
             "cli_focus_stage": "idle",
             "focus_task": {},
-            "status_label": "待命拉单",
+            "status_label": "等待放行",
             "chain_reason": "链路: 当前没有新的 API-A 可执行链路项；API-B 正在判断、回收写回或推进下一轮再读取",
-            "activity_text": "执行流: 等待监督者放行链路项或等待下一轮拉单",
+            "activity_text": "执行流: 等待 API-B 放行链路项，或等待再读取后形成新的待认领窗口",
             "reason_style": "info",
         }
     if stage_label:
@@ -279,20 +279,20 @@ def resolve_autonomous_panel_focus_stage(
     focus_task_id = str(focus_task.get("task_id") or "").strip()
     if current_task_id and focus_task_id and current_task_id == focus_task_id:
         if agent_running:
-            return "claimed_running"
+            return "local_claimed_active"
         if last_agent_turn_result is not None:
-            return "claimed_waiting_writeback"
-        return "claimed_waiting_start"
+            return "local_claimed_waiting_writeback"
+        return "local_claimed_waiting_first_turn"
     hinted_stage = str(focus_task.get("_supervisor_stage") or "").strip()
-    if hinted_stage == "approved_waiting_claim":
-        return "approved_waiting_claim"
-    if hinted_stage == "running_autonomous_task":
-        return "running_elsewhere"
+    if hinted_stage == "waiting_api_a_claim":
+        return "waiting_api_a_claim"
+    if hinted_stage == "running_on_other_api_a":
+        return "running_on_other_api_a"
     task_status = str(focus_task.get("status") or "").strip().lower()
     if task_status in {"approved", "retry"}:
-        return "approved_waiting_claim"
+        return "waiting_api_a_claim"
     if task_status == "running":
-        return "running_elsewhere"
+        return "running_on_other_api_a"
     return "idle"
 
 
@@ -322,8 +322,8 @@ def resolve_autonomous_no_task_reason(supervisor_state: Dict[str, Any]) -> tuple
     hinted_style = str(api_a_execution.get("reason_style") or "").strip().lower()
     if hinted_reason and str(api_a_execution.get("stage") or "").strip() not in {
         "",
-        "approved_waiting_claim",
-        "running_autonomous_task",
+        "waiting_api_a_claim",
+        "running_on_other_api_a",
     }:
         style = {
             "warn": "class:auto-panel-warn",
@@ -359,11 +359,11 @@ def resolve_autonomous_no_task_reason(supervisor_state: Dict[str, Any]) -> tuple
         if deferred:
             return (
                 "class:auto-panel-warn",
-                "链路: 当前学习链路项大多仍停留在 API-B 治理段并被延后，尚未进入 API-A 待拉取窗口",
+                "链路: 当前学习链路项大多仍停留在 API-B 治理段并被延后，尚未进入 API-A 待认领窗口",
             )
         return (
             "class:auto-panel-info",
-            "链路: 当前自主链路项仍停留在 API-B 治理段，尚未进入 API-A 待拉取窗口",
+            "链路: 当前自主链路项仍停留在 API-B 治理段，尚未进入 API-A 待认领窗口",
         )
 
     stage_projections = observation_loop_stage_projections(supervisor_state)
@@ -417,10 +417,10 @@ def format_supervisor_status_snapshot(state: Dict[str, Any]) -> list[str]:
         "tasks_reviewed": "批量复核",
         "tasks_planned": "链路规划",
         "supervisor_activity": "监督活动",
-        "execution_handoff_started": "执行交接",
-        "execution_handoff_completed": "交接完成",
-        "execution_handoff_failed": "交接失败",
-        "execution_handoff_retry": "交接重试",
+        "execution_handoff_started": "自主交接",
+        "execution_handoff_completed": "自主交接完成",
+        "execution_handoff_failed": "自主交接失败",
+        "execution_handoff_retry": "自主交接重试",
     }
 
     lines.append(f"场景: {_scene_label(state.get('scene'))} — {_display_text(state.get('title'), '自主链路观测')}")
@@ -433,23 +433,23 @@ def format_supervisor_status_snapshot(state: Dict[str, Any]) -> list[str]:
     )
     lines.append(
         "治理统计: "
-        f"direct={governance.get('direct_lm_actions', 0)}, "
-        f"shadow={governance.get('shadow_recommendations', 0)}, "
-        f"priority_updates={governance.get('priority_updates', 0)}"
+        f"裁定={governance.get('review_actions', 0)}, "
+        f"建议={governance.get('followup_suggestions', 0)}, "
+        f"重排={governance.get('priority_adjustments', 0)}"
     )
 
-    if stage_projections:
+    if focus:
+        lines.append(
+            "闭环焦点: "
+            f"{_display_text(focus.get('title'))} "
+            f"({_display_text(focus.get('status'), '等待中')})"
+        )
+    elif stage_projections:
         primary = stage_projections[0]
         lines.append(
             "闭环焦点: "
             f"{_display_text(primary.get('title'))} "
             f"({_display_text(primary.get('display_status') or primary.get('status'), '等待中')})"
-        )
-    elif focus:
-        lines.append(
-            "闭环焦点: "
-            f"{_display_text(focus.get('title'))} "
-            f"({_display_text(focus.get('status'), '等待中')})"
         )
 
     if chain_segments:
@@ -458,7 +458,7 @@ def format_supervisor_status_snapshot(state: Dict[str, Any]) -> list[str]:
             label = str(segment.get("label") or segment.get("owner") or "?").strip() or "?"
             count = int(segment.get("count") or len(list(segment.get("items") or [])) or 0)
             segment_parts.append(f"{label}={count}")
-        lines.append("链路分段: " + ", ".join(segment_parts))
+        lines.append("闭环分段: " + ", ".join(segment_parts))
 
     execution_card = observation_loop_stage_projection(
         state,

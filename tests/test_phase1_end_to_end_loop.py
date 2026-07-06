@@ -110,7 +110,7 @@ class TestPhase1EndogenousDriveToBacklog:
 
     @pytest.mark.asyncio
     @pytest.mark.unit
-    async def test_memory_continuity_candidate_is_queued_under_current_drive_posture(self, tmp_path):
+    async def test_memory_continuity_candidate_is_planned_under_current_drive_posture(self, tmp_path):
         """The current endogenous posture emits the memory continuity task candidate."""
         sv = _make_supervisor(tmp_path)
         # Increase max_candidates so all 4 are included
@@ -312,7 +312,7 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
 
     @pytest.mark.asyncio
     @pytest.mark.unit
-    async def test_execution_request_dispatched_for_approved_memory_task(self, tmp_path):
+    async def test_execution_request_handed_off_for_approved_memory_task(self, tmp_path):
         """Approved memory_maintenance task gets handed off with execution_request."""
         sv = _make_supervisor(tmp_path)
         sv.config = sv.config.model_copy(
@@ -335,7 +335,7 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
         )
 
         # Mock idle-window to guarantee in-window approval regardless of real time
-        async def fake_idle_for_dispatch(_request=None):
+        async def fake_idle_for_handoff(_request=None):
             return {
                 "status": "evaluated",
                 "checks": {
@@ -375,7 +375,7 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
                     "eligible_for_execution": True,
                 },
             }
-        sv.evaluate_activity_guards = fake_idle_for_dispatch  # type: ignore[method-assign]
+        sv.evaluate_activity_guards = fake_idle_for_handoff  # type: ignore[method-assign]
 
         # Run full review + handoff cycle
         result = await sv._run_autonomous_chain_review_cycle()
@@ -390,7 +390,7 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
 
     @pytest.mark.asyncio
     @pytest.mark.unit
-    async def test_duplicate_dispatch_prevented(self, tmp_path):
+    async def test_duplicate_handoff_prevented(self, tmp_path):
         """running status prevents duplicate execution."""
         sv = _make_supervisor(tmp_path)
         sv._fetch_gateway_activity_snapshot = AsyncMock(
@@ -636,9 +636,6 @@ class TestPhase1GovernorMode:
             "active_sessions": 0,
         })
         sv._touch_gateway_activity = AsyncMock()
-        sv._dispatch_self_learning_followup = AsyncMock(
-            return_value={"status": "self_learning_followup_executed"}
-        )
         sv._handoff_autonomous_chain_execution_request = AsyncMock(
             return_value={"status": "executed"}
         )
@@ -676,7 +673,7 @@ class TestPhase1GovernorMode:
 
         await sv._run_autonomous_chain_review_cycle()
         # Self-learning tasks are NOT handed off by supervisor review — they wait for Agent pull.
-        sv._dispatch_self_learning_followup.assert_not_awaited()
+        sv._handoff_autonomous_chain_execution_request.assert_not_awaited()
 
     @pytest.mark.asyncio
     @pytest.mark.unit

@@ -298,6 +298,11 @@ async def test_supervisor_runtime_trace_view_aggregates_autonomous_activity_gove
                         "governance_task_type": "self_learning",
                         "task_family": "self_learning",
                         "decision_id": "decision-runtime-1",
+                        "task_identity": {
+                            "title": "Trace self-learning evidence path",
+                            "display_label": "自主学习",
+                            "summary": "Trace self-learning evidence path (自主学习)",
+                        },
                     },
                 }
             ],
@@ -328,6 +333,12 @@ async def test_supervisor_runtime_trace_view_aggregates_autonomous_activity_gove
         "mem_governor_history",
         "gateway_activity_log",
     }.issubset(event_sources)
+    gateway_event = next(
+        event for event in result["timeline"]
+        if event.get("source") == "gateway_activity_log"
+    )
+    assert gateway_event["event_label"] == "自主学习回报"
+    assert gateway_event["summary"] == "网关记下了 「Trace self-learning evidence path (自主学习)」 的自主学习回报。"
 
 
 @pytest.mark.asyncio
@@ -442,6 +453,11 @@ async def test_supervisor_runtime_timeline_exposes_recent_unified_trace_records(
                         "task_id": task_id,
                         "governance_task_type": "self_learning",
                         "task_family": "self_learning",
+                        "task_identity": {
+                            "title": "Timeline-backed UI observation",
+                            "display_label": "自主学习",
+                            "summary": "Timeline-backed UI observation (自主学习)",
+                        },
                     },
                 },
                 {
@@ -493,6 +509,8 @@ async def test_supervisor_runtime_timeline_exposes_recent_unified_trace_records(
         if event.get("source") == "gateway_activity_log"
     ]
     assert [event["event_type"] for event in gateway_events] == ["self_learning"]
+    assert gateway_events[0]["source_label"] == "网关回报"
+    assert gateway_events[0]["summary"] == "网关记下了 「Timeline-backed UI observation (自主学习)」 的自主学习回报。"
 
 
 @pytest.mark.unit
@@ -741,7 +759,7 @@ async def test_supervisor_room_state_exposes_governance_preview_for_shadow_revie
             tasks_by_title["Duplicate learning branch"]: {
                 "action": "merge",
                 "reason": "Duplicate branch should merge into the canonical one.",
-                "shadow": {
+                "followup_suggestion": {
                     "action": "merge",
                     "reason": "Duplicate branch should merge into the canonical one.",
                     "merge_into": tasks_by_title["Canonical learning branch"],
@@ -749,7 +767,7 @@ async def test_supervisor_room_state_exposes_governance_preview_for_shadow_revie
             }
         }
 
-    monkeypatch.setattr(supervisor, "_lm_review_task_governance", fake_lm_review)
+    monkeypatch.setattr(supervisor, "_review_task_governance_with_supervisor", fake_lm_review)
 
     await supervisor.review_autonomous_chain_tasks(
         {
@@ -768,13 +786,13 @@ async def test_supervisor_room_state_exposes_governance_preview_for_shadow_revie
         for entry in duplicate.get("decision_history", [])
         if isinstance(entry, dict)
     )
-    preview = duplicate["governance_preview"]["lm_governance_shadow"]
+    preview = duplicate["governance_preview"]["followup_suggestion"]
     assert preview["action"] == "merge"
     assert preview["merge_into"] == tasks_by_title["Canonical learning branch"]
     assert preview["merge_into_title"] == "Canonical learning branch"
     assert "监督者保留建议" in preview["summary"]
     assert "Canonical learning branch" in duplicate["governance_preview"]["summary"]
-    assert state["autonomous_observation"]["metrics"]["governance"]["shadow_recommendations"] >= 1
+    assert state["autonomous_observation"]["metrics"]["governance"]["followup_suggestions"] >= 1
 
 
 @pytest.mark.asyncio
@@ -813,7 +831,7 @@ async def test_supervisor_room_state_exposes_applied_priority_updates(tmp_path, 
             }
         }
 
-    monkeypatch.setattr(supervisor, "_lm_review_task_governance", fake_lm_review)
+    monkeypatch.setattr(supervisor, "_review_task_governance_with_supervisor", fake_lm_review)
 
     await supervisor.review_autonomous_chain_tasks(
         {
@@ -833,10 +851,10 @@ async def test_supervisor_room_state_exposes_applied_priority_updates(tmp_path, 
         for entry in task.get("decision_history", [])
         if isinstance(entry, dict)
     )
-    assert task["governance_preview"]["lm_governance_priority"]["priority"] == "high"
-    assert task["governance_preview"]["lm_governance_priority"]["priority_label"] == "高"
+    assert task["governance_preview"]["priority_adjustment"]["priority"] == "high"
+    assert task["governance_preview"]["priority_adjustment"]["priority_label"] == "高"
     assert "监督者已重排优先级" in task["governance_preview"]["summary"]
-    assert state["autonomous_observation"]["metrics"]["governance"]["priority_updates"] >= 1
+    assert state["autonomous_observation"]["metrics"]["governance"]["priority_adjustments"] >= 1
 
 
 @pytest.mark.asyncio
@@ -847,7 +865,7 @@ async def test_supervisor_room_state_exposes_task_identity_for_body_improvement(
 
     planned = await supervisor.plan_autonomous_chain_task(
         {
-            "title": "Improve shell body from learning",
+            "title": "根据学习结果改进 shell 替身",
             "task_family": "body_upgrade",
             "execution_kind": "body_improvement",
             "metadata": {
@@ -913,7 +931,7 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
     )
     agent_task_1 = await supervisor.plan_autonomous_chain_task(
         {
-            "title": "Agent first creative task",
+            "title": "第一个自主学习链路项",
             "task_type": "self_learning",
             "metadata": {
                 "governance_task_type": "self_learning",
@@ -958,8 +976,9 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
     assert observation["loop"]["stages"][0]["key"] == "api_b_judgement"
     assert observation["loop"]["stages"][1]["key"] == "api_a_execution"
     assert observation["loop"]["recent_writebacks"] == []
-    assert observation["board"]["headline"] == "自主链路闭环观测"
+    assert observation["board"]["headline"] == "API-B 主视角自主闭环总览"
     assert "watch_groups" not in observation["board"]
+    assert "protocol_notes" not in observation["board"]
     assert loop_stage_keys == [
         "api_b_judgement",
         "api_a_execution",
@@ -968,15 +987,29 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
     ]
     assert group_keys == ["api_b_candidates", "api_b_backlog", "api_a_ready", "mem_recent"]
     assert "queue" not in observation
-    assert observation["chain"]["headline"] == "自主链路分段观察"
+    assert observation["chain"]["headline"] == "自主闭环分段观察"
     assert "presentation" not in observation
     assert observation["board"]["primary_focus"]["title"] == "Supervisor first task"
     assert observation["board"]["primary_focus"]["status"] == "当前在途"
     assert observation["board"]["primary_focus"]["observation_role"] == "api_b_judgement"
     assert observation["board"]["primary_focus"]["stage_key"] == "api_b_judgement"
+    assert observation["board"]["hero_summary"] == observation["board"]["summary"]
+    assert [pill["key"] for pill in observation["board"]["hero_pills"]][:2] == [
+        "focus",
+        "chain_waiting",
+    ]
+    assert any(
+        pill["text"] in {"治理在途 · 1", "待认领窗口 · 1"}
+        for pill in observation["board"]["hero_pills"]
+    )
+    assert observation["board"]["observation_notes"][0]["title"] == "API-B 主视角"
+    assert any(
+        "当前待认领窗口 1" in note["text"]
+        for note in observation["board"]["observation_notes"]
+    )
     assert "current_cards" not in observation["board"]
     assert _observation_loop_stage(observation, "api_a_execution")["status"] == "ready"
-    assert _observation_loop_stage(observation, "api_a_execution")["focus_task"]["title"] == "Agent first creative task"
+    assert _observation_loop_stage(observation, "api_a_execution")["focus_task"]["title"] == "第一个自主学习链路项"
     assert [group["key"] for group in observation["chain"]["segments"]] == group_keys
     assert api_b_backlog["owner"] == "API-B"
     assert api_b_backlog["stage_label"] == "判断与治理"
@@ -1017,7 +1050,7 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
     assert _observation_loop_stage(observation, "mem_writeback")["status"] == "idle"
     assert _observation_loop_stage(observation, "api_b_judgement")["focus_task"]["title"] == "Supervisor first task"
     assert _observation_loop_stage(observation, "api_b_judgement")["focus_task"]["display_status"] == "待执行"
-    assert _observation_loop_stage(observation, "api_a_execution")["focus_task"]["title"] == "Agent first creative task"
+    assert _observation_loop_stage(observation, "api_a_execution")["focus_task"]["title"] == "第一个自主学习链路项"
     assert _observation_loop_stage(observation, "api_a_execution")["focus_task"]["display_status"] == "待执行"
     assert [item["title"] for item in api_b_backlog["items"]] == [
         "Supervisor first task",
@@ -1026,13 +1059,14 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
     ]
     assert [item["display_status"] for item in api_b_backlog["items"]] == ["待执行", "待审核", "待审核"]
     assert [item["lane"] for item in api_b_backlog["items"]] == ["supervisor", "supervisor", "supervisor"]
-    assert [item["title"] for item in api_a_ready["items"]] == ["Agent first creative task"]
+    assert [item["title"] for item in api_a_ready["items"]] == ["第一个自主学习链路项"]
     assert [item["display_status"] for item in api_a_ready["items"]] == ["待执行"]
     assert [item["lane"] for item in api_a_ready["items"]] == ["agent"]
     assert observation["metrics"]["slot_overview"] == "slot-A / slot-B"
-    assert observation["metrics"]["observed_task_total"] == 4
-    assert observation["metrics"]["autonomous_task_total"] == 2
-    assert observation["metrics"]["api_b_task_total"] == 2
+    assert observation["metrics"]["chain_projection"]["governance_backlog"] == 3
+    assert observation["metrics"]["chain_projection"]["governance_backlog_creativity"] == 1
+    assert observation["metrics"]["chain_projection"]["api_a_ready"] == 1
+    assert observation["metrics"]["chain_projection"]["writeback_history"] == 0
     assert observation["runtime"]["activity_guards"]["snapshot_source"] == "live"
 
 
@@ -1043,7 +1077,7 @@ async def test_supervisor_room_state_keeps_running_api_a_task_out_of_ready_segme
 
     planned = await supervisor.plan_autonomous_chain_task(
         {
-            "title": "Running creative task",
+            "title": "运行中的自主学习链路项",
             "task_type": "self_learning",
             "metadata": {
                 "governance_task_type": "self_learning",
@@ -1071,7 +1105,7 @@ async def test_supervisor_room_state_keeps_running_api_a_task_out_of_ready_segme
     assert api_a_ready["items"] == []
     assert api_a_ready["payload_count"] == 0
     assert api_a_execution["status"] == "active"
-    assert api_a_execution["focus_task"]["title"] == "Running creative task"
+    assert api_a_execution["focus_task"]["title"] == "运行中的自主学习链路项"
 
 
 @pytest.mark.asyncio
@@ -1152,7 +1186,7 @@ async def test_supervisor_room_state_exposes_recent_mem_writebacks_in_autonomous
 
     planned = await supervisor.plan_autonomous_chain_task(
         {
-            "title": "Completed autonomous learning writeback",
+            "title": "已完成的自主学习写回",
             "task_family": "self_learning",
             "metadata": {
                 "governance_task_type": "self_learning",
@@ -1177,7 +1211,7 @@ async def test_supervisor_room_state_exposes_recent_mem_writebacks_in_autonomous
     supervisor._autonomous_chain_store.update_status(
         task_id,
         status="completed",
-        reason="Completed autonomous learning writeback.",
+        reason="已完成的自主学习写回。",
     )
 
     state = await supervisor.get_supervisor_ui_state()
@@ -1185,10 +1219,10 @@ async def test_supervisor_room_state_exposes_recent_mem_writebacks_in_autonomous
     mem_recent = state["autonomous_observation"]["chain"]["segments"][3]["items"][0]
     mem_stage = _observation_loop_stage(state["autonomous_observation"], "mem_writeback")
 
-    assert writeback["title"] == "Completed autonomous learning writeback"
+    assert writeback["title"] == "已完成的自主学习写回"
     assert writeback["lane"] == "agent"
     assert writeback["status"] == "completed"
-    assert mem_stage["focus_task"]["title"] == "Completed autonomous learning writeback"
+    assert mem_stage["focus_task"]["title"] == "已完成的自主学习写回"
     assert mem_stage["status"] == "ready"
     assert mem_recent["lane"] == "mem"
 
@@ -1342,6 +1376,64 @@ async def test_supervisor_ui_state_projects_cognition_judgement_and_uncertainty_
     assert top_item["recommended_probe_label"] == "复核近期不确定回答与修正信号"
     assert top_item["recommended_next_step_label"] == "补观察证据"
     assert top_item["persistence_label"] == "长期未化解"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_ui_state_projects_recent_autonomous_activity_for_web_room(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_endogenous_drive = AsyncMock(  # type: ignore[method-assign]
+        return_value={"candidates": []}
+    )
+    supervisor.evaluate_activity_guards = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "checks": {},
+            "idle_seconds": {},
+            "activity": {
+                "active_sessions": 0,
+                "counts": {},
+                "last_autonomous_chain_execute_at": "2026-07-06T10:05:00",
+                "recent_metadata": {
+                    "autonomous_chain_execute": {
+                        "source_service": "executor",
+                        "task_type": "self_evolution",
+                        "task_type_label": "自主改进",
+                        "task_family": "body_switch",
+                        "task_family_label": "身体切换",
+                        "execution_kind": "body_switch",
+                        "execution_kind_label": "身体切换",
+                        "task_identity": {
+                            "display_label": "身体切换",
+                            "summary": "替身切换验收 (身体切换)",
+                        },
+                    }
+                },
+            },
+            "task_family_decisions": {},
+            "governance_task_type_decisions": {},
+        }
+    )
+
+    state = await supervisor.get_supervisor_ui_state()
+    observation = state["autonomous_observation"]
+    recent = observation["board"]["recent_activity"]
+
+    assert recent["kind"] == "autonomous_chain_execute"
+    assert recent["phase_label"] == "执行回报"
+    assert recent["title"] == "替身切换验收 (身体切换)"
+    assert recent["summary"] == "API-A 子执行面 已向 API-B 回报 身体切换 的执行进展。"
+    assert recent["source_label"] == "API-A 子执行面"
+    assert recent["tone"] == "accent"
+    assert observation["board"]["hero_summary"] == observation["board"]["summary"]
+    assert any(
+        pill["text"] == "执行回报 · 替身切换验收 (身体切换)"
+        for pill in observation["board"]["hero_pills"]
+    )
+    assert any(
+        note["title"] == "执行回报"
+        and note["text"] == "API-A 子执行面 已向 API-B 回报 身体切换 的执行进展。"
+        for note in observation["board"]["observation_notes"]
+    )
 
 
 @pytest.mark.asyncio
@@ -1835,6 +1927,14 @@ async def test_supervisor_accepts_self_learning_conclusion_submission_into_backl
             "conclusion_id": conclusion.conclusion_id,
         },
     )
+
+
+@pytest.mark.unit
+def test_supervisor_display_and_trace_labels_absorb_legacy_queued_status(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    assert supervisor._observation_display_status({"status": "queued"}) == "待审核"
+    assert supervisor._trace_status_label("queued") == "待审核"
 
 
 

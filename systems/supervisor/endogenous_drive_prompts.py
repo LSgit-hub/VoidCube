@@ -146,14 +146,14 @@ def build_endogenous_task_generation_payload(
         charter.get("prompt_output_requirements"),
         fallback=(
             "- 提案必须显式绑定 evidence graph / agenda graph 节点。\n"
-            "- 证据不足时允许返回空 proposals。"
+            "- 证据不足时允许返回空提案数组。"
         ),
     )
     brief_sections = ""
     for title, value, limit in (
-        ("graph_brief", graph_brief, 3200),
-        ("memory_brief", memory_brief, 2600),
-        ("evidence_brief", evidence_brief, 2600),
+        ("图谱简报", graph_brief, 3200),
+        ("记忆简报", memory_brief, 2600),
+        ("证据简报", evidence_brief, 2600),
     ):
         if _has_prompt_brief_content(value):
             brief_sections += (
@@ -195,11 +195,11 @@ def build_endogenous_task_generation_payload(
         "17. 如果 evidence_level=weak 或 risk_level=high，优先让 execution_mode 更保守\n\n"
         "【本轮任务生成焦点】\n"
         f"{reasoning_focus_block}\n\n"
-        "【decision_core】\n"
+        "【判断核心】\n"
         f"{json.dumps(decision_core, ensure_ascii=False, default=str)[:3200]}\n\n"
-        "【supporting_detail】\n"
+        "【支撑细节】\n"
         f"{json.dumps(supporting_detail, ensure_ascii=False, default=str)[:2200]}\n\n"
-        "【long_tail_context】\n"
+        "【长尾上下文】\n"
         f"{json.dumps(long_tail_context, ensure_ascii=False, default=str)[:1600]}\n\n"
         f"{brief_sections}"
         "【本轮输出附加要求】\n"
@@ -252,8 +252,8 @@ def build_endogenous_task_generation_payload(
         '      "blocking_factors":["..."],\n'
         '      "referenced_evidence_nodes":["self_structure","external_research"],\n'
         '      "referenced_agenda_nodes":["expand_learning_frontier","focus:learning_expansion"],\n'
-        '      "posture_alignment":["follows_truthfulness_first_by_prioritizing review"],\n'
-        '      "priority_basis":["recent correction signals are elevated","reference alignment remains weak"]\n'
+        '      "posture_alignment":["遵循 truthfulness_first，优先把 review 放在前列"],\n'
+        '      "priority_basis":["近期纠错信号正在抬高","引用对齐仍然偏弱"]\n'
         '    }\n'
         "  ]\n"
         "}\n\n"
@@ -279,28 +279,28 @@ def _render_cognitive_briefing(packet: Dict[str, Any]) -> str:
     posture_reason = str(
         posture_source.get("selection_reason")
         or cognitive_posture.get("selection_reason")
-        or "unknown"
+        or "未知"
     ).strip()
     current_judgement = str(
         decision_core.get("current_judgement")
         or meta_cognition_profile.get("current_judgement")
         or meta_cognition_profile.get("summary")
-        or "unknown"
+        or "未知"
     ).strip()
     dominant_constraint = str(
         decision_core.get("dominant_constraint")
         or meta_cognition_profile.get("dominant_constraint")
-        or "unknown"
+        or "未知"
     ).strip()
     secondary_task_shape_hint = str(
         decision_core.get("secondary_task_shape_hint")
-        or "unknown"
+        or "未知"
     ).strip()
     governance_posture = str(
         decision_core.get("governance_posture")
         or meta_cognition_profile.get("governance_posture")
         or secondary_task_shape_hint
-        or "unknown"
+        or "未知"
     ).strip()
     secondary_task_shape_score = decision_core.get("secondary_task_shape_score")
     self_gaps = [
@@ -360,26 +360,26 @@ def _render_cognitive_briefing(packet: Dict[str, Any]) -> str:
     top_iteration_domain = str(
         decision_core.get("top_self_iteration_domain")
         or self_iteration_hypotheses.get("top_target_domain")
-        or "unknown"
+        or "未知"
     ).strip()
     dominant_iteration_hypothesis = str(
         decision_core.get("top_self_iteration_hypothesis")
         or self_iteration_hypotheses.get("dominant_hypothesis")
-        or "unknown"
+        or "未知"
     ).strip()
     meta_summary = str(
         decision_core.get("summary")
         or meta_cognition_profile.get("summary")
         or current_judgement
-        or "unknown"
+        or "未知"
     ).strip()
     dominant_failure_mode = str(
-        meta_cognition_profile.get("dominant_failure_mode") or "unknown"
+        meta_cognition_profile.get("dominant_failure_mode") or "未知"
     ).strip()
     grounding_pressure = str(
         decision_core.get("grounding_pressure")
         or meta_cognition_profile.get("grounding_pressure")
-        or "unknown"
+        or "未知"
     ).strip()
     why_not_improvement_now = [
         str(item).strip()
@@ -400,23 +400,23 @@ def _render_cognitive_briefing(packet: Dict[str, Any]) -> str:
         f"- 当前 grounding 压力: {grounding_pressure}",
         f"- 当前建议治理姿态: {governance_posture}",
         f"- 当前姿态: {posture_name} ({posture_reason})",
-        f"- 当前主证据主题: {', '.join(primary_evidence_nodes) or 'none'}",
-        f"- 当前主议程主题: {', '.join(primary_agenda_nodes) or 'none'}",
-        f"- 当前 grounding 缺口: {', '.join(grounding_gaps) or 'none'}",
-        f"- 当前证据冲突: {', '.join(contradictory_topics) or 'none'}",
-        f"- 当前弱通道: {', '.join(weak_channels) or 'none'}",
-        f"- 当前自我理解缺口: {', '.join(self_gaps) or 'none'}",
-        f"- 当前首要自我迭代域: {top_iteration_domain or 'none'}",
-        f"- 当前首要自我迭代假设: {dominant_iteration_hypothesis or 'none'}",
-        f"- 当前治理在途上下文: {governance_backlog_summary or 'none'}",
-        f"- 当前不宜直接 improvement 的原因: {', '.join(why_not_improvement_now) or 'none'}",
+        f"- 当前主证据主题: {', '.join(primary_evidence_nodes) or '无'}",
+        f"- 当前主议程主题: {', '.join(primary_agenda_nodes) or '无'}",
+        f"- 当前 grounding 缺口: {', '.join(grounding_gaps) or '无'}",
+        f"- 当前证据冲突: {', '.join(contradictory_topics) or '无'}",
+        f"- 当前弱通道: {', '.join(weak_channels) or '无'}",
+        f"- 当前自我理解缺口: {', '.join(self_gaps) or '无'}",
+        f"- 当前首要自我迭代域: {top_iteration_domain or '无'}",
+        f"- 当前首要自我迭代假设: {dominant_iteration_hypothesis or '无'}",
+        f"- 当前治理在途上下文: {governance_backlog_summary or '无'}",
+        f"- 当前不宜直接改进的原因: {', '.join(why_not_improvement_now) or '无'}",
         "- 先输出一个 cognitive_assessment，明确写出当前判断、主约束、grounding 缺口，以及为什么当前治理姿态成立。",
         "- 如果 evidence_packet 提供了 self_iteration_hypotheses，请在 cognitive_assessment 中写出 self_iteration_target 与 self_iteration_hypothesis。",
         "- 如果 evidence_packet 提供了 self_iteration_trend_memory，请在 cognitive_assessment 中写出 stay_or_switch 与 switch_reason。",
         "- 先基于主证据主题与主议程主题做判断，再决定是否需要形成任务投影以及投影强度。",
-        "- 如果 grounding 缺口或证据冲突明显，优先提出 observation / review / learning，而不是直接 improvement。",
+        "- 如果 grounding 缺口或证据冲突明显，优先提出 observation / review / learning，而不是直接改进。",
     ]
-    if secondary_task_shape_hint and secondary_task_shape_hint != "unknown":
+    if secondary_task_shape_hint and secondary_task_shape_hint != "未知":
         task_shape_line = (
             f"- 任务形态辅助提示: {secondary_task_shape_hint}"
             + (
