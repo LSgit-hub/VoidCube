@@ -9,6 +9,67 @@ from systems.runtime_task_profile import derive_runtime_task_profile
 class TraceRuntimeMixin:
     """Read-only trace aggregation across supervisor-local runtime stores."""
 
+    @staticmethod
+    def _trace_status_label(value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        return {
+            "planned": "待审核",
+            "awaiting_review": "待审查",
+            "approved": "待执行",
+            "running": "执行中",
+            "retry": "重试中",
+            "deferred": "已延后",
+            "paused": "已暂停",
+            "completed": "已写回",
+            "failed": "执行失败",
+            "cancelled": "已取消",
+        }.get(normalized, str(value or "").strip() or "状态未识别")
+
+    @staticmethod
+    def _trace_event_label(value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        return {
+            "task_snapshot": "链路项快照",
+            "task_decision": "治理裁决",
+            "execution_request": "执行交接请求",
+            "trace_marker": "轨迹标记",
+            "tasks_planned": "治理入栈",
+            "tasks_reviewed": "批量复核",
+            "endogenous_drive_planned": "内生候选入栈",
+            "endogenous_drive_evaluated": "内生驱动评估",
+            "self_learning": "自主学习回报",
+            "autonomous_chain": "自主链路活动",
+            "autonomous_chain_plan": "治理规划回报",
+            "autonomous_chain_execute": "执行回报",
+            "memory_task": "记忆维护回报",
+            "memory_write_failure": "记忆写回异常",
+            "uncertainty_high": "高不确定性告警",
+            "gateway_activity_unavailable": "网关活动暂不可见",
+        }.get(normalized, str(value or "").strip() or "链路事件")
+
+    @staticmethod
+    def _trace_source_label(value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        return {
+            "autonomous_chain_store": "链路存储",
+            "supervisor_activity": "监督者活动",
+            "mem_governor_history": "治理历史",
+            "gateway_activity_log": "网关回报",
+            "gateway_activity": "网关状态",
+        }.get(normalized, str(value or "").strip() or "未知记录侧")
+
+    @staticmethod
+    def _trace_runtime_label(value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        return {
+            "self_learning": "自主学习",
+            "self_evolution": "自主改进",
+            "general_self_evolution": "通用自主改进",
+            "body_improvement": "替身改进",
+            "body_switch": "替身切换",
+            "memory_maintenance": "记忆维护",
+        }.get(normalized, str(value or "").strip() or "")
+
     async def list_runtime_traces(self, limit: int = 20) -> Dict[str, Any]:
         records = await self._collect_trace_records(limit=max(limit, 1))
         summaries = self._summarize_trace_records(records)
@@ -90,7 +151,10 @@ class TraceRuntimeMixin:
                     task_id=task.task_id,
                     decision_id=None,
                     profile=profile,
-                    summary=f"Task '{task.title}' is {task.status}.",
+                    summary=(
+                        f"监督者当前观察到链路项「{task.title}」处于"
+                        f"{self._trace_status_label(task.status)}。"
+                    ),
                     payload=serialized,
                 )
             )
@@ -105,7 +169,10 @@ class TraceRuntimeMixin:
                         task_id=task.task_id,
                         decision_id=decision.decision_id,
                         profile=self._trace_runtime_profile_from_payload(decision_payload),
-                        summary=f"Task '{task.title}' was marked {decision.status}.",
+                        summary=(
+                            f"API-B 已将链路项「{task.title}」裁决为"
+                            f"{self._trace_status_label(decision.status)}。"
+                        ),
                         payload=decision_payload,
                     )
                 )
@@ -120,7 +187,7 @@ class TraceRuntimeMixin:
                         task_id=task.task_id,
                         decision_id=task.execution_request.decision_id,
                         profile=self._trace_runtime_profile_from_payload(execution_payload),
-                        summary=f"Formal execution request prepared for '{task.title}'.",
+                        summary=f"API-B 已为「{task.title}」准备交给执行面的交接请求。",
                         payload=execution_payload,
                     )
                 )
@@ -238,11 +305,24 @@ class TraceRuntimeMixin:
                     task_id=metadata.get("task_id"),
                     decision_id=metadata.get("decision_id"),
                     profile=self._trace_runtime_profile_from_payload(metadata),
-                    summary=f"Gateway recorded {event.get('activity_kind') or 'activity'}.",
+                    summary=self._trace_gateway_activity_summary(event),
                     payload=event,
                 )
             )
         return records
+
+    def _trace_gateway_activity_summary(self, event: Dict[str, Any]) -> str:
+        activity_kind = str(event.get("activity_kind") or "").strip().lower()
+        labels = {
+            "self_learning": "网关记下了一次 API-A 自主学习回报。",
+            "autonomous_chain": "网关记下了一次自主链路活动回报。",
+            "autonomous_chain_plan": "网关记下了一次治理规划回报。",
+            "autonomous_chain_execute": "网关记下了一次执行结果回报。",
+            "memory_task": "网关记下了一次记忆维护回报。",
+            "memory_write_failure": "网关记下了一次记忆写回异常。",
+            "uncertainty_high": "网关记下了一次高不确定性告警。",
+        }
+        return labels.get(activity_kind, "网关记下了一次自主链路相关回报。")
 
     @staticmethod
     def _gateway_activity_visible_to_supervisor_ui(event: Dict[str, Any]) -> bool:
@@ -326,14 +406,19 @@ class TraceRuntimeMixin:
     ) -> Dict[str, Any]:
         return {
             "source": source,
+            "source_label": self._trace_source_label(source),
             "event_type": event_type,
+            "event_label": self._trace_event_label(event_type),
             "trace_id": trace_id,
             "recorded_at": recorded_at,
             "task_id": task_id,
             "decision_id": decision_id,
             "governance_task_type": profile.get("governance_task_type"),
+            "governance_task_type_label": self._trace_runtime_label(profile.get("governance_task_type")),
             "task_family": profile.get("task_family"),
+            "task_family_label": self._trace_runtime_label(profile.get("task_family")),
             "execution_kind": profile.get("execution_kind"),
+            "execution_kind_label": self._trace_runtime_label(profile.get("execution_kind")),
             "summary": summary,
             "payload": payload,
         }
@@ -390,11 +475,14 @@ class TraceRuntimeMixin:
                 "first_seen_at": None,
                 "last_seen_at": None,
                 "sources": {},
+                "source_labels": [],
                 "task_ids": [],
                 "decision_ids": [],
                 "governance_task_types": [],
+                "governance_labels": [],
                 "task_families": [],
                 "execution_kinds": [],
+                "execution_labels": [],
             }
 
         timestamps = sorted(
@@ -408,11 +496,18 @@ class TraceRuntimeMixin:
             "first_seen_at": timestamps[0] if timestamps else None,
             "last_seen_at": timestamps[-1] if timestamps else None,
             "sources": self._trace_source_counts(real_records),
+            "source_labels": self._trace_unique_labels(real_records, "source_label"),
             "task_ids": self._unique_trace_values(real_records, "task_id"),
             "decision_ids": self._unique_trace_values(real_records, "decision_id"),
             "governance_task_types": self._unique_trace_values(real_records, "governance_task_type"),
+            "governance_labels": self._trace_unique_labels(real_records, "governance_task_type_label"),
             "task_families": self._unique_trace_values(real_records, "task_family"),
             "execution_kinds": self._unique_trace_values(real_records, "execution_kind"),
+            "execution_labels": self._trace_unique_labels(
+                real_records,
+                "execution_kind_label",
+                fallback_key="task_family_label",
+            ),
         }
 
     def _unique_trace_values(self, records: List[Dict[str, Any]], key: str) -> List[str]:
@@ -423,6 +518,23 @@ class TraceRuntimeMixin:
                 if record.get(key) is not None
             }
         )
+
+    def _trace_unique_labels(
+        self,
+        records: List[Dict[str, Any]],
+        key: str,
+        *,
+        fallback_key: Optional[str] = None,
+    ) -> List[str]:
+        values: List[str] = []
+        for record in records:
+            raw = str(record.get(key) or "").strip()
+            if not raw and fallback_key:
+                raw = str(record.get(fallback_key) or "").strip()
+            if not raw or raw in values:
+                continue
+            values.append(raw)
+        return values
 
     def _extract_trace_value(self, payload: Any, key: str) -> Optional[str]:
         if not isinstance(payload, dict):

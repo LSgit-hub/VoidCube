@@ -1,5 +1,5 @@
 """
-VoidCube Live Dashboard — supervisor execution visibility and activity signals.
+VoidCube Live Dashboard — supervisor autonomous-chain visibility and activity signals.
 
 Fetches real-time data from Gateway (:6000) and Supervisor (:6002)
 to surface what is happening and how the supervisor currently observes
@@ -34,7 +34,7 @@ SCENE_LABEL: Dict[str, str] = {
     "drive": "内生判断",
     "memory": "记忆整理",
     "maintenance": "连续性维护",
-    "handoff": "执行交接",
+    "handoff": "自主交接",
     # Agent (API-A)
     "learning": "自主学习",
     "code_editing": "替身改进",
@@ -209,6 +209,19 @@ def _human_policy_scope(value: Optional[str]) -> str:
     }.get(text, text)
 
 
+def _human_service_label(value: Optional[str]) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "未知侧"
+    return {
+        "supervisor": "API-B",
+        "agent": "API-A",
+        "executor": "API-A 子执行面",
+        "memory": "Mem",
+        "gateway": "网关",
+    }.get(text, text)
+
+
 def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
     """Parse an ISO timestamp string, returning a naive UTC datetime."""
     if not ts:
@@ -220,6 +233,94 @@ def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
         return dt
     except ValueError:
         return None
+
+
+def _recent_autonomous_activity(activity: Dict[str, Any]) -> Dict[str, Any]:
+    recent_metadata = dict(activity.get("recent_metadata") or {})
+    candidates = [
+        (
+            "autonomous_chain_execute",
+            _parse_iso(activity.get("last_autonomous_chain_execute_at")),
+            "执行回报",
+        ),
+        (
+            "autonomous_chain_plan",
+            _parse_iso(activity.get("last_autonomous_chain_plan_at")),
+            "治理放行",
+        ),
+        (
+            "self_learning",
+            _parse_iso(activity.get("last_self_learning_activity_at")),
+            "自主学习",
+        ),
+        (
+            "memory_write_failure",
+            _parse_iso(activity.get("last_memory_write_failure_at")),
+            "写回异常",
+        ),
+        (
+            "autonomous_chain",
+            _parse_iso(activity.get("last_autonomous_chain_activity_at")),
+            "最近动作",
+        ),
+    ]
+    newest = None
+    for kind, recorded_at, phase_label in candidates:
+        if recorded_at is None:
+            continue
+        metadata = dict(recent_metadata.get(kind) or {})
+        if not metadata:
+            continue
+        if newest is None or recorded_at > newest[1]:
+            newest = (kind, recorded_at, phase_label, metadata)
+
+    if newest is None:
+        return {
+            "kind": "unavailable",
+            "phase_label": "最近自主动作",
+            "title": "最近暂无自主链路动作",
+            "summary": "等待 API-B 形成新的治理、放行或写回回报。",
+            "source_label": "API-B",
+            "display_at": "暂无数据",
+        }
+
+    kind, recorded_at, phase_label, metadata = newest
+    identity = dict(metadata.get("task_identity") or {})
+    label = (
+        str(identity.get("display_label") or "").strip()
+        or str(metadata.get("execution_kind_label") or "").strip()
+        or str(metadata.get("task_family_label") or "").strip()
+        or str(metadata.get("governance_task_type_label") or "").strip()
+        or str(metadata.get("task_type_label") or "").strip()
+    )
+    summary = (
+        str(identity.get("summary") or "").strip()
+        or str(metadata.get("title") or metadata.get("task_title") or "").strip()
+        or label
+        or phase_label
+    )
+    source_label = _human_service_label(metadata.get("source_service"))
+
+    if kind == "autonomous_chain_execute":
+        detail = f"{source_label}已回报 {label or '自主链路项'} 的执行进展。"
+    elif kind == "autonomous_chain_plan":
+        detail = f"API-B 已完成 {label or '自主链路项'} 的治理判断或放行。"
+    elif kind == "self_learning":
+        detail = f"API-A 子执行面正在围绕 {label or '自主学习'} 回传学习进展。"
+    elif kind == "memory_write_failure":
+        detail = "最近一次 Mem 写回出现异常，当前链路需要重新写回或补偿。"
+    else:
+        detail = f"{source_label} 最近记下了一次自主链路相关动作。"
+
+    return {
+        "kind": kind,
+        "phase_label": phase_label,
+        "title": summary,
+        "summary": detail,
+        "source_label": source_label,
+        "recorded_at": recorded_at.isoformat(),
+        "display_at": recorded_at.strftime("%H:%M:%S"),
+    }
 
 
 # ── Dashboard builder ──────────────────────────────────────────────────
@@ -238,6 +339,7 @@ def build_dashboard() -> Dict[str, Any]:
     decisions = dict(runtime.get("eligibility") or guards.get("decisions") or {})
     thresholds = dict(guards.get("thresholds") or {})
     chain_snapshot = _build_autonomous_chain_snapshot(state)
+    recent_activity = _recent_autonomous_activity(activity)
 
     # ── Services ────────────────────────────────────────────────────
     registered = services.get("services", {})
@@ -298,7 +400,7 @@ def build_dashboard() -> Dict[str, Any]:
         "display": "continuous",
         "met": True,
         "scope": "soft_signal_only",
-        "summary": "API-B 24x7 self-governance; user chain is soft signal only",
+        "summary": "API-B 持续运行自主链路；用户链路只作为软感知信号。",
     }
 
     # Overall execution eligibility follows the supervisor's current decision,
@@ -359,6 +461,7 @@ def build_dashboard() -> Dict[str, Any]:
             "memory": bool(memory_info),
         },
         "chain": chain_view,
+        "recent_activity": recent_activity,
         "countdowns": countdowns,
         "eligibility": {
             "can_execute": can_execute,
@@ -407,13 +510,11 @@ def fetch_scenes_aggregated(force_refresh: bool = True) -> Dict[str, Any]:
 def _format_segment_line(seg: Dict[str, str], state: Dict[str, Any]) -> str:
     info = state.get(seg["key"]) or {}
     # The minimal ops dashboard observes the autonomous chain: for the API-A
-    # segment read the supervisor_task lane so its view is never overwritten by
-    # the main CLI's user-chat subagents. Fall back to the top-level slot when
-    # an older gateway doesn't expose lanes yet.
+    # segment read only the supervisor_task lane so user-chat activity never
+    # overwrites the autonomous-chain observation view.
     if seg["key"] == "agent":
         lane = ((info.get("lanes") or {}).get("supervisor_task")) if isinstance(info, dict) else None
-        if isinstance(lane, dict) and lane:
-            info = lane
+        info = lane if isinstance(lane, dict) else info
     scene = str(info.get("scene") or "idle")
     label = SCENE_LABEL.get(scene, scene)
     reachable = bool(info.get("reachable"))
@@ -465,11 +566,12 @@ def print_three_segment_status_bar() -> None:
 
 
 def print_dashboard() -> None:
-    """Print a rich terminal dashboard with execution visibility."""
+    """Print a rich terminal dashboard with autonomous-chain visibility."""
     db = build_dashboard()
 
     svc = db["services"]
     chain = db["chain"]
+    recent_activity = db.get("recent_activity") or {}
     cds = db["countdowns"]
     elig = db["eligibility"]
     policy = db["autonomous_chain_policy"]
@@ -517,6 +619,13 @@ def print_dashboard() -> None:
         print(
             f"  ║  {chain.get('summary', '等待 Supervisor 观测板数据')[:54]:<54s}  ║"
         )
+    if recent_activity:
+        phase = str(recent_activity.get("phase_label") or "最近动作")[:10]
+        title = str(recent_activity.get("title") or "最近暂无自主链路动作")[:30]
+        display_at = str(recent_activity.get("display_at") or "?")[:8]
+        summary = str(recent_activity.get("summary") or "")[:44]
+        print(f"  ║  最近自主动作 {phase:<10s} {title:<30s} {display_at:>8s}    ║")
+        print(f"  ║  {summary:<54s}  ║")
 
     # ── Runtime activity signals ────────────────────────────────────
     print(f"  ╠══════════════════════════════════════════════════════════╣")

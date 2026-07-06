@@ -261,7 +261,7 @@ class SupervisorExecutionConfig(BaseModel):
 class SupervisorServiceRuntimeConfig(BaseModel):
     health_check_interval: int = 30
     autonomous_chain_review_interval: int = 300
-    self_evolution_handoff_limit_per_cycle: int = 1
+    autonomous_chain_handoff_limit_per_cycle: int = 1
     activity_guard_user_seconds: int = DEFAULT_ACTIVITY_GUARD_SECONDS
     activity_guard_memory_seconds: int = DEFAULT_ACTIVITY_GUARD_SECONDS
     activity_guard_workflow_seconds: int = DEFAULT_ACTIVITY_GUARD_SECONDS

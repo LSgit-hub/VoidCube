@@ -2547,7 +2547,7 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 .game-score-fill.mid   { background: linear-gradient(90deg, var(--gold), var(--accent-yellow)); }
 .game-score-fill.low   { background: linear-gradient(90deg, var(--coral), var(--accent-red)); }
 
-/* ── LM Input 面板专用 ── */
+/* ── 判断输入面板专用 ── */
 .lm-section {
   display: grid; gap: 8px;
 }
@@ -3120,7 +3120,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
       <!-- 📊 认知面板 -->
       <div class="dock-panel" id="panelCognition">
         <div class="panel-header">
-          <div class="panel-title"><span class="pt-icon">📊</span>认知状态 · 感知到意图</div>
+          <div class="panel-title"><span class="pt-icon">📊</span>API-B 当前判断</div>
           <button class="panel-close" data-panel="cognition">×</button>
         </div>
         <div class="panel-body" id="panelCognitionBody">
@@ -3301,13 +3301,17 @@ function typeLabel(t) {
   if (observationRole === 'api_a_execution') return 'API-A 执行回报';
   if (observationRole === 'candidate') return '候选形成';
   const identity = t.task_identity || {};
+  const displayLabel = String(identity.display_label || '').trim();
+  if (displayLabel) return displayLabel;
   const displayKind = String(identity.display_kind || t.execution_kind || '').trim();
   const governance = String(t.governance_task_type || '').trim();
   const primary = displayKind || governance || String(t.task_family || '').trim();
   const typeMap = {
     self_learning: '自主学习', body_improvement: '替身改进',
-    memory_maintenance: '记忆维护', self_evolution: '通用演化',
-    general_self_evolution: '通用演化',
+    memory_maintenance: '记忆维护', self_evolution: '自主改进',
+    general_self_evolution: '通用自主改进',
+    body_switch: '身体切换',
+    body_upgrade: '替身升级',
   };
   return typeMap[primary] || primary.replace(/_/g, ' ') || '链路项';
 }
@@ -3315,13 +3319,17 @@ function taskIdentityHint(t) {
   const identity = t.task_identity || {};
   const family = String(identity.task_family || t.task_family || '').trim();
   const displayKind = String(identity.display_kind || identity.execution_kind || '').trim();
-  if (family && displayKind && family !== displayKind) return '执行家族: ' + family + ' · 执行动作: ' + displayKind;
-  if (displayKind) return '执行类型: ' + displayKind;
-  if (family) return '执行家族: ' + family;
+  if (family && displayKind && family !== displayKind) {
+    return '治理动作: ' + autonomousRuntimeLabel(family) + ' · 执行动作: ' + autonomousRuntimeLabel(displayKind);
+  }
+  if (displayKind) return '执行动作: ' + autonomousRuntimeLabel(displayKind);
+  if (family) return '治理动作: ' + autonomousRuntimeLabel(family);
   return '';
 }
 function governanceHint(t) {
   const preview = t.governance_preview || {};
+  const summary = String(preview.summary || '').trim();
+  if (summary) return summary.slice(0, 120);
   const direct = preview.lm_governance_review || null;
   const shadow = preview.lm_governance_shadow || null;
   const actionLabel = action => ({
@@ -3342,6 +3350,54 @@ function governanceHint(t) {
     return '监督者建议: ' + actionLabel(shadow.action) + extra + ' · ' + String(shadow.reason || '').slice(0, 80);
   }
   return '';
+}
+
+function endogenousCandidateKindLabel(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return {
+    memory_maintenance: '记忆维护',
+    truthfulness_review: '真实性复核',
+    exploratory_learning: '探索学习',
+    shell_baseline_learning: '替身基线学习',
+    governance_hygiene_review: '治理卫生复核',
+    body_improvement: '替身改进',
+  }[normalized] || String(value || '').trim() || '';
+}
+
+function endogenousTopicSourceLabel(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return {
+    activity_metadata: '活动信号',
+    cognitive_assessment_memory: '认知评估记忆',
+    shell_codebase_baseline: '替身代码基线',
+    external_research: '外部研究',
+  }[normalized] || String(value || '').trim() || '';
+}
+
+function endogenousLearningBranchLabel(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return {
+    exploratory: '探索分支',
+    cognitive_assessment_review: '认知评估复核',
+    codebase_baseline: '代码基线',
+  }[normalized] || String(value || '').trim() || '';
+}
+
+function candidateReasonHint(task) {
+  const meta = task.metadata || {};
+  const evidence = task.evidence || {};
+  const endogenous = evidence.endogenous_drive || {};
+  const scoreBreakdown = meta.score_breakdown || endogenous.score_breakdown || {};
+  const candidateKind = endogenousCandidateKindLabel(scoreBreakdown.candidate_kind || '');
+  const topicSource = endogenousTopicSourceLabel(endogenous.topic_source || evidence.topic_source || '');
+  const learningBranch = endogenousLearningBranchLabel(endogenous.learning_branch || evidence.learning_branch || meta.learning_branch || '');
+  const utility = Number(meta.utility != null ? meta.utility : task.utility);
+  const hints = [];
+  if (candidateKind) hints.push('候选类型: ' + candidateKind);
+  if (topicSource) hints.push('信号来源: ' + topicSource);
+  if (learningBranch) hints.push('学习分支: ' + learningBranch);
+  if (Number.isFinite(utility)) hints.push('价值度 ' + Math.round(utility * 100) + '%');
+  return hints.join(' · ');
 }
 function statusLabel(s) {
   const map = {
@@ -3949,6 +4005,20 @@ function autonomousEventSourceLabel(value) {
   return labels[normalized] || normalized || '未知来源';
 }
 
+function autonomousRuntimeLabel(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  const labels = {
+    self_learning: '自主学习',
+    self_evolution: '自主改进',
+    general_self_evolution: '通用自主改进',
+    body_improvement: '替身改进',
+    body_switch: '身体切换',
+    body_upgrade: '替身升级',
+    memory_maintenance: '记忆维护',
+  };
+  return labels[normalized] || String(value || '').trim() || '未命名动作';
+}
+
 function cognitionTypeLabel(kind, value) {
   const normalized = String(value || '').trim().toLowerCase();
   const maps = {
@@ -4154,7 +4224,7 @@ function buildChainSectionBand(group, options) {
     '<div class="game-card-meta"><div class="game-card-tags">' +
     '<span class="game-card-tag memory">载荷 ' + esc(payloadCount) + '</span>' +
     '<span class="game-card-tag truthfulness">事件 ' + esc(eventCount) + '</span>' +
-    '<span class="game-card-tag creativity">轨迹 ' + esc(traceCount) + '</span>' +
+    '<span class="game-card-tag creativity">回合 ' + esc(traceCount) + '</span>' +
     '</div></div>';
   body.append(summaryCard);
   const items = Array.isArray(group.items) ? group.items : [];
@@ -4181,11 +4251,11 @@ function buildChainSectionBand(group, options) {
 
   const footer = document.createElement('div');
   footer.className = 'watch-band-footer';
-  footer.innerHTML =
+    footer.innerHTML =
     '<span class="watch-band-footnote">' +
     esc(
       payloadCount || eventCount || traceCount
-        ? ('载荷 ' + payloadCount + ' · 事件 ' + eventCount + ' · 轨迹 ' + traceCount)
+        ? ('载荷 ' + payloadCount + ' · 事件 ' + eventCount + ' · 回合 ' + traceCount)
         : '查看这一段自主链路的最近事件'
     ) +
     '</span>' +
@@ -4347,7 +4417,7 @@ function renderAutonomousDrawer(state) {
       ' <span class="segment-col-tag">' + esc(group.stage_label || '链路阶段') + '</span></div>' +
       '<div class="segment-metric"><span>链路载荷</span><b>' + payloadCount + '</b></div>' +
       '<div class="segment-metric"><span>最近事件</span><b>' + eventCount + '</b></div>' +
-      '<div class="segment-metric"><span>最近轨迹</span><b>' + traceCount + '</b></div>' +
+      '<div class="segment-metric"><span>最近回合</span><b>' + traceCount + '</b></div>' +
       '<div class="segment-active"><div class="la-title">' + esc(focusTitle) +
       '</div><div style="margin-top:3px;">' + esc(group.segment_status_label || '链路观察') +
       (focusSummary ? ' · ' + esc(focusSummary) : '') +
@@ -4383,13 +4453,14 @@ function renderAutonomousDrawer(state) {
         : '') +
       '<div class="drawer-sub" style="margin-top:8px;">当前可见链路项 ' + focusItems.length +
       ' · 最近链路事件 ' + focusEvents.length +
-      (focusTraceIds.length ? (' · 轨迹 ' + esc(focusTraceIds.slice(0, 3).join(' / '))) : '') +
+      (focusTraceIds.length ? (' · 回合 ' + esc(focusTraceIds.slice(0, 3).join(' / '))) : '') +
       '</div>' +
       (focusItems.length
         ? focusItems.slice(0, 4).map(item =>
             '<div class="segment-active" style="margin-top:6px;"><div class="la-title">' +
             esc(String(item.title || '未命名').substring(0, 56)) + '</div>' +
             '<div style="margin-top:3px;">状态: ' + esc(item.display_status || item.status || '—') +
+            (governanceHint(item) ? ' · ' + esc(String(governanceHint(item)).substring(0, 88)) : '') +
             (item.summary ? ' · ' + esc(String(item.summary).substring(0, 88)) : '') +
             '</div></div>'
           ).join('')
@@ -4401,42 +4472,42 @@ function renderAutonomousDrawer(state) {
             '<div class="segment-active" style="margin-top:6px;"><div class="la-title">' +
             esc(shortClock(event.recorded_at)) + ' · ' +
             esc(String(event.summary || autonomousEventTypeLabel(event.event_type) || '链路事件').substring(0, 84)) + '</div>' +
-            '<div style="margin-top:3px;">来源: ' + esc(autonomousEventSourceLabel(event.source)) +
+            '<div style="margin-top:3px;">记录侧: ' + esc(event.source_label || autonomousEventSourceLabel(event.source)) +
             (event.task_id ? ' · 链路项 ' + esc(String(event.task_id).substring(0, 16)) : '') +
-            (event.trace_id ? ' · 轨迹 ' + esc(String(event.trace_id).substring(0, 18)) : '') +
+            (event.trace_id ? ' · 回合 ' + esc(String(event.trace_id).substring(0, 18)) : '') +
             '</div></div>'
           ).join('')
-        : '<div class="drawer-sub" style="margin:0;">该分段暂时没有命中最近轨迹记录。</div>') +
+        : '<div class="drawer-sub" style="margin:0;">该分段暂时没有命中最近闭环回合记录。</div>') +
       '</div>';
-    html += '<div class="drawer-section"><div class="drawer-section-label">最近轨迹摘要</div>' +
+    html += '<div class="drawer-section"><div class="drawer-section-label">最近回合摘要</div>' +
       (focusTraces.length
         ? '<div class="trace-chip-row">' +
           focusTraces.slice(0, 5).map(trace =>
             '<span class="trace-chip" data-drill="autonomous" data-chain-group="' + esc(focusGroup.key || '') +
-            '" data-chain-trace="' + esc(trace.trace_id || '') + '">轨迹 ' +
+            '" data-chain-trace="' + esc(trace.trace_id || '') + '">回合 ' +
             esc(String(trace.trace_id || '').substring(0, 10)) + ' · ' +
-            esc(String(autonomousEventTypeLabel(trace.last_event_type) || '事件').substring(0, 14)) + ' · ' +
+            esc(String(trace.last_event_label || autonomousEventTypeLabel(trace.last_event_type) || '事件').substring(0, 14)) + ' · ' +
             esc(String(trace.event_count || 0)) + '</span>'
           ).join('') + '</div>'
-        : '<div class="drawer-sub" style="margin:0;">该分段最近没有可聚合的轨迹摘要。</div>') +
+        : '<div class="drawer-sub" style="margin:0;">该分段最近没有可聚合的闭环回合摘要。</div>') +
       '</div>';
     if (selectedTrace) {
-      html += '<div class="drawer-section"><div class="drawer-section-label">选中轨迹</div>' +
-        '<div class="drawer-sub" style="margin:0;">轨迹 ' + esc(String(selectedTrace.trace_id || '').substring(0, 24)) +
+      html += '<div class="drawer-section"><div class="drawer-section-label">选中回合</div>' +
+        '<div class="drawer-sub" style="margin:0;">回合 ' + esc(String(selectedTrace.trace_id || '').substring(0, 24)) +
         ' · 最近 ' + esc(shortClock(selectedTrace.last_seen_at)) +
         ' · 事件 ' + esc(selectedTrace.event_count) +
         (selectedTrace.task_titles && selectedTrace.task_titles.length
           ? ' · 条目 ' + esc(selectedTrace.task_titles.slice(0, 2).join(' / '))
           : '') +
         '</div>' +
-        '<div class="drawer-sub" style="margin-top:8px;">来源 ' + esc((selectedTrace.sources || []).map(autonomousEventSourceLabel).join(' / ') || '未知来源') +
+        '<div class="drawer-sub" style="margin-top:8px;">记录侧 ' + esc((selectedTrace.source_labels || []).join(' / ') || (selectedTrace.sources || []).map(autonomousEventSourceLabel).join(' / ') || '未知来源') +
         ' · ' + esc(String(selectedTrace.latest_summary || '').substring(0, 120) || '暂无摘要') +
         '</div></div>';
       if (selectedTraceDetail) {
         const sourceCounts = selectedTraceDetail.source_counts || {};
         const sourceSummary = Object.keys(sourceCounts).map(key => autonomousEventSourceLabel(key) + ':' + sourceCounts[key]).join(' / ');
-        const taskFamilies = Array.isArray(selectedTraceDetail.task_families) ? selectedTraceDetail.task_families : [];
-        const executionKinds = Array.isArray(selectedTraceDetail.execution_kinds) ? selectedTraceDetail.execution_kinds : [];
+        const governanceLabels = Array.isArray(selectedTraceDetail.governance_labels) ? selectedTraceDetail.governance_labels : [];
+        const executionLabels = Array.isArray(selectedTraceDetail.execution_labels) ? selectedTraceDetail.execution_labels : [];
         const decisionIds = Array.isArray(selectedTraceDetail.decision_ids) ? selectedTraceDetail.decision_ids : [];
         const preview = Array.isArray(selectedTraceDetail.timeline_preview) ? selectedTraceDetail.timeline_preview : [];
         const allEvents = Array.isArray(selectedTraceDetail.timeline_events) ? selectedTraceDetail.timeline_events : [];
@@ -4444,19 +4515,19 @@ function renderAutonomousDrawer(state) {
           if (!focusTraceSource) return true;
           return String(event.source || '').trim() === focusTraceSource;
         });
-        const toggleLabel = focusTraceExpanded ? '收起事件流' : '展开全部事件';
+        const toggleLabel = focusTraceExpanded ? '收起事件流' : '展开整个回合';
         const sourceKeys = Object.keys(sourceCounts);
-        html += '<div class="drawer-section"><div class="drawer-section-label">轨迹详情</div>' +
+        html += '<div class="drawer-section"><div class="drawer-section-label">回合细节</div>' +
           '<div class="drawer-sub" style="margin:0;">记录 ' + esc(selectedTraceDetail.record_count) +
           ' · 首次 ' + esc(shortClock(selectedTraceDetail.first_seen_at)) +
           ' · 最近 ' + esc(shortClock(selectedTraceDetail.last_seen_at)) +
-          (sourceSummary ? ' · 来源分布 ' + esc(sourceSummary) : '') +
+          (sourceSummary ? ' · 记录侧分布 ' + esc(sourceSummary) : '') +
           '</div>' +
-          (taskFamilies.length
-            ? '<div class="drawer-sub" style="margin-top:8px;">执行家族 ' + esc(taskFamilies.join(' / ')) + '</div>'
+          (governanceLabels.length
+            ? '<div class="drawer-sub" style="margin-top:8px;">治理动作 ' + esc(governanceLabels.join(' / ')) + '</div>'
             : '') +
-          (executionKinds.length
-            ? '<div class="drawer-sub" style="margin-top:4px;">执行类型 ' + esc(executionKinds.join(' / ')) + '</div>'
+          (executionLabels.length
+            ? '<div class="drawer-sub" style="margin-top:4px;">执行动作 ' + esc(executionLabels.join(' / ')) + '</div>'
             : '') +
           (decisionIds.length
             ? '<div class="drawer-sub" style="margin-top:4px;">决策记录 ' + esc(decisionIds.slice(0, 3).join(' / ')) + '</div>'
@@ -4486,13 +4557,13 @@ function renderAutonomousDrawer(state) {
             ? visibleEvents.map(event =>
                 '<div class="segment-active" style="margin-top:6px;"><div class="la-title">' +
                 esc(shortClock(event.recorded_at)) + ' · ' +
-                esc(String(event.summary || autonomousEventTypeLabel(event.event_type) || '轨迹事件').substring(0, 84)) + '</div>' +
-                '<div style="margin-top:3px;">来源: ' + esc(autonomousEventSourceLabel(event.source)) +
+                esc(String(event.summary || event.event_label || autonomousEventTypeLabel(event.event_type) || '轨迹事件').substring(0, 84)) + '</div>' +
+                '<div style="margin-top:3px;">记录侧: ' + esc(event.source_label || autonomousEventSourceLabel(event.source)) +
                 (event.task_id ? ' · 链路项 ' + esc(String(event.task_id).substring(0, 16)) : '') +
                 (event.decision_id ? ' · 决策 ' + esc(String(event.decision_id).substring(0, 16)) : '') +
                 '</div></div>'
               ).join('')
-            : '<div class="drawer-sub" style="margin-top:8px;">当前来源过滤下没有可显示的事件。</div>') +
+            : '<div class="drawer-sub" style="margin-top:8px;">当前记录侧过滤下没有可显示的事件。</div>') +
           '</div>';
       }
     }
@@ -4517,7 +4588,7 @@ function renderAutonomousDrawer(state) {
   }
   html += '<div class="drawer-sub" style="margin-top:10px;">当前抽屉聚焦 ' +
     esc((focusGroup && focusGroup.label) || '自主链路闭环') +
-    (selectedTrace ? (' · 轨迹 ' + esc(String(selectedTrace.trace_id || '').substring(0, 18))) : '') +
+    (selectedTrace ? (' · 回合 ' + esc(String(selectedTrace.trace_id || '').substring(0, 18))) : '') +
     ' · 用户链路只作为软感知输入，不参与这条观测链的展示。</div>';
   els.drawerBody.innerHTML = html;
 }
@@ -4530,11 +4601,13 @@ function renderProvenanceDrawer(state) {
   const needs = Array.isArray(cog.needs) ? cog.needs : [];
   const intents = Array.isArray(cog.intents) ? cog.intents : [];
   const policy = cog.adaptive_policy || {};
+  const judgement = cog.judgement || {};
+  const uncertainty = cog.uncertainty || {};
   const candidateGroup = chainGroupByKey(state.autonomous_observation || {}, 'api_b_candidates') || {};
   const cands = Array.isArray(candidateGroup.items) ? candidateGroup.items : [];
 
   if (!Object.keys(p).length && !needs.length) {
-    els.drawerBody.innerHTML = '<div class="drawer-sub">认知状态尚未初始化。激活监督者内生驱动后会填充感知→意图链。</div>';
+    els.drawerBody.innerHTML = '<div class="drawer-sub">判断依据尚未初始化。激活监督者内生驱动后，这里会出现 API-B 的当前判断与自主观察依据。</div>';
     return;
   }
 
@@ -4559,7 +4632,33 @@ function renderProvenanceDrawer(state) {
   chain += '<div class="prov-node"><div class="prov-node-label">🎚 策略</div><div class="prov-node-body">' +
     '偏好焦点 ' + esc(cognitionTypeLabel('preferred_focus', policy.preferred_focus || '—')) + ' · 候选预算 ' + (policy.candidate_budget != null ? policy.candidate_budget : '—') +
     ' · 观察偏置 ' + pct(policy.observation_bias) + '</div></div>';
+  chain += '<div class="prov-node"><div class="prov-node-label">🧠 判断</div><div class="prov-node-body">' +
+    esc(judgement.summary || '当前判断尚未稳定') +
+    (judgement.observation_target_label ? '<br>当前先看: ' + esc(judgement.observation_target_label) : '') +
+    (judgement.why_not_direct_improvement && judgement.why_not_direct_improvement.length
+      ? '<br>暂不直接改替身: ' + esc(String(judgement.why_not_direct_improvement[0]).substring(0, 90))
+      : '') +
+    '</div></div>';
   chain += '</div>';
+
+  let uncertaintyHtml = '<div class="drawer-section-label">当前不确定性</div>';
+  if (!(uncertainty.top_items || []).length) {
+    uncertaintyHtml += '<div class="drawer-sub" style="margin:0;">当前没有需要单独追踪的高风险不确定性。</div>';
+  } else {
+    uncertaintyHtml += '<div class="drawer-sub" style="margin:0 0 8px 0;">' + esc(uncertainty.summary || '') + '</div>' +
+      uncertainty.top_items.map(item =>
+        '<div class="segment-active" style="margin-top:6px;"><div class="la-title">' +
+        esc(item.domain_label || '未命名风险') + ' · 风险 ' + esc(item.risk_label || '0%') +
+        ' · 置信 ' + esc(item.confidence_label || '0%') + '</div>' +
+        '<div style="margin-top:3px;">先看: ' + esc(item.observation_target_label || '—') +
+        (item.recommended_next_step_label ? ' · 下一步 ' + esc(item.recommended_next_step_label) : '') +
+        (item.persistence_label ? ' · 持续态 ' + esc(item.persistence_label) : '') +
+        '</div>' +
+        (item.recommended_probe_label ? '<div style="margin-top:3px;">建议探针: ' + esc(String(item.recommended_probe_label).substring(0, 120)) + '</div>' : '') +
+        (item.why_uncertain ? '<div style="margin-top:3px;color:var(--text-muted);">为何还不确定: ' + esc(String(item.why_uncertain).substring(0, 140)) + '</div>' : '') +
+        '</div>'
+      ).join('');
+  }
 
   // candidate provenance
   let candHtml = '<div class="drawer-section-label">候选产出 (' + cands.length + ')</div>';
@@ -4568,18 +4667,34 @@ function renderProvenanceDrawer(state) {
   } else {
     candHtml += cands.slice(0, 6).map(c => {
       const meta = c && c.metadata ? c.metadata : {};
+      const evidence = c && c.evidence ? c.evidence : {};
+      const endogenous = evidence.endogenous_drive || {};
+      const scoreBreakdown = meta.score_breakdown || endogenous.score_breakdown || {};
       const rawTags = Array.isArray(meta.core_values) ? meta.core_values : (Array.isArray(c.value_tags) ? c.value_tags : []);
       const rationale = c.rationale || meta.rationale || '';
       const tags = rawTags.map(tag => esc(cognitionTypeLabel('core_value', tag))).join(' · ');
+      const candidateKind = endogenousCandidateKindLabel(scoreBreakdown.candidate_kind || '');
+      const topicSource = endogenousTopicSourceLabel(endogenous.topic_source || evidence.topic_source || '');
+      const learningBranch = endogenousLearningBranchLabel(endogenous.learning_branch || evidence.learning_branch || meta.learning_branch || '');
+      const reasonHint = candidateReasonHint(c);
       return '<div class="segment-active" style="margin-top:6px;"><div class="la-title">' + esc(String(c.title || '未命名').substring(0, 52)) + '</div>' +
+        (reasonHint ? '<div style="margin-top:3px;">浮出原因: ' + esc(String(reasonHint).substring(0, 120)) + '</div>' : '') +
+        ((candidateKind || topicSource || learningBranch)
+          ? '<div style="margin-top:3px;">' +
+            (candidateKind ? '候选类型: ' + esc(candidateKind) : '') +
+            (topicSource ? (candidateKind ? ' · ' : '') + '信号来源: ' + esc(topicSource) : '') +
+            (learningBranch ? ((candidateKind || topicSource) ? ' · ' : '') + '学习分支: ' + esc(learningBranch) : '') +
+            '</div>'
+          : '') +
         (rationale ? '<div style="margin-top:3px;">理由: ' + esc(String(rationale).substring(0, 120)) + '</div>' : '') +
         (tags ? '<div style="margin-top:3px;color:var(--text-muted);">价值标签: ' + tags + '</div>' : '') + '</div>';
     }).join('');
   }
 
   els.drawerBody.innerHTML =
-    '<div class="drawer-sub">回答"当前为什么这样判断 / 为什么产出(或不产出)这些候选与链路项"。链路: 感知 → 世界模型 → 需求 → 意图 → 策略 → 候选。</div>' +
+    '<div class="drawer-sub">回答"API-B 当前为什么这样判断 / 为什么产出或暂不产出这些候选与链路项"。这里展示的是自主判断依据，不是底层实现流程图。</div>' +
     '<div class="drawer-section">' + chain + '</div>' +
+    '<div class="drawer-section">' + uncertaintyHtml + '</div>' +
     '<div class="drawer-section">' + candHtml + '</div>';
 }
 
@@ -4605,7 +4720,7 @@ function renderHealthDrawer(state) {
   const memRows = [
     ['Tier1 短期记忆条目', (ts.total_entries != null ? ts.total_entries : '—')],
     ['压缩块', (ts.compressed_blocks != null ? ts.compressed_blocks : '—')],
-    ['记忆 LLM 健康', ts.llm_healthy ? '✅ 正常' : '⚠️ 异常 / 未知'],
+    ['记忆模型健康', ts.llm_healthy ? '✅ 正常' : '⚠️ 异常 / 未知'],
     ['记忆活跃', ts.memory_active ? '✅ 是' : '💤 否'],
   ];
 
@@ -4795,6 +4910,7 @@ function buildSectionCard(task) {
 function buildCandidateCard(task) {
   const subtitle = [
     '内生驱动候选形成',
+    candidateReasonHint(task),
     task.summary ? String(task.summary).substring(0, 100) : '',
   ].filter(Boolean).join(' · ') || '等待 API-B 判断';
   return buildObservationCard(task, {
@@ -4806,7 +4922,7 @@ function buildCandidateCard(task) {
   });
 }
 
-/* ── 🧠 LM 输入面板 ── */
+/* ── 🧠 API-B 判断输入面板 ── */
 function renderLMInputPanel(state) {
   const body = els.panelLMInputBody;
   if (!body) return;
@@ -4815,14 +4931,14 @@ function renderLMInputPanel(state) {
   const lm = state.lm_input || {};
   const mem = state.mem_usage || {};
 
-  // Token 统计
+  // 资源统计
   const tokSec = document.createElement('div');
   tokSec.className = 'lm-section';
-  tokSec.innerHTML = '<div class="lm-section-label">📊 Token 用量</div>';
+  tokSec.innerHTML = '<div class="lm-section-label">📊 判断资源用量</div>';
   const stats = [
     {icon:'📨', label:'总消耗', value:(mem.total_tokens||0).toLocaleString(), hl:false},
-    {icon:'📥', label:'Prompt', value:(mem.prompt_tokens||0).toLocaleString(), hl:false},
-    {icon:'📤', label:'Completion', value:(mem.completion_tokens||0).toLocaleString(), hl:false},
+    {icon:'📥', label:'输入', value:(mem.prompt_tokens||0).toLocaleString(), hl:false},
+    {icon:'📤', label:'输出', value:(mem.completion_tokens||0).toLocaleString(), hl:false},
     {icon:'🔢', label:'请求数', value:mem.request_count||0, hl:false},
     {icon:'📐', label:'上下文', value:(mem.context_length||0).toLocaleString() + ' (' + (mem.context_percent||0) + '%)', hl:(mem.context_percent||0) > 80},
   ];
@@ -4835,19 +4951,19 @@ function renderLMInputPanel(state) {
   });
   body.append(tokSec);
 
-  // LM 调用信息
+  // 判断调用信息
   if (lm.last_call_at || lm.prompt_estimate || lm.status || lm.proposal_count != null) {
     const callSec = document.createElement('div');
     callSec.className = 'lm-section';
-    callSec.innerHTML = '<div class="lm-section-label">🧠 最近 LM 调用</div>';
+    callSec.innerHTML = '<div class="lm-section-label">🧠 最近判断驱动调用</div>';
     const info = [
       {icon:'🕐', label:'最近调用', value: lm.last_call_at ? new Date(lm.last_call_at).toLocaleTimeString() : '—'},
-      {icon:'📝', label:'Prompt 预估', value: lm.prompt_estimate ? (lm.prompt_estimate + ' 字符') : '—'},
+      {icon:'📝', label:'判断输入长度', value: lm.prompt_estimate ? (lm.prompt_estimate + ' 字符') : '—'},
       {icon:'🔗', label:'证据节点', value: (lm.evidence_node_count != null) ? lm.evidence_node_count : '—'},
-      {icon:'🎯', label:'候选提案', value: (lm.proposal_count != null) ? lm.proposal_count : '—'},
+      {icon:'🎯', label:'候选草案', value: (lm.proposal_count != null) ? lm.proposal_count : '—'},
       {icon:'🧭', label:'状态', value: lm.status || '—'},
-      {icon:'🧩', label:'模型角色', value: lm.model_role || '—'},
-      {icon:'⚙️', label:'生成状态', value: lm.generation_enabled ? '✅ 已启用' : '⏸ 已禁用'},
+      {icon:'🧩', label:'判断角色', value: lm.model_role || '—'},
+      {icon:'⚙️', label:'候选生成', value: lm.generation_enabled ? '✅ 已启用' : '⏸ 已禁用'},
     ];
     info.forEach(s => {
       const row = document.createElement('div');
@@ -4863,7 +4979,7 @@ function renderLMInputPanel(state) {
   if (evNodes.length) {
     const evSec = document.createElement('div');
     evSec.className = 'lm-section';
-    evSec.innerHTML = '<div class="lm-section-label">📎 最近证据节点 (' + evNodes.length + ')</div>';
+    evSec.innerHTML = '<div class="lm-section-label">📎 最近判断依据 (' + evNodes.length + ')</div>';
     const list = document.createElement('div');
     list.className = 'lm-evidence-list';
     evNodes.slice(0, 20).forEach(ev => {
@@ -4878,11 +4994,11 @@ function renderLMInputPanel(state) {
     body.append(evSec);
   }
 
-  // Prompt 预览
+  // 判断输入预览
   if (lm.prompt_preview) {
     const prevSec = document.createElement('div');
     prevSec.className = 'lm-section';
-    prevSec.innerHTML = '<div class="lm-section-label">📄 Prompt 预览</div>';
+    prevSec.innerHTML = '<div class="lm-section-label">📄 判断输入预览</div>';
     const pre = document.createElement('div');
     pre.className = 'lm-prompt-preview';
     pre.textContent = String(lm.prompt_preview).substring(0, 2000);
@@ -4895,7 +5011,7 @@ function renderLMInputPanel(state) {
     body.replaceChildren();
     const empty = document.createElement('div');
     empty.className = 'panel-empty';
-    empty.innerHTML = '<div class="pe-icon">🧠</div><div class="pe-text">LM 尚未产生调用记录</div><div style="font-size:10px;color:var(--text-muted);">激活监督者内生驱动并启用 LM 候选生成后会出现数据</div>';
+    empty.innerHTML = '<div class="pe-icon">🧠</div><div class="pe-text">API-B 还没有新的判断驱动记录</div><div style="font-size:10px;color:var(--text-muted);">激活监督者内生驱动并启用候选生成后，这里会出现判断输入与证据依据</div>';
     body.append(empty);
   }
 }
@@ -4918,9 +5034,25 @@ function renderCognitionPanel(state) {
   const intents = Array.isArray(cog.intents) ? cog.intents : [];
   const signals = Array.isArray(cog.signals) ? cog.signals : [];
   const policy = cog.adaptive_policy || {};
+  const judgement = cog.judgement || {};
+  const uncertainty = cog.uncertainty || {};
 
   const flow = document.createElement('div');
   flow.className = 'cog-flow';
+
+  if (Object.keys(judgement).length) {
+    const judgeSummary = document.createElement('div');
+    judgeSummary.className = 'game-card rarity-common';
+    judgeSummary.innerHTML =
+      '<div class="game-card-head"><div class="game-card-title">当前判断摘要</div>' +
+      '<span class="game-card-badge running">' + esc(judgement.focus_label || '判断中') + '</span></div>' +
+      '<div class="game-card-sub">' + esc(judgement.summary || '当前判断尚未稳定') + '</div>' +
+      '<div class="game-card-meta"><div class="game-card-tags">' +
+      '<span class="game-card-tag truthfulness">主约束 · ' + esc(judgement.dominant_constraint_label || '暂无主约束') + '</span>' +
+      (judgement.observation_target_label ? '<span class="game-card-tag memory">先看 · ' + esc(judgement.observation_target_label) + '</span>' : '') +
+      '</div></div>';
+    body.append(judgeSummary);
+  }
 
   // Perception
   const percStep = document.createElement('div');
@@ -5004,13 +5136,45 @@ function renderCognitionPanel(state) {
     flow.append(polStep);
   }
 
+  if (Object.keys(judgement).length) {
+    const judgeStep = document.createElement('div');
+    judgeStep.className = 'cog-step';
+    judgeStep.innerHTML = '<div class="cog-step-label">🧠 判断</div><div class="cog-step-content"><div class="cog-step-title">' +
+      esc(judgement.summary || '当前判断尚未稳定') +
+      '</div><div class="cog-step-detail">' +
+      '主约束: ' + esc(judgement.dominant_constraint_label || '暂无主约束') +
+      (judgement.observation_target_label ? ' · 先看: ' + esc(judgement.observation_target_label) : '') +
+      '</div>' +
+      ((judgement.why_not_direct_improvement || []).length
+        ? '<div class="cog-step-detail">暂不直接改替身: ' + esc(String(judgement.why_not_direct_improvement[0]).substring(0, 120)) + '</div>'
+        : '') +
+      '</div>';
+    flow.append(judgeStep);
+  }
+
+  if ((uncertainty.top_items || []).length) {
+    const uncertainTop = uncertainty.top_items[0] || {};
+    const uncertaintyStep = document.createElement('div');
+    uncertaintyStep.className = 'cog-step';
+    uncertaintyStep.innerHTML = '<div class="cog-step-label">🧪 不确定性</div><div class="cog-step-content"><div class="cog-step-title">' +
+      esc(uncertainty.summary || '当前没有高风险不确定性') +
+      '</div><div class="cog-step-detail">' +
+      '最高风险: ' + esc(uncertainty.highest_risk_label || '—') +
+      (uncertainTop.risk_label ? ' · 风险 ' + esc(uncertainTop.risk_label) : '') +
+      (uncertainTop.confidence_label ? ' · 置信 ' + esc(uncertainTop.confidence_label) : '') +
+      '</div>' +
+      (uncertainTop.recommended_probe_label ? '<div class="cog-step-detail">建议探针: ' + esc(String(uncertainTop.recommended_probe_label).substring(0, 110)) + '</div>' : '') +
+      '</div>';
+    flow.append(uncertaintyStep);
+  }
+
   body.append(flow);
 
   if (!Object.keys(perception).length && !needs.length) {
     body.replaceChildren();
     const empty = document.createElement('div');
     empty.className = 'panel-empty';
-    empty.innerHTML = '<div class="pe-icon">📊</div><div class="pe-text">认知状态尚未初始化</div><div style="font-size:10px;color:var(--text-muted);">激活监督者内生驱动后会填充认知层</div>';
+    empty.innerHTML = '<div class="pe-icon">📊</div><div class="pe-text">API-B 当前判断尚未初始化</div><div style="font-size:10px;color:var(--text-muted);">激活监督者内生驱动后，这里会逐步出现当前判断、约束与观察依据</div>';
     body.append(empty);
   }
 }
@@ -5146,7 +5310,7 @@ function renderStatsPanel(state) {
   [
     {icon:'📊', label:'Tier1 条目', value: ts.total_entries || '—'},
     {icon:'📦', label:'压缩块', value: ts.compressed_blocks || '—'},
-    {icon:'✅', label:'LLM 健康', value: ts.llm_healthy ? '✅ 正常' : '⚠️ 异常'},
+    {icon:'✅', label:'判断模型健康', value: ts.llm_healthy ? '✅ 正常' : '⚠️ 异常'},
     {icon:'🧠', label:'记忆活跃', value: ts.memory_active ? '✅ 是' : '💤 否'},
     {icon:'📐', label:'上下文用量', value: (mem.context_percent || 0) + '% (' + (mem.total_tokens || 0).toLocaleString() + ' tokens)'},
   ].forEach(s => {
@@ -5652,6 +5816,383 @@ class SupervisorUIMixin:
         timeline.reverse()
         return timeline[: max(int(limit), 0)]
 
+    def _ui_cognition_label(self, kind: str, value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        maps: Dict[str, Dict[str, str]] = {
+            "system_posture": {
+                "balanced": "平衡观察",
+                "truth_guarded": "真实性优先",
+                "exploratory": "探索扩张",
+                "continuity_guarded": "连续性守护",
+            },
+            "user_mode": {
+                "quiet": "安静",
+                "active": "活跃",
+                "interrupted": "被打断",
+                "unknown": "未识别",
+                "unrecognized": "未识别",
+                "未识别": "未识别",
+            },
+            "governance_load_state": {
+                "calm": "平稳",
+                "stable": "稳定",
+                "busy": "繁忙",
+                "strained": "紧张",
+                "overloaded": "过载",
+                "unknown": "未识别",
+                "未识别": "未识别",
+            },
+            "need_type": {
+                "clear_governance_backlog": "清理治理积压",
+                "truthfulness_repair": "修补真实性风险",
+                "exploratory_learning": "发起自主学习",
+                "shell_baseline_learning": "替身基线学习",
+                "governance_hygiene_review": "治理卫生复核",
+                "body_improvement": "推进替身改进",
+                "memory_continuity": "维护记忆连续性",
+                "memory_maintenance": "记忆维护",
+                "observation_expansion": "扩展观察覆盖",
+                "observe_before_acting": "先观察再行动",
+                "未分类需求": "未分类需求",
+            },
+            "intent_type": {
+                "review_governance_hygiene": "复核治理卫生",
+                "expand_learning": "扩展学习",
+                "protect_truthfulness": "保护真实性",
+                "preserve_memory_continuity": "维持记忆连续性",
+                "improve_body": "推动替身改进",
+                "observe_only": "只观察",
+                "未命名意图": "未命名意图",
+            },
+            "output_channel": {
+                "task_candidates": "候选池",
+                "governance_review": "治理复核",
+                "observation_only": "只读观察",
+                "memory_maintenance": "记忆维护",
+                "body_improvement": "替身改进",
+            },
+            "target_horizon": {
+                "immediate": "当前轮",
+                "near_term": "短时段",
+                "next_cycle": "下一轮",
+                "medium_term": "中期",
+                "current_round": "当前轮",
+                "当前轮": "当前轮",
+            },
+            "preferred_focus": {
+                "balanced": "平衡",
+                "truthfulness": "真实性",
+                "creativity": "创造学习",
+                "learning_expansion": "学习扩张",
+                "continuity": "连续性",
+                "memory_continuity": "记忆连续性",
+                "governance_hygiene": "治理卫生",
+                "body_growth": "替身成长",
+                "observation": "观察覆盖",
+            },
+            "constraint_type": {
+                "user_service_priority": "用户链路优先",
+                "historical_underdelivery": "历史兑现偏弱",
+                "governance_backlog_blockage": "治理积压阻塞",
+                "weak_learning_yield": "学习收益偏弱",
+                "weak self structure grounding": "替身结构地基偏弱",
+                "weak_self_structure_grounding": "替身结构地基偏弱",
+                "none": "暂无主约束",
+            },
+            "uncertainty_domain": {
+                "truthfulness": "真实性侧",
+                "governance_backlog": "治理积压侧",
+                "learning_yield": "学习收益侧",
+                "autonomy_alignment": "自主对齐侧",
+                "self_regulation": "自调节侧",
+            },
+            "observation_target": {
+                "truthfulness": "真实性侧",
+                "governance_backlog_blockage": "治理积压阻塞侧",
+                "learning_yield": "学习收益侧",
+                "autonomy_alignment": "自主对齐侧",
+                "self_regulation": "自调节侧",
+                "grounding": "结构地基侧",
+                "learning_frontier": "学习前沿侧",
+                "memory_continuity": "记忆连续性侧",
+                "body_growth": "替身成长侧",
+                "governance_backlog": "治理积压侧",
+            },
+            "observation_next_step": {
+                "collect_observation": "补观察证据",
+                "monitor": "继续观察",
+            },
+            "observation_persistence": {
+                "persistent": "持续反复出现",
+                "stalled": "长期未化解",
+                "stabilizing": "正在稳定",
+                "cooling": "开始降温",
+                "emerging": "刚浮现",
+            },
+        }
+        if normalized in maps.get(kind, {}):
+            return maps[kind][normalized]
+        text = str(value or "").strip()
+        return text or "未命名"
+
+    def _ui_cognition_probe_label(self, value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        mapping = {
+            "review recent uncertain answers and correction signals": "复核近期不确定回答与修正信号",
+            "inspect stale, deferred, and pending-review endogenous tasks": "检查陈旧、推迟和待复核的自主链路项",
+            "compare recent learning quality against downstream task completion and review outcomes": "对照近期学习质量与后续完成/复核结果",
+            "inspect whether current posture should remain guarded or corrective on the next endogenous cycle": "下一轮先确认当前姿态是否仍应保持谨慎或纠偏",
+            "re-evaluate whether corrective boosts are still justified after the next endogenous cycle": "下一轮后重新评估纠偏增益是否还成立",
+            "inspect which observation requests escalated into truthfulness alerts": "回查哪些观察请求升级成了真实性告警",
+        }
+        if normalized in mapping:
+            return mapping[normalized]
+        return str(value or "").strip()
+
+    def _ui_cognition_reason_label(self, value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        mapping = {
+            "delay direct body improvement while user_service_priority remains dominant.": "当前先让路给用户链路，暂不做直接替身改进",
+            "delay direct body improvement while historical_underdelivery remains dominant.": "近期自主兑现偏弱，先补兑现再考虑直接替身改进",
+            "prioritize truthfulness governance before direct body improvement.": "先处理真实性风险，再考虑直接替身改进",
+            "prioritize observation governance before direct body improvement.": "先补观察证据，再考虑直接替身改进",
+            "prioritize governance_hygiene governance before direct body improvement.": "先清治理积压，再考虑直接替身改进",
+            "prioritize memory_continuity governance before direct body improvement.": "先稳住记忆连续性，再考虑直接替身改进",
+        }
+        if normalized in mapping:
+            return mapping[normalized]
+        if normalized.startswith("recent outcome status ") and " requires review before broader self-improvement." in normalized:
+            status = normalized.removeprefix("recent outcome status ").replace(
+                " requires review before broader self-improvement.",
+                "",
+            ).strip()
+            status_label = {
+                "failed": "失败",
+                "deferred": "推迟",
+                "awaiting_review": "待复核",
+            }.get(status, status or "未知")
+            return f"近期结果为{status_label}，先复核再扩大自我改进"
+        return str(value or "").strip()
+
+    def _ui_cognition_percentage(self, value: Any) -> str:
+        try:
+            return f"{round(max(0.0, min(1.0, float(value))) * 100)}%"
+        except Exception:
+            return "0%"
+
+    def _project_ui_cognition_judgement(
+        self,
+        cog_snapshot: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        judgement_core = dict(cog_snapshot.get("judgement_core") or {})
+        governance = dict(cog_snapshot.get("governance") or {})
+        proposal_cognition = dict(cog_snapshot.get("proposal_cognition") or {})
+        assessment_trace = dict(proposal_cognition.get("assessment_trace") or {})
+        meta_profile = dict(proposal_cognition.get("meta_cognition_profile") or {})
+        observation_program = dict(cog_snapshot.get("observation_program") or {})
+
+        primary_need = dict(judgement_core.get("primary_need") or {})
+        primary_intent = dict(judgement_core.get("primary_intent") or {})
+        self_iteration_focus = dict(meta_profile.get("self_iteration_focus") or {})
+
+        focus = str(
+            governance.get("preferred_focus")
+            or meta_profile.get("governance_posture")
+            or ""
+        ).strip()
+        constraint = str(
+            assessment_trace.get("dominant_constraint")
+            or governance.get("dominant_constraint")
+            or meta_profile.get("dominant_constraint")
+            or ""
+        ).strip()
+        current_judgement = str(
+            assessment_trace.get("current_judgement")
+            or meta_profile.get("current_judgement")
+            or ""
+        ).strip()
+        observation_target = str(
+            observation_program.get("highest_priority_target")
+            or assessment_trace.get("self_iteration_target")
+            or self_iteration_focus.get("domain")
+            or ""
+        ).strip()
+        hypothesis = str(
+            assessment_trace.get("self_iteration_hypothesis")
+            or self_iteration_focus.get("hypothesis")
+            or ""
+        ).strip()
+
+        focus_label = self._ui_cognition_label("preferred_focus", focus)
+        constraint_label = (
+            self._ui_cognition_label("constraint_type", constraint)
+            if constraint
+            else "暂无主约束"
+        )
+        primary_need_label = self._ui_cognition_label(
+            "need_type", primary_need.get("need_type")
+        ) if primary_need else ""
+        primary_intent_label = self._ui_cognition_label(
+            "intent_type", primary_intent.get("intent_type")
+        ) if primary_intent else ""
+        observation_target_label = (
+            self._ui_cognition_label("observation_target", observation_target)
+            if observation_target
+            else ""
+        )
+
+        reasons: List[str] = []
+        explicit_reason = self._ui_cognition_reason_label(
+            assessment_trace.get("why_not_improvement_now")
+        )
+        if explicit_reason:
+            reasons.append(explicit_reason)
+        if constraint in {"user_service_priority", "historical_underdelivery"}:
+            derived = (
+                "当前先让路给用户链路，暂不做直接替身改进"
+                if constraint == "user_service_priority"
+                else "近期自主兑现偏弱，先补兑现再考虑直接替身改进"
+            )
+            if derived not in reasons:
+                reasons.append(derived)
+        if constraint == "governance_backlog_blockage":
+            reasons.append("治理积压还没消化完，先清积压再扩展改进")
+        if constraint == "weak_learning_yield":
+            reasons.append("近期学习收益偏弱，先补证据和后续跟进")
+        if focus in {
+            "truthfulness",
+            "observation",
+            "governance_hygiene",
+            "memory_continuity",
+        }:
+            focus_reason = {
+                "truthfulness": "当前优先压真实性风险，暂不把替身改进当主动作",
+                "observation": "当前优先补观察覆盖，暂不把替身改进当主动作",
+                "governance_hygiene": "当前优先做治理卫生，暂不把替身改进当主动作",
+                "memory_continuity": "当前优先稳住记忆连续性，暂不把替身改进当主动作",
+            }[focus]
+            if focus_reason not in reasons:
+                reasons.append(focus_reason)
+
+        summary_parts = []
+        if focus_label and focus_label != "未命名":
+            summary_parts.append(f"当前焦点在{focus_label}")
+        if primary_need_label and primary_need_label != "未命名":
+            summary_parts.append(f"先响应{primary_need_label}")
+        if constraint_label:
+            summary_parts.append(f"主要约束是{constraint_label}")
+        summary = "，".join(summary_parts) or "当前认知判断尚未稳定。"
+
+        return {
+            "summary": summary,
+            "current_judgement": current_judgement,
+            "focus": focus or None,
+            "focus_label": focus_label,
+            "dominant_constraint": constraint or None,
+            "dominant_constraint_label": constraint_label,
+            "primary_need": primary_need.get("need_type") if primary_need else None,
+            "primary_need_label": primary_need_label or None,
+            "primary_intent": primary_intent.get("intent_type") if primary_intent else None,
+            "primary_intent_label": primary_intent_label or None,
+            "observation_target": observation_target or None,
+            "observation_target_label": observation_target_label or None,
+            "self_iteration_hypothesis": hypothesis or None,
+            "why_not_direct_improvement": reasons[:4],
+        }
+
+    def _project_ui_cognition_uncertainty(
+        self,
+        cog_snapshot: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        ledger = dict(cog_snapshot.get("uncertainty_ledger") or {})
+        observation_program = dict(cog_snapshot.get("observation_program") or {})
+        program_entries = [
+            dict(item)
+            for item in list(observation_program.get("entries") or [])
+            if isinstance(item, dict)
+        ]
+        program_by_target = {
+            str(item.get("target") or "").strip().lower(): item
+            for item in program_entries
+            if str(item.get("target") or "").strip()
+        }
+
+        top_items: List[Dict[str, Any]] = []
+        for entry in list(ledger.get("entries") or [])[:3]:
+            if not isinstance(entry, dict):
+                continue
+            domain = str(entry.get("domain") or "").strip().lower()
+            target = str(
+                entry.get("observation_target")
+                or domain
+                or ""
+            ).strip().lower()
+            program = dict(program_by_target.get(target) or {})
+            risk = float(entry.get("risk") or 0.0)
+            confidence = float(entry.get("confidence") or 0.0)
+            domain_label = self._ui_cognition_label("uncertainty_domain", domain)
+            target_label = self._ui_cognition_label("observation_target", target)
+            probe = str(
+                entry.get("recommended_probe")
+                or program.get("recommended_probe")
+                or ""
+            ).strip()
+            probe_label = self._ui_cognition_probe_label(probe)
+            persistence_state = str(program.get("persistence_state") or "").strip().lower()
+            next_step = str(program.get("recommended_next_step") or "").strip().lower()
+            top_items.append(
+                {
+                    "domain": domain or None,
+                    "domain_label": domain_label,
+                    "risk": round(risk, 4),
+                    "risk_label": self._ui_cognition_percentage(risk),
+                    "confidence": round(confidence, 4),
+                    "confidence_label": self._ui_cognition_percentage(confidence),
+                    "summary": (
+                        f"{domain_label}风险较高，建议先{probe_label}。"
+                        if probe_label
+                        else f"{domain_label}风险较高，建议继续观察。"
+                    ),
+                    "why_uncertain": str(entry.get("why_uncertain") or "").strip() or None,
+                    "observation_target": target or None,
+                    "observation_target_label": target_label,
+                    "recommended_probe": probe or None,
+                    "recommended_probe_label": probe_label or None,
+                    "recommended_next_step": next_step or None,
+                    "recommended_next_step_label": (
+                        self._ui_cognition_label("observation_next_step", next_step)
+                        if next_step
+                        else None
+                    ),
+                    "persistence_state": persistence_state or None,
+                    "persistence_label": (
+                        self._ui_cognition_label("observation_persistence", persistence_state)
+                        if persistence_state
+                        else None
+                    ),
+                }
+            )
+
+        highest_risk_domain = str(ledger.get("highest_risk_domain") or "").strip().lower()
+        highest_risk_label = (
+            self._ui_cognition_label("uncertainty_domain", highest_risk_domain)
+            if highest_risk_domain
+            else "暂无显著不确定性"
+        )
+        summary = (
+            f"当前最需要补证据的是{highest_risk_label}。"
+            if top_items
+            else "当前没有需要单独追踪的高风险不确定性。"
+        )
+
+        return {
+            "summary": summary,
+            "active_count": max(0, int(ledger.get("active_count") or 0)),
+            "highest_risk_domain": highest_risk_domain or None,
+            "highest_risk_label": highest_risk_label,
+            "top_items": top_items,
+        }
+
     async def get_supervisor_ui_state(self) -> Dict[str, Any]:
         backlog_tasks = list(self._autonomous_chain_store.list_governance_backlog_tasks())
         writeback_history_tasks = list(self._autonomous_chain_store.list_writeback_history())
@@ -5883,6 +6424,8 @@ class SupervisorUIMixin:
                 "body_growth_quota": raw_policy.get("body_growth_quota", 0),
                 "preferred_focus": raw_policy.get("preferred_focus", "balanced"),
             }
+            cognition["judgement"] = self._project_ui_cognition_judgement(cog_snapshot)
+            cognition["uncertainty"] = self._project_ui_cognition_uncertainty(cog_snapshot)
         except Exception:
             pass
 
@@ -6093,7 +6636,9 @@ class SupervisorUIMixin:
                 {
                     "recorded_at": event.get("recorded_at"),
                     "source": str(event.get("source") or "").strip(),
+                    "source_label": str(event.get("source_label") or "").strip(),
                     "event_type": str(event.get("event_type") or "").strip(),
+                    "event_label": str(event.get("event_label") or "").strip(),
                     "summary": str(event.get("summary") or "").strip()[:160],
                     "task_id": str(event.get("task_id") or "").strip(),
                     "trace_id": str(event.get("trace_id") or "").strip(),
@@ -6142,11 +6687,15 @@ class SupervisorUIMixin:
                 continue
             first = dict(events[0])
             sources: List[str] = []
+            source_labels: List[str] = []
             task_ids = list(task_ids_by_trace.get(trace_id) or [])
             for event in events:
                 source = str(event.get("source") or "").strip()
                 if source and source not in sources:
                     sources.append(source)
+                source_label = str(event.get("source_label") or "").strip()
+                if source_label and source_label not in source_labels:
+                    source_labels.append(source_label)
                 event_task_id = str(event.get("task_id") or "").strip()
                 if event_task_id and event_task_id not in task_ids:
                     task_ids.append(event_task_id)
@@ -6156,8 +6705,10 @@ class SupervisorUIMixin:
                     "event_count": len(events),
                     "last_seen_at": first.get("recorded_at"),
                     "last_event_type": str(first.get("event_type") or "").strip(),
+                    "last_event_label": str(first.get("event_label") or "").strip(),
                     "latest_summary": str(first.get("summary") or "").strip()[:160],
                     "sources": sources,
+                    "source_labels": source_labels,
                     "task_ids": task_ids,
                     "task_titles": list(titles_by_trace.get(trace_id) or []),
                 }
@@ -6331,7 +6882,9 @@ class SupervisorUIMixin:
                 {
                     "recorded_at": event.get("recorded_at"),
                     "source": str(event.get("source") or "").strip(),
+                    "source_label": str(event.get("source_label") or "").strip(),
                     "event_type": str(event.get("event_type") or "").strip(),
+                    "event_label": str(event.get("event_label") or "").strip(),
                     "summary": str(event.get("summary") or "").strip()[:160],
                     "task_id": str(event.get("task_id") or "").strip(),
                     "decision_id": str(event.get("decision_id") or "").strip(),
@@ -6342,7 +6895,9 @@ class SupervisorUIMixin:
                 {
                     "recorded_at": event.get("recorded_at"),
                     "source": str(event.get("source") or "").strip(),
+                    "source_label": str(event.get("source_label") or "").strip(),
                     "event_type": str(event.get("event_type") or "").strip(),
+                    "event_label": str(event.get("event_label") or "").strip(),
                     "summary": str(event.get("summary") or "").strip()[:160],
                     "task_id": str(event.get("task_id") or "").strip(),
                     "decision_id": str(event.get("decision_id") or "").strip(),
@@ -6356,10 +6911,13 @@ class SupervisorUIMixin:
                 "first_seen_at": summary.get("first_seen_at"),
                 "last_seen_at": summary.get("last_seen_at"),
                 "source_counts": dict(summary.get("sources") or {}),
+                "source_labels": list(summary.get("source_labels") or []),
                 "task_ids": list(summary.get("task_ids") or []),
                 "decision_ids": list(summary.get("decision_ids") or []),
                 "task_families": list(summary.get("task_families") or []),
+                "governance_labels": list(summary.get("governance_labels") or []),
                 "execution_kinds": list(summary.get("execution_kinds") or []),
+                "execution_labels": list(summary.get("execution_labels") or []),
                 "timeline_preview": preview,
                 "timeline_events": all_events,
             }
@@ -7126,7 +7684,7 @@ class SupervisorUIMixin:
         """
         error_note = f" · {error_count} recent error(s)" if error_count > 0 else ""
 
-        # ── Scene priority: running > memory_active > drive > queued > idle ──
+        # ── Scene priority: running > memory_active > drive > backlog > idle ──
 
         # 1. Active execution: handoff if a task is running (the supervisor has
         #    already handed it over; the actual execution is the Agent's /
@@ -7195,7 +7753,7 @@ class SupervisorUIMixin:
                 f"「{first.get('title', '治理投影')}」从核心价值中浮现 [{value_tags}]，价值度 {utility_pct}%，等待治理审查。",
             )
 
-        # 4. Memory maintenance queued
+        # 4. Memory maintenance waiting in backlog
         maintenance_pending = [t for t in all_tasks if "memory" in str(t.get("task_family", "")) and t.get("status") in ("approved", "planned")]
         if maintenance_pending:
             mp = maintenance_pending[0]

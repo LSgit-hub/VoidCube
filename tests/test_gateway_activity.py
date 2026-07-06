@@ -89,12 +89,19 @@ def test_gateway_activity_touch_derives_runtime_task_profile_from_broad_metadata
     metadata = activity["recent_metadata"]["autonomous_chain_plan"]
     assert metadata["trace_id"] == "trace-plan-1"
     assert metadata["task_type"] == "self_evolution"
+    assert metadata["task_type_label"] == "自主改进"
     assert metadata["governance_task_type"] == "self_evolution"
+    assert metadata["governance_task_type_label"] == "自主改进"
     assert metadata["task_family"] == "body_switch"
+    assert metadata["task_family_label"] == "身体切换"
     assert metadata["execution_kind"] == "body_switch"
+    assert metadata["execution_kind_label"] == "身体切换"
     assert metadata["decision_id"] == "decision-plan-1"
     assert metadata["task_identity"]["display_kind"] == "body_switch"
+    assert metadata["task_identity"]["display_label"] == "身体切换"
     assert metadata["task_identity"]["requested_kind"] == "body_switch"
+    assert metadata["task_identity"]["requested_kind_label"] == "身体切换"
+    assert metadata["task_identity"]["summary"] == "身体切换"
 
 
 def test_gateway_activity_touch_derives_runtime_task_profile_from_nested_runtime_profile():
@@ -123,8 +130,11 @@ def test_gateway_activity_touch_derives_runtime_task_profile_from_nested_runtime
     metadata = activity["recent_metadata"]["autonomous_chain_execute"]
     assert metadata["trace_id"] == "trace-exec-2"
     assert metadata["governance_task_type"] == "memory_maintenance"
+    assert metadata["governance_task_type_label"] == "记忆维护"
     assert metadata["task_family"] == "memory_maintenance"
+    assert metadata["task_family_label"] == "记忆维护"
     assert metadata["execution_kind"] == "memory_maintenance"
+    assert metadata["execution_kind_label"] == "记忆维护"
     assert metadata["decision_id"] == "decision-exec-2"
 
 
@@ -354,7 +364,11 @@ def test_gateway_activity_touch_adds_task_identity_summary():
     assert identity["title"] == "Improve shell body"
     assert identity["execution_kind"] == "body_improvement"
     assert identity["display_kind"] == "body_improvement"
-    assert "Improve shell body" in identity["summary"]
+    assert identity["governance_task_type_label"] == "自主改进"
+    assert identity["task_family_label"] == "替身升级"
+    assert identity["execution_kind_label"] == "替身改进"
+    assert identity["display_label"] == "替身改进"
+    assert "Improve shell body (替身改进)" == identity["summary"]
 
 
 def test_gateway_agent_scene_touch_updates_scene_cache_and_prefers_cli_agent():
@@ -395,7 +409,7 @@ def test_gateway_agent_scene_touch_updates_scene_cache_and_prefers_cli_agent():
     assert response.status_code == 200
     scenes = client.get("/admin/scenes").json()["scenes"]
     assert scenes["agent"]["scene"] == "learning"
-    assert scenes["agent"]["scene_projection_scope"] == "legacy_last_writer_agent_scene"
+    assert scenes["agent"]["scene_projection_scope"] == "agent_top_level_projection"
     assert scenes["agent"]["canonical_lanes"] == ["supervisor_task", "user_chat"]
     assert scenes["agent"]["lane_contract"]["supervisor_task"] == "autonomous_chain_observation"
     assert scenes["agent"]["lane_contract"]["user_chat"] == "user_chain_status"
@@ -896,12 +910,17 @@ def test_gateway_executor_route_updates_execute_activity_even_when_upstream_fail
     assert activity["counts"]["autonomous_chain_activity_count"] == 1
     assert activity["recent_metadata"]["autonomous_chain_execute"]["trace_id"] == "trace-exec-1"
     assert activity["recent_metadata"]["autonomous_chain_execute"]["task_type"] == "self_evolution"
+    assert activity["recent_metadata"]["autonomous_chain_execute"]["task_type_label"] == "自主改进"
     assert activity["recent_metadata"]["autonomous_chain_execute"]["governance_task_type"] == "self_evolution"
+    assert activity["recent_metadata"]["autonomous_chain_execute"]["governance_task_type_label"] == "自主改进"
     assert activity["recent_metadata"]["autonomous_chain_execute"]["task_family"] == "body_switch"
+    assert activity["recent_metadata"]["autonomous_chain_execute"]["task_family_label"] == "身体切换"
     assert activity["recent_metadata"]["autonomous_chain_execute"]["execution_kind"] == "body_switch"
+    assert activity["recent_metadata"]["autonomous_chain_execute"]["execution_kind_label"] == "身体切换"
     assert activity["recent_metadata"]["autonomous_chain_execute"]["decision_id"] == "decision-exec-1"
     assert activity["recent_metadata"]["autonomous_chain_execute"]["task_id"] == "task-exec-1"
     assert activity["recent_metadata"]["autonomous_chain_execute"]["task_identity"]["display_kind"] == "body_switch"
+    assert activity["recent_metadata"]["autonomous_chain_execute"]["task_identity"]["display_label"] == "身体切换"
     assert activity["recent_metadata"]["autonomous_chain_execute"]["task_identity"]["requested_kind"] == "body_switch"
 
 
@@ -952,7 +971,7 @@ def test_gateway_agent_lanes_keep_supervisor_and_user_chat_separate():
 
     agent_scene = client.get("/admin/scenes").json()["scenes"]["agent"]
     assert agent_scene["scene"] == "executing"
-    assert agent_scene["scene_projection_scope"] == "legacy_last_writer_agent_scene"
+    assert agent_scene["scene_projection_scope"] == "agent_top_level_projection"
     assert agent_scene["subagent_focus_tool"] == "grep"
 
     lanes = agent_scene["lanes"]

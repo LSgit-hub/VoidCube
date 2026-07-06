@@ -1138,7 +1138,7 @@ async def test_evaluate_endogenous_drive_exposes_alignment_signal_when_reflectio
     supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     await supervisor.plan_autonomous_chain_task(
         {
-            "title": "Stale endogenous queue item",
+            "title": "Stale endogenous backlog item",
             "task_family": "general_self_evolution",
             "execution_kind": "general_self_evolution",
             "source": "endogenous_drive",
@@ -1836,7 +1836,7 @@ def test_candidate_annotation_adds_canonical_drive_judgement_and_evidence_contex
         candidate_items=[
             {
                 "title": "Review correction signals",
-                "summary": "Review the truthfulness queue.",
+                "summary": "Review the truthfulness backlog.",
                 "priority": "high",
                 "governance_task_type": "self_learning",
                 "task_family": "self_learning",
@@ -3925,7 +3925,7 @@ async def test_cognition_state_attention_agenda_prioritizes_observe_before_actin
     supervisor.evaluate_activity_guards = fake_activity_guards  # type: ignore[method-assign]
     await supervisor.plan_autonomous_chain_task(
         {
-            "title": "Stale endogenous queue item",
+            "title": "Stale endogenous backlog item",
             "task_family": "general_self_evolution",
             "execution_kind": "general_self_evolution",
             "source": "endogenous_drive",
@@ -10237,7 +10237,12 @@ async def test_endogenous_drive_records_cognitive_posture_in_lm_generation_conte
     assert proposal_cognition["assessment_trace"]["current_judgement"] == (
         "review should dominate until grounding is repaired"
     )
+    assert proposal_cognition["assessment_trace"]["why_not_improvement_now"] == (
+        "Prioritize truthfulness governance before direct body improvement."
+    )
     assert proposal_cognition["assessment_trace"]["why_not_improvement_now_count"] == 1
+    assert proposal_cognition["assessment_trace"]["self_iteration_target"] == "grounding"
+    assert proposal_cognition["assessment_trace"]["self_iteration_hypothesis"]
 
 
 @pytest.mark.asyncio
@@ -12283,7 +12288,7 @@ async def test_cleared_historical_underdelivery_does_not_reenter_observation_fro
             "quality_score": 0.79,
         },
         {
-            "title": "Retried queue item F",
+            "title": "Retried backlog item F",
             "event_type": "decision",
             "status": "retry",
             "task_family": "general_self_evolution",
@@ -12807,7 +12812,7 @@ async def test_mixed_recovery_history_does_not_let_memory_need_override_observat
             "quality_score": 0.81,
         },
         {
-            "title": "Retried queue item G",
+            "title": "Retried backlog item G",
             "event_type": "decision",
             "status": "retry",
             "task_family": "general_self_evolution",
@@ -13494,7 +13499,7 @@ async def test_recent_relapse_retightens_candidate_budget_in_longer_mixed_histor
             "quality_score": 0.84,
         },
         {
-            "title": "Retried queue item K",
+            "title": "Retried backlog item K",
             "event_type": "decision",
             "status": "retry",
             "task_family": "general_self_evolution",
@@ -13502,7 +13507,7 @@ async def test_recent_relapse_retightens_candidate_budget_in_longer_mixed_histor
             "quality_score": 0.20,
         },
         {
-            "title": "Deferred queue item L",
+            "title": "Deferred backlog item L",
             "event_type": "decision",
             "status": "deferred",
             "task_family": "general_self_evolution",
@@ -14546,7 +14551,7 @@ async def test_governance_hygiene_candidate_path_does_not_crash_when_self_learni
     history = supervisor._endogenous_drive_history_default()
     history["outcomes"] = [
         {
-            "title": "Deferred queue item A",
+            "title": "Deferred backlog item A",
             "event_type": "decision",
             "status": "deferred",
             "task_family": "general_self_evolution",
@@ -14554,7 +14559,7 @@ async def test_governance_hygiene_candidate_path_does_not_crash_when_self_learni
             "quality_score": 0.20,
         },
         {
-            "title": "Awaiting review queue item B",
+            "title": "Awaiting review backlog item B",
             "event_type": "decision",
             "status": "awaiting_review",
             "task_family": "general_self_evolution",
@@ -14562,7 +14567,7 @@ async def test_governance_hygiene_candidate_path_does_not_crash_when_self_learni
             "quality_score": 0.20,
         },
         {
-            "title": "Retry queue item C",
+            "title": "Retry backlog item C",
             "event_type": "decision",
             "status": "retry",
             "task_family": "general_self_evolution",
@@ -15372,7 +15377,7 @@ async def test_observation_mode_prefers_candidate_with_stronger_drive_judgement_
             },
         },
     )
-    candidate_queue = EndogenousTaskCandidate(
+    candidate_backlog_review = EndogenousTaskCandidate(
         stable_key="continuity:governance_hygiene_review",
         title="Review governance backlog hygiene",
         summary="Governance hygiene review",
@@ -15392,7 +15397,7 @@ async def test_observation_mode_prefers_candidate_with_stronger_drive_judgement_
     )
 
     selected = engine._apply_adaptive_candidate_budget(
-        [candidate_queue, candidate_truthfulness],
+        [candidate_backlog_review, candidate_truthfulness],
         adaptive_policy=DriveAdaptivePolicy(
             learning_expansion_bias=0.5,
             truthfulness_bias=0.5,
@@ -15436,7 +15441,7 @@ def test_observation_mode_tie_break_is_stable_across_input_order_when_truthfulne
             },
         },
     )
-    candidate_queue = EndogenousTaskCandidate(
+    candidate_backlog_review = EndogenousTaskCandidate(
         stable_key="continuity:governance_hygiene_review",
         title="Review governance backlog hygiene",
         summary="Governance hygiene review",
@@ -15470,11 +15475,11 @@ def test_observation_mode_tie_break_is_stable_across_input_order_when_truthfulne
     )
 
     forward = engine._apply_adaptive_candidate_budget(
-        [candidate_truthfulness, candidate_queue],
+        [candidate_truthfulness, candidate_backlog_review],
         adaptive_policy=adaptive_policy,
     )
     reversed_order = engine._apply_adaptive_candidate_budget(
-        [candidate_queue, candidate_truthfulness],
+        [candidate_backlog_review, candidate_truthfulness],
         adaptive_policy=adaptive_policy,
     )
 
@@ -15524,7 +15529,7 @@ def test_observation_mode_keeps_monotonic_switch_when_backlog_review_becomes_sli
             },
         },
     )
-    candidate_queue = EndogenousTaskCandidate(
+    candidate_backlog_review = EndogenousTaskCandidate(
         stable_key="continuity:governance_hygiene_review",
         title="Review governance backlog hygiene",
         summary="Governance hygiene review",
@@ -15544,7 +15549,7 @@ def test_observation_mode_keeps_monotonic_switch_when_backlog_review_becomes_sli
     )
 
     selected = engine._apply_adaptive_candidate_budget(
-        [candidate_truthfulness, candidate_queue],
+        [candidate_truthfulness, candidate_backlog_review],
         adaptive_policy=adaptive_policy,
     )
 
@@ -16138,7 +16143,7 @@ async def test_endogenous_drive_still_plans_learning_candidates_with_active_sess
     result = await supervisor._run_endogenous_drive_cycle()
     queued = await supervisor.list_autonomous_chain_tasks()
     keys = {
-        task["metadata"]["endogenous_drive_key"]: task for task in queued["tasks"]
+            task["metadata"]["endogenous_drive_key"]: task for task in queued["tasks"]
     }
 
     assert result["status"] == "planned"
@@ -16178,7 +16183,7 @@ async def test_batch_review_accepts_lm_governance_override(tmp_path, monkeypatch
         return {
             tasks_by_title["Weak duplicate follow-up"]: {
                 "action": "cancel",
-                "reason": "Duplicate and low-evidence task should be cleared from the queue.",
+                "reason": "Duplicate and low-evidence task should be cleared from the backlog.",
             }
         }
 
@@ -16231,7 +16236,7 @@ async def test_autonomous_chain_gate_preserves_agent_pull_task_approval_when_lm_
         return {
             task_id: {
                 "action": "defer",
-                "reason": "Conservative queue governance would wait for more evidence.",
+                "reason": "Conservative backlog governance would wait for more evidence.",
             }
         }
 
@@ -16280,7 +16285,7 @@ async def test_batch_review_preserves_agent_pull_task_approval_without_autonomou
         return {
             task_id: {
                 "action": "defer",
-                "reason": "Conservative queue governance would wait for more evidence.",
+                "reason": "Conservative backlog governance would wait for more evidence.",
             }
         }
 
@@ -16610,7 +16615,7 @@ async def test_plan_task_normalizes_scheduled_for_into_runtime_payload(tmp_path)
 
     planned = await supervisor.plan_autonomous_chain_task(
         {
-            "title": "Scheduled queue task",
+            "title": "Scheduled backlog task",
             "scheduled_for": "2026-06-28T01:00:00",
         }
     )
@@ -16692,7 +16697,7 @@ async def test_batch_review_defers_second_task_when_scheduled_for_conflicts(tmp_
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-@pytest.mark.skip(reason="Boundary violation defer removed — body_upgrade/body_switch no longer driven by task queue")
+@pytest.mark.skip(reason="Boundary violation defer removed — body_upgrade/body_switch no longer driven by autonomous-chain backlog flow")
 async def test_batch_review_defers_body_task_with_boundary_violations(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     await supervisor.plan_autonomous_chain_task(
@@ -16752,7 +16757,7 @@ async def test_batch_review_defers_body_task_with_boundary_violations(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-@pytest.mark.skip(reason="Boundary defer removed — body_upgrade/body_switch no longer driven by task queue")
+@pytest.mark.skip(reason="Boundary defer removed — body_upgrade/body_switch no longer driven by autonomous-chain backlog flow")
 async def test_batch_review_boundary_defer_does_not_depend_on_mem_write_success(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     await supervisor.plan_autonomous_chain_task(
@@ -16863,7 +16868,7 @@ async def test_body_self_evolution_approval_builds_formal_execution_request(tmp_
         {
             "decision": "approve",
             "actor": "mem_supervisor",
-            "reason": "Probe and lineage evidence are sufficient for formal handoff.",
+            "reason": "Probe and lineage evidence are sufficient for autonomous-chain handoff.",
         },
     )
 
@@ -16886,7 +16891,7 @@ async def test_body_self_evolution_approval_builds_formal_execution_request(tmp_
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-@pytest.mark.skip(reason="evolution_boundary removed — body switching validation no longer in task queue path")
+@pytest.mark.skip(reason="evolution_boundary removed — body switching validation no longer sits in the autonomous-chain backlog path")
 async def test_body_self_evolution_task_api_exposes_boundary_summary_before_approval(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     planned = await supervisor.plan_autonomous_chain_task(
@@ -16931,7 +16936,7 @@ async def test_body_self_evolution_task_api_exposes_boundary_summary_before_appr
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-@pytest.mark.skip(reason="Body boundary validation removed — body_upgrade not driven by task queue")
+@pytest.mark.skip(reason="Body boundary validation removed — body_upgrade not driven by autonomous-chain backlog flow")
 async def test_body_self_evolution_approval_rejects_mother_system_changes(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     planned = await supervisor.plan_autonomous_chain_task(
@@ -17262,7 +17267,7 @@ async def test_list_autonomous_chain_tasks_can_filter_body_improvement_agent_tas
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_list_autonomous_chain_tasks_reads_chain_projection_views_instead_of_raw_total_queue(tmp_path):
+async def test_list_autonomous_chain_tasks_reads_chain_projection_views_instead_of_raw_total_backlog(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
     planned = await supervisor.plan_autonomous_chain_task({"title": "Projected backlog task"})
@@ -17646,7 +17651,7 @@ def test_autonomous_chain_store_has_explicit_review_and_retry_transitions(tmp_pa
         task.task_id,
         status="running",
         actor="test",
-        reason="dispatch",
+        reason="execution handoff",
     )
     assert running.status == "running"
 
@@ -17670,7 +17675,7 @@ def test_autonomous_chain_store_has_explicit_review_and_retry_transitions(tmp_pa
         task.task_id,
         status="running",
         actor="test",
-        reason="dispatch again",
+        reason="execution handoff again",
     )
     completed = supervisor._autonomous_chain_store.update_status(
         task.task_id,
@@ -17691,75 +17696,75 @@ def test_autonomous_chain_store_has_explicit_review_and_retry_transitions(tmp_pa
 
 def test_autonomous_chain_store_exposes_backlog_api_a_execution_lane_and_writeback_projections(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    queue = supervisor._autonomous_chain_store
+    store = supervisor._autonomous_chain_store
 
-    planned = queue.create_task(title="Planned backlog task", summary="backlog")
-    running = queue.create_task(title="Running API-A lane task", summary="api-a-lane")
-    completed = queue.create_task(title="Completed writeback task", summary="writeback")
-    failed = queue.create_task(title="Failed writeback task", summary="writeback")
-    cancelled = queue.create_task(title="Cancelled task", summary="terminal without writeback")
+    planned = store.create_task(title="Planned backlog task", summary="backlog")
+    running = store.create_task(title="Running API-A lane task", summary="api-a-lane")
+    completed = store.create_task(title="Completed writeback task", summary="writeback")
+    failed = store.create_task(title="Failed writeback task", summary="writeback")
+    cancelled = store.create_task(title="Cancelled task", summary="terminal without writeback")
 
-    queue.update_status(
+    store.update_status(
         running.task_id,
         status="approved",
         actor="test",
         reason="approved for API-A execution lane",
     )
-    queue.update_status(
+    store.update_status(
         running.task_id,
         status="running",
         actor="test",
         reason="API-A execution lane in progress",
     )
 
-    queue.update_status(
+    store.update_status(
         completed.task_id,
         status="approved",
         actor="test",
         reason="approved for execution",
     )
-    queue.update_status(
+    store.update_status(
         completed.task_id,
         status="running",
         actor="test",
         reason="executing",
     )
-    queue.update_status(
+    store.update_status(
         completed.task_id,
         status="completed",
         actor="test",
         reason="writeback finished",
     )
 
-    queue.update_status(
+    store.update_status(
         failed.task_id,
         status="approved",
         actor="test",
         reason="approved for execution",
     )
-    queue.update_status(
+    store.update_status(
         failed.task_id,
         status="running",
         actor="test",
         reason="executing",
     )
-    queue.update_status(
+    store.update_status(
         failed.task_id,
         status="failed",
         actor="test",
         reason="writeback failed",
     )
 
-    queue.update_status(
+    store.update_status(
         cancelled.task_id,
         status="cancelled",
         actor="test",
         reason="cancelled before execution handoff",
     )
 
-    backlog_titles = [task.title for task in queue.list_governance_backlog_tasks()]
-    api_a_lane_titles = [task.title for task in queue.list_api_a_execution_lane_tasks()]
-    writeback_titles = [task.title for task in queue.list_writeback_history()]
+    backlog_titles = [task.title for task in store.list_governance_backlog_tasks()]
+    api_a_lane_titles = [task.title for task in store.list_api_a_execution_lane_tasks()]
+    writeback_titles = [task.title for task in store.list_writeback_history()]
 
     assert backlog_titles == ["Planned backlog task", "Running API-A lane task"]
     assert api_a_lane_titles == ["Running API-A lane task"]
@@ -17768,47 +17773,47 @@ def test_autonomous_chain_store_exposes_backlog_api_a_execution_lane_and_writeba
 
 def test_autonomous_chain_store_exposes_chain_projection_without_raw_total_backlog_semantics(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    queue = supervisor._autonomous_chain_store
+    store = supervisor._autonomous_chain_store
 
-    planned = queue.create_task(title="Planned backlog task", summary="backlog")
-    completed = queue.create_task(title="Completed writeback task", summary="writeback")
-    cancelled = queue.create_task(title="Cancelled task", summary="terminal without writeback")
+    planned = store.create_task(title="Planned backlog task", summary="backlog")
+    completed = store.create_task(title="Completed writeback task", summary="writeback")
+    cancelled = store.create_task(title="Cancelled task", summary="terminal without writeback")
 
-    queue.update_status(
+    store.update_status(
         completed.task_id,
         status="approved",
         actor="test",
         reason="approved for execution",
     )
-    queue.update_status(
+    store.update_status(
         completed.task_id,
         status="running",
         actor="test",
         reason="executing",
     )
-    queue.update_status(
+    store.update_status(
         completed.task_id,
         status="completed",
         actor="test",
         reason="writeback finished",
     )
-    queue.update_status(
+    store.update_status(
         cancelled.task_id,
         status="cancelled",
         actor="test",
         reason="cancelled before execution handoff",
     )
 
-    visible_titles = [task.title for task in queue.list_chain_projection_tasks()]
+    visible_titles = [task.title for task in store.list_chain_projection_tasks()]
     visible_with_cancelled = [
-        task.title for task in queue.list_chain_projection_tasks(include_cancelled=True)
+        task.title for task in store.list_chain_projection_tasks(include_cancelled=True)
     ]
     completed_titles = [
-        task.title for task in queue.list_chain_projection_tasks(status="completed")
+        task.title for task in store.list_chain_projection_tasks(status="completed")
     ]
     cancelled_titles = [
         task.title
-        for task in queue.list_chain_projection_tasks(
+        for task in store.list_chain_projection_tasks(
             status="cancelled",
             include_cancelled=True,
         )
@@ -17912,7 +17917,7 @@ async def test_run_autonomous_chain_review_cycle_limits_formal_execution_handoff
     for idx in range(3):
         planned = await supervisor.plan_autonomous_chain_task(
             {
-                "title": f"Formal handoff budget task {idx}",
+                "title": f"Autonomous-chain handoff budget task {idx}",
                 "metadata": {
                     "execution_kind": "body_switch",
                     "target_slot_id": f"slot-{idx}",
@@ -17926,7 +17931,7 @@ async def test_run_autonomous_chain_review_cycle_limits_formal_execution_handoff
             {
                 "decision": "approve",
                 "actor": "mem_supervisor",
-                "reason": "ready for formal handoff",
+                "reason": "ready for autonomous-chain handoff",
             },
         )
 

@@ -160,7 +160,7 @@ class InternalGateway:
             },
             "agent": {
                 "scene": "idle",
-                "scene_projection_scope": "legacy_last_writer_agent_scene",
+                "scene_projection_scope": "agent_top_level_projection",
                 "canonical_lanes": ["supervisor_task", "user_chat"],
                 "lane_contract": {
                     "supervisor_task": "autonomous_chain_observation",
@@ -179,12 +179,8 @@ class InternalGateway:
                 "source_service": None,
                 "reachable": False,
                 "last_fetched_at": None,
-                # Per-role lanes (additive; top-level above stays last-writer-wins
-                # for backward compat with the status bar and existing tests).
-                # supervisor_task = API-A CLI executing supervisor tasks (learning/
-                # body improvement); user_chat = main CLI interacting with the user.
-                # The minimal ops dashboard reads the supervisor_task lane so its
-                # subagent view is never overwritten by user-chat subagents.
+                # Per-role lanes keep user-chat and supervisor-task activity
+                # separated even when they share the same API-A process.
                 "lanes": {
                     "supervisor_task": self._empty_agent_lane(),
                     "user_chat": self._empty_agent_lane(),
@@ -208,25 +204,6 @@ class InternalGateway:
             self.config.activity_log_path = str(run_dir / "gateway-activity.json")
         self._setup_routes()
         self._load_activity_state()
-
-    @staticmethod
-    def _legacy_autonomous_chain_state_key_map() -> Dict[str, str]:
-        return {
-            "last_self_evolution_activity_at": "last_autonomous_chain_activity_at",
-            "last_self_evolution_plan_at": "last_autonomous_chain_plan_at",
-            "last_self_evolution_execute_at": "last_autonomous_chain_execute_at",
-            "self_evolution_activity_count": "autonomous_chain_activity_count",
-            "self_evolution_plan_count": "autonomous_chain_plan_count",
-            "self_evolution_execute_count": "autonomous_chain_execute_count",
-        }
-
-    @staticmethod
-    def _legacy_autonomous_chain_recent_metadata_key_map() -> Dict[str, str]:
-        return {
-            "self_evolution": "autonomous_chain",
-            "self_evolution_plan": "autonomous_chain_plan",
-            "self_evolution_execute": "autonomous_chain_execute",
-        }
 
     @classmethod
     def _normalize_gateway_activity_kind(cls, activity_kind: str) -> str:
@@ -342,7 +319,7 @@ class InternalGateway:
             self._apply_agent_scene_projection_to_snapshot(
                 snapshot,
                 agent_scene,
-                projection_scope="legacy_last_writer_agent_scene",
+                projection_scope="agent_top_level_projection",
                 agent_lane=None,
             )
         snapshot.update(self._build_session_lease_snapshot(session_id))
@@ -739,16 +716,6 @@ class InternalGateway:
         saved_state = raw.get("state")
         if isinstance(saved_state, dict):
             normalized_state = dict(saved_state)
-            for legacy_key, canonical_key in self._legacy_autonomous_chain_state_key_map().items():
-                if canonical_key not in normalized_state and legacy_key in normalized_state:
-                    normalized_state[canonical_key] = normalized_state.get(legacy_key)
-            saved_recent_metadata = normalized_state.get("recent_metadata")
-            if isinstance(saved_recent_metadata, dict):
-                normalized_recent_metadata = dict(saved_recent_metadata)
-                for legacy_key, canonical_key in self._legacy_autonomous_chain_recent_metadata_key_map().items():
-                    if canonical_key not in normalized_recent_metadata and legacy_key in normalized_recent_metadata:
-                        normalized_recent_metadata[canonical_key] = normalized_recent_metadata.get(legacy_key)
-                normalized_state["recent_metadata"] = normalized_recent_metadata
             # Timestamp fields are stored as ISO strings; restore to datetime
             _ts_fields = {k for k in self._activity_state if k.startswith("last_")}
             for key in self._activity_state:
@@ -850,6 +817,23 @@ class InternalGateway:
             payload.setdefault("session_id", session_id)
         return payload or None
 
+    def _runtime_activity_label(self, value: Any) -> Optional[str]:
+        normalized = str(value or "").strip().lower()
+        if not normalized:
+            return None
+        return {
+            "self_learning": "自主学习",
+            "self_evolution": "自主改进",
+            "general_self_evolution": "通用自主改进",
+            "memory_maintenance": "记忆维护",
+            "body_upgrade": "替身升级",
+            "body_switch": "身体切换",
+            "body_improvement": "替身改进",
+            "autonomous_chain": "自主链路",
+            "autonomous_chain_plan": "自主链路规划",
+            "autonomous_chain_execute": "自主链路执行",
+        }.get(normalized, str(value or "").strip() or None)
+
     def _build_task_identity_summary(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not isinstance(payload, dict):
             return None
@@ -861,15 +845,37 @@ class InternalGateway:
         task_family = str(payload.get("task_family") or "").strip() or None
         execution_kind = str(payload.get("execution_kind") or "").strip() or None
         requested_kind = str(payload.get("kind") or "").strip() or None
+        task_type_label = self._runtime_activity_label(task_type)
+        governance_task_type_label = self._runtime_activity_label(governance_task_type)
+        task_family_label = self._runtime_activity_label(task_family)
+        execution_kind_label = self._runtime_activity_label(execution_kind)
+        requested_kind_label = self._runtime_activity_label(requested_kind)
 
         label_parts = [part for part in (execution_kind, task_family, governance_task_type, task_type) if part]
+        label_texts = [
+            part
+            for part in (
+                execution_kind_label,
+                task_family_label,
+                governance_task_type_label,
+                task_type_label,
+            )
+            if part
+        ]
         display_kind = requested_kind or execution_kind or task_family or governance_task_type or task_type
+        display_label = (
+            requested_kind_label
+            or execution_kind_label
+            or task_family_label
+            or governance_task_type_label
+            or task_type_label
+        )
         if title:
-            summary = f"{title} ({display_kind})" if display_kind else title
+            summary = f"{title} ({display_label or display_kind})" if (display_label or display_kind) else title
         elif task_id:
-            summary = f"{task_id} ({display_kind})" if display_kind else task_id
-        elif display_kind:
-            summary = display_kind
+            summary = f"{task_id} ({display_label or display_kind})" if (display_label or display_kind) else task_id
+        elif display_label or display_kind:
+            summary = display_label or display_kind
         else:
             summary = None
 
@@ -885,8 +891,15 @@ class InternalGateway:
             "execution_kind": execution_kind,
             "requested_kind": requested_kind,
             "display_kind": display_kind,
+            "task_type_label": task_type_label,
+            "governance_task_type_label": governance_task_type_label,
+            "task_family_label": task_family_label,
+            "execution_kind_label": execution_kind_label,
+            "requested_kind_label": requested_kind_label,
+            "display_label": display_label,
             "summary": summary,
             "labels": label_parts,
+            "label_texts": label_texts,
         }
 
     def _extract_activity_metadata_from_payload(self, payload: Any) -> Dict[str, Any]:
@@ -941,6 +954,10 @@ class InternalGateway:
         # correlation identifier, not required to be a UUID).
         if "trace_id" not in metadata:
             metadata["trace_id"] = str(uuid.uuid4())
+        for key in ("task_type", "governance_task_type", "task_family", "execution_kind", "kind"):
+            label = self._runtime_activity_label(metadata.get(key))
+            if label:
+                metadata[f"{key}_label"] = label
         return metadata
 
     def _is_memory_write_activity(self, path: str, method: str) -> bool:

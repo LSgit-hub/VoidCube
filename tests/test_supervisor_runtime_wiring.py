@@ -116,7 +116,7 @@ def test_supervisor_room_frontend_uses_chain_panel_contract():
     assert 'renderChainPanel' in UI_HTML
     assert 'chain-stage-rail' in UI_HTML
     assert 'API-B 判断输入' in UI_HTML
-    assert '认知状态 · 感知到意图' in UI_HTML
+    assert 'API-B 当前判断' in UI_HTML
     assert 'data-chain-group="' in UI_HTML
     assert 'data-chain-trace="' in UI_HTML
     assert 'data-chain-trace-expanded="' in UI_HTML
@@ -314,6 +314,8 @@ async def test_supervisor_runtime_trace_view_aggregates_autonomous_activity_gove
     assert result["summary"]["task_ids"] == [task_id]
     assert result["summary"]["decision_ids"] == ["decision-runtime-1"]
     assert result["summary"]["governance_task_types"] == ["self_learning"]
+    assert "自主学习" in result["summary"]["governance_labels"]
+    assert "链路存储" in result["summary"]["source_labels"]
     assert result["summary"]["task_families"] == ["self_learning"]
     assert result["sources"]["autonomous_chain_store"] >= 2
     assert result["sources"]["supervisor_activity"] >= 1
@@ -769,6 +771,9 @@ async def test_supervisor_room_state_exposes_governance_preview_for_shadow_revie
     preview = duplicate["governance_preview"]["lm_governance_shadow"]
     assert preview["action"] == "merge"
     assert preview["merge_into"] == tasks_by_title["Canonical learning branch"]
+    assert preview["merge_into_title"] == "Canonical learning branch"
+    assert "监督者保留建议" in preview["summary"]
+    assert "Canonical learning branch" in duplicate["governance_preview"]["summary"]
     assert state["autonomous_observation"]["metrics"]["governance"]["shadow_recommendations"] >= 1
 
 
@@ -829,6 +834,8 @@ async def test_supervisor_room_state_exposes_applied_priority_updates(tmp_path, 
         if isinstance(entry, dict)
     )
     assert task["governance_preview"]["lm_governance_priority"]["priority"] == "high"
+    assert task["governance_preview"]["lm_governance_priority"]["priority_label"] == "高"
+    assert "监督者已重排优先级" in task["governance_preview"]["summary"]
     assert state["autonomous_observation"]["metrics"]["governance"]["priority_updates"] >= 1
 
 
@@ -1188,6 +1195,157 @@ async def test_supervisor_room_state_exposes_recent_mem_writebacks_in_autonomous
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_supervisor_ui_state_projects_cognition_judgement_and_uncertainty_for_web_room(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_endogenous_drive = AsyncMock(  # type: ignore[method-assign]
+        return_value={"candidates": []}
+    )
+    supervisor.evaluate_activity_guards = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "checks": {},
+            "idle_seconds": {},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "task_family_decisions": {},
+            "governance_task_type_decisions": {},
+        }
+    )
+    supervisor._persist_endogenous_cognition_state(
+        {
+            "perception": {
+                "system_posture": "truth_guarded",
+                "user_mode": "quiet",
+                "governance_backlog_count": 2,
+                "active_sessions": 0,
+                "recent_errors": 1,
+                "learning_quality": 61,
+                "correction_signals": 2,
+                "idle_seconds": {"user": 120, "memory": 15},
+            },
+            "world_model": {
+                "governance_load_state": "strained",
+                "memory_pressure": 0.22,
+                "truthfulness_pressure": 0.71,
+                "learning_momentum": 0.33,
+                "self_confidence": 0.44,
+            },
+            "needs": [
+                {
+                    "need_type": "truthfulness_repair",
+                    "severity": 0.83,
+                    "urgency": 0.8,
+                    "confidence": 0.66,
+                    "rationale": "Recent corrections suggest unresolved truthfulness debt.",
+                }
+            ],
+            "intents": [
+                {
+                    "intent_type": "protect_truthfulness",
+                    "priority": 0.86,
+                    "output_channel": "governance_review",
+                    "target_horizon": "next_cycle",
+                    "rationale": "Protect truthfulness before expanding output.",
+                }
+            ],
+            "signals": [
+                {
+                    "signal_type": "truthfulness_alert",
+                    "priority": 0.72,
+                    "message": "Truthfulness alerts have been rising.",
+                }
+            ],
+            "adaptive_policy": {
+                "learning_expansion_bias": 0.12,
+                "truthfulness_bias": 0.77,
+                "memory_continuity_bias": 0.15,
+                "governance_hygiene_bias": 0.54,
+                "body_growth_bias": 0.08,
+                "observation_bias": 0.63,
+                "candidate_throttle": 0.4,
+                "candidate_budget": 2,
+                "exploratory_learning_quota": 0,
+                "body_growth_quota": 0,
+                "preferred_focus": "truthfulness",
+            },
+            "judgement_core": {
+                "primary_need": {"need_type": "truthfulness_repair"},
+                "primary_intent": {"intent_type": "protect_truthfulness"},
+            },
+            "governance": {
+                "preferred_focus": "truthfulness",
+                "dominant_constraint": "governance_backlog_blockage",
+            },
+            "proposal_cognition": {
+                "assessment_trace": {
+                    "available": True,
+                    "dominant_constraint": "governance_backlog_blockage",
+                    "current_judgement": "review should dominate until grounding is repaired",
+                    "why_not_improvement_now": "Prioritize truthfulness governance before direct body improvement.",
+                    "why_not_improvement_now_count": 1,
+                    "self_iteration_target": "truthfulness",
+                    "self_iteration_hypothesis": "Repair truthfulness signals before body work.",
+                },
+                "meta_cognition_profile": {
+                    "current_judgement": "",
+                    "dominant_constraint": "",
+                    "self_iteration_focus": {
+                        "domain": "truthfulness",
+                        "hypothesis": "Repair truthfulness signals before body work.",
+                    },
+                },
+            },
+            "uncertainty_ledger": {
+                "active_count": 1,
+                "highest_risk_domain": "truthfulness",
+                "entries": [
+                    {
+                        "domain": "truthfulness",
+                        "risk": 0.72,
+                        "confidence": 0.64,
+                        "why_uncertain": "Corrections are visible but still need targeted review.",
+                        "observation_target": "truthfulness",
+                        "recommended_probe": "review recent uncertain answers and correction signals",
+                    }
+                ],
+            },
+            "observation_program": {
+                "highest_priority_target": "truthfulness",
+                "entries": [
+                    {
+                        "target": "truthfulness",
+                        "recommended_probe": "review recent uncertain answers and correction signals",
+                        "recommended_next_step": "collect_observation",
+                        "persistence_state": "stalled",
+                    }
+                ],
+            },
+        }
+    )
+
+    state = await supervisor.get_supervisor_ui_state()
+    cognition = state["cognition"]
+    judgement = cognition["judgement"]
+    uncertainty = cognition["uncertainty"]
+    top_item = uncertainty["top_items"][0]
+
+    assert judgement["focus_label"] == "真实性"
+    assert judgement["dominant_constraint_label"] == "治理积压阻塞"
+    assert judgement["primary_need_label"] == "修补真实性风险"
+    assert judgement["primary_intent_label"] == "保护真实性"
+    assert judgement["observation_target_label"] == "真实性侧"
+    assert judgement["why_not_direct_improvement"][0] == "先处理真实性风险，再考虑直接替身改进"
+    assert "真实性" in judgement["summary"]
+    assert uncertainty["highest_risk_label"] == "真实性侧"
+    assert uncertainty["summary"] == "当前最需要补证据的是真实性侧。"
+    assert top_item["domain_label"] == "真实性侧"
+    assert top_item["risk_label"] == "72%"
+    assert top_item["confidence_label"] == "64%"
+    assert top_item["recommended_probe_label"] == "复核近期不确定回答与修正信号"
+    assert top_item["recommended_next_step_label"] == "补观察证据"
+    assert top_item["persistence_label"] == "长期未化解"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_supervisor_room_state_keeps_supervisor_idle_when_only_agent_task_is_waiting(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor.evaluate_endogenous_drive = AsyncMock(  # type: ignore[method-assign]
@@ -1306,7 +1464,7 @@ async def test_supervisor_periodic_compression_runtime_does_not_route_through_ex
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_supervisor_self_evolution_cycle_hands_off_approved_formal_task(tmp_path):
+async def test_supervisor_autonomous_chain_review_cycle_hands_off_approved_formal_task(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._body_upgrade_executor.execute_body_upgrade = AsyncMock(  # type: ignore[method-assign]
         return_value={"status": "upgrade_executed"}
@@ -1354,11 +1512,11 @@ async def test_supervisor_self_evolution_cycle_hands_off_approved_formal_task(tm
 
     cycle = await supervisor._run_autonomous_chain_review_cycle()
 
-    queued = await supervisor.get_autonomous_chain_task(task_id)
+    task_snapshot = await supervisor.get_autonomous_chain_task(task_id)
     assert cycle["reviewed"] == 1
     assert cycle["handed_off"] == [{"task_id": task_id, "status": "autonomous_chain_execution_executed"}]
-    assert queued["status"] == "completed"
-    assert queued["metadata"]["execution_result"]["status"] == "autonomous_chain_execution_executed"
+    assert task_snapshot["status"] == "completed"
+    assert task_snapshot["metadata"]["execution_result"]["status"] == "autonomous_chain_execution_executed"
     supervisor._body_upgrade_executor.execute_body_upgrade.assert_awaited_once()  # type: ignore[attr-defined]
 
 
@@ -1414,18 +1572,18 @@ async def test_execution_handoff_unknown_executor_status_retries_instead_of_comp
     )
 
     cycle = await supervisor._run_autonomous_chain_review_cycle()
-    queued = await supervisor.get_autonomous_chain_task(task_id)
+    task_snapshot = await supervisor.get_autonomous_chain_task(task_id)
 
     assert cycle["handed_off"] == [{"task_id": task_id, "status": "accepted"}]
-    assert queued["status"] == "approved"
-    assert queued["metadata"]["execution_failed"] is True
-    assert queued["metadata"]["execution_failure_count"] == 1
-    assert queued["metadata"]["execution_result"]["status"] == "accepted"
+    assert task_snapshot["status"] == "approved"
+    assert task_snapshot["metadata"]["execution_failed"] is True
+    assert task_snapshot["metadata"]["execution_failure_count"] == 1
+    assert task_snapshot["metadata"]["execution_result"]["status"] == "accepted"
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_supervisor_periodic_self_evolution_review_runtime_invokes_cycle(tmp_path):
+async def test_supervisor_periodic_autonomous_chain_review_runtime_invokes_cycle(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._health_check_task = None
     supervisor._autonomous_chain_review_task = None
@@ -1620,14 +1778,14 @@ async def test_supervisor_internal_body_upgrade_pipeline_does_not_route_through_
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_supervisor_accepts_self_learning_conclusion_submission_into_queue(tmp_path):
+async def test_supervisor_accepts_self_learning_conclusion_submission_into_backlog(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     learning = SelfLearningConclusionStore(tmp_path / "self-learning")
 
     topic = learning.create_topic(
         title="Gateway-backed activity guard",
-        reason="Need a formal self-evolution proposal backed by learning evidence.",
+        reason="Need a formal autonomous-chain proposal backed by learning evidence.",
         tags=["gateway", "idle"],
     )
     session = learning.plan_session(topic=topic, planned_minutes=20, trigger="idle")

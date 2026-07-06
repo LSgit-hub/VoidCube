@@ -304,6 +304,64 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
     assert built["chain"]["segments"][0]["title"] == "Governance backlog task"
 
 
+def test_build_dashboard_uses_gateway_activity_labels_for_recent_autonomous_activity(monkeypatch):
+    monkeypatch.setattr(dashboard, "fetch_gateway_services", lambda: {"services": {}})
+    monkeypatch.setattr(
+        dashboard,
+        "fetch_gateway_activity",
+        lambda: {
+            "last_user_request_at": None,
+            "last_agent_work_at": None,
+            "last_memory_task_at": None,
+            "last_self_learning_activity_at": "2026-07-06T10:00:00",
+            "last_autonomous_chain_activity_at": "2026-07-06T10:05:00",
+            "last_autonomous_chain_plan_at": "2026-07-06T10:03:00",
+            "last_autonomous_chain_execute_at": "2026-07-06T10:05:00",
+            "last_memory_write_failure_at": None,
+            "recent_metadata": {
+                "autonomous_chain_execute": {
+                    "source_service": "executor",
+                    "task_family_label": "身体切换",
+                    "execution_kind_label": "身体切换",
+                    "task_identity": {
+                        "display_label": "身体切换",
+                        "summary": "替身切换验收 (身体切换)",
+                    },
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(
+        dashboard,
+        "fetch_supervisor_state",
+        lambda: {
+            "autonomous_observation": {
+                "runtime": {
+                    "activity_guards": {
+                        "thresholds": {
+                            "user_idle_seconds": 600,
+                            "memory_idle_seconds": 600,
+                            "workflow_idle_seconds": 600,
+                        }
+                    },
+                    "eligibility": {
+                        "eligible_for_planning": True,
+                        "eligible_for_execution": True,
+                    },
+                }
+            }
+        },
+    )
+
+    built = dashboard.build_dashboard()
+
+    assert built["recent_activity"]["kind"] == "autonomous_chain_execute"
+    assert built["recent_activity"]["phase_label"] == "执行回报"
+    assert built["recent_activity"]["title"] == "替身切换验收 (身体切换)"
+    assert built["recent_activity"]["summary"] == "API-A 子执行面已回报 身体切换 的执行进展。"
+    assert built["recent_activity"]["source_label"] == "API-A 子执行面"
+
+
 def test_print_dashboard_uses_autonomous_chain_countdown_keys(monkeypatch, capsys):
     monkeypatch.setattr(
         dashboard,
@@ -381,3 +439,53 @@ def test_print_dashboard_shows_chain_segments_headline(monkeypatch, capsys):
     output = capsys.readouterr().out
 
     assert "自主链路分段观察" in output
+
+
+def test_print_dashboard_shows_recent_autonomous_activity(monkeypatch, capsys):
+    monkeypatch.setattr(
+        dashboard,
+        "build_dashboard",
+        lambda: {
+            "services": {"agents": 0, "supervisor": True, "memory": True},
+            "chain": {
+                "mode": "autonomous_chain_board",
+                "headline": "自主链路闭环观测",
+                "segments_headline": "自主链路分段观察",
+                "api_b_backlog": 1,
+                "api_a_ready": 0,
+                "candidates": 2,
+                "writebacks": 0,
+                "loop_stages": [],
+                "segments": [],
+            },
+            "recent_activity": {
+                "phase_label": "治理放行",
+                "title": "替身改进验收 (替身改进)",
+                "summary": "API-B 已完成 替身改进 的治理判断或放行。",
+                "display_at": "10:15:30",
+            },
+            "countdowns": {
+                "user_chain_quiet": {"display": "10s", "met": False, "threshold_s": 600},
+                "agent_idle": {"display": "20s", "met": False, "threshold_s": 600},
+                "memory_idle": {"display": "30s", "met": False, "threshold_s": 600},
+                "autonomous_chain_plan_idle": {"display": "40s", "met": False, "threshold_s": 600},
+                "autonomous_chain_execute_idle": {"display": "50s", "met": False, "threshold_s": 600},
+                "autonomous_chain": {"display": "continuous", "scope": "soft_signal_only"},
+            },
+            "eligibility": {
+                "can_execute": False,
+                "eligible_for_planning": True,
+                "eligible_for_execution": False,
+            },
+            "next_review_cycle_display": "4m00s",
+            "autonomous_chain_policy": {"label": "continuous", "scope": "soft_signal_only"},
+        },
+    )
+    monkeypatch.setattr(dashboard, "print_three_segment_status_bar", lambda: None)
+
+    dashboard.print_dashboard()
+    output = capsys.readouterr().out
+
+    assert "最近自主动作" in output
+    assert "治理放行" in output
+    assert "替身改进验收 (替身改进)" in output

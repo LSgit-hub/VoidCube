@@ -1658,7 +1658,19 @@ class PlanningRuntimeMixin:
                 ).strip()
                 or None,
                 "current_judgement": current_judgement or None,
+                "why_not_improvement_now": str(
+                    cognitive_assessment_memory.get("why_not_improvement_now") or ""
+                ).strip()
+                or None,
                 "why_not_improvement_now_count": why_not_improvement_now_count,
+                "self_iteration_target": str(
+                    cognitive_assessment_memory.get("self_iteration_target") or ""
+                ).strip()
+                or None,
+                "self_iteration_hypothesis": str(
+                    cognitive_assessment_memory.get("self_iteration_hypothesis") or ""
+                ).strip()
+                or None,
             },
             "auxiliary_memory": compact_memory,
             "current_candidates": current_candidates,
@@ -6203,7 +6215,7 @@ class PlanningRuntimeMixin:
         self,
         body_task: Optional[AutonomousChainTask] = None,
     ) -> bool:
-        queued_self_learning = False
+        backlog_self_learning_pending = False
         for task in self._autonomous_chain_store.list_governance_backlog_tasks():
             if self._task_governance_type(task) != "self_learning":
                 continue
@@ -6211,8 +6223,8 @@ class PlanningRuntimeMixin:
                 continue
             if task.status == "running":
                 return True
-            queued_self_learning = True
-        if not queued_self_learning:
+            backlog_self_learning_pending = True
+        if not backlog_self_learning_pending:
             return False
         if body_task is None:
             return True
@@ -6408,10 +6420,10 @@ class PlanningRuntimeMixin:
         return session_id
 
     def _get_autonomous_chain_cycle_lock(self) -> asyncio.Lock:
-        lock = getattr(self, "_self_evolution_cycle_lock", None)
+        lock = getattr(self, "_autonomous_chain_cycle_lock", None)
         if lock is None:
             lock = asyncio.Lock()
-            setattr(self, "_self_evolution_cycle_lock", lock)
+            setattr(self, "_autonomous_chain_cycle_lock", lock)
         return lock
 
     def _build_autonomous_chain_execution_request(
@@ -6507,16 +6519,10 @@ class PlanningRuntimeMixin:
             latest = decision_history[-1]
             if isinstance(latest, dict):
                 latest_context = dict(latest.get("context") or {})
-        governance_preview: Dict[str, Any] = {}
-        lm_review = latest_context.get("lm_governance_review")
-        if isinstance(lm_review, dict):
-            governance_preview["lm_governance_review"] = dict(lm_review)
-        lm_shadow = latest_context.get("lm_governance_shadow")
-        if isinstance(lm_shadow, dict):
-            governance_preview["lm_governance_shadow"] = dict(lm_shadow)
-        lm_priority = latest_context.get("lm_governance_priority")
-        if isinstance(lm_priority, dict):
-            governance_preview["lm_governance_priority"] = dict(lm_priority)
+        governance_preview = self._governance_preview_projection(
+            latest_context=latest_context,
+            current_task=task,
+        )
         if governance_preview:
             payload["governance_preview"] = governance_preview
         display_kind = (
@@ -6544,6 +6550,111 @@ class PlanningRuntimeMixin:
             ),
         }
         return payload
+
+    def _governance_action_label(self, value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        return {
+            "approve": "放行",
+            "defer": "延后",
+            "cancel": "清退",
+            "pause": "暂停",
+            "retire": "退休建议",
+            "merge": "合并建议",
+            "reprioritize": "重排优先级",
+            "reprioritise": "重排优先级",
+        }.get(normalized, str(value or "").strip() or "治理动作")
+
+    def _governance_priority_label(self, value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        return {
+            "low": "低",
+            "normal": "中",
+            "high": "高",
+        }.get(normalized, str(value or "").strip() or "未识别")
+
+    def _governance_merge_target_title(self, task_id: Any) -> str:
+        normalized = str(task_id or "").strip()
+        if not normalized:
+            return ""
+        target = self._autonomous_chain_store.get_task(normalized)
+        if target is None:
+            return ""
+        return str(target.title or "").strip()
+
+    def _governance_preview_projection(
+        self,
+        *,
+        latest_context: Dict[str, Any],
+        current_task: AutonomousChainTask,
+    ) -> Dict[str, Any]:
+        governance_preview: Dict[str, Any] = {}
+        notes: list[str] = []
+
+        lm_review = latest_context.get("lm_governance_review")
+        if isinstance(lm_review, dict):
+            review_payload = dict(lm_review)
+            action_label = self._governance_action_label(review_payload.get("action"))
+            review_payload["action_label"] = action_label
+            review_payload["summary"] = (
+                f"监督者已采纳治理动作: {action_label}"
+                + (
+                    f" · {str(review_payload.get('reason') or '').strip()[:120]}"
+                    if str(review_payload.get("reason") or "").strip()
+                    else ""
+                )
+            )
+            governance_preview["lm_governance_review"] = review_payload
+            notes.append(str(review_payload["summary"]))
+
+        lm_shadow = latest_context.get("lm_governance_shadow")
+        if isinstance(lm_shadow, dict):
+            shadow_payload = dict(lm_shadow)
+            action_label = self._governance_action_label(shadow_payload.get("action"))
+            shadow_payload["action_label"] = action_label
+            merge_target_title = self._governance_merge_target_title(
+                shadow_payload.get("merge_into")
+            )
+            if merge_target_title:
+                shadow_payload["merge_into_title"] = merge_target_title
+            if shadow_payload.get("merge_into") and merge_target_title:
+                shadow_extra = f" · 并入 {merge_target_title}"
+            elif shadow_payload.get("merge_into"):
+                shadow_extra = f" · 并入 {str(shadow_payload.get('merge_into') or '')[:16]}"
+            else:
+                shadow_extra = ""
+            shadow_payload["summary"] = (
+                f"监督者保留建议: {action_label}{shadow_extra}"
+                + (
+                    f" · {str(shadow_payload.get('reason') or '').strip()[:120]}"
+                    if str(shadow_payload.get("reason") or "").strip()
+                    else ""
+                )
+            )
+            governance_preview["lm_governance_shadow"] = shadow_payload
+            notes.append(str(shadow_payload["summary"]))
+
+        lm_priority = latest_context.get("lm_governance_priority")
+        if isinstance(lm_priority, dict):
+            priority_payload = dict(lm_priority)
+            priority_label = self._governance_priority_label(priority_payload.get("priority"))
+            priority_payload["priority_label"] = priority_label
+            priority_payload["summary"] = (
+                f"监督者已重排优先级: {priority_label}"
+                + (
+                    f" · {str(priority_payload.get('reason') or '').strip()[:120]}"
+                    if str(priority_payload.get("reason") or "").strip()
+                    else ""
+                )
+            )
+            governance_preview["lm_governance_priority"] = priority_payload
+            notes.append(str(priority_payload["summary"]))
+
+        if notes:
+            governance_preview["notes"] = notes[:3]
+            governance_preview["summary"] = notes[0]
+        if governance_preview:
+            governance_preview["task_title"] = str(current_task.title or "").strip()
+        return governance_preview
 
     def _build_lm_governance_review_snapshot(
         self,
@@ -7591,7 +7702,7 @@ class PlanningRuntimeMixin:
         review_result = await self.review_autonomous_chain_tasks({})
         handed_off = []
         handoff_limit = int(
-            getattr(self.config.service_runtime, "self_evolution_handoff_limit_per_cycle", 1)
+            getattr(self.config.service_runtime, "autonomous_chain_handoff_limit_per_cycle", 1)
             or 0
         )
         handoff_budget_exhausted = 0

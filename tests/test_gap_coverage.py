@@ -1094,13 +1094,13 @@ class TestEndogenousDriveErrorBridge:
                 "active_sessions": 0,
                 "recent_metadata": {
                     "user_request": {
-                        "text": "Investigate agent task queue deduplication strategy for autonomous-chain gate"
+                        "text": "Investigate agent backlog deduplication strategy for autonomous-chain gate"
                     }
                 },
             },
             "completed_learning_tasks": [
                 {
-                    "title": "Investigate agent task queue deduplication strategy for autonomous-chain gate",
+                    "title": "Investigate agent backlog deduplication strategy for autonomous-chain gate",
                     "completed_at": "2099-01-01T00:00:00+00:00",
                     "quality_score": 0.9,
                 }
