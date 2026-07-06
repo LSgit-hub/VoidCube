@@ -124,7 +124,7 @@ def _print_three_segment_scene_bar() -> None:
 
     scenes = (payload or {}).get("scenes") or {}
     if not scenes:
-        print("  Scene Status:  ⛔ gateway offline")
+        print("  分域场景状态:  ⛔ gateway offline")
         return
 
     # Per-reporter legal labels (baseline §8.1).  Any scene returned by
@@ -182,7 +182,7 @@ def _print_three_segment_scene_bar() -> None:
         return f"{name}: {label}{suffix}"
 
     print(
-        "  Scene Status:  "
+        "  分域场景状态:  "
         + "   ".join(
             [
                 _render("supervisor", "🧠 API-B"),

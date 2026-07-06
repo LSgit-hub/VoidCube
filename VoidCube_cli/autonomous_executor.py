@@ -19,7 +19,7 @@ def autonomous_task_execution_kind(task: Dict[str, Any]) -> str:
 
 
 def autonomous_task_label(execution_kind: str) -> str:
-    return "body improvement task" if execution_kind == "body_improvement" else "learning task"
+    return "改进链路项" if execution_kind == "body_improvement" else "学习链路项"
 
 
 def build_autonomous_task_prompt(

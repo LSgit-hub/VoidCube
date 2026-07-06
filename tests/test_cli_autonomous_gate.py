@@ -8,6 +8,7 @@ from urllib.request import Request
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cli import VoidcubeCLI
+from VoidCube_cli.autonomous_status_host import format_gateway_agent_activity_snapshot
 
 
 class _FakeUrlopenResponse:
@@ -846,7 +847,7 @@ def test_autonomous_panel_fragments_include_focus_task_and_recent_events(monkeyp
 
     rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
 
-    assert "Autonomous Executor" in rendered
+    assert "API-A 自主执行面" in rendered
     assert "Executor: this executor healthy" in rendered
     assert "Panel task title" in rendered
     assert "已接管任务 learn-panel-1" in rendered
@@ -902,28 +903,31 @@ def test_autonomous_panel_shows_no_api_a_executable_task_reason(monkeypatch):
             "chain": {
                 "segments": [
                     {
-                        "key": "api_a_ready",
+                        "key": "api_b_backlog",
                         "items": [
-                            {"task_id": "deferred-1", "title": "Deferred task", "status": "deferred", "lane": "agent"}
+                            {
+                                "task_id": "deferred-1",
+                                "title": "Deferred task",
+                                "status": "deferred",
+                                "lane": "supervisor",
+                                "task_family": "self_learning",
+                                "governance_task_type": "self_learning",
+                            }
                         ],
                     }
                 ]
             },
-            "board": {
-                "current_cards": [
+            "loop": {
+                "stages": [
                     {
-                        "title": "API-B judgement",
+                        "key": "api_b_judgement",
+                        "label": "API-B judgement",
+                        "owner": "API-B",
                         "status": "active",
-                        "observation_role": "api_b_judgement",
                         "summary": "API-B is still judging the next step.",
                     }
                 ],
             },
-            "api_a": {
-                "pending": [
-                    {"task_id": "deferred-1", "title": "Deferred task", "status": "deferred", "lane": "agent"}
-                ]
-            }
         },
     }
     cli._fetch_autonomous_gateway_status = lambda: {
@@ -938,11 +942,11 @@ def test_autonomous_panel_shows_no_api_a_executable_task_reason(monkeypatch):
 
     rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
 
-    assert "任务: 当前没有被认领的自主任务" in rendered
-    assert "当前没有已批准的 API-A 可执行任务" in rendered
+    assert "链路项: 当前没有被认领的自主链路项" in rendered
+    assert "仍停留在 API-B 治理段" in rendered
 
 
-def test_autonomous_panel_prefers_board_current_task_when_present(monkeypatch):
+def test_autonomous_panel_prefers_loop_focus_when_present(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._autonomous_gate_active = True
     cli._agent_running = False
@@ -974,26 +978,22 @@ def test_autonomous_panel_prefers_board_current_task_when_present(monkeypatch):
                     }
                 ]
             },
-            "board": {
-                "current_cards": [
+            "loop": {
+                "stages": [
                     {
-                        "task_id": "learn-board-1",
-                        "title": "Board approved task",
+                        "key": "api_a_execution",
+                        "label": "API-A 自主执行",
+                        "owner": "API-A",
                         "status": "ready",
-                        "display_status": "已观察到",
-                        "observation_role": "api_a_execution",
+                        "focus_task": {
+                            "task_id": "learn-board-1",
+                            "title": "Board approved task",
+                            "status": "approved",
+                            "task_family": "self_learning",
+                            "lane": "agent",
+                        },
                     }
-                ],
-            },
-            "api_a": {
-                "current": {
-                    "task_id": "learn-board-1",
-                    "title": "Board approved task",
-                    "status": "approved",
-                    "task_family": "self_learning",
-                    "lane": "agent",
-                },
-                "pending": [],
+                ]
             },
         },
         "tasks": [],
@@ -1046,14 +1046,18 @@ def test_autonomous_panel_shows_approved_task_waiting_for_claim(monkeypatch):
                     }
                 ]
             },
-            "api_a": {
-                "pending": [
+            "loop": {
+                "stages": [
                     {
-                        "task_id": "learn-approved-1",
-                        "title": "Approved waiting task",
-                        "task_type": "self_learning",
-                        "status": "approved",
-                        "lane": "agent",
+                        "key": "api_a_execution",
+                        "status": "ready",
+                        "focus_task": {
+                            "task_id": "learn-approved-1",
+                            "title": "Approved waiting task",
+                            "task_type": "self_learning",
+                            "status": "approved",
+                            "lane": "agent",
+                        },
                     }
                 ]
             },
@@ -1073,11 +1077,11 @@ def test_autonomous_panel_shows_approved_task_waiting_for_claim(monkeypatch):
 
     assert "状态: 已放行待认领" in rendered
     assert "Approved waiting task" in rendered
-    assert "链路: 监督者已放行该任务，等待 API-A 自主执行面认领" in rendered
-    assert "执行流: 监督者已放行任务，等待 API-A 自主执行面认领" in rendered
+    assert "链路: 监督者已放行该链路项，等待 API-A 自主执行面认领" in rendered
+    assert "执行流: 监督者已放行链路项，等待 API-A 自主执行面认领" in rendered
 
 
-def test_autonomous_panel_prefers_supervisor_presentation_for_non_local_reasoning(monkeypatch):
+def test_autonomous_panel_prefers_loop_stage_descriptor_for_non_local_reasoning(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._autonomous_gate_active = True
     cli._agent_running = False
@@ -1092,22 +1096,26 @@ def test_autonomous_panel_prefers_supervisor_presentation_for_non_local_reasonin
     cli._fetch_supervisor_status = lambda: {
         "timeline": [],
         "autonomous_observation": {
-            "presentation": {
-                "api_a_execution": {
-                    "stage": "approved_waiting_claim",
-                    "cli_focus_stage": "approved_waiting_claim",
-                    "status_label": "已放行待认领",
-                    "chain_reason": "链路: Supervisor 已放行该任务，等待自主执行位认领",
-                    "activity_text": "执行流: Supervisor 等待某个自主执行位开始接单",
-                    "reason_style": "warn",
-                    "focus_task": {
-                        "task_id": "learn-approved-presentation-1",
-                        "title": "Presentation driven task",
-                        "task_type": "self_learning",
-                        "status": "approved",
-                        "lane": "agent",
-                    },
-                }
+            "loop": {
+                "stages": [
+                    {
+                        "key": "api_a_execution",
+                        "status": "ready",
+                        "stage": "approved_waiting_claim",
+                        "cli_focus_stage": "approved_waiting_claim",
+                        "status_label": "已放行待认领",
+                        "chain_reason": "链路: Supervisor 已放行该任务，等待自主执行位认领",
+                        "activity_text": "执行流: Supervisor 等待某个自主执行位开始接单",
+                        "reason_style": "warn",
+                        "focus_task": {
+                            "task_id": "learn-approved-loop-stage-1",
+                            "title": "Loop-stage driven task",
+                            "task_type": "self_learning",
+                            "status": "approved",
+                            "lane": "agent",
+                        },
+                    }
+                ]
             }
         },
     }
@@ -1124,7 +1132,7 @@ def test_autonomous_panel_prefers_supervisor_presentation_for_non_local_reasonin
     rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
 
     assert "状态: 已放行待认领" in rendered
-    assert "Presentation driven task" in rendered
+    assert "Loop-stage driven task" in rendered
     assert "链路: Supervisor 已放行该任务，等待自主执行位认领" in rendered
     assert "执行流: Supervisor 等待某个自主执行位开始接单" in rendered
 
@@ -1160,14 +1168,18 @@ def test_autonomous_panel_shows_running_task_owned_elsewhere(monkeypatch):
                     }
                 ]
             },
-            "api_a": {
-                "pending": [
+            "loop": {
+                "stages": [
                     {
-                        "task_id": "learn-running-2",
-                        "title": "Running elsewhere task",
-                        "task_type": "self_learning",
-                        "status": "running",
-                        "lane": "agent",
+                        "key": "api_a_execution",
+                        "status": "active",
+                        "focus_task": {
+                            "task_id": "learn-running-2",
+                            "title": "Running elsewhere task",
+                            "task_type": "self_learning",
+                            "status": "running",
+                            "lane": "agent",
+                        },
                     }
                 ]
             },
@@ -1187,8 +1199,8 @@ def test_autonomous_panel_shows_running_task_owned_elsewhere(monkeypatch):
 
     assert "状态: 他处执行中" in rendered
     assert "Running elsewhere task" in rendered
-    assert "链路: 该任务已被其他 API-A 自主执行面认领" in rendered
-    assert "执行流: 任务正在其他 API-A 自主执行面中运行" in rendered
+    assert "链路: 该链路项已被其他 API-A 自主执行面认领" in rendered
+    assert "执行流: 链路项正在其他 API-A 自主执行面中运行" in rendered
 
 
 def test_autonomous_panel_shows_claimed_task_waiting_to_start(monkeypatch):
@@ -1223,9 +1235,9 @@ def test_autonomous_panel_shows_claimed_task_waiting_to_start(monkeypatch):
 
     assert "状态: 已认领待起跑" in rendered
     assert "Claimed not started task" in rendered
-    assert "链路: 自主执行面已认领该任务，等待进入首个模型或工具回合" in rendered
-    assert "近因: 已认领任务，但还没有收到后续执行事件" in rendered
-    assert "执行流: API-A 自主执行面已认领任务，等待进入首个模型或工具回合" in rendered
+    assert "链路: 自主执行面已认领该链路项，等待进入首个模型或工具回合" in rendered
+    assert "近因: 已认领链路项，但还没有收到后续执行事件" in rendered
+    assert "执行流: API-A 自主执行面已认领链路项，等待进入首个模型或工具回合" in rendered
 
 
 def test_autonomous_panel_shows_waiting_start_cause_after_prompt_enqueued(monkeypatch):
@@ -1306,8 +1318,8 @@ def test_autonomous_panel_shows_claimed_task_waiting_for_writeback(monkeypatch):
 
     assert "状态: 等待回写" in rendered
     assert "Writeback waiting task" in rendered
-    assert "链路: 自主执行面已完成执行，等待结果回写到任务链" in rendered
-    assert "执行流: API-A 自主执行面已结束本轮执行，等待写回任务状态" in rendered
+    assert "链路: 自主执行面已完成执行，等待结果回写到自主链路" in rendered
+    assert "执行流: API-A 自主执行面已结束本轮执行，等待写回链路状态" in rendered
 
 
 def test_sync_autonomous_supervisor_event_records_latest_timeline_once():
@@ -1330,7 +1342,7 @@ def test_sync_autonomous_supervisor_event_records_latest_timeline_once():
     cli._sync_autonomous_supervisor_event(state)
 
     assert len(cli._autonomous_execution_events) == 1
-    assert "监督者 task_decided: Approved learning task from supervisor." in cli._autonomous_execution_events[0]["message"]
+    assert "监督者链路裁决: Approved learning task from supervisor." in cli._autonomous_execution_events[0]["message"]
 
 
 def test_cli_force_quit_marks_body_improvement_task_interrupted(monkeypatch):
@@ -1369,7 +1381,7 @@ def test_cli_force_quit_marks_body_improvement_task_interrupted(monkeypatch):
     task_request = next(item for item in requests if item["url"].endswith("/v1/tasks/body-1/decision"))
     assert task_request["data"]["decision"] == "failed"
     assert task_request["data"]["context"]["execution_kind"] == "body_improvement"
-    assert "body improvement task" in task_request["data"]["reason"]
+    assert "改进链路项被用户中断" in task_request["data"]["reason"]
     assert cli._current_autonomous_task is None
 
 
@@ -1695,18 +1707,30 @@ def test_cli_formats_supervisor_status_snapshot():
                         "title": "API-B judgement",
                         "status": "当前在途",
                     },
-                    "current_cards": [
+                },
+                "loop": {
+                    "stages": [
                         {
-                            "title": "Review self-evolution governance hygiene",
-                            "display_status": "当前在途",
-                            "observation_role": "api_b_judgement",
+                            "key": "api_b_judgement",
+                            "label": "API-B judgement",
+                            "owner": "API-B",
+                            "status": "active",
+                            "focus_task": {
+                                "title": "Review self-evolution governance hygiene",
+                                "display_status": "当前在途",
+                            },
                         },
                         {
-                            "title": "Improve shell body",
-                            "display_status": "等待写回",
-                            "observation_role": "mem_writeback",
-                        }
-                    ],
+                            "key": "mem_writeback",
+                            "label": "Mem 写回",
+                            "owner": "Mem",
+                            "status": "ready",
+                            "focus_task": {
+                                "title": "Improve shell body",
+                                "display_status": "等待写回",
+                            },
+                        },
+                    ]
                 },
                 "chain": {
                     "segments": [
@@ -1726,18 +1750,18 @@ def test_cli_formats_supervisor_status_snapshot():
         }
     )
 
-    assert any("Scene: planning" in line for line in lines)
+    assert any("场景: planning" in line for line in lines)
     assert any("learning=2" in line and "evolution=3" in line for line in lines)
     assert any("priority_updates=1" in line for line in lines)
-    assert any("Autonomous Focus: Review self-evolution governance hygiene (当前在途)" in line for line in lines)
-    assert any("Chain Segments: API-B 治理在途=1, API-A 待拉取=2, API-B 候选判断=3, Mem 最近写回=1" in line for line in lines)
+    assert any("闭环焦点: Review self-evolution governance hygiene (当前在途)" in line for line in lines)
+    assert any("链路分段: API-B 治理在途=1, API-A 待拉取=2, API-B 候选判断=3, Mem 最近写回=1" in line for line in lines)
+    assert any("执行焦点: Improve shell body (等待写回)" in line for line in lines)
     assert any("Improve shell body" in line for line in lines)
-    assert any("tasks_reviewed" in line for line in lines)
+    assert any("最近监督/事件: 批量复核" in line for line in lines)
 
 
 def test_cli_formats_gateway_agent_activity_snapshot():
-    cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    lines = cli._format_gateway_agent_activity_snapshot(
+    lines = format_gateway_agent_activity_snapshot(
         {
             "last_agent_work_at": "2026-06-26T10:00:00",
             "agent_work_count": 3,
@@ -1752,5 +1776,5 @@ def test_cli_formats_gateway_agent_activity_snapshot():
         }
     )
 
-    assert any("Recent Task: Improve shell body (body_improvement)" in line for line in lines)
-    assert any("source=cli_agent" in line and "count=3" in line and "task_id=body-1" in line for line in lines)
+    assert any("最近链路项: Improve shell body (body_improvement)" in line for line in lines)
+    assert any("来源=cli_agent" in line and "次数=3" in line and "task_id=body-1" in line for line in lines)

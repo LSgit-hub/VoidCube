@@ -42,7 +42,7 @@ def test_dashboard_agent_segment_includes_subagent_summary():
     )
 
     assert "API-A: executing" in rendered
-    assert "task learn-12" in rendered
+    assert "链路项 learn-12" in rendered
     assert "SA 2+1" in rendered
     assert "read_file" in rendered
 
@@ -77,7 +77,7 @@ def test_dashboard_agent_segment_prefers_supervisor_task_lane():
     )
 
     assert "API-A: learning" in rendered
-    assert "task learn-su" in rendered
+    assert "链路项 learn-su" in rendered
     assert "SA 3+1" in rendered
     assert "read_file" in rendered
     assert "grep" not in rendered
@@ -230,18 +230,24 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
                 },
                 "board": {
                     "headline": "自主链路闭环观测",
-                    "current_cards": [
+                },
+                "loop": {
+                    "stages": [
                         {
-                            "title": "API-B judgement",
-                            "display_status": "当前在途",
-                            "observation_role": "api_b_judgement",
+                            "key": "api_b_judgement",
+                            "label": "API-B judgement",
+                            "owner": "API-B",
+                            "status": "active",
+                            "focus_task": {"title": "API-B judgement"},
                         },
                         {
-                            "title": "API-A execution",
-                            "display_status": "已观察到",
-                            "observation_role": "api_a_execution",
+                            "key": "api_a_execution",
+                            "label": "API-A execution",
+                            "owner": "API-A",
+                            "status": "ready",
+                            "focus_task": {"title": "API-A execution"},
                         },
-                    ],
+                    ]
                 },
                 "chain": {
                     "headline": "自主链路分段观察",
@@ -293,7 +299,7 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
     assert built["chain"]["candidates"] == 3
     assert built["chain"]["writebacks"] == 1
     assert built["chain"]["segments_headline"] == "自主链路分段观察"
-    assert built["chain"]["current_cards"][0]["title"] == "API-B judgement"
+    assert built["chain"]["loop_stages"][0]["title"] == "API-B judgement"
     assert built["chain"]["segments"][0]["label"] == "API-B"
     assert built["chain"]["segments"][0]["title"] == "Governance backlog task"
 
@@ -331,8 +337,8 @@ def test_print_dashboard_uses_autonomous_chain_countdown_keys(monkeypatch, capsy
     dashboard.print_dashboard()
     output = capsys.readouterr().out
 
-    assert "Plan idle" in output and "40s" in output
-    assert "Exec idle" in output and "50s" in output
+    assert "规划空闲" in output and "40s" in output
+    assert "执行空闲" in output and "50s" in output
 
 
 def test_print_dashboard_shows_chain_segments_headline(monkeypatch, capsys):
@@ -349,7 +355,7 @@ def test_print_dashboard_shows_chain_segments_headline(monkeypatch, capsys):
                 "api_a_ready": 0,
                 "candidates": 2,
                 "writebacks": 0,
-                "current_cards": [],
+                "loop_stages": [],
                 "segments": [],
             },
             "countdowns": {

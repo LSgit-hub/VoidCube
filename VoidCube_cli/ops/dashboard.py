@@ -93,17 +93,33 @@ def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
     counts = dict(observation.get("counts") or {})
     board = dict(observation.get("board") or {})
     chain = dict(observation.get("chain") or {})
+    loop = dict(observation.get("loop") or {})
     segment_label_fallback = {
         "api_b_backlog": "API-B",
         "api_a_ready": "API-A",
         "api_b_candidates": "候选",
         "mem_recent": "Mem",
     }
-    current_cards = [
-        dict(item)
-        for item in list(board.get("current_cards") or [])
-        if isinstance(item, dict)
-    ]
+    loop_stages = []
+    for stage in list(loop.get("stages") or []):
+        if not isinstance(stage, dict):
+            continue
+        focus_task = dict(stage.get("focus_task") or {})
+        loop_stages.append(
+            {
+                "key": str(stage.get("key") or "").strip(),
+                "owner": str(stage.get("owner") or "").strip(),
+                "label": str(stage.get("label") or "阶段"),
+                "title": str(focus_task.get("title") or stage.get("label") or "阶段"),
+                "status": str(
+                    focus_task.get("display_status")
+                    or stage.get("status_label")
+                    or stage.get("summary")
+                    or stage.get("status")
+                    or "等待中"
+                ),
+            }
+        )
     chain_segments = []
     for section in list(chain.get("segments") or []):
         if not isinstance(section, dict):
@@ -129,7 +145,7 @@ def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
                     head_item.get("title")
                     or section.get("empty_text")
                     or section.get("summary")
-                    or "暂无可见任务"
+                    or "暂无可见链路项"
                 ),
                 "status": str(
                     head_item.get("display_status")
@@ -139,7 +155,7 @@ def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
             }
         )
 
-    if not current_cards and not chain_segments:
+    if not loop_stages and not chain_segments:
         return {}
 
     return {
@@ -147,14 +163,7 @@ def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
         "api_a_ready": int(counts.get("api_a_ready") or 0),
         "candidates": int(counts.get("candidates") or 0),
         "writebacks": int(counts.get("writebacks") or 0),
-        "current_cards": [
-            {
-                "title": str(item.get("title") or "?"),
-                "status": str(item.get("display_status") or item.get("status") or "?"),
-                "role": str(item.get("observation_role") or ""),
-            }
-            for item in current_cards[:4]
-        ],
+        "loop_stages": loop_stages[:4],
         "segments": chain_segments[:4],
         "headline": str(board.get("headline") or "自主链路闭环观测"),
         "segments_headline": str(chain.get("headline") or "自主链路分段观察"),
@@ -177,6 +186,25 @@ def _fmt_countdown(seconds: Optional[float]) -> str:
     h, r = divmod(int(seconds), 3600)
     m = r // 60
     return f"{h}h{m:02d}m"
+
+
+def _human_dashboard_display(value: Optional[str]) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "?"
+    return {
+        "continuous": "持续运行",
+        "no data": "暂无数据",
+    }.get(text, text)
+
+
+def _human_policy_scope(value: Optional[str]) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "?"
+    return {
+        "soft_signal_only": "仅软感知用户链路",
+    }.get(text, text)
 
 
 def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
@@ -286,7 +314,7 @@ def build_dashboard() -> Dict[str, Any]:
             "api_a_ready": chain_snapshot.get("api_a_ready", 0),
             "candidates": chain_snapshot.get("candidates", 0),
             "writebacks": chain_snapshot.get("writebacks", 0),
-            "current_cards": list(chain_snapshot.get("current_cards") or []),
+            "loop_stages": list(chain_snapshot.get("loop_stages") or []),
             "segments": list(chain_snapshot.get("segments") or []),
             "segments_headline": chain_snapshot.get("segments_headline", "自主链路分段观察"),
         }
@@ -294,12 +322,12 @@ def build_dashboard() -> Dict[str, Any]:
         chain_view = {
             "mode": "observation_unavailable",
             "headline": "自主链路观测暂不可用",
-            "summary": "Supervisor 尚未提供 autonomous_observation.board 读模型",
+            "summary": "监督者尚未提供自主链路读模型",
             "api_b_backlog": 0,
             "api_a_ready": 0,
             "candidates": 0,
             "writebacks": 0,
-            "current_cards": [],
+            "loop_stages": [],
             "segments": [],
             "segments_headline": "自主链路分段观察",
         }
@@ -389,13 +417,13 @@ def _format_segment_line(seg: Dict[str, str], state: Dict[str, Any]) -> str:
     reachable = bool(info.get("reachable"))
     icon = seg["icon"]
     if not reachable:
-        return f"{icon} {seg['name']}: ⛔ unreachable"
+        return f"{icon} {seg['name']}: ⛔ 不可达"
     task_hint = ""
     if seg["key"] == "agent":
         task_id = info.get("scene_task_id")
         if task_id:
             short = str(task_id)[:8]
-            task_hint = f" · task {short}"
+            task_hint = f" · 链路项 {short}"
         fg_count = max(0, int(info.get("subagent_foreground_count") or 0))
         bg_count = max(0, int(info.get("subagent_background_count") or 0))
         if fg_count or bg_count:
@@ -426,9 +454,9 @@ def print_three_segment_status_bar() -> None:
     payload = fetch_scenes_aggregated(force_refresh=True)
     scenes = payload.get("scenes") or {}
     if not scenes:
-        print("  ⛔ Scene status unavailable (gateway offline)")
+        print("  ⛔ 场景状态暂不可用（网关离线）")
         return
-    print("  ┌─ Scene Status (per-reporter) ─────────────────────────────")
+    print("  ┌─ 分域场景状态（按报告者）─────────────────────────────")
     for seg in REPORTER_SEGMENT:
         print(f"  │  {_format_segment_line(seg, scenes)}")
     print("  └───────────────────────────────────────────────────────────")
@@ -447,7 +475,7 @@ def print_dashboard() -> None:
     # ── Header ──────────────────────────────────────────────────────
     print()
     print("  ╔══════════════════════════════════════════════════════════╗")
-    print("  ║          VoidCube Supervisor — Live Status               ║")
+    print("  ║            VoidCube Supervisor · 实时观测                ║")
     print("  ╠══════════════════════════════════════════════════════════╣")
     print_three_segment_status_bar()
     print()
@@ -456,7 +484,7 @@ def print_dashboard() -> None:
     agent_n = svc["agents"]
     sup_ok = "✓" if svc["supervisor"] else "✗"
     mem_ok = "✓" if svc["memory"] else "✗"
-    print(f"  ║  Services   Gateway ✓  Super {sup_ok}  Memory {mem_ok}  Agents {agent_n:<3}         ║")
+    print(f"  ║  服务状态   Gateway ✓  Super {sup_ok}  Memory {mem_ok}  Agents {agent_n:<3}         ║")
 
     # ── Autonomous chain board ─────────────────────────────────────
     print(f"  ╠══════════════════════════════════════════════════════════╣")
@@ -471,7 +499,7 @@ def print_dashboard() -> None:
             f"  ║  API-B {chain.get('api_b_backlog', 0)}  ·  API-A {chain.get('api_a_ready', 0)}  ·  "
             f"候选 {chain.get('candidates', 0)}  ·  写回 {chain.get('writebacks', 0)}              ║"
         )
-        for item in list(chain.get("current_cards") or [])[:4]:
+        for item in list(chain.get("loop_stages") or [])[:4]:
             title = str(item.get("title") or "?")[:28]
             status = str(item.get("status") or "?")[:12]
             print(f"  ║  ↻ {title:<28s} {status:<12s}                          ║")
@@ -490,51 +518,53 @@ def print_dashboard() -> None:
 
     # ── Runtime activity signals ────────────────────────────────────
     print(f"  ╠══════════════════════════════════════════════════════════╣")
-    print(f"  ║  Runtime Activity Signals                               ║")
+    print(f"  ║  运行时活动信号                                         ║")
 
     conds = [
-        ("User quiet", "user_chain_quiet"),
-        ("Agent idle", "agent_idle"),
-        ("Memory idle", "memory_idle"),
-        ("Plan idle", "autonomous_chain_plan_idle"),
-        ("Exec idle", "autonomous_chain_execute_idle"),
+        ("用户链路安静", "user_chain_quiet"),
+        ("API-A 空闲", "agent_idle"),
+        ("记忆空闲", "memory_idle"),
+        ("规划空闲", "autonomous_chain_plan_idle"),
+        ("执行空闲", "autonomous_chain_execute_idle"),
     ]
     for label, key in conds:
         c = cds.get(key, {})
         icon = "✓" if c.get("met") else "⏳"
-        display = c.get("display", "?")
-        print(f"  ║    {icon} {label:<14s} {display:>8s}  (need {c.get('threshold_s', '?')}s)                    ║")
+        display = _human_dashboard_display(c.get("display", "?"))
+        print(f"  ║    {icon} {label:<14s} {display:>8s}  (阈值 {c.get('threshold_s', '?')}s)                    ║")
 
     # Continuous autonomous-chain banner
     policy_cd = cds.get("autonomous_chain", {})
-    print(f"  ║    ✓ Auto chain   {policy_cd.get('display', '?'):>8s}  ({policy.get('scope', '?')})              ║")
+    print(
+        f"  ║    ✓ 自主链路   {_human_dashboard_display(policy_cd.get('display', '?')):>8s}  "
+        f"({_human_policy_scope(policy.get('scope', '?'))})              ║"
+    )
 
     # ── Eligibility ─────────────────────────────────────────────────
     print(f"  ╠══════════════════════════════════════════════════════════╣")
-    can = "✓ EXECUTION ELIGIBLE" if elig["can_execute"] else "✗ DEFERRED"
+    can = "✓ 允许执行" if elig["can_execute"] else "✗ 暂缓执行"
     plan_ok = "✓" if elig["eligible_for_planning"] else "✗"
     exec_ok = "✓" if elig["eligible_for_execution"] else "✗"
-    print(f"  ║  Status     {can:<40s}   ║")
-    print(f"  ║             Plan eligible: {plan_ok}   Execute eligible: {exec_ok}                       ║")
+    print(f"  ║  当前状态   {can:<40s}   ║")
+    print(f"  ║             可规划: {plan_ok}   可执行: {exec_ok}                                  ║")
 
     # ── Next review cycle ───────────────────────────────────────────
     next_rev = db.get("next_review_cycle_display", "?")
-    print(f"  ║  Next review cycle in {next_rev:<10s}                               ║")
+    print(f"  ║  下一轮复核 {next_rev:<14s}                                   ║")
 
     # ── Agent instances ─────────────────────────────────────────────
     agents = svc.get("agent_instances", [])
     if agents:
         print(f"  ╠══════════════════════════════════════════════════════════╣")
-        print(f"  ║  Agent Instances                                        ║")
+        print(f"  ║  API-A 实例                                              ║")
         for a in agents:
             healthy = "✓" if a["healthy"] else "✗"
             print(f"  ║    {healthy} {a['name']:<20s} slot={a['slot_id']:<8s} {a['address']}   ║")
     else:
         print(f"  ╠══════════════════════════════════════════════════════════╣")
-        print(f"  ║  ⚠ No agent instances registered                        ║")
-        print(f"  ║    API-A autonomous executors appear when a supervisor   ║")
-        print(f"  ║    task is approved on the autonomous chain.             ║")
-        print(f"  ║    Activity signals below are advisory context only.     ║")
+        print(f"  ║  ⚠ 尚无 API-A 实例注册                                  ║")
+        print(f"  ║    监督者放行链路项后，API-A 自主执行器才会出现。         ║")
+        print(f"  ║    下方活动信号仅作为观测上下文。                         ║")
 
     # ── Footer ──────────────────────────────────────────────────────
     print(f"  ╚══════════════════════════════════════════════════════════╝")
@@ -542,14 +572,14 @@ def print_dashboard() -> None:
 
     # ── Plain-language summary ──────────────────────────────────────
     if not elig["can_execute"]:
-        print("  💡 Why is execution deferred?")
-        print("     → Supervisor has not approved execution yet.")
+        print("  💡 为什么当前仍暂缓执行？")
+        print("     → 监督者尚未放行执行。")
         for label, key in conds:
             c = cds.get(key, {})
             if not c.get("met") and c.get("remaining_s", 1) > 0:
-                print(f"     → {label}: {c['display']} signal gap (reference threshold {c.get('threshold_s', '?')}s)")
+                print(f"     → {label}: 还需 {c['display']}（参考阈值 {c.get('threshold_s', '?')}s）")
         if svc["agents"] == 0:
-            print(f"     → No agent instances are running. One will be spawned after supervisor approval.")
+            print(f"     → 当前没有 API-A 实例在运行；监督者放行后才会拉起执行器。")
         print()
 
 
@@ -572,15 +602,15 @@ def watch_dashboard(interval: float = 3.0) -> None:
 
             # Timestamp
             from datetime import datetime
-            print(f"  Refreshed at {datetime.now().strftime('%H:%M:%S')}  (Ctrl+C to exit)")
+            print(f"  刷新时间 {datetime.now().strftime('%H:%M:%S')}  （Ctrl+C 退出）")
             print()
 
             try:
                 print_dashboard()
             except Exception as exc:
-                print(f"  ⚠ Dashboard error: {exc}")
+                print(f"  ⚠ Dashboard 错误: {exc}")
                 print()
 
             time.sleep(interval)
     except KeyboardInterrupt:
-        print("\n  Watch stopped.\n")
+        print("\n  监视已停止。\n")

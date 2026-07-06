@@ -9,6 +9,10 @@ from VoidCube_cli.autonomous_observation import (
     resolve_autonomous_panel_focus_task,
     resolve_supervisor_stage_descriptor,
 )
+from VoidCube_cli.autonomous_status_host import (
+    fetch_autonomous_gateway_status,
+    fetch_supervisor_status,
+)
 
 
 def build_autonomous_executor_lease_row(
@@ -49,14 +53,14 @@ def resolve_autonomous_waiting_start_cause(
     if not events:
         return (
             "class:auto-panel-warn",
-            "近因: 已认领任务，但还没有收到后续执行事件",
+            "近因: 已认领链路项，但还没有收到后续执行事件",
         )
     latest = dict(events[-1] or {})
     stage = str(latest.get("stage") or "").strip().lower()
     if stage == "prompt_enqueue_failed":
         return (
             "class:auto-panel-bad",
-            "近因: 执行提示注入前台 CLI 失败，任务未真正起跑",
+            "近因: 执行提示注入前台 CLI 失败，链路项未真正起跑",
         )
     if stage == "prompt_enqueued":
         return (
@@ -66,7 +70,7 @@ def resolve_autonomous_waiting_start_cause(
     if stage == "claim":
         return (
             "class:auto-panel-warn",
-            "近因: 任务刚被认领，执行提示尚未注入前台 CLI",
+            "近因: 链路项刚被认领，执行提示尚未注入前台 CLI",
         )
     if stage == "tool_started":
         return (
@@ -81,7 +85,7 @@ def resolve_autonomous_waiting_start_cause(
     if stage == "model_turn_finished":
         return (
             "class:auto-panel-info",
-            "近因: 模型回合已结束，等待任务写回阶段接管",
+            "近因: 模型回合已结束，等待链路写回阶段接管",
         )
     return (
         "class:auto-panel-dim",
@@ -94,8 +98,8 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
     inner_width = max(34, min(width - 4, 92))
     session_short = str(getattr(host, "session_id", "") or "")[-8:] or "unknown"
     rows: list[tuple[str, str]] = []
-    supervisor_state = host._fetch_supervisor_status()
-    gateway_state = host._fetch_autonomous_gateway_status()
+    supervisor_state = fetch_supervisor_status(host)
+    gateway_state = fetch_autonomous_gateway_status(host)
     focus_task = resolve_autonomous_panel_focus_task(
         supervisor_state,
         getattr(host, "_current_autonomous_task", None),
@@ -133,7 +137,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
         status_label = str(supervisor_descriptor.get("status_label") or "待命拉单")
         status_style = "class:auto-panel-warn"
 
-    rows.append(("class:auto-panel-title", f"Autonomous Executor · 会话 {session_short}"))
+    rows.append(("class:auto-panel-title", f"API-A 自主执行面 · 会话 {session_short}"))
     rows.append((status_style, f"状态: {status_label}"))
     rows.append(
         build_autonomous_executor_lease_row(
@@ -153,7 +157,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
     ).strip().lower()
     if task_id:
         label = "改进" if execution_kind == "body_improvement" else "学习"
-        task_text = f"任务: {label} · {task_id[:8]} · {task_title or '(untitled)'}"
+        task_text = f"链路项: {label} · {task_id[:8]} · {task_title or '(untitled)'}"
         current_task = getattr(host, "_current_autonomous_task", None)
         if focus_task is current_task:
             started_at = float(getattr(host, "_current_autonomous_task_started_at", 0.0) or 0.0)
@@ -166,7 +170,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
                 (
                     "class:auto-panel-warn",
                     host._trim_status_bar_text(
-                        "链路: 自主执行面已认领该任务，等待进入首个模型或工具回合",
+                        "链路: 自主执行面已认领该链路项，等待进入首个模型或工具回合",
                         inner_width,
                     ),
                 )
@@ -180,7 +184,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
                 (
                     "class:auto-panel-info",
                     host._trim_status_bar_text(
-                        "链路: 自主执行面已完成执行，等待结果回写到任务链",
+                        "链路: 自主执行面已完成执行，等待结果回写到自主链路",
                         inner_width,
                     ),
                 )
@@ -192,7 +196,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
                     host._trim_status_bar_text(
                         str(
                             supervisor_descriptor.get("chain_reason")
-                            or "链路: 监督者已放行该任务，等待 API-A 自主执行面认领"
+                            or "链路: 监督者已放行该链路项，等待 API-A 自主执行面认领"
                         ),
                         inner_width,
                     ),
@@ -205,14 +209,14 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
                     host._trim_status_bar_text(
                         str(
                             supervisor_descriptor.get("chain_reason")
-                            or "链路: 该任务已被其他 API-A 自主执行面认领"
+                            or "链路: 该链路项已被其他 API-A 自主执行面认领"
                         ),
                         inner_width,
                     ),
                 )
             )
     else:
-        rows.append(("class:auto-panel-dim", "任务: 当前没有被认领的自主任务"))
+        rows.append(("class:auto-panel-dim", "链路项: 当前没有被认领的自主链路项"))
         reason_style, reason_text = resolve_autonomous_no_task_reason(supervisor_state)
         rows.append((reason_style, host._trim_status_bar_text(reason_text, inner_width)))
 
@@ -222,23 +226,23 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
     elif focus_stage == "claimed_running" or getattr(host, "_agent_running", False):
         activity_text = "执行流: 模型正在 API-A 自主执行面中工作"
     elif focus_stage == "claimed_waiting_start":
-        activity_text = "执行流: API-A 自主执行面已认领任务，等待进入首个模型或工具回合"
+        activity_text = "执行流: API-A 自主执行面已认领链路项，等待进入首个模型或工具回合"
     elif focus_stage == "claimed_waiting_writeback":
-        activity_text = "执行流: API-A 自主执行面已结束本轮执行，等待写回任务状态"
+        activity_text = "执行流: API-A 自主执行面已结束本轮执行，等待写回链路状态"
     elif focus_stage == "approved_waiting_claim":
         activity_text = str(
             supervisor_descriptor.get("activity_text")
-            or "执行流: 监督者已放行任务，等待 API-A 自主执行面认领"
+            or "执行流: 监督者已放行链路项，等待 API-A 自主执行面认领"
         )
     elif focus_stage == "running_elsewhere":
         activity_text = str(
             supervisor_descriptor.get("activity_text")
-            or "执行流: 任务正在其他 API-A 自主执行面中运行"
+            or "执行流: 链路项正在其他 API-A 自主执行面中运行"
         )
     else:
         activity_text = str(
             supervisor_descriptor.get("activity_text")
-            or "执行流: 等待监督者放行任务或等待下一轮拉单"
+            or "执行流: 等待监督者放行链路项或等待下一轮拉单"
         )
     rows.append(("class:auto-panel-text", host._trim_status_bar_text(activity_text, inner_width)))
 

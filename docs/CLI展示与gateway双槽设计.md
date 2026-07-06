@@ -31,7 +31,7 @@
 - gateway 只有一个 `_scenes_cache["agent"]` 槽位。
 - 两个进程都用 `source_service="cli_agent"` + 各自 session_id 上报，而且两者都会上报：
   - 主 CLI 用户任务时报 `executing`
-  - 监督者任务 CLI 在执行自主任务 / current task 时报 `learning` / `code_editing`，带 `execution_kind` + `task_id`（见 `cli.py` 的 `_current_gateway_presence_snapshot`）
+  - 监督者任务 CLI 在执行自主链路项 / 当前执行焦点时上报 `learning` / `code_editing`，带 `execution_kind` + `task_id`（见 `cli.py` 的 `_current_gateway_presence_snapshot`）
 - gateway 取“最后一个非 idle 上报者”占用槽位，两进程同时活跃时互相覆盖，聚合视图分不开。
 
 这就是为什么“按 session 过滤”不成立：session_id 虽不同，但 gateway 单槽后写覆盖，下游读到的是混合结果。

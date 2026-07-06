@@ -42,9 +42,9 @@ def handle_auto_command(
     parts = cmd.strip().split(maxsplit=1)
     focus = parts[1].strip() if len(parts) > 1 else ""
 
-    cprint("  🧠 Activating autonomous chain...")
+    cprint("  🧠 正在激活自主链路...")
     if focus:
-        cprint(f"     Focus: {focus}")
+        cprint(f"     聚焦: {focus}")
 
     def _ensure_supervisor_runtime() -> bool:
         try:
@@ -107,27 +107,27 @@ def handle_auto_command(
                     host._poll_autonomous_workflow()
                 except Exception:
                     pass
-                cprint("  ✅ Autonomous chain [bold green]ACTIVE[/]")
-                cprint(f"     Drive loop:  {'running' if resp.get('drive_loop_running') else 'stopped'}")
-                cprint(f"     Review loop: {'running' if resp.get('review_loop_running') else 'stopped'}")
+                cprint("  ✅ 自主链路 [bold green]已激活[/]")
+                cprint(f"     内生驱动循环: {'运行中' if resp.get('drive_loop_running') else '未运行'}")
+                cprint(f"     治理复核循环: {'运行中' if resp.get('review_loop_running') else '未运行'}")
                 if not resp.get("endogenous_drive_enabled", True):
-                    cprint("     ⚠️  endogenous_drive_enabled=False in config — drive loop disabled")
+                    cprint("     ⚠️  endogenous_drive_enabled=False，内生驱动循环未启用")
                 if isinstance(cycle_result, dict):
                     summary = cycle_result.get("summary", {}) if isinstance(cycle_result, dict) else {}
                     planned = summary.get("planned", 0)
                     dispatched = summary.get("dispatched", 0)
-                    cprint(f"     Initial cycle: planned={planned}, dispatched={dispatched}")
+                    cprint(f"     首轮循环: planned={planned}, dispatched={dispatched}")
                 snapshot = host._fetch_supervisor_status_snapshot()
                 if snapshot:
                     for line in host._format_supervisor_status_snapshot(snapshot)[:4]:
                         cprint(f"     {line}")
-                cprint("     Foreground CLI interaction remains available.")
-                cprint("     Use /auto-q to stop the autonomous chain.")
-                cprint(f"     Monitor: {supervisor_url}/ui")
+                cprint("     前台主 CLI 交互仍保持可用。")
+                cprint("     使用 /auto-q 停止自主链路。")
+                cprint(f"     监视地址: {supervisor_url}/ui")
             else:
-                cprint("  ⚠️  Autonomous chain activation failed.")
+                cprint("  ⚠️  自主链路激活失败。")
                 if not resp.get("endogenous_drive_enabled", True):
-                    cprint("     endogenous_drive_enabled is False in config.")
+                    cprint("     配置中的 endogenous_drive_enabled 为 False。")
         except Exception:
             pass
 
@@ -145,7 +145,7 @@ def handle_auto_q_command(
     push_cli_agent_scene: Any,
     thread_factory: Any,
 ) -> None:
-    cprint("  🔄 Stopping autonomous chain...")
+    cprint("  🔄 正在停止自主链路...")
 
     def _call_deactivate_autonomous_chain_gate():
         supervisor_url = _resolve_supervisor_url()
@@ -164,7 +164,7 @@ def handle_auto_q_command(
         active = resp.get("autonomous_chain_gate_active", True)
         if not active:
             host._interrupt_current_autonomous_task(
-                reason="Autonomous chain exited by /auto-q; current task interrupted by user.",
+                reason="自主链路已由 /auto-q 退出；当前链路项被用户中断。",
                 source="auto_q",
                 timeout=5,
             )
@@ -175,11 +175,11 @@ def handle_auto_q_command(
                 agent_role="supervisor_task",
             )
             host._append_autonomous_execution_event("/auto 已退出", tone="warn")
-            cprint("  💤 Autonomous chain [bold]STOPPED[/].")
-            cprint("     The baseline health-check loop remains running.")
-            cprint("     Use /auto to restart the autonomous chain.")
+            cprint("  💤 自主链路 [bold]已停止[/].")
+            cprint("     基线健康检查循环仍会继续运行。")
+            cprint("     使用 /auto 可重新进入自主链路。")
         else:
-            cprint("  ⚠️  Autonomous chain could not be stopped (still active).")
+            cprint("  ⚠️  自主链路未能停止，当前仍处于激活状态。")
 
     thread_factory(
         target=_call_deactivate_autonomous_chain_gate,
@@ -198,7 +198,7 @@ def exit_autonomous_gate_fast(
     if not host._autonomous_gate_active:
         return True
 
-    cprint("  🔄 Exiting autonomous chain (fast path)...")
+    cprint("  🔄 正在退出自主链路（fast path）...")
     if host._agent_running:
         try:
             host._interrupt_queue.put("__AUTONOMOUS_Q_EXIT__")
@@ -216,7 +216,7 @@ def exit_autonomous_gate_fast(
         resp = json.loads(urllib.request.urlopen(request, timeout=10).read())
         if not resp.get("autonomous_chain_gate_active", True):
             host._interrupt_current_autonomous_task(
-                reason="Autonomous chain exited via fast-path /auto-q; current task interrupted by user.",
+                reason="自主链路已通过 fast-path /auto-q 退出；当前链路项被用户中断。",
                 source="auto_q_fast_path",
                 timeout=5,
             )
@@ -227,20 +227,20 @@ def exit_autonomous_gate_fast(
                 agent_role="supervisor_task",
             )
             host._append_autonomous_execution_event("/auto 已退出", tone="warn")
-            cprint("  💤 Autonomous chain [bold]STOPPED[/].")
-            cprint("     The baseline health-check loop remains running.")
-            cprint("     Use /auto to restart the autonomous chain.")
+            cprint("  💤 自主链路 [bold]已停止[/].")
+            cprint("     基线健康检查循环仍会继续运行。")
+            cprint("     使用 /auto 可重新进入自主链路。")
             record_supervisor_ui_activity_safe(
                 "autonomous_gate_exit",
                 scene="idle",
-                summary="Autonomous chain exited via fast-path /auto-q",
+                summary="自主链路已通过 fast-path /auto-q 退出",
             )
             return True
-        cprint("  ⚠️  Autonomous chain could not be stopped (still active).")
+        cprint("  ⚠️  自主链路未能停止，当前仍处于激活状态。")
         return False
     except Exception as exc:
         host._interrupt_current_autonomous_task(
-            reason="Autonomous chain exited locally while supervisor was unreachable; current task interrupted by user.",
+            reason="自主链路已在本地退出；supervisor 不可达，当前链路项被用户中断。",
             source="auto_q_local_exit",
             timeout=5,
         )
@@ -252,8 +252,8 @@ def exit_autonomous_gate_fast(
         )
         host._append_autonomous_execution_event("/auto 本地已退出，但 supervisor 可能仍保持激活", tone="warn")
         cprint(f"  ⚠️  Supervisor unreachable: {exc}")
-        cprint("     Local autonomous chain state deactivated (supervisor state may be stale).")
-        cprint("     Run /auto to re-enter when supervisor is available.")
+        cprint("     本地自主链路状态已关闭（supervisor 侧状态可能仍陈旧）。")
+        cprint("     等 supervisor 可用后，可再次执行 /auto 重新进入。")
         return True
 
 
@@ -263,7 +263,7 @@ def force_quit_autonomous_gate(
     cprint: Any,
     push_cli_agent_scene: Any,
 ) -> bool:
-    cprint("\n  🚨 FORCE QUIT AUTONOMOUS CHAIN — attempting emergency cleanup...")
+    cprint("\n  🚨 强制退出自主链路 —— 正在尝试紧急清理...")
 
     if host._agent_running:
         try:
@@ -280,23 +280,24 @@ def force_quit_autonomous_gate(
             method="POST",
         )
         json.loads(urllib.request.urlopen(request, timeout=5).read())
-        cprint("  ✅ Autonomous chain stopped")
+        cprint("  ✅ 自主链路已停止")
     except Exception as exc:
-        cprint(f"  ⚠️  Autonomous chain deactivation failed: {exc}")
+        cprint(f"  ⚠️  自主链路停用失败: {exc}")
 
     current = getattr(host, "_current_autonomous_task", None)
     if current is not None:
         task_id = str(current.get("task_id") or "")
         execution_kind = host._autonomous_task_execution_kind(current)
         task_label = host._autonomous_task_label(execution_kind)
+        chain_item_label = "改进" if execution_kind == "body_improvement" else "学习"
         if host._interrupt_current_autonomous_task(
-            reason=f"Autonomous chain force-quit — {task_label} interrupted by user.",
+            reason=f"自主链路被强制退出；{chain_item_label}链路项被用户中断。",
             source="force_quit",
             timeout=5,
         ):
-            cprint(f"  ✅ Autonomous {task_label} {task_id[:8]}... marked interrupted")
+            cprint(f"  ✅ {task_label} {task_id[:8]}... 已标记为中断")
         else:
-            cprint("  ⚠️  Could not report task completion to Gateway")
+            cprint("  ⚠️  未能向 Gateway 回报链路项终态")
 
     try:
         session_id = getattr(host, "session_id", "")
@@ -317,5 +318,5 @@ def force_quit_autonomous_gate(
         session_id=getattr(host, "session_id", None),
         agent_role="supervisor_task",
     )
-    cprint("  🛡️  Force quit complete — autonomous chain stopped.")
+    cprint("  🛡️  强制退出完成 —— 自主链路已停止。")
     return True

@@ -1003,7 +1003,7 @@ Governor (API-B)
    - 任务卡只展示“当前已在链路中的任务位置与状态”；
    - 时间线只展示“刚刚发生了什么”。
    三者不能混成旧式“任务总览 + 队列操作台”。
-   - Web 小屋前端应优先消费专门的自主链路读模型，例如 `autonomous_observation.chain.segments / board.current_cards` 一类投影，而不是直接把 Supervisor 底层任务存储结构当成页面协议。
+   - Web 小屋前端应优先消费专门的自主链路读模型，例如 `autonomous_observation.chain.segments / loop.stages / board.primary_focus` 一类投影，而不是直接把 Supervisor 底层任务存储结构当成页面协议。
 5. **链路任务只做只读观测**：
    - Web 小屋可以显示 API-B 当前任务、API-A 当前任务、链路回流任务和候选；
    - 但这些展示的目标是帮助理解“API-B 在做什么”，不是提供一套人工管理队列的操作面。
@@ -1268,17 +1268,19 @@ Mem 中长期记忆 + 网关活动快照（7 个时间戳 + 错误/不确定性�
 
 **gateway 双泳道展示/活动架构**：`user_chat` 与 `supervisor_task` 是同一 API-A 域下的两个工作泳道。用户链路的主 CLI 交互走 `user_chat`，自主链路中监督者放行的学习/改造任务走 `supervisor_task`；两者互不覆盖。dashboard / Web 监控只作为 API-B 观测面按 lane 读取自主链路状态，不能退回单槽 last-writer-wins，也不能变成用户聊天入口。
 
-终端 dashboard / Web 小屋应优先消费 Supervisor 提供的 `autonomous_observation.chain.segments / board.current_cards / primary_focus` 读模型；其中 `chain.segments` 是程序侧主协议，对应的治理 API 入口也应统一收口为 `/autonomous-chain/tasks`。观测板暂不可用时可以显示空态，但不应回退成旧 `/self-evolution/tasks` 队列管理视角。
+终端 dashboard / Web 小屋应优先消费 Supervisor 提供的 `autonomous_observation.chain.segments / loop.stages / board.primary_focus` 读模型；其中 `chain.segments` 与 `loop.stages` 是程序侧主协议，对应的治理 API 入口也应统一收口为 `/autonomous-chain/tasks`。观测板暂不可用时可以显示空态，但不应回退成旧 `/self-evolution/tasks` 队列管理视角。
 
 Web 小屋前端内部主面板也应以 `chain`/“自主链路总览”作为主语，而不是继续沿用 `tasks`/任务台命名；默认展开内容应先展示焦点、四段闭环和链路分段观察，再展示更细的任务卡。这里的“分段观察”是对自主链路四段流动的只读投影，不是旧式队列管理台。
 
-对应地，Supervisor 的 `/ui/state` 不应再把顶层 `tasks`、`drive_candidates`，以及 `autonomous_observation.observed_tasks / autonomous_observation.candidates` 这类原始治理/候选切片作为前端主协议返回；前端应围绕 `autonomous_observation.chain.segments`、`board.current_cards` 与分 lane 当前态取数。
+对应地，Supervisor 的 `/ui/state` 不应再把顶层 `tasks`、`drive_candidates`，以及 `autonomous_observation.observed_tasks / autonomous_observation.candidates` 这类原始治理/候选切片作为前端主协议返回；前端应围绕 `autonomous_observation.chain.segments`、`loop.stages` 与 `board.primary_focus` 取数。
 
 同理，`drive_available`、`autonomous_chain_gate` 这类 Web 观测专用运行时信号也应优先下沉到 `autonomous_observation.runtime` 一类读模型分支，而不是继续作为顶层 UI 镜像字段长期保留。
 
 进一步地，`metrics`、`activity_guards`、`active_sessions` 这类辅助观测数据也不应继续散落在 `/ui/state` 顶层；应并入 `autonomous_observation.metrics` 与 `autonomous_observation.runtime.activity_guards / user_chain_signal / eligibility`，保证 Web/CLI/dashboard 都围绕同一棵状态树读取。
 
 如果需要展示“链路分段”，也应把它理解成自主链路的观测投影，而不是旧任务台。推荐主协议为 `autonomous_observation.chain.segments`，显式区分 `api_b_backlog`、`api_a_ready`、`api_b_candidates`、`mem_recent` 四类链路分段；前端应直接消费这些分段，而不是再额外维护一层旧展示别名。每个 segment 还应允许携带 `recent_events` 一类最近链路事件摘要，以及 `recent_traces` 一类按 `trace_id` 聚合的轻量 trace 摘要；Web 小屋优先使用 Supervisor 本地记录来生成这些摘要，避免观测页刷新反向依赖慢速 live 探活。当某条 recent trace 值得展开时，还应允许内联少量 `detail`（如 source 分布、任务家族、timeline preview，以及有限条数的 `timeline_events` 事件流），并支持按 source 过滤事件流，便于 Web 小屋顺着这一段继续钻取最近的 timeline / trace。
+
+其中 `api_a_ready` 必须严格理解成“已放行、待 API-A 拉取”的窗口，而不是 API-A 全部执行态总段。已经进入 `running` 的自主任务应继续通过 `loop.stages.api_a_execution`、最近事件和最近轨迹观察，不应再混回 `api_a_ready`，否则前端会重新退化成旧式队列台视角。
 
 同样地，Supervisor 底层的任务列表存储虽然目前仍由 `systems/supervisor/autonomous_chain_store.py` 承载，但程序消费层不应继续把它当成一个无差别“总存储”。推荐底层统一围绕三类投影读取：
 
