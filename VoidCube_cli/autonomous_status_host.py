@@ -10,6 +10,20 @@ from VoidCube_cli.autonomous_observation import format_supervisor_status_snapsho
 from VoidCube_cli.autonomous_events import sync_autonomous_supervisor_event
 
 
+def initialize_autonomous_status_caches(host: Any) -> None:
+    """Initialize autonomous observation caches on the CLI host."""
+    host._supervisor_state_cache = {}
+    host._supervisor_state_ts = 0.0
+    host._supervisor_state_refreshing = False
+    host._supervisor_url = ""
+    host._autonomous_gateway_status_cache = {}
+    host._autonomous_gateway_status_ts = 0.0
+    host._autonomous_gateway_status_refreshing = False
+    host._autonomous_gateway_activity_cache = {}
+    host._autonomous_gateway_activity_ts = 0.0
+    host._autonomous_gateway_activity_refreshing = False
+
+
 def get_supervisor_url(host: Any) -> str:
     """Resolve supervisor UI state endpoint from config or defaults."""
     cached = str(getattr(host, "_supervisor_url", "") or "").strip()
@@ -29,6 +43,12 @@ def get_supervisor_url(host: Any) -> str:
 
 def fetch_supervisor_status(host: Any) -> Dict[str, Any]:
     """Return cached supervisor state without blocking."""
+    override = getattr(host, "_fetch_supervisor_status", None)
+    if callable(override):
+        try:
+            return dict(override() or {})
+        except Exception:
+            return {}
     return getattr(host, "_supervisor_state_cache", None) or {}
 
 
@@ -40,6 +60,24 @@ def fetch_autonomous_gateway_status(host: Any) -> Dict[str, Any]:
 def fetch_cached_gateway_agent_activity(host: Any) -> Dict[str, Any]:
     """Return cached gateway API-A execution activity for CLI-side observation."""
     return getattr(host, "_autonomous_gateway_activity_cache", None) or {}
+
+
+def is_supervisor_status_refreshing(host: Any) -> bool:
+    return bool(getattr(host, "_supervisor_state_refreshing", False))
+
+
+def is_gateway_agent_activity_refreshing(host: Any) -> bool:
+    return bool(getattr(host, "_autonomous_gateway_activity_refreshing", False))
+
+
+def supervisor_activity_snapshot(host: Any) -> Dict[str, Any]:
+    status = fetch_supervisor_status(host)
+    scene = str(status.get("scene") or "idle").strip() or "idle"
+    return {
+        "scene": scene,
+        "is_active": scene != "idle",
+        "mem_usage": dict(status.get("mem_usage") or {}),
+    }
 
 
 def refresh_supervisor_status(host: Any) -> None:
@@ -154,6 +192,12 @@ def refresh_autonomous_observation_surfaces(
 
 
 def fetch_supervisor_status_snapshot(host: Any) -> Dict[str, Any]:
+    override = getattr(host, "_fetch_supervisor_status_snapshot", None)
+    if callable(override):
+        try:
+            return dict(override() or {})
+        except Exception:
+            return {}
     try:
         from VoidCube_cli.config import load_config
 
@@ -170,6 +214,12 @@ def fetch_supervisor_status_snapshot(host: Any) -> Dict[str, Any]:
 
 
 def fetch_gateway_agent_activity_snapshot(host: Any) -> Dict[str, Any]:
+    override = getattr(host, "_fetch_gateway_agent_activity_snapshot", None)
+    if callable(override):
+        try:
+            return dict(override() or {})
+        except Exception:
+            return {}
     return _fetch_gateway_agent_activity_snapshot_now(host)
 
 
@@ -210,13 +260,28 @@ def autonomous_observation_summary_sections(
     if supervisor_status:
         lines.extend(["", "监督者快照:"])
         lines.extend(format_supervisor_status_snapshot(supervisor_status))
-    elif getattr(host, "_supervisor_state_refreshing", False):
+    elif is_supervisor_status_refreshing(host):
         lines.extend(["", "监督者快照:", "后台刷新中，稍后会回到当前自主闭环快照。"])
 
     agent_activity = fetch_cached_gateway_agent_activity(host)
     if agent_activity:
         lines.extend(["", "网关执行活动:"])
         lines.extend(format_gateway_agent_activity_snapshot(agent_activity))
-    elif getattr(host, "_autonomous_gateway_activity_refreshing", False):
+    elif is_gateway_agent_activity_refreshing(host):
         lines.extend(["", "网关执行活动:", "后台刷新中，稍后会回到最近 API-A 执行回报。"])
     return lines
+
+
+def preview_supervisor_status_lines(
+    host: Any,
+    *,
+    limit: int = 4,
+) -> list[str]:
+    refresh_supervisor_status(host)
+    supervisor_status = fetch_supervisor_status(host)
+    if not supervisor_status:
+        return []
+    lines = format_supervisor_status_snapshot(supervisor_status)
+    if limit <= 0:
+        return list(lines)
+    return list(lines[:limit])

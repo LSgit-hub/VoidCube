@@ -100,6 +100,21 @@ def _idle_snapshot(
     }
 
 
+async def _drive_input_from_runtime_probe(
+    supervisor: Supervisor,
+    *,
+    now: str,
+    task_family: str,
+) -> Dict[str, Any]:
+    legacy_runtime = await supervisor.evaluate_activity_guards(
+        {
+            "now": now,
+            "task_family": task_family,
+        }
+    )
+    return supervisor._project_drive_input_snapshot(legacy_runtime)
+
+
 # ---------------------------------------------------------------------------
 # Phase 1 loop steps
 # ---------------------------------------------------------------------------
@@ -221,9 +236,14 @@ class TestPhase1IdleWindowGovernance:
         )
 
         # 再执行自动裁决。
+        drive_input = await _drive_input_from_runtime_probe(
+            sv,
+            now="2026-06-20T02:00:00",
+            task_family="memory_maintenance",
+        )
         decision = await sv.decide_autonomous_chain_task(
             mem_task["task_id"],
-            {"decision": "auto", "activity_guards": {"now": "2026-06-20T02:00:00"}},
+            {"decision": "auto", "drive_input": drive_input},
         )
         assert decision["status"] == "approved", f"Expected approved, got {decision}"
 
@@ -243,9 +263,14 @@ class TestPhase1IdleWindowGovernance:
             if t["governance_task_type"] == "memory_maintenance"
         )
 
+        drive_input = await _drive_input_from_runtime_probe(
+            sv,
+            now="2026-06-20T14:00:00",
+            task_family="memory_maintenance",
+        )
         decision = await sv.decide_autonomous_chain_task(
             mem_task["task_id"],
-            {"decision": "auto", "activity_guards": {"now": "2026-06-20T14:00:00"}},
+            {"decision": "auto", "drive_input": drive_input},
         )
         assert decision["status"] == "approved", f"全天候执行下应允许批准，实际得到 {decision}"
 
@@ -396,9 +421,14 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
             t for t in tasks["tasks"]
             if t["governance_task_type"] == "memory_maintenance"
         )
+        drive_input = await _drive_input_from_runtime_probe(
+            sv,
+            now="2026-06-20T02:00:00",
+            task_family="memory_maintenance",
+        )
         await sv.decide_autonomous_chain_task(
             mem_task["task_id"],
-            {"decision": "auto", "activity_guards": {"now": "2026-06-20T02:00:00"}},
+            {"decision": "auto", "drive_input": drive_input},
         )
 
         # 第一次交接。

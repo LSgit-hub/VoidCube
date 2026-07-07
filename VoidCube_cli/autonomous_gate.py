@@ -11,11 +11,9 @@ from VoidCube_cli.autonomous_executor import (
     autonomous_task_execution_kind,
     autonomous_task_label,
 )
-from VoidCube_cli.autonomous_observation import format_supervisor_status_snapshot
 from VoidCube_cli.autonomous_presence import ensure_autonomous_executor_session
 from VoidCube_cli.autonomous_status_host import (
-    fetch_supervisor_status,
-    refresh_supervisor_status,
+    preview_supervisor_status_lines,
 )
 
 logger = logging.getLogger(__name__)
@@ -172,10 +170,9 @@ def handle_auto_command(
                     planned = summary.get("planned", 0)
                     handed_off = summary.get("handed_off", 0)
                     cprint(f"     首轮循环: planned={planned}, handed_off={handed_off}")
-                refresh_supervisor_status(host)
-                snapshot = fetch_supervisor_status(host)
-                if snapshot:
-                    for line in format_supervisor_status_snapshot(snapshot)[:4]:
+                supervisor_preview = preview_supervisor_status_lines(host, limit=4)
+                if supervisor_preview:
+                    for line in supervisor_preview:
                         cprint(f"     {line}")
                 else:
                     cprint("     监督者快照将在后台刷新后进入观测面。")

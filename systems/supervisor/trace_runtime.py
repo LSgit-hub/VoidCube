@@ -13,15 +13,19 @@ class TraceRuntimeMixin:
     @staticmethod
     def _normalize_trace_execution_request_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         normalized = dict(payload or {})
+        legacy_activity_guard_evidence = dict(
+            normalized.get("activity_guard_evidence") or {}
+        )
         drive_input_evidence = dict(
             normalized.get("drive_input_evidence")
-            or normalized.get("activity_guard_evidence")
+            or legacy_activity_guard_evidence
             or {}
         )
         normalized["drive_input_evidence"] = dict(drive_input_evidence)
-        normalized["activity_guard_evidence"] = dict(
-            normalized.get("activity_guard_evidence") or drive_input_evidence
-        )
+        if legacy_activity_guard_evidence:
+            normalized["activity_guard_evidence"] = dict(legacy_activity_guard_evidence)
+        else:
+            normalized.pop("activity_guard_evidence", None)
         return normalized
 
     @staticmethod

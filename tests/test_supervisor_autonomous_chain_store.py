@@ -182,6 +182,23 @@ def _endogenous_drive_input_payload(
     }
 
 
+def _assert_compat_drive_input_mirror(
+    compat_payload: dict,
+    drive_input: dict,
+    *keys: str,
+) -> None:
+    mirror_keys = keys or ("user_chain_signal", "decisions")
+    for key in mirror_keys:
+        assert compat_payload.get(key) == drive_input.get(key)
+
+
+def _compat_drive_input_fields(drive_input: dict) -> dict:
+    return {
+        "drive_input": dict(drive_input),
+        "activity_guards": dict(drive_input),
+    }
+
+
 def _drive_cycle_failure_replay_evaluation(
     *,
     context: str,
@@ -283,24 +300,17 @@ def _drive_cycle_failure_replay_evaluation(
         ]
     return {
         "status": "evaluated",
-        "drive_input": {
-            "checks": {},
-            "task_family_decisions": {
-                task_family: {"eligible_for_planning": True, "eligible_for_execution": True},
-            },
-            "governance_task_type_decisions": {
-                governance_type: {"eligible_for_planning": True, "eligible_for_execution": True},
-            },
-        },
-        "activity_guards": {
-            "checks": {},
-            "task_family_decisions": {
-                task_family: {"eligible_for_planning": True, "eligible_for_execution": True},
-            },
-            "governance_task_type_decisions": {
-                governance_type: {"eligible_for_planning": True, "eligible_for_execution": True},
-            },
-        },
+        **_compat_drive_input_fields(
+            {
+                "checks": {},
+                "task_family_decisions": {
+                    task_family: {"eligible_for_planning": True, "eligible_for_execution": True},
+                },
+                "governance_task_type_decisions": {
+                    governance_type: {"eligible_for_planning": True, "eligible_for_execution": True},
+                },
+            }
+        ),
         "deliberation": deliberation,
         "drive_posture": deliberation["signals"][0],
         "governance_channels": governance_channels,
@@ -2217,8 +2227,7 @@ async def test_evaluate_endogenous_drive_accepts_drive_input_request_without_gua
 
     assert result["drive_input"]["activity"]["counts"]["error_count"] == 1
     assert result["drive_input"]["user_chain_signal"]["scope"] == "soft_signal_only"
-    compat_drive_input = result["activity_guards"]
-    assert compat_drive_input["user_chain_signal"] == result["drive_input"]["user_chain_signal"]
+    assert "activity_guards" not in result
 
 
 @pytest.mark.asyncio
@@ -2535,10 +2544,10 @@ async def test_cognitive_self_regulation_tightens_adaptive_policy_when_lm_drift_
         result["drive_input"]["endogenous_drive_policy"]["dynamic_candidate_throttle_boost"]
         == regulation["dynamic_candidate_throttle_boost"]
     )
-    compat_drive_input = result["activity_guards"]
-    assert (
-        compat_drive_input["endogenous_drive_policy"]["dynamic_candidate_throttle_boost"]
-        == result["drive_input"]["endogenous_drive_policy"]["dynamic_candidate_throttle_boost"]
+    _assert_compat_drive_input_mirror(
+        result["activity_guards"],
+        result["drive_input"],
+        "endogenous_drive_policy",
     )
     assert adaptive_policy["preferred_focus"] == "observation"
     assert adaptive_policy["candidate_budget"] <= 2
@@ -6264,42 +6273,26 @@ async def test_run_endogenous_drive_cycle_only_judges_candidates_kept_after_runt
         }
         return {
             "status": "evaluated",
-            "drive_input": {
-                "task_family_decisions": {
-                    "self_learning": {
+            **_compat_drive_input_fields(
+                {
+                    "task_family_decisions": {
+                        "self_learning": {
+                            "eligible_for_planning": True,
+                            "eligible_for_execution": True,
+                        },
+                    },
+                    "governance_task_type_decisions": {
+                        "self_learning": {
+                            "eligible_for_planning": True,
+                            "eligible_for_execution": True,
+                        },
+                    },
+                    "decisions": {
                         "eligible_for_planning": True,
                         "eligible_for_execution": True,
                     },
-                },
-                "governance_task_type_decisions": {
-                    "self_learning": {
-                        "eligible_for_planning": True,
-                        "eligible_for_execution": True,
-                    },
-                },
-                "decisions": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-            },
-            "activity_guards": {
-                "task_family_decisions": {
-                    "self_learning": {
-                        "eligible_for_planning": True,
-                        "eligible_for_execution": True,
-                    },
-                },
-                "governance_task_type_decisions": {
-                    "self_learning": {
-                        "eligible_for_planning": True,
-                        "eligible_for_execution": True,
-                    },
-                },
-                "decisions": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-            },
+                }
+            ),
             "deliberation": deliberation,
             "drive_posture": deliberation["signals"][0],
             "governance_channels": {},
@@ -16431,11 +16424,11 @@ async def test_auto_decision_approves_task_when_drive_input_allows_execution(tmp
     assert result["task"]["decision_history"][-1]["execution_kind"] == "general_self_evolution"
     decision_context = result["task"]["decision_history"][-1]["context"]
     decision_drive_input = decision_context["drive_input"]
-    decision_drive_compat = decision_context["activity_guards"]
     assert decision_drive_input["decisions"]["eligible_for_execution"] is True
     assert decision_drive_input["user_chain_signal"]["scope"] == "soft_signal_only"
     assert decision_drive_input["user_chain_signal"]["active_sessions"] == 0
-    assert decision_drive_compat["user_chain_signal"] == decision_drive_input["user_chain_signal"]
+    assert "activity_guards" not in result
+    assert "activity_guards" not in decision_context
 
 
 @pytest.mark.asyncio
@@ -16455,6 +16448,7 @@ async def test_auto_decision_accepts_drive_input_request_without_guard_probe(tmp
     )
 
     assert result["status"] == "approved"
+    assert "activity_guards" not in result
     assert result["task"]["decision_history"][-1]["context"]["drive_input"]["user_chain_signal"]["scope"] == "soft_signal_only"
 
 
@@ -16500,6 +16494,7 @@ async def test_batch_review_defers_tasks_when_drive_input_is_not_ready(tmp_path)
     assert result["decision"] == "deferred"
     assert result["count"] == 2
     assert result["drive_input"]["activity"]["active_sessions"] == 1
+    assert "activity_guards" not in result
     assert all(task["status"] == "deferred" for task in result["tasks"])
     assert all(
         task["decision_history"][-1]["context"]["drive_input"]["decisions"]["eligible_for_execution"] is False
@@ -16523,6 +16518,7 @@ async def test_batch_review_accepts_drive_input_request_without_guard_probe(tmp_
     assert result["status"] == "reviewed"
     assert result["count"] == 1
     assert result["drive_input"]["user_chain_signal"]["scope"] == "soft_signal_only"
+    assert "activity_guards" not in result
     assert (
         result["tasks"][0]["decision_history"][-1]["context"]["drive_input"]["governance_task_type_decisions"]["self_evolution"]["eligible_for_execution"]
         is True
@@ -17437,14 +17433,10 @@ async def test_body_self_evolution_approval_builds_formal_execution_request(tmp_
     assert execution_request["drive_input_evidence"]["user_chain_signal"]["active_sessions"] == 0
     assert execution_request["drive_input_evidence"]["decisions"]["eligible_for_execution"] is True
     assert execution_request["drive_input_evidence"]["user_chain_signal"]["scope"] == "soft_signal_only"
-    assert execution_request["activity_guard_evidence"]["user_chain_signal"] == execution_request["drive_input_evidence"]["user_chain_signal"]
-    assert execution_request["activity_guard_evidence"]["decisions"] == execution_request["drive_input_evidence"]["decisions"]
+    assert "activity_guard_evidence" not in execution_request
     decision_context = result["task"]["decision_history"][-1]["context"]
     assert decision_context["drive_input"]["user_chain_signal"]["active_sessions"] == 0
-    assert (
-        decision_context["activity_guards"]["user_chain_signal"]
-        == decision_context["drive_input"]["user_chain_signal"]
-    )
+    assert "activity_guards" not in decision_context
 
 
 @pytest.mark.unit
@@ -17466,6 +17458,27 @@ def test_execution_request_legacy_activity_guard_evidence_backfills_drive_input_
 
     assert request.drive_input_evidence["user_chain_signal"]["active_sessions"] == 2
     assert request.activity_guard_evidence["user_chain_signal"]["active_sessions"] == 2
+
+
+@pytest.mark.unit
+def test_execution_request_drive_input_evidence_does_not_backfill_legacy_activity_guard_evidence():
+    request = AutonomousChainExecutionRequest.model_validate(
+        {
+            "task_id": "task-2",
+            "trace_id": "trace-2",
+            "task_type": "self_evolution",
+            "kind": "general_self_evolution",
+            "drive_input_evidence": {
+                "user_chain_signal": {
+                    "scope": "soft_signal_only",
+                    "active_sessions": 1,
+                }
+            },
+        }
+    )
+
+    assert request.drive_input_evidence["user_chain_signal"]["active_sessions"] == 1
+    assert request.activity_guard_evidence == {}
 
 
 @pytest.mark.asyncio
@@ -17723,13 +17736,11 @@ async def test_self_learning_followup_auto_approval_does_not_build_execution_req
     assert decision["execution_kind"] is None
     assert decision["decision_id"]
     decision_drive_input = decision["context"]["drive_input"]
-    decision_drive_compat = decision["context"]["activity_guards"]
     assert decision_drive_input["governance_task_type"] == "self_learning"
     assert decision_drive_input["task_family"] == "self_learning"
     assert decision_drive_input["user_chain_signal"]["scope"] == "soft_signal_only"
     assert decision_drive_input["decisions"]["eligible_for_execution"] is True
-    assert decision_drive_compat["user_chain_signal"] == decision_drive_input["user_chain_signal"]
-    assert decision_drive_compat["decisions"] == decision_drive_input["decisions"]
+    assert "activity_guards" not in decision["context"]
 
 
 @pytest.mark.asyncio
@@ -17757,13 +17768,20 @@ async def test_memory_maintenance_auto_decision_defers_when_memory_activity_is_r
 
     supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
 
+    drive_input = supervisor._project_drive_input_snapshot(
+        await supervisor.evaluate_activity_guards(
+            {
+                "now": "2026-05-25T00:15:00",
+                "task_family": "memory_maintenance",
+            }
+        )
+    )
+
     result = await supervisor.decide_autonomous_chain_task(
         task_id,
         {
             "decision": "auto",
-            "activity_guards": {
-                "now": "2026-05-25T00:15:00",
-            },
+            "drive_input": drive_input,
         },
     )
 

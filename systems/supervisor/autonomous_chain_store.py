@@ -81,9 +81,7 @@ class AutonomousChainExecutionRequest(BaseModel):
             self.drive_input_evidence or self.activity_guard_evidence or {}
         )
         self.drive_input_evidence = dict(normalized_drive_input_evidence)
-        self.activity_guard_evidence = dict(
-            self.activity_guard_evidence or normalized_drive_input_evidence
-        )
+        self.activity_guard_evidence = dict(self.activity_guard_evidence or {})
         return self
 
 

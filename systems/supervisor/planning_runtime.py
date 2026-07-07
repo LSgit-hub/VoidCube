@@ -1232,6 +1232,15 @@ class PlanningRuntimeMixin:
         normalized = dict(context or {})
         context_drive_input = normalized.get("drive_input")
         context_legacy_activity_guards = normalized.get("activity_guards")
+        explicit_legacy_activity_guards = (
+            dict(legacy_activity_guards)
+            if isinstance(legacy_activity_guards, dict)
+            else (
+                dict(context_legacy_activity_guards)
+                if isinstance(context_legacy_activity_guards, dict)
+                else {}
+            )
+        )
         effective_drive_input = dict(
             drive_input
             or (context_drive_input if isinstance(context_drive_input, dict) else {})
@@ -1243,19 +1252,13 @@ class PlanningRuntimeMixin:
             )
             or {}
         )
-        effective_legacy_activity_guards = self._build_legacy_activity_guards_snapshot(
-            effective_drive_input,
-            legacy_activity_guards
-            or (
-                context_legacy_activity_guards
-                if isinstance(context_legacy_activity_guards, dict)
-                else {}
-            ),
-        )
         if effective_drive_input:
             normalized["drive_input"] = effective_drive_input
-        if effective_legacy_activity_guards:
-            normalized["activity_guards"] = effective_legacy_activity_guards
+        if explicit_legacy_activity_guards:
+            normalized["activity_guards"] = self._build_legacy_activity_guards_snapshot(
+                effective_drive_input,
+                explicit_legacy_activity_guards,
+            )
         return normalized
 
     def _build_drive_input_response_fields(
@@ -1267,10 +1270,17 @@ class PlanningRuntimeMixin:
             drive_input=drive_input,
             legacy_activity_guards=legacy_activity_guards,
         )
-        return {
-            "drive_input": dict(normalized.get("drive_input") or {}),
-            "activity_guards": dict(normalized.get("activity_guards") or {}),
+        response_drive_input = dict(normalized.get("drive_input") or {})
+        response_legacy_activity_guards = self._build_legacy_activity_guards_snapshot(
+            response_drive_input,
+            legacy_activity_guards,
+        )
+        fields: Dict[str, Dict[str, Any]] = {
+            "drive_input": response_drive_input,
         }
+        if legacy_activity_guards:
+            fields["activity_guards"] = response_legacy_activity_guards
+        return fields
 
     def _drive_input_fields_from_evaluation(
         self,
@@ -1344,11 +1354,7 @@ class PlanningRuntimeMixin:
                     ),
                 )
             legacy_activity_guards = dict(request.get("activity_guards") or {})
-            merged_legacy_activity_guards = self._build_legacy_activity_guards_snapshot(
-                drive_input,
-                legacy_activity_guards,
-            )
-            return merged_legacy_activity_guards, drive_input
+            return legacy_activity_guards, drive_input
 
         legacy_activity_guard_request = dict(request.get("activity_guards") or {})
         if default_task_family is not None:
@@ -5749,6 +5755,9 @@ class PlanningRuntimeMixin:
         request = request or {}
         record_activity = bool(request.get("record_activity", True))
         persist_evaluation = bool(request.get("persist_evaluation", True))
+        expose_legacy_activity_guards = bool(request.get("activity_guards")) or not bool(
+            request.get("drive_input")
+        )
         legacy_activity_guards, drive_input = await self._resolve_runtime_drive_input_request(
             request,
             include_gate_default=True,
@@ -5816,10 +5825,11 @@ class PlanningRuntimeMixin:
         drive_input["drive_history"] = self._history_for_endogenous_drive(
             self._load_endogenous_drive_history()
         )
-        legacy_activity_guards = self._build_legacy_activity_guards_snapshot(
-            drive_input,
-            legacy_activity_guards,
-        )
+        if expose_legacy_activity_guards:
+            legacy_activity_guards = self._build_legacy_activity_guards_snapshot(
+                drive_input,
+                legacy_activity_guards,
+            )
         self_regulation = dict(persisted_self_regulation)
         for key in (
             "dynamic_candidate_throttle_boost",
@@ -5830,10 +5840,11 @@ class PlanningRuntimeMixin:
             drive_input["endogenous_drive_policy"][key] = float(
                 self_regulation.get(key) or 0.0
             )
-        legacy_activity_guards = self._build_legacy_activity_guards_snapshot(
-            drive_input,
-            legacy_activity_guards,
-        )
+        if expose_legacy_activity_guards:
+            legacy_activity_guards = self._build_legacy_activity_guards_snapshot(
+                drive_input,
+                legacy_activity_guards,
+            )
         max_candidates = int(
             request.get(
                 "max_candidates",
@@ -5926,10 +5937,11 @@ class PlanningRuntimeMixin:
             drive_input["endogenous_drive_policy"][key] = float(
                 combined_self_regulation.get(key) or 0.0
             )
-        legacy_activity_guards = self._build_legacy_activity_guards_snapshot(
-            drive_input,
-            legacy_activity_guards,
-        )
+        if expose_legacy_activity_guards:
+            legacy_activity_guards = self._build_legacy_activity_guards_snapshot(
+                drive_input,
+                legacy_activity_guards,
+            )
 
         if any(float(cognitive_self_regulation.get(key) or 0.0) > 0.0 for key in (
             "dynamic_candidate_throttle_boost",
@@ -6750,7 +6762,7 @@ class PlanningRuntimeMixin:
 
         decision_fields = self._drive_input_fields_from_decision_context(decision_context)
         drive_input_evidence = dict(decision_fields.get("drive_input") or {})
-        return AutonomousChainExecutionRequest(
+        execution_request = AutonomousChainExecutionRequest(
             task_id=task.task_id,
             trace_id=task.trace_id,
             task_type=task.task_type,
@@ -6775,21 +6787,36 @@ class PlanningRuntimeMixin:
             governor_decision=governor_decision,
             rollback_plan=rollback_plan,
         )
+        execution_request.activity_guard_evidence = {}
+        return execution_request
+
+    @staticmethod
+    def _normalize_execution_request_evidence_payload(
+        execution_request_payload: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        payload = dict(execution_request_payload or {})
+        legacy_activity_guard_evidence = dict(payload.get("activity_guard_evidence") or {})
+        drive_input_evidence = dict(
+            payload.get("drive_input_evidence")
+            or legacy_activity_guard_evidence
+            or {}
+        )
+        if not drive_input_evidence:
+            return payload
+        payload["drive_input_evidence"] = dict(drive_input_evidence)
+        if legacy_activity_guard_evidence:
+            payload["activity_guard_evidence"] = dict(legacy_activity_guard_evidence)
+        else:
+            payload.pop("activity_guard_evidence", None)
+        return payload
 
     def _serialize_autonomous_chain_task(self, task: AutonomousChainTask) -> Dict[str, Any]:
         payload = task.model_dump(mode="json")
         execution_request_payload = payload.get("execution_request")
         if isinstance(execution_request_payload, dict):
-            drive_input_evidence = dict(
-                execution_request_payload.get("drive_input_evidence")
-                or execution_request_payload.get("activity_guard_evidence")
-                or {}
+            payload["execution_request"] = self._normalize_execution_request_evidence_payload(
+                execution_request_payload
             )
-            execution_request_payload["drive_input_evidence"] = dict(drive_input_evidence)
-            execution_request_payload["activity_guard_evidence"] = dict(
-                execution_request_payload.get("activity_guard_evidence") or drive_input_evidence
-            )
-            payload["execution_request"] = execution_request_payload
         runtime_profile = self._task_runtime_profile(task)
         execution = dict(task.metadata.get("execution_request") or {})
         payload["governance_task_type"] = (

@@ -1778,57 +1778,14 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 .ch-hp.warn { color: var(--accent-yellow); }
 .ch-hp.danger { color: var(--accent-red); }
 
-/* ── 动作切换器(底部) ── */
-.action-bar {
-  position: absolute;
-  left: 50%; bottom: 18px;
-  transform: translateX(-50%);
-  display: flex; gap: 8px;
-  z-index: 20;
-  padding: 6px;
-  background: rgba(20,14,10,.85);
-  border: 1px solid rgba(255,255,255,.1);
-  border-radius: 99px;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  box-shadow: 0 12px 24px var(--shadow-deep);
-}
-.action-btn {
-  position: relative;
-  padding: 8px 16px;
-  border: 0;
-  background: transparent;
-  color: var(--text-secondary);
-  font: 12px/1 "Inter","PingFang SC",system-ui,sans-serif;
-  font-weight: 600;
-  border-radius: 99px;
-  cursor: pointer;
-  transition: all .35s var(--ease-out);
-  display: flex; align-items: center; gap: 6px;
-}
-.action-btn:hover { background: rgba(255,255,255,.06); color: var(--text-primary); }
-.action-btn.active {
-  background: linear-gradient(135deg, var(--coral) 0%, #c66858 100%);
-  color: #fff;
-  box-shadow: 0 4px 12px var(--coral-g);
-}
-.action-btn[data-action="organize"].active { background: linear-gradient(135deg, #e2b04a, #b08830); box-shadow: 0 4px 12px var(--gold-g); }
-.action-btn[data-action="rest"].active     { background: linear-gradient(135deg, var(--mint), #4a9070); box-shadow: 0 4px 12px var(--mint-g); }
-.action-btn[data-action="work"].active     { background: linear-gradient(135deg, #6a7eb8, #4a6098); box-shadow: 0 4px 12px var(--indigo-g); }
-.action-btn[data-action="write"].active    { background: linear-gradient(135deg, #a78ad4, #7a5ab0); box-shadow: 0 4px 12px var(--plum-g); }
-.action-btn .ico { font-size: 14px; }
-
 /* ── 响应式 ── */
 @media (max-width: 1024px) {
   .status { width: 300px; font-size: 11px; }
   .char-card { min-width: 200px; }
-  .action-bar { bottom: 12px; }
 }
 @media (max-width: 720px) {
   .status { display: none; }
   .char-card { top: 12px; left: 12px; min-width: 180px; }
-  .action-bar { flex-wrap: wrap; max-width: calc(100% - 24px); justify-content: center; }
-  .action-btn { padding: 6px 12px; font-size: 11px; }
 }
 
 /*━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -3192,20 +3149,6 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
         <span class="db-label">统计</span>
       </button>
 
-      <!-- 动作切换(紧凑) -->
-      <span class="dock-sep" style="margin-left:12px;"></span>
-      <button class="dock-btn" data-action-btn="rest" title="休息">
-        <span class="db-icon">🛋</span>
-      </button>
-      <button class="dock-btn" data-action-btn="work" title="工作">
-        <span class="db-icon">💻</span>
-      </button>
-      <button class="dock-btn" data-action-btn="organize" title="整理">
-        <span class="db-icon">📚</span>
-      </button>
-      <button class="dock-btn" data-action-btn="write" title="审核">
-        <span class="db-icon">✍️</span>
-      </button>
     </nav>
 
     <!-- drill-down 详情抽屉 -->
@@ -3430,14 +3373,6 @@ if (els.dock) {
   els.dock.addEventListener('click', e => {
     const btn = e.target.closest('.dock-btn');
     if (!btn) return;
-    // 动作按钮
-    if (btn.dataset.actionBtn) {
-      const a = btn.dataset.actionBtn;
-      setAction(a, false);
-      userPickedAction = { scene: '__manual__', action: a };
-      updateDockActionButtons();
-      return;
-    }
     // 面板按钮
     const panelName = btn.dataset.panel;
     if (!panelName) return;
@@ -3552,12 +3487,6 @@ function autonomousLoopStatusLabel(status) {
   return map[String(status || '').trim()] || '等待中';
 }
 
-function autonomousLoopStageStatusText(stage) {
-  const explicit = String((stage || {}).status_label || '').trim();
-  if (explicit) return explicit;
-  return autonomousLoopStatusLabel((stage || {}).status || 'idle');
-}
-
 function observationDisplayStatus(row, fallback) {
   const record = row && typeof row === 'object' ? row : {};
   const explicit = String(record.display_status || record.status_label || '').trim();
@@ -3567,17 +3496,56 @@ function observationDisplayStatus(row, fallback) {
   return derived || String(fallback || '等待中');
 }
 
-function autonomousLoopStageFocusTitle(stage) {
-  const focusTask = (stage || {}).focus_task || {};
-  return String(focusTask.title || '').trim();
+function observationLoopRailEntries(loop) {
+  const entries = Array.isArray((loop || {}).rail_entries) ? loop.rail_entries : [];
+  return entries.filter(entry => entry && typeof entry === 'object');
 }
 
-function autonomousLoopStageReason(stage) {
-  return String((stage || {}).chain_reason || '').trim();
-}
-
-function autonomousLoopStageActivity(stage) {
-  return String((stage || {}).activity_text || '').trim();
+function observationLoopStageRows(loop) {
+  const cards = observationLoopStageCards(loop);
+  const rails = observationLoopRailEntries(loop);
+  const railByKey = new Map(
+    rails.map(entry => [String((entry || {}).key || '').trim(), entry])
+  );
+  if (cards.length) {
+    return cards.map(card => {
+      const stageKey = String((card || {}).stage_key || '').trim();
+      const rail = railByKey.get(stageKey) || {};
+      const label = String(
+        rail.label || card.observation_stage_label || card.title || '阶段'
+      ).trim() || '阶段';
+      const status = String(card.status || rail.status || 'idle').trim().toLowerCase() || 'idle';
+      const statusText = observationDisplayStatus(card, rail.state || '等待中');
+      const summary = String(card.summary || rail.note || '').trim();
+      const subtitle = String(card.card_subtitle || '').trim();
+      const readRule = String(card.read_rule || '').trim();
+      const transitionHint = String(card.transition_hint || '').trim();
+      return {
+        key: stageKey,
+        label,
+        sourceLabel: String(card.source_label || rail.source_label || '—').trim() || '—',
+        status,
+        statusText,
+        summary,
+        focusTitle: String(card.title || '').trim(),
+        readRule,
+        transitionHint,
+        activity: subtitle && subtitle !== summary ? subtitle : '',
+      };
+    });
+  }
+  return rails.map(entry => ({
+    key: String((entry || {}).key || '').trim(),
+    label: String((entry || {}).label || '阶段').trim() || '阶段',
+    sourceLabel: String((entry || {}).source_label || '—').trim() || '—',
+    status: String((entry || {}).status || 'idle').trim().toLowerCase() || 'idle',
+    statusText: String((entry || {}).state || '等待中').trim() || '等待中',
+    summary: String((entry || {}).note || '').trim(),
+    focusTitle: '',
+    readRule: '',
+    transitionHint: '',
+    activity: '',
+  }));
 }
 
 function observationStateBadgeClass(status) {
@@ -3592,7 +3560,7 @@ function observationStateBadgeClass(status) {
 
 function renderAutonomousLoop(loop, options) {
   const opts = options || {};
-  const stages = Array.isArray(loop.stages) ? loop.stages : [];
+  const stages = observationLoopStageRows(loop);
   const writebacks = Array.isArray(loop.recent_writebacks) ? loop.recent_writebacks : [];
   if (!stages.length) return '';
 
@@ -3604,21 +3572,19 @@ function renderAutonomousLoop(loop, options) {
   html += stages.map(stage => {
     const status = String(stage.status || 'idle').trim() || 'idle';
     const summary = String(stage.summary || '暂无信号').trim() || '暂无信号';
-    const statusText = autonomousLoopStageStatusText(stage);
-    const focusTitle = autonomousLoopStageFocusTitle(stage);
-    const reason = autonomousLoopStageReason(stage);
-    const activity = autonomousLoopStageActivity(stage);
-    const readRule = String(stage.read_rule || '').trim();
-    const transitionHint = String(stage.transition_hint || '').trim();
-    const sourceLabel = String(stage.source_label || '—').trim() || '—';
+    const statusText = String(stage.statusText || '等待中').trim() || '等待中';
+    const focusTitle = String(stage.focusTitle || '').trim();
+    const activity = String(stage.activity || '').trim();
+    const readRule = String(stage.readRule || '').trim();
+    const transitionHint = String(stage.transitionHint || '').trim();
+    const sourceLabel = String(stage.sourceLabel || '—').trim() || '—';
     return '<div class="autonomous-loop-stage ' + esc(status) + '">' +
       '<div class="autonomous-loop-topline"><span class="autonomous-loop-label">' + esc(stage.label || '阶段') +
       '</span><span class="autonomous-loop-owner">' + esc(sourceLabel) + '</span></div>' +
       '<div class="autonomous-loop-status">' + esc(statusText) + '</div>' +
       (focusTitle ? '<div class="autonomous-loop-focus">' + esc(focusTitle).substring(0, 72) + '</div>' : '') +
       '<div class="autonomous-loop-summary">' + esc(summary).substring(0, 120) + '</div>' +
-      (reason && reason !== summary ? '<div class="autonomous-loop-reason">' + esc(reason).substring(0, 120) + '</div>' : '') +
-      (activity && activity !== reason ? '<div class="autonomous-loop-activity">' + esc(activity).substring(0, 120) + '</div>' : '') +
+      (activity && activity !== summary ? '<div class="autonomous-loop-activity">' + esc(activity).substring(0, 120) + '</div>' : '') +
       (readRule ? '<div class="autonomous-loop-activity">' + esc(readRule).substring(0, 120) + '</div>' : '') +
       (transitionHint ? '<div class="autonomous-loop-activity">下一跳: ' + esc(transitionHint).substring(0, 110) + '</div>' : '') +
       '</div>';
@@ -4121,7 +4087,7 @@ function buildChainHero(state) {
   hero.innerHTML =
     '<div class="chain-hero-top">' +
       '<div class="chain-hero-main">' +
-        '<div class="chain-hero-label">API-B 主视角观测协议 · v' + esc(obs.read_model_version != null ? obs.read_model_version : 11) + '</div>' +
+        '<div class="chain-hero-label">API-B 主视角观测协议 · v' + esc(obs.read_model_version != null ? obs.read_model_version : 12) + '</div>' +
         '<div class="chain-hero-title">' + esc(board.headline || 'API-B 主视角自主闭环总览') + '</div>' +
         '<div class="chain-hero-summary">' + esc(board.hero_summary || board.summary || chain.summary || 'Web 小屋以 API-B 为主视角，只读观察判断、治理、API-A 执行回报、Mem 回流与再读取闭环。').substring(0, 220) + '</div>' +
       '</div>' +
@@ -4560,7 +4526,7 @@ function observationRoleStageLabel(task) {
   const role = String(task.observation_role || '').trim();
   const labels = {
     api_b_judgement: 'API-B 判断阶段',
-    api_a_execution: 'API-A 待认领 / 执行回报阶段',
+    api_a_execution: 'API-A 认领 / 执行观测阶段',
     mem_writeback: 'Mem 写回阶段',
     api_b_reread: 'API-B 再读取阶段',
     candidate: '候选形成阶段',
@@ -5058,7 +5024,7 @@ function renderObservationPanel(state) {
   boundaryNote.textContent = String(
     (obs.board || {}).boundary_note
     || loop.boundary
-    || 'Web 小屋只观察 API-B 主导的自主链路，不展示用户聊天内容。'
+    || 'Web 小屋只观察 API-B 主导的自主链路，不展示用户聊天内容，也不提供人工队列管理。'
   );
   body.append(boundaryNote);
 }
@@ -5167,7 +5133,6 @@ function updateSceneMiniTitle(state) {
 }
 
 /* ── 应用状态(主入口) ── */
-let userPickedAction = null;
 let lastState = null;
 
 function applyState(state) {
@@ -5189,13 +5154,8 @@ function applyState(state) {
     els.body.dataset.character = newChar;
   }
 
-  // 自动动作
-  if (!userPickedAction || userPickedAction.scene !== scene) {
-    const action = SCENE_TO_ACTION[scene] || 'rest';
-    setAction(action, true);
-    userPickedAction = { scene, action };
-  }
-  updateDockActionButtons();
+  const action = SCENE_TO_ACTION[scene] || 'rest';
+  setAction(action, true);
 
   updateSceneMiniTitle(state);
   updateDockCharStrip(state);
@@ -5216,12 +5176,6 @@ function applyState(state) {
 function setAction(action, silent) {
   els.body.dataset.action = action;
   if (!silent) spawnParticles(action, 8);
-}
-
-function updateDockActionButtons() {
-  $$('.dock-btn[data-action-btn]').forEach(b => {
-    b.classList.toggle('active', b.dataset.actionBtn === els.body.dataset.action);
-  });
 }
 
 /* ── 粒子 ── */
@@ -5284,7 +5238,6 @@ if ('EventSource' in window) {
 }
 
 ambientParticles();
-updateDockActionButtons();
 
 /* ── 钟表时/分针同步 ── */
 function syncClock() {
@@ -5650,11 +5603,21 @@ class SupervisorUIMixin:
         key: str,
     ) -> Dict[str, Any]:
         loop = dict(observation.get("loop") or {})
-        for stage in list(loop.get("stages") or []):
-            if not isinstance(stage, dict):
+        normalized_key = str(key or "").strip()
+        for stage_card in list(loop.get("stage_cards") or []):
+            if not isinstance(stage_card, dict):
                 continue
-            if str(stage.get("key") or "").strip() == key:
-                return dict(stage)
+            if str(stage_card.get("stage_key") or "").strip() != normalized_key:
+                continue
+            projected = dict(stage_card)
+            projected["key"] = normalized_key
+            if not str(projected.get("status_label") or "").strip():
+                projected["status_label"] = str(
+                    projected.get("display_status") or ""
+                ).strip()
+            if "focus_task" not in projected:
+                projected["focus_task"] = dict(stage_card.get("focus_task") or {})
+            return projected
         return {}
 
     def _project_ui_observation_board(
@@ -6862,6 +6825,7 @@ class SupervisorUIMixin:
             **focus_task,
             "title": str(focus_task.get("title") or row.get("label") or "阶段").strip() or "阶段",
             "status": raw_status,
+            "status_label": str(row.get("status_label") or "").strip(),
             "display_status": self._observation_display_status(display_payload),
             "summary": str(
                 focus_task.get("summary")
@@ -6870,6 +6834,9 @@ class SupervisorUIMixin:
                 or row.get("activity_text")
                 or ""
             ).strip(),
+            "chain_reason": str(row.get("chain_reason") or "").strip(),
+            "activity_text": str(row.get("activity_text") or "").strip(),
+            "reason_style": str(row.get("reason_style") or "").strip(),
             "read_rule": str(row.get("read_rule") or "").strip(),
             "transition_hint": str(row.get("transition_hint") or "").strip(),
             "observation_role": observation_role,
@@ -6878,6 +6845,7 @@ class SupervisorUIMixin:
             "stage_key": str(row.get("key") or "").strip(),
             "source_label": str(row.get("source_label") or "").strip() or "—",
             "card_subtitle": str(row.get("card_subtitle") or "").strip(),
+            "focus_task": dict(focus_task) if focus_task else None,
         }
 
     @staticmethod
@@ -7417,11 +7385,11 @@ class SupervisorUIMixin:
             for task in api_a_lane_source
             if self._observation_status_value(task) == "running"
         ]
-        api_a_backlog_source = [
+        api_a_governance_hold_source = [
             task for task in api_a_lane_family_sorted if not self._is_api_a_execution_lane_task(task)
         ]
         api_b_governance_source = sorted(
-            [*supervisor_sorted, *api_a_backlog_source],
+            [*supervisor_sorted, *api_a_governance_hold_source],
             key=self._chain_projection_order_key,
         )
 
@@ -7470,7 +7438,7 @@ class SupervisorUIMixin:
             for task in api_a_lane_items
             if str(task.get("status") or "").strip().lower() in {"approved", "retry"}
         ]
-        api_a_backlog_cards = [
+        api_a_governance_hold_cards = [
             card for card in governance_backlog_cards if self._is_api_a_lane_family_task(card)
         ]
 
@@ -7513,9 +7481,9 @@ class SupervisorUIMixin:
                 seen_titles.add(candidate_title)
 
         api_a_ready_focus = api_a_ready[0] if api_a_ready else None
-        deferred_api_a_backlog = [
+        deferred_api_a_governance_hold = [
             task
-            for task in api_a_backlog_cards
+            for task in api_a_governance_hold_cards
             if str(task.get("status") or "").strip().lower() == "deferred"
         ]
         completed_tasks = [
@@ -7555,9 +7523,9 @@ class SupervisorUIMixin:
         elif api_a_ready:
             api_a_status = "ready"
             api_a_summary = f"{len(api_a_ready)} 个已放行链路项正在等待 API-A 认领执行"
-        elif api_a_backlog_cards:
+        elif api_a_governance_hold_cards:
             api_a_status = "idle"
-            api_a_summary = f"{len(api_a_backlog_cards)} 个自主链路项仍停留在 API-B 治理段，尚未进入 API-A"
+            api_a_summary = f"{len(api_a_governance_hold_cards)} 个自主链路项仍停留在 API-B 治理段，尚未进入 API-A"
         else:
             api_a_status = "idle"
             api_a_summary = "当前没有进入 API-A 执行窗口的自主链路项"
@@ -7593,11 +7561,11 @@ class SupervisorUIMixin:
             api_a_chain_reason = "链路: API-B 已放行该链路项，等待 API-A 自主执行面认领"
             api_a_activity_text = "执行流: 一旦被认领，执行结果会回流到 Mem 再供 API-B 读取"
             api_a_reason_style = "warn"
-        elif deferred_api_a_backlog:
+        elif deferred_api_a_governance_hold:
             api_a_chain_reason = "链路: 当前学习链路项大多仍停留在 API-B 治理段并被延后，尚未进入 API-A 待认领窗口"
             api_a_activity_text = "执行流: 等待 API-B 重新放行、重排或补充证据后再进入执行窗口"
             api_a_reason_style = "warn"
-        elif api_a_backlog_cards:
+        elif api_a_governance_hold_cards:
             api_a_chain_reason = "链路: 当前自主链路项仍停留在 API-B 治理段，尚未进入 API-A 待认领窗口"
             api_a_activity_text = "执行流: 等待 API-B 审核、放行或重新排序链路项"
             api_a_reason_style = "info"
@@ -7734,10 +7702,10 @@ class SupervisorUIMixin:
                 decor_cls="agent",
                 decor_icon="🤖",
                 item_label="待认领项",
-                event_label="执行回报",
-                trace_label="执行回合",
-                footer_label="查看待认领窗口与执行回报记录",
-                drill_label="🔬 执行细节",
+                event_label="认领与回报事件",
+                trace_label="执行观测回合",
+                footer_label="查看 API-A 认领窗口与执行回报观察",
+                drill_label="🔬 执行观测细节",
                 read_rule="这里只显示已放行待认领项；执行中的项在上方闭环阶段里观察。",
                 next_step="被 API-A 认领后，会执行并把结果回流到 Mem。",
             ),
@@ -7806,11 +7774,11 @@ class SupervisorUIMixin:
         board = {
             "headline": "API-B 主视角自主闭环总览",
             "summary": (
-                "Web 小屋以 API-B 为主视角，只读观察判断、治理、API-A 执行回报、Mem 回流与再读取闭环；"
+                "Web 小屋以 API-B 为主视角，只读观察判断、治理、API-A 认领与执行回报、Mem 回流与再读取闭环；"
                 "用户链路仅作软感知。"
             ),
             "boundary_note": (
-                "Web 小屋只观察 API-B 主导的自主链路，不展示用户聊天内容。"
+                "Web 小屋只观察 API-B 主导的自主链路，不展示用户聊天内容，也不提供人工队列管理。"
             ),
             "primary_focus": {
                 "title": str((focus_card or {}).get("title") or "自主闭环当前落点").strip(),
@@ -7885,7 +7853,7 @@ class SupervisorUIMixin:
             {
                 "key": "api_a_execution",
                 "label": "API-A 自主执行",
-                "observation_stage_label": "API-A 待认领 / 执行回报阶段",
+                "observation_stage_label": "API-A 认领 / 执行观测阶段",
                 "source_label": "API-A",
                 "lane": "agent",
                 "observation_role": "api_a_execution",
@@ -7965,7 +7933,7 @@ class SupervisorUIMixin:
         )
 
         return {
-            "read_model_version": 11,
+            "read_model_version": 12,
             "mode": {
                 "label": "观测模式",
                 "scope": "api_b_autonomous_chain_only",
@@ -7982,7 +7950,6 @@ class SupervisorUIMixin:
                 "boundary": boundary_note,
                 "rail_entries": rail_entries,
                 "stage_cards": loop_stage_cards,
-                "stages": loop_stages,
                 "recent_writebacks": recent_writebacks,
             },
             "counts": {

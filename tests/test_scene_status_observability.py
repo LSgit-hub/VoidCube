@@ -26,61 +26,37 @@ class _FakeUrlopenResponse:
         return False
 
 
-def test_dashboard_agent_segment_includes_subagent_summary():
-    rendered = dashboard._format_segment_line(
-        {"key": "agent", "icon": "🤖", "name": "API-A"},
-        {
-            "agent": {
-                "scene": "executing",
-                "reachable": True,
-                "scene_task_id": "learn-12345678",
-                "subagent_foreground_count": 2,
-                "subagent_background_count": 1,
-                "subagent_focus_tool": "read_file",
-            }
-        },
-    )
-
-    assert "API-A: 执行中" in rendered
-    assert "链路项 learn-12" in rendered
-    assert "SA 2+1" in rendered
-    assert "read_file" in rendered
-
-
-def test_dashboard_agent_segment_prefers_supervisor_task_lane():
-    rendered = dashboard._format_segment_line(
-        {"key": "agent", "icon": "🤖", "name": "API-A"},
-        {
-            "agent": {
-                "scene": "executing",
-                "reachable": True,
-                "subagent_foreground_count": 1,
-                "subagent_focus_tool": "grep",
-                "lanes": {
-                    "supervisor_task": {
-                        "scene": "learning",
-                        "reachable": True,
-                        "scene_task_id": "learn-supervisor-1",
-                        "subagent_foreground_count": 3,
-                        "subagent_background_count": 1,
-                        "subagent_focus_tool": "read_file",
-                    },
-                    "user_chat": {
-                        "scene": "executing",
-                        "reachable": True,
-                        "subagent_foreground_count": 1,
-                        "subagent_focus_tool": "grep",
-                    },
+def test_dashboard_builds_supervisor_only_status_summary(monkeypatch):
+    monkeypatch.setattr(
+        dashboard,
+        "fetch_supervisor_state",
+        lambda: {
+            "scene": "drive",
+            "title": "监督者正在推进自主判断",
+            "autonomous_observation": {
+                "read_model_version": 12,
+                "mode": {
+                    "scope": "api_b_autonomous_chain_only",
+                    "status_text": "只读观测 API-B 与自主链路",
                 },
-            }
+                "runtime": {
+                    "user_chain_signal": {"scope": "soft_signal_only", "is_quiet": True},
+                    "snapshot_source": "cached",
+                },
+            },
         },
     )
 
-    assert "API-A: 自主学习" in rendered
-    assert "链路项 learn-su" in rendered
-    assert "SA 3+1" in rendered
-    assert "read_file" in rendered
-    assert "grep" not in rendered
+    built = dashboard.build_dashboard()
+
+    assert built["status"]["supervisor_online"] is True
+    assert built["status"]["scene"] == "drive"
+    assert built["status"]["scene_label"] == "内生判断"
+    assert built["status"]["title"] == "监督者正在推进自主判断"
+    assert built["status"]["snapshot_source"] == "cached"
+    assert built["status"]["scope"] == "api_b_autonomous_chain_only"
+    assert built["status"]["status_text"] == "只读观测 API-B 与自主链路"
+    assert built["status"]["read_model_version"] == "12"
 
 
 def test_status_scene_bar_includes_subagent_summary(monkeypatch, capsys):
@@ -159,7 +135,6 @@ def test_status_scene_bar_prefers_user_chat_lane(monkeypatch, capsys):
 
 
 def test_build_dashboard_reads_supervisor_observation_input_without_legacy_guard_shell(monkeypatch):
-    monkeypatch.setattr(dashboard, "fetch_gateway_services", lambda: {"services": {}})
     monkeypatch.setattr(
         dashboard,
         "fetch_supervisor_state",
@@ -191,7 +166,6 @@ def test_build_dashboard_reads_supervisor_observation_input_without_legacy_guard
 
 
 def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeypatch):
-    monkeypatch.setattr(dashboard, "fetch_gateway_services", lambda: {"services": {}})
     monkeypatch.setattr(
         dashboard,
         "fetch_supervisor_state",
@@ -217,24 +191,40 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
                     ],
                 },
                 "loop": {
-                    "stages": [
+                    "rail_entries": [
                         {
                             "key": "api_b_judgement",
                             "label": "API-B 判断",
                             "source_label": "API-B",
                             "status": "active",
-                            "status_label": "当前在途",
-                            "focus_task": {"title": "API-B 判断", "display_status": "当前在途"},
+                            "state": "当前在途",
                         },
                         {
                             "key": "api_a_execution",
-                            "label": "API-A 待认领窗口",
+                            "label": "API-A 自主执行",
                             "source_label": "API-A",
                             "status": "ready",
-                            "status_label": "待认领",
-                            "focus_task": {"title": "API-A execution", "display_status": "待认领"},
+                            "state": "待认领",
                         },
-                    ]
+                    ],
+                    "stage_cards": [
+                        {
+                            "stage_key": "api_b_judgement",
+                            "title": "Supervisor first task",
+                            "source_label": "API-B",
+                            "status": "active",
+                            "display_status": "当前在途",
+                            "summary": "API-B 正在处理当前链路焦点。",
+                        },
+                        {
+                            "stage_key": "api_a_execution",
+                            "title": "API-A execution",
+                            "source_label": "API-A",
+                            "status": "ready",
+                            "display_status": "待认领",
+                            "summary": "已放行，等待 API-A 认领。",
+                        },
+                    ],
                 },
                 "chain": {
                     "headline": "自主闭环分段观察",
@@ -290,16 +280,19 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
     assert built["chain"]["candidates"] == 3
     assert built["chain"]["writebacks"] == 1
     assert built["chain"]["segments_headline"] == "自主闭环分段观察"
-    assert built["chain"]["loop_stages"][0]["title"] == "API-B 判断"
-    assert built["chain"]["loop_stages"][0]["status"] == "当前在途"
+    assert built["chain"]["stage_cards"][0]["title"] == "API-B 判断"
+    assert built["chain"]["stage_cards"][0]["status"] == "当前在途"
+    assert built["chain"]["stage_cards"][0]["source_label"] == "API-B"
+    assert built["chain"]["rail_entries"][0]["label"] == "API-B 判断"
     assert built["chain"]["segments"][0]["label"] == "治理在途投影"
     assert built["chain"]["segments"][0]["stage_label"] == "判断与治理"
+    assert built["chain"]["segments"][0]["source_label"] == "API-B"
+    assert "owner" not in built["chain"]["segments"][0]
     assert built["chain"]["segments"][1]["label"] == "待认领窗口投影"
     assert built["chain"]["segments"][0]["title"] == "Governance backlog task"
 
 
 def test_build_dashboard_does_not_fallback_to_gateway_recent_activity_projection(monkeypatch):
-    monkeypatch.setattr(dashboard, "fetch_gateway_services", lambda: {"services": {}})
     monkeypatch.setattr(
         dashboard,
         "fetch_supervisor_state",
@@ -319,7 +312,6 @@ def test_build_dashboard_does_not_fallback_to_gateway_recent_activity_projection
 
 
 def test_build_dashboard_prefers_supervisor_recent_activity_projection(monkeypatch):
-    monkeypatch.setattr(dashboard, "fetch_gateway_services", lambda: {"services": {}})
     monkeypatch.setattr(
         dashboard,
         "fetch_supervisor_state",
@@ -355,7 +347,12 @@ def test_print_dashboard_shows_api_b_observation_input(monkeypatch, capsys):
         dashboard,
         "build_dashboard",
         lambda: {
-            "services": {"agents": 0, "supervisor": True, "memory": True},
+            "status": {
+                "scene_label": "静置",
+                "snapshot_source": "live",
+                "read_model_version": "12",
+                "title": "自主链路观测",
+            },
             "chain": {
                 "mode": "observation_unavailable",
                 "headline": "自主链路观测暂不可用",
@@ -373,11 +370,11 @@ def test_print_dashboard_shows_api_b_observation_input(monkeypatch, capsys):
             },
         },
     )
-    monkeypatch.setattr(dashboard, "print_three_segment_status_bar", lambda: None)
 
     dashboard.print_dashboard()
     output = capsys.readouterr().out
 
+    assert "API-B 观测板" in output
     assert "API-B 判断输入" in output
     assert "安静软信号" in output
     assert "仅软感知用户链路" in output
@@ -388,7 +385,12 @@ def test_print_dashboard_shows_chain_segments_headline(monkeypatch, capsys):
         dashboard,
         "build_dashboard",
         lambda: {
-            "services": {"agents": 0, "supervisor": True, "memory": True},
+            "status": {
+                "scene_label": "治理安排",
+                "snapshot_source": "cached",
+                "read_model_version": "12",
+                "title": "API-B 主视角观测",
+            },
             "chain": {
                 "mode": "autonomous_chain_board",
                 "headline": "API-B 主视角自主闭环总览",
@@ -401,7 +403,8 @@ def test_print_dashboard_shows_chain_segments_headline(monkeypatch, capsys):
                 "api_a_ready": 0,
                 "candidates": 2,
                 "writebacks": 0,
-                "loop_stages": [],
+                "stage_cards": [],
+                "rail_entries": [],
                 "segments": [],
             },
             "observation_input": {
@@ -416,11 +419,11 @@ def test_print_dashboard_shows_chain_segments_headline(monkeypatch, capsys):
             },
         },
     )
-    monkeypatch.setattr(dashboard, "print_three_segment_status_bar", lambda: None)
 
     dashboard.print_dashboard()
     output = capsys.readouterr().out
 
+    assert "监督者 治理安排" in output
     assert "自主闭环分段观察" in output
     assert "执行中 1" in output
 
@@ -430,7 +433,12 @@ def test_print_dashboard_shows_recent_autonomous_activity(monkeypatch, capsys):
         dashboard,
         "build_dashboard",
         lambda: {
-            "services": {"agents": 0, "supervisor": True, "memory": True},
+            "status": {
+                "scene_label": "内生判断",
+                "snapshot_source": "live",
+                "read_model_version": "12",
+                "title": "API-B 主视角观测",
+            },
             "chain": {
                 "mode": "autonomous_chain_board",
                 "headline": "API-B 主视角自主闭环总览",
@@ -443,7 +451,8 @@ def test_print_dashboard_shows_recent_autonomous_activity(monkeypatch, capsys):
                 "api_a_ready": 0,
                 "candidates": 2,
                 "writebacks": 0,
-                "loop_stages": [],
+                "stage_cards": [],
+                "rail_entries": [],
                 "segments": [],
             },
             "recent_activity": {
@@ -464,7 +473,6 @@ def test_print_dashboard_shows_recent_autonomous_activity(monkeypatch, capsys):
             },
         },
     )
-    monkeypatch.setattr(dashboard, "print_three_segment_status_bar", lambda: None)
 
     dashboard.print_dashboard()
     output = capsys.readouterr().out

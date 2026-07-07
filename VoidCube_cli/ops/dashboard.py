@@ -10,13 +10,11 @@ from __future__ import annotations
 import json
 import time
 import urllib.request
-import urllib.error
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 
 # ── Configuration ──────────────────────────────────────────────────────
-GATEWAY_URL = "http://127.0.0.1:6000"
 SUPERVISOR_URL = "http://127.0.0.1:6002"
 REQUEST_TIMEOUT = 5  # seconds per HTTP call
 
@@ -57,51 +55,50 @@ def _get_json(url: str, timeout: float = REQUEST_TIMEOUT) -> Optional[Dict[str, 
     return None
 
 
-def _post_json(url: str, payload: Dict[str, Any], timeout: float = REQUEST_TIMEOUT) -> Optional[Dict[str, Any]]:
-    """POST JSON to an endpoint.  Returns None on any error."""
-    try:
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            if resp.status == 200:
-                return json.loads(resp.read().decode())
-    except Exception:
-        pass
-    return None
-
-
 # ── Data fetchers ──────────────────────────────────────────────────────
-
-def fetch_gateway_services() -> Dict[str, Any]:
-    """Return registered services from the gateway."""
-    return _get_json(f"{GATEWAY_URL}/admin/services") or {}
-
 
 def fetch_supervisor_state() -> Dict[str, Any]:
     """Return supervisor UI state."""
     return _get_json(f"{SUPERVISOR_URL}/ui/state") or {}
 
 
-def _project_chain_stage(stage: Dict[str, Any]) -> Dict[str, Any]:
-    focus_task = dict(stage.get("focus_task") or {})
-    label = str(stage.get("label") or "").strip() or "阶段"
+def _project_stage_card(
+    stage_card: Dict[str, Any],
+    rail_entry: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    rail = dict(rail_entry or {})
+    label = str(
+        rail.get("label")
+        or stage_card.get("observation_stage_label")
+        or stage_card.get("title")
+        or "阶段"
+    ).strip() or "阶段"
     return {
-        "key": str(stage.get("key") or "").strip(),
-        "owner": str(stage.get("owner") or "").strip(),
+        "key": str(stage_card.get("stage_key") or rail.get("key") or "").strip(),
+        "source_label": str(
+            stage_card.get("source_label") or rail.get("source_label") or ""
+        ).strip(),
         "label": label,
-        "title": str(
-            focus_task.get("title")
-            or stage.get("title")
-            or label
-        ).strip() or label,
+        "title": label,
         "status": str(
-            stage.get("status_label")
-            or focus_task.get("display_status")
-            or focus_task.get("status_label")
-            or stage.get("summary")
-            or stage.get("status")
+            stage_card.get("display_status")
+            or rail.get("state")
+            or stage_card.get("summary")
+            or stage_card.get("status")
             or "等待中"
         ).strip() or "等待中",
+    }
+
+
+def _project_rail_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "key": str(entry.get("key") or "").strip(),
+        "label": str(entry.get("label") or "阶段").strip() or "阶段",
+        "source_label": str(entry.get("source_label") or "").strip(),
+        "status": str(entry.get("status") or "idle").strip().lower() or "idle",
+        "state": str(entry.get("state") or "等待中").strip() or "等待中",
+        "note": str(entry.get("note") or "").strip(),
+        "focus": bool(entry.get("focus")),
     }
 
 
@@ -122,7 +119,7 @@ def _project_chain_segment(segment: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "key": str(segment.get("key") or "").strip(),
         "label": str(segment.get("label") or "").strip() or "未命名分段",
-        "owner": str(segment.get("owner") or "").strip(),
+        "source_label": str(segment.get("source_label") or "").strip(),
         "stage_label": str(segment.get("stage_label") or "").strip(),
         "count": max(0, int(segment.get("count") or len(items))),
         "title": str(
@@ -143,10 +140,28 @@ def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
     chain = dict(observation.get("chain") or {})
     loop = dict(observation.get("loop") or {})
     primary_focus = dict(board.get("primary_focus") or {})
-    loop_stages = [
-        _project_chain_stage(stage)
-        for stage in list(loop.get("stages") or [])
+    rail_entries = [
+        dict(entry)
+        for entry in list(loop.get("rail_entries") or [])
+        if isinstance(entry, dict)
+    ]
+    rail_by_key = {
+        str(entry.get("key") or "").strip(): entry
+        for entry in rail_entries
+        if str(entry.get("key") or "").strip()
+    }
+    stage_cards = [
+        dict(stage)
+        for stage in list(loop.get("stage_cards") or [])
         if isinstance(stage, dict)
+    ]
+    stage_cards = [
+        _project_stage_card(stage, rail_by_key.get(str(stage.get("stage_key") or "").strip()))
+        for stage in stage_cards
+    ]
+    rail_projection = [
+        _project_rail_entry(entry)
+        for entry in rail_entries
     ]
     chain_segments = [
         _project_chain_segment(section)
@@ -160,7 +175,7 @@ def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
             str(board.get("hero_summary") or "").strip(),
             str(board.get("summary") or "").strip(),
             bool(primary_focus),
-            bool(loop_stages),
+            bool(stage_cards),
             bool(chain_segments),
         ]
     ):
@@ -172,7 +187,8 @@ def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
         "api_a_ready": int(counts.get("api_a_ready") or 0),
         "candidates": int(counts.get("candidates") or 0),
         "writebacks": int(counts.get("writebacks") or 0),
-        "loop_stages": loop_stages[:4],
+        "stage_cards": stage_cards[:4],
+        "rail_entries": rail_projection[:4],
         "segments": chain_segments[:4],
         "headline": str(board.get("headline") or "").strip(),
         "summary": str(board.get("summary") or chain.get("summary") or "").strip(),
@@ -239,17 +255,48 @@ def _supervisor_recent_autonomous_activity(state: Dict[str, Any]) -> Dict[str, A
     return normalized
 
 
+def _build_supervisor_status_summary(
+    state: Dict[str, Any],
+    *,
+    snapshot_source: str,
+) -> Dict[str, Any]:
+    scene = str(state.get("scene") or "idle").strip().lower() or "idle"
+    observation = dict(state.get("autonomous_observation") or {})
+    mode = dict(observation.get("mode") or {})
+    read_model_version = observation.get("read_model_version")
+    version_text = (
+        str(int(read_model_version))
+        if isinstance(read_model_version, (int, float))
+        else str(read_model_version or "").strip()
+    )
+    return {
+        "supervisor_online": bool(state),
+        "scene": scene,
+        "scene_label": SCENE_LABEL.get(scene, scene or "idle"),
+        "title": str(state.get("title") or "自主链路观测").strip() or "自主链路观测",
+        "snapshot_source": snapshot_source,
+        "scope": str(mode.get("scope") or "api_b_autonomous_chain_only").strip()
+        or "api_b_autonomous_chain_only",
+        "status_text": str(mode.get("status_text") or "只读观测 API-B 与自主链路").strip()
+        or "只读观测 API-B 与自主链路",
+        "read_model_version": version_text,
+    }
+
+
 # ── Dashboard builder ──────────────────────────────────────────────────
 
 def build_dashboard() -> Dict[str, Any]:
     """Collect all data and compute visibility metrics."""
     # ── Fetch data ──────────────────────────────────────────────────
-    services = fetch_gateway_services()
     state = fetch_supervisor_state()
     observation = dict(state.get("autonomous_observation") or {})
     runtime = dict(observation.get("runtime") or {})
     user_signal = dict(runtime.get("user_chain_signal") or {})
     snapshot_source = str(runtime.get("snapshot_source") or "default")
+    supervisor_status = _build_supervisor_status_summary(
+        state,
+        snapshot_source=snapshot_source,
+    )
     chain_snapshot = _build_autonomous_chain_snapshot(state)
     recent_activity = _supervisor_recent_autonomous_activity(state)
     user_threshold = int(user_signal.get("quiet_after_seconds") or 600)
@@ -265,14 +312,6 @@ def build_dashboard() -> Dict[str, Any]:
         "scope": str(user_signal.get("scope") or "soft_signal_only").strip() or "soft_signal_only",
         "summary": "用户链路只作为 API-B 判断让路参考，不展示聊天内容。",
     }
-
-    # ── Services ────────────────────────────────────────────────────
-    registered = services.get("services", {})
-    svc_list = list(registered.values()) if isinstance(registered, dict) else []
-
-    agents = [s for s in svc_list if s.get("service_type") == "agent"]
-    supervisor_info = next((s for s in svc_list if s.get("service_type") == "supervisor"), None)
-    memory_info = next((s for s in svc_list if s.get("service_type") == "memory"), None)
 
     # ── Autonomous chain board ──────────────────────────────────────
     chain_view: Dict[str, Any]
@@ -292,7 +331,8 @@ def build_dashboard() -> Dict[str, Any]:
             "api_a_ready": chain_snapshot.get("api_a_ready", 0),
             "candidates": chain_snapshot.get("candidates", 0),
             "writebacks": chain_snapshot.get("writebacks", 0),
-            "loop_stages": list(chain_snapshot.get("loop_stages") or []),
+            "stage_cards": list(chain_snapshot.get("stage_cards") or []),
+            "rail_entries": list(chain_snapshot.get("rail_entries") or []),
             "segments": list(chain_snapshot.get("segments") or []),
             "segments_headline": chain_snapshot.get("segments_headline") or "自主闭环分段观察",
         }
@@ -310,125 +350,26 @@ def build_dashboard() -> Dict[str, Any]:
             "api_a_ready": 0,
             "candidates": 0,
             "writebacks": 0,
-            "loop_stages": [],
+            "stage_cards": [],
+            "rail_entries": [],
             "segments": [],
             "segments_headline": "自主闭环分段观察",
         }
 
     return {
         "now": datetime.now().isoformat(),
-        "services": {
-            "agents": len(agents),
-            "agent_instances": [
-                {
-                    "name": a.get("service_name", "?"),
-                    "healthy": a.get("healthy", False),
-                    "address": a.get("address", "?"),
-                    "slot_id": a.get("metadata", {}).get("slot_id", "?"),
-                }
-                for a in agents
-            ],
-            "supervisor": bool(supervisor_info),
-            "memory": bool(memory_info),
-        },
+        "status": supervisor_status,
         "chain": chain_view,
         "recent_activity": recent_activity,
         "observation_input": observation_input,
     }
 
 
-# ── Terminal display ───────────────────────────────────────────────────
-
-# ── Three-segment scene bar (baseline §8.1) ──
-# Each reporter (supervisor / agent / executor) declares its own scene;
-# the CLI status bar simply shows the three reporters side-by-side so the
-# user can distinguish API-B governance, API-A execution, and executor
-# activity without re-mixing them into one coarse status.
-
-REPORTER_SEGMENT: List[Dict[str, str]] = [
-    {"key": "supervisor", "icon": "🧠", "name": "API-B"},
-    {"key": "agent",      "icon": "🤖", "name": "API-A"},
-    {"key": "executor",   "icon": "⚙️",  "name": "Executor"},
-]
-
-
-def fetch_scenes_aggregated(force_refresh: bool = True) -> Dict[str, Any]:
-    """Fetch the gateway's aggregated per-reporter scene view.
-
-    ``force_refresh=True`` triggers a fresh fetch from each registered
-    service so the status bar reflects current activity.  Returns an
-    empty envelope if the gateway is unreachable.
-    """
-    if force_refresh:
-        # /admin/scenes/refresh is a POST endpoint that forces a re-fetch
-        # of every reporter's scene before returning the cached view.
-        return _post_json(f"{GATEWAY_URL}/admin/scenes/refresh", {}) or {}
-    return _get_json(f"{GATEWAY_URL}/admin/scenes") or {}
-
-
-def _format_segment_line(seg: Dict[str, str], state: Dict[str, Any]) -> str:
-    info = state.get(seg["key"]) or {}
-    # The minimal ops dashboard observes the autonomous chain: for the API-A
-    # segment read only the supervisor_task lane so user-chat activity never
-    # overwrites the autonomous-chain observation view.
-    if seg["key"] == "agent":
-        lane = ((info.get("lanes") or {}).get("supervisor_task")) if isinstance(info, dict) else None
-        info = lane if isinstance(lane, dict) else info
-    scene = str(info.get("scene") or "idle")
-    label = SCENE_LABEL.get(scene, scene)
-    reachable = bool(info.get("reachable"))
-    icon = seg["icon"]
-    if not reachable:
-        return f"{icon} {seg['name']}: ⛔ 不可达"
-    task_hint = ""
-    if seg["key"] == "agent":
-        task_id = info.get("scene_task_id")
-        if task_id:
-            short = str(task_id)[:8]
-            task_hint = f" · 链路项 {short}"
-        fg_count = max(0, int(info.get("subagent_foreground_count") or 0))
-        bg_count = max(0, int(info.get("subagent_background_count") or 0))
-        if fg_count or bg_count:
-            counts = f"{fg_count}+{bg_count}" if bg_count else str(fg_count)
-            task_hint += f" · SA {counts}"
-            focus = str(
-                info.get("subagent_focus_tool")
-                or info.get("subagent_focus_preview")
-                or ""
-            ).strip()
-            if focus:
-                task_hint += f" · {focus[:20]}"
-    elif seg["key"] == "supervisor":
-        title = info.get("title")
-        if title:
-            task_hint = f" · {str(title)[:24]}"
-    return f"{icon} {seg['name']}: {label}{task_hint}"
-
-
-def print_three_segment_status_bar() -> None:
-    """Render the per-reporter scene status bar at the CLI prompt.
-
-    The bar reads the gateway's ``/admin/scenes`` aggregation and prints
-    three independent segments — never a fused string.  When the gateway
-    or any reporter is unreachable, the segment shows the ⛔ marker
-    instead of fabricating a scene.
-    """
-    payload = fetch_scenes_aggregated(force_refresh=True)
-    scenes = payload.get("scenes") or {}
-    if not scenes:
-        print("  ⛔ 场景状态暂不可用（网关离线）")
-        return
-    print("  ┌─ 分域场景状态（按报告者）─────────────────────────────")
-    for seg in REPORTER_SEGMENT:
-        print(f"  │  {_format_segment_line(seg, scenes)}")
-    print("  └───────────────────────────────────────────────────────────")
-
-
 def print_dashboard() -> None:
     """Print a rich terminal dashboard with autonomous-chain visibility."""
     db = build_dashboard()
 
-    svc = db["services"]
+    status = dict(db.get("status") or {})
     chain = db["chain"]
     recent_activity = db.get("recent_activity") or {}
     observation_input = db.get("observation_input") or {}
@@ -436,16 +377,16 @@ def print_dashboard() -> None:
     # ── Header ──────────────────────────────────────────────────────
     print()
     print("  ╔══════════════════════════════════════════════════════════╗")
-    print("  ║            VoidCube Supervisor · 实时观测                ║")
+    print("  ║         VoidCube Supervisor · API-B 观测板              ║")
     print("  ╠══════════════════════════════════════════════════════════╣")
-    print_three_segment_status_bar()
-    print()
-
-    # ── Services ────────────────────────────────────────────────────
-    agent_n = svc["agents"]
-    sup_ok = "✓" if svc["supervisor"] else "✗"
-    mem_ok = "✓" if svc["memory"] else "✗"
-    print(f"  ║  服务状态   Gateway ✓  Super {sup_ok}  Memory {mem_ok}  Agents {agent_n:<3}         ║")
+    scene_label = str(status.get("scene_label") or "静置")[:10]
+    snapshot_label = _human_snapshot_source(status.get("snapshot_source"))
+    read_model_version = str(status.get("read_model_version") or "—")[:8]
+    title = str(status.get("title") or "自主链路观测")[:20]
+    print(
+        f"  ║  监督者 {scene_label:<10s} 快照 {snapshot_label:<10s} 读模 v{read_model_version:<8s} ║"
+    )
+    print(f"  ║  {title:<54s}  ║")
 
     # ── Autonomous chain board ─────────────────────────────────────
     print(f"  ╠══════════════════════════════════════════════════════════╣")
@@ -467,12 +408,12 @@ def print_dashboard() -> None:
         if focus:
             focus_line = f"当前焦点 {focus.get('status', '等待中')} · {focus.get('title', '暂无')}"
             print(f"  ║  {focus_line[:54]:<54s}  ║")
-        for item in list(chain.get("loop_stages") or [])[:4]:
+        for item in list(chain.get("stage_cards") or [])[:4]:
             title = str(item.get("title") or "?")[:28]
             status = str(item.get("status") or "?")[:12]
             print(f"  ║  ↻ {title:<28s} {status:<12s}                          ║")
         for item in list(chain.get("segments") or [])[:4]:
-            group = str(item.get("label") or item.get("owner") or "?")[:12]
+            group = str(item.get("label") or "?")[:12]
             title = str(item.get("title") or "?")[:28]
             status = str(item.get("status") or "?")[:10]
             print(f"  ║  • {group:<12s} {title:<28s} {status:<10s}              ║")
@@ -510,20 +451,6 @@ def print_dashboard() -> None:
     print(f"  ║    用户链路 {user_state:<12s} 会话 {active_sessions:<3d} 阈值 {quiet_after!s:<6s}      ║")
     print(f"  ║    快照 {snapshot:<16s} 边界 {scope_label:<18s} ║")
     print(f"  ║    {str(observation_input.get('summary') or '用户链路只作为 API-B 判断让路参考。')[:50]:<50s}    ║")
-
-    # ── Agent instances ─────────────────────────────────────────────
-    agents = svc.get("agent_instances", [])
-    if agents:
-        print(f"  ╠══════════════════════════════════════════════════════════╣")
-        print(f"  ║  API-A 实例                                              ║")
-        for a in agents:
-            healthy = "✓" if a["healthy"] else "✗"
-            print(f"  ║    {healthy} {a['name']:<20s} slot={a['slot_id']:<8s} {a['address']}   ║")
-    else:
-        print(f"  ╠══════════════════════════════════════════════════════════╣")
-        print(f"  ║  ⚠ 尚无 API-A 实例注册                                  ║")
-        print(f"  ║    监督者放行链路项后，API-A 自主执行器才会出现。         ║")
-        print(f"  ║    dashboard 只读 API-B 投影，不本地再管理队列。          ║")
 
     # ── Footer ──────────────────────────────────────────────────────
     print(f"  ╚══════════════════════════════════════════════════════════╝")

@@ -92,7 +92,9 @@ from VoidCube_cli.autonomous_runtime_host import (
 )
 from VoidCube_cli.autonomous_status_host import (
     autonomous_observation_summary_sections as _autonomous_observation_summary_sections_view,
+    initialize_autonomous_status_caches as _initialize_autonomous_status_caches_view,
     refresh_autonomous_observation_surfaces as _refresh_autonomous_observation_surfaces_view,
+    supervisor_activity_snapshot as _supervisor_activity_snapshot_view,
 )
 
 logger = logging.getLogger(__name__)
@@ -2058,12 +2060,7 @@ class VoidcubeCLI:
         self._gateway_presence_refresh_interval_seconds: float = 30.0
         self._autonomous_execution_events: List[Dict[str, str]] = []
         self._autonomous_last_supervisor_event_key: str = ""
-        self._autonomous_gateway_status_cache: Dict[str, Any] = {}
-        self._autonomous_gateway_status_ts: float = 0.0
-        self._autonomous_gateway_status_refreshing: bool = False
-        self._autonomous_gateway_activity_cache: Dict[str, Any] = {}
-        self._autonomous_gateway_activity_ts: float = 0.0
-        self._autonomous_gateway_activity_refreshing: bool = False
+        _initialize_autonomous_status_caches_view(self)
 
     def _invalidate(self, min_interval: float = 0.25) -> None:
         """Throttled UI repaint — prevents terminal blinking on slow/SSH connections."""
@@ -2376,34 +2373,12 @@ class VoidcubeCLI:
         except Exception:
             return f"{self.model if getattr(self, 'model', None) else 'Voidcube'}"
 
-    # ── Supervisor status polling ──────────────────────────────────────
-    _supervisor_state_cache: Dict[str, Any] = {}
-    _supervisor_state_ts: float = 0.0
-    _supervisor_state_refreshing: bool = False  # guard against concurrent HTTP fetches
-    _supervisor_url: str = ""
-
     _autonomous_gate_last_event_ts: str = ""
 
     _current_autonomous_task: Dict[str, Any] | None = None
     _current_autonomous_task_started_at: float = 0.0
     _last_agent_turn_result: Dict[str, Any] | None = None
     _current_autonomous_task_run_id: str = ""
-
-    def _autonomous_runtime(self):
-        return _autonomous_executor_runtime_view(
-            self,
-            push_cli_agent_scene=_push_cli_agent_scene,
-            git_head_commit=_git_head_commit,
-            git_improvement_diff=_git_improvement_diff,
-            cprint=_cprint,
-        )
-
-    def _inject_autonomous_execution_prompt(self, task: Dict[str, Any], execution_kind: str, *, recovered: bool = False) -> bool:
-        return self._autonomous_runtime().inject_execution_prompt(
-            task,
-            execution_kind,
-            recovered=recovered,
-        )
 
     def _execute_pending_input(self, user_input: Any, *, app=None) -> bool:
         """Execute one queued prompt/command using the same path as the interactive loop."""
@@ -2602,15 +2577,16 @@ class VoidcubeCLI:
         ascii_mode = self._use_ascii_fallback_cached()
 
         # ── Fetch supervisor state once (cached 5s) ──
-        sup: Dict[str, Any] = {}
+        scene = "idle"
+        sup_active = False
+        mem_usage: Dict[str, Any] = {}
         try:
-            sup = getattr(self, "_supervisor_state_cache", None) or {}
-            # Update auto-mode execution indicator
+            supervisor_snapshot = _supervisor_activity_snapshot_view(self)
+            scene = str(supervisor_snapshot.get("scene") or "idle").strip() or "idle"
+            sup_active = bool(supervisor_snapshot.get("is_active"))
+            mem_usage = dict(supervisor_snapshot.get("mem_usage") or {})
         except Exception:
             pass
-        scene = sup.get("scene", "idle")
-        sup_active = scene != "idle"
-        mem_usage = sup.get("mem_usage", {}) if isinstance(sup, dict) else {}
 
         # ── Supervisor's model (memory.llm) ──
         try:
@@ -6542,7 +6518,13 @@ class VoidcubeCLI:
                 self,
                 cmd_original,
                 cprint=_cprint,
-                poll_autonomous_workflow_callback=self._autonomous_runtime().poll_workflow,
+                poll_autonomous_workflow_callback=_autonomous_executor_runtime_view(
+                    self,
+                    push_cli_agent_scene=_push_cli_agent_scene,
+                    git_head_commit=_git_head_commit,
+                    git_improvement_diff=_git_improvement_diff,
+                    cprint=_cprint,
+                ).poll_workflow,
                 refresh_gateway_cli_presence_callback=lambda *, force=False: _refresh_gateway_cli_presence_view(
                     self,
                     force=force,
@@ -6557,7 +6539,13 @@ class VoidcubeCLI:
             _handle_auto_q_command_view(
                 self,
                 cprint=_cprint,
-                interrupt_current_task_callback=self._autonomous_runtime().interrupt_current_task,
+                interrupt_current_task_callback=_autonomous_executor_runtime_view(
+                    self,
+                    push_cli_agent_scene=_push_cli_agent_scene,
+                    git_head_commit=_git_head_commit,
+                    git_improvement_diff=_git_improvement_diff,
+                    cprint=_cprint,
+                ).interrupt_current_task,
                 push_cli_agent_scene_callback=_push_cli_agent_scene,
                 thread_factory=threading.Thread,
             )
@@ -9082,7 +9070,13 @@ class VoidcubeCLI:
                         else ""
                     )
                     if timed_out_run_id == autonomous_task_run_id:
-                        autonomous_timeout_reported = self._autonomous_runtime().report_current_task_timeout_if_needed(
+                        autonomous_timeout_reported = _autonomous_executor_runtime_view(
+                            self,
+                            push_cli_agent_scene=_push_cli_agent_scene,
+                            git_head_commit=_git_head_commit,
+                            git_improvement_diff=_git_improvement_diff,
+                            cprint=_cprint,
+                        ).report_current_task_timeout_if_needed(
                             timeout=15,
                         )
                         autonomous_timeout_writeback_succeeded = (
@@ -9977,7 +9971,13 @@ class VoidcubeCLI:
                             _exit_autonomous_gate_fast_view(
                                 self,
                                 cprint=_cprint,
-                                interrupt_current_task_callback=self._autonomous_runtime().interrupt_current_task,
+                                interrupt_current_task_callback=_autonomous_executor_runtime_view(
+                                    self,
+                                    push_cli_agent_scene=_push_cli_agent_scene,
+                                    git_head_commit=_git_head_commit,
+                                    git_improvement_diff=_git_improvement_diff,
+                                    cprint=_cprint,
+                                ).interrupt_current_task,
                                 push_cli_agent_scene_callback=_push_cli_agent_scene,
                             )
                             event.app.invalidate()
@@ -10204,7 +10204,13 @@ class VoidcubeCLI:
                 _force_quit_autonomous_gate_view(
                     self,
                     cprint=_cprint,
-                    interrupt_current_task_callback=self._autonomous_runtime().interrupt_current_task,
+                    interrupt_current_task_callback=_autonomous_executor_runtime_view(
+                        self,
+                        push_cli_agent_scene=_push_cli_agent_scene,
+                        git_head_commit=_git_head_commit,
+                        git_improvement_diff=_git_improvement_diff,
+                        cprint=_cprint,
+                    ).interrupt_current_task,
                     push_cli_agent_scene_callback=_push_cli_agent_scene,
                 )
                 event.app.invalidate()
@@ -11186,7 +11192,13 @@ class VoidcubeCLI:
                                     push_cli_agent_scene=_push_cli_agent_scene,
                                     monotonic_time=time.monotonic,
                                 ),
-                                poll_autonomous_workflow=self._autonomous_runtime().poll_workflow,
+                                poll_autonomous_workflow=_autonomous_executor_runtime_view(
+                                    self,
+                                    push_cli_agent_scene=_push_cli_agent_scene,
+                                    git_head_commit=_git_head_commit,
+                                    git_improvement_diff=_git_improvement_diff,
+                                    cprint=_cprint,
+                                ).poll_workflow,
                             )
                             # Check for background process notifications (completions
                             # and watch pattern matches) while agent is idle.

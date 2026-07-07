@@ -38,32 +38,22 @@ def observation_loop(state: Dict[str, Any]) -> Dict[str, Any]:
     return dict(observation.get("loop") or {})
 
 
-def observation_group_items(
-    state: Dict[str, Any],
-    group_key: str,
-) -> list[Dict[str, Any]]:
-    chain = observation_chain(state)
-    groups = [
-        dict(item)
-        for item in list(chain.get("segments") or [])
-        if isinstance(item, dict)
-    ]
-    for group in groups:
-        if str(group.get("key") or "").strip() != group_key:
-            continue
-        return [
-            dict(item)
-            for item in list(group.get("items") or [])
-            if isinstance(item, dict)
-        ]
-    return []
-
-
-def observation_loop_stage_projections(state: Dict[str, Any]) -> list[Dict[str, Any]]:
-    loop = observation_loop(state)
-    projected: list[Dict[str, Any]] = []
+def _compat_loop_stage(loop: Dict[str, Any], stage_key: str) -> Dict[str, Any]:
+    """Read legacy loop stage snapshots only as a compatibility fallback."""
+    normalized_key = str(stage_key or "").strip()
     for stage in list(loop.get("stages") or []):
         if not isinstance(stage, dict):
+            continue
+        if str(stage.get("key") or "").strip() == normalized_key:
+            return dict(stage)
+    return {}
+
+
+def _compat_loop_stage_projections(loop: Dict[str, Any]) -> list[Dict[str, Any]]:
+    projected: list[Dict[str, Any]] = []
+    for stage_key in ("api_b_judgement", "api_a_execution", "mem_writeback", "api_b_reread"):
+        stage = _compat_loop_stage(loop, stage_key)
+        if not stage:
             continue
         focus_task = dict(stage.get("focus_task") or {})
         projected.append(
@@ -90,6 +80,71 @@ def observation_loop_stage_projections(state: Dict[str, Any]) -> list[Dict[str, 
     return projected
 
 
+def observation_group_items(
+    state: Dict[str, Any],
+    group_key: str,
+) -> list[Dict[str, Any]]:
+    chain = observation_chain(state)
+    groups = [
+        dict(item)
+        for item in list(chain.get("segments") or [])
+        if isinstance(item, dict)
+    ]
+    for group in groups:
+        if str(group.get("key") or "").strip() != group_key:
+            continue
+        return [
+            dict(item)
+            for item in list(group.get("items") or [])
+            if isinstance(item, dict)
+        ]
+    return []
+
+
+def observation_loop_stage_projections(state: Dict[str, Any]) -> list[Dict[str, Any]]:
+    loop = observation_loop(state)
+    projected: list[Dict[str, Any]] = []
+    stage_cards = [
+        dict(stage_card)
+        for stage_card in list(loop.get("stage_cards") or [])
+        if isinstance(stage_card, dict)
+    ]
+    if stage_cards:
+        for stage_card in stage_cards:
+            focus_task = dict(stage_card.get("focus_task") or {})
+            projected.append(
+                {
+                    **focus_task,
+                    "title": str(
+                        stage_card.get("title")
+                        or stage_card.get("observation_stage_label")
+                        or "阶段"
+                    ),
+                    "status": str(stage_card.get("status") or focus_task.get("status") or "idle"),
+                    "display_status": str(
+                        stage_card.get("display_status")
+                        or stage_card.get("status_label")
+                        or stage_card.get("title")
+                        or "等待中"
+                    ),
+                    "summary": str(
+                        stage_card.get("summary")
+                        or stage_card.get("chain_reason")
+                        or stage_card.get("activity_text")
+                        or focus_task.get("summary")
+                        or ""
+                    ),
+                    "observation_role": str(
+                        stage_card.get("stage_key")
+                        or stage_card.get("observation_role")
+                        or ""
+                    ),
+                }
+            )
+        return projected
+    return _compat_loop_stage_projections(loop)
+
+
 def observation_loop_stage_projection(
     state: Dict[str, Any],
     *roles: str,
@@ -113,11 +168,24 @@ def observation_loop_stage(
     stage_key: str,
 ) -> Dict[str, Any]:
     loop = observation_loop(state)
-    for stage in list(loop.get("stages") or []):
-        if not isinstance(stage, dict):
+    normalized_key = str(stage_key or "").strip()
+    for stage_card in list(loop.get("stage_cards") or []):
+        if not isinstance(stage_card, dict):
             continue
-        if str(stage.get("key") or "").strip() == str(stage_key or "").strip():
-            return dict(stage)
+        if str(stage_card.get("stage_key") or "").strip() != normalized_key:
+            continue
+        projected = dict(stage_card)
+        projected["key"] = normalized_key
+        if not str(projected.get("status_label") or "").strip():
+            projected["status_label"] = str(
+                projected.get("display_status") or ""
+            ).strip()
+        if "focus_task" not in projected:
+            projected["focus_task"] = dict(stage_card.get("focus_task") or {})
+        return projected
+    compat_stage = _compat_loop_stage(loop, normalized_key)
+    if compat_stage:
+        return compat_stage
     return {}
 
 
@@ -455,7 +523,7 @@ def format_supervisor_status_snapshot(state: Dict[str, Any]) -> list[str]:
     if chain_segments:
         segment_parts: list[str] = []
         for segment in chain_segments[:4]:
-            label = str(segment.get("label") or segment.get("owner") or "?").strip() or "?"
+            label = str(segment.get("label") or "?").strip() or "?"
             count = int(segment.get("count") or len(list(segment.get("items") or [])) or 0)
             segment_parts.append(f"{label}={count}")
         lines.append("闭环分段: " + ", ".join(segment_parts))
