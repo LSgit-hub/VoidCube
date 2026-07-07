@@ -122,6 +122,7 @@ class Supervisor(
             self.app.add_api_route("/ui/state", self.get_supervisor_ui_state, methods=["GET"])
             self.app.add_api_route("/ui/events", self.get_supervisor_ui_events, methods=["GET"])
         self.app.add_api_route("/runtime/activity", self.get_runtime_activity, methods=["GET"])
+        self.app.add_api_route("/runtime/observation-input", self.get_runtime_observation_input, methods=["GET"])
         self.app.add_api_route("/runtime/timeline", self.get_runtime_timeline, methods=["GET"])
         self.app.add_api_route("/runtime/traces", self.list_runtime_traces, methods=["GET"])
         self.app.add_api_route("/runtime/traces/{trace_id}", self.get_runtime_trace, methods=["GET"])

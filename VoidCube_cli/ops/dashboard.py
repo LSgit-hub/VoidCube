@@ -1,9 +1,8 @@
 """
-VoidCube Live Dashboard — supervisor autonomous-chain visibility and activity signals.
+VoidCube Live Dashboard — supervisor autonomous-chain visibility and API-B observation input.
 
-Fetches real-time data from Gateway (:6000) and Supervisor (:6002)
-to surface what is happening and how the supervisor currently observes
-the autonomous chain.
+Fetches the minimal shared state needed to surface what is happening and how
+the supervisor currently observes the autonomous chain.
 """
 
 from __future__ import annotations
@@ -78,14 +77,63 @@ def fetch_gateway_services() -> Dict[str, Any]:
     return _get_json(f"{GATEWAY_URL}/admin/services") or {}
 
 
-def fetch_gateway_activity() -> Dict[str, Any]:
-    """Return gateway activity snapshot."""
-    return _get_json(f"{GATEWAY_URL}/admin/activity") or {}
-
-
 def fetch_supervisor_state() -> Dict[str, Any]:
     """Return supervisor UI state."""
     return _get_json(f"{SUPERVISOR_URL}/ui/state") or {}
+
+
+def _project_chain_stage(stage: Dict[str, Any]) -> Dict[str, Any]:
+    focus_task = dict(stage.get("focus_task") or {})
+    label = str(stage.get("label") or "").strip() or "阶段"
+    return {
+        "key": str(stage.get("key") or "").strip(),
+        "owner": str(stage.get("owner") or "").strip(),
+        "label": label,
+        "title": str(
+            focus_task.get("title")
+            or stage.get("title")
+            or label
+        ).strip() or label,
+        "status": str(
+            stage.get("status_label")
+            or focus_task.get("display_status")
+            or focus_task.get("status_label")
+            or stage.get("summary")
+            or stage.get("status")
+            or "等待中"
+        ).strip() or "等待中",
+    }
+
+
+def _project_chain_segment(segment: Dict[str, Any]) -> Dict[str, Any]:
+    items = [
+        dict(item)
+        for item in list(segment.get("items") or [])
+        if isinstance(item, dict)
+    ]
+    head_item = items[0] if items else {}
+    item_status = str(
+        head_item.get("display_status")
+        or head_item.get("status_label")
+        or head_item.get("status")
+        or ""
+    ).strip()
+    empty_status = "空" if not items else "等待中"
+    return {
+        "key": str(segment.get("key") or "").strip(),
+        "label": str(segment.get("label") or "").strip() or "未命名分段",
+        "owner": str(segment.get("owner") or "").strip(),
+        "stage_label": str(segment.get("stage_label") or "").strip(),
+        "count": max(0, int(segment.get("count") or len(items))),
+        "title": str(
+            head_item.get("title")
+            or segment.get("focus_title")
+            or segment.get("summary")
+            or segment.get("empty_text")
+            or "暂无可见链路项"
+        ).strip() or "暂无可见链路项",
+        "status": item_status or empty_status,
+    }
 
 
 def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -95,89 +143,40 @@ def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
     chain = dict(observation.get("chain") or {})
     loop = dict(observation.get("loop") or {})
     primary_focus = dict(board.get("primary_focus") or {})
-    segment_label_fallback = {
-        "api_b_backlog": "治理在途",
-        "api_a_ready": "待认领窗口",
-        "api_b_candidates": "候选形成",
-        "mem_recent": "写回回流",
-    }
-    loop_stages = []
-    for stage in list(loop.get("stages") or []):
-        if not isinstance(stage, dict):
-            continue
-        focus_task = dict(stage.get("focus_task") or {})
-        loop_stages.append(
-            {
-                "key": str(stage.get("key") or "").strip(),
-                "owner": str(stage.get("owner") or "").strip(),
-                "label": str(stage.get("label") or "阶段"),
-                "title": str(focus_task.get("title") or stage.get("label") or "阶段"),
-                "status": str(
-                    focus_task.get("display_status")
-                    or stage.get("status_label")
-                    or stage.get("summary")
-                    or stage.get("status")
-                    or "等待中"
-                ),
-            }
-        )
-    chain_segments = []
-    for section in list(chain.get("segments") or []):
-        if not isinstance(section, dict):
-            continue
-        items = [
-            dict(item)
-            for item in list(section.get("items") or [])
-            if isinstance(item, dict)
-        ]
-        head_item = items[0] if items else {}
-        chain_segments.append(
-            {
-                "key": str(section.get("key") or "").strip(),
-                "label": str(
-                    section.get("label")
-                    or section.get("owner")
-                    or segment_label_fallback.get(str(section.get("key") or "").strip(), "?")
-                ),
-                "owner": str(section.get("owner") or "").strip(),
-                "stage_label": str(section.get("stage_label") or "").strip(),
-                "count": len(items),
-                "title": str(
-                    head_item.get("title")
-                    or section.get("empty_text")
-                    or section.get("summary")
-                    or "暂无可见链路项"
-                ),
-                "status": str(
-                    head_item.get("display_status")
-                    or head_item.get("status")
-                    or ("空" if not items else "?")
-                ),
-            }
-        )
+    loop_stages = [
+        _project_chain_stage(stage)
+        for stage in list(loop.get("stages") or [])
+        if isinstance(stage, dict)
+    ]
+    chain_segments = [
+        _project_chain_segment(section)
+        for section in list(chain.get("segments") or [])
+        if isinstance(section, dict)
+    ]
 
-    if not loop_stages and not chain_segments:
+    if not any(
+        [
+            str(board.get("headline") or "").strip(),
+            str(board.get("hero_summary") or "").strip(),
+            str(board.get("summary") or "").strip(),
+            bool(primary_focus),
+            bool(loop_stages),
+            bool(chain_segments),
+        ]
+    ):
         return {}
 
     return {
         "api_b_backlog": int(counts.get("api_b_backlog") or 0),
+        "api_a_running": int(counts.get("api_a_running") or 0),
         "api_a_ready": int(counts.get("api_a_ready") or 0),
         "candidates": int(counts.get("candidates") or 0),
         "writebacks": int(counts.get("writebacks") or 0),
         "loop_stages": loop_stages[:4],
         "segments": chain_segments[:4],
-        "headline": str(board.get("headline") or "API-B 主视角自主闭环总览"),
-        "summary": str(
-            board.get("summary")
-            or chain.get("summary")
-            or "API-B 主视角下的判断、治理、执行回报、Mem 回流与再读取闭环。"
-        ),
-        "hero_summary": str(
-            board.get("hero_summary")
-            or board.get("summary")
-            or chain.get("summary")
-            or "Web 小屋与最小 dashboard 只消费 Supervisor 投影出的 API-B 主视角自主闭环读模型。"
-        ),
+        "headline": str(board.get("headline") or "").strip(),
+        "summary": str(board.get("summary") or chain.get("summary") or "").strip(),
+        "hero_summary": str(board.get("hero_summary") or "").strip(),
         "primary_focus": {
             "title": str(primary_focus.get("title") or "当前没有显著闭环焦点").strip()
             or "当前没有显著闭环焦点",
@@ -194,47 +193,17 @@ def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
             for item in list(board.get("observation_notes") or [])
             if isinstance(item, dict)
         ][:4],
-        "segments_headline": str(chain.get("headline") or "自主闭环分段观察"),
+        "segments_headline": str(chain.get("headline") or "").strip(),
     }
 
 
-# ── Time calculations ──────────────────────────────────────────────────
-
-def _fmt_countdown(seconds: Optional[float]) -> str:
-    """Format seconds into a human-readable countdown."""
-    if seconds is None:
-        return "unknown"
-    if seconds <= 0:
-        return "now"
-    if seconds < 60:
-        return f"{int(seconds)}s"
-    if seconds < 3600:
-        m, s = divmod(int(seconds), 60)
-        return f"{m}m{s:02d}s"
-    h, r = divmod(int(seconds), 3600)
-    m = r // 60
-    return f"{h}h{m:02d}m"
-
-
-def _human_dashboard_display(value: Optional[str]) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return "?"
+def _human_snapshot_source(value: Optional[str]) -> str:
+    text = str(value or "").strip().lower()
     return {
-        "continuous": "持续运行",
-        "no data": "暂无数据",
-        "unknown": "未知",
-        "now": "现在",
-    }.get(text, text)
-
-
-def _human_policy_scope(value: Optional[str]) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return "?"
-    return {
-        "soft_signal_only": "仅软感知用户链路",
-    }.get(text, text)
+        "live": "实时快照",
+        "cached": "缓存快照",
+        "default": "默认快照",
+    }.get(text, str(value or "").strip() or "默认快照")
 
 
 def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
@@ -274,19 +243,28 @@ def _supervisor_recent_autonomous_activity(state: Dict[str, Any]) -> Dict[str, A
 
 def build_dashboard() -> Dict[str, Any]:
     """Collect all data and compute visibility metrics."""
-    now = datetime.now()
-
     # ── Fetch data ──────────────────────────────────────────────────
     services = fetch_gateway_services()
-    activity = fetch_gateway_activity()
     state = fetch_supervisor_state()
     observation = dict(state.get("autonomous_observation") or {})
     runtime = dict(observation.get("runtime") or {})
-    guards = dict(runtime.get("activity_guards") or {})
-    decisions = dict(runtime.get("eligibility") or guards.get("decisions") or {})
-    thresholds = dict(guards.get("thresholds") or {})
+    user_signal = dict(runtime.get("user_chain_signal") or {})
+    snapshot_source = str(runtime.get("snapshot_source") or "default")
     chain_snapshot = _build_autonomous_chain_snapshot(state)
     recent_activity = _supervisor_recent_autonomous_activity(state)
+    user_threshold = int(user_signal.get("quiet_after_seconds") or 600)
+    observation_input = {
+        "headline": "API-B 判断输入",
+        "user_chain_quiet": bool(user_signal.get("is_quiet", True)),
+        "user_chain_state": (
+            "安静软信号" if bool(user_signal.get("is_quiet", True)) else "活跃软信号"
+        ),
+        "active_sessions": int(user_signal.get("active_sessions") or 0),
+        "quiet_after_seconds": user_threshold,
+        "snapshot_source": snapshot_source,
+        "scope": str(user_signal.get("scope") or "soft_signal_only").strip() or "soft_signal_only",
+        "summary": "用户链路只作为 API-B 判断让路参考，不展示聊天内容。",
+    }
 
     # ── Services ────────────────────────────────────────────────────
     registered = services.get("services", {})
@@ -296,89 +274,27 @@ def build_dashboard() -> Dict[str, Any]:
     supervisor_info = next((s for s in svc_list if s.get("service_type") == "supervisor"), None)
     memory_info = next((s for s in svc_list if s.get("service_type") == "memory"), None)
 
-    # ── Activity timestamps ─────────────────────────────────────────
-    last_user = _parse_iso(activity.get("last_user_request_at"))
-    last_agent = _parse_iso(activity.get("last_agent_work_at"))
-    last_memory = _parse_iso(activity.get("last_memory_task_at"))
-    last_chain_plan = _parse_iso(activity.get("last_autonomous_chain_plan_at"))
-    last_chain_exec = _parse_iso(activity.get("last_autonomous_chain_execute_at"))
-
-    # ── Idle seconds ────────────────────────────────────────────────
-    def idle_since(dt: Optional[datetime]) -> Optional[float]:
-        if dt is None:
-            return None
-        return max(0.0, (now - dt).total_seconds())
-
-    user_idle_s = idle_since(last_user)
-    agent_idle_s = idle_since(last_agent)
-    memory_idle_s = idle_since(last_memory)
-    chain_plan_idle_s = idle_since(last_chain_plan)
-    chain_exec_idle_s = idle_since(last_chain_exec)
-
-    # ── Activity guard read model from supervisor state ─────────────
-    user_threshold = int(thresholds.get("user_idle_seconds", 600))
-    memory_threshold = int(thresholds.get("memory_idle_seconds", 600))
-    workflow_threshold = int(thresholds.get("workflow_idle_seconds", 600))
-    # ── Countdowns ──────────────────────────────────────────────────
-    # When will each activity signal next cross its configured threshold?
-    countdowns: Dict[str, Any] = {}
-
-    for label, idle_val, thresh in [
-        ("user_chain_quiet", user_idle_s, user_threshold),
-        ("agent_idle", agent_idle_s, workflow_threshold),
-        ("memory_idle", memory_idle_s, memory_threshold),
-        ("autonomous_chain_plan_idle", chain_plan_idle_s, workflow_threshold),
-        ("autonomous_chain_execute_idle", chain_exec_idle_s, workflow_threshold),
-    ]:
-        if idle_val is None:
-            countdowns[label] = {"remaining_s": None, "display": "no data", "met": True}
-        else:
-            remaining = max(0.0, thresh - idle_val)
-            countdowns[label] = {
-                "remaining_s": remaining,
-                "display": _fmt_countdown(remaining),
-                "met": remaining <= 0,
-                "idle_s": idle_val,
-                "threshold_s": thresh,
-            }
-
-    countdowns["autonomous_chain"] = {
-        "remaining_s": 0.0,
-        "display": "continuous",
-        "met": True,
-        "scope": "soft_signal_only",
-        "summary": "API-B 持续运行自主链路；用户链路只作为软感知信号。",
-    }
-
-    # Overall execution eligibility follows the supervisor's current decision,
-    # not a locally reconstructed execution-window gate.
-    can_execute = bool(decisions.get("eligible_for_execution", False))
-    countdowns["can_execute"] = {"met": can_execute}
-
     # ── Autonomous chain board ──────────────────────────────────────
     chain_view: Dict[str, Any]
     if chain_snapshot:
         chain_view = {
             "mode": "autonomous_chain_board",
-            "headline": chain_snapshot.get("headline", "API-B 主视角自主闭环总览"),
-            "hero_summary": chain_snapshot.get(
-                "hero_summary",
-                "Web 小屋与最小 dashboard 只消费 Supervisor 投影出的 API-B 主视角自主闭环读模型。",
-            ),
-            "summary": chain_snapshot.get(
-                "summary",
-                "API-B 主视角下的判断、治理、执行回报、Mem 回流与再读取闭环。",
-            ),
+            "headline": chain_snapshot.get("headline") or "API-B 主视角自主闭环总览",
+            "hero_summary": chain_snapshot.get("hero_summary")
+            or "Web 小屋与最小 dashboard 只消费 Supervisor 投影出的 API-B 主视角自主闭环读模型。",
+            "summary": chain_snapshot.get("summary")
+            or "API-B 主视角下的判断、治理、执行回报、Mem 回流与再读取闭环。",
             "primary_focus": dict(chain_snapshot.get("primary_focus") or {}),
             "hero_pills": list(chain_snapshot.get("hero_pills") or []),
             "observation_notes": list(chain_snapshot.get("observation_notes") or []),
             "api_b_backlog": chain_snapshot.get("api_b_backlog", 0),
+            "api_a_running": chain_snapshot.get("api_a_running", 0),
             "api_a_ready": chain_snapshot.get("api_a_ready", 0),
             "candidates": chain_snapshot.get("candidates", 0),
             "writebacks": chain_snapshot.get("writebacks", 0),
             "loop_stages": list(chain_snapshot.get("loop_stages") or []),
             "segments": list(chain_snapshot.get("segments") or []),
-            "segments_headline": chain_snapshot.get("segments_headline", "自主闭环分段观察"),
+            "segments_headline": chain_snapshot.get("segments_headline") or "自主闭环分段观察",
         }
     else:
         chain_view = {
@@ -390,6 +306,7 @@ def build_dashboard() -> Dict[str, Any]:
             "hero_pills": [],
             "observation_notes": [],
             "api_b_backlog": 0,
+            "api_a_running": 0,
             "api_a_ready": 0,
             "candidates": 0,
             "writebacks": 0,
@@ -398,16 +315,8 @@ def build_dashboard() -> Dict[str, Any]:
             "segments_headline": "自主闭环分段观察",
         }
 
-    # ── Next review cycle estimate ──────────────────────────────────
-    review_interval = 300  # default 5 min
-    next_review_s = max(0.0, review_interval - (chain_plan_idle_s or review_interval))
-    if chain_plan_idle_s is not None and chain_plan_idle_s < review_interval:
-        next_review_s = review_interval - chain_plan_idle_s
-    else:
-        next_review_s = review_interval
-
     return {
-        "now": now.isoformat(),
+        "now": datetime.now().isoformat(),
         "services": {
             "agents": len(agents),
             "agent_instances": [
@@ -424,18 +333,7 @@ def build_dashboard() -> Dict[str, Any]:
         },
         "chain": chain_view,
         "recent_activity": recent_activity,
-        "countdowns": countdowns,
-        "eligibility": {
-            "can_execute": can_execute,
-            "eligible_for_planning": decisions.get("eligible_for_planning", False),
-            "eligible_for_execution": decisions.get("eligible_for_execution", False),
-        },
-        "next_review_cycle_s": next_review_s,
-        "next_review_cycle_display": _fmt_countdown(next_review_s),
-        "autonomous_chain_policy": {
-            "label": "continuous",
-            "scope": "soft_signal_only",
-        },
+        "observation_input": observation_input,
     }
 
 
@@ -533,9 +431,7 @@ def print_dashboard() -> None:
     svc = db["services"]
     chain = db["chain"]
     recent_activity = db.get("recent_activity") or {}
-    cds = db["countdowns"]
-    elig = db["eligibility"]
-    policy = db["autonomous_chain_policy"]
+    observation_input = db.get("observation_input") or {}
 
     # ── Header ──────────────────────────────────────────────────────
     print()
@@ -561,8 +457,8 @@ def print_dashboard() -> None:
             f"  ║  {chain.get('segments_headline', '自主闭环分段观察')[:46]:<46s}          ║"
         )
         print(
-            f"  ║  候选 {chain.get('candidates', 0)}  ·  治理 {chain.get('api_b_backlog', 0)}  ·  "
-            f"待认领 {chain.get('api_a_ready', 0)}  ·  回流 {chain.get('writebacks', 0)}              ║"
+            f"  ║  候选形成 {chain.get('candidates', 0)}  ·  治理在途 {chain.get('api_b_backlog', 0)}  ·  "
+            f"执行中 {chain.get('api_a_running', 0)}  ·  待认领 {chain.get('api_a_ready', 0)}  ·  回流 {chain.get('writebacks', 0)}   ║"
         )
         print(
             f"  ║  {chain.get('hero_summary', chain.get('summary', 'API-B 主视角下的闭环观测'))[:54]:<54s}  ║"
@@ -602,41 +498,18 @@ def print_dashboard() -> None:
         print(f"  ║  最近自主动作 {phase:<10s} {title:<30s} {display_at:>8s}    ║")
         print(f"  ║  {summary:<54s}  ║")
 
-    # ── Runtime activity signals ────────────────────────────────────
+    # ── API-B observation input ─────────────────────────────────────
     print(f"  ╠══════════════════════════════════════════════════════════╣")
-    print(f"  ║  运行时活动信号                                         ║")
-
-    conds = [
-        ("用户链路安静", "user_chain_quiet"),
-        ("API-A 空闲", "agent_idle"),
-        ("记忆空闲", "memory_idle"),
-        ("规划空闲", "autonomous_chain_plan_idle"),
-        ("执行空闲", "autonomous_chain_execute_idle"),
-    ]
-    for label, key in conds:
-        c = cds.get(key, {})
-        icon = "✓" if c.get("met") else "⏳"
-        display = _human_dashboard_display(c.get("display", "?"))
-        print(f"  ║    {icon} {label:<14s} {display:>8s}  (阈值 {c.get('threshold_s', '?')}s)                    ║")
-
-    # Continuous autonomous-chain banner
-    policy_cd = cds.get("autonomous_chain", {})
-    print(
-        f"  ║    ✓ 自主链路   {_human_dashboard_display(policy_cd.get('display', '?')):>8s}  "
-        f"({_human_policy_scope(policy.get('scope', '?'))})              ║"
-    )
-
-    # ── Eligibility ─────────────────────────────────────────────────
-    print(f"  ╠══════════════════════════════════════════════════════════╣")
-    can = "✓ 允许执行" if elig["can_execute"] else "✗ 暂缓执行"
-    plan_ok = "✓" if elig["eligible_for_planning"] else "✗"
-    exec_ok = "✓" if elig["eligible_for_execution"] else "✗"
-    print(f"  ║  当前状态   {can:<40s}   ║")
-    print(f"  ║             可规划: {plan_ok}   可执行: {exec_ok}                                  ║")
-
-    # ── Next review cycle ───────────────────────────────────────────
-    next_rev = db.get("next_review_cycle_display", "?")
-    print(f"  ║  下一轮复核 {next_rev:<14s}                                   ║")
+    user_state = str(observation_input.get("user_chain_state") or "安静软信号")
+    active_sessions = int(observation_input.get("active_sessions") or 0)
+    quiet_after = observation_input.get("quiet_after_seconds", "?")
+    snapshot = _human_snapshot_source(observation_input.get("snapshot_source"))
+    scope = str(observation_input.get("scope") or "soft_signal_only").strip()
+    scope_label = "仅软感知用户链路" if scope == "soft_signal_only" else scope
+    print(f"  ║  API-B 判断输入                                         ║")
+    print(f"  ║    用户链路 {user_state:<12s} 会话 {active_sessions:<3d} 阈值 {quiet_after!s:<6s}      ║")
+    print(f"  ║    快照 {snapshot:<16s} 边界 {scope_label:<18s} ║")
+    print(f"  ║    {str(observation_input.get('summary') or '用户链路只作为 API-B 判断让路参考。')[:50]:<50s}    ║")
 
     # ── Agent instances ─────────────────────────────────────────────
     agents = svc.get("agent_instances", [])
@@ -650,23 +523,11 @@ def print_dashboard() -> None:
         print(f"  ╠══════════════════════════════════════════════════════════╣")
         print(f"  ║  ⚠ 尚无 API-A 实例注册                                  ║")
         print(f"  ║    监督者放行链路项后，API-A 自主执行器才会出现。         ║")
-        print(f"  ║    下方活动信号仅作为观测上下文。                         ║")
+        print(f"  ║    dashboard 只读 API-B 投影，不本地再管理队列。          ║")
 
     # ── Footer ──────────────────────────────────────────────────────
     print(f"  ╚══════════════════════════════════════════════════════════╝")
     print()
-
-    # ── Plain-language summary ──────────────────────────────────────
-    if not elig["can_execute"]:
-        print("  💡 为什么当前仍暂缓执行？")
-        print("     → 监督者尚未放行执行。")
-        for label, key in conds:
-            c = cds.get(key, {})
-            if not c.get("met") and c.get("remaining_s", 1) > 0:
-                print(f"     → {label}: 还需 {c['display']}（参考阈值 {c.get('threshold_s', '?')}s）")
-        if svc["agents"] == 0:
-            print(f"     → 当前没有 API-A 实例在运行；监督者放行后才会拉起执行器。")
-        print()
 
 
 def watch_dashboard(interval: float = 3.0) -> None:

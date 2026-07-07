@@ -7,6 +7,7 @@ import urllib.request
 from typing import Any, Dict
 
 from VoidCube_cli.autonomous_observation import format_supervisor_status_snapshot
+from VoidCube_cli.autonomous_events import sync_autonomous_supervisor_event
 
 
 def get_supervisor_url(host: Any) -> str:
@@ -36,6 +37,11 @@ def fetch_autonomous_gateway_status(host: Any) -> Dict[str, Any]:
     return getattr(host, "_autonomous_gateway_status_cache", None) or {}
 
 
+def fetch_cached_gateway_agent_activity(host: Any) -> Dict[str, Any]:
+    """Return cached gateway API-A execution activity for CLI-side observation."""
+    return getattr(host, "_autonomous_gateway_activity_cache", None) or {}
+
+
 def refresh_supervisor_status(host: Any) -> None:
     """Fetch supervisor state in a background thread."""
     now = time.time()
@@ -51,7 +57,7 @@ def refresh_supervisor_status(host: Any) -> None:
             with urllib.request.urlopen(req, timeout=2) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 host._supervisor_state_cache = data
-                host._sync_autonomous_supervisor_event(data)
+                sync_autonomous_supervisor_event(host, data)
         except Exception:
             pass
         finally:
@@ -84,38 +90,7 @@ def refresh_autonomous_gateway_status(host: Any) -> None:
     threading.Thread(target=_do_fetch, daemon=True, name="auto-gateway-status").start()
 
 
-def refresh_autonomous_observation_surfaces(
-    host: Any,
-    *,
-    refresh_gateway_cli_presence: Any,
-    poll_autonomous_workflow: Any,
-) -> None:
-    """Refresh cached autonomous observation surfaces while the CLI is idle."""
-    refresh_supervisor_status(host)
-    refresh_autonomous_gateway_status(host)
-    refresh_gateway_cli_presence()
-    if getattr(host, "_autonomous_gate_active", False):
-        poll_autonomous_workflow()
-
-
-def fetch_supervisor_status_snapshot(host: Any) -> Dict[str, Any]:
-    try:
-        from VoidCube_cli.config import load_config
-
-        cfg = load_config()
-        sv_cfg = cfg.get("supervisor", {})
-        supervisor_url = f"http://{sv_cfg.get('host', '127.0.0.1')}:{sv_cfg.get('port', 6002)}"
-    except Exception:
-        supervisor_url = "http://127.0.0.1:6002"
-
-    try:
-        return json.loads(urllib.request.urlopen(f"{supervisor_url}/ui/state", timeout=5).read())
-    except Exception:
-        return {}
-
-
-def fetch_gateway_agent_activity_snapshot(host: Any) -> Dict[str, Any]:
-    del host
+def _fetch_gateway_agent_activity_snapshot_now(host: Any) -> Dict[str, Any]:
     gateway_base = "http://127.0.0.1:6000"
     try:
         from VoidCube_cli.config import load_config
@@ -140,6 +115,62 @@ def fetch_gateway_agent_activity_snapshot(host: Any) -> Dict[str, Any]:
         "agent_work_count": dict(activity.get("counts") or {}).get("agent_work_count", 0),
         "agent_work": agent_work,
     }
+
+
+def refresh_gateway_agent_activity_snapshot(host: Any) -> None:
+    """Fetch gateway API-A execution activity in a background thread."""
+    now = time.time()
+    if (now - getattr(host, "_autonomous_gateway_activity_ts", 0.0)) < 5.0:
+        return
+    if getattr(host, "_autonomous_gateway_activity_refreshing", False):
+        return
+    host._autonomous_gateway_activity_refreshing = True
+
+    def _do_fetch() -> None:
+        try:
+            host._autonomous_gateway_activity_cache = _fetch_gateway_agent_activity_snapshot_now(host)
+        except Exception:
+            pass
+        finally:
+            host._autonomous_gateway_activity_ts = time.time()
+            host._autonomous_gateway_activity_refreshing = False
+
+    threading.Thread(target=_do_fetch, daemon=True, name="auto-gateway-activity").start()
+
+
+def refresh_autonomous_observation_surfaces(
+    host: Any,
+    *,
+    refresh_gateway_cli_presence: Any,
+    poll_autonomous_workflow: Any,
+) -> None:
+    """Refresh cached autonomous observation surfaces while the CLI is idle."""
+    refresh_supervisor_status(host)
+    refresh_autonomous_gateway_status(host)
+    refresh_gateway_agent_activity_snapshot(host)
+    refresh_gateway_cli_presence()
+    if getattr(host, "_autonomous_gate_active", False):
+        poll_autonomous_workflow()
+
+
+def fetch_supervisor_status_snapshot(host: Any) -> Dict[str, Any]:
+    try:
+        from VoidCube_cli.config import load_config
+
+        cfg = load_config()
+        sv_cfg = cfg.get("supervisor", {})
+        supervisor_url = f"http://{sv_cfg.get('host', '127.0.0.1')}:{sv_cfg.get('port', 6002)}"
+    except Exception:
+        supervisor_url = "http://127.0.0.1:6002"
+
+    try:
+        return json.loads(urllib.request.urlopen(f"{supervisor_url}/ui/state", timeout=5).read())
+    except Exception:
+        return {}
+
+
+def fetch_gateway_agent_activity_snapshot(host: Any) -> Dict[str, Any]:
+    return _fetch_gateway_agent_activity_snapshot_now(host)
 
 
 def format_gateway_agent_activity_snapshot(state: Dict[str, Any]) -> list[str]:
@@ -172,12 +203,20 @@ def autonomous_observation_summary_sections(
     host: Any,
 ) -> list[str]:
     lines: list[str] = []
-    supervisor_status = fetch_supervisor_status_snapshot(host)
+    refresh_supervisor_status(host)
+    refresh_gateway_agent_activity_snapshot(host)
+
+    supervisor_status = fetch_supervisor_status(host)
     if supervisor_status:
         lines.extend(["", "监督者快照:"])
         lines.extend(format_supervisor_status_snapshot(supervisor_status))
-    agent_activity = fetch_gateway_agent_activity_snapshot(host)
+    elif getattr(host, "_supervisor_state_refreshing", False):
+        lines.extend(["", "监督者快照:", "后台刷新中，稍后会回到当前自主闭环快照。"])
+
+    agent_activity = fetch_cached_gateway_agent_activity(host)
     if agent_activity:
         lines.extend(["", "网关执行活动:"])
         lines.extend(format_gateway_agent_activity_snapshot(agent_activity))
+    elif getattr(host, "_autonomous_gateway_activity_refreshing", False):
+        lines.extend(["", "网关执行活动:", "后台刷新中，稍后会回到最近 API-A 执行回报。"])
     return lines

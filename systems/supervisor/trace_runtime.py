@@ -4,33 +4,42 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from systems.runtime_task_profile import derive_runtime_task_profile
+from systems.supervisor.observation_status import trace_status_label
 
 
 class TraceRuntimeMixin:
     """Read-only trace aggregation across supervisor-local runtime stores."""
 
     @staticmethod
+    def _normalize_trace_execution_request_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(payload or {})
+        drive_input_evidence = dict(
+            normalized.get("drive_input_evidence")
+            or normalized.get("activity_guard_evidence")
+            or {}
+        )
+        normalized["drive_input_evidence"] = dict(drive_input_evidence)
+        normalized["activity_guard_evidence"] = dict(
+            normalized.get("activity_guard_evidence") or drive_input_evidence
+        )
+        return normalized
+
+    @staticmethod
     def _trace_status_label(value: Any) -> str:
-        normalized = str(value or "").strip().lower()
-        if normalized == "queued":
-            normalized = "planned"
-        return {
-            "planned": "待审核",
-            "awaiting_review": "待审查",
-            "approved": "待执行",
-            "running": "执行中",
-            "retry": "重试中",
-            "deferred": "已延后",
-            "paused": "已暂停",
-            "completed": "已写回",
-            "failed": "执行失败",
-            "cancelled": "已取消",
-        }.get(normalized, str(value or "").strip() or "状态未识别")
+        return trace_status_label(value)
 
     @staticmethod
     def _trace_event_label(value: Any) -> str:
-        normalized = str(value or "").strip().lower()
+        normalized = (
+            str(value or "")
+            .strip()
+            .lower()
+            .replace("-", "_")
+            .replace(" ", "_")
+        )
         return {
+            "supervisor_activity": "监督者活动",
+            "governance_record": "治理记录",
             "task_snapshot": "链路项快照",
             "task_decision": "治理裁决",
             "execution_request": "自主交接请求",
@@ -48,6 +57,17 @@ class TraceRuntimeMixin:
             "uncertainty_high": "高不确定性告警",
             "gateway_activity_unavailable": "网关活动暂不可见",
         }.get(normalized, str(value or "").strip() or "链路事件")
+
+    def _trace_human_summary_fallback(
+        self,
+        *,
+        event_type: Any,
+        scope_label: str,
+    ) -> str:
+        event_label = self._trace_event_label(event_type)
+        if event_label == "链路事件":
+            return scope_label
+        return f"{scope_label}：{event_label}"
 
     @staticmethod
     def _trace_source_label(value: Any) -> str:
@@ -180,7 +200,9 @@ class TraceRuntimeMixin:
                     )
                 )
             if task.execution_request is not None:
-                execution_payload = task.execution_request.model_dump(mode="json")
+                execution_payload = self._normalize_trace_execution_request_payload(
+                    task.execution_request.model_dump(mode="json")
+                )
                 records.append(
                     self._build_trace_record(
                         source="autonomous_chain_store",
@@ -221,7 +243,11 @@ class TraceRuntimeMixin:
                     task_id=metadata.get("task_id"),
                     decision_id=metadata.get("decision_id"),
                     profile=self._trace_runtime_profile_from_payload(metadata),
-                    summary=str(event.get("summary") or event.get("event_type") or "监督者活动"),
+                    summary=str(event.get("summary") or "").strip()
+                    or self._trace_human_summary_fallback(
+                        event_type=event.get("event_type") or "supervisor_activity",
+                        scope_label="监督者活动",
+                    ),
                     payload=event,
                 )
             )
@@ -256,7 +282,11 @@ class TraceRuntimeMixin:
                     task_id=request.get("task_id"),
                     decision_id=request.get("decision_id") or lineage.get("decision_id"),
                     profile=profile,
-                    summary=str(request.get("summary") or record.get("kind") or "治理记录"),
+                    summary=str(request.get("summary") or "").strip()
+                    or self._trace_human_summary_fallback(
+                        event_type=record.get("kind") or request.get("event_type") or "governance_record",
+                        scope_label="治理记录",
+                    ),
                     payload=record,
                 )
             )

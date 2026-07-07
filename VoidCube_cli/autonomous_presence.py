@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Dict
 
 
@@ -42,6 +43,72 @@ def ensure_autonomous_executor_session(host: Any, *, logger_debug: Any) -> None:
                 session_db._conn.commit()
     except Exception as exc:
         logger_debug("Could not persist autonomous executor session: %s", exc)
+
+
+def push_cli_agent_scene(
+    scene: str,
+    *,
+    session_id: str | None = None,
+    task_id: str | None = None,
+    execution_kind: str | None = None,
+    subagent_summary: Dict[str, Any] | None = None,
+    agent_role: str | None = None,
+) -> bool:
+    """Best-effort: report the current API-A lane scene to Gateway."""
+    normalized_scene = str(scene or "").strip().lower()
+    if not normalized_scene:
+        return False
+
+    try:
+        import urllib.request as _req
+
+        metadata = {"scene": normalized_scene}
+        if task_id:
+            metadata["task_id"] = task_id
+        if execution_kind:
+            metadata["execution_kind"] = execution_kind
+        normalized_role = str(agent_role or "").strip().lower()
+        if normalized_role in ("supervisor_task", "user_chat"):
+            metadata["agent_role"] = normalized_role
+        if isinstance(subagent_summary, dict):
+            foreground_count = max(0, int(subagent_summary.get("foreground_count") or 0))
+            background_count = max(0, int(subagent_summary.get("background_count") or 0))
+            total_count = max(
+                foreground_count + background_count,
+                int(subagent_summary.get("total_count") or 0),
+            )
+            metadata["subagent_foreground_count"] = foreground_count
+            metadata["subagent_background_count"] = background_count
+            metadata["subagent_total_count"] = total_count
+
+            focus_task_id = str(subagent_summary.get("focus_task_id") or "").strip()
+            focus_tool = str(subagent_summary.get("focus_tool") or "").strip()
+            focus_preview = str(subagent_summary.get("focus_preview") or "").strip()
+            if focus_task_id:
+                metadata["subagent_focus_task_id"] = focus_task_id
+            if focus_tool:
+                metadata["subagent_focus_tool"] = focus_tool
+            if focus_preview:
+                metadata["subagent_focus_preview"] = focus_preview
+
+        payload = json.dumps(
+            {
+                "activity_kind": "agent_scene",
+                "source_service": "cli_agent",
+                "session_id": session_id,
+                "metadata": metadata,
+            }
+        ).encode()
+        req = _req.Request(
+            "http://127.0.0.1:6000/admin/activity/touch",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        _req.urlopen(req, timeout=3)
+        return True
+    except Exception:
+        return False
 
 
 def current_gateway_presence_snapshot(host: Any) -> tuple[str, str | None, str | None]:

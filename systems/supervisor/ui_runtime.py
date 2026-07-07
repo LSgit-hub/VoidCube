@@ -16,6 +16,10 @@ from fastapi import Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from VoidCube_core.utils import atomic_json_write
+from systems.supervisor.observation_status import (
+    normalize_autonomous_status,
+    observation_status_label,
+)
 
 logger = logging.getLogger("supervisor")
 
@@ -3402,9 +3406,7 @@ function candidateReasonHint(task) {
   return hints.join(' · ');
 }
 function normalizeObservationStatus(s) {
-  const normalized = String(s || '').trim().toLowerCase();
-  if (normalized === 'queued') return 'planned';
-  return normalized;
+  return String(s || '').trim().toLowerCase();
 }
 function statusLabel(s) {
   const normalized = normalizeObservationStatus(s);
@@ -3642,6 +3644,15 @@ function autonomousLoopStageStatusText(stage) {
   return autonomousLoopStatusLabel((stage || {}).status || 'idle');
 }
 
+function observationDisplayStatus(row, fallback) {
+  const record = row && typeof row === 'object' ? row : {};
+  const explicit = String(record.display_status || record.status_label || '').trim();
+  if (explicit) return explicit;
+  const normalized = normalizeObservationStatus(record.status);
+  const derived = statusLabel(normalized || 'idle');
+  return derived || String(fallback || '等待中');
+}
+
 function autonomousLoopStageFocusTitle(stage) {
   const focusTask = (stage || {}).focus_task || {};
   return String(focusTask.title || '').trim();
@@ -3760,18 +3771,21 @@ function observationLoopStageProjection(stage) {
   const row = stage && typeof stage === 'object' ? stage : {};
   const focusTask = row.focus_task && typeof row.focus_task === 'object' ? row.focus_task : {};
   const owner = String(row.owner || '').trim();
-  const rawStatus = String(row.status || focusTask.status || 'idle').trim().toLowerCase() || 'idle';
-  const lane = owner === 'API-A' ? 'agent' : (owner === 'Mem' ? 'mem' : 'supervisor');
+  const rawStatus = normalizeObservationStatus(row.status || focusTask.status || 'idle') || 'idle';
+  const lane = String(row.lane || '').trim() || (owner === 'API-A' ? 'agent' : (owner === 'Mem' ? 'mem' : 'supervisor'));
+  const observationRole = String(row.observation_role || '').trim() || loopStageObservationRole(row.key);
   return {
     ...focusTask,
     title: String(focusTask.title || row.label || '阶段').trim() || '阶段',
     status: rawStatus,
-    display_status: String(
-      focusTask.display_status
-      || row.status_label
-      || autonomousLoopStageStatusText(row)
-      || '等待中'
-    ).trim() || '等待中',
+    display_status: observationDisplayStatus(
+      {
+        ...focusTask,
+        status: rawStatus,
+        status_label: row.status_label,
+      },
+      autonomousLoopStageStatusText(row) || '等待中'
+    ),
     summary: String(
       focusTask.summary
       || row.summary
@@ -3781,7 +3795,7 @@ function observationLoopStageProjection(stage) {
     ).trim(),
     read_rule: String(row.read_rule || '').trim(),
     transition_hint: String(row.transition_hint || '').trim(),
-    observation_role: loopStageObservationRole(row.key),
+    observation_role: observationRole,
     lane,
     stage_key: String(row.key || '').trim(),
     stage_owner: owner || '—',
@@ -3801,15 +3815,28 @@ function isCreativityObservationTask(task) {
   return governance === 'self_learning' || taskFamily === 'self_learning' || taskFamily === 'body_upgrade' || executionKind === 'body_improvement';
 }
 
-function creativityGovernanceBacklogCount(observation) {
-  const backlog = chainGroupByKey(observation, 'api_b_backlog') || {};
-  const items = Array.isArray(backlog.items) ? backlog.items : [];
-  return items.filter(item => isCreativityObservationTask(item)).length;
-}
-
 function observationRuntime(observation) {
   const obs = observation || {};
   return obs.runtime || {};
+}
+
+function observationUserSignal(observation) {
+  const runtime = observationRuntime(observation);
+  return runtime.user_chain_signal || {};
+}
+
+function observationSnapshotSource(observation) {
+  const runtime = observationRuntime(observation);
+  return String(runtime.snapshot_source || '').trim() || 'default';
+}
+
+function observationSnapshotSourceLabel(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return {
+    live: '实时快照',
+    cached: '缓存快照',
+    default: '默认快照',
+  }[normalized] || (String(value || '').trim() || '默认快照');
 }
 
 function observationFocus(observation) {
@@ -3840,6 +3867,8 @@ function derivedHeroPills(observation) {
 }
 
 function derivedMetricCards(observation) {
+  const board = ((observation || {}).board || {});
+  if (Array.isArray(board.metric_cards) && board.metric_cards.length) return board.metric_cards;
   const counts = observationCounts(observation);
   return [
     {key:'api_b_candidates', cls:'candidate', label:'候选形成', value:intOrZero(counts.candidates), note:'API-B'},
@@ -3857,7 +3886,7 @@ function derivedLoopRailEntries(observation) {
   return stages.map(stage => {
     const stageKey = String((stage || {}).key || '').trim();
     const focusRole = String(focus.observation_role || '').trim();
-    const isFocus =
+    const fallbackFocus =
       (stageKey === 'api_b_judgement' && focusRole === 'api_b_judgement') ||
       (stageKey === 'api_a_execution' && focusRole === 'api_a_execution') ||
       (stageKey === 'mem_writeback' && focusRole === 'mem_writeback') ||
@@ -3867,9 +3896,9 @@ function derivedLoopRailEntries(observation) {
       label: String((stage || {}).label || '阶段').trim() || '阶段',
       owner: String((stage || {}).owner || '—').trim() || '—',
       status: String((stage || {}).status || 'idle').trim().toLowerCase() || 'idle',
-      state: autonomousLoopStageStatusText(stage),
-      note: autonomousLoopStageFocusTitle(stage) || String((stage || {}).summary || (stage || {}).read_rule || '').trim(),
-      focus: isFocus,
+      state: String((stage || {}).rail_state || '').trim() || autonomousLoopStageStatusText(stage),
+      note: String((stage || {}).rail_note || '').trim() || autonomousLoopStageFocusTitle(stage) || String((stage || {}).summary || (stage || {}).read_rule || '').trim(),
+      focus: typeof (stage || {}).is_focus === 'boolean' ? stage.is_focus : fallbackFocus,
     };
   });
 }
@@ -3972,7 +4001,7 @@ function cognitionTypeLabel(kind, value) {
       '未识别': '未识别',
     },
     need_type: {
-      clear_governance_backlog: '清理治理积压',
+      clear_governance_backlog: '疏通治理在途',
       truthfulness_repair: '修补真实性风险',
       exploratory_learning: '发起自主学习',
       shell_baseline_learning: '替身基线学习',
@@ -3996,13 +4025,13 @@ function cognitionTypeLabel(kind, value) {
       correction_signal: '修正信号',
       user_activity: '用户活动',
       memory_pressure: '记忆压力',
-      governance_backlog: '治理积压',
+      governance_backlog: '治理在途',
       truthfulness_alert: '真实性告警',
       learning_followthrough: '学习跟进',
       '未命名信号': '未命名信号',
     },
     output_channel: {
-      task_candidates: '候选池',
+      task_candidates: '候选形成段',
       governance_review: '治理复核',
       observation_only: '只读观察',
       memory_maintenance: '记忆维护',
@@ -4081,6 +4110,13 @@ function observationGroupBadgeClass(group) {
 }
 
 function observationSegmentDecor(group) {
+  const projected = group && typeof group.display_decor === 'object' ? group.display_decor : null;
+  if (projected) {
+    return {
+      cls: String(projected.cls || 'supervisor'),
+      icon: String(projected.icon || '🧠'),
+    };
+  }
   const key = String((group || {}).key || '').trim();
   if (key === 'api_b_candidates') return {cls: 'candidate', icon: '🪄'};
   if (key === 'api_a_ready') return {cls: 'agent', icon: '🤖'};
@@ -4089,6 +4125,16 @@ function observationSegmentDecor(group) {
 }
 
 function observationSegmentDisplayCopy(group) {
+  const projected = group && typeof group.display_copy === 'object' ? group.display_copy : null;
+  if (projected) {
+    return {
+      itemLabel: String(projected.item_label || '链路项'),
+      eventLabel: String(projected.event_label || '链路事件'),
+      traceLabel: String(projected.trace_label || '闭环回合'),
+      footerLabel: String(projected.footer_label || '查看最近闭环记录'),
+      drillLabel: String(projected.drill_label || '🔬 闭环细节'),
+    };
+  }
   const key = String((group || {}).key || '').trim();
   if (key === 'api_b_candidates') {
     return {
@@ -4276,17 +4322,18 @@ function buildChainHero(state) {
   const focusStage = loopStageByKey(loop, focus.stage_key) || {};
   const focusCard = observationLoopStageProjection(focusStage);
   const focusBadgeClass = observationStateBadgeClass(focus.stage_status || focusCard.status || focus.status);
+  const focusStatusText = String(focus.status || observationDisplayStatus(focusCard, '等待中')).trim() || '等待中';
   const hero = document.createElement('section');
   hero.className = 'chain-hero';
   hero.innerHTML =
     '<div class="chain-hero-top">' +
       '<div class="chain-hero-main">' +
-        '<div class="chain-hero-label">API-B 主视角观测协议 · v' + esc(obs.read_model_version != null ? obs.read_model_version : 8) + '</div>' +
+        '<div class="chain-hero-label">API-B 主视角观测协议 · v' + esc(obs.read_model_version != null ? obs.read_model_version : 10) + '</div>' +
         '<div class="chain-hero-title">' + esc(board.headline || 'API-B 主视角自主闭环总览') + '</div>' +
         '<div class="chain-hero-summary">' + esc(board.hero_summary || board.summary || chain.summary || 'Web 小屋以 API-B 为主视角，只读观察判断、治理、API-A 执行回报、Mem 回流与再读取闭环。').substring(0, 220) + '</div>' +
       '</div>' +
       '<div class="chain-hero-focus">' +
-        '<span class="game-card-badge ' + focusBadgeClass + '">' + esc(focus.status || focusCard.display_status || '等待中') + '</span>' +
+        '<span class="game-card-badge ' + focusBadgeClass + '">' + esc(focusStatusText) + '</span>' +
         '<div class="chain-hero-focus-title">' + esc(focus.title || '当前没有显著闭环焦点') + '</div>' +
         (recent && recent.summary
           ? '<div class="chain-hero-summary" style="margin-top:8px;font-size:11px;">' +
@@ -4341,9 +4388,8 @@ function buildChainHero(state) {
 /* ── 🚦 自主链路观测总览 ── */
 function renderAutonomousDrawer(state) {
   const obs = state.autonomous_observation || {};
-  const runtime = obs.runtime || {};
-  const guards = runtime.activity_guards || {};
-  const userSignal = guards.user_chain_signal || {};
+  const userSignal = observationUserSignal(obs);
+  const snapshotSource = observationSnapshotSource(obs);
   const recent = recentAutonomousActivity(obs);
   const loop = obs.loop || {};
   const orderedGroups = chainGroups(obs);
@@ -4431,7 +4477,7 @@ function renderAutonomousDrawer(state) {
         ? focusItems.slice(0, 4).map(item =>
             '<div class="segment-active" style="margin-top:6px;"><div class="la-title">' +
             esc(String(item.title || '未命名').substring(0, 56)) + '</div>' +
-            '<div style="margin-top:3px;">状态: ' + esc(item.display_status || item.status || '—') +
+            '<div style="margin-top:3px;">状态: ' + esc(observationDisplayStatus(item, '—')) +
             (governanceHint(item) ? ' · ' + esc(String(governanceHint(item)).substring(0, 88)) : '') +
             (item.summary ? ' · ' + esc(String(item.summary).substring(0, 88)) : '') +
             '</div></div>'
@@ -4544,7 +4590,7 @@ function renderAutonomousDrawer(state) {
   html += '<div class="drawer-sub" style="margin-top:10px;">用户链路软感知: ' + esc(userState) +
     ' · 会话数 ' + esc(activeSessions) +
     ' · 让路参考阈值 ' + esc(quietAfter) + 's' +
-    ' · 临时开关 ' + (runtime.autonomous_chain_gate_active ? '已开启' : '已关闭') + '</div>';
+    ' · 观测快照 ' + esc(observationSnapshotSourceLabel(snapshotSource)) + '</div>';
   if (orderedGroups.length) {
     html += '<div class="segment-grid">' +
       orderedGroups.map(group => {
@@ -4555,7 +4601,7 @@ function renderAutonomousDrawer(state) {
   }
   if (rereadCard && Object.keys(rereadCard).length) {
     html += '<div class="drawer-sub" style="margin-top:10px;">API-B 再读取: ' +
-      esc(rereadCard.display_status || '等待中') + ' · ' +
+      esc(observationDisplayStatus(rereadCard, '等待中')) + ' · ' +
       esc(String(rereadCard.summary || '').substring(0, 120)) + '</div>';
   }
   html += '<div class="drawer-sub" style="margin-top:10px;">当前抽屉聚焦 ' +
@@ -4763,15 +4809,15 @@ function buildObservationCard(task, options) {
   title.textContent = (task.title || '未命名').substring(0, 64);
   title.title = task.title || '';
   const badge = document.createElement('span');
-  const rawStatus = String(task.status || '').trim().toLowerCase();
+  const rawStatus = normalizeObservationStatus(task.status);
   const badgeTone = (
     ['planned', 'approved', 'running', 'completed', 'failed', 'deferred', 'paused'].includes(rawStatus)
       ? rawStatus
       : observationStateBadgeClass(rawStatus)
   );
-  const st = task.display_status || task.status || 'idle';
+  const st = observationDisplayStatus(task, '等待中');
   badge.className = 'game-card-badge ' + badgeTone;
-  badge.textContent = statusLabel(st);
+  badge.textContent = st;
   head.append(title, badge);
   card.append(head);
 
@@ -5022,6 +5068,7 @@ function renderCognitionPanel(state) {
       '<div class="game-card-meta"><div class="game-card-tags">' +
       '<span class="game-card-tag truthfulness">主约束 · ' + esc(judgement.dominant_constraint_label || '暂无主约束') + '</span>' +
       (judgement.observation_target_label ? '<span class="game-card-tag memory">先看 · ' + esc(judgement.observation_target_label) + '</span>' : '') +
+      (judgement.api_a_lane_summary ? '<span class="game-card-tag system">API-A 段 · ' + esc(String(judgement.api_a_lane_summary).substring(0, 42)) + '</span>' : '') +
       '</div></div>';
     body.append(judgeSummary);
   }
@@ -5035,6 +5082,9 @@ function renderCognitionPanel(state) {
     '治理在途: ' + (perception.governance_backlog_count || 0) +
     ' · 用户会话: ' + (perception.active_sessions != null ? perception.active_sessions : '—') +
     ' · 学习质量: ' + (perception.learning_quality != null ? Math.round(perception.learning_quality) + '%' : '—') +
+    '</div><div class="cog-step-detail">' +
+    'API-A 待认领: ' + (perception.api_a_ready_count || 0) +
+    ' · API-A 执行中: ' + (perception.api_a_running_count || 0) +
     '</div><div class="cog-step-detail">' +
     '修正信号: ' + (perception.correction_signals || 0) +
     ' · 用户静默: ' + ((perception.idle_seconds || {}).user || '—') + 's' +
@@ -5117,6 +5167,9 @@ function renderCognitionPanel(state) {
       '主约束: ' + esc(judgement.dominant_constraint_label || '暂无主约束') +
       (judgement.observation_target_label ? ' · 先看: ' + esc(judgement.observation_target_label) : '') +
       '</div>' +
+      (judgement.api_a_lane_summary
+        ? '<div class="cog-step-detail">API-A 段: ' + esc(String(judgement.api_a_lane_summary).substring(0, 140)) + '</div>'
+        : '') +
       ((judgement.why_not_direct_improvement || []).length
         ? '<div class="cog-step-detail">暂不直接改替身: ' + esc(String(judgement.why_not_direct_improvement[0]).substring(0, 120)) + '</div>'
         : '') +
@@ -5158,9 +5211,7 @@ function renderObservationPanel(state) {
   body.replaceChildren();
 
   const obs = state.autonomous_observation || {};
-  const runtime = observationRuntime(obs);
-  const guards = runtime.activity_guards || {};
-  const userSignal = guards.user_chain_signal || {};
+  const userSignal = observationUserSignal(obs);
   const loop = obs.loop || {};
   const recent = recentAutonomousActivity(obs);
 
@@ -5263,9 +5314,10 @@ function renderStatsPanel(state) {
   const ts = state.tier1_stats || {};
   const mem = state.mem_usage || {};
   const obs = state.autonomous_observation || {};
-  const runtime = obs.runtime || {};
-  const guards = runtime.activity_guards || {};
-  const userSignal = guards.user_chain_signal || {};
+  const userSignal = observationUserSignal(obs);
+  const focus = observationFocus(obs);
+  const recent = recentAutonomousActivity(obs);
+  const snapshotSource = observationSnapshotSource(obs);
 
   const drill = document.createElement('div');
   drill.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:6px;';
@@ -5307,23 +5359,24 @@ function renderStatsPanel(state) {
   });
   body.append(memSec);
 
-  // 治理状态
-  const gateSec = document.createElement('div');
-  gateSec.className = 'lm-section';
-  gateSec.innerHTML = '<div class="lm-section-label">⚙️ 治理状态</div>';
+  // API-B 判断输入
+  const observationSec = document.createElement('div');
+  observationSec.className = 'lm-section';
+  observationSec.innerHTML = '<div class="lm-section-label">⚙️ API-B 判断输入</div>';
   [
-    {icon:'🔮', label:'自主链路', value: runtime.autonomous_chain_gate_active ? '✅ 已激活' : '⏸ 未激活'},
-    {icon:'🌐', label:'执行模式', value: '全天候'},
-    {icon:'👁', label:'用户链路感知', value: userSignal.active_sessions || 0},
-    {icon:'📡', label:'驱动可用', value: runtime.drive_available ? '✅' : '⚠️ 不可用'},
-    {icon:'📋', label:'闭环分段', value: loopStages(obs).length || 0},
+    {icon:'🎯', label:'当前焦点', value: String(focus.title || '暂无显著焦点').substring(0, 18)},
+    {icon:'👁', label:'用户链路', value: userSignal.is_quiet ? '安静软信号' : '活跃软信号'},
+    {icon:'🧾', label:'会话数', value: userSignal.active_sessions || 0},
+    {icon:'🛰', label:'观测快照', value: observationSnapshotSourceLabel(snapshotSource)},
+    {icon:'🧭', label:'作用边界', value: '仅 API-B 判断参考'},
+    {icon:'🕘', label:'最近动作', value: String(recent.phase_label || '暂无').substring(0, 18)},
   ].forEach(s => {
     const row = document.createElement('div');
     row.className = 'lm-stat-row';
     row.innerHTML = '<span class="lm-stat-icon">' + s.icon + '</span><span class="lm-stat-label">' + s.label + '</span><span class="lm-stat-value">' + s.value + '</span>';
-    gateSec.append(row);
+    observationSec.append(row);
   });
-  body.append(gateSec);
+  body.append(observationSec);
 }
 
 /* ── Dock 角色迷你状态更新 ── */
@@ -5354,16 +5407,6 @@ function updateSceneMiniTitle(state) {
   if (els.sceneMiniText) els.sceneMiniText.textContent = state.title || '星子与西子的小屋';
 }
 
-/* ── 倒计时(静默) ── */
-let countdownTimer = null, nextReviewAt = null;
-function renderSchedule(sch) {
-  if (countdownTimer) clearInterval(countdownTimer);
-  const nxt = sch.next_review_at || sch.next_drive_at;
-  if (!nxt) { nextReviewAt = null; return; }
-  nextReviewAt = nxt;
-  countdownTimer = setInterval(() => {}, 30000);
-}
-
 /* ── 应用状态(主入口) ── */
 let userPickedAction = null;
 let lastState = null;
@@ -5376,7 +5419,7 @@ function applyState(state) {
   els.glyph.textContent = GLYPHS[scene] || '·';
   if (els.glyphXingzi) els.glyphXingzi.textContent = GLYPHS[scene] || '·';
   els.body.dataset.hasErrors = ((state.error_count || 0) > 0) ? 'true' : 'false';
-  // Whole-day execution (baseline §6): room theme stays in active/day state.
+  // 全天候执行基线下，房间主题不再因为时段切换而降成夜间阻塞态。
   els.body.dataset.execWindow = 'true';
 
   // 槽位决定角色: A→星子(男), B→西子(女)
@@ -5407,8 +5450,6 @@ function applyState(state) {
 
   // 抽屉打开时随状态刷新
   if (drawerOpen) renderDrawer();
-
-  renderSchedule(state.schedule || {});
 
   if (scene !== prevScene) spawnParticles(scene, 12);
 }
@@ -5459,7 +5500,7 @@ async function refresh() {
     applyState(await r.json());
   } catch (e) {
     els.body.dataset.scene = 'idle';
-    if (els.sceneMiniText) els.sceneMiniText.textContent = '义子的小屋 · 等待中';
+    if (els.sceneMiniText) els.sceneMiniText.textContent = '星子与西子的小屋 · 等待中';
     els.glyph.textContent = '·';
     if (els.glyphXingzi) els.glyphXingzi.textContent = '·';
   }
@@ -5512,7 +5553,7 @@ window.addEventListener('load', updateRoomScale);
 
 
 class SupervisorUIMixin:
-    """Small built-in supervisor room UI and state mapper."""
+    """内置监督者小屋 UI 与 API-B 主视角状态映射。"""
 
     def _initialize_supervisor_ui_runtime(self) -> None:
         runtime_root = Path(
@@ -5526,7 +5567,7 @@ class SupervisorUIMixin:
             self._load_supervisor_ui_activity(),
             maxlen=self.config.ui_activity_buffer_size,
         )
-        self._supervisor_ui_activity_guards_cache: Dict[str, Any] = {}
+        self._supervisor_ui_observation_input_cache: Dict[str, Any] = {}
         self._supervisor_ui_memory_stats_cache: Dict[str, Any] = {}
 
     def _record_supervisor_ui_activity(
@@ -5537,11 +5578,10 @@ class SupervisorUIMixin:
         summary: str = "",
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        # Per baseline §3.4/§3.6 the supervisor (API-B) is the
-        # governance identity of Mem — it MANAGES the task list and
-        # runs endogenous drive; it never executes learning or
-        # body-upgrade code.  Reject any scene that implies execution
-        # (`learning`, `execution`) which is API-A territory.
+        # 按基线 §3.4/§3.6，Supervisor（API-B）只负责治理判断、
+        # 治理在途管理和内生驱动，不直接执行学习或替身改进代码。
+        # 因此凡是暗示执行面的 scene（如 `learning`、`execution`）
+        # 都要被挡回 `planning`；那是 API-A 的职责域。
         from systems.supervisor.planning_runtime import SUPERVISOR_LEGAL_SCENES
 
         if scene not in SUPERVISOR_LEGAL_SCENES:
@@ -5670,21 +5710,15 @@ class SupervisorUIMixin:
         data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         return f"event: {event_name}\ndata: {data}\n\n"
 
-    def _default_ui_activity_guard_snapshot(self) -> Dict[str, Any]:
+    def _default_ui_observation_input_snapshot(self) -> Dict[str, Any]:
         return {
             "activity": {"active_sessions": 0, "counts": {}, "recent_metadata": {}},
-            "checks": {},
-            "decisions": {},
-            "thresholds": {},
             "user_chain_signal": {
                 "scope": "soft_signal_only",
                 "active_sessions": 0,
                 "is_quiet": True,
                 "quiet_after_seconds": 600,
             },
-            "autonomous_chain_gate_active": bool(
-                getattr(getattr(self, "_service_runtime", None), "autonomous_chain_gate_active", False)
-            ),
             "snapshot_source": "default",
         }
 
@@ -5851,36 +5885,42 @@ class SupervisorUIMixin:
                 return dict(group)
         return {}
 
-    def _ui_creativity_backlog_count(self, observation: Dict[str, Any]) -> int:
-        backlog = self._ui_autonomous_observation_group(observation, "api_b_backlog")
-        items = [
-            dict(item)
-            for item in list(backlog.get("items") or [])
-            if isinstance(item, dict)
-        ]
-        return sum(1 for item in items if self._is_creativity_ui_task(item))
+    @staticmethod
+    def _ui_autonomous_observation_loop_stage(
+        observation: Dict[str, Any],
+        key: str,
+    ) -> Dict[str, Any]:
+        loop = dict(observation.get("loop") or {})
+        for stage in list(loop.get("stages") or []):
+            if not isinstance(stage, dict):
+                continue
+            if str(stage.get("key") or "").strip() == key:
+                return dict(stage)
+        return {}
 
     def _project_ui_observation_board(
         self,
         observation: Dict[str, Any],
         *,
-        activity_guards: Dict[str, Any],
+        user_chain_signal: Dict[str, Any],
         recent_activity: Dict[str, Any],
     ) -> Dict[str, Any]:
         counts = dict(observation.get("counts") or {})
         board = dict(observation.get("board") or {})
         focus = dict(board.get("primary_focus") or {})
-        user_signal = dict(activity_guards.get("user_chain_signal") or {})
+        user_signal = dict(user_chain_signal or {})
+        governance_backlog_count = self._ui_autonomous_observation_count(
+            counts.get("api_b_backlog")
+        )
         ready_count = self._ui_autonomous_observation_count(counts.get("api_a_ready"))
+        running_count = self._ui_autonomous_observation_count(counts.get("api_a_running"))
         writeback_count = self._ui_autonomous_observation_count(counts.get("writebacks"))
-        creativity_backlog = self._ui_creativity_backlog_count(observation)
         board["recent_activity"] = dict(recent_activity)
         board["hero_summary"] = str(
             board.get("hero_summary")
             or board.get("summary")
             or "Web 小屋以 API-B 为主视角，只读观察判断、治理、API-A 执行回报、Mem 回流与再读取闭环。"
         ).strip()
-        board.pop("protocol_notes", None)
         pills: List[Dict[str, Any]] = [
             {
                 "key": "focus",
@@ -5889,9 +5929,12 @@ class SupervisorUIMixin:
                 + (str(focus.get("title") or "").strip() or "自主链路闭环"),
             }
         ]
-        if creativity_backlog:
-            waiting_text = f"治理在途 · {creativity_backlog}"
+        if governance_backlog_count:
+            waiting_text = f"治理在途 · {governance_backlog_count}"
             waiting_tone = "warn"
+        elif running_count:
+            waiting_text = f"执行回流中 · {running_count}"
+            waiting_tone = "accent"
         elif ready_count:
             waiting_text = f"待认领窗口 · {ready_count}"
             waiting_tone = "accent"
@@ -5931,13 +5974,9 @@ class SupervisorUIMixin:
         )
         pills.append(
             {
-                "key": "autonomous_chain_gate",
+                "key": "ready_boundary",
                 "tone": "info",
-                "text": (
-                    "自主链路临时门控 · 已开启"
-                    if bool(activity_guards.get("autonomous_chain_gate_active"))
-                    else "自主链路临时门控 · 已关闭"
-                ),
+                "text": "待认领窗口不含执行中",
             }
         )
         board["hero_pills"] = pills
@@ -5949,13 +5988,13 @@ class SupervisorUIMixin:
                 "text": "Web 小屋只读观察 API-B 如何判断、治理、接收 API-A 执行回报，并把 Mem 回流纳入下一轮再读取。",
             }
         ]
-        if creativity_backlog:
+        if governance_backlog_count:
             notes.append(
                 {
                     "key": "governance_waiting",
                     "tone": "warn",
                     "title": "治理段待放行",
-                    "text": f"仍有 {creativity_backlog} 个创造类链路项停留在 API-B 治理段，只有补证、重排或放行后，才会进入 API-A 待认领窗口。",
+                    "text": f"仍有 {governance_backlog_count} 个链路项停留在 API-B 治理段，只有补证、重排或放行后，才会进入 API-A 待认领窗口。",
                 }
             )
         recent_summary = str(recent_activity.get("summary") or "").strip()
@@ -5969,6 +6008,24 @@ class SupervisorUIMixin:
                     "text": recent_summary[:180],
                 }
             )
+        if running_count:
+            notes.append(
+                {
+                    "key": "api_a_flow_hold",
+                    "tone": "info",
+                    "title": "执行回流仍在沉淀",
+                    "text": f"当前 API-A 仍有 {running_count} 个执行中链路项；Supervisor 会先等待写回回流与再读取，再决定是否继续推出新的替身改进或扩张学习。",
+                }
+            )
+        elif ready_count:
+            notes.append(
+                {
+                    "key": "api_a_flow_hold",
+                    "tone": "info",
+                    "title": "待认领项仍未消化",
+                    "text": f"当前 API-A 待认领窗口还有 {ready_count} 个链路项；Supervisor 会优先等待这一轮认领、执行与回流沉淀，再决定是否继续扩张。",
+                }
+            )
         notes.extend(
             [
                 {
@@ -5977,6 +6034,8 @@ class SupervisorUIMixin:
                     "title": "API-A 执行回报窗口",
                     "text": "当前待认领窗口 "
                     + str(ready_count)
+                    + " · 执行中 "
+                    + str(running_count)
                     + " · 当前焦点 "
                     + (str(focus.get("title") or "").strip() or "暂无")
                     + " · Web 只把 API-A 视为 API-B 可见的执行回报来源，不进入用户链路。",
@@ -5994,6 +6053,12 @@ class SupervisorUIMixin:
                     + "s · 只影响 API-B 判断是否让路，不改写用户主 CLI。",
                 },
                 {
+                    "key": "ready_boundary",
+                    "tone": "info",
+                    "title": "待认领窗口边界",
+                    "text": "待认领窗口只放已放行、待 API-A 认领的链路项；执行中的项留在闭环阶段，写回结果留在 Mem 回流段。",
+                },
+                {
                     "key": "protocol_contract",
                     "tone": "info",
                     "title": "观测协议",
@@ -6004,50 +6069,36 @@ class SupervisorUIMixin:
         board["observation_notes"] = notes
         return board
 
-    async def _load_ui_activity_guard_snapshot(
+    async def _load_ui_observation_input_snapshot(
         self,
         *,
         timeout_seconds: float = 0.8,
     ) -> tuple[Dict[str, Any], bool]:
-        default_snapshot = self._default_ui_activity_guard_snapshot()
+        default_snapshot = self._default_ui_observation_input_snapshot()
         try:
             payload = await asyncio.wait_for(
-                self.evaluate_activity_guards({}),
+                self.get_runtime_observation_input(),
                 timeout=max(float(timeout_seconds), 0.05),
             )
         except Exception:
-            cached = dict(getattr(self, "_supervisor_ui_activity_guards_cache", {}) or {})
+            cached = dict(getattr(self, "_supervisor_ui_observation_input_cache", {}) or {})
             if cached:
                 cached["snapshot_source"] = "cached"
-                cached["autonomous_chain_gate_active"] = bool(
-                    cached.get(
-                        "autonomous_chain_gate_active",
-                        default_snapshot.get("autonomous_chain_gate_active", False),
-                    )
-                )
                 return cached, False
             return default_snapshot, False
 
-        normalized = {
-            "activity": dict(payload.get("activity") or {}),
-            "checks": dict(payload.get("checks") or {}),
-            "decisions": dict(payload.get("decisions") or {}),
-            "thresholds": dict(payload.get("thresholds") or {}),
-            "user_chain_signal": dict(payload.get("user_chain_signal") or {}),
-            "autonomous_chain_gate_active": bool(
-                payload.get(
-                    "autonomous_chain_gate_active",
-                    default_snapshot.get("autonomous_chain_gate_active", False),
-                )
-            ),
-            "snapshot_source": "live",
-        }
+        normalized = dict(payload.get("observation_input") or {})
+        if not normalized:
+            normalized = dict(default_snapshot)
+            normalized["snapshot_source"] = "default"
+        normalized["activity"] = dict(normalized.get("activity") or {})
+        normalized["user_chain_signal"] = dict(normalized.get("user_chain_signal") or {})
         if not normalized["user_chain_signal"]:
             normalized["user_chain_signal"] = dict(default_snapshot["user_chain_signal"])
         normalized["user_chain_signal"]["scope"] = str(
             normalized["user_chain_signal"].get("scope") or "soft_signal_only"
         ).strip() or "soft_signal_only"
-        self._supervisor_ui_activity_guards_cache = dict(normalized)
+        self._supervisor_ui_observation_input_cache = dict(normalized)
         return normalized, True
 
     async def _load_ui_memory_stats(
@@ -6145,7 +6196,7 @@ class SupervisorUIMixin:
                 "未识别": "未识别",
             },
             "need_type": {
-                "clear_governance_backlog": "清理治理积压",
+                "clear_governance_backlog": "疏通治理在途",
                 "truthfulness_repair": "修补真实性风险",
                 "exploratory_learning": "发起自主学习",
                 "shell_baseline_learning": "替身基线学习",
@@ -6167,7 +6218,7 @@ class SupervisorUIMixin:
                 "未命名意图": "未命名意图",
             },
             "output_channel": {
-                "task_candidates": "候选池",
+                "task_candidates": "候选形成段",
                 "governance_review": "治理复核",
                 "observation_only": "只读观察",
                 "memory_maintenance": "记忆维护",
@@ -6195,7 +6246,7 @@ class SupervisorUIMixin:
             "constraint_type": {
                 "user_service_priority": "用户链路优先",
                 "historical_underdelivery": "历史兑现偏弱",
-                "governance_backlog_blockage": "治理积压阻塞",
+                "governance_backlog_blockage": "治理在途阻塞",
                 "weak_learning_yield": "学习收益偏弱",
                 "weak self structure grounding": "替身结构地基偏弱",
                 "weak_self_structure_grounding": "替身结构地基偏弱",
@@ -6203,14 +6254,14 @@ class SupervisorUIMixin:
             },
             "uncertainty_domain": {
                 "truthfulness": "真实性侧",
-                "governance_backlog": "治理积压侧",
+                "governance_backlog": "治理在途侧",
                 "learning_yield": "学习收益侧",
                 "autonomy_alignment": "自主对齐侧",
                 "self_regulation": "自调节侧",
             },
             "observation_target": {
                 "truthfulness": "真实性侧",
-                "governance_backlog_blockage": "治理积压阻塞侧",
+                "governance_backlog_blockage": "治理在途阻塞侧",
                 "learning_yield": "学习收益侧",
                 "autonomy_alignment": "自主对齐侧",
                 "self_regulation": "自调节侧",
@@ -6218,7 +6269,7 @@ class SupervisorUIMixin:
                 "learning_frontier": "学习前沿侧",
                 "memory_continuity": "记忆连续性侧",
                 "body_growth": "替身成长侧",
-                "governance_backlog": "治理积压侧",
+                "governance_backlog": "治理在途侧",
             },
             "observation_next_step": {
                 "collect_observation": "补观察证据",
@@ -6257,8 +6308,9 @@ class SupervisorUIMixin:
             "delay direct body improvement while user_service_priority remains dominant.": "当前先让路给用户链路，暂不做直接替身改进",
             "delay direct body improvement while historical_underdelivery remains dominant.": "近期自主兑现偏弱，先补兑现再考虑直接替身改进",
             "prioritize truthfulness governance before direct body improvement.": "先处理真实性风险，再考虑直接替身改进",
+            "在直接进行身体改进前，应优先处理 truthfulness 治理。": "先处理真实性风险，再考虑直接替身改进",
             "prioritize observation governance before direct body improvement.": "先补观察证据，再考虑直接替身改进",
-            "prioritize governance_hygiene governance before direct body improvement.": "先清治理积压，再考虑直接替身改进",
+            "prioritize governance_hygiene governance before direct body improvement.": "先疏通治理在途，再考虑直接替身改进",
             "prioritize memory_continuity governance before direct body improvement.": "先稳住记忆连续性，再考虑直接替身改进",
         }
         if normalized in mapping:
@@ -6292,6 +6344,7 @@ class SupervisorUIMixin:
         assessment_trace = dict(proposal_cognition.get("assessment_trace") or {})
         meta_profile = dict(proposal_cognition.get("meta_cognition_profile") or {})
         observation_program = dict(cog_snapshot.get("observation_program") or {})
+        perception = dict(cog_snapshot.get("perception") or {})
 
         primary_need = dict(judgement_core.get("primary_need") or {})
         primary_intent = dict(judgement_core.get("primary_intent") or {})
@@ -6342,6 +6395,21 @@ class SupervisorUIMixin:
             if observation_target
             else ""
         )
+        api_a_ready_count = self._ui_autonomous_observation_count(
+            perception.get("api_a_ready_count")
+        )
+        api_a_running_count = self._ui_autonomous_observation_count(
+            perception.get("api_a_running_count")
+        )
+        api_a_lane_summary = ""
+        if api_a_running_count > 0:
+            api_a_lane_summary = (
+                f"API-A 当前仍有 {api_a_running_count} 个执行中链路项，先等写回回流沉淀。"
+            )
+        elif api_a_ready_count > 0:
+            api_a_lane_summary = (
+                f"API-A 当前仍有 {api_a_ready_count} 个待认领链路项，先等这一轮执行回流沉淀。"
+            )
 
         reasons: List[str] = []
         explicit_reason = self._ui_cognition_reason_label(
@@ -6358,7 +6426,7 @@ class SupervisorUIMixin:
             if derived not in reasons:
                 reasons.append(derived)
         if constraint == "governance_backlog_blockage":
-            reasons.append("治理积压还没消化完，先清积压再扩展改进")
+            reasons.append("治理在途还没消化完，先疏通治理段再扩展改进")
         if constraint == "weak_learning_yield":
             reasons.append("近期学习收益偏弱，先补证据和后续跟进")
         if focus in {
@@ -6375,6 +6443,8 @@ class SupervisorUIMixin:
             }[focus]
             if focus_reason not in reasons:
                 reasons.append(focus_reason)
+        if api_a_lane_summary and api_a_lane_summary not in reasons:
+            reasons.append(api_a_lane_summary)
 
         summary_parts = []
         if focus_label and focus_label != "未命名":
@@ -6383,6 +6453,10 @@ class SupervisorUIMixin:
             summary_parts.append(f"先响应{primary_need_label}")
         if constraint_label:
             summary_parts.append(f"主要约束是{constraint_label}")
+        if api_a_running_count > 0:
+            summary_parts.append(f"API-A 仍有 {api_a_running_count} 个执行中链路项")
+        elif api_a_ready_count > 0:
+            summary_parts.append(f"API-A 仍有 {api_a_ready_count} 个待认领链路项")
         summary = "，".join(summary_parts) or "当前认知判断尚未稳定。"
 
         return {
@@ -6399,6 +6473,9 @@ class SupervisorUIMixin:
             "observation_target": observation_target or None,
             "observation_target_label": observation_target_label or None,
             "self_iteration_hypothesis": hypothesis or None,
+            "api_a_ready_count": api_a_ready_count,
+            "api_a_running_count": api_a_running_count,
+            "api_a_lane_summary": api_a_lane_summary or None,
             "why_not_direct_improvement": reasons[:4],
         }
 
@@ -6496,26 +6573,14 @@ class SupervisorUIMixin:
         }
 
     async def get_supervisor_ui_state(self) -> Dict[str, Any]:
-        governance_backlog_rows = list(
-            self._autonomous_chain_store.list_governance_backlog_tasks()
+        chain_projection_rows = list(
+            self._autonomous_chain_store.list_chain_projection_tasks()
         )
-        writeback_history_rows = list(
-            self._autonomous_chain_store.list_writeback_history()
-        )
-        chain_history_projection = [
+        chain_projection = [
             self._serialize_autonomous_chain_task(task)
-            for task in [*governance_backlog_rows, *writeback_history_rows]
+            for task in chain_projection_rows
         ]
-        chain_history_projection.sort(
-            key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""),
-            reverse=True,
-        )
-
-        governance_backlog_projection = [
-            self._serialize_autonomous_chain_task(task)
-            for task in governance_backlog_rows
-        ]
-        governance_backlog_projection.sort(
+        chain_projection.sort(
             key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""),
             reverse=True,
         )
@@ -6524,16 +6589,19 @@ class SupervisorUIMixin:
 
         # Extract metrics from gateway activity for richer UI expression
         (
-            activity_guard_snapshot_with_status,
+            observation_input_snapshot_with_status,
             tier1_stats,
             observation_timeline,
         ) = await asyncio.gather(
-            self._load_ui_activity_guard_snapshot(),
+            self._load_ui_observation_input_snapshot(),
             self._load_ui_memory_stats(),
             self._load_ui_observation_timeline(limit=12),
         )
-        activity_guard_snapshot, drive_available = activity_guard_snapshot_with_status
-        activity = dict(activity_guard_snapshot.get("activity") or {})
+        (
+            observation_input_snapshot,
+            observation_input_available,
+        ) = observation_input_snapshot_with_status
+        activity = dict(observation_input_snapshot.get("activity") or {})
         counts = dict(activity.get("counts") or {})
         error_count = int(counts.get("error_count") or 0)
 
@@ -6549,18 +6617,6 @@ class SupervisorUIMixin:
             }
         except Exception:
             pass
-
-        # ── Schedule visibility ──
-        schedule: Dict[str, Any] = {
-            "autonomous_chain_review_interval_seconds": self.config.service_runtime.autonomous_chain_review_interval,
-            "drive_interval_seconds": self.config.service_runtime.endogenous_drive_interval,
-        }
-        if self._service_runtime.next_review_at is not None:
-            schedule["next_review_at"] = self._service_runtime.next_review_at.isoformat()
-            schedule["last_review_at"] = self._service_runtime.last_review_at.isoformat() if self._service_runtime.last_review_at else None
-        if self._service_runtime.next_drive_at is not None:
-            schedule["next_drive_at"] = self._service_runtime.next_drive_at.isoformat()
-            schedule["last_drive_at"] = self._service_runtime.last_drive_at.isoformat() if self._service_runtime.last_drive_at else None
 
         # ── LLM token usage ──
         mem_usage: Dict[str, Any] = {}
@@ -6580,15 +6636,11 @@ class SupervisorUIMixin:
         except Exception:
             pass
 
-        # ── Web room observation model ──
+        # ── Web 小屋 API-B 主视角观测模型 ──
         autonomous_observation = self._build_autonomous_observation(
-            governance_backlog_projection,
+            chain_projection,
             drive_candidates=drive_candidates,
-            drive_available=drive_available,
-            autonomous_chain_gate_active=bool(
-                activity_guard_snapshot.get("autonomous_chain_gate_active", False)
-            ),
-            history_tasks=chain_history_projection,
+            history_tasks=chain_projection,
             timeline=observation_timeline,
         )
         try:
@@ -6599,16 +6651,15 @@ class SupervisorUIMixin:
         except Exception:
             pass
         metrics = self._build_ui_metrics(
-            chain_history_projection,
+            chain_projection,
             autonomous_observation=autonomous_observation,
             body_status=body_status,
             error_count=error_count,
         )
 
         scene, title, summary = self._map_supervisor_scene(
-            governance_backlog_projection=governance_backlog_projection,
             autonomous_observation=autonomous_observation,
-            drive_available=drive_available,
+            observation_input_available=observation_input_available,
             error_count=error_count,
             memory_active=tier1_stats.get("memory_active", False),
         )
@@ -6668,6 +6719,8 @@ class SupervisorUIMixin:
                 "system_posture": perception.get("system_posture", "balanced"),
                 "user_mode": perception.get("user_mode", "未识别"),
                 "governance_backlog_count": perception.get("governance_backlog_count", 0),
+                "api_a_ready_count": perception.get("api_a_ready_count", 0),
+                "api_a_running_count": perception.get("api_a_running_count", 0),
                 "active_sessions": perception.get("active_sessions", 0),
                 "recent_errors": perception.get("recent_errors", 0),
                 "learning_quality": perception.get("learning_quality", 0),
@@ -6737,28 +6790,26 @@ class SupervisorUIMixin:
         except Exception:
             pass
 
-        ui_activity_guards = {
-            "scope": "user_chain_soft_signal_only",
-            "checks": dict(activity_guard_snapshot.get("checks") or {}),
-            "decisions": dict(activity_guard_snapshot.get("decisions") or {}),
-            "thresholds": dict(activity_guard_snapshot.get("thresholds") or {}),
-            "user_chain_signal": dict(activity_guard_snapshot.get("user_chain_signal") or {}),
-            "autonomous_chain_gate_active": bool(
-                activity_guard_snapshot.get("autonomous_chain_gate_active", False)
-            ),
-            "snapshot_source": str(activity_guard_snapshot.get("snapshot_source") or "default"),
-        }
         recent_autonomous_activity = self._project_ui_recent_autonomous_activity(
-            dict(activity_guard_snapshot.get("activity") or {})
+            dict(observation_input_snapshot.get("activity") or {})
         )
         autonomous_runtime = dict(autonomous_observation.get("runtime") or {})
-        autonomous_runtime["activity_guards"] = ui_activity_guards
-        autonomous_runtime["user_chain_signal"] = dict(ui_activity_guards.get("user_chain_signal") or {})
-        autonomous_runtime["eligibility"] = dict(ui_activity_guards.get("decisions") or {})
+        autonomous_runtime["user_chain_signal"] = dict(
+            observation_input_snapshot.get("user_chain_signal") or {}
+        )
+        autonomous_runtime["snapshot_source"] = str(
+            observation_input_snapshot.get("snapshot_source") or "default"
+        )
+        autonomous_runtime["api_a_ready_count"] = self._ui_autonomous_observation_count(
+            dict(autonomous_observation.get("counts") or {}).get("api_a_ready")
+        )
+        autonomous_runtime["api_a_running_count"] = self._ui_autonomous_observation_count(
+            dict(autonomous_observation.get("counts") or {}).get("api_a_running")
+        )
         autonomous_observation["runtime"] = autonomous_runtime
         autonomous_board = self._project_ui_observation_board(
             autonomous_observation,
-            activity_guards=ui_activity_guards,
+            user_chain_signal=dict(observation_input_snapshot.get("user_chain_signal") or {}),
             recent_activity=recent_autonomous_activity,
         )
         autonomous_observation["board"] = autonomous_board
@@ -6771,7 +6822,6 @@ class SupervisorUIMixin:
             "summary": summary,
             "generated_at": datetime.utcnow().isoformat(),
             "autonomous_observation": autonomous_observation,
-            "schedule": schedule,
             "mem_usage": mem_usage,
             "tier1_stats": tier1_stats,
             "body_status": body_status,
@@ -6781,22 +6831,19 @@ class SupervisorUIMixin:
             "cognition": cognition,
         }
 
-    def _is_creativity_ui_task(self, task: Dict[str, Any]) -> bool:
+    def _is_api_a_lane_family_task(self, task: Dict[str, Any]) -> bool:
         governance = str(task.get("governance_task_type") or "").strip().lower()
         execution_kind = str(task.get("execution_kind") or "").strip().lower()
         return governance == "self_learning" or execution_kind == "body_improvement"
 
     def _normalize_observation_status(self, status: Any) -> str:
-        normalized = str(status or "").strip().lower()
-        if normalized == "queued":
-            return "planned"
-        return normalized
+        return normalize_autonomous_status(status)
 
     def _observation_status_value(self, task: Dict[str, Any]) -> str:
         return self._normalize_observation_status(task.get("status"))
 
     def _is_api_a_execution_lane_task(self, task: Dict[str, Any]) -> bool:
-        return self._is_creativity_ui_task(task) and self._observation_status_value(task) in {
+        return self._is_api_a_lane_family_task(task) and self._observation_status_value(task) in {
             "approved",
             "running",
             "retry",
@@ -6814,24 +6861,29 @@ class SupervisorUIMixin:
         updated = str(task.get("updated_at") or task.get("created_at") or "")
         return (order.get(status, 9), updated)
 
-    def _observation_sort_key(self, task: Dict[str, Any]) -> tuple[str, str, str]:
-        scheduled_for = self._observation_schedule_token(task) or "9999-12-31T23:59:59"
-        created = str(task.get("created_at") or "")
-        updated = str(task.get("updated_at") or "")
-        return (scheduled_for, created or updated, updated or created)
+    def _chain_projection_phase_rank(self, task: Dict[str, Any]) -> int:
+        status = self._observation_status_value(task)
+        if status in {"active", "running"}:
+            return 0
+        if status in {"approved", "retry"}:
+            return 1
+        if status == "candidate":
+            return 2
+        if status in {"planned", "awaiting_review"}:
+            return 3
+        if status in {"deferred", "paused"}:
+            return 4
+        if status in {"completed", "failed", "cancelled"}:
+            return 5
+        return 9
+
+    def _chain_projection_order_key(self, task: Dict[str, Any]) -> tuple[int, str, str]:
+        updated = str(task.get("updated_at") or task.get("created_at") or "")
+        title = str(task.get("title") or task.get("task_id") or "")
+        return (self._chain_projection_phase_rank(task), updated, title)
 
     def _observation_display_status(self, task: Dict[str, Any]) -> str:
-        status = self._normalize_observation_status(task.get("status"))
-        mapping = {
-            "planned": "待审核",
-            "awaiting_review": "待审查",
-            "approved": "待执行",
-            "running": "执行中",
-            "deferred": "已推迟",
-            "paused": "已暂停",
-            "retry": "重试",
-        }
-        return mapping.get(status, status or "待定")
+        return observation_status_label(task.get("status"))
 
     def _loop_stage_status_label(self, status: str) -> str:
         mapping = {
@@ -6842,7 +6894,7 @@ class SupervisorUIMixin:
         return mapping.get(str(status or "").strip().lower(), "等待中")
 
     def _observation_role_tag(self, task: Dict[str, Any]) -> str:
-        return "agent" if self._is_creativity_ui_task(task) else "supervisor"
+        return "agent" if self._is_api_a_lane_family_task(task) else "supervisor"
 
     def _build_observation_card(
         self,
@@ -6872,9 +6924,9 @@ class SupervisorUIMixin:
         if observation_role is not None:
             card["observation_role"] = observation_role
         if status is not None:
-            card["status"] = str(status).strip().lower()
+            card["status"] = self._normalize_observation_status(status)
         else:
-            card["status"] = str(card.get("status") or "").strip().lower()
+            card["status"] = self._normalize_observation_status(card.get("status"))
         if display_status is not None:
             card["display_status"] = str(display_status).strip() or "待定"
         elif card.get("display_status") is None:
@@ -6894,6 +6946,13 @@ class SupervisorUIMixin:
         summary: str = "",
         order: int = 0,
         segment_kind: str = "",
+        decor_cls: str = "",
+        decor_icon: str = "",
+        item_label: str = "",
+        event_label: str = "",
+        trace_label: str = "",
+        footer_label: str = "",
+        drill_label: str = "",
         read_rule: str = "",
         next_step: str = "",
     ) -> Dict[str, Any]:
@@ -6907,6 +6966,17 @@ class SupervisorUIMixin:
             "summary": summary,
             "order": order,
             "segment_kind": segment_kind,
+            "display_decor": {
+                "cls": str(decor_cls or "").strip() or "supervisor",
+                "icon": str(decor_icon or "").strip() or "🧠",
+            },
+            "display_copy": {
+                "item_label": str(item_label or "").strip() or "链路项",
+                "event_label": str(event_label or "").strip() or "链路事件",
+                "trace_label": str(trace_label or "").strip() or "闭环回合",
+                "footer_label": str(footer_label or "").strip() or "查看最近闭环记录",
+                "drill_label": str(drill_label or "").strip() or "🔬 闭环细节",
+            },
             "read_rule": str(read_rule or "").strip(),
             "next_step": str(next_step or "").strip(),
             "count": len(items),
@@ -7291,66 +7361,37 @@ class SupervisorUIMixin:
         observation["chain"] = chain
         return observation
 
-    def _observation_schedule_token(self, payload: Dict[str, Any]) -> str:
-        if not isinstance(payload, dict):
-            return ""
-        nested_sources = [
-            payload,
-            payload.get("metadata"),
-            payload.get("constraints"),
-            payload.get("evidence"),
-            (payload.get("evidence") or {}).get("endogenous_drive"),
-        ]
-        for source in nested_sources:
-            if not isinstance(source, dict):
-                continue
-            for key in (
-                "scheduled_for",
-                "preset_time",
-                "scheduled_at",
-                "run_at",
-                "execute_after",
-                "time_slot",
-                "window",
-            ):
-                value = str(source.get(key) or "").strip()
-                if value:
-                    return value
-        return ""
-
     def _build_autonomous_observation(
         self,
         all_tasks: List[Dict[str, Any]],
         *,
         drive_candidates: List[Dict[str, Any]],
-        drive_available: bool,
-        autonomous_chain_gate_active: bool,
         history_tasks: Optional[List[Dict[str, Any]]] = None,
         timeline: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
-        creativity_tasks = [
-            task for task in all_tasks if self._is_creativity_ui_task(task)
+        api_a_lane_family_tasks = [
+            task for task in all_tasks if self._is_api_a_lane_family_task(task)
         ]
         supervisor_tasks = [
-            task for task in all_tasks if not self._is_creativity_ui_task(task)
+            task for task in all_tasks if not self._is_api_a_lane_family_task(task)
         ]
 
-        creativity_sorted = sorted(creativity_tasks, key=self._observation_sort_key)
-        supervisor_sorted = sorted(supervisor_tasks, key=self._observation_sort_key)
-        creativity_api_a_lane_source = [
-            task for task in creativity_sorted if self._is_api_a_execution_lane_task(task)
+        api_a_lane_family_sorted = sorted(api_a_lane_family_tasks, key=self._chain_projection_order_key)
+        supervisor_sorted = sorted(supervisor_tasks, key=self._chain_projection_order_key)
+        api_a_lane_source = [
+            task for task in api_a_lane_family_sorted if self._is_api_a_execution_lane_task(task)
         ]
-        creativity_running_source = [
+        api_a_running_source = [
             task
-            for task in creativity_api_a_lane_source
+            for task in api_a_lane_source
             if self._observation_status_value(task) == "running"
         ]
-        creativity_governance_source = [
-            task for task in creativity_sorted if not self._is_api_a_execution_lane_task(task)
+        api_a_backlog_source = [
+            task for task in api_a_lane_family_sorted if not self._is_api_a_execution_lane_task(task)
         ]
         api_b_governance_source = sorted(
-            [*supervisor_sorted, *creativity_governance_source],
-            key=self._observation_sort_key,
+            [*supervisor_sorted, *api_a_backlog_source],
+            key=self._chain_projection_order_key,
         )
 
         def pick_active(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -7359,19 +7400,19 @@ class SupervisorUIMixin:
                 if self._observation_status_value(row) == "running"
             ]
             if running:
-                return sorted(running, key=self._observation_sort_key)[0]
+                return sorted(running, key=self._chain_projection_order_key)[0]
             approved = [
                 row for row in rows
                 if self._observation_status_value(row) == "approved"
             ]
             if approved:
-                return sorted(approved, key=self._observation_sort_key)[0]
+                return sorted(approved, key=self._chain_projection_order_key)[0]
             return None
 
-        supervisor_active = pick_active(supervisor_sorted)
-        agent_active = pick_active(creativity_running_source)
+        api_b_focus_task = pick_active(supervisor_sorted)
+        api_a_running_task = pick_active(api_a_running_source)
 
-        api_b_pending = [
+        governance_backlog_cards = [
             self._build_observation_card(
                 task,
                 lane="supervisor",
@@ -7379,14 +7420,16 @@ class SupervisorUIMixin:
             )
             for task in api_b_governance_source
         ]
-        api_b_pending = [task for task in api_b_pending if isinstance(task, dict)]
+        governance_backlog_cards = [
+            task for task in governance_backlog_cards if isinstance(task, dict)
+        ]
         api_a_lane_items = [
             self._build_observation_card(
                 task,
                 lane="agent",
                 observation_role="observed_task",
             )
-            for task in creativity_api_a_lane_source
+            for task in api_a_lane_source
         ]
         api_a_lane_items = [
             task for task in api_a_lane_items if isinstance(task, dict)
@@ -7396,18 +7439,18 @@ class SupervisorUIMixin:
             for task in api_a_lane_items
             if str(task.get("status") or "").strip().lower() in {"approved", "retry"}
         ]
-        creativity_governance_cards = [
-            card for card in api_b_pending if self._is_creativity_ui_task(card)
+        api_a_backlog_cards = [
+            card for card in governance_backlog_cards if self._is_api_a_lane_family_task(card)
         ]
 
         seen_keys = {
             str(task.get("metadata", {}).get("endogenous_drive_key") or "").strip()
-            for task in [*api_b_pending, *api_a_lane_items]
+            for task in [*governance_backlog_cards, *api_a_lane_items]
             if isinstance(task, dict)
         }
         seen_titles = {
             str(task.get("title") or "").strip()
-            for task in [*api_b_pending, *api_a_lane_items]
+            for task in [*governance_backlog_cards, *api_a_lane_items]
             if isinstance(task, dict)
         }
         candidates: List[Dict[str, Any]] = []
@@ -7439,9 +7482,9 @@ class SupervisorUIMixin:
                 seen_titles.add(candidate_title)
 
         api_a_ready_focus = api_a_ready[0] if api_a_ready else None
-        deferred_api_a_governance = [
+        deferred_api_a_backlog = [
             task
-            for task in creativity_governance_cards
+            for task in api_a_backlog_cards
             if str(task.get("status") or "").strip().lower() == "deferred"
         ]
         completed_tasks = [
@@ -7468,22 +7511,22 @@ class SupervisorUIMixin:
         if candidates:
             api_b_summary = f"{len(candidates)} 个候选等待 API-B 判断是否进入治理闭环"
             api_b_status = "active"
-        elif api_b_pending:
-            api_b_summary = f"{len(api_b_pending)} 个链路项仍由 API-B 在治理段内管理"
+        elif governance_backlog_cards:
+            api_b_summary = f"{len(governance_backlog_cards)} 个链路项仍由 API-B 在治理段内管理"
             api_b_status = "active"
         else:
             api_b_summary = "当前没有新的候选或治理在途信号"
             api_b_status = "idle"
 
-        if agent_active:
+        if api_a_running_task:
             api_a_status = "active"
-            api_a_summary = f"{str(agent_active.get('title') or '自主链路项').strip()} 正在由 API-A 自主执行，并向 API-B 回报进展"
+            api_a_summary = f"{str(api_a_running_task.get('title') or '自主链路项').strip()} 正在由 API-A 自主执行，并向 API-B 回报进展"
         elif api_a_ready:
             api_a_status = "ready"
             api_a_summary = f"{len(api_a_ready)} 个已放行链路项正在等待 API-A 认领执行"
-        elif creativity_governance_cards:
+        elif api_a_backlog_cards:
             api_a_status = "idle"
-            api_a_summary = f"{len(creativity_governance_cards)} 个自主链路项仍停留在 API-B 治理段，尚未进入 API-A"
+            api_a_summary = f"{len(api_a_backlog_cards)} 个自主链路项仍停留在 API-B 治理段，尚未进入 API-A"
         else:
             api_a_status = "idle"
             api_a_summary = "当前没有进入 API-A 执行窗口的自主链路项"
@@ -7495,7 +7538,7 @@ class SupervisorUIMixin:
             writeback_status = "idle"
             writeback_summary = "尚未观察到新的 Mem 写回回流"
 
-        if recent_writebacks and (candidates or api_b_pending):
+        if recent_writebacks and (candidates or governance_backlog_cards):
             reread_status = "active"
             reread_summary = "API-B 正结合最新 Mem 回流与治理在途项推进下一轮判断"
         elif recent_writebacks:
@@ -7509,7 +7552,7 @@ class SupervisorUIMixin:
         api_a_chain_reason = "链路: 当前没有已放行到 API-A 的自主链路项"
         api_a_activity_text = "执行流: 等待 API-B 放行，或等待下一轮再读取后形成新任务"
         api_a_reason_style = "dim"
-        if agent_active:
+        if api_a_running_task:
             api_a_stage_label = "执行中"
             api_a_chain_reason = "链路: 该链路项已被 API-A 自主执行面认领，并持续向 API-B 回报进展"
             api_a_activity_text = "执行流: API-A 正在执行，完成后会把结果写回 Mem"
@@ -7519,21 +7562,21 @@ class SupervisorUIMixin:
             api_a_chain_reason = "链路: API-B 已放行该链路项，等待 API-A 自主执行面认领"
             api_a_activity_text = "执行流: 一旦被认领，执行结果会回流到 Mem 再供 API-B 读取"
             api_a_reason_style = "warn"
-        elif deferred_api_a_governance:
+        elif deferred_api_a_backlog:
             api_a_chain_reason = "链路: 当前学习链路项大多仍停留在 API-B 治理段并被延后，尚未进入 API-A 待认领窗口"
             api_a_activity_text = "执行流: 等待 API-B 重新放行、重排或补充证据后再进入执行窗口"
             api_a_reason_style = "warn"
-        elif creativity_governance_cards:
+        elif api_a_backlog_cards:
             api_a_chain_reason = "链路: 当前自主链路项仍停留在 API-B 治理段，尚未进入 API-A 待认领窗口"
             api_a_activity_text = "执行流: 等待 API-B 审核、放行或重新排序链路项"
             api_a_reason_style = "info"
-        elif recent_writebacks or candidates or api_b_pending:
+        elif recent_writebacks or candidates or governance_backlog_cards:
             api_a_chain_reason = "链路: 当前没有新的 API-A 可执行链路项；API-B 正在围绕候选、Mem 回流或治理结果推进下一轮闭环"
             api_a_reason_style = "info"
 
         api_b_current = self._build_observation_card(
-            supervisor_active
-            or (api_b_pending[0] if api_b_pending else None)
+            api_b_focus_task
+            or (governance_backlog_cards[0] if governance_backlog_cards else None)
             or (candidates[0] if candidates else None)
             or {"title": "API-B 判断"},
             lane="supervisor",
@@ -7542,14 +7585,14 @@ class SupervisorUIMixin:
             summary_override=api_b_summary,
             observation_role="api_b_judgement",
             title_override=(
-                str((supervisor_active or {}).get("title") or "").strip()
-                or str((api_b_pending[0] if api_b_pending else {}).get("title") or "").strip()
+                str((api_b_focus_task or {}).get("title") or "").strip()
+                or str((governance_backlog_cards[0] if governance_backlog_cards else {}).get("title") or "").strip()
                 or str((candidates[0] if candidates else {}).get("title") or "").strip()
                 or "API-B 判断"
             ),
         )
         api_a_current = self._build_observation_card(
-            agent_active
+            api_a_running_task
             or api_a_ready_focus
             or {"title": "API-A 自主执行"},
             lane="agent",
@@ -7558,7 +7601,7 @@ class SupervisorUIMixin:
             summary_override=api_a_summary,
             observation_role="api_a_execution",
             title_override=(
-                str((agent_active or {}).get("title") or "").strip()
+                str((api_a_running_task or {}).get("title") or "").strip()
                 or str((api_a_ready_focus or {}).get("title") or "").strip()
                 or "API-A 自主执行"
             ),
@@ -7586,20 +7629,20 @@ class SupervisorUIMixin:
         )
         api_b_active_task = (
             self._build_observation_card(
-                supervisor_active,
+                api_b_focus_task,
                 lane="supervisor",
                 observation_role="api_b_active_task",
             )
-            if supervisor_active
+            if api_b_focus_task
             else None
         )
         api_a_active_task = (
             self._build_observation_card(
-                agent_active,
+                api_a_running_task,
                 lane="agent",
                 observation_role="api_a_active_task",
             )
-            if agent_active
+            if api_a_running_task
             else None
         )
 
@@ -7615,6 +7658,13 @@ class SupervisorUIMixin:
                 summary="API-B 内生驱动刚形成的新候选，尚未进入治理闭环。",
                 order=0,
                 segment_kind="candidate_judgement",
+                decor_cls="candidate",
+                decor_icon="🪄",
+                item_label="候选",
+                event_label="候选事件",
+                trace_label="候选回合",
+                footer_label="查看候选形成段的最近闭环记录",
+                drill_label="🔬 候选细节",
                 read_rule="这些只是刚形成的候选，不等于已经放行的自主链路项。",
                 next_step="API-B 会决定它们进入治理在途，或在本轮直接丢弃。",
             ),
@@ -7622,13 +7672,20 @@ class SupervisorUIMixin:
                 key="api_b_backlog",
                 label="治理在途",
                 empty_text="当前没有新的治理在途链路项",
-                items=api_b_pending[:6],
+                items=governance_backlog_cards[:6],
                 emphasis="supervisor",
                 owner="API-B",
                 stage_label="判断与治理",
                 summary="仍由 API-B 判断、补证、重排或延后的自主链路项。",
                 order=1,
                 segment_kind="governance_backlog",
+                decor_cls="supervisor",
+                decor_icon="🧠",
+                item_label="治理项",
+                event_label="治理事件",
+                trace_label="治理回合",
+                footer_label="查看治理在途段的最近闭环记录",
+                drill_label="🔬 治理细节",
                 read_rule="这一段仍属于 API-B 治理闭环，不是 API-A 执行窗口。",
                 next_step="只有被放行后才会进入 API-A 待认领窗口。",
             ),
@@ -7643,6 +7700,13 @@ class SupervisorUIMixin:
                 summary="已经被 API-B 放行，等待 API-A 认领执行的自主链路项。",
                 order=2,
                 segment_kind="execution_ready",
+                decor_cls="agent",
+                decor_icon="🤖",
+                item_label="待认领项",
+                event_label="执行回报",
+                trace_label="执行回合",
+                footer_label="查看待认领窗口与执行回报记录",
+                drill_label="🔬 执行细节",
                 read_rule="这里只显示已放行待认领项；执行中的项在上方闭环阶段里观察。",
                 next_step="被 API-A 认领后，会执行并把结果回流到 Mem。",
             ),
@@ -7657,6 +7721,13 @@ class SupervisorUIMixin:
                 summary="最近完成并已经回流到 Mem 的自主链路结果。",
                 order=3,
                 segment_kind="mem_writeback",
+                decor_cls="mem",
+                decor_icon="💾",
+                item_label="回流结果",
+                event_label="回流事件",
+                trace_label="回流回合",
+                footer_label="查看 Mem 回流后的最近闭环记录",
+                drill_label="🔬 回流细节",
                 read_rule="这里只看结果回流，不代表新的放行动作。",
                 next_step="这些回流结果会被 API-B 再读取，决定下一轮是否形成新候选。",
             ),
@@ -7671,7 +7742,7 @@ class SupervisorUIMixin:
             activity_items_by_key={
                 "api_b_backlog": [
                     item
-                    for item in (api_b_current, api_b_active_task, *api_b_pending)
+                    for item in (api_b_current, api_b_active_task, *governance_backlog_cards)
                     if isinstance(item, dict)
                 ],
                 "api_a_ready": [
@@ -7700,6 +7771,7 @@ class SupervisorUIMixin:
             ),
             api_b_current,
         )
+        focus_role = str((focus_card or {}).get("observation_role") or "").strip()
         board = {
             "headline": "API-B 主视角自主闭环总览",
             "summary": (
@@ -7715,19 +7787,46 @@ class SupervisorUIMixin:
                 "stage_key": str((focus_card or {}).get("observation_role") or "").strip(),
                 "stage_owner": str((focus_card or {}).get("lane") or "").strip(),
             },
+            "metric_cards": [
+                {
+                    "key": "api_b_candidates",
+                    "cls": "candidate",
+                    "label": "候选形成",
+                    "value": len(candidates),
+                    "note": "API-B",
+                },
+                {
+                    "key": "api_b_backlog",
+                    "cls": "api-b",
+                    "label": "治理在途",
+                    "value": len(governance_backlog_cards),
+                    "note": "API-B",
+                },
+                {
+                    "key": "api_a_ready",
+                    "cls": "api-a",
+                    "label": "待认领窗口",
+                    "value": len(api_a_ready),
+                    "note": "API-A",
+                },
+                {
+                    "key": "mem_recent",
+                    "cls": "mem",
+                    "label": "写回回流",
+                    "value": len(recent_writebacks),
+                    "note": "Mem",
+                },
+            ],
         }
 
         return {
-            "read_model_version": 8,
+            "read_model_version": 10,
             "mode": {
                 "label": "观测模式",
                 "scope": "api_b_autonomous_chain_only",
                 "status_text": "只读观测 API-B 与自主链路",
             },
-            "runtime": {
-                "drive_available": bool(drive_available),
-                "autonomous_chain_gate_active": bool(autonomous_chain_gate_active),
-            },
+            "runtime": {},
             "chain": {
                 "headline": "自主闭环分段观察",
                 "summary": "把候选形成、治理在途、API-A 待认领窗口与 Mem 回流压成同一条自主链路只读投影。",
@@ -7744,17 +7843,35 @@ class SupervisorUIMixin:
                         "key": "api_b_judgement",
                         "label": "API-B 判断",
                         "owner": "API-B",
+                        "lane": "supervisor",
+                        "observation_role": "api_b_judgement",
                         "status": api_b_status,
+                        "rail_state": self._loop_stage_status_label(api_b_status),
+                        "rail_note": api_b_summary,
+                        "is_focus": focus_role == "api_b_judgement",
                         "summary": api_b_summary,
                         "read_rule": "这一段表示 API-B 正在形成候选、治理在途项或处理闭环内部维护。",
                         "transition_hint": "被放行的链路项会进入 API-A 待认领窗口。",
-                        "focus_task": api_b_active_task or (candidates[0] if candidates else None) or (api_b_pending[0] if api_b_pending else None),
+                        "focus_task": (
+                            api_b_active_task
+                            or (candidates[0] if candidates else None)
+                            or (
+                                governance_backlog_cards[0]
+                                if governance_backlog_cards
+                                else None
+                            )
+                        ),
                     },
                     {
                         "key": "api_a_execution",
                         "label": "API-A 自主执行",
                         "owner": "API-A",
+                        "lane": "agent",
+                        "observation_role": "api_a_execution",
                         "status": api_a_status,
+                        "rail_state": api_a_stage_label,
+                        "rail_note": api_a_chain_reason,
+                        "is_focus": focus_role == "api_a_execution",
                         "summary": api_a_summary,
                         "status_label": api_a_stage_label,
                         "chain_reason": api_a_chain_reason,
@@ -7768,7 +7885,12 @@ class SupervisorUIMixin:
                         "key": "mem_writeback",
                         "label": "Mem 写回",
                         "owner": "Mem",
+                        "lane": "mem",
+                        "observation_role": "mem_writeback",
                         "status": writeback_status,
+                        "rail_state": self._loop_stage_status_label(writeback_status),
+                        "rail_note": writeback_summary,
+                        "is_focus": focus_role == "mem_writeback",
                         "summary": writeback_summary,
                         "read_rule": "这一段表示执行结果已经回流到 Mem，正在形成可供再读取的记忆证据。",
                         "transition_hint": "这些回流结果会供下一轮 API-B 再读取。",
@@ -7778,7 +7900,12 @@ class SupervisorUIMixin:
                         "key": "api_b_reread",
                         "label": "API-B 再读取",
                         "owner": "API-B",
+                        "lane": "supervisor",
+                        "observation_role": "api_b_reread",
                         "status": reread_status,
+                        "rail_state": self._loop_stage_status_label(reread_status),
+                        "rail_note": reread_summary,
+                        "is_focus": focus_role == "api_b_reread",
                         "summary": reread_summary,
                         "read_rule": "这一段表示 API-B 正重新读取 Mem 回流，并决定继续形成候选还是结束本轮。",
                         "transition_hint": "再读取后会回到候选形成，或在本轮收束闭环。",
@@ -7790,8 +7917,9 @@ class SupervisorUIMixin:
             "counts": {
                 "candidates": len(candidates),
                 "writebacks": len(recent_writebacks),
-                "api_b_backlog": len(api_b_pending),
+                "api_b_backlog": len(governance_backlog_cards),
                 "api_a_ready": len(api_a_ready),
+                "api_a_running": len(api_a_running_source),
             },
         }
 
@@ -7906,12 +8034,12 @@ class SupervisorUIMixin:
         learning_completed = sum(
             1
             for t in chain_history_projection
-            if self._is_creativity_ui_task(t) and t.get("status") == "completed"
+            if self._is_api_a_lane_family_task(t) and t.get("status") == "completed"
         )
         learning_failed = sum(
             1
             for t in chain_history_projection
-            if self._is_creativity_ui_task(t) and t.get("status") == "failed"
+            if self._is_api_a_lane_family_task(t) and t.get("status") == "failed"
         )
         followup_suggestion_count = 0
         followup_action_counts: Dict[str, int] = {}
@@ -7935,8 +8063,8 @@ class SupervisorUIMixin:
                 "governance_backlog": self._ui_autonomous_observation_count(
                     counts.get("api_b_backlog")
                 ),
-                "governance_backlog_creativity": self._ui_creativity_backlog_count(
-                    autonomous_observation
+                "api_a_running": self._ui_autonomous_observation_count(
+                    counts.get("api_a_running")
                 ),
                 "api_a_ready": self._ui_autonomous_observation_count(
                     counts.get("api_a_ready")
@@ -7980,68 +8108,81 @@ class SupervisorUIMixin:
     def _map_supervisor_scene(
         self,
         *,
-        governance_backlog_projection: List[Dict[str, Any]],
         autonomous_observation: Dict[str, Any],
-        drive_available: bool,
+        observation_input_available: bool,
         error_count: int = 0,
         memory_active: bool = False,
     ) -> tuple[str, str, str]:
-        """Map current supervisor activity to one of SUPERVISOR_LEGAL_SCENES.
+        """把当前监督者活动映射到合法的 Supervisor scene。
 
-        Per architectural baseline §3.4/§3.6/§8.1, the supervisor (API-B)
-        only MANAGES tasks — it never executes learning or body-upgrade
-        code.  Therefore the supervisor's `scene` is restricted to:
+        按架构基线 §3.4/§3.6/§8.1，Supervisor（API-B）只负责判断、
+        治理和交接，不直接执行学习或替身改进代码，所以这里只允许：
           idle, planning, drive, memory, maintenance, handoff
-        The "learning", "code_editing", "executing", "body_switch" scenes
-        belong to the Agent (API-A) or Executor, and are not legal
-        returns from this method.  When the supervisor is judging a
-        body-switch request, it reports `handoff` (it has decided to
-        hand off to the executor) — the executor then reports
-        `body_switch` while mechanically executing the switch.
+        `learning`、`code_editing`、`executing`、`body_switch`
+        这些场景属于 Agent（API-A）或 Executor，不应由这里返回。
+        当监督者只是完成“准许交接”时，应报告 `handoff`；真正机械执行
+        身体切换的那一刻，再由执行面报告 `body_switch`。
         """
         error_note = f" · {error_count} recent error(s)" if error_count > 0 else ""
-
-        # ── Scene priority: running > memory_active > drive > backlog > idle ──
-
-        # 1. Active execution: handoff if a task is running (the supervisor has
-        #    already handed it over; the actual execution is the Agent's /
-        #    Executor's responsibility).
-        running = [
-            task
-            for task in governance_backlog_projection
-            if task.get("status") == "running"
+        backlog_group = self._ui_autonomous_observation_group(
+            autonomous_observation,
+            "api_b_backlog",
+        )
+        backlog_items = [
+            dict(item)
+            for item in list(backlog_group.get("items") or [])
+            if isinstance(item, dict)
         ]
-        if running:
-            r = running[0]
-            rtitle = str(r.get("title") or "Running task")
-            rfamily = str(r.get("task_family") or "")
-            # Memory maintenance is the one case the supervisor is genuinely
-            # "doing" the work itself (§3.4 — handled by supervisor's
-            # internal memory service, not by API-A autonomous pull).
+        api_a_stage = self._ui_autonomous_observation_loop_stage(
+            autonomous_observation,
+            "api_a_execution",
+        )
+        api_a_focus = dict(api_a_stage.get("focus_task") or {})
+        api_a_status = str(api_a_stage.get("status") or "").strip().lower()
+
+        # ── 场景优先级：执行中 > 记忆活跃 > 内生驱动 > 治理在途 > idle ──
+
+        # 1. 当前执行态：Web 小屋只读自主闭环投影，不再回头检查原始存储行。
+        running_backlog_items = [
+            item
+            for item in backlog_items
+            if str(item.get("status") or "").strip().lower() == "running"
+        ]
+        if running_backlog_items:
+            running_item = running_backlog_items[0]
+            rtitle = str(running_item.get("title") or "运行中的链路项")
+            rfamily = str(running_item.get("task_family") or "")
+            # 记忆维护是少数仍由 Supervisor 自己真正落地处理的工作：
+            # 它走内部 memory service，不走 API-A 自主 pull。
             if "memory" in rfamily:
                 return (
                     "maintenance",
                     f"正在整理记忆{error_note}",
                     f"「{rtitle}」记忆维护任务正在执行。",
                 )
-            # For learning / body-upgrade running tasks, the supervisor
-            # has already handed them over — show `handoff` (NOT `learning` or
-            # `body_switch`, which are Agent / Executor scenes).
+            # 学习 / 替身改进一旦进入运行中，就说明已经交给 API-A 或执行器；
+            # 这里应显示 `handoff`，而不是冒充成 Agent / Executor scene。
             return (
                 "handoff",
                 f"自主交接中{error_note}",
                 f"「{rtitle}」已交给 API-A 自主执行面或执行器处理，结果将写回 Mem 供下一轮监督者判断。",
             )
+        if api_a_status == "active" and api_a_focus:
+            return (
+                "handoff",
+                f"自主交接中{error_note}",
+                f"「{api_a_focus.get('title', '自主链路项')}」已交给 API-A 自主执行面处理，结果将写回 Mem 供下一轮监督者判断。",
+            )
 
-        # 2. Supervisor-governed tasks that are ready now.
-        supervisor_pending = [
+        # 2. 当前已进入监督者处理位的链路项。
+        supervisor_approved_rows = [
             t
-            for t in governance_backlog_projection
-            if not self._is_creativity_ui_task(t)
+            for t in backlog_items
+            if not self._is_api_a_lane_family_task(t)
             and str(t.get("status") or "").strip().lower() == "approved"
         ]
-        if supervisor_pending:
-            lp = sorted(supervisor_pending, key=self._observation_sort_key)[0]
+        if supervisor_approved_rows:
+            lp = sorted(supervisor_approved_rows, key=self._chain_projection_order_key)[0]
             if "memory" in str(lp.get("task_family") or ""):
                 return (
                     "maintenance",
@@ -8054,7 +8195,7 @@ class SupervisorUIMixin:
                 f"「{lp.get('title', '监督者任务')}」已进入监督者执行位，等待处理。",
             )
 
-        # 2.5 Memory model actively compressing (detected from memory_service rules_status)
+        # 2.5 记忆模型正在主动压缩（由 memory_service rules_status 判定）
         if memory_active:
             return (
                 "memory",
@@ -8062,7 +8203,7 @@ class SupervisorUIMixin:
                 "记忆模型正在执行压缩规则：衰减→桥接→升级→清退。",
             )
 
-        # 3. Endogenous drive active
+        # 3. 内生驱动正在形成候选
         candidate_group = self._ui_autonomous_observation_group(
             autonomous_observation,
             "api_b_candidates",
@@ -8083,30 +8224,30 @@ class SupervisorUIMixin:
                 f"「{first.get('title', '治理投影')}」从核心价值中浮现 [{value_tags}]，价值度 {utility_pct}%，等待治理审查。",
             )
 
-        # 4. Memory maintenance waiting in backlog
-        maintenance_pending = [
+        # 4. 治理在途中仍有待处理的记忆维护项
+        maintenance_approved_rows = [
             task
-            for task in governance_backlog_projection
+            for task in backlog_items
             if "memory" in str(task.get("task_family", ""))
-            and task.get("status") in ("approved", "planned")
+            and str(task.get("status") or "").strip().lower() in {"approved", "planned"}
         ]
-        if maintenance_pending:
-            mp = maintenance_pending[0]
+        if maintenance_approved_rows:
+            mp = maintenance_approved_rows[0]
             return (
                 "maintenance",
                 f"正在整理记忆书架{error_note}",
                 f"「{mp.get('title', '维护任务')}」长期连续性正在被守护。",
             )
 
-        # 5. Drive unavailable
-        if not drive_available:
+        # 5. 当前无法拉到 Web 观测输入快照
+        if not observation_input_available:
             return (
                 "idle",
                 "望着窗外",
                 "网关无法访问，房间显示本地监督者状态——信号恢复后内生驱动将继续。",
             )
 
-        # 6. Truly idle
+        # 6. 真正空闲
         window_mood = "全天候自动执行已就绪，系统处于安静状态。"
         return (
             "idle",

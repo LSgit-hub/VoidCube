@@ -1,12 +1,67 @@
 from __future__ import annotations
 
 import json
+import logging
 import urllib.request
 from typing import Any, Dict
 
 from systems.supervisor.autonomous_chain_contract import AUTONOMOUS_CHAIN_CYCLE_ROUTE
+from VoidCube_cli.autonomous_events import append_autonomous_execution_event
+from VoidCube_cli.autonomous_executor import (
+    autonomous_task_execution_kind,
+    autonomous_task_label,
+)
 from VoidCube_cli.autonomous_observation import format_supervisor_status_snapshot
-from VoidCube_cli.autonomous_status_host import fetch_supervisor_status_snapshot
+from VoidCube_cli.autonomous_presence import ensure_autonomous_executor_session
+from VoidCube_cli.autonomous_status_host import (
+    fetch_supervisor_status,
+    refresh_supervisor_status,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _enter_autonomous_gate_locally(
+    host: Any,
+    *,
+    refresh_gateway_cli_presence_callback: Any,
+) -> None:
+    host._autonomous_gate_active = True
+    ensure_autonomous_executor_session(host, logger_debug=logger.debug)
+    append_autonomous_execution_event(
+        host,
+        "自主链路已激活，API-A 自主执行面等待任务",
+        tone="success",
+        stage="autonomous_gate",
+    )
+    refresh_gateway_cli_presence_callback(force=True)
+
+
+def _exit_autonomous_gate_locally(
+    host: Any,
+    *,
+    push_cli_agent_scene_callback: Any,
+    interrupt_current_task_callback: Any,
+    interrupt_reason: str = "",
+    interrupt_source: str = "",
+    interrupt_timeout: float = 5,
+    event_message: str = "",
+    event_tone: str = "warn",
+) -> None:
+    if interrupt_reason and interrupt_source:
+        interrupt_current_task_callback(
+            reason=interrupt_reason,
+            source=interrupt_source,
+            timeout=interrupt_timeout,
+        )
+    host._autonomous_gate_active = False
+    push_cli_agent_scene_callback(
+        "idle",
+        session_id=getattr(host, "session_id", None),
+        agent_role="supervisor_task",
+    )
+    if event_message:
+        append_autonomous_execution_event(host, event_message, tone=event_tone)
 
 
 def _resolve_supervisor_url() -> str:
@@ -39,6 +94,8 @@ def handle_auto_command(
     cmd: str,
     *,
     cprint: Any,
+    poll_autonomous_workflow_callback: Any,
+    refresh_gateway_cli_presence_callback: Any,
     thread_factory: Any,
 ) -> None:
     parts = cmd.strip().split(maxsplit=1)
@@ -92,21 +149,17 @@ def handle_auto_command(
         try:
             active = resp.get("autonomous_chain_gate_active", False)
             if active:
-                host._autonomous_gate_active = True
-                host._ensure_autonomous_executor_session()
-                host._append_autonomous_execution_event(
-                    "自主链路已激活，API-A 自主执行面等待任务",
-                    tone="success",
-                    stage="autonomous_gate",
+                _enter_autonomous_gate_locally(
+                    host,
+                    refresh_gateway_cli_presence_callback=refresh_gateway_cli_presence_callback,
                 )
-                host._refresh_gateway_cli_presence(force=True)
                 cycle_result = None
                 try:
-                    cycle_result = host._trigger_autonomous_cycle(focus=focus)
+                    cycle_result = trigger_autonomous_cycle(focus=focus)
                 except Exception as exc:
                     cprint(f"     ⚠️  Initial autonomous cycle failed: {exc}")
                 try:
-                    host._poll_autonomous_workflow()
+                    poll_autonomous_workflow_callback()
                 except Exception:
                     pass
                 cprint("  ✅ 自主链路 [bold green]已激活[/]")
@@ -119,10 +172,13 @@ def handle_auto_command(
                     planned = summary.get("planned", 0)
                     handed_off = summary.get("handed_off", 0)
                     cprint(f"     首轮循环: planned={planned}, handed_off={handed_off}")
-                snapshot = fetch_supervisor_status_snapshot(host)
+                refresh_supervisor_status(host)
+                snapshot = fetch_supervisor_status(host)
                 if snapshot:
                     for line in format_supervisor_status_snapshot(snapshot)[:4]:
                         cprint(f"     {line}")
+                else:
+                    cprint("     监督者快照将在后台刷新后进入观测面。")
                 cprint("     前台主 CLI 交互仍保持可用。")
                 cprint("     使用 /auto-q 停止自主链路。")
                 cprint(f"     监视地址: {supervisor_url}/ui")
@@ -144,6 +200,8 @@ def handle_auto_q_command(
     host: Any,
     *,
     cprint: Any,
+    interrupt_current_task_callback: Any,
+    push_cli_agent_scene_callback: Any,
     thread_factory: Any,
 ) -> None:
     cprint("  🔄 正在停止自主链路...")
@@ -164,18 +222,16 @@ def handle_auto_q_command(
 
         active = resp.get("autonomous_chain_gate_active", True)
         if not active:
-            host._interrupt_current_autonomous_task(
-                reason="自主链路已由 /auto-q 退出；当前链路项被用户中断。",
-                source="auto_q",
-                timeout=5,
+            _exit_autonomous_gate_locally(
+                host,
+                push_cli_agent_scene_callback=push_cli_agent_scene_callback,
+                interrupt_current_task_callback=interrupt_current_task_callback,
+                interrupt_reason="自主链路已由 /auto-q 退出；当前链路项被用户中断。",
+                interrupt_source="auto_q",
+                interrupt_timeout=5,
+                event_message="/auto 已退出",
+                event_tone="warn",
             )
-            host._autonomous_gate_active = False
-            host._publish_cli_agent_scene(
-                "idle",
-                session_id=getattr(host, "session_id", None),
-                agent_role="supervisor_task",
-            )
-            host._append_autonomous_execution_event("/auto 已退出", tone="warn")
             cprint("  💤 自主链路 [bold]已停止[/].")
             cprint("     基线健康检查循环仍会继续运行。")
             cprint("     使用 /auto 可重新进入自主链路。")
@@ -193,6 +249,8 @@ def exit_autonomous_gate_fast(
     host: Any,
     *,
     cprint: Any,
+    interrupt_current_task_callback: Any,
+    push_cli_agent_scene_callback: Any,
 ) -> bool:
     if not host._autonomous_gate_active:
         return True
@@ -214,18 +272,16 @@ def exit_autonomous_gate_fast(
         )
         resp = json.loads(urllib.request.urlopen(request, timeout=10).read())
         if not resp.get("autonomous_chain_gate_active", True):
-            host._interrupt_current_autonomous_task(
-                reason="自主链路已通过 fast-path /auto-q 退出；当前链路项被用户中断。",
-                source="auto_q_fast_path",
-                timeout=5,
+            _exit_autonomous_gate_locally(
+                host,
+                push_cli_agent_scene_callback=push_cli_agent_scene_callback,
+                interrupt_current_task_callback=interrupt_current_task_callback,
+                interrupt_reason="自主链路已通过 fast-path /auto-q 退出；当前链路项被用户中断。",
+                interrupt_source="auto_q_fast_path",
+                interrupt_timeout=5,
+                event_message="/auto 已退出",
+                event_tone="warn",
             )
-            host._autonomous_gate_active = False
-            host._publish_cli_agent_scene(
-                "idle",
-                session_id=getattr(host, "session_id", None),
-                agent_role="supervisor_task",
-            )
-            host._append_autonomous_execution_event("/auto 已退出", tone="warn")
             cprint("  💤 自主链路 [bold]已停止[/].")
             cprint("     基线健康检查循环仍会继续运行。")
             cprint("     使用 /auto 可重新进入自主链路。")
@@ -241,18 +297,16 @@ def exit_autonomous_gate_fast(
         cprint("  ⚠️  自主链路未能停止，当前仍处于激活状态。")
         return False
     except Exception as exc:
-        host._interrupt_current_autonomous_task(
-            reason="自主链路已在本地退出；supervisor 不可达，当前链路项被用户中断。",
-            source="auto_q_local_exit",
-            timeout=5,
+        _exit_autonomous_gate_locally(
+            host,
+            push_cli_agent_scene_callback=push_cli_agent_scene_callback,
+            interrupt_current_task_callback=interrupt_current_task_callback,
+            interrupt_reason="自主链路已在本地退出；supervisor 不可达，当前链路项被用户中断。",
+            interrupt_source="auto_q_local_exit",
+            interrupt_timeout=5,
+            event_message="/auto 本地已退出，但 supervisor 可能仍保持激活",
+            event_tone="warn",
         )
-        host._autonomous_gate_active = False
-        host._publish_cli_agent_scene(
-            "idle",
-            session_id=getattr(host, "session_id", None),
-            agent_role="supervisor_task",
-        )
-        host._append_autonomous_execution_event("/auto 本地已退出，但 supervisor 可能仍保持激活", tone="warn")
         cprint(f"  ⚠️  Supervisor unreachable: {exc}")
         cprint("     本地自主链路状态已关闭（supervisor 侧状态可能仍陈旧）。")
         cprint("     等 supervisor 可用后，可再次执行 /auto 重新进入。")
@@ -263,6 +317,8 @@ def force_quit_autonomous_gate(
     host: Any,
     *,
     cprint: Any,
+    interrupt_current_task_callback: Any,
+    push_cli_agent_scene_callback: Any,
 ) -> bool:
     cprint("\n  🚨 强制退出自主链路 —— 正在尝试紧急清理...")
 
@@ -288,10 +344,10 @@ def force_quit_autonomous_gate(
     current = getattr(host, "_current_autonomous_task", None)
     if current is not None:
         task_id = str(current.get("task_id") or "")
-        execution_kind = host._autonomous_task_execution_kind(current)
-        task_label = host._autonomous_task_label(execution_kind)
+        execution_kind = autonomous_task_execution_kind(current)
+        task_label = autonomous_task_label(execution_kind)
         chain_item_label = "改进" if execution_kind == "body_improvement" else "学习"
-        if host._interrupt_current_autonomous_task(
+        if interrupt_current_task_callback(
             reason=f"自主链路被强制退出；{chain_item_label}链路项被用户中断。",
             source="force_quit",
             timeout=5,
@@ -313,11 +369,11 @@ def force_quit_autonomous_gate(
     except Exception:
         pass
 
-    host._autonomous_gate_active = False
-    host._publish_cli_agent_scene(
-        "idle",
-        session_id=getattr(host, "session_id", None),
-        agent_role="supervisor_task",
+    _exit_autonomous_gate_locally(
+        host,
+        push_cli_agent_scene_callback=push_cli_agent_scene_callback,
+        interrupt_current_task_callback=interrupt_current_task_callback,
+        event_message="",
     )
     cprint("  🛡️  强制退出完成 —— 自主链路已停止。")
     return True

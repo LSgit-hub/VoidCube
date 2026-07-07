@@ -66,4 +66,6 @@ def sync_autonomous_supervisor_event(host: Any, state: Dict[str, Any]) -> None:
 def autonomous_execution_panel_height(host: Any) -> int:
     if not getattr(host, "_autonomous_gate_active", False):
         return 0
-    return len(host._build_autonomous_execution_panel_rows())
+    from VoidCube_cli.autonomous_panel import build_autonomous_execution_panel_rows
+
+    return len(build_autonomous_execution_panel_rows(host))

@@ -25,7 +25,7 @@ class TestEndogenousDriveWithGatewayData:
 
     def test_drive_generates_memory_maintenance_when_eligible(self):
         engine = EndogenousDriveEngine()
-        idle = {
+        drive_input = {
             "checks": {},
             "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
             "activity": {"counts": {}, "active_sessions": 0},
@@ -41,20 +41,23 @@ class TestEndogenousDriveWithGatewayData:
             },
         }
         candidates = engine.generate_candidates(
-            activity_guards=idle, existing_drive_keys=set(), max_candidates=5
+            drive_input=drive_input, existing_drive_keys=set(), max_candidates=5
         )
         keys = {c.stable_key for c in candidates}
         assert "continuity:memory_maintenance_sweep" in keys
         mem = next(c for c in candidates if c.stable_key == "continuity:memory_maintenance_sweep")
         assert mem.governance_task_type == "memory_maintenance"
         assert mem.priority == "high"
+        assert "observation_checks" in mem.evidence
+        assert "activity_guard_checks" not in mem.evidence
 
     def test_drive_generates_truthfulness_when_errors_exist(self):
         engine = EndogenousDriveEngine()
-        idle = {
+        drive_input = {
             "checks": {},
             "idle_seconds": {"user": 1000, "agent": 1000},
             "activity": {"counts": {"error_count": 5, "uncertainty_high_count": 3}, "active_sessions": 0},
+            "correction_signals": 8,
             "task_family_decisions": {
                 "self_learning": {"eligible_for_planning": True},
                 "memory_maintenance": {"eligible_for_planning": False},
@@ -67,17 +70,18 @@ class TestEndogenousDriveWithGatewayData:
             },
         }
         candidates = engine.generate_candidates(
-            activity_guards=idle, existing_drive_keys=set(), max_candidates=5
+            drive_input=drive_input, existing_drive_keys=set(), max_candidates=5
         )
         keys = {c.stable_key for c in candidates}
         assert "truthfulness:review_correction_signals" in keys
         truth = next(c for c in candidates if c.stable_key == "truthfulness:review_correction_signals")
         assert truth.priority == "high"
         assert truth.governance_task_type == "self_learning"
+        assert truth.evidence["signal_source"] == "runtime_observation_snapshot"
 
     def test_drive_skips_existing_keys(self):
         engine = EndogenousDriveEngine()
-        idle = {
+        drive_input = {
             "checks": {},
             "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
             "activity": {"counts": {}, "active_sessions": 0},
@@ -94,10 +98,39 @@ class TestEndogenousDriveWithGatewayData:
         }
         existing = {"continuity:memory_maintenance_sweep"}
         candidates = engine.generate_candidates(
-            activity_guards=idle, existing_drive_keys=existing, max_candidates=5
+            drive_input=drive_input, existing_drive_keys=existing, max_candidates=5
         )
         keys = {c.stable_key for c in candidates}
         assert "continuity:memory_maintenance_sweep" not in keys
+
+    def test_drive_input_alias_drives_deliberation_and_candidates(self):
+        engine = EndogenousDriveEngine()
+        drive_input = {
+            "checks": {},
+            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "activity": {"counts": {"error_count": 2}, "active_sessions": 0},
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True},
+                "self_learning": {"eligible_for_planning": True},
+                "general_self_evolution": {"eligible_for_planning": False},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": True},
+                "self_learning": {"eligible_for_planning": True},
+                "self_evolution": {"eligible_for_planning": False},
+            },
+        }
+
+        report = engine.build_deliberation_report(drive_input=drive_input).to_dict()
+        candidates = engine.generate_candidates(
+            drive_input=drive_input,
+            existing_drive_keys=set(),
+            max_candidates=5,
+        )
+
+        assert report["perception"]["recent_errors"] == 2
+        assert report["perception"]["governance_backlog_count"] == 0
+        assert len(candidates) >= 1
 
 
 # ── T-06: Service runtime lifecycle ─────────────────────────────────
@@ -287,7 +320,7 @@ class TestEndogenousDriveErrorBridge:
                 "self_evolution": {"eligible_for_planning": False},
             },
         }
-        candidates = engine.generate_candidates(activity_guards=idle, existing_drive_keys=set(), max_candidates=5)
+        candidates = engine.generate_candidates(drive_input=idle, existing_drive_keys=set(), max_candidates=5)
         truth = [c for c in candidates if c.stable_key == "truthfulness:review_correction_signals"]
         assert len(truth) == 1
         assert truth[0].priority == "high"
@@ -318,7 +351,7 @@ class TestEndogenousDriveErrorBridge:
                 "self_evolution": {"eligible_for_planning": False},
             },
         }
-        candidates = engine.generate_candidates(activity_guards=idle, existing_drive_keys=set(), max_candidates=5)
+        candidates = engine.generate_candidates(drive_input=idle, existing_drive_keys=set(), max_candidates=5)
         truth = next(c for c in candidates if c.stable_key == "truthfulness:review_correction_signals")
         exploratory = next(
             c for c in candidates
@@ -346,7 +379,7 @@ class TestEndogenousDriveErrorBridge:
                 "self_evolution": {"eligible_for_planning": False},
             },
         }
-        candidates = engine.generate_candidates(activity_guards=idle, existing_drive_keys=set(), max_candidates=3)
+        candidates = engine.generate_candidates(drive_input=idle, existing_drive_keys=set(), max_candidates=3)
         memory_candidate = next(c for c in candidates if c.stable_key == "continuity:memory_maintenance_sweep")
         breakdown = memory_candidate.metadata.get("score_breakdown") or {}
         backlog_item = memory_candidate.to_backlog_item()
@@ -382,7 +415,7 @@ class TestEndogenousDriveErrorBridge:
                 "self_evolution": {"eligible_for_planning": True},
             },
         }
-        candidates = engine.generate_candidates(activity_guards=idle, existing_drive_keys=set(), max_candidates=5)
+        candidates = engine.generate_candidates(drive_input=idle, existing_drive_keys=set(), max_candidates=5)
         truth = next(c for c in candidates if c.stable_key == "truthfulness:review_correction_signals")
         judgement = truth.metadata.get("drive_judgement") or {}
 
@@ -415,7 +448,7 @@ class TestEndogenousDriveErrorBridge:
                 "self_evolution": {"eligible_for_planning": False},
             },
         }
-        candidates = engine.generate_candidates(activity_guards=idle, existing_drive_keys=set(), max_candidates=5)
+        candidates = engine.generate_candidates(drive_input=idle, existing_drive_keys=set(), max_candidates=5)
         baseline = next(
             c for c in candidates
             if c.metadata.get("self_learning_mode") == "shell_codebase_baseline"
@@ -443,7 +476,7 @@ class TestEndogenousDriveErrorBridge:
                 "self_evolution": {"eligible_for_planning": True},
             },
         }
-        report = engine.build_deliberation_report(activity_guards=idle).to_dict()
+        report = engine.build_deliberation_report(drive_input=idle).to_dict()
 
         assert report["perception"]["correction_signals"] == 3
         assert report["world_model"]["truthfulness_pressure"] > 0
@@ -498,7 +531,7 @@ class TestEndogenousDriveErrorBridge:
                 "self_evolution": {"eligible_for_planning": True},
             },
         }
-        report = engine.build_deliberation_report(activity_guards=idle).to_dict()
+        report = engine.build_deliberation_report(drive_input=idle).to_dict()
 
         assert report["reflection"]["governance_backlog_blockage_state"] in {"dragging", "blocked"}
         assert report["reflection"]["dominant_constraint"] in {
@@ -534,7 +567,7 @@ class TestEndogenousDriveErrorBridge:
                 "self_evolution": {"eligible_for_planning": True},
             },
         }
-        report = engine.build_deliberation_report(activity_guards=idle).to_dict()
+        report = engine.build_deliberation_report(drive_input=idle).to_dict()
 
         assert report["reflection"]["dominant_constraint"] == "historical_underdelivery"
         assert any(
@@ -570,7 +603,7 @@ class TestEndogenousDriveErrorBridge:
             },
         }
         healthy_candidates = engine.generate_candidates(
-            activity_guards=base_idle,
+            drive_input=base_idle,
             existing_drive_keys=set(),
             max_candidates=5,
         )
@@ -589,12 +622,12 @@ class TestEndogenousDriveErrorBridge:
             },
         }
         throttled_candidates = engine.generate_candidates(
-            activity_guards=throttled_idle,
+            drive_input=throttled_idle,
             existing_drive_keys=set(),
             max_candidates=5,
         )
         throttled_report = engine.build_deliberation_report(
-            activity_guards=throttled_idle,
+            drive_input=throttled_idle,
         ).to_dict()
         throttled_kinds = {
             c.metadata["score_breakdown"]["candidate_kind"]
@@ -639,9 +672,9 @@ class TestEndogenousDriveErrorBridge:
                 "self_evolution": {"eligible_for_planning": True},
             },
         }
-        report = engine.build_deliberation_report(activity_guards=idle).to_dict()
+        report = engine.build_deliberation_report(drive_input=idle).to_dict()
         candidates = engine.generate_candidates(
-            activity_guards=idle,
+            drive_input=idle,
             existing_drive_keys=set(),
             max_candidates=5,
         )
@@ -688,7 +721,7 @@ class TestEndogenousDriveErrorBridge:
             },
         }
 
-        report = engine.build_deliberation_report(activity_guards=idle).to_dict()
+        report = engine.build_deliberation_report(drive_input=idle).to_dict()
 
         assert report["adaptive_policy"]["preferred_focus"] == "truthfulness"
         assert any(
@@ -755,7 +788,7 @@ class TestEndogenousDriveErrorBridge:
             },
         }
 
-        report = engine.build_deliberation_report(activity_guards=idle).to_dict()
+        report = engine.build_deliberation_report(drive_input=idle).to_dict()
 
         assert report["adaptive_policy"]["preferred_focus"] == "observation"
         assert any(
@@ -780,7 +813,7 @@ class TestEndogenousDriveErrorBridge:
                 "self_evolution": {"eligible_for_planning": True},
             },
         }
-        report = engine.build_deliberation_report(activity_guards=idle).to_dict()
+        report = engine.build_deliberation_report(drive_input=idle).to_dict()
 
         posture = next(signal for signal in report["signals"] if signal["signal_type"] == "drive_posture_signal")
         assert posture["payload"]["preferred_focus"] == report["adaptive_policy"]["preferred_focus"]
@@ -835,7 +868,7 @@ class TestEndogenousDriveErrorBridge:
             },
         }
 
-        report = engine.build_deliberation_report(activity_guards=idle).to_dict()
+        report = engine.build_deliberation_report(drive_input=idle).to_dict()
         policy = report["adaptive_policy"]
 
         assert policy["observation_bias"] >= 0.6
@@ -900,7 +933,7 @@ class TestEndogenousDriveErrorBridge:
             },
         }
 
-        report = engine.build_deliberation_report(activity_guards=idle).to_dict()
+        report = engine.build_deliberation_report(drive_input=idle).to_dict()
         policy = report["adaptive_policy"]
 
         assert policy["learning_expansion_bias"] >= 0.5
@@ -960,9 +993,9 @@ class TestEndogenousDriveErrorBridge:
             },
         }
 
-        report = engine.build_deliberation_report(activity_guards=idle).to_dict()
+        report = engine.build_deliberation_report(drive_input=idle).to_dict()
         candidates = engine.generate_candidates(
-            activity_guards=idle,
+            drive_input=idle,
             existing_drive_keys=set(),
             max_candidates=5,
         )
@@ -1007,7 +1040,7 @@ class TestEndogenousDriveErrorBridge:
                 "self_evolution": {"eligible_for_planning": True},
             },
         }
-        report = engine.build_deliberation_report(activity_guards=idle).to_dict()
+        report = engine.build_deliberation_report(drive_input=idle).to_dict()
 
         signal_types = {signal["signal_type"] for signal in report["signals"]}
         assert "observation_signal" in signal_types
@@ -1030,7 +1063,7 @@ class TestEndogenousDriveErrorBridge:
                 "self_evolution": {"eligible_for_planning": True},
             },
         }
-        report = engine.build_deliberation_report(activity_guards=idle).to_dict()
+        report = engine.build_deliberation_report(drive_input=idle).to_dict()
 
         assert report["adaptive_policy"]["preferred_focus"] == "truthfulness"
         assert any(
@@ -1055,7 +1088,7 @@ class TestEndogenousDriveErrorBridge:
                 "self_evolution": {"eligible_for_planning": False},
             },
         }
-        candidates = engine.generate_candidates(activity_guards=idle, existing_drive_keys=set(), max_candidates=5)
+        candidates = engine.generate_candidates(drive_input=idle, existing_drive_keys=set(), max_candidates=5)
         assert len(candidates) == 0
 
     def test_learning_candidates_use_active_sessions_as_soft_signal_when_planning_allowed(self):
@@ -1081,7 +1114,7 @@ class TestEndogenousDriveErrorBridge:
                 "self_evolution": {"eligible_for_planning": False},
             },
         }
-        candidates = engine.generate_candidates(activity_guards=idle, existing_drive_keys=set(), max_candidates=5)
+        candidates = engine.generate_candidates(drive_input=idle, existing_drive_keys=set(), max_candidates=5)
         assert any(candidate.governance_task_type == "self_learning" for candidate in candidates)
 
     def test_learning_topics_respect_recent_completion_cooldown(self):
@@ -1094,13 +1127,13 @@ class TestEndogenousDriveErrorBridge:
                 "active_sessions": 0,
                 "recent_metadata": {
                     "user_request": {
-                        "text": "Investigate agent backlog deduplication strategy for autonomous-chain gate"
+                        "text": "研究自主链路门控下的治理在途去重策略"
                     }
                 },
             },
             "completed_learning_tasks": [
                 {
-                    "title": "Investigate agent backlog deduplication strategy for autonomous-chain gate",
+                    "title": "研究自主链路门控下的治理在途去重策略",
                     "completed_at": "2099-01-01T00:00:00+00:00",
                     "quality_score": 0.9,
                 }
@@ -1122,7 +1155,7 @@ class TestEndogenousDriveErrorBridge:
             },
         }
         candidates = engine.generate_candidates(
-            activity_guards=idle,
+            drive_input=idle,
             existing_drive_keys=set(),
             max_candidates=5,
         )
@@ -1141,14 +1174,14 @@ class TestEndogenousDriveErrorBridge:
             },
             "completed_learning_tasks": [
                 {
-                    "title": "Study agent display pipeline",
+                    "title": "研究 Agent 展示链路",
                     "completed_at": "2099-01-01T00:00:00+00:00",
                     "quality_score": 1.0,
                 }
             ],
             "governance_backlog_tasks": [
                 {
-                    "title": "改进 shell 替身：收紧治理积压复核",
+                    "title": "改进 shell 替身：收紧治理在途复核",
                     "status": "approved",
                     "execution_kind": "body_improvement",
                     "constraints": {"target_slot_id": "slot-B"},
@@ -1174,7 +1207,7 @@ class TestEndogenousDriveErrorBridge:
             },
         }
         candidates = engine.generate_candidates(
-            activity_guards=idle,
+            drive_input=idle,
             existing_drive_keys=set(),
             max_candidates=5,
         )
@@ -1191,9 +1224,9 @@ class TestSelfLearningConclusionStoreLifecycle:
         from systems.self_learning.conclusion_store import SelfLearningConclusionStore
 
         svc = SelfLearningConclusionStore(storage_root=str(tmp_path))
-        topic = svc.create_topic(title="Test Topic", reason="Testing lifecycle")
+        topic = svc.create_topic(title="测试主题", reason="验证生命周期")
         assert topic.topic_id
-        assert topic.title == "Test Topic"
+        assert topic.title == "测试主题"
 
         session = svc.plan_session(topic=topic, trigger="test")
         assert session.session_id
@@ -1209,12 +1242,14 @@ class TestSelfLearningConclusionStoreLifecycle:
         conclusion = svc.submit_conclusion(
             topic=topic, session=session,
             experiments=[experiment], comparisons=["baseline"],
-            summary="Learning concluded", verified=True,
+            summary="学习已完成收束", verified=True,
         )
         assert conclusion.conclusion_id
 
         submission = svc.build_supervisor_submission(conclusion)
         assert submission.conclusion_id == conclusion.conclusion_id
+
+
 
 
 

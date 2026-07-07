@@ -82,13 +82,10 @@ from VoidCube_cli.autonomous_gate import (
     force_quit_autonomous_gate as _force_quit_autonomous_gate_view,
     handle_auto_command as _handle_auto_command_view,
     handle_auto_q_command as _handle_auto_q_command_view,
-    trigger_autonomous_cycle as _trigger_autonomous_cycle_view,
 )
 from VoidCube_cli.autonomous_presence import (
-    current_cli_agent_role as _current_cli_agent_role_view,
-    current_gateway_presence_snapshot as _current_gateway_presence_snapshot_view,
-    ensure_autonomous_executor_session as _ensure_autonomous_executor_session_view,
     refresh_gateway_cli_presence as _refresh_gateway_cli_presence_view,
+    push_cli_agent_scene as _push_cli_agent_scene,
 )
 from VoidCube_cli.autonomous_runtime_host import (
     autonomous_executor_runtime as _autonomous_executor_runtime_view,
@@ -879,80 +876,6 @@ def _register_with_gateway(session_id: str, model: str, provider: str) -> bool:
         return True
     except Exception:
         return False  # Best-effort — Gateway may not be started or doesn't support this endpoint
-
-
-def _push_cli_agent_scene(
-    scene: str,
-    *,
-    session_id: str | None = None,
-    task_id: str | None = None,
-    execution_kind: str | None = None,
-    subagent_summary: Dict[str, Any] | None = None,
-    agent_role: str | None = None,
-) -> None:
-    """Best-effort: report the current API-A lane scene to Gateway.
-
-    ``agent_role`` tags which gateway agent lane this report belongs to:
-    "supervisor_task" (the autonomous executor is running supervisor tasks /
-    learning / body improvement) vs "user_chat" (main CLI interacting with
-    the user).
-    The gateway uses it to keep the two reporters' subagent views separate;
-    when omitted the gateway falls back to a scene heuristic.
-    """
-    import json as _json
-
-    normalized_scene = str(scene or "").strip().lower()
-    if not normalized_scene:
-        return False
-
-    try:
-        import urllib.request as _req
-        metadata = {"scene": normalized_scene}
-        if task_id:
-            metadata["task_id"] = task_id
-        if execution_kind:
-            metadata["execution_kind"] = execution_kind
-        normalized_role = str(agent_role or "").strip().lower()
-        if normalized_role in ("supervisor_task", "user_chat"):
-            metadata["agent_role"] = normalized_role
-        if isinstance(subagent_summary, dict):
-            foreground_count = max(0, int(subagent_summary.get("foreground_count") or 0))
-            background_count = max(0, int(subagent_summary.get("background_count") or 0))
-            total_count = max(
-                foreground_count + background_count,
-                int(subagent_summary.get("total_count") or 0),
-            )
-            metadata["subagent_foreground_count"] = foreground_count
-            metadata["subagent_background_count"] = background_count
-            metadata["subagent_total_count"] = total_count
-
-            focus_task_id = str(subagent_summary.get("focus_task_id") or "").strip()
-            focus_tool = str(subagent_summary.get("focus_tool") or "").strip()
-            focus_preview = str(subagent_summary.get("focus_preview") or "").strip()
-            if focus_task_id:
-                metadata["subagent_focus_task_id"] = focus_task_id
-            if focus_tool:
-                metadata["subagent_focus_tool"] = focus_tool
-            if focus_preview:
-                metadata["subagent_focus_preview"] = focus_preview
-        payload = _json.dumps(
-            {
-                "activity_kind": "agent_scene",
-                "source_service": "cli_agent",
-                "session_id": session_id,
-                "metadata": metadata,
-            }
-        ).encode()
-        req = _req.Request(
-            "http://127.0.0.1:6000/admin/activity/touch",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        _req.urlopen(req, timeout=3)
-        return True
-    except Exception:
-        return False
 
 
 def _get_tool_definitions(*args, **kwargs):
@@ -2138,6 +2061,9 @@ class VoidcubeCLI:
         self._autonomous_gateway_status_cache: Dict[str, Any] = {}
         self._autonomous_gateway_status_ts: float = 0.0
         self._autonomous_gateway_status_refreshing: bool = False
+        self._autonomous_gateway_activity_cache: Dict[str, Any] = {}
+        self._autonomous_gateway_activity_ts: float = 0.0
+        self._autonomous_gateway_activity_refreshing: bool = False
 
     def _invalidate(self, min_interval: float = 0.25) -> None:
         """Throttled UI repaint — prevents terminal blinking on slow/SSH connections."""
@@ -2409,32 +2335,6 @@ class VoidcubeCLI:
             return 0
         return 0 if self._use_minimal_tui_chrome(width=width) else 1
 
-    def _append_autonomous_execution_event(
-        self,
-        message: str,
-        *,
-        tone: str = "info",
-        stage: str = "",
-    ) -> None:
-        _append_autonomous_execution_event_view(
-            self,
-            message,
-            tone=tone,
-            stage=stage,
-        )
-
-    def _sync_autonomous_supervisor_event(self, state: Dict[str, Any]) -> None:
-        _sync_autonomous_supervisor_event_view(self, state)
-
-    def _autonomous_execution_panel_height(self) -> int:
-        return _autonomous_execution_panel_height_view(self)
-
-    def _build_autonomous_execution_panel_rows(self) -> list[tuple[str, str]]:
-        return _build_autonomous_execution_panel_rows_view(self)
-
-    def _get_autonomous_execution_panel_fragments(self):
-        return _get_autonomous_execution_panel_fragments_view(self)
-
     def _spinner_widget_height(self, width: Optional[int] = None) -> int:
         """Return the visible height for the spinner/status text line above the status bar."""
         if not getattr(self, "_spinner_text", ""):
@@ -2493,21 +2393,9 @@ class VoidcubeCLI:
         return _autonomous_executor_runtime_view(
             self,
             push_cli_agent_scene=_push_cli_agent_scene,
+            git_head_commit=_git_head_commit,
             git_improvement_diff=_git_improvement_diff,
             cprint=_cprint,
-        )
-
-    def _autonomous_task_execution_kind(self, task: Dict[str, Any]) -> str:
-        return autonomous_task_execution_kind(task)
-
-    def _autonomous_task_label(self, execution_kind: str) -> str:
-        return autonomous_task_label(execution_kind)
-
-    def _build_autonomous_task_prompt(self, task: Dict[str, Any], execution_kind: str) -> str:
-        return build_autonomous_task_prompt(
-            task,
-            execution_kind,
-            git_head_commit=_git_head_commit,
         )
 
     def _inject_autonomous_execution_prompt(self, task: Dict[str, Any], execution_kind: str, *, recovered: bool = False) -> bool:
@@ -2515,153 +2403,6 @@ class VoidcubeCLI:
             task,
             execution_kind,
             recovered=recovered,
-        )
-
-    def _autonomous_task_run_id_for_chat_message(self, message: Any) -> str:
-        return autonomous_task_run_id_for_message(
-            getattr(self, "_current_autonomous_task", None),
-            message,
-        )
-
-    def _clear_current_autonomous_task_state(self) -> None:
-        self._autonomous_runtime().clear_current_task_state()
-
-    def _current_cli_agent_role(self) -> str:
-        return _current_cli_agent_role_view(self)
-
-    def _ensure_autonomous_executor_session(self) -> None:
-        _ensure_autonomous_executor_session_view(self, logger_debug=logger.debug)
-
-    def _report_current_autonomous_task_timeout_if_needed(
-        self,
-        *,
-        gateway_base: str = "http://127.0.0.1:6000",
-        timeout: float = 15,
-        now: float | None = None,
-    ) -> bool:
-        return self._autonomous_runtime().report_current_task_timeout_if_needed(
-            gateway_base=gateway_base,
-            timeout=timeout,
-            now=now,
-        )
-
-    def _post_autonomous_task_decision(
-        self,
-        task_id: str,
-        *,
-        decision: str,
-        reason: str,
-        context: Dict[str, Any] | None = None,
-        final_response: str = "",
-        timeout: float = 15,
-        gateway_base: str = "http://127.0.0.1:6000",
-    ) -> bool:
-        return self._autonomous_runtime().post_task_decision(
-            task_id,
-            decision=decision,
-            reason=reason,
-            context=context,
-            final_response=final_response,
-            timeout=timeout,
-            gateway_base=gateway_base,
-        )
-
-    def _interrupt_current_autonomous_task(
-        self,
-        *,
-        reason: str,
-        source: str,
-        timeout: float = 5,
-        gateway_base: str = "http://127.0.0.1:6000",
-    ) -> bool:
-        return self._autonomous_runtime().interrupt_current_task(
-            reason=reason,
-            source=source,
-            timeout=timeout,
-            gateway_base=gateway_base,
-        )
-
-    def _poll_autonomous_workflow(self) -> None:
-        """Pull approved autonomous tasks from Gateway and execute them.
-
-        With the autonomous chain enabled, the API-A autonomous executor pulls
-        approved tasks (`self_learning` + `body_improvement`) from the
-        Supervisor's task list via the Gateway and reports lifecycle updates
-        back through the same Gateway surface.
-
-        Architecture baseline: §3.3, §3.5, §3.6, §7.3, §7.5.
-        """
-        self._autonomous_runtime().poll_workflow()
-
-    def _submit_body_improvement_report(
-        self,
-        task: Dict[str, Any],
-        task_id: str,
-        gateway_base: str,
-        *,
-        improvement_description: str,
-    ) -> None:
-        """Submit a body-improvement report for a completed autonomous task.
-
-        Attributes the worktree commit made during this task (HEAD moved off the
-        baseline captured at dispatch) and POSTs a report so the supervisor can
-        score the shell slot's health. Best-effort: no commit, missing context,
-        or a transport error just skips reporting — it never disturbs the
-        already-completed decision writeback (P0-2 成果回流, body path).
-        """
-        self._autonomous_runtime().submit_body_improvement_report(
-            task,
-            task_id,
-            gateway_base,
-            improvement_description=improvement_description,
-        )
-
-    def _trigger_autonomous_cycle(self, *, focus: str = "") -> Dict[str, Any] | None:
-        """Run one synchronous supervisor cycle for immediate autonomous-chain responsiveness."""
-        return _trigger_autonomous_cycle_view(focus=focus)
-
-    def _current_gateway_presence_snapshot(self) -> tuple[str, str | None, str | None]:
-        """Return the CLI scene the gateway should treat as the active executor."""
-        return _current_gateway_presence_snapshot_view(self)
-
-    def _publish_cli_agent_scene(
-        self,
-        scene: str,
-        *,
-        session_id: str | None = None,
-        task_id: str | None = None,
-        execution_kind: str | None = None,
-        subagent_summary: Dict[str, Any] | None = None,
-        agent_role: str | None = None,
-    ) -> bool:
-        return _push_cli_agent_scene(
-            scene,
-            session_id=session_id,
-            task_id=task_id,
-            execution_kind=execution_kind,
-            subagent_summary=subagent_summary,
-            agent_role=agent_role,
-        )
-
-    def _refresh_gateway_cli_presence(self, *, force: bool = False) -> None:
-        """Keep the gateway's active CLI executor view aligned with the live session."""
-        import time as _time
-
-        _refresh_gateway_cli_presence_view(
-            self,
-            force=force,
-            is_gateway_running=_is_gateway_running,
-            register_with_gateway=_register_with_gateway,
-            push_cli_agent_scene=_push_cli_agent_scene,
-            monotonic_time=_time.monotonic,
-        )
-
-    def _refresh_autonomous_observation_surfaces(self) -> None:
-        """Refresh autonomous-chain observation surfaces while the CLI is idle."""
-        _refresh_autonomous_observation_surfaces_view(
-            self,
-            refresh_gateway_cli_presence=self._refresh_gateway_cli_presence,
-            poll_autonomous_workflow=self._poll_autonomous_workflow,
         )
 
     def _execute_pending_input(self, user_input: Any, *, app=None) -> bool:
@@ -6797,9 +6538,29 @@ class VoidcubeCLI:
             # Use original case (handler lowercases the personality name itself)
             self._handle_personality_command(cmd_original)
         elif canonical == "auto":
-            self._handle_auto_command(cmd_original)
+            _handle_auto_command_view(
+                self,
+                cmd_original,
+                cprint=_cprint,
+                poll_autonomous_workflow_callback=self._autonomous_runtime().poll_workflow,
+                refresh_gateway_cli_presence_callback=lambda *, force=False: _refresh_gateway_cli_presence_view(
+                    self,
+                    force=force,
+                    is_gateway_running=_is_gateway_running,
+                    register_with_gateway=_register_with_gateway,
+                    push_cli_agent_scene=_push_cli_agent_scene,
+                    monotonic_time=time.monotonic,
+                ),
+                thread_factory=threading.Thread,
+            )
         elif canonical == "auto-q":
-            self._handle_auto_q_command()
+            _handle_auto_q_command_view(
+                self,
+                cprint=_cprint,
+                interrupt_current_task_callback=self._autonomous_runtime().interrupt_current_task,
+                push_cli_agent_scene_callback=_push_cli_agent_scene,
+                thread_factory=threading.Thread,
+            )
         elif canonical == "plan":
             self._handle_plan_command(cmd_original)
         elif canonical == "retry":
@@ -7012,36 +6773,6 @@ class VoidcubeCLI:
                     _cprint(f"{_DIM}{_ACCENT}Type /help for available commands{_RST}")
         
         return True
-
-    def _handle_auto_command(self, cmd: str):
-        _handle_auto_command_view(
-            self,
-            cmd,
-            cprint=_cprint,
-            thread_factory=threading.Thread,
-        )
-
-    def _handle_auto_q_command(self):
-        """Handle /auto-q — stop the autonomous chain."""
-        _handle_auto_q_command_view(
-            self,
-            cprint=_cprint,
-            thread_factory=threading.Thread,
-        )
-
-    def _exit_autonomous_gate_fast(self) -> bool:
-        """Fast-path synchronous exit from the autonomous chain; bypasses the message queue."""
-        return _exit_autonomous_gate_fast_view(
-            self,
-            cprint=_cprint,
-        )
-
-    def _force_quit_autonomous_gate(self) -> bool:
-        """Emergency force-quit: triple-Ctrl+C in the autonomous chain triggers safe exit."""
-        return _force_quit_autonomous_gate_view(
-            self,
-            cprint=_cprint,
-        )
 
     def _record_supervisor_ui_activity_safe(self, event_type: str, *, scene: str = "idle", summary: str = "") -> None:
         """Non-fatal UI activity recording — best-effort, never throws."""
@@ -8196,7 +7927,8 @@ class VoidcubeCLI:
             ):
                 duration = kwargs.get("duration", 0.0)
                 suffix = f" ({duration:.1f}s)" if duration else ""
-                self._append_autonomous_execution_event(
+                _append_autonomous_execution_event_view(
+                    self,
                     f"工具完成: {function_name}{suffix}",
                     tone="success" if not kwargs.get("is_error", False) else "error",
                     stage="tool_completed",
@@ -8244,7 +7976,8 @@ class VoidcubeCLI:
                 function_args if function_args is not None else {}
             )
             if getattr(self, "_autonomous_gate_active", False) and getattr(self, "_current_autonomous_task", None):
-                self._append_autonomous_execution_event(
+                _append_autonomous_execution_event_view(
+                    self,
                     f"工具启动: {function_name}",
                     tone="info",
                     stage="tool_started",
@@ -9163,7 +8896,10 @@ class VoidcubeCLI:
         # Refresh provider credentials if needed (handles key rotation transparently)
         if not self._ensure_runtime_credentials():
             return None
-        autonomous_task_run_id = self._autonomous_task_run_id_for_chat_message(message)
+        autonomous_task_run_id = autonomous_task_run_id_for_message(
+            getattr(self, "_current_autonomous_task", None),
+            message,
+        )
         if autonomous_task_run_id or not getattr(self, "_current_autonomous_task", None):
             self._last_agent_turn_result = None
 
@@ -9346,7 +9082,7 @@ class VoidcubeCLI:
                         else ""
                     )
                     if timed_out_run_id == autonomous_task_run_id:
-                        autonomous_timeout_reported = self._report_current_autonomous_task_timeout_if_needed(
+                        autonomous_timeout_reported = self._autonomous_runtime().report_current_task_timeout_if_needed(
                             timeout=15,
                         )
                         autonomous_timeout_writeback_succeeded = (
@@ -9466,19 +9202,22 @@ class VoidcubeCLI:
                 and not autonomous_timeout_writeback_succeeded
             ):
                 if turn_result["failed"] or turn_result["partial"]:
-                    self._append_autonomous_execution_event(
+                    _append_autonomous_execution_event_view(
+                        self,
                         f"模型回合结束，但结果异常: {turn_result['error'] or 'unknown error'}",
                         tone="error",
                         stage="model_turn_finished",
                     )
                 elif turn_result["interrupted"]:
-                    self._append_autonomous_execution_event(
+                    _append_autonomous_execution_event_view(
+                        self,
                         "模型回合被中断，等待下一条指令",
                         tone="warn",
                         stage="model_turn_finished",
                     )
                 else:
-                    self._append_autonomous_execution_event(
+                    _append_autonomous_execution_event_view(
+                        self,
                         "模型回合完成，等待任务回写",
                         tone="success",
                         stage="model_turn_finished",
@@ -10235,7 +9974,12 @@ class VoidcubeCLI:
                             # ── FAST PATH: exit immediately, bypass queue ──
                             event.app.current_buffer.reset(append_to_history=True)
                             _cprint(f"  🔓 退出自主链路...")
-                            self._exit_autonomous_gate_fast()
+                            _exit_autonomous_gate_fast_view(
+                                self,
+                                cprint=_cprint,
+                                interrupt_current_task_callback=self._autonomous_runtime().interrupt_current_task,
+                                push_cli_agent_scene_callback=_push_cli_agent_scene,
+                            )
                             event.app.invalidate()
                             return
 
@@ -10457,7 +10201,12 @@ class VoidcubeCLI:
                 # ── Autonomous chain: Ctrl+D = emergency force-quit ──
                 event.app.current_buffer.reset()
                 _cprint(f"\n  ⚡ Ctrl+D — 触发紧急强制退出自主链路...")
-                self._force_quit_autonomous_gate()
+                _force_quit_autonomous_gate_view(
+                    self,
+                    cprint=_cprint,
+                    interrupt_current_task_callback=self._autonomous_runtime().interrupt_current_task,
+                    push_cli_agent_scene_callback=_push_cli_agent_scene,
+                )
                 event.app.invalidate()
                 return
             # Normal mode: clear input (no exit, use /quit instead)
@@ -11199,8 +10948,8 @@ class VoidcubeCLI:
 
         auto_execution_panel = ConditionalContainer(
             Window(
-                FormattedTextControl(lambda: cli_ref._get_autonomous_execution_panel_fragments()),
-                height=lambda: cli_ref._autonomous_execution_panel_height(),
+                FormattedTextControl(lambda: _get_autonomous_execution_panel_fragments_view(cli_ref)),
+                height=lambda: _autonomous_execution_panel_height_view(cli_ref),
                 wrap_lines=False,
             ),
             filter=Condition(lambda: cli_ref._autonomous_gate_active),
@@ -11395,7 +11144,14 @@ class VoidcubeCLI:
                         or self._get_subagent_observability_snapshot().get("active")
                     )
                 ):
-                    self._refresh_gateway_cli_presence(force=True)
+                    _refresh_gateway_cli_presence_view(
+                        self,
+                        force=True,
+                        is_gateway_running=_is_gateway_running,
+                        register_with_gateway=_register_with_gateway,
+                        push_cli_agent_scene=_push_cli_agent_scene,
+                        monotonic_time=_time.monotonic,
+                    )
                     last_presence_refresh = now
                 if self._command_running:
                     self._invalidate(min_interval=0.1)
@@ -11420,7 +11176,18 @@ class VoidcubeCLI:
                         # Periodic background tasks — never block the UI thread
                         if not self._agent_running:
                             self._check_config_mcp_changes()
-                            self._refresh_autonomous_observation_surfaces()
+                            _refresh_autonomous_observation_surfaces_view(
+                                self,
+                                refresh_gateway_cli_presence=lambda: _refresh_gateway_cli_presence_view(
+                                    self,
+                                    force=False,
+                                    is_gateway_running=_is_gateway_running,
+                                    register_with_gateway=_register_with_gateway,
+                                    push_cli_agent_scene=_push_cli_agent_scene,
+                                    monotonic_time=time.monotonic,
+                                ),
+                                poll_autonomous_workflow=self._autonomous_runtime().poll_workflow,
+                            )
                             # Check for background process notifications (completions
                             # and watch pattern matches) while agent is idle.
                             try:

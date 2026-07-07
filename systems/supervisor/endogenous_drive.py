@@ -146,6 +146,8 @@ class DrivePerceptionSnapshot:
     body_improvement_backlog_count: int
     stale_backlog_count: int
     pending_review_count: int
+    api_a_ready_count: int = 0
+    api_a_running_count: int = 0
     checks: Dict[str, Any] = field(default_factory=dict)
     idle_seconds: Dict[str, Any] = field(default_factory=dict)
 
@@ -256,6 +258,8 @@ class DriveDeliberationReport:
                 "body_improvement_backlog_count": self.perception.body_improvement_backlog_count,
                 "stale_backlog_count": self.perception.stale_backlog_count,
                 "pending_review_count": self.perception.pending_review_count,
+                "api_a_ready_count": self.perception.api_a_ready_count,
+                "api_a_running_count": self.perception.api_a_running_count,
                 "checks": dict(self.perception.checks),
                 "idle_seconds": dict(self.perception.idle_seconds),
             },
@@ -359,13 +363,30 @@ class EndogenousDriveEngine:
     def get_latest_lm_task_generation_proposals(self) -> List[Dict[str, Any]]:
         return [dict(item) for item in self._latest_lm_task_generation_proposals]
 
+    def _resolve_drive_input(
+        self,
+        *,
+        drive_input: Optional[Dict[str, Any]] = None,
+        activity_guards: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if isinstance(drive_input, dict):
+            return dict(drive_input)
+        if isinstance(activity_guards, dict):
+            return dict(activity_guards)
+        return {}
+
     def resolve_cognitive_posture_state(
         self,
         *,
-        activity_guards: Dict[str, Any],
+        drive_input: Optional[Dict[str, Any]] = None,
+        activity_guards: Optional[Dict[str, Any]] = None,
         deliberation_dict: Dict[str, Any],
     ) -> Dict[str, Any]:
-        drive_context = self._build_drive_context(activity_guards)
+        drive_input = self._resolve_drive_input(
+            drive_input=drive_input,
+            activity_guards=activity_guards,
+        )
+        drive_context = self._build_drive_context(drive_input)
         runtime_config = getattr(self.config, "service_runtime", None)
         charter_model = getattr(runtime_config, "endogenous_drive_cognition_charter", None)
         policy_model = getattr(charter_model, "cognitive_control_policy", None)
@@ -378,7 +399,7 @@ class EndogenousDriveEngine:
         proposal_drift_memory = self._build_proposal_drift_memory(drive_context)
         recent_learning_evidence = self._build_recent_learning_evidence(drive_context)
         external_research_evidence = self._build_external_research_evidence()
-        shell_slot = dict(self._get_shell_slot_meta(activity_guards) or {})
+        shell_slot = dict(self._get_shell_slot_meta(drive_input) or {})
         shell_body_profile = self._build_shell_body_profile(shell_slot)
         evidence_channels = self._build_evidence_channels(
             recent_learning_evidence=recent_learning_evidence,
@@ -423,15 +444,20 @@ class EndogenousDriveEngine:
     def generate_candidates(
         self,
         *,
-        activity_guards: Dict[str, Any],
+        drive_input: Optional[Dict[str, Any]] = None,
+        activity_guards: Optional[Dict[str, Any]] = None,
         existing_drive_keys: Iterable[str],
         max_candidates: int = 3,
         deliberation_report: DriveDeliberationReport | None = None,
         lm_proposals_override: Optional[List[Dict[str, Any]]] = None,
     ) -> List[EndogenousTaskCandidate]:
+        drive_input = self._resolve_drive_input(
+            drive_input=drive_input,
+            activity_guards=activity_guards,
+        )
         existing_keys = set(existing_drive_keys)
         candidates = self._candidate_stream(
-            activity_guards,
+            drive_input,
             existing_keys=existing_keys,
             deliberation_report=deliberation_report,
             lm_proposals_override=lm_proposals_override,
@@ -442,10 +468,15 @@ class EndogenousDriveEngine:
     def build_deliberation_report(
         self,
         *,
-        activity_guards: Dict[str, Any],
+        drive_input: Optional[Dict[str, Any]] = None,
+        activity_guards: Optional[Dict[str, Any]] = None,
     ) -> DriveDeliberationReport:
-        activity = dict(activity_guards.get("activity") or {})
-        drive_context = self._build_drive_context(activity_guards)
+        drive_input = self._resolve_drive_input(
+            drive_input=drive_input,
+            activity_guards=activity_guards,
+        )
+        activity = dict(drive_input.get("activity") or {})
+        drive_context = self._build_drive_context(drive_input)
         nested_counts = dict(activity.get("counts") or {})
         counts: Dict[str, Any] = dict(nested_counts)
         for _key in (
@@ -457,8 +488,8 @@ class EndogenousDriveEngine:
             value = activity.get(_key)
             if value is not None and _key not in counts:
                 counts[_key] = value
-        decisions_by_family = dict(activity_guards.get("task_family_decisions") or {})
-        decisions_by_governance = dict(activity_guards.get("governance_task_type_decisions") or {})
+        decisions_by_family = dict(drive_input.get("task_family_decisions") or {})
+        decisions_by_governance = dict(drive_input.get("governance_task_type_decisions") or {})
         memory_plan = self._decision_for(
             "memory_maintenance",
             decisions_by_family,
@@ -480,7 +511,7 @@ class EndogenousDriveEngine:
             or counts.get("high_uncertainty")
             or 0
         )
-        pre_decayed = activity_guards.get("correction_signals")
+        pre_decayed = drive_input.get("correction_signals")
         if pre_decayed is not None:
             try:
                 correction_signals = max(0, int(pre_decayed))
@@ -488,9 +519,9 @@ class EndogenousDriveEngine:
                 correction_signals = recent_errors + uncertainty_count
         else:
             correction_signals = recent_errors + uncertainty_count
-        shell_slot_meta = self._get_shell_slot_meta(activity_guards) or {}
+        shell_slot_meta = self._get_shell_slot_meta(drive_input) or {}
         perception = self._perceive_drive_state(
-            activity_guards=activity_guards,
+            drive_input=drive_input,
             activity=activity,
             drive_context=drive_context,
             counts=counts,
@@ -547,17 +578,17 @@ class EndogenousDriveEngine:
     def _perceive_drive_state(
         self,
         *,
-        activity_guards: Dict[str, Any],
+        drive_input: Dict[str, Any],
         activity: Dict[str, Any],
         drive_context: Dict[str, Any],
         counts: Dict[str, Any],
         correction_signals: int,
         shell_slot_meta: Optional[Dict[str, Any]] = None,
     ) -> DrivePerceptionSnapshot:
-        checks = dict(activity_guards.get("checks") or {})
-        idle_seconds = dict(activity_guards.get("idle_seconds") or {})
-        user_chain_signal = dict(activity_guards.get("user_chain_signal") or {})
-        autonomous_chain_gate_active = bool(activity_guards.get("autonomous_chain_gate_active", False))
+        checks = dict(drive_input.get("checks") or {})
+        idle_seconds = dict(drive_input.get("idle_seconds") or {})
+        user_chain_signal = dict(drive_input.get("user_chain_signal") or {})
+        autonomous_chain_gate_active = bool(drive_input.get("autonomous_chain_gate_active", False))
         active_sessions = int(activity.get("active_sessions") or 0)
         learning_backlog_count = len(list(drive_context.get("learning_backlog_titles") or []))
         body_improvement_backlog_count = len(
@@ -566,7 +597,9 @@ class EndogenousDriveEngine:
         stale_backlog_count = int(drive_context.get("stale_backlog_count") or 0)
         pending_review_count = int(drive_context.get("pending_review_count") or 0)
         governance_backlog_count = int(drive_context.get("governance_backlog_count") or 0)
-        learning_quality = self._calculate_learning_quality_score(activity_guards)
+        api_a_ready_count = int(drive_context.get("api_a_ready_count") or 0)
+        api_a_running_count = int(drive_context.get("api_a_running_count") or 0)
+        learning_quality = self._calculate_learning_quality_score(drive_input)
         recent_errors = int(counts.get("error_count") or counts.get("recent_errors") or 0)
         uncertainty_count = int(
             counts.get("uncertainty_high_count")
@@ -604,7 +637,7 @@ class EndogenousDriveEngine:
             uncertainty_count=uncertainty_count,
             correction_signals=max(0, correction_signals),
             learning_quality=learning_quality,
-            has_learning_history=bool(activity_guards.get("completed_learning_tasks") or []),
+            has_learning_history=bool(drive_input.get("completed_learning_tasks") or []),
             shell_slot_present=shell_slot_present,
             shell_slot_id=shell_slot_id,
             governance_backlog_count=governance_backlog_count,
@@ -612,6 +645,8 @@ class EndogenousDriveEngine:
             body_improvement_backlog_count=body_improvement_backlog_count,
             stale_backlog_count=stale_backlog_count,
             pending_review_count=pending_review_count,
+            api_a_ready_count=api_a_ready_count,
+            api_a_running_count=api_a_running_count,
             checks=checks,
             idle_seconds=idle_seconds,
         )
@@ -676,7 +711,7 @@ class EndogenousDriveEngine:
         shell_slot_meta: Optional[Dict[str, Any]] = None,
     ) -> DriveReflection:
         completed_learning_tasks = list(drive_context.get("completed_learning_tasks") or [])
-        governance_backlog_tasks = list(drive_context.get("governance_backlog_tasks") or [])
+        governance_backlog_tasks = list(drive_context.get("autonomous_chain_live_tasks") or [])
         drive_history = dict(drive_context.get("drive_history") or {})
         historical_outcomes = [
             dict(item)
@@ -805,17 +840,17 @@ class EndogenousDriveEngine:
             dominant_constraint = "user_service_priority"
 
         rationale_parts = [
-            f"recent learning yield is {learning_yield_state}",
-            f"governance backlog blockage is {governance_backlog_blockage_state}",
+            f"近期学习收益状态为 {learning_yield_state}",
+            f"治理在途阻塞状态为 {governance_backlog_blockage_state}",
         ]
         if historical_total > 0:
             rationale_parts.append(
-                f"historical {historical_scope} success ratio is {historical_success_ratio:.2f}"
+                f"历史 {historical_scope} 成功比率为 {historical_success_ratio:.2f}"
             )
         if body_growth_blocked:
-            rationale_parts.append("body growth is temporarily blocked by recent shell-improvement activity")
+            rationale_parts.append("近期 shell 改进活动暂时阻断了替身成长")
         if dominant_constraint != "none":
-            rationale_parts.append(f"dominant constraint is {dominant_constraint}")
+            rationale_parts.append(f"当前主约束是 {dominant_constraint}")
 
         return DriveReflection(
             recent_learning_count=recent_learning_count,
@@ -1171,6 +1206,23 @@ class EndogenousDriveEngine:
         observation_bias = self._clamp01(
             observation_bias + float(policy.get("dynamic_observation_bias_boost") or 0.0)
         )
+        api_a_execution_flow_pressure = self._clamp01(
+            perception.api_a_ready_count * 0.14
+            + perception.api_a_running_count * 0.24
+        )
+        if api_a_execution_flow_pressure > 0.0:
+            learning_expansion_bias = self._clamp01(
+                learning_expansion_bias - api_a_execution_flow_pressure * 0.08
+            )
+            body_growth_bias = self._clamp01(
+                body_growth_bias - api_a_execution_flow_pressure * 0.22
+            )
+            observation_bias = self._clamp01(
+                observation_bias + api_a_execution_flow_pressure * 0.06
+            )
+            candidate_throttle = self._clamp01(
+                candidate_throttle + api_a_execution_flow_pressure * 0.18
+            )
 
         focus_candidates = {
             "truthfulness": truthfulness_bias,
@@ -1259,6 +1311,10 @@ class EndogenousDriveEngine:
             exploratory_learning_quota = 1
         else:
             exploratory_learning_quota = 2
+        if perception.api_a_running_count > 0:
+            exploratory_learning_quota = 0
+        elif perception.api_a_ready_count > 0:
+            exploratory_learning_quota = min(exploratory_learning_quota, 1)
         body_growth_quota = (
             1
             if (
@@ -1268,6 +1324,8 @@ class EndogenousDriveEngine:
             )
             else 0
         )
+        if perception.api_a_ready_count > 0 or perception.api_a_running_count > 0:
+            body_growth_quota = 0
 
         rationale_parts = [
             f"preferred focus is {preferred_focus}",
@@ -1286,6 +1344,8 @@ class EndogenousDriveEngine:
             )
         if observation_bias >= 0.6:
             rationale_parts.append("observation bias is elevated because autonomous output should slow down")
+        if api_a_execution_flow_pressure > 0.0:
+            rationale_parts.append("API-A 执行窗口仍在流动，因此先等待回流沉淀再扩大自主产出")
 
         return DriveAdaptivePolicy(
             learning_expansion_bias=learning_expansion_bias,
@@ -1325,6 +1385,9 @@ class EndogenousDriveEngine:
                 f"dynamic_observation_bias_boost={float(policy.get('dynamic_observation_bias_boost') or 0.0):.2f}",
                 f"dynamic_truthfulness_bias_boost={float(policy.get('dynamic_truthfulness_bias_boost') or 0.0):.2f}",
                 f"dynamic_learning_expansion_suppression={float(policy.get('dynamic_learning_expansion_suppression') or 0.0):.2f}",
+                f"api_a_execution_flow_pressure={api_a_execution_flow_pressure:.2f}",
+                f"api_a_ready_count={perception.api_a_ready_count}",
+                f"api_a_running_count={perception.api_a_running_count}",
                 f"focus_effectiveness[{preferred_focus}]={focus_effectiveness.get(preferred_focus, 0.5):.2f}",
                 f"candidate_budget={candidate_budget}",
                 f"exploratory_learning_quota={exploratory_learning_quota}",
@@ -1513,6 +1576,11 @@ class EndogenousDriveEngine:
                 learning_constraint_penalty += 0.06
             if memory_backlog_recovery_window:
                 learning_constraint_penalty += 0.14
+            learning_constraint_penalty += min(
+                0.22,
+                perception.api_a_ready_count * 0.06
+                + perception.api_a_running_count * 0.14,
+            )
             needs.append(
                 DriveNeed(
                     need_type="expand_learning_frontier",
@@ -1551,6 +1619,8 @@ class EndogenousDriveEngine:
                         f"learning_expansion_bias={adaptive_policy.learning_expansion_bias:.2f}",
                         f"candidate_throttle={adaptive_policy.candidate_throttle:.2f}",
                         f"learning_constraint_penalty={learning_constraint_penalty:.2f}",
+                        f"api_a_ready_count={perception.api_a_ready_count}",
+                        f"api_a_running_count={perception.api_a_running_count}",
                     ],
                 )
             )
@@ -1559,6 +1629,8 @@ class EndogenousDriveEngine:
             and perception.shell_slot_present
             and perception.learning_quality >= 60.0
             and not reflection.body_growth_blocked
+            and perception.api_a_ready_count <= 0
+            and perception.api_a_running_count <= 0
         ):
             needs.append(
                 DriveNeed(
@@ -1588,6 +1660,8 @@ class EndogenousDriveEngine:
                         f"body_improvement_backlog_count={perception.body_improvement_backlog_count}",
                         f"body_growth_blocked={reflection.body_growth_blocked}",
                         f"body_growth_bias={adaptive_policy.body_growth_bias:.2f}",
+                        f"api_a_ready_count={perception.api_a_ready_count}",
+                        f"api_a_running_count={perception.api_a_running_count}",
                     ],
                 )
             )
@@ -1844,11 +1918,11 @@ class EndogenousDriveEngine:
                         (backlog_need.severity if backlog_need else 0.45)
                         + (0.08 if world_model.governance_load_state == "strained" else 0.0)
                     ),
-                    message="Governance backlog state suggests a governance review pass before more autonomous work accumulates.",
+                    message="治理在途状态提示：在继续累积更多自主工作前，应先进行一轮治理复核。",
                     rationale=(
                         backlog_need.rationale
                         if backlog_need is not None
-                        else "Backlog pressure and review debt indicate the governance backlog should be examined."
+                        else "治理在途压力与复核债务都提示当前应先检查治理段。"
                     ),
                     source_needs=(
                         [backlog_need.need_type]
@@ -1879,7 +1953,7 @@ class EndogenousDriveEngine:
                     DriveSignal(
                         signal_type="governance_review_suggestion",
                         priority=self._clamp01(backlog_need.severity + 0.06),
-                        message="Backlog review is suggested because review debt or stale work is already present even before full backlog strain emerges.",
+                        message="即便尚未出现完整阻塞，只要已经出现复核债务或陈旧治理项，也建议先做治理复核。",
                         rationale=backlog_need.rationale,
                         source_needs=[backlog_need.need_type],
                         related_intent=backlog_intent.intent_type if backlog_intent is not None else None,
@@ -1908,8 +1982,8 @@ class EndogenousDriveEngine:
                         + adaptive_policy.truthfulness_bias * 0.1
                     ),
                     message=(
-                        "Truthfulness-focused observation is recommended because correction pressure is rising "
-                        "even if the overall drive is also slowing down."
+                        "当前建议把观察焦点落在真实性侧，因为修正压力正在上升，"
+                        "即使整体内生驱动也在放缓。"
                     ),
                     rationale=truthfulness_need.rationale,
                     source_needs=[truthfulness_need.need_type],
@@ -1937,7 +2011,7 @@ class EndogenousDriveEngine:
                     priority=self._clamp01(
                         observe_need.severity + 0.06 + adaptive_policy.observation_bias * 0.12
                     ),
-                    message="Observation is recommended before more autonomous output because the drive is encountering blockage or weak readiness.",
+                    message="在继续扩大自主输出前，建议先补观察，因为当前内生驱动正遭遇阻塞或准备度偏弱。",
                     rationale=observe_need.rationale,
                     source_needs=[observe_need.need_type],
                     related_intent=observe_intent.intent_type if observe_intent is not None else None,
@@ -1955,7 +2029,7 @@ class EndogenousDriveEngine:
                     priority=self._clamp01(
                         observe_need.urgency + 0.04 + adaptive_policy.observation_bias * 0.16
                     ),
-                    message="Autonomous output should be aligned and throttled before pushing more candidate work.",
+                    message="在继续推出更多候选工作前，应先对齐并收紧自主输出节奏。",
                     rationale=(
                         f"{reflection.rationale} {adaptive_policy.rationale}"
                     ),
@@ -1981,9 +2055,9 @@ class EndogenousDriveEngine:
                         + min(perception.correction_signals, 4) * 0.04
                     ),
                     message=(
-                        "Observation is recommended before further autonomous actions because correction pressure is rising."
+                        "在继续推进自主动作前，建议先补观察，因为修正压力正在上升。"
                         if observation_target == "truthfulness"
-                        else "Observation is recommended because learning quality suggests a possible growth window is forming."
+                        else "当前建议先补观察，因为学习质量显示可能正在形成新的成长窗口。"
                     ),
                     rationale=(
                         need_lookup[source_need].rationale
@@ -2005,7 +2079,7 @@ class EndogenousDriveEngine:
             DriveSignal(
                 signal_type="drive_posture_signal",
                 priority=self._clamp01(0.4 + adaptive_policy.candidate_throttle * 0.3),
-                message="The endogenous drive has selected a current governance posture and candidate budget for this cycle.",
+                message="本轮内生驱动已经为当前治理姿态与候选预算完成选择。",
                 rationale=adaptive_policy.rationale,
                 source_needs=(
                     [observe_need.need_type]
@@ -2389,7 +2463,7 @@ class EndogenousDriveEngine:
 
     def _candidate_stream(
         self,
-        activity_guards: Dict[str, Any],
+        drive_input: Dict[str, Any],
         *,
         existing_keys: set[str] = None,
         deliberation_report: DriveDeliberationReport | None = None,
@@ -2397,12 +2471,12 @@ class EndogenousDriveEngine:
     ) -> List[EndogenousTaskCandidate]:
         if existing_keys is None:
             existing_keys = set()
-        activity = dict(activity_guards.get("activity") or {})
-        drive_context = self._build_drive_context(activity_guards)
+        activity = dict(drive_input.get("activity") or {})
+        drive_context = self._build_drive_context(drive_input)
         policy = drive_context["policy"]
-        shell_slot_meta = self._get_shell_slot_meta(activity_guards) or {}
-        decisions_by_family = dict(activity_guards.get("task_family_decisions") or {})
-        decisions_by_governance = dict(activity_guards.get("governance_task_type_decisions") or {})
+        shell_slot_meta = self._get_shell_slot_meta(drive_input) or {}
+        decisions_by_family = dict(drive_input.get("task_family_decisions") or {})
+        decisions_by_governance = dict(drive_input.get("governance_task_type_decisions") or {})
 
         memory_plan = self._decision_for(
             "memory_maintenance",
@@ -2420,7 +2494,7 @@ class EndogenousDriveEngine:
             decisions_by_governance,
         )
         deliberation = deliberation_report or self.build_deliberation_report(
-            activity_guards=activity_guards
+            drive_input=drive_input
         )
         perception = deliberation.perception
         world_model = deliberation.world_model
@@ -2435,7 +2509,7 @@ class EndogenousDriveEngine:
         }
 
         lm_candidates = self._llm_task_proposals(
-            activity_guards=activity_guards,
+            drive_input=drive_input,
             existing_keys=existing_keys,
             deliberation=deliberation,
             drive_context=drive_context,
@@ -2459,7 +2533,7 @@ class EndogenousDriveEngine:
                     stable_key="continuity:memory_maintenance_sweep",
                     title="维持长期记忆连续性",
                     summary=(
-                        "在当前活动护栏周期内检查记忆维护需求，"
+                        "在当前观测周期内检查记忆维护需求，"
                         "让长期身份、摘要与治理轨迹保持可用。"
                     ),
                     priority="high",
@@ -2470,7 +2544,7 @@ class EndogenousDriveEngine:
                     candidate_kind="memory_maintenance",
                     score_inputs={
                         "core_value_strength": 1.0,
-                        "urgency": self._memory_maintenance_urgency(activity_guards),
+                        "urgency": self._memory_maintenance_urgency(drive_input),
                         "novelty": 0.58,
                         "specificity": 0.78,
                         "execution_readiness": 1.0,
@@ -2498,8 +2572,8 @@ class EndogenousDriveEngine:
                         )
                     },
                     evidence={
-                        "activity_guard_checks": dict(activity_guards.get("checks") or {}),
-                        "idle_seconds": dict(activity_guards.get("idle_seconds") or {}),
+                        "observation_checks": dict(drive_input.get("checks") or {}),
+                        "idle_seconds": dict(drive_input.get("idle_seconds") or {}),
                     },
                 )
             )
@@ -2531,7 +2605,7 @@ class EndogenousDriveEngine:
                         "urgency": self._clamp01(
                             0.35 + (min(perception.correction_signals, 6) / 6.0) * 0.65
                         ),
-                        "novelty": 0.72 if activity_guards.get("correction_signals") is not None else 0.68,
+                        "novelty": 0.72 if drive_input.get("correction_signals") is not None else 0.68,
                         "specificity": self._clamp01(
                             0.55 + min(perception.correction_signals, 5) * 0.08
                         ),
@@ -2562,7 +2636,11 @@ class EndogenousDriveEngine:
                         "recent_errors": recent_errors,
                         "uncertainty_high_count": uncertainty_count,
                         "correction_signals": perception.correction_signals,
-                        "signal_source": "evaluate_activity_guards" if activity_guards.get("correction_signals") is not None else "raw_counts",
+                        "signal_source": (
+                            "runtime_observation_snapshot"
+                            if drive_input.get("correction_signals") is not None
+                            else "raw_counts"
+                        ),
                     },
                 )
             )
@@ -2580,7 +2658,7 @@ class EndogenousDriveEngine:
 
             topics: list[dict] = []
 
-            autonomous_chain_gate_active = activity_guards.get("autonomous_chain_gate_active", False)
+            autonomous_chain_gate_active = drive_input.get("autonomous_chain_gate_active", False)
             mechanical_topic = self._extract_learning_topic(activity)
             if mechanical_topic:
                 topics = [{"title": mechanical_topic, "summary": (
@@ -2808,9 +2886,9 @@ class EndogenousDriveEngine:
             candidates.append(
                 self._build_scored_candidate(
                     stable_key="continuity:governance_hygiene_review",
-                    title="复核治理积压卫生",
+                    title="复核治理在途卫生",
                     summary=(
-                        "检查已规划、已延后或已暂停的治理积压工作是否仍具备"
+                        "检查已规划、已延后或已暂停的治理在途工作是否仍具备"
                         "足够证据、责任归属和回滚约束。"
                     ),
                     priority="normal",
@@ -2939,7 +3017,8 @@ class EndogenousDriveEngine:
     def _llm_task_proposals(
         self,
         *,
-        activity_guards: Dict[str, Any],
+        drive_input: Optional[Dict[str, Any]] = None,
+        activity_guards: Optional[Dict[str, Any]] = None,
         existing_keys: set[str],
         deliberation: DriveDeliberationReport,
         drive_context: Dict[str, Any],
@@ -2948,6 +3027,10 @@ class EndogenousDriveEngine:
         autonomous_improvement_plan: Dict[str, Any],
         proposals_override: Optional[List[Dict[str, Any]]] = None,
     ) -> List[EndogenousTaskCandidate]:
+        drive_input = self._resolve_drive_input(
+            drive_input=drive_input,
+            activity_guards=activity_guards,
+        )
         service_runtime = getattr(self.config, "service_runtime", None)
         if service_runtime is None:
             return []
@@ -2955,7 +3038,7 @@ class EndogenousDriveEngine:
             return []
 
         evidence_packet = self._build_lm_evidence_packet(
-            activity_guards=activity_guards,
+            drive_input=drive_input,
             deliberation=deliberation,
             drive_context=drive_context,
             memory_plan=memory_plan,
@@ -2979,13 +3062,18 @@ class EndogenousDriveEngine:
     def _build_lm_evidence_packet(
         self,
         *,
-        activity_guards: Dict[str, Any],
+        drive_input: Optional[Dict[str, Any]] = None,
+        activity_guards: Optional[Dict[str, Any]] = None,
         deliberation: DriveDeliberationReport,
         drive_context: Dict[str, Any],
         memory_plan: Dict[str, Any],
         self_learning_plan: Dict[str, Any],
         autonomous_improvement_plan: Dict[str, Any],
     ) -> Dict[str, Any]:
+        drive_input = self._resolve_drive_input(
+            drive_input=drive_input,
+            activity_guards=activity_guards,
+        )
         cognition_charter = self._resolve_endogenous_cognition_charter(
             getattr(self.config, "service_runtime", None)
         )
@@ -2994,7 +3082,7 @@ class EndogenousDriveEngine:
         world_model = deliberation_dict.get("world_model", {})
         reflection = deliberation_dict.get("reflection", {})
         adaptive_policy = deliberation_dict.get("adaptive_policy", {})
-        shell_slot = dict(self._get_shell_slot_meta(activity_guards) or {})
+        shell_slot = dict(self._get_shell_slot_meta(drive_input) or {})
         recent_learning_evidence = self._build_recent_learning_evidence(drive_context)
         external_research_evidence = self._build_external_research_evidence()
         shell_body_profile = self._build_shell_body_profile(shell_slot)
@@ -3048,7 +3136,7 @@ class EndogenousDriveEngine:
             proposal_drift_memory=proposal_drift_memory,
         )
         cognitive_posture = self.resolve_cognitive_posture_state(
-            activity_guards=activity_guards,
+            drive_input=drive_input,
             deliberation_dict=deliberation_dict,
         )
         grounding_focus = {
@@ -3199,8 +3287,8 @@ class EndogenousDriveEngine:
             "learning_backlog_titles": list(drive_context.get("learning_backlog_titles") or [])[:8],
             "body_improvement_backlog_titles": list(drive_context.get("body_improvement_backlog_titles") or [])[:8],
             "governance_backlog_tasks": list(drive_context.get("governance_backlog_tasks") or [])[:12],
-            "checks": dict(activity_guards.get("checks") or {}),
-            "idle_seconds": dict(activity_guards.get("idle_seconds") or {}),
+            "checks": dict(drive_input.get("checks") or {}),
+            "idle_seconds": dict(drive_input.get("idle_seconds") or {}),
             "shell_slot": shell_slot,
             "shell_body_profile": shell_body_profile,
         }
@@ -4176,11 +4264,11 @@ class EndogenousDriveEngine:
             if isinstance(channel, dict) and str(channel.get("channel") or "").strip()
         ]
         summary = (
-            f"LM cognition status={status}; "
-            f"proposal drift={str(proposal_drift_memory.get('drift_state') or 'unknown').strip() or 'unknown'}."
+            f"LM 认知状态={status}；"
+            f"提案漂移={str(proposal_drift_memory.get('drift_state') or 'unknown').strip() or 'unknown'}。"
         )
         if error:
-            summary += f" Error={error}."
+            summary += f" 异常={error}。"
 
         def _texts(values: Any, *, limit: int = 4) -> List[str]:
             raw_values = [values] if isinstance(values, str) else list(values or [])
@@ -7818,11 +7906,16 @@ class EndogenousDriveEngine:
             return "recent"
         return "stale"
 
-    def _build_drive_context(self, activity_guards: Dict[str, Any]) -> Dict[str, Any]:
-        policy = dict(activity_guards.get("endogenous_drive_policy") or {})
-        drive_history = dict(activity_guards.get("drive_history") or {})
-        governance_backlog_tasks = list(activity_guards.get("governance_backlog_tasks") or [])
-        completed_learning_tasks = list(activity_guards.get("completed_learning_tasks") or [])
+    def _build_drive_context(self, drive_input: Dict[str, Any]) -> Dict[str, Any]:
+        policy = dict(drive_input.get("endogenous_drive_policy") or {})
+        drive_history = dict(drive_input.get("drive_history") or {})
+        governance_backlog_tasks = list(drive_input.get("governance_backlog_tasks") or [])
+        api_a_execution_lane_tasks = list(drive_input.get("api_a_execution_lane_tasks") or [])
+        autonomous_chain_live_tasks = list(
+            drive_input.get("autonomous_chain_live_tasks")
+            or [*governance_backlog_tasks, *api_a_execution_lane_tasks]
+        )
+        completed_learning_tasks = list(drive_input.get("completed_learning_tasks") or [])
 
         recent_learning_titles = [
             str(task.get("title") or "").strip()
@@ -7838,12 +7931,14 @@ class EndogenousDriveEngine:
         active_backlog_by_execution_kind: dict[str, int] = {}
         stale_backlog_count = 0
         pending_review_count = 0
+        api_a_ready_count = 0
+        api_a_running_count = 0
         now = datetime.now(timezone.utc)
 
         for title in recent_learning_titles:
             signatures.append(self._topic_signature(title))
 
-        for task in governance_backlog_tasks:
+        for task in autonomous_chain_live_tasks:
             title = str(task.get("title") or "").strip()
             if not title:
                 continue
@@ -7856,7 +7951,7 @@ class EndogenousDriveEngine:
                 signatures.append(self._topic_signature(title))
             if execution_kind == "body_improvement":
                 body_improvement_backlog_titles.append(title)
-            if status not in _TERMINAL_QUEUE_STATUSES:
+            if status not in _TERMINAL_QUEUE_STATUSES and task in governance_backlog_tasks:
                 active_backlog_tasks.append(task)
                 if governance_task_type:
                     active_backlog_by_governance[governance_task_type] = (
@@ -7876,6 +7971,13 @@ class EndogenousDriveEngine:
                 if updated_at is not None and now - updated_at >= timedelta(hours=24):
                     stale_backlog_count += 1
 
+        for task in api_a_execution_lane_tasks:
+            status = str(task.get("status") or "").strip().lower()
+            if status in {"approved", "retry"}:
+                api_a_ready_count += 1
+            elif status == "running":
+                api_a_running_count += 1
+
         return {
             "policy": policy,
             "drive_history": {
@@ -7894,6 +7996,8 @@ class EndogenousDriveEngine:
                 ),
             },
             "governance_backlog_tasks": governance_backlog_tasks,
+            "api_a_execution_lane_tasks": api_a_execution_lane_tasks,
+            "autonomous_chain_live_tasks": autonomous_chain_live_tasks,
             "completed_learning_tasks": completed_learning_tasks,
             "recent_learning_titles": recent_learning_titles,
             "learning_backlog_titles": learning_backlog_titles,
@@ -7905,6 +8009,8 @@ class EndogenousDriveEngine:
             "active_backlog_by_execution_kind": active_backlog_by_execution_kind,
             "stale_backlog_count": stale_backlog_count,
             "pending_review_count": pending_review_count,
+            "api_a_ready_count": api_a_ready_count,
+            "api_a_running_count": api_a_running_count,
         }
 
     @staticmethod
@@ -8163,8 +8269,8 @@ class EndogenousDriveEngine:
         penalty = 0.02 * max(total_active - 1, 0) + 0.03 * related
         return round(min(penalty, 0.28), 4)
 
-    def _memory_maintenance_urgency(self, activity_guards: Dict[str, Any]) -> float:
-        idle_seconds = dict(activity_guards.get("idle_seconds") or {})
+    def _memory_maintenance_urgency(self, drive_input: Dict[str, Any]) -> float:
+        idle_seconds = dict(drive_input.get("idle_seconds") or {})
         coverage = [
             self._clamp01(float(idle_seconds.get(name) or 0) / 900.0)
             for name in ("user", "agent", "memory")
@@ -8251,7 +8357,7 @@ class EndogenousDriveEngine:
         filtered: list[Dict[str, Any]] = []
         seen_signatures: list[set[str]] = []
         completed_learning_tasks = list(drive_context.get("completed_learning_tasks") or [])
-        governance_backlog_tasks = list(drive_context.get("governance_backlog_tasks") or [])
+        governance_backlog_tasks = list(drive_context.get("autonomous_chain_live_tasks") or [])
 
         for topic in topics:
             title = str(topic.get("title") or "").strip()
@@ -8561,9 +8667,9 @@ class EndogenousDriveEngine:
             governance = family
         return dict(decisions_by_governance.get(governance) or {})
 
-    def _calculate_learning_quality_score(self, activity_guards: Dict[str, Any]) -> float:
+    def _calculate_learning_quality_score(self, drive_input: Dict[str, Any]) -> float:
         try:
-            learning_tasks = activity_guards.get("completed_learning_tasks", [])
+            learning_tasks = drive_input.get("completed_learning_tasks", [])
             completed_count = len(learning_tasks)
             if completed_count == 0:
                 return 0.0
@@ -8599,9 +8705,9 @@ class EndogenousDriveEngine:
         except Exception:
             return 0.0
 
-    def _get_shell_slot_meta(self, activity_guards: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _get_shell_slot_meta(self, drive_input: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         try:
-            shell_slot = activity_guards.get("shell_slot")
+            shell_slot = drive_input.get("shell_slot")
             if shell_slot and isinstance(shell_slot, dict):
                 return shell_slot
         except Exception:

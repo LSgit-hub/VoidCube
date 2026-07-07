@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
 from systems.supervisor.autonomous_chain_contract import AUTONOMOUS_CHAIN_TASKS_ROUTE
+from VoidCube_cli.autonomous_events import append_autonomous_execution_event
 
 
 AUTONOMOUS_LEARNING_TASK_PREFIX = "[Autonomous Learning Task]"
@@ -133,11 +134,13 @@ class AutonomousExecutorRuntime:
         host: Any,
         *,
         push_cli_agent_scene: Callable[..., Any],
+        git_head_commit: Callable[[str], str],
         git_improvement_diff: Callable[[str, str], Optional[Dict[str, Any]]],
         cprint: Callable[[str], None],
     ) -> None:
         self.host = host
         self._push_cli_agent_scene = push_cli_agent_scene
+        self._git_head_commit = git_head_commit
         self._git_improvement_diff = git_improvement_diff
         self._cprint = cprint
 
@@ -190,11 +193,16 @@ class AutonomousExecutorRuntime:
         if task.get("_autonomous_execution_started"):
             return True
         try:
-            prompt = self.host._build_autonomous_task_prompt(task, execution_kind)
+            prompt = build_autonomous_task_prompt(
+                task,
+                execution_kind,
+                git_head_commit=self._git_head_commit,
+            )
             run_id = bind_autonomous_execution_start(task, prompt)
             self.host._current_autonomous_task_run_id = run_id
             self.host._pending_input.put(prompt)
-            self.host._append_autonomous_execution_event(
+            append_autonomous_execution_event(
+                self.host,
                 "恢复链路项的自主执行已重新起跑，等待模型响应" if recovered else "自主执行已起跑，等待模型响应",
                 tone="warn" if recovered else "info",
                 stage="autonomous_execution_started",
@@ -247,7 +255,8 @@ class AutonomousExecutorRuntime:
         )
         if writeback_ok:
             self._cprint(f"  ⏰  Autonomous {task_label} {task_id[:8]}... timed out ({int(elapsed)}s)")
-            self.host._append_autonomous_execution_event(
+            append_autonomous_execution_event(
+                self.host,
                 f"任务 {task_id[:8]} 超时，已回写 failed",
                 tone="error",
                 stage="writeback",
@@ -292,7 +301,8 @@ class AutonomousExecutorRuntime:
             urllib.request.urlopen(request, timeout=timeout)
             return True
         except Exception as exc:
-            self.host._append_autonomous_execution_event(
+            append_autonomous_execution_event(
+                self.host,
                 f"任务 {task_id[:8]} 回写 {decision} 失败，保留本地状态待重试",
                 tone="error",
                 stage="writeback_failed",
@@ -331,7 +341,8 @@ class AutonomousExecutorRuntime:
             gateway_base=gateway_base,
         )
         if ok:
-            self.host._append_autonomous_execution_event(
+            append_autonomous_execution_event(
+                self.host,
                 f"任务 {task_id[:8]} 已按中断回写 failed",
                 tone="warn",
                 stage="writeback",
@@ -346,7 +357,8 @@ class AutonomousExecutorRuntime:
             recovered_task = self.find_owned_running_task()
             if recovered_task is not None:
                 self.host._current_autonomous_task = recovered_task
-                self.host._append_autonomous_execution_event(
+                append_autonomous_execution_event(
+                    self.host,
                     f"认回运行中任务 {str(recovered_task.get('task_id') or '')[:8]}",
                     tone="warn",
                     stage="claim",
@@ -429,7 +441,8 @@ class AutonomousExecutorRuntime:
                     gateway_base=gateway_base,
                 )
                 if writeback_ok:
-                    self.host._append_autonomous_execution_event(
+                    append_autonomous_execution_event(
+                        self.host,
                         f"任务 {task_id[:8]} 已回写 {decision}",
                         tone="error" if decision == "failed" else "success",
                         stage="writeback",
@@ -512,7 +525,8 @@ class AutonomousExecutorRuntime:
         self.host._current_autonomous_task_started_at = time.time()
         self.host._current_autonomous_task_run_id = ""
         self.host._last_agent_turn_result = None
-        self.host._append_autonomous_execution_event(
+        append_autonomous_execution_event(
+            self.host,
             f"已接管任务 {task_id[:8]} · {title}",
             tone="success",
             stage="claim",
@@ -549,7 +563,8 @@ class AutonomousExecutorRuntime:
         if not self.inject_execution_prompt(self.host._current_autonomous_task, execution_kind):
             task_label = autonomous_task_label(execution_kind)
             self._cprint(f"  ⚠️  Autonomous {task_label} execution failed to start {task_id[:8]}...")
-            self.host._append_autonomous_execution_event(
+            append_autonomous_execution_event(
+                self.host,
                 f"任务 {task_id[:8]} 自主执行启动失败",
                 tone="error",
                 stage="autonomous_execution_start_failed",
@@ -585,7 +600,8 @@ class AutonomousExecutorRuntime:
             return
         diff = self._git_improvement_diff(worktree_path, baseline_head)
         if not diff or not diff.get("changed_files"):
-            self.host._append_autonomous_execution_event(
+            append_autonomous_execution_event(
+                self.host,
                 f"任务 {task_id[:8]} 未检测到替身提交，跳过改进报告",
                 tone="warn",
                 stage="improvement_report_skipped",
@@ -612,13 +628,15 @@ class AutonomousExecutorRuntime:
                 method="POST",
             )
             urllib.request.urlopen(request, timeout=15)
-            self.host._append_autonomous_execution_event(
+            append_autonomous_execution_event(
+                self.host,
                 f"任务 {task_id[:8]} 改进报告已提交（{len(diff['changed_files'])} 文件）",
                 tone="success",
                 stage="improvement_report",
             )
         except Exception:
-            self.host._append_autonomous_execution_event(
+            append_autonomous_execution_event(
+                self.host,
                 f"任务 {task_id[:8]} 改进报告提交失败",
                 tone="error",
                 stage="improvement_report_failed",

@@ -1314,17 +1314,17 @@ def _derive_governance_backlog_snapshot(packet: Dict[str, Any]) -> Dict[str, Any
         for item in list(packet.get("learning_backlog_titles") or [])[:5]
         if str(item).strip()
     ]
-    queued_body_titles = [
+    body_improvement_backlog_titles = [
         str(item).strip()
         for item in list(packet.get("body_improvement_backlog_titles") or [])[:4]
         if str(item).strip()
     ]
-    if not governance_backlog_tasks and not learning_backlog_titles and not queued_body_titles:
+    if not governance_backlog_tasks and not learning_backlog_titles and not body_improvement_backlog_titles:
         return {}
 
     backlog_count = len(governance_backlog_tasks)
     learning_count = len(learning_backlog_titles)
-    body_count = len(queued_body_titles)
+    body_count = len(body_improvement_backlog_titles)
     recent_titles = [
         str(item.get("title") or "").strip()
         for item in governance_backlog_tasks[:4]
@@ -1342,13 +1342,13 @@ def _derive_governance_backlog_snapshot(packet: Dict[str, Any]) -> Dict[str, Any
         "recent_titles": recent_titles,
         "recent_statuses": statuses,
         "summary": (
-            f"governance_backlog={backlog_count}; "
-            f"learning_backlog={learning_count}; "
-            f"body_improvement_backlog={body_count}; "
-            f"recent_titles={', '.join(recent_titles[:3]) or 'none'}."
+            f"治理在途={backlog_count}；"
+            f"学习在途={learning_count}；"
+            f"替身改进在途={body_count}；"
+            f"最近标题={', '.join(recent_titles[:3]) or '暂无'}。"
         ),
         "guidance": (
-            "Avoid proposing tasks that duplicate existing governance backlog unless the evidence clearly justifies a stronger replacement."
+            "除非证据足以明确支持更强替代项，否则不要提出与现有治理在途重复的任务。"
         ),
     }
 
@@ -1456,13 +1456,13 @@ def _derive_grounding_focus(packet: Dict[str, Any]) -> Dict[str, Any]:
         "grounding_gaps": grounding_gaps[:6],
         "weak_or_missing_channels": weak_or_missing_channels,
         "summary": (
-            f"Primary evidence={', '.join(primary_evidence_nodes[:3]) or 'none'}; "
-            f"primary agenda={', '.join(primary_agenda_nodes[:3]) or 'none'}; "
-            f"gaps={', '.join(grounding_gaps[:4]) or 'none'}."
+            f"主证据={', '.join(primary_evidence_nodes[:3]) or '暂无'}；"
+            f"主议程={', '.join(primary_agenda_nodes[:3]) or '暂无'}；"
+            f"缺口={', '.join(grounding_gaps[:4]) or '暂无'}。"
         ),
         "guidance": (
-            "Bind proposals to primary evidence and agenda nodes first; "
-            "treat contradictions and grounding gaps as priority repair signals."
+            "优先把提案绑定到主证据节点与主议程节点；"
+            "把矛盾与 grounding 缺口视为优先修补信号。"
         ),
     }
 

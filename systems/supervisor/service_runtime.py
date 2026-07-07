@@ -17,7 +17,7 @@ class ServiceRuntimeState:
     started: bool = False
     autonomous_chain_gate_active: bool = False
     structured_maintenance_task: Optional[asyncio.Task[Any]] = None
-    # Scheduling visibility for the web UI countdown
+    # Observation cadence timestamps for API-B read-only monitoring
     last_review_at: Optional[datetime] = None
     next_review_at: Optional[datetime] = None
     last_drive_at: Optional[datetime] = None

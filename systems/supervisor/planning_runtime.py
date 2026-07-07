@@ -1209,6 +1209,58 @@ class PlanningRuntimeMixin:
             return 0.0
         return max(0.0, min(1.0, numeric))
 
+    @staticmethod
+    def _project_drive_input_snapshot(activity_guards: Dict[str, Any]) -> Dict[str, Any]:
+        return dict(activity_guards or {})
+
+    async def _resolve_runtime_drive_input_request(
+        self,
+        request: Dict[str, Any],
+        *,
+        default_task_family: Optional[str] = None,
+        default_execution_kind: Optional[str] = None,
+        include_gate_default: bool = False,
+    ) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        request = dict(request or {})
+        requested_drive_input = dict(request.get("drive_input") or {})
+        if requested_drive_input:
+            drive_input = dict(requested_drive_input)
+            if default_task_family is not None:
+                drive_input.setdefault("task_family", default_task_family)
+            if default_execution_kind is not None:
+                drive_input.setdefault("execution_kind", default_execution_kind)
+            if include_gate_default:
+                drive_input.setdefault(
+                    "autonomous_chain_gate_active",
+                    getattr(
+                        getattr(self, "_service_runtime", None),
+                        "autonomous_chain_gate_active",
+                        False,
+                    ),
+                )
+            activity_guards = dict(request.get("activity_guards") or {})
+            merged_activity_guards = dict(activity_guards)
+            merged_activity_guards.update(drive_input)
+            return merged_activity_guards, drive_input
+
+        activity_guard_request = dict(request.get("activity_guards") or {})
+        if default_task_family is not None:
+            activity_guard_request.setdefault("task_family", default_task_family)
+        if default_execution_kind is not None:
+            activity_guard_request.setdefault("execution_kind", default_execution_kind)
+        if include_gate_default:
+            activity_guard_request.setdefault(
+                "autonomous_chain_gate_active",
+                getattr(
+                    getattr(self, "_service_runtime", None),
+                    "autonomous_chain_gate_active",
+                    False,
+                ),
+            )
+        activity_guards = await self.evaluate_activity_guards(activity_guard_request)
+        drive_input = self._project_drive_input_snapshot(activity_guards)
+        return activity_guards, drive_input
+
     def _build_endogenous_cognition_state(
         self,
         *,
@@ -4096,10 +4148,12 @@ class PlanningRuntimeMixin:
         *,
         deliberation: Dict[str, Any],
         activity_guards: Dict[str, Any],
+        drive_input: Optional[Dict[str, Any]] = None,
         candidate_items: list[Dict[str, Any]],
     ) -> list[Dict[str, Any]]:
         if not candidate_items:
             return []
+        drive_input = dict(drive_input or activity_guards or {})
 
         history = self._load_endogenous_drive_history()
         evaluation_id = str(uuid.uuid4())
@@ -4264,6 +4318,14 @@ class PlanningRuntimeMixin:
                         "governance_backlog_count": dict(deliberation.get("perception") or {}).get("governance_backlog_count"),
                         "autonomous_chain_gate_active": bool(activity_guards.get("autonomous_chain_gate_active")),
                     },
+                    "drive_input_context": {
+                        "user_mode": dict(deliberation.get("perception") or {}).get("user_mode"),
+                        "system_posture": dict(deliberation.get("perception") or {}).get("system_posture"),
+                        "active_sessions": dict(deliberation.get("perception") or {}).get("active_sessions"),
+                        "correction_signals": dict(deliberation.get("perception") or {}).get("correction_signals"),
+                        "governance_backlog_count": dict(deliberation.get("perception") or {}).get("governance_backlog_count"),
+                        "autonomous_chain_gate_active": bool(drive_input.get("autonomous_chain_gate_active")),
+                    },
                 }
             )
 
@@ -4290,6 +4352,7 @@ class PlanningRuntimeMixin:
         *,
         deliberation: Dict[str, Any],
         activity_guards: Dict[str, Any],
+        drive_input: Optional[Dict[str, Any]] = None,
         governance_channels: Dict[str, Any],
         self_regulation: Dict[str, Any],
         candidate_items: list[Dict[str, Any]],
@@ -4302,6 +4365,7 @@ class PlanningRuntimeMixin:
             annotated_items = self._annotate_endogenous_drive_candidates(
                 deliberation=deliberation,
                 activity_guards=activity_guards,
+                drive_input=drive_input,
                 candidate_items=candidate_items,
             )
             governance_event_stream = self._record_endogenous_governance_events(
@@ -5074,42 +5138,68 @@ class PlanningRuntimeMixin:
         rows.sort(key=lambda item: item[0], reverse=True)
         return [payload for _, payload in rows[: max(0, limit)]]
 
+    def _is_api_a_execution_lane_task_record(self, task: AutonomousChainTask) -> bool:
+        status = str(task.status or "").strip().lower()
+        return self._is_agent_pull_task(task) and status in {"approved", "running", "retry"}
+
+    def _autonomous_chain_task_summary_payload(
+        self,
+        task: AutonomousChainTask,
+    ) -> Dict[str, Any]:
+        return {
+            "task_id": task.task_id,
+            "title": task.title,
+            "status": str(task.status),
+            "governance_task_type": self._task_governance_type(task),
+            "task_family": self._task_runtime_family(task),
+            "execution_kind": self._task_execution_kind(task),
+            "created_at": (
+                task.created_at.isoformat()
+                if isinstance(getattr(task, "created_at", None), datetime)
+                else str(getattr(task, "created_at", "") or "")
+            ),
+            "updated_at": (
+                task.updated_at.isoformat()
+                if isinstance(getattr(task, "updated_at", None), datetime)
+                else str(getattr(task, "updated_at", "") or "")
+            ),
+            "constraints": dict(task.constraints or {}),
+            "evidence": {
+                "learning_quality_score": dict(task.evidence or {}).get("learning_quality_score"),
+                "recent_learning_topics": dict(task.evidence or {}).get("recent_learning_topics"),
+                "source": dict(task.evidence or {}).get("source"),
+            },
+            "metadata": {
+                "endogenous_drive_key": dict(task.metadata or {}).get("endogenous_drive_key"),
+                "learning_branch": dict(task.metadata or {}).get("learning_branch"),
+                "self_learning_mode": dict(task.metadata or {}).get("self_learning_mode"),
+                "quality_score": dict(task.metadata or {}).get("quality_score"),
+            },
+        }
+
     def _governance_backlog_task_summaries(self, limit: int = 20) -> list[Dict[str, Any]]:
         rows: list[tuple[str, Dict[str, Any]]] = []
         for task in self._autonomous_chain_store.list_governance_backlog_tasks():
+            if self._is_api_a_execution_lane_task_record(task):
+                continue
             rows.append(
                 (
                     str(getattr(task, "updated_at", None) or getattr(task, "created_at", None) or ""),
-                    {
-                        "task_id": task.task_id,
-                        "title": task.title,
-                        "status": str(task.status),
-                        "governance_task_type": self._task_governance_type(task),
-                        "task_family": self._task_runtime_family(task),
-                        "execution_kind": self._task_execution_kind(task),
-                        "created_at": (
-                            task.created_at.isoformat()
-                            if isinstance(getattr(task, "created_at", None), datetime)
-                            else str(getattr(task, "created_at", "") or "")
-                        ),
-                        "updated_at": (
-                            task.updated_at.isoformat()
-                            if isinstance(getattr(task, "updated_at", None), datetime)
-                            else str(getattr(task, "updated_at", "") or "")
-                        ),
-                        "constraints": dict(task.constraints or {}),
-                        "evidence": {
-                            "learning_quality_score": dict(task.evidence or {}).get("learning_quality_score"),
-                            "recent_learning_topics": dict(task.evidence or {}).get("recent_learning_topics"),
-                            "source": dict(task.evidence or {}).get("source"),
-                        },
-                        "metadata": {
-                            "endogenous_drive_key": dict(task.metadata or {}).get("endogenous_drive_key"),
-                            "learning_branch": dict(task.metadata or {}).get("learning_branch"),
-                            "self_learning_mode": dict(task.metadata or {}).get("self_learning_mode"),
-                            "quality_score": dict(task.metadata or {}).get("quality_score"),
-                        },
-                    },
+                    self._autonomous_chain_task_summary_payload(task),
+                )
+            )
+        rows.sort(key=lambda item: item[0], reverse=True)
+        return [payload for _, payload in rows[: max(0, limit)]]
+
+    def _api_a_execution_lane_task_summaries(self, limit: int = 20) -> list[Dict[str, Any]]:
+        rows: list[tuple[str, Dict[str, Any]]] = []
+        for task in self._autonomous_chain_store.list_api_a_execution_lane_tasks():
+            if not self._is_agent_pull_task(task):
+                continue
+            rows.append(
+                (
+                    str(getattr(task, "updated_at", None) or getattr(task, "created_at", None) or ""),
+                    self._autonomous_chain_task_summary_payload(task),
                 )
             )
         rows.sort(key=lambda item: item[0], reverse=True)
@@ -5178,6 +5268,62 @@ class PlanningRuntimeMixin:
             "status": "ok",
             "gateway_address": self.config.execution.gateway_address,
             "activity": snapshot,
+        }
+
+    def _project_runtime_observation_input(
+        self,
+        payload: dict | None,
+        *,
+        snapshot_source: str = "live",
+    ) -> dict:
+        raw = dict(payload or {})
+        activity = dict(raw.get("activity") or {})
+        counts = dict(activity.get("counts") or {})
+        recent_metadata = dict(activity.get("recent_metadata") or {})
+        active_sessions_raw = raw.get("active_sessions")
+        if active_sessions_raw is None:
+            active_sessions_raw = activity.get("active_sessions")
+        try:
+            active_sessions = max(0, int(active_sessions_raw or 0))
+        except (TypeError, ValueError):
+            active_sessions = 0
+
+        user_chain_signal = dict(raw.get("user_chain_signal") or {})
+        quiet_after_raw = user_chain_signal.get("quiet_after_seconds")
+        try:
+            quiet_after_seconds = max(0, int(quiet_after_raw or 600))
+        except (TypeError, ValueError):
+            quiet_after_seconds = 600
+
+        user_chain_signal["scope"] = (
+            str(user_chain_signal.get("scope") or "soft_signal_only").strip()
+            or "soft_signal_only"
+        )
+        user_chain_signal["active_sessions"] = active_sessions
+        user_chain_signal["quiet_after_seconds"] = quiet_after_seconds
+        if "is_quiet" not in user_chain_signal:
+            user_chain_signal["is_quiet"] = active_sessions <= 0
+
+        activity["active_sessions"] = active_sessions
+        activity["counts"] = counts
+        activity["recent_metadata"] = recent_metadata
+
+        return {
+            "activity": activity,
+            "user_chain_signal": user_chain_signal,
+            "snapshot_source": str(snapshot_source or "live").strip() or "live",
+        }
+
+    async def get_runtime_observation_input(self):
+        payload = await self.evaluate_activity_guards({})
+        observation_input = self._project_runtime_observation_input(
+            payload,
+            snapshot_source="live",
+        )
+        return {
+            "status": "ok",
+            "gateway_address": self.config.execution.gateway_address,
+            "observation_input": observation_input,
         }
 
     async def evaluate_activity_guards(self, request: dict | None = None):
@@ -5483,16 +5629,21 @@ class PlanningRuntimeMixin:
         """Evaluate the endogenous cognition state and governance-backlog projections."""
 
         request = request or {}
-        activity_guard_request = dict(request.get("activity_guards") or {})
-        activity_guard_request.setdefault(
-            "autonomous_chain_gate_active",
-            getattr(getattr(self, "_service_runtime", None), "autonomous_chain_gate_active", False),
-        )
         record_activity = bool(request.get("record_activity", True))
         persist_evaluation = bool(request.get("persist_evaluation", True))
-        activity_guards = await self.evaluate_activity_guards(activity_guard_request)
+        activity_guards, drive_input = await self._resolve_runtime_drive_input_request(
+            request,
+            include_gate_default=True,
+        )
         persisted_self_regulation = self._load_endogenous_self_regulation()
-        activity_guards["governance_backlog_tasks"] = self._governance_backlog_task_summaries(limit=24)
+        governance_backlog_tasks = self._governance_backlog_task_summaries(limit=24)
+        api_a_execution_lane_tasks = self._api_a_execution_lane_task_summaries(limit=24)
+        activity_guards["governance_backlog_tasks"] = governance_backlog_tasks
+        activity_guards["api_a_execution_lane_tasks"] = api_a_execution_lane_tasks
+        activity_guards["autonomous_chain_live_tasks"] = [
+            *governance_backlog_tasks,
+            *api_a_execution_lane_tasks,
+        ]
         activity_guards["endogenous_drive_policy"] = {
             "learning_topic_cooldown_hours": int(
                 getattr(
@@ -5547,6 +5698,7 @@ class PlanningRuntimeMixin:
         activity_guards["drive_history"] = self._history_for_endogenous_drive(
             self._load_endogenous_drive_history()
         )
+        drive_input = self._project_drive_input_snapshot(activity_guards)
         self_regulation = dict(persisted_self_regulation)
         for key in (
             "dynamic_candidate_throttle_boost",
@@ -5594,11 +5746,11 @@ class PlanningRuntimeMixin:
                 return []
 
         deliberation = self._endogenous_drive_engine.build_deliberation_report(
-            activity_guards=activity_guards,
+            drive_input=drive_input,
         )
         deliberation_dict = deliberation.to_dict()
         candidates = self._endogenous_drive_engine.generate_candidates(
-            activity_guards=activity_guards,
+            drive_input=drive_input,
             existing_drive_keys=self._existing_endogenous_drive_keys(),
             max_candidates=max_candidates,
             deliberation_report=deliberation,
@@ -5657,11 +5809,11 @@ class PlanningRuntimeMixin:
             "dynamic_learning_expansion_suppression",
         )):
             deliberation = self._endogenous_drive_engine.build_deliberation_report(
-                activity_guards=activity_guards,
+                drive_input=drive_input,
             )
             deliberation_dict = deliberation.to_dict()
             candidates = self._endogenous_drive_engine.generate_candidates(
-                activity_guards=activity_guards,
+                drive_input=drive_input,
                 existing_drive_keys=self._existing_endogenous_drive_keys(),
                 max_candidates=max_candidates,
                 deliberation_report=deliberation,
@@ -5676,6 +5828,7 @@ class PlanningRuntimeMixin:
             persisted_evaluation = self._persist_endogenous_evaluation_for_candidates(
                 deliberation=deliberation_dict,
                 activity_guards=activity_guards,
+                drive_input=drive_input,
                 governance_channels=governance_channels,
                 self_regulation=combined_self_regulation,
                 candidate_items=candidate_items,
@@ -5714,6 +5867,7 @@ class PlanningRuntimeMixin:
             "enabled": self.config.service_runtime.endogenous_drive_enabled,
             "core_values": CORE_VALUES,
             "activity_guards": activity_guards,
+            "drive_input": drive_input,
             "deliberation": deliberation_dict,
             "candidates": candidate_items,
             "count": len(candidates),
@@ -6033,6 +6187,7 @@ class PlanningRuntimeMixin:
                 "planned": 0,
                 "tasks": [],
                 "activity_guards": evaluation.get("activity_guards"),
+                "drive_input": evaluation.get("drive_input"),
                 "drive_posture": drive_posture,
                 "governance_channels": governance_channels,
                 "governance_event_stream": governance_event_stream,
@@ -6045,6 +6200,7 @@ class PlanningRuntimeMixin:
         persisted_evaluation = self._persist_endogenous_evaluation_for_candidates(
             deliberation=dict(evaluation.get("deliberation") or {}),
             activity_guards=dict(evaluation.get("activity_guards") or {}),
+            drive_input=dict(evaluation.get("drive_input") or {}),
             governance_channels=governance_channels,
             self_regulation=dict(evaluation.get("self_regulation") or {}),
             candidate_items=candidate_items,
@@ -6104,6 +6260,7 @@ class PlanningRuntimeMixin:
             "planned": len(created_tasks),
             "tasks": created_tasks,
             "activity_guards": evaluation.get("activity_guards"),
+            "drive_input": evaluation.get("drive_input"),
             "drive_posture": drive_posture,
             "governance_channels": governance_channels,
             "governance_event_stream": governance_event_stream,
@@ -6138,9 +6295,11 @@ class PlanningRuntimeMixin:
         self,
         *,
         task: AutonomousChainTask,
-        activity_guards: Dict[str, Any],
+        drive_input: Optional[Dict[str, Any]] = None,
+        activity_guards: Optional[Dict[str, Any]] = None,
         autonomous_chain_gate_active: bool = False,
     ) -> tuple[str, str]:
+        drive_input = dict(drive_input or activity_guards or {})
         task_type = self._task_governance_type(task)
         task_family = self._task_runtime_family(task)
         if self._is_agent_pull_task(task):
@@ -6176,9 +6335,9 @@ class PlanningRuntimeMixin:
                 )
 
         decision = (
-            activity_guards.get("task_family_decisions", {}).get(task_family)
-            or activity_guards.get("governance_task_type_decisions", {}).get(task_type)
-            or activity_guards["decisions"]
+            drive_input.get("task_family_decisions", {}).get(task_family)
+            or drive_input.get("governance_task_type_decisions", {}).get(task_type)
+            or drive_input["decisions"]
         )
 
         if decision["eligible_for_execution"]:
@@ -6458,6 +6617,11 @@ class PlanningRuntimeMixin:
         if "governor_decision" in task.evidence:
             governor_decision["evidence_decision"] = task.evidence["governor_decision"]
 
+        drive_input_evidence = dict(
+            decision_context.get("drive_input")
+            or decision_context.get("activity_guards")
+            or {}
+        )
         return AutonomousChainExecutionRequest(
             task_id=task.task_id,
             trace_id=task.trace_id,
@@ -6479,13 +6643,25 @@ class PlanningRuntimeMixin:
                 or task.evidence.get("probe_report_ref")
                 or task.evidence.get("probe_report_path")
             ),
-            activity_guard_evidence=dict(decision_context.get("activity_guards") or {}),
+            drive_input_evidence=drive_input_evidence,
             governor_decision=governor_decision,
             rollback_plan=rollback_plan,
         )
 
     def _serialize_autonomous_chain_task(self, task: AutonomousChainTask) -> Dict[str, Any]:
         payload = task.model_dump(mode="json")
+        execution_request_payload = payload.get("execution_request")
+        if isinstance(execution_request_payload, dict):
+            drive_input_evidence = dict(
+                execution_request_payload.get("drive_input_evidence")
+                or execution_request_payload.get("activity_guard_evidence")
+                or {}
+            )
+            execution_request_payload["drive_input_evidence"] = dict(drive_input_evidence)
+            execution_request_payload["activity_guard_evidence"] = dict(
+                execution_request_payload.get("activity_guard_evidence") or drive_input_evidence
+            )
+            payload["execution_request"] = execution_request_payload
         runtime_profile = self._task_runtime_profile(task)
         execution = dict(task.metadata.get("execution_request") or {})
         payload["governance_task_type"] = (
@@ -6748,10 +6924,13 @@ class PlanningRuntimeMixin:
         self,
         tasks: list[AutonomousChainTask],
         *,
-        activity_guards: Dict[str, Any],
+        drive_input: Dict[str, Any],
+        activity_guards: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Dict[str, Any]]:
         if not tasks:
             return {}
+        drive_input = dict(drive_input or activity_guards or {})
+        activity_guards = dict(activity_guards or drive_input or {})
 
         try:
             from memai.model_config import resolve_mem_llm_client
@@ -6766,7 +6945,7 @@ class PlanningRuntimeMixin:
         prompt = (
             "你是 VoidCube 的监督者任务治理层。你的职责不是产出新任务，"
             "而是治理当前治理在途链路项。\n\n"
-            "请基于当前 activity_guards、治理在途快照和用户优先级，"
+            "请基于当前 drive_input、治理在途快照和用户优先级，"
             "为每个链路项给出一个结构化治理动作建议。你可以使用以下动作：\n"
             "- approve: 建议当前任务本轮放行\n"
             "- defer: 建议当前任务继续等待\n"
@@ -6790,7 +6969,7 @@ class PlanningRuntimeMixin:
             '    {"task_id": "...", "action": "approve|defer|cancel|pause|retire|merge|reprioritize", "reason": "...", "merge_into": "...", "priority": "..."}\n'
             "  ]\n"
             "}\n\n"
-            f"【activity_guards】\n{json.dumps(activity_guards, ensure_ascii=False, default=str)[:3000]}\n\n"
+            f"【drive_input】\n{json.dumps(drive_input, ensure_ascii=False, default=str)[:3000]}\n\n"
             f"【governance_backlog】\n{json.dumps(backlog_snapshot, ensure_ascii=False, default=str)[:5000]}"
         )
 
@@ -7011,20 +7190,23 @@ class PlanningRuntimeMixin:
         decision_context: Dict[str, Any] = {}
 
         if normalized is None or normalized == "auto":
-            activity_guard_request = dict(request.get("activity_guards") or {})
-            activity_guard_request.setdefault("task_family", self._task_runtime_family(task))
+            task_family = self._task_runtime_family(task)
             task_execution_kind = self._task_execution_kind(task)
-            if task_execution_kind is not None:
-                activity_guard_request.setdefault("execution_kind", task_execution_kind)
-            activity_guards = await self.evaluate_activity_guards(activity_guard_request)
+            activity_guards, drive_input = await self._resolve_runtime_drive_input_request(
+                request,
+                default_task_family=task_family,
+                default_execution_kind=task_execution_kind,
+            )
             normalized, auto_reason = self._build_autonomous_chain_auto_decision(
                 task=task,
+                drive_input=drive_input,
                 activity_guards=activity_guards,
                 autonomous_chain_gate_active=getattr(
                     getattr(self, "_service_runtime", None), "autonomous_chain_gate_active", False
                 ),
             )
             decision_context["activity_guards"] = activity_guards
+            decision_context["drive_input"] = drive_input
             reason = str(request.get("reason") or auto_reason)
         else:
             reason = str(request.get("reason") or f"Task marked as {normalized} by supervisor decision.")
@@ -7144,18 +7326,20 @@ class PlanningRuntimeMixin:
                 raise HTTPException(status_code=400, detail=f"Unsupported review status: {status}")
             normalized_statuses.append(normalized)
 
-        activity_guard_request = dict(request.get("activity_guards") or {})
-        activity_guards = await self.evaluate_activity_guards(activity_guard_request)
+        activity_guards, drive_input = await self._resolve_runtime_drive_input_request(request)
         requested_task_family = self._normalize_runtime_task_family(
-            activity_guard_request.get("execution_kind") or activity_guard_request.get("task_family")
+            request.get("execution_kind")
+            or request.get("task_family")
+            or drive_input.get("execution_kind")
+            or drive_input.get("task_family")
         )
         requested_governance_task_type = self._normalize_runtime_task_type(requested_task_family)
         review_decision = (
-            activity_guards.get("task_family_decisions", {}).get(requested_task_family)
-            or activity_guards.get("governance_task_type_decisions", {}).get(
+            drive_input.get("task_family_decisions", {}).get(requested_task_family)
+            or drive_input.get("governance_task_type_decisions", {}).get(
                 requested_governance_task_type
             )
-            or activity_guards["decisions"]
+            or drive_input["decisions"]
         )
         default_review_status = (
             "approved" if review_decision["eligible_for_execution"] else "deferred"
@@ -7170,6 +7354,7 @@ class PlanningRuntimeMixin:
 
         supervisor_review_actions = await self._review_task_governance_with_supervisor(
             candidate_tasks,
+            drive_input=drive_input,
             activity_guards=activity_guards,
         )
         reserved_schedule_tokens = self._build_schedule_conflict_index(
@@ -7180,23 +7365,28 @@ class PlanningRuntimeMixin:
         reviewed_statuses = []
         for task in candidate_tasks:
             task_activity_guards = activity_guards
+            task_drive_input = drive_input
             task_family = self._task_runtime_family(task)
-            if activity_guards.get("task_family") != task_family:
-                task_activity_guard_request = dict(activity_guard_request)
-                task_activity_guard_request["task_family"] = task_family
+            if drive_input.get("task_family") != task_family:
                 task_execution_kind = self._task_execution_kind(task)
-                task_activity_guard_request.pop("execution_kind", None)
-                if task_execution_kind is not None:
-                    task_activity_guard_request["execution_kind"] = task_execution_kind
-                task_activity_guards = await self.evaluate_activity_guards(task_activity_guard_request)
+                task_request = dict(request)
+                task_activity_guards, task_drive_input = await self._resolve_runtime_drive_input_request(
+                    task_request,
+                    default_task_family=task_family,
+                    default_execution_kind=task_execution_kind,
+                )
             target_status, default_reason = self._build_autonomous_chain_auto_decision(
                 task=task,
+                drive_input=task_drive_input,
                 activity_guards=task_activity_guards,
                 autonomous_chain_gate_active=getattr(
                     getattr(self, "_service_runtime", None), "autonomous_chain_gate_active", False
                 ),
             )
-            decision_context: Dict[str, Any] = {"activity_guards": task_activity_guards}
+            decision_context: Dict[str, Any] = {
+                "activity_guards": task_activity_guards,
+                "drive_input": task_drive_input,
+            }
             review_action = supervisor_review_actions.get(task.task_id)
             reprioritized = False
             if review_action:
@@ -7286,7 +7476,10 @@ class PlanningRuntimeMixin:
                             decision_id=decision_id,
                             actor=str(request.get("actor", "supervisor")),
                             reason=str(request.get("reason") or default_reason),
-                            decision_context={"activity_guards": task_activity_guards},
+                            decision_context={
+                                "activity_guards": task_activity_guards,
+                                "drive_input": task_drive_input,
+                            },
                         )
                     except ValueError:
                         updated = self._update_task_status(
@@ -7391,6 +7584,7 @@ class PlanningRuntimeMixin:
             "tasks": [self._serialize_autonomous_chain_task(task) for task in reviewed],
             "count": len(reviewed),
             "activity_guards": activity_guards,
+            "drive_input": drive_input,
         }
 
     async def submit_self_learning_conclusion(self, request: dict | None = None):

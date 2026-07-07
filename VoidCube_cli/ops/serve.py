@@ -382,7 +382,7 @@ def print_status(full: bool = False) -> None:
     """Print a formatted status table.
 
     When ``full=True``, also fetches supervisor/gateway data and displays
-    the rich execution dashboard with task countdowns and agent status.
+    the rich execution dashboard with autonomous-chain observation and agent status.
     """
     # Always show daemon status
     status = status_all()

@@ -158,39 +158,21 @@ def test_status_scene_bar_prefers_user_chat_lane(monkeypatch, capsys):
     assert "read_file" not in output
 
 
-def test_build_dashboard_uses_supervisor_execution_eligibility_without_local_window_gate(monkeypatch):
+def test_build_dashboard_reads_supervisor_observation_input_without_legacy_guard_shell(monkeypatch):
     monkeypatch.setattr(dashboard, "fetch_gateway_services", lambda: {"services": {}})
-    monkeypatch.setattr(
-        dashboard,
-        "fetch_gateway_activity",
-        lambda: {
-            "last_user_request_at": None,
-            "last_agent_work_at": None,
-            "last_memory_task_at": None,
-            "last_autonomous_chain_plan_at": None,
-            "last_autonomous_chain_execute_at": None,
-        },
-    )
     monkeypatch.setattr(
         dashboard,
         "fetch_supervisor_state",
         lambda: {
             "autonomous_observation": {
                 "runtime": {
-                    "activity_guards": {
-                        "checks": {},
-                        "idle_seconds": {},
-                        "thresholds": {
-                            "user_idle_seconds": 600,
-                            "memory_idle_seconds": 600,
-                            "workflow_idle_seconds": 600,
-                        },
-                        "user_chain_signal": {"scope": "soft_signal_only", "is_quiet": False},
+                    "user_chain_signal": {
+                        "scope": "soft_signal_only",
+                        "is_quiet": False,
+                        "active_sessions": 3,
+                        "quiet_after_seconds": 900,
                     },
-                    "eligibility": {
-                        "eligible_for_planning": True,
-                        "eligible_for_execution": True,
-                    },
+                    "snapshot_source": "live",
                 }
             }
         },
@@ -198,9 +180,13 @@ def test_build_dashboard_uses_supervisor_execution_eligibility_without_local_win
 
     built = dashboard.build_dashboard()
 
-    assert built["eligibility"]["can_execute"] is True
-    assert built["countdowns"]["autonomous_chain"]["display"] == "continuous"
-    assert built["autonomous_chain_policy"]["label"] == "continuous"
+    assert built["observation_input"]["headline"] == "API-B 判断输入"
+    assert built["observation_input"]["user_chain_quiet"] is False
+    assert built["observation_input"]["user_chain_state"] == "活跃软信号"
+    assert built["observation_input"]["active_sessions"] == 3
+    assert built["observation_input"]["quiet_after_seconds"] == 900
+    assert built["observation_input"]["snapshot_source"] == "live"
+    assert built["observation_input"]["scope"] == "soft_signal_only"
     assert built["chain"]["mode"] == "observation_unavailable"
 
 
@@ -208,22 +194,12 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
     monkeypatch.setattr(dashboard, "fetch_gateway_services", lambda: {"services": {}})
     monkeypatch.setattr(
         dashboard,
-        "fetch_gateway_activity",
-        lambda: {
-            "last_user_request_at": None,
-            "last_agent_work_at": None,
-            "last_memory_task_at": None,
-            "last_autonomous_chain_plan_at": None,
-            "last_autonomous_chain_execute_at": None,
-        },
-    )
-    monkeypatch.setattr(
-        dashboard,
         "fetch_supervisor_state",
         lambda: {
             "autonomous_observation": {
                 "counts": {
                     "api_b_backlog": 1,
+                    "api_a_running": 1,
                     "api_a_ready": 2,
                     "candidates": 3,
                     "writebacks": 1,
@@ -247,14 +223,16 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
                             "label": "API-B 判断",
                             "owner": "API-B",
                             "status": "active",
-                            "focus_task": {"title": "API-B 判断"},
+                            "status_label": "当前在途",
+                            "focus_task": {"title": "API-B 判断", "display_status": "当前在途"},
                         },
                         {
                             "key": "api_a_execution",
-                            "label": "API-A execution",
+                            "label": "API-A 待认领窗口",
                             "owner": "API-A",
                             "status": "ready",
-                            "focus_task": {"title": "API-A execution"},
+                            "status_label": "待认领",
+                            "focus_task": {"title": "API-A execution", "display_status": "待认领"},
                         },
                     ]
                 },
@@ -263,37 +241,37 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
                     "segments": [
                         {
                             "key": "api_b_backlog",
+                            "label": "治理在途投影",
+                            "owner": "API-B",
+                            "stage_label": "判断与治理",
                             "items": [{"title": "Governance backlog task", "display_status": "待审核"}],
                         },
                         {
                             "key": "api_a_ready",
+                            "label": "待认领窗口投影",
+                            "owner": "API-A",
+                            "stage_label": "执行前窗口",
                             "items": [{"title": "Autonomous ready task", "display_status": "待执行"}],
                         },
                         {
                             "key": "api_b_candidates",
+                            "label": "候选形成投影",
+                            "owner": "API-B",
+                            "stage_label": "刚形成",
                             "items": [{"title": "Candidate decision", "display_status": "候选形成"}],
                         },
                         {
                             "key": "mem_recent",
+                            "label": "写回回流投影",
+                            "owner": "Mem",
+                            "stage_label": "写回回流",
                             "items": [{"title": "Mem writeback", "display_status": "已观察到"}],
                         },
                     ],
                 },
                 "runtime": {
-                    "activity_guards": {
-                        "checks": {},
-                        "idle_seconds": {},
-                        "thresholds": {
-                            "user_idle_seconds": 600,
-                            "memory_idle_seconds": 600,
-                            "workflow_idle_seconds": 600,
-                        },
-                        "user_chain_signal": {"scope": "soft_signal_only", "is_quiet": True},
-                    },
-                    "eligibility": {
-                        "eligible_for_planning": True,
-                        "eligible_for_execution": False,
-                    },
+                    "user_chain_signal": {"scope": "soft_signal_only", "is_quiet": True},
+                    "snapshot_source": "cached",
                 },
             }
         },
@@ -307,13 +285,16 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
     assert built["chain"]["primary_focus"]["title"] == "API-B 判断"
     assert built["chain"]["hero_pills"][0]["text"] == "当前落点 · API-B 判断"
     assert built["chain"]["api_b_backlog"] == 1
+    assert built["chain"]["api_a_running"] == 1
     assert built["chain"]["api_a_ready"] == 2
     assert built["chain"]["candidates"] == 3
     assert built["chain"]["writebacks"] == 1
     assert built["chain"]["segments_headline"] == "自主闭环分段观察"
     assert built["chain"]["loop_stages"][0]["title"] == "API-B 判断"
-    assert built["chain"]["segments"][0]["label"] == "治理在途"
-    assert built["chain"]["segments"][1]["label"] == "待认领窗口"
+    assert built["chain"]["loop_stages"][0]["status"] == "当前在途"
+    assert built["chain"]["segments"][0]["label"] == "治理在途投影"
+    assert built["chain"]["segments"][0]["stage_label"] == "判断与治理"
+    assert built["chain"]["segments"][1]["label"] == "待认领窗口投影"
     assert built["chain"]["segments"][0]["title"] == "Governance backlog task"
 
 
@@ -321,46 +302,12 @@ def test_build_dashboard_does_not_fallback_to_gateway_recent_activity_projection
     monkeypatch.setattr(dashboard, "fetch_gateway_services", lambda: {"services": {}})
     monkeypatch.setattr(
         dashboard,
-        "fetch_gateway_activity",
-        lambda: {
-            "last_user_request_at": None,
-            "last_agent_work_at": None,
-            "last_memory_task_at": None,
-            "last_self_learning_activity_at": "2026-07-06T10:00:00",
-            "last_autonomous_chain_activity_at": "2026-07-06T10:05:00",
-            "last_autonomous_chain_plan_at": "2026-07-06T10:03:00",
-            "last_autonomous_chain_execute_at": "2026-07-06T10:05:00",
-            "last_memory_write_failure_at": None,
-            "recent_metadata": {
-                "autonomous_chain_execute": {
-                    "source_service": "executor",
-                    "task_family_label": "身体切换",
-                    "execution_kind_label": "身体切换",
-                    "task_identity": {
-                        "display_label": "身体切换",
-                        "summary": "替身切换验收 (身体切换)",
-                    },
-                }
-            },
-        },
-    )
-    monkeypatch.setattr(
-        dashboard,
         "fetch_supervisor_state",
         lambda: {
             "autonomous_observation": {
                 "runtime": {
-                    "activity_guards": {
-                        "thresholds": {
-                            "user_idle_seconds": 600,
-                            "memory_idle_seconds": 600,
-                            "workflow_idle_seconds": 600,
-                        }
-                    },
-                    "eligibility": {
-                        "eligible_for_planning": True,
-                        "eligible_for_execution": True,
-                    },
+                    "user_chain_signal": {"scope": "soft_signal_only", "is_quiet": True},
+                    "snapshot_source": "default",
                 }
             }
         },
@@ -373,22 +320,6 @@ def test_build_dashboard_does_not_fallback_to_gateway_recent_activity_projection
 
 def test_build_dashboard_prefers_supervisor_recent_activity_projection(monkeypatch):
     monkeypatch.setattr(dashboard, "fetch_gateway_services", lambda: {"services": {}})
-    monkeypatch.setattr(
-        dashboard,
-        "fetch_gateway_activity",
-        lambda: {
-            "last_autonomous_chain_execute_at": "2026-07-06T10:15:30",
-            "recent_metadata": {
-                "autonomous_chain_execute": {
-                    "source_service": "executor",
-                    "task_identity": {
-                        "display_label": "身体切换",
-                        "summary": "Gateway old summary",
-                    },
-                }
-            },
-        },
-    )
     monkeypatch.setattr(
         dashboard,
         "fetch_supervisor_state",
@@ -404,17 +335,8 @@ def test_build_dashboard_prefers_supervisor_recent_activity_projection(monkeypat
                     }
                 },
                 "runtime": {
-                    "activity_guards": {
-                        "thresholds": {
-                            "user_idle_seconds": 600,
-                            "memory_idle_seconds": 600,
-                            "workflow_idle_seconds": 600,
-                        }
-                    },
-                    "eligibility": {
-                        "eligible_for_planning": True,
-                        "eligible_for_execution": True,
-                    },
+                    "user_chain_signal": {"scope": "soft_signal_only", "is_quiet": True},
+                    "snapshot_source": "live",
                 },
             }
         },
@@ -428,7 +350,7 @@ def test_build_dashboard_prefers_supervisor_recent_activity_projection(monkeypat
     assert built["recent_activity"]["source_label"] == "API-B"
 
 
-def test_print_dashboard_uses_autonomous_chain_countdown_keys(monkeypatch, capsys):
+def test_print_dashboard_shows_api_b_observation_input(monkeypatch, capsys):
     monkeypatch.setattr(
         dashboard,
         "build_dashboard",
@@ -439,21 +361,16 @@ def test_print_dashboard_uses_autonomous_chain_countdown_keys(monkeypatch, capsy
                 "headline": "自主链路观测暂不可用",
                 "summary": "监督者尚未提供 API-B 主视角的自主链路读模型。",
             },
-            "countdowns": {
-                "user_chain_quiet": {"display": "10s", "met": False, "threshold_s": 600},
-                "agent_idle": {"display": "20s", "met": False, "threshold_s": 600},
-                "memory_idle": {"display": "30s", "met": False, "threshold_s": 600},
-                "autonomous_chain_plan_idle": {"display": "40s", "met": False, "threshold_s": 600},
-                "autonomous_chain_execute_idle": {"display": "50s", "met": False, "threshold_s": 600},
-                "autonomous_chain": {"display": "continuous", "scope": "soft_signal_only"},
+            "observation_input": {
+                "headline": "API-B 判断输入",
+                "user_chain_quiet": True,
+                "user_chain_state": "安静软信号",
+                "active_sessions": 0,
+                "quiet_after_seconds": 600,
+                "snapshot_source": "live",
+                "scope": "soft_signal_only",
+                "summary": "用户链路只作为 API-B 判断让路参考，不展示聊天内容。",
             },
-            "eligibility": {
-                "can_execute": False,
-                "eligible_for_planning": True,
-                "eligible_for_execution": False,
-            },
-            "next_review_cycle_display": "4m00s",
-            "autonomous_chain_policy": {"label": "continuous", "scope": "soft_signal_only"},
         },
     )
     monkeypatch.setattr(dashboard, "print_three_segment_status_bar", lambda: None)
@@ -461,8 +378,9 @@ def test_print_dashboard_uses_autonomous_chain_countdown_keys(monkeypatch, capsy
     dashboard.print_dashboard()
     output = capsys.readouterr().out
 
-    assert "规划空闲" in output and "40s" in output
-    assert "执行空闲" in output and "50s" in output
+    assert "API-B 判断输入" in output
+    assert "安静软信号" in output
+    assert "仅软感知用户链路" in output
 
 
 def test_print_dashboard_shows_chain_segments_headline(monkeypatch, capsys):
@@ -479,27 +397,23 @@ def test_print_dashboard_shows_chain_segments_headline(monkeypatch, capsys):
                 "primary_focus": {"title": "API-B 判断", "status": "当前在途"},
                 "hero_pills": [{"text": "当前落点 · API-B 判断"}],
                 "api_b_backlog": 1,
+                "api_a_running": 1,
                 "api_a_ready": 0,
                 "candidates": 2,
                 "writebacks": 0,
                 "loop_stages": [],
                 "segments": [],
             },
-            "countdowns": {
-                "user_chain_quiet": {"display": "10s", "met": False, "threshold_s": 600},
-                "agent_idle": {"display": "20s", "met": False, "threshold_s": 600},
-                "memory_idle": {"display": "30s", "met": False, "threshold_s": 600},
-                "autonomous_chain_plan_idle": {"display": "40s", "met": False, "threshold_s": 600},
-                "autonomous_chain_execute_idle": {"display": "50s", "met": False, "threshold_s": 600},
-                "autonomous_chain": {"display": "continuous", "scope": "soft_signal_only"},
+            "observation_input": {
+                "headline": "API-B 判断输入",
+                "user_chain_quiet": False,
+                "user_chain_state": "活跃软信号",
+                "active_sessions": 2,
+                "quiet_after_seconds": 600,
+                "snapshot_source": "cached",
+                "scope": "soft_signal_only",
+                "summary": "用户链路只作为 API-B 判断让路参考，不展示聊天内容。",
             },
-            "eligibility": {
-                "can_execute": False,
-                "eligible_for_planning": True,
-                "eligible_for_execution": False,
-            },
-            "next_review_cycle_display": "4m00s",
-            "autonomous_chain_policy": {"label": "continuous", "scope": "soft_signal_only"},
         },
     )
     monkeypatch.setattr(dashboard, "print_three_segment_status_bar", lambda: None)
@@ -508,6 +422,7 @@ def test_print_dashboard_shows_chain_segments_headline(monkeypatch, capsys):
     output = capsys.readouterr().out
 
     assert "自主闭环分段观察" in output
+    assert "执行中 1" in output
 
 
 def test_print_dashboard_shows_recent_autonomous_activity(monkeypatch, capsys):
@@ -524,6 +439,7 @@ def test_print_dashboard_shows_recent_autonomous_activity(monkeypatch, capsys):
                 "primary_focus": {"title": "API-B 判断", "status": "当前在途"},
                 "hero_pills": [{"text": "当前落点 · API-B 判断"}],
                 "api_b_backlog": 1,
+                "api_a_running": 0,
                 "api_a_ready": 0,
                 "candidates": 2,
                 "writebacks": 0,
@@ -536,21 +452,16 @@ def test_print_dashboard_shows_recent_autonomous_activity(monkeypatch, capsys):
                 "summary": "API-B 已更新 替身改进 的治理判断，并决定是否继续放行。",
                 "display_at": "10:15:30",
             },
-            "countdowns": {
-                "user_chain_quiet": {"display": "10s", "met": False, "threshold_s": 600},
-                "agent_idle": {"display": "20s", "met": False, "threshold_s": 600},
-                "memory_idle": {"display": "30s", "met": False, "threshold_s": 600},
-                "autonomous_chain_plan_idle": {"display": "40s", "met": False, "threshold_s": 600},
-                "autonomous_chain_execute_idle": {"display": "50s", "met": False, "threshold_s": 600},
-                "autonomous_chain": {"display": "continuous", "scope": "soft_signal_only"},
+            "observation_input": {
+                "headline": "API-B 判断输入",
+                "user_chain_quiet": True,
+                "user_chain_state": "安静软信号",
+                "active_sessions": 0,
+                "quiet_after_seconds": 600,
+                "snapshot_source": "live",
+                "scope": "soft_signal_only",
+                "summary": "用户链路只作为 API-B 判断让路参考，不展示聊天内容。",
             },
-            "eligibility": {
-                "can_execute": False,
-                "eligible_for_planning": True,
-                "eligible_for_execution": False,
-            },
-            "next_review_cycle_display": "4m00s",
-            "autonomous_chain_policy": {"label": "continuous", "scope": "soft_signal_only"},
         },
     )
     monkeypatch.setattr(dashboard, "print_three_segment_status_bar", lambda: None)

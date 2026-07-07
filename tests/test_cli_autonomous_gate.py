@@ -2,14 +2,25 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 from urllib.request import Request
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import cli as cli_module
 from cli import VoidcubeCLI
+from VoidCube_cli import autonomous_events as autonomous_events_module
+from VoidCube_cli import autonomous_executor as autonomous_executor_module
+from VoidCube_cli import autonomous_gate as autonomous_gate_module
+from VoidCube_cli import autonomous_panel as autonomous_panel_module
+from VoidCube_cli import autonomous_presence as autonomous_presence_module
+from VoidCube_cli import autonomous_status_host as autonomous_status_host_module
 from VoidCube_cli.autonomous_observation import format_supervisor_status_snapshot
-from VoidCube_cli.autonomous_status_host import format_gateway_agent_activity_snapshot
+from VoidCube_cli.autonomous_status_host import (
+    autonomous_observation_summary_sections,
+    format_gateway_agent_activity_snapshot,
+)
 
 
 class _FakeUrlopenResponse:
@@ -112,7 +123,7 @@ def test_cli_autonomous_gate_marks_learning_task_failed_after_agent_error(monkey
     monkeypatch.setattr("time.time", fake_time)
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    cli._poll_autonomous_workflow()
+    cli._autonomous_runtime().poll_workflow()
 
     assert requests[0]["url"].endswith("/v1/tasks/learn-1/decision")
     assert requests[0]["data"]["decision"] == "failed"
@@ -149,7 +160,7 @@ def test_cli_autonomous_gate_keeps_completed_task_when_writeback_fails(monkeypat
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr("cli._cprint", lambda *args, **kwargs: None)
 
-    cli._poll_autonomous_workflow()
+    cli._autonomous_runtime().poll_workflow()
 
     assert cli._current_autonomous_task is not None
     assert cli._current_autonomous_task["task_id"] == "learn-writeback-fail"
@@ -176,8 +187,8 @@ def test_cli_autonomous_execution_prompt_injection_binds_local_run_id():
     assert cli._current_autonomous_task_run_id == task["_autonomous_task_run_id"]
     assert task["_autonomous_execution_start_text"] == prompts[0]
     cli._current_autonomous_task = task
-    assert cli._autonomous_task_run_id_for_chat_message(prompts[0]) == task["_autonomous_task_run_id"]
-    assert cli._autonomous_task_run_id_for_chat_message("ordinary background chat") == ""
+    assert autonomous_executor_module.autonomous_task_run_id_for_message(task, prompts[0]) == task["_autonomous_task_run_id"]
+    assert autonomous_executor_module.autonomous_task_run_id_for_message(task, "ordinary background chat") == ""
 
 
 def test_cli_autonomous_gate_ignores_turn_result_from_different_run(monkeypatch):
@@ -209,7 +220,7 @@ def test_cli_autonomous_gate_ignores_turn_result_from_different_run(monkeypatch)
     monkeypatch.setattr("time.time", fake_time)
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    cli._poll_autonomous_workflow()
+    cli._autonomous_runtime().poll_workflow()
 
     assert calls == []
     assert cli._current_autonomous_task["task_id"] == "learn-current-run"
@@ -234,7 +245,7 @@ def test_cli_autonomous_gate_does_not_pull_new_task_while_current_task_is_runnin
     monkeypatch.setattr("time.time", fake_time)
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    cli._poll_autonomous_workflow()
+    cli._autonomous_runtime().poll_workflow()
 
     assert calls == []
     assert cli._current_autonomous_task["task_id"] == "learn-running"
@@ -267,7 +278,7 @@ def test_cli_auto_timeout_helper_reports_failed_and_clears_state(monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr("cli._cprint", lambda *args, **kwargs: None)
 
-    timed_out = cli._report_current_autonomous_task_timeout_if_needed(now=1802.0)
+    timed_out = cli._autonomous_runtime().report_current_task_timeout_if_needed(now=1802.0)
 
     assert timed_out is True
     assert requests[0]["url"].endswith("/v1/tasks/learn-timeout-live/decision")
@@ -322,7 +333,7 @@ def test_cli_autonomous_gate_pulls_body_improvement_tasks(monkeypatch):
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    cli._poll_autonomous_workflow()
+    cli._autonomous_runtime().poll_workflow()
 
     assert any("task_type=self_learning" in url for url in requested_urls)
     assert any("execution_kind=body_improvement" in url for url in requested_urls)
@@ -375,7 +386,7 @@ def test_cli_autonomous_gate_running_decision_records_owner_session(monkeypatch)
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    cli._poll_autonomous_workflow()
+    cli._autonomous_runtime().poll_workflow()
 
     run_request = next(item for item in requests if item["url"].endswith("/v1/tasks/learn-7/decision"))
     assert run_request["data"]["decision"] == "running"
@@ -426,7 +437,7 @@ def test_cli_autonomous_gate_learning_prompt_includes_shell_baseline_when_presen
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    cli._poll_autonomous_workflow()
+    cli._autonomous_runtime().poll_workflow()
 
     assert prompts
     assert "Learning branch: shell codebase baseline" in prompts[0]
@@ -471,7 +482,7 @@ def test_cli_autonomous_gate_learning_prompt_shows_exploratory_branch(monkeypatc
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    cli._poll_autonomous_workflow()
+    cli._autonomous_runtime().poll_workflow()
 
     assert prompts
     assert "Learning branch: exploratory" in prompts[0]
@@ -527,7 +538,7 @@ def test_cli_autonomous_gate_recovers_owned_running_task_before_completion_write
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    cli._poll_autonomous_workflow()
+    cli._autonomous_runtime().poll_workflow()
 
     complete_request = next(
         item for item in requests if item["url"].endswith("/v1/tasks/learn-restore-1/decision")
@@ -572,7 +583,7 @@ def test_cli_autonomous_gate_replays_recovered_running_task_prompt(monkeypatch):
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    cli._poll_autonomous_workflow()
+    cli._autonomous_runtime().poll_workflow()
 
     assert cli._current_autonomous_task is not None
     assert cli._current_autonomous_task["task_id"] == "learn-replay-1"
@@ -652,7 +663,12 @@ def test_auto_q_fast_path_marks_current_task_interrupted(monkeypatch):
     monkeypatch.setattr("cli._cprint", lambda *args, **kwargs: None)
     cli._record_supervisor_ui_activity_safe = lambda *args, **kwargs: None
 
-    assert cli._exit_autonomous_gate_fast() is True
+    assert autonomous_gate_module.exit_autonomous_gate_fast(
+        cli,
+        cprint=lambda *args, **kwargs: None,
+        interrupt_current_task_callback=cli._autonomous_runtime().interrupt_current_task,
+        push_cli_agent_scene_callback=autonomous_presence_module.push_cli_agent_scene,
+    ) is True
 
     decision_request = next(
         item for item in requests if item["url"].endswith("/v1/tasks/learn-autoq-1/decision")
@@ -694,7 +710,14 @@ def test_refresh_gateway_cli_presence_registers_session_and_scene(monkeypatch):
     )
     monkeypatch.setattr("time.monotonic", lambda: 100.0)
 
-    cli._refresh_gateway_cli_presence(force=True)
+    autonomous_presence_module.refresh_gateway_cli_presence(
+        cli,
+        force=True,
+        is_gateway_running=cli_module._is_gateway_running,
+        register_with_gateway=cli_module._register_with_gateway,
+        push_cli_agent_scene=cli_module._push_cli_agent_scene,
+        monotonic_time=time.monotonic,
+    )
 
     assert registrations == [("cli-session-keepalive", "api-a-model", "agnesai")]
     assert scenes == [("learning", "cli-session-keepalive", "learn-11", "self_learning", {"active": False, "foreground_count": 0, "background_count": 0, "total_count": 0, "counts_label": "0", "focus_task_id": "", "focus_tool": "", "focus_preview": "", "compact_preview": ""}, "supervisor_task")]
@@ -737,7 +760,14 @@ def test_refresh_gateway_cli_presence_keeps_user_turn_in_user_chat_lane_during_a
     )
     monkeypatch.setattr("time.monotonic", lambda: 100.0)
 
-    cli._refresh_gateway_cli_presence(force=True)
+    autonomous_presence_module.refresh_gateway_cli_presence(
+        cli,
+        force=True,
+        is_gateway_running=cli_module._is_gateway_running,
+        register_with_gateway=cli_module._register_with_gateway,
+        push_cli_agent_scene=cli_module._push_cli_agent_scene,
+        monotonic_time=time.monotonic,
+    )
 
     assert scenes == [
         {
@@ -776,7 +806,14 @@ def test_refresh_gateway_cli_presence_respects_refresh_interval(monkeypatch):
     monkeypatch.setattr("cli._push_cli_agent_scene", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not push scene")))
     monkeypatch.setattr("time.monotonic", lambda: 100.0)
 
-    cli._refresh_gateway_cli_presence()
+    autonomous_presence_module.refresh_gateway_cli_presence(
+        cli,
+        force=False,
+        is_gateway_running=cli_module._is_gateway_running,
+        register_with_gateway=cli_module._register_with_gateway,
+        push_cli_agent_scene=cli_module._push_cli_agent_scene,
+        monotonic_time=time.monotonic,
+    )
 
     assert cli._last_gateway_presence_refresh_at == 90.0
 
@@ -803,7 +840,14 @@ def test_refresh_gateway_cli_presence_retries_quickly_after_register_failure(mon
     )
     monkeypatch.setattr("time.monotonic", lambda: 100.0)
 
-    cli._refresh_gateway_cli_presence(force=True)
+    autonomous_presence_module.refresh_gateway_cli_presence(
+        cli,
+        force=True,
+        is_gateway_running=cli_module._is_gateway_running,
+        register_with_gateway=cli_module._register_with_gateway,
+        push_cli_agent_scene=cli_module._push_cli_agent_scene,
+        monotonic_time=time.monotonic,
+    )
 
     assert scenes == [("idle", "cli-session-keepalive", None, None, {"active": False, "foreground_count": 0, "background_count": 0, "total_count": 0, "counts_label": "0", "focus_task_id": "", "focus_tool": "", "focus_preview": "", "compact_preview": ""})]
     assert cli._last_gateway_presence_refresh_at == 72.0
@@ -823,8 +867,16 @@ def test_autonomous_panel_fragments_include_focus_task_and_recent_events(monkeyp
     cli._current_autonomous_task_started_at = 0.0
     cli._autonomous_execution_events = []
     cli._autonomous_last_supervisor_event_key = ""
-    cli._append_autonomous_execution_event("已接管任务 learn-panel-1", tone="success")
-    cli._append_autonomous_execution_event("工具启动: web_search", tone="info")
+    autonomous_events_module.append_autonomous_execution_event(
+        cli,
+        "已接管任务 learn-panel-1",
+        tone="success",
+    )
+    autonomous_events_module.append_autonomous_execution_event(
+        cli,
+        "工具启动: web_search",
+        tone="info",
+    )
 
     monkeypatch.setattr(VoidcubeCLI, "_get_tui_terminal_width", staticmethod(lambda default=(80, 24): 80))
     cli._supervisor_state_cache = {
@@ -846,7 +898,7 @@ def test_autonomous_panel_fragments_include_focus_task_and_recent_events(monkeyp
         }
     }
 
-    rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
     assert "API-A 自主执行面" in rendered
     assert "执行位: 当前执行位 正常" in rendered
@@ -879,7 +931,7 @@ def test_autonomous_panel_shows_stale_foreign_executor(monkeypatch):
         }
     }
 
-    rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
     assert "执行位: 他处执行位 " in rendered
     assert "已陈旧（静默 120s，场景 executing）" in rendered
@@ -941,7 +993,7 @@ def test_autonomous_panel_shows_no_api_a_executable_task_reason(monkeypatch):
         }
     }
 
-    rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
     assert "链路项: 当前没有被认领的自主链路项" in rendered
     assert "仍停留在 API-B 治理段" in rendered
@@ -1009,7 +1061,7 @@ def test_autonomous_panel_prefers_loop_focus_when_present(monkeypatch):
         }
     }
 
-    rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
     assert "状态: 已放行待认领" in rendered
     assert "Board approved task" in rendered
@@ -1074,7 +1126,7 @@ def test_autonomous_panel_shows_approved_task_waiting_for_claim(monkeypatch):
         }
     }
 
-    rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
     assert "状态: 已放行待认领" in rendered
     assert "Approved waiting task" in rendered
@@ -1130,7 +1182,7 @@ def test_autonomous_panel_prefers_loop_stage_descriptor_for_non_local_reasoning(
         }
     }
 
-    rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
     assert "状态: 已放行待认领" in rendered
     assert "Loop-stage driven task" in rendered
@@ -1196,7 +1248,7 @@ def test_autonomous_panel_shows_running_task_owned_elsewhere(monkeypatch):
         }
     }
 
-    rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
     assert "状态: 他处执行中" in rendered
     assert "Running elsewhere task" in rendered
@@ -1232,7 +1284,7 @@ def test_autonomous_panel_shows_claimed_task_waiting_to_start(monkeypatch):
         }
     }
 
-    rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
     assert "状态: 已认领待起跑" in rendered
     assert "Claimed not started task" in rendered
@@ -1276,7 +1328,7 @@ def test_autonomous_panel_shows_waiting_start_cause_after_autonomous_execution_s
         }
     }
 
-    rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
     assert "状态: 已认领待起跑" in rendered
     assert "近因: 自主执行已起跑，正在等待首个模型响应" in rendered
@@ -1315,7 +1367,7 @@ def test_autonomous_panel_shows_claimed_task_waiting_for_writeback(monkeypatch):
         }
     }
 
-    rendered = "\n".join(text for _, text in cli._build_autonomous_execution_panel_rows())
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
     assert "状态: 等待回写" in rendered
     assert "Writeback waiting task" in rendered
@@ -1339,8 +1391,8 @@ def test_sync_autonomous_supervisor_event_records_latest_timeline_once():
         ]
     }
 
-    cli._sync_autonomous_supervisor_event(state)
-    cli._sync_autonomous_supervisor_event(state)
+    autonomous_events_module.sync_autonomous_supervisor_event(cli, state)
+    autonomous_events_module.sync_autonomous_supervisor_event(cli, state)
 
     assert len(cli._autonomous_execution_events) == 1
     assert "监督者链路裁决: Approved learning task from supervisor." in cli._autonomous_execution_events[0]["message"]
@@ -1376,7 +1428,12 @@ def test_cli_force_quit_marks_body_improvement_task_interrupted(monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr("cli._cprint", fake_cprint)
 
-    result = cli._force_quit_autonomous_gate()
+    result = autonomous_gate_module.force_quit_autonomous_gate(
+        cli,
+        cprint=fake_cprint,
+        interrupt_current_task_callback=cli._autonomous_runtime().interrupt_current_task,
+        push_cli_agent_scene_callback=autonomous_presence_module.push_cli_agent_scene,
+    )
 
     assert result is True
     task_request = next(item for item in requests if item["url"].endswith("/v1/tasks/body-1/decision"))
@@ -1442,18 +1499,22 @@ def test_auto_command_marks_cli_agent_surface_active(monkeypatch):
         fake_push("executing", session_id=cli.session_id)
 
     monkeypatch.setattr("cli._cprint", fake_cprint)
-    monkeypatch.setattr("cli._push_cli_agent_scene", fake_push)
     monkeypatch.setattr("threading.Thread", _ImmediateThread)
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr(cli, "_trigger_autonomous_cycle", fake_cycle)
-    monkeypatch.setattr(cli, "_poll_autonomous_workflow", fake_poll)
-    monkeypatch.setattr(cli, "_refresh_gateway_cli_presence", fake_refresh_gateway_cli_presence)
+    monkeypatch.setattr(autonomous_gate_module, "trigger_autonomous_cycle", fake_cycle)
     monkeypatch.setattr(
         "VoidCube_cli.config.load_config",
         lambda: {"supervisor": {"host": "127.0.0.1", "port": 6002}},
     )
 
-    cli._handle_auto_command("/auto")
+    autonomous_gate_module.handle_auto_command(
+        cli,
+        "/auto",
+        cprint=fake_cprint,
+        poll_autonomous_workflow_callback=fake_poll,
+        refresh_gateway_cli_presence_callback=fake_refresh_gateway_cli_presence,
+        thread_factory=_ImmediateThread,
+    )
 
     assert cli._autonomous_gate_active is True
     assert presence_refreshes == [True]
@@ -1461,6 +1522,86 @@ def test_auto_command_marks_cli_agent_surface_active(monkeypatch):
     assert pushed[0]["session_id"] == "cli-session-auto"
     assert cycle_calls == [""]
     assert polled == [True]
+
+
+def test_auto_command_reads_cached_supervisor_snapshot_instead_of_sync_fetch(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._autonomous_gate_active = False
+    cli.session_id = "cli-session-auto-cache"
+    cli._supervisor_state_cache = {
+        "scene": "planning",
+        "title": "治理安排",
+        "autonomous_observation": {
+            "metrics": {"by_path": {}, "running_count": 0, "governance": {}},
+            "board": {"primary_focus": {"title": "复核治理在途卫生", "status": "当前在途"}},
+            "chain": {"segments": []},
+            "loop": {"stages": [], "recent_writebacks": []},
+            "counts": {},
+            "timeline": [],
+        },
+    }
+
+    printed = []
+    refresh_calls = []
+
+    def fake_cprint(*args, **kwargs):
+        del kwargs
+        printed.append(" ".join(str(arg) for arg in args))
+
+    class _ImmediateThread:
+        def __init__(self, target=None, **kwargs):
+            del kwargs
+            self._target = target
+
+        def start(self):
+            if self._target:
+                self._target()
+
+    def fake_urlopen(request, timeout=0):
+        del request, timeout
+        return _FakeUrlopenResponse(
+            {
+                "autonomous_chain_gate_active": True,
+                "drive_loop_running": True,
+                "review_loop_running": True,
+                "endogenous_drive_enabled": True,
+            }
+        )
+
+    monkeypatch.setattr("cli._cprint", fake_cprint)
+    monkeypatch.setattr("threading.Thread", _ImmediateThread)
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        autonomous_gate_module,
+        "trigger_autonomous_cycle",
+        lambda focus="": {"summary": {"planned": 0, "handed_off": 0}},
+    )
+    monkeypatch.setattr(
+        "VoidCube_cli.config.load_config",
+        lambda: {"supervisor": {"host": "127.0.0.1", "port": 6002}},
+    )
+    monkeypatch.setattr(
+        "VoidCube_cli.autonomous_gate.refresh_supervisor_status",
+        lambda host: refresh_calls.append(host),
+    )
+    monkeypatch.setattr(
+        "VoidCube_cli.autonomous_gate.fetch_supervisor_status_snapshot",
+        lambda host: (_ for _ in ()).throw(AssertionError("不应再同步读取 supervisor snapshot")),
+        raising=False,
+    )
+
+    autonomous_gate_module.handle_auto_command(
+        cli,
+        "/auto",
+        cprint=fake_cprint,
+        poll_autonomous_workflow_callback=lambda: None,
+        refresh_gateway_cli_presence_callback=lambda *, force=False: None,
+        thread_factory=_ImmediateThread,
+    )
+
+    assert refresh_calls == [cli]
+    assert any("闭环焦点: 复核治理在途卫生 (当前在途)" in line for line in printed)
+    assert not any("监督者快照将在后台刷新后进入观测面。" in line for line in printed)
 
 
 def test_autonomous_executor_session_is_persisted_before_agent_pull():
@@ -1482,7 +1623,7 @@ def test_autonomous_executor_session_is_persisted_before_agent_pull():
     db = _FakeSessionDB()
     cli._session_db = db
 
-    cli._ensure_autonomous_executor_session()
+    autonomous_gate_module.ensure_autonomous_executor_session(cli, logger_debug=lambda *args, **kwargs: None)
 
     assert db.created == [
         {
@@ -1498,7 +1639,7 @@ def test_current_cli_agent_role_stays_supervisor_task_while_autonomous_task_is_u
     cli._autonomous_gate_active = False
     cli._current_autonomous_task = {"task_id": "task-1"}
 
-    assert cli._current_cli_agent_role() == "supervisor_task"
+    assert autonomous_presence_module.current_cli_agent_role(cli) == "supervisor_task"
 
 
 def test_current_cli_agent_role_treats_autonomous_gate_without_task_as_user_chat():
@@ -1506,7 +1647,7 @@ def test_current_cli_agent_role_treats_autonomous_gate_without_task_as_user_chat
     cli._autonomous_gate_active = True
     cli._current_autonomous_task = None
 
-    assert cli._current_cli_agent_role() == "user_chat"
+    assert autonomous_presence_module.current_cli_agent_role(cli) == "user_chat"
 
 
 def test_process_command_allows_regular_slash_commands_while_autonomous_gate_active(monkeypatch):
@@ -1548,9 +1689,11 @@ def test_push_cli_agent_scene_includes_session_id(monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr("threading.Thread", _ImmediateThread)
 
-    from cli import _push_cli_agent_scene
-
-    _push_cli_agent_scene("learning", session_id="cli-session-2", task_id="learn-2")
+    autonomous_presence_module.push_cli_agent_scene(
+        "learning",
+        session_id="cli-session-2",
+        task_id="learn-2",
+    )
 
     assert requests[0]["url"].endswith("/admin/activity/touch")
     assert requests[0]["data"]["session_id"] == "cli-session-2"
@@ -1572,9 +1715,7 @@ def test_push_cli_agent_scene_includes_subagent_summary(monkeypatch):
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    from cli import _push_cli_agent_scene
-
-    _push_cli_agent_scene(
+    autonomous_presence_module.push_cli_agent_scene(
         "executing",
         session_id="cli-session-3",
         subagent_summary={
@@ -1599,7 +1740,6 @@ def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._autonomous_gate_active = False
     cli.session_id = "cli-session-auto-recover"
-    cli._append_autonomous_execution_event = lambda *args, **kwargs: None
 
     printed = []
     cycle_calls = []
@@ -1659,12 +1799,9 @@ def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
         fake_push("executing", session_id=cli.session_id)
 
     monkeypatch.setattr("cli._cprint", fake_cprint)
-    monkeypatch.setattr("cli._push_cli_agent_scene", fake_push)
     monkeypatch.setattr("threading.Thread", _ImmediateThread)
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr(cli, "_trigger_autonomous_cycle", fake_cycle)
-    monkeypatch.setattr(cli, "_poll_autonomous_workflow", fake_poll)
-    monkeypatch.setattr(cli, "_refresh_gateway_cli_presence", fake_refresh_gateway_cli_presence)
+    monkeypatch.setattr(autonomous_gate_module, "trigger_autonomous_cycle", fake_cycle)
     monkeypatch.setattr(
         "VoidCube_cli.config.load_config",
         lambda: {"supervisor": {"host": "127.0.0.1", "port": 6002}},
@@ -1676,7 +1813,14 @@ def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
         },
     )
 
-    cli._handle_auto_command("/auto")
+    autonomous_gate_module.handle_auto_command(
+        cli,
+        "/auto",
+        cprint=fake_cprint,
+        poll_autonomous_workflow_callback=fake_poll,
+        refresh_gateway_cli_presence_callback=fake_refresh_gateway_cli_presence,
+        thread_factory=_ImmediateThread,
+    )
 
     assert cli._autonomous_gate_active is True
     assert attempts["count"] >= 2
@@ -1704,7 +1848,7 @@ def test_cli_formats_supervisor_status_snapshot():
                 },
                 "board": {
                     "primary_focus": {
-                        "title": "复核治理积压卫生",
+                        "title": "复核治理在途卫生",
                         "status": "当前在途",
                     },
                 },
@@ -1716,7 +1860,7 @@ def test_cli_formats_supervisor_status_snapshot():
                             "owner": "API-B",
                             "status": "active",
                             "focus_task": {
-                                "title": "复核治理积压卫生",
+                                "title": "复核治理在途卫生",
                                 "display_status": "当前在途",
                             },
                         },
@@ -1753,7 +1897,7 @@ def test_cli_formats_supervisor_status_snapshot():
     assert any("场景: 治理安排" in line for line in lines)
     assert any("learning=2" in line and "evolution=3" in line for line in lines)
     assert any("裁定=2" in line and "建议=1" in line and "重排=1" in line for line in lines)
-    assert any("闭环焦点: 复核治理积压卫生 (当前在途)" in line for line in lines)
+    assert any("闭环焦点: 复核治理在途卫生 (当前在途)" in line for line in lines)
     assert any("闭环分段: 治理在途=1, 待认领窗口=2, 候选形成=3, 写回回流=1" in line for line in lines)
     assert any("执行焦点: 改进 shell 替身 (等待写回)" in line for line in lines)
     assert any("改进 shell 替身" in line for line in lines)
@@ -1778,3 +1922,107 @@ def test_cli_formats_gateway_agent_activity_snapshot():
 
     assert any("最近链路项: 改进 shell 替身 (替身改进)" in line for line in lines)
     assert any("来源=cli_agent" in line and "次数=3" in line and "task_id=body-1" in line for line in lines)
+
+
+def test_cli_autonomous_summary_sections_read_cached_observation_surfaces(monkeypatch):
+    host = type("_Host", (), {})()
+    host._supervisor_state_cache = {
+        "scene": "planning",
+        "title": "治理安排",
+        "summary": "正在梳理治理在途",
+        "autonomous_observation": {
+            "counts": {
+                "api_b_backlog": 1,
+                "api_a_ready": 1,
+                "candidates": 0,
+                "writebacks": 0,
+            },
+            "board": {
+                "primary_focus": {
+                    "title": "复核治理在途卫生",
+                    "status": "当前在途",
+                }
+            },
+            "loop": {
+                "stages": [],
+                "recent_writebacks": [],
+            },
+            "metrics": {
+                "chain_projection": {
+                    "api_a_running": 0,
+                    "body_improvement": 0,
+                },
+                "governance": {
+                    "review_actions": 0,
+                    "followup_suggestions": 0,
+                    "priority_adjustments": 0,
+                },
+            },
+            "timeline": [],
+        },
+    }
+    host._autonomous_gateway_activity_cache = {
+        "last_agent_work_at": "2026-06-26T10:00:00",
+        "agent_work_count": 2,
+        "agent_work": {
+            "source_service": "cli_agent",
+            "task_identity": {
+                "task_id": "learn-1",
+                "summary": "学习替身基线",
+            },
+        },
+    }
+    host._supervisor_state_refreshing = False
+    host._autonomous_gateway_activity_refreshing = False
+
+    refresh_calls = []
+    monkeypatch.setattr(
+        autonomous_status_host_module,
+        "refresh_supervisor_status",
+        lambda current_host: refresh_calls.append(("supervisor", current_host)),
+    )
+    monkeypatch.setattr(
+        autonomous_status_host_module,
+        "refresh_gateway_agent_activity_snapshot",
+        lambda current_host: refresh_calls.append(("gateway_activity", current_host)),
+    )
+    monkeypatch.setattr(
+        autonomous_status_host_module,
+        "fetch_supervisor_status_snapshot",
+        lambda current_host: (_ for _ in ()).throw(AssertionError("不应再走同步 supervisor snapshot")),
+    )
+    monkeypatch.setattr(
+        autonomous_status_host_module,
+        "fetch_gateway_agent_activity_snapshot",
+        lambda current_host: (_ for _ in ()).throw(AssertionError("不应再走同步 gateway activity snapshot")),
+    )
+
+    lines = autonomous_observation_summary_sections(host)
+
+    assert refresh_calls == [("supervisor", host), ("gateway_activity", host)]
+    assert any("监督者快照:" == line for line in lines)
+    assert any("闭环焦点: 复核治理在途卫生 (当前在途)" in line for line in lines)
+    assert any("网关执行活动:" == line for line in lines)
+    assert any("最近链路项: 学习替身基线" in line for line in lines)
+
+
+def test_cli_autonomous_summary_sections_show_refreshing_hint_when_cache_empty(monkeypatch):
+    host = type("_Host", (), {})()
+    host._supervisor_state_cache = {}
+    host._autonomous_gateway_activity_cache = {}
+    host._supervisor_state_refreshing = True
+    host._autonomous_gateway_activity_refreshing = True
+
+    monkeypatch.setattr(autonomous_status_host_module, "refresh_supervisor_status", lambda current_host: None)
+    monkeypatch.setattr(
+        autonomous_status_host_module,
+        "refresh_gateway_agent_activity_snapshot",
+        lambda current_host: None,
+    )
+
+    lines = autonomous_observation_summary_sections(host)
+
+    assert any("监督者快照:" == line for line in lines)
+    assert any("后台刷新中，稍后会回到当前自主闭环快照。" in line for line in lines)
+    assert any("网关执行活动:" == line for line in lines)
+    assert any("后台刷新中，稍后会回到最近 API-A 执行回报。" in line for line in lines)
