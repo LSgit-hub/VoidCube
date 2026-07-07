@@ -1214,13 +1214,27 @@ class PlanningRuntimeMixin:
         return dict(source_payload or {})
 
     @staticmethod
-    def _build_legacy_activity_guards_snapshot(
+    def _build_compat_activity_guards_snapshot(
         drive_input: Optional[Dict[str, Any]] = None,
         legacy_activity_guards: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         compat = dict(legacy_activity_guards or {})
         compat.update(dict(drive_input or {}))
         return compat
+
+    @staticmethod
+    def _has_explicit_legacy_activity_guards_request(request: Optional[Dict[str, Any]] = None) -> bool:
+        request = dict(request or {})
+        return bool(dict(request.get("activity_guards") or {}))
+
+    def _should_expose_legacy_activity_guards_response(
+        self,
+        request: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        request = dict(request or {})
+        return self._has_explicit_legacy_activity_guards_request(request) or not bool(
+            request.get("drive_input")
+        )
 
     def _normalize_runtime_decision_context(
         self,
@@ -1255,7 +1269,7 @@ class PlanningRuntimeMixin:
         if effective_drive_input:
             normalized["drive_input"] = effective_drive_input
         if explicit_legacy_activity_guards:
-            normalized["activity_guards"] = self._build_legacy_activity_guards_snapshot(
+            normalized["activity_guards"] = self._build_compat_activity_guards_snapshot(
                 effective_drive_input,
                 explicit_legacy_activity_guards,
             )
@@ -1265,41 +1279,57 @@ class PlanningRuntimeMixin:
         self,
         drive_input: Optional[Dict[str, Any]] = None,
         legacy_activity_guards: Optional[Dict[str, Any]] = None,
+        *,
+        include_legacy_activity_guards: bool = False,
     ) -> Dict[str, Dict[str, Any]]:
         normalized = self._normalize_runtime_decision_context(
             drive_input=drive_input,
             legacy_activity_guards=legacy_activity_guards,
         )
         response_drive_input = dict(normalized.get("drive_input") or {})
-        response_legacy_activity_guards = self._build_legacy_activity_guards_snapshot(
+        response_legacy_activity_guards = self._build_compat_activity_guards_snapshot(
             response_drive_input,
             legacy_activity_guards,
         )
         fields: Dict[str, Dict[str, Any]] = {
             "drive_input": response_drive_input,
         }
-        if legacy_activity_guards:
+        if include_legacy_activity_guards and legacy_activity_guards:
             fields["activity_guards"] = response_legacy_activity_guards
         return fields
 
     def _drive_input_fields_from_evaluation(
         self,
         evaluation: Optional[Dict[str, Any]] = None,
+        *,
+        include_legacy_activity_guards: bool = False,
     ) -> Dict[str, Dict[str, Any]]:
         evaluation = dict(evaluation or {})
         return self._build_drive_input_response_fields(
             drive_input=dict(evaluation.get("drive_input") or {}),
-            legacy_activity_guards=dict(evaluation.get("activity_guards") or {}),
+            legacy_activity_guards=(
+                dict(evaluation.get("activity_guards") or {})
+                if include_legacy_activity_guards
+                else {}
+            ),
+            include_legacy_activity_guards=include_legacy_activity_guards,
         )
 
     def _drive_input_fields_from_decision_context(
         self,
         decision_context: Optional[Dict[str, Any]] = None,
+        *,
+        include_legacy_activity_guards: bool = False,
     ) -> Dict[str, Dict[str, Any]]:
         decision_context = dict(decision_context or {})
         return self._build_drive_input_response_fields(
             drive_input=dict(decision_context.get("drive_input") or {}),
-            legacy_activity_guards=dict(decision_context.get("activity_guards") or {}),
+            legacy_activity_guards=(
+                dict(decision_context.get("activity_guards") or {})
+                if include_legacy_activity_guards
+                else {}
+            ),
+            include_legacy_activity_guards=include_legacy_activity_guards,
         )
 
     @staticmethod
@@ -1357,6 +1387,9 @@ class PlanningRuntimeMixin:
             return legacy_activity_guards, drive_input
 
         legacy_activity_guard_request = dict(request.get("activity_guards") or {})
+        explicit_legacy_activity_guard_request = self._has_explicit_legacy_activity_guards_request(
+            request
+        )
         if default_task_family is not None:
             legacy_activity_guard_request.setdefault("task_family", default_task_family)
         if default_execution_kind is not None:
@@ -1375,6 +1408,9 @@ class PlanningRuntimeMixin:
                     False,
                 ),
             )
+        if explicit_legacy_activity_guard_request:
+            drive_input = self._project_drive_input_snapshot(legacy_activity_guard_request)
+            return legacy_activity_guard_request, drive_input
         legacy_activity_guards = await self.evaluate_activity_guards(
             legacy_activity_guard_request
         )
@@ -4274,9 +4310,10 @@ class PlanningRuntimeMixin:
         if not candidate_items:
             return []
         drive_input = dict(drive_input or legacy_activity_guards or {})
-        legacy_activity_guards = self._build_legacy_activity_guards_snapshot(
-            drive_input,
-            legacy_activity_guards,
+        explicit_legacy_activity_guards = (
+            dict(legacy_activity_guards)
+            if isinstance(legacy_activity_guards, dict)
+            else {}
         )
 
         history = self._load_endogenous_drive_history()
@@ -4437,11 +4474,11 @@ class PlanningRuntimeMixin:
                     "legacy_drive_input_context": self._build_drive_input_context_snapshot(
                         {
                             **dict(deliberation.get("perception") or {}),
-                            "autonomous_chain_gate_active": legacy_activity_guards.get(
+                            "autonomous_chain_gate_active": explicit_legacy_activity_guards.get(
                                 "autonomous_chain_gate_active"
                             ),
                         }
-                    ),
+                    ) if explicit_legacy_activity_guards else None,
                     "drive_input_context": self._build_drive_input_context_snapshot(
                         {
                             **dict(deliberation.get("perception") or {}),
@@ -4452,6 +4489,8 @@ class PlanningRuntimeMixin:
                     ),
                 }
             )
+            if not explicit_legacy_activity_guards:
+                judgement_records[-1].pop("legacy_drive_input_context", None)
 
         if judgement_records:
             history["judgements"] = judgement_records + list(history.get("judgements") or [])
@@ -5755,8 +5794,8 @@ class PlanningRuntimeMixin:
         request = request or {}
         record_activity = bool(request.get("record_activity", True))
         persist_evaluation = bool(request.get("persist_evaluation", True))
-        expose_legacy_activity_guards = bool(request.get("activity_guards")) or not bool(
-            request.get("drive_input")
+        expose_legacy_activity_guards = self._should_expose_legacy_activity_guards_response(
+            request
         )
         legacy_activity_guards, drive_input = await self._resolve_runtime_drive_input_request(
             request,
@@ -5826,7 +5865,7 @@ class PlanningRuntimeMixin:
             self._load_endogenous_drive_history()
         )
         if expose_legacy_activity_guards:
-            legacy_activity_guards = self._build_legacy_activity_guards_snapshot(
+            legacy_activity_guards = self._build_compat_activity_guards_snapshot(
                 drive_input,
                 legacy_activity_guards,
             )
@@ -5841,7 +5880,7 @@ class PlanningRuntimeMixin:
                 self_regulation.get(key) or 0.0
             )
         if expose_legacy_activity_guards:
-            legacy_activity_guards = self._build_legacy_activity_guards_snapshot(
+            legacy_activity_guards = self._build_compat_activity_guards_snapshot(
                 drive_input,
                 legacy_activity_guards,
             )
@@ -5938,7 +5977,7 @@ class PlanningRuntimeMixin:
                 combined_self_regulation.get(key) or 0.0
             )
         if expose_legacy_activity_guards:
-            legacy_activity_guards = self._build_legacy_activity_guards_snapshot(
+            legacy_activity_guards = self._build_compat_activity_guards_snapshot(
                 drive_input,
                 legacy_activity_guards,
             )
@@ -6006,6 +6045,7 @@ class PlanningRuntimeMixin:
         response_fields = self._build_drive_input_response_fields(
             drive_input=drive_input,
             legacy_activity_guards=legacy_activity_guards,
+            include_legacy_activity_guards=expose_legacy_activity_guards,
         )
         return {
             "status": "evaluated",
@@ -7475,6 +7515,9 @@ class PlanningRuntimeMixin:
 
     async def review_autonomous_chain_tasks(self, request: dict | None = None):
         request = request or {}
+        expose_legacy_activity_guards = self._should_expose_legacy_activity_guards_response(
+            request
+        )
         statuses = request.get("statuses") or ["planned", "deferred", "paused"]
         normalized_statuses = []
         for status in statuses:
@@ -7735,6 +7778,7 @@ class PlanningRuntimeMixin:
         response_fields = self._build_drive_input_response_fields(
             drive_input=drive_input,
             legacy_activity_guards=legacy_activity_guards,
+            include_legacy_activity_guards=expose_legacy_activity_guards,
         )
         return {
             "status": "reviewed",

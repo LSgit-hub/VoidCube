@@ -46,6 +46,8 @@
 
 收敛判据：最小 CLI 在“主 CLI 正与用户交互 + 监督者任务同时在跑子代理”时，仍只显示监督者任务那一套，不被用户交互子代理覆盖或混入。
 
+补充边界：主 CLI 当前不再挂载 `API-A 自主执行面` 的执行流程窗口。主 CLI 只保留用户链路输入输出、`/auto` 门控提示与用户链路状态栏；API-A 自主执行流程的细节观察应只出现在最小 CLI / 专用观察面里。
+
 ## 4. gateway 双槽设计
 
 > **前提澄清：两个 lane 都属于 API-A。** gateway 的 `agent` scene 槽位专属 API-A。双槽拆的是「同一个 API-A 的两种工作模式」：`supervisor_task`（执行监督者 / API-B 派来的学习、改造任务）与 `user_chat`（与用户交互）。`supervisor_task` 这个名字指**任务来源**是监督者，**执行者仍是 API-A**，不是 API-B。API-B（`supervisor` 槽位）只负责产出任务与自维护，干活的两种模式都是 API-A。两个 lane 互不覆盖。
@@ -92,5 +94,12 @@ agent:
 - 第 2 步（reporter 打标）：已落地
 - 第 3 步（dashboard 读 supervisor lane）：已落地
 - 第 4 步（主 CLI status 读 user_chat lane）：已落地
+
+进一步收口后，最小 dashboard 已不再把 gateway agent top-level 兼容聚合当作 API-A 自主观察来源，而是显式拆成两层：
+
+- `API-B 主视角自主闭环总览`：继续只读 Supervisor 的 `autonomous_observation`
+- `API-A 自主执行观察面`：只读 gateway `scenes.agent.lanes.supervisor_task` 与 `active_cli_executor(agent_lane=supervisor_task)`，不再回退 `user_chat` 或 top-level 聚合
+
+这意味着即便主 CLI 的 `user_chat` 正在活跃，最小 dashboard 也只会显示自主链路自己的 API-A 执行位、子代理焦点与链路项，不再出现用户聊天焦点串入自主执行观察面的情况。
 
 Web 小屋 drill-down（双泳道治理 / 决策溯源 / 健康度）此前已完成，属本分工里的 Web 总览面。当前 Web 小屋 timeline 已过滤 Gateway 的 `user_request` 与 `agent_scene`，只展示 API-B 治理、自主任务与 Mem 相关观测，不展示用户聊天内容。

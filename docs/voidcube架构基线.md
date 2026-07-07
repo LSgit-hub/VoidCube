@@ -1276,7 +1276,7 @@ Mem 中长期记忆 + 网关活动快照（7 个时间戳 + 错误/不确定性�
 
 **gateway 双泳道展示/活动架构**：`user_chat` 与 `supervisor_task` 是同一 API-A 域下的两个工作泳道。用户链路的主 CLI 交互走 `user_chat`，自主链路中监督者放行的学习/改造任务走 `supervisor_task`；两者互不覆盖。dashboard / Web 监控只作为 API-B 观测面按 lane 读取自主链路状态，不能退回单槽 last-writer-wins，也不能变成用户聊天入口。
 
-终端 dashboard / Web 小屋应优先消费 Supervisor 提供的 `autonomous_observation.chain.segments / loop.stage_cards / loop.rail_entries / board.primary_focus / board.hero_pills / board.observation_notes / board.recent_activity` 读模型；其中 `chain.segments + loop.stage_cards + loop.rail_entries` 是当前程序侧正式观测协议，`loop.stages` 只允许作为历史快照兼容镜像留在少量 helper/fallback 中。观测板暂不可用时可以显示空态，但不应回退成旧 `/self-evolution/tasks` 人工任务台视角，也不应再从 `protocol_notes` 或 gateway 活动快照反推一套兼容说明。
+终端 dashboard / Web 小屋应优先消费 Supervisor 提供的 `autonomous_observation.chain.segments / loop.stage_cards / loop.rail_entries / board.primary_focus / board.hero_pills / board.observation_notes / board.recent_activity` 读模型；其中 `chain.segments + loop.stage_cards + loop.rail_entries` 是当前程序侧正式观测协议，`loop.stages` 只允许作为历史快照兼容镜像留在显式 compat helper/fallback 中。观测板暂不可用时可以显示空态，但不应回退成旧 `/self-evolution/tasks` 人工任务台视角，也不应再从 `protocol_notes` 或 gateway 活动快照反推一套兼容说明。
 
 Web 小屋前端内部主面板也应以 `chain`/“API-B 主视角自主闭环总览”作为主语，而不是继续沿用 `tasks`/任务台命名；默认展开内容应先展示焦点、四段闭环和自主闭环分段观察，再展示更细的任务卡。这里的“分段观察”是对自主链路四段流动的只读投影，不是旧式人工任务台。
 

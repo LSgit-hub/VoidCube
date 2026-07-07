@@ -8,14 +8,18 @@ the supervisor currently observes the autonomous chain.
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from VoidCube_cli.autonomous_observation import supervisor_api_a_execution_hint
+
 
 # ── Configuration ──────────────────────────────────────────────────────
 SUPERVISOR_URL = "http://127.0.0.1:6002"
+GATEWAY_URL = os.environ.get("VOIDCUBE_GATEWAY_URL", "http://127.0.0.1:6000").rstrip("/")
 REQUEST_TIMEOUT = 5  # seconds per HTTP call
 
 # Scene→human label and color hint (per baseline §8.1 reporter-scene mapping).
@@ -60,6 +64,16 @@ def _get_json(url: str, timeout: float = REQUEST_TIMEOUT) -> Optional[Dict[str, 
 def fetch_supervisor_state() -> Dict[str, Any]:
     """Return supervisor UI state."""
     return _get_json(f"{SUPERVISOR_URL}/ui/state") or {}
+
+
+def fetch_gateway_scenes() -> Dict[str, Any]:
+    """Return gateway scene projections."""
+    return _get_json(f"{GATEWAY_URL}/admin/scenes") or {}
+
+
+def fetch_gateway_status() -> Dict[str, Any]:
+    """Return gateway health / executor snapshot."""
+    return _get_json(f"{GATEWAY_URL}/") or {}
 
 
 def _project_stage_card(
@@ -222,6 +236,20 @@ def _human_snapshot_source(value: Optional[str]) -> str:
     }.get(text, str(value or "").strip() or "默认快照")
 
 
+def _human_execution_kind(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return {
+        "self_learning": "自主学习",
+        "body_improvement": "替身改进",
+        "body_upgrade": "替身改进",
+    }.get(text, str(value or "").strip() or "自主链路项")
+
+
+def _session_tail(value: Any) -> str:
+    text = str(value or "").strip()
+    return text[-8:] if text else "—"
+
+
 def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
     """Parse an ISO timestamp string, returning a naive UTC datetime."""
     if not ts:
@@ -253,6 +281,128 @@ def _supervisor_recent_autonomous_activity(state: Dict[str, Any]) -> Dict[str, A
             display_at = recorded_at.strftime("%H:%M:%S")
     normalized["display_at"] = display_at or "暂无数据"
     return normalized
+
+
+def _build_api_a_observation(
+    supervisor_state: Dict[str, Any],
+    gateway_scenes: Dict[str, Any],
+    gateway_status: Dict[str, Any],
+) -> Dict[str, Any]:
+    hint = supervisor_api_a_execution_hint(supervisor_state)
+    scenes = dict(gateway_scenes.get("scenes") or {})
+    agent_scene = dict(scenes.get("agent") or {})
+    lanes = agent_scene.get("lanes") if isinstance(agent_scene.get("lanes"), dict) else {}
+    supervisor_lane = dict(lanes.get("supervisor_task") or {})
+
+    active_executor = dict(gateway_status.get("active_cli_executor") or {})
+    if str(active_executor.get("agent_lane") or "").strip().lower() != "supervisor_task":
+        active_executor = {}
+
+    focus_task = dict(hint.get("focus_task") or {})
+    lane_scene = str(
+        supervisor_lane.get("scene")
+        or active_executor.get("scene")
+        or "idle"
+    ).strip().lower() or "idle"
+    session_id = str(
+        supervisor_lane.get("session_id")
+        or active_executor.get("session_id")
+        or ""
+    ).strip()
+    task_id = str(
+        supervisor_lane.get("scene_task_id")
+        or active_executor.get("scene_task_id")
+        or focus_task.get("task_id")
+        or ""
+    ).strip()
+    task_title = str(focus_task.get("title") or "").strip()
+    execution_kind = str(
+        focus_task.get("execution_kind")
+        or focus_task.get("task_family")
+        or focus_task.get("task_type")
+        or supervisor_lane.get("execution_kind")
+        or ""
+    ).strip().lower()
+    fg_count = max(
+        0,
+        int(
+            supervisor_lane.get("subagent_foreground_count")
+            or active_executor.get("subagent_foreground_count")
+            or 0
+        ),
+    )
+    bg_count = max(
+        0,
+        int(
+            supervisor_lane.get("subagent_background_count")
+            or active_executor.get("subagent_background_count")
+            or 0
+        ),
+    )
+    focus_tool = str(
+        supervisor_lane.get("subagent_focus_tool")
+        or active_executor.get("subagent_focus_tool")
+        or ""
+    ).strip()
+    focus_preview = str(
+        supervisor_lane.get("subagent_focus_preview")
+        or active_executor.get("subagent_focus_preview")
+        or ""
+    ).strip()
+    has_signal = any(
+        [
+            bool(supervisor_lane),
+            bool(active_executor),
+            bool(task_id),
+            str(hint.get("status_label") or "").strip() != "治理段观察中",
+            str(hint.get("chain_reason") or "").strip(),
+            str(hint.get("activity_text") or "").strip(),
+        ]
+    )
+
+    if active_executor:
+        idle_seconds = max(0, int(active_executor.get("idle_seconds") or 0))
+        lease_status = str(active_executor.get("lease_status") or "healthy").strip().lower()
+        if lease_status == "stale" or bool(active_executor.get("is_stale")):
+            lease_summary = (
+                f"执行位: 会话 {_session_tail(session_id)} 的自主执行位已陈旧"
+                f"（静默 {idle_seconds}s）"
+            )
+        else:
+            lease_summary = (
+                f"执行位: 会话 {_session_tail(session_id)} 正持有 supervisor_task 执行位"
+                f"（静默 {idle_seconds}s）"
+            )
+    elif session_id and lane_scene != "idle":
+        lease_status = "observed"
+        lease_summary = (
+            f"执行位: 已观测到会话 {_session_tail(session_id)} 正在自主执行 lane 中活动"
+        )
+    else:
+        lease_status = "idle"
+        lease_summary = "执行位: 当前没有可见的 supervisor_task 执行位"
+
+    return {
+        "mode": "supervisor_task_lane" if has_signal else "unavailable",
+        "headline": "API-A 自主执行观察面",
+        "summary": "只读 gateway 的 supervisor_task 泳道与 Supervisor 的 API-A 执行投影，不展示 user_chat。",
+        "lane": "supervisor_task",
+        "lane_scene": lane_scene,
+        "lane_scene_label": SCENE_LABEL.get(lane_scene, lane_scene or "idle"),
+        "status_label": str(hint.get("status_label") or "治理段观察中").strip() or "治理段观察中",
+        "chain_reason": str(hint.get("chain_reason") or "").strip(),
+        "activity_text": str(hint.get("activity_text") or "").strip(),
+        "task_id": task_id,
+        "task_title": task_title,
+        "task_kind_label": _human_execution_kind(execution_kind),
+        "session_id": session_id,
+        "lease_status": lease_status,
+        "lease_summary": lease_summary,
+        "subagent_foreground_count": fg_count,
+        "subagent_background_count": bg_count,
+        "subagent_focus_tool": focus_tool,
+        "subagent_focus_preview": focus_preview,
+    }
 
 
 def _build_supervisor_status_summary(
@@ -289,6 +439,8 @@ def build_dashboard() -> Dict[str, Any]:
     """Collect all data and compute visibility metrics."""
     # ── Fetch data ──────────────────────────────────────────────────
     state = fetch_supervisor_state()
+    gateway_scenes = fetch_gateway_scenes()
+    gateway_status = fetch_gateway_status()
     observation = dict(state.get("autonomous_observation") or {})
     runtime = dict(observation.get("runtime") or {})
     user_signal = dict(runtime.get("user_chain_signal") or {})
@@ -299,6 +451,7 @@ def build_dashboard() -> Dict[str, Any]:
     )
     chain_snapshot = _build_autonomous_chain_snapshot(state)
     recent_activity = _supervisor_recent_autonomous_activity(state)
+    api_a_observation = _build_api_a_observation(state, gateway_scenes, gateway_status)
     user_threshold = int(user_signal.get("quiet_after_seconds") or 600)
     observation_input = {
         "headline": "API-B 判断输入",
@@ -360,6 +513,7 @@ def build_dashboard() -> Dict[str, Any]:
         "now": datetime.now().isoformat(),
         "status": supervisor_status,
         "chain": chain_view,
+        "api_a_observation": api_a_observation,
         "recent_activity": recent_activity,
         "observation_input": observation_input,
     }
@@ -371,6 +525,7 @@ def print_dashboard() -> None:
 
     status = dict(db.get("status") or {})
     chain = db["chain"]
+    api_a_observation = db.get("api_a_observation") or {}
     recent_activity = db.get("recent_activity") or {}
     observation_input = db.get("observation_input") or {}
 
@@ -438,6 +593,36 @@ def print_dashboard() -> None:
         summary = str(recent_activity.get("summary") or "")[:44]
         print(f"  ║  最近自主动作 {phase:<10s} {title:<30s} {display_at:>8s}    ║")
         print(f"  ║  {summary:<54s}  ║")
+
+    # ── API-A supervisor_task lane ──────────────────────────────────
+    print(f"  ╠══════════════════════════════════════════════════════════╣")
+    print(f"  ║  API-A 自主执行观察面                                   ║")
+    lane_scene = str(api_a_observation.get("lane_scene_label") or "静置")[:10]
+    status_label = str(api_a_observation.get("status_label") or "治理段观察中")[:18]
+    fg_count = max(0, int(api_a_observation.get("subagent_foreground_count") or 0))
+    bg_count = max(0, int(api_a_observation.get("subagent_background_count") or 0))
+    sa_counts = f"{fg_count}+{bg_count}" if bg_count else str(fg_count)
+    print(f"  ║    泳道 supervisor_task · 场景 {lane_scene:<10s} · 状态 {status_label:<18s} ║")
+    print(f"  ║    子代理 SA {sa_counts:<7s}  会话 {_session_tail(api_a_observation.get('session_id')):<10s}        ║")
+    if str(api_a_observation.get("task_id") or "").strip():
+        task_kind = str(api_a_observation.get("task_kind_label") or "自主链路项")[:8]
+        task_id = str(api_a_observation.get("task_id") or "")[:8]
+        task_title = str(api_a_observation.get("task_title") or "未命名")[:30]
+        print(f"  ║    链路项 {task_kind:<8s} {task_id:<8s} {task_title:<30s} ║")
+    focus_hint = str(
+        api_a_observation.get("subagent_focus_tool")
+        or api_a_observation.get("subagent_focus_preview")
+        or ""
+    ).strip()
+    if focus_hint:
+        print(f"  ║    聚焦 {focus_hint[:48]:<48s}  ║")
+    print(f"  ║    {str(api_a_observation.get('lease_summary') or '执行位: 当前没有可见的 supervisor_task 执行位')[:50]:<50s}    ║")
+    chain_reason = str(api_a_observation.get("chain_reason") or "").strip()
+    if chain_reason:
+        print(f"  ║    {chain_reason[:50]:<50s}    ║")
+    activity_text = str(api_a_observation.get("activity_text") or "").strip()
+    if activity_text:
+        print(f"  ║    {activity_text[:50]:<50s}    ║")
 
     # ── API-B observation input ─────────────────────────────────────
     print(f"  ╠══════════════════════════════════════════════════════════╣")

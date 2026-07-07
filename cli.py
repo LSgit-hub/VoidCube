@@ -70,12 +70,7 @@ from VoidCube_cli.autonomous_executor import (
 )
 from VoidCube_cli.autonomous_events import (
     append_autonomous_execution_event as _append_autonomous_execution_event_view,
-    autonomous_execution_panel_height as _autonomous_execution_panel_height_view,
     sync_autonomous_supervisor_event as _sync_autonomous_supervisor_event_view,
-)
-from VoidCube_cli.autonomous_panel import (
-    build_autonomous_execution_panel_rows as _build_autonomous_execution_panel_rows_view,
-    get_autonomous_execution_panel_fragments as _get_autonomous_execution_panel_fragments_view,
 )
 from VoidCube_cli.autonomous_gate import (
     exit_autonomous_gate_fast as _exit_autonomous_gate_fast_view,
@@ -9555,6 +9550,12 @@ class VoidcubeCLI:
         Wrapper CLIs can override this to inject widgets (e.g. a mini-player,
         overlay menu) into the layout without overriding ``run()``.  Widgets
         are inserted between the spacer and the status bar.
+
+        The main CLI intentionally does not mount the API-A autonomous
+        execution window. That execution-flow display belongs to the dedicated
+        autonomous-chain mini CLI / observer surface, so wrapper CLIs should
+        inject their own observation widget here instead of reusing the main
+        CLI as the execution window.
         """
         return []
 
@@ -10952,15 +10953,6 @@ class VoidcubeCLI:
                 ("class:auto-mode", " 🤖 自主链路 | /auto-q 退出"),
             ]
 
-        auto_execution_panel = ConditionalContainer(
-            Window(
-                FormattedTextControl(lambda: _get_autonomous_execution_panel_fragments_view(cli_ref)),
-                height=lambda: _autonomous_execution_panel_height_view(cli_ref),
-                wrap_lines=False,
-            ),
-            filter=Condition(lambda: cli_ref._autonomous_gate_active),
-        )
-
         autonomous_gate_bar = ConditionalContainer(
             Window(
                 FormattedTextControl(_get_autonomous_gate_text),
@@ -11005,7 +10997,7 @@ class VoidcubeCLI:
                     spinner_widget=spinner_widget,
                     spacer=spacer,
                     status_bar=status_bar,
-                    auto_execution_panel=auto_execution_panel,
+                    auto_execution_panel=None,
                     input_rule_top=input_rule_top,
                     image_bar=image_bar,
                     input_area=input_area,

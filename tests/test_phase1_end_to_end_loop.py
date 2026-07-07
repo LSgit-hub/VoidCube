@@ -106,13 +106,13 @@ async def _drive_input_from_runtime_probe(
     now: str,
     task_family: str,
 ) -> Dict[str, Any]:
-    legacy_runtime = await supervisor.evaluate_activity_guards(
+    runtime_probe_snapshot = await supervisor.evaluate_activity_guards(
         {
             "now": now,
             "task_family": task_family,
         }
     )
-    return supervisor._project_drive_input_snapshot(legacy_runtime)
+    return supervisor._project_drive_input_snapshot(runtime_probe_snapshot)
 
 
 # ---------------------------------------------------------------------------
@@ -583,7 +583,7 @@ class TestPhase1GatewayErrorTracking:
     def test_endogenous_drive_reads_canonical_gateway_field_names(self):
         """内生驱动优先读取 error_count 与 uncertainty_high_count。"""
         engine = EndogenousDriveEngine()
-        activity_guards = {
+        drive_input = {
             "activity": {
                 "active_sessions": 0,
                 "counts": {
@@ -605,7 +605,7 @@ class TestPhase1GatewayErrorTracking:
             "decisions": {"eligible_for_planning": True, "eligible_for_execution": True},
         }
         candidates = engine.generate_candidates(
-            activity_guards=activity_guards,
+            drive_input=drive_input,
             existing_drive_keys=set(),
             max_candidates=10,
         )

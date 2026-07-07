@@ -140,13 +140,7 @@ def _observation_stage_card(observation: dict, key: str) -> dict:
 
 
 def _observation_loop_stage(observation: dict, key: str) -> dict:
-    try:
-        card = _observation_stage_card(observation, key)
-    except AssertionError:
-        legacy_stage = _legacy_observation_loop_stage(observation, key)
-        if legacy_stage:
-            return legacy_stage
-        raise AssertionError(f"loop stage not found: {key!r}")
+    card = _observation_stage_card(observation, key)
     projected = dict(card)
     projected["key"] = key
     if not str(projected.get("status_label") or "").strip():
@@ -193,12 +187,16 @@ def test_supervisor_room_frontend_uses_chain_panel_contract():
     assert 'data-panel="chain"' in UI_HTML
     assert 'renderChainPanel' in UI_HTML
     assert 'chain-stage-rail' in UI_HTML
-    assert 'API-B 判断输入' in UI_HTML
-    assert 'API-B 当前判断' in UI_HTML
+    assert '判断参考' in UI_HTML
+    assert '当前判断' in UI_HTML
+    assert '替身与统计' in UI_HTML
     assert 'data-chain-group="' in UI_HTML
     assert 'data-chain-trace="' in UI_HTML
     assert 'data-chain-trace-expanded="' in UI_HTML
     assert 'data-chain-trace-source="' in UI_HTML
+    assert "body_tree" in UI_HTML
+    assert "data-body-slot" in UI_HTML
+    assert "renderBodyTreeDrawer" in UI_HTML
     assert 'data-action-btn=' not in UI_HTML
     assert "__manual__" not in UI_HTML
     assert 'panelTasks' not in UI_HTML
@@ -586,6 +584,57 @@ async def test_supervisor_runtime_trace_normalizes_execution_request_drive_input
     payload = execution_event["payload"]
     assert payload["drive_input_evidence"]["user_chain_signal"]["active_sessions"] == 5
     assert payload["activity_guard_evidence"]["user_chain_signal"]["active_sessions"] == 5
+
+
+@pytest.mark.unit
+def test_supervisor_builds_body_slot_cards_with_upgrade_tree_focus(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    registry = supervisor._body_registry.load_registry()
+    shell_slot = str(registry.shell_slot or "")
+    active_slot = str(registry.active_slot or "")
+    assert shell_slot
+    assert active_slot
+
+    shell_meta = supervisor._body_registry.load_slot_meta(shell_slot)
+    shell_worktree = Path(shell_meta.worktree_path)
+    (shell_worktree / "agent").mkdir(parents=True, exist_ok=True)
+    (shell_worktree / "systems").mkdir(parents=True, exist_ok=True)
+    (shell_worktree / "tools").mkdir(parents=True, exist_ok=True)
+    (shell_worktree / "run_agent.py").write_text("print('ok')\n", encoding="utf-8")
+    (shell_worktree / "config.yaml").write_text("name: shell\n", encoding="utf-8")
+
+    slot_metas = {
+        slot_id: supervisor._body_registry.load_slot_meta(slot_id).model_dump(mode="json")
+        for slot_id in registry.slot_ids
+    }
+    cards = supervisor._build_ui_body_slot_cards(
+        registry=registry,
+        slot_metas=slot_metas,
+        chain_history_projection=[
+            {
+                "task_id": "body-1",
+                "title": "Refine shell structure",
+                "execution_kind": "body_improvement",
+                "status": "running",
+                "execution_request": {
+                    "target_slot_id": shell_slot,
+                    "editable_dirs": ["systems", "agent"],
+                },
+            }
+        ],
+    )
+
+    shell_card = next(card for card in cards if card["slot_id"] == shell_slot)
+    active_card = next(card for card in cards if card["slot_id"] == active_slot)
+
+    assert shell_card["role_label"] == "培养替身"
+    assert shell_card["upgrade_active"] is True
+    assert "API-A 正在改" in shell_card["focus_summary"]
+    assert any(node["key"] == "systems" and node["upgrade_active"] for node in shell_card["tree_nodes"])
+    assert any(node["key"] == "agent" and node["upgrade_active"] for node in shell_card["tree_nodes"])
+    assert any(node["key"] == "run_agent.py" for node in shell_card["tree_nodes"])
+    assert shell_card["upgrade_signals"][0]["source_label"] == "API-A 正在改"
+    assert active_card["upgrade_active"] is False
 
 
 @pytest.mark.asyncio
@@ -1161,7 +1210,7 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
     assert observation["board"]["headline"] == "API-B 主视角自主闭环总览"
     assert "watch_groups" not in observation["board"]
     assert "protocol_notes" not in observation["board"]
-    assert observation["board"]["boundary_note"] == "Web 小屋只观察 API-B 主导的自主链路，不展示用户聊天内容，也不提供人工队列管理。"
+    assert observation["board"]["boundary_note"] == "Web 小屋只看自主链路，不看用户聊天，也不做人手调度。"
     assert observation["board"]["metric_cards"][0]["key"] == "api_b_candidates"
     assert observation["board"]["metric_cards"][1]["value"] == 3
     assert [card["label"] for card in observation["board"]["metric_cards"]] == [
@@ -1195,20 +1244,11 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
         pill["text"] in {"治理在途 · 3", "待认领窗口 · 1"}
         for pill in observation["board"]["hero_pills"]
     )
-    assert any(
-        pill["key"] == "ready_boundary" and pill["text"] == "待认领窗口不含执行中"
-        for pill in observation["board"]["hero_pills"]
-    )
-    assert observation["board"]["observation_notes"][0]["title"] == "API-B 主视角"
-    assert any(
-        "当前待认领窗口 1" in note["text"]
-        for note in observation["board"]["observation_notes"]
-    )
-    assert any(
-        note["title"] == "待认领窗口边界"
-        and "执行中的项留在闭环阶段" in note["text"]
-        for note in observation["board"]["observation_notes"]
-    )
+    assert not any(note.get("key") == "api_b_scope" for note in observation["board"]["observation_notes"])
+    assert not any(note.get("key") == "recent_activity" for note in observation["board"]["observation_notes"])
+    assert not any(note.get("key") == "ready_boundary" for note in observation["board"]["observation_notes"])
+    assert not any(note.get("key") == "user_chain_signal" for note in observation["board"]["observation_notes"])
+    assert not any(note.get("key") == "protocol_contract" for note in observation["board"]["observation_notes"])
     assert "current_cards" not in observation["board"]
     assert _observation_loop_stage(observation, "api_a_execution")["status"] == "ready"
     assert _observation_loop_stage(observation, "api_a_execution")["focus_task"]["title"] == "第一个自主学习链路项"
@@ -1345,7 +1385,8 @@ def test_observation_loop_stage_helper_accepts_legacy_stage_compat_snapshot():
     assert legacy_stage["source_label"] == "API-B"
     assert legacy_stage["status"] == "active"
     assert "owner" not in legacy_stage
-    assert _observation_loop_stage(observation, "api_b_judgement")["focus_task"]["title"] == "Legacy compat task"
+    with pytest.raises(AssertionError):
+        _observation_loop_stage(observation, "api_b_judgement")
 
 
 @pytest.mark.asyncio
@@ -1389,9 +1430,44 @@ async def test_supervisor_room_state_keeps_running_api_a_task_out_of_ready_segme
     assert observation["runtime"]["api_a_running_count"] == 1
     assert any(
         note.get("title") == "执行回流仍在沉淀"
-        and "等待写回回流与再读取" in str(note.get("text") or "")
+        and "结果尚未回流到 Mem" in str(note.get("text") or "")
         for note in notes
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_maps_running_api_a_task_to_handoff_scene(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
+
+    planned = await supervisor.plan_autonomous_chain_task(
+        {
+            "title": "正在执行的自主学习链路项",
+            "task_family": "self_learning",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+    supervisor._autonomous_chain_store.update_status(
+        task_id,
+        status="approved",
+        reason="approved for pull",
+    )
+    supervisor._autonomous_chain_store.update_status(
+        task_id,
+        status="running",
+        reason="claimed by API-A executor",
+    )
+
+    state = await supervisor.get_supervisor_ui_state()
+
+    assert state["scene"] == "handoff"
+    assert "自主交接中" in state["title"]
+    assert "已交给 API-A 自主执行面处理" in state["summary"]
 
 
 @pytest.mark.asyncio
@@ -1660,7 +1736,7 @@ async def test_supervisor_ui_state_projects_cognition_judgement_and_uncertainty_
     assert "真实性" in judgement["summary"]
     assert judgement["api_a_ready_count"] == 1
     assert judgement["api_a_running_count"] == 0
-    assert judgement["api_a_lane_summary"] == "API-A 当前仍有 1 个待认领链路项，先等这一轮执行回流沉淀。"
+    assert judgement["api_a_lane_summary"] == "API-A 仍有 1 个待认领链路项。"
     assert cognition["perception"]["api_a_ready_count"] == 1
     assert cognition["perception"]["api_a_running_count"] == 0
     assert uncertainty["highest_risk_label"] == "真实性侧"
@@ -1724,9 +1800,8 @@ async def test_supervisor_ui_state_projects_recent_autonomous_activity_for_web_r
         pill["text"] == "执行回报 · 替身切换验收 (身体切换)"
         for pill in observation["board"]["hero_pills"]
     )
-    assert any(
-        note["title"] == "执行回报"
-        and note["text"] == "API-A 子执行面 已向 API-B 回报 身体切换 的执行进展。"
+    assert not any(
+        note.get("key") == "recent_activity"
         for note in observation["board"]["observation_notes"]
     )
 

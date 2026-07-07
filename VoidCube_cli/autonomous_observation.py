@@ -80,6 +80,24 @@ def _compat_loop_stage_projections(loop: Dict[str, Any]) -> list[Dict[str, Any]]
     return projected
 
 
+def compat_observation_loop_stage_projections(state: Dict[str, Any]) -> list[Dict[str, Any]]:
+    """Read legacy loop stage projections only from explicit compatibility call sites."""
+    loop = observation_loop(state)
+    return _compat_loop_stage_projections(loop)
+
+
+def compat_observation_loop_stage(
+    state: Dict[str, Any],
+    stage_key: str,
+) -> Dict[str, Any]:
+    """Read a legacy loop stage snapshot only from explicit compatibility call sites."""
+    loop = observation_loop(state)
+    normalized_key = str(stage_key or "").strip()
+    if not normalized_key:
+        return {}
+    return _compat_loop_stage(loop, normalized_key)
+
+
 def observation_group_items(
     state: Dict[str, Any],
     group_key: str,
@@ -142,7 +160,7 @@ def observation_loop_stage_projections(state: Dict[str, Any]) -> list[Dict[str, 
                 }
             )
         return projected
-    return _compat_loop_stage_projections(loop)
+    return []
 
 
 def observation_loop_stage_projection(
@@ -183,9 +201,6 @@ def observation_loop_stage(
         if "focus_task" not in projected:
             projected["focus_task"] = dict(stage_card.get("focus_task") or {})
         return projected
-    compat_stage = _compat_loop_stage(loop, normalized_key)
-    if compat_stage:
-        return compat_stage
     return {}
 
 
@@ -238,9 +253,9 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
         "stage": "idle",
         "cli_focus_stage": "idle",
         "focus_task": {},
-        "status_label": "等待放行",
+        "status_label": "治理段观察中",
         "chain_reason": "链路: 当前没有已批准的 API-A 可执行链路项",
-        "activity_text": "执行流: 等待 API-B 放行链路项，或等待再读取后形成新的待认领窗口",
+        "activity_text": "执行流: 等待 API-B 判断、重排或再读取后形成新的待认领窗口",
         "reason_style": "dim",
     }
     approved_focus = (
@@ -273,7 +288,7 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
             "stage": "governance_waiting",
             "cli_focus_stage": "idle",
             "focus_task": {},
-            "status_label": "等待放行",
+            "status_label": "治理段观察中",
             "chain_reason": "链路: 当前学习链路项大多仍停留在 API-B 治理段并被延后，尚未进入 API-A 待认领窗口",
             "activity_text": "执行流: 等待 API-B 重新放行、重排或补充证据后形成待认领窗口",
             "reason_style": "warn",
@@ -283,7 +298,7 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
             "stage": "governance_waiting",
             "cli_focus_stage": "idle",
             "focus_task": {},
-            "status_label": "等待放行",
+            "status_label": "治理段观察中",
             "chain_reason": "链路: 当前自主链路项仍停留在 API-B 治理段，尚未进入 API-A 待认领窗口",
             "activity_text": "执行流: 等待 API-B 审核、放行或重新排序链路项后形成待认领窗口",
             "reason_style": "info",
@@ -293,9 +308,9 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
             "stage": "api_b_or_mem_focus",
             "cli_focus_stage": "idle",
             "focus_task": {},
-            "status_label": "等待放行",
+            "status_label": "治理段观察中",
             "chain_reason": "链路: 当前没有新的 API-A 可执行链路项；API-B 正在判断、回收写回或推进下一轮再读取",
-            "activity_text": "执行流: 等待 API-B 放行链路项，或等待再读取后形成新的待认领窗口",
+            "activity_text": "执行流: 等待 API-B 判断、重排或再读取后形成新的待认领窗口",
             "reason_style": "info",
         }
     if stage_label:

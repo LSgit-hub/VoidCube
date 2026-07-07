@@ -4,6 +4,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from VoidCube_cli.ops import dashboard
@@ -24,6 +26,12 @@ class _FakeUrlopenResponse:
     def __exit__(self, exc_type, exc, tb):
         del exc_type, exc, tb
         return False
+
+
+@pytest.fixture(autouse=True)
+def _stub_dashboard_gateway(monkeypatch):
+    monkeypatch.setattr(dashboard, "fetch_gateway_scenes", lambda: {})
+    monkeypatch.setattr(dashboard, "fetch_gateway_status", lambda: {})
 
 
 def test_dashboard_builds_supervisor_only_status_summary(monkeypatch):
@@ -292,6 +300,98 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
     assert built["chain"]["segments"][0]["title"] == "Governance backlog task"
 
 
+def test_build_dashboard_api_a_observation_reads_supervisor_task_lane_only(monkeypatch):
+    monkeypatch.setattr(
+        dashboard,
+        "fetch_supervisor_state",
+        lambda: {
+            "autonomous_observation": {
+                "counts": {"api_a_running": 1},
+                "loop": {
+                    "stage_cards": [
+                        {
+                            "stage_key": "api_a_execution",
+                            "title": "API-A 自主执行",
+                            "source_label": "API-A",
+                            "status": "active",
+                            "status_label": "他处执行中",
+                            "chain_reason": "链路: 该链路项已被其他 API-A 自主执行面认领",
+                            "activity_text": "执行流: 链路项正在其他 API-A 自主执行面中运行",
+                            "focus_task": {
+                                "task_id": "learn-supervisor-1",
+                                "title": "Supervisor autonomous task",
+                                "status": "running",
+                                "execution_kind": "self_learning",
+                            },
+                        }
+                    ]
+                },
+            }
+        },
+    )
+    monkeypatch.setattr(
+        dashboard,
+        "fetch_gateway_scenes",
+        lambda: {
+            "scenes": {
+                "agent": {
+                    "scene": "executing",
+                    "lanes": {
+                        "supervisor_task": {
+                            "scene": "learning",
+                            "scene_task_id": "learn-supervisor-1",
+                            "session_id": "cli-session-supervisor",
+                            "subagent_foreground_count": 2,
+                            "subagent_background_count": 1,
+                            "subagent_focus_tool": "read_file",
+                            "reachable": True,
+                        },
+                        "user_chat": {
+                            "scene": "executing",
+                            "scene_task_id": "user-chat-9",
+                            "session_id": "cli-session-user",
+                            "subagent_foreground_count": 5,
+                            "subagent_focus_preview": "grep app.py",
+                            "reachable": True,
+                        },
+                    },
+                }
+            }
+        },
+    )
+    monkeypatch.setattr(
+        dashboard,
+        "fetch_gateway_status",
+        lambda: {
+            "active_cli_executor": {
+                "agent_lane": "user_chat",
+                "session_id": "cli-session-user",
+                "scene": "executing",
+                "idle_seconds": 4,
+                "lease_status": "healthy",
+                "subagent_focus_preview": "grep app.py",
+            }
+        },
+    )
+
+    built = dashboard.build_dashboard()
+
+    assert built["api_a_observation"]["lane"] == "supervisor_task"
+    assert built["api_a_observation"]["lane_scene"] == "learning"
+    assert built["api_a_observation"]["lane_scene_label"] == "自主学习"
+    assert built["api_a_observation"]["status_label"] == "他处执行中"
+    assert built["api_a_observation"]["task_id"] == "learn-supervisor-1"
+    assert built["api_a_observation"]["task_title"] == "Supervisor autonomous task"
+    assert built["api_a_observation"]["task_kind_label"] == "自主学习"
+    assert built["api_a_observation"]["subagent_foreground_count"] == 2
+    assert built["api_a_observation"]["subagent_background_count"] == 1
+    assert built["api_a_observation"]["subagent_focus_tool"] == "read_file"
+    assert built["api_a_observation"]["subagent_focus_preview"] == ""
+    assert built["api_a_observation"]["session_id"] == "cli-session-supervisor"
+    assert built["api_a_observation"]["lease_status"] == "observed"
+    assert "cli-session-user" not in built["api_a_observation"]["lease_summary"]
+
+
 def test_build_dashboard_does_not_fallback_to_gateway_recent_activity_projection(monkeypatch):
     monkeypatch.setattr(
         dashboard,
@@ -480,3 +580,69 @@ def test_print_dashboard_shows_recent_autonomous_activity(monkeypatch, capsys):
     assert "最近自主动作" in output
     assert "治理放行" in output
     assert "替身改进验收 (替身改进)" in output
+
+
+def test_print_dashboard_shows_supervisor_task_lane_without_user_chat_leak(monkeypatch, capsys):
+    monkeypatch.setattr(
+        dashboard,
+        "build_dashboard",
+        lambda: {
+            "status": {
+                "scene_label": "治理安排",
+                "snapshot_source": "cached",
+                "read_model_version": "12",
+                "title": "API-B 主视角观测",
+            },
+            "chain": {
+                "mode": "autonomous_chain_board",
+                "headline": "API-B 主视角自主闭环总览",
+                "segments_headline": "自主闭环分段观察",
+                "hero_summary": "Supervisor projected hero summary",
+                "primary_focus": {"title": "API-B 判断", "status": "当前在途"},
+                "hero_pills": [{"text": "当前落点 · API-B 判断"}],
+                "api_b_backlog": 1,
+                "api_a_running": 1,
+                "api_a_ready": 0,
+                "candidates": 2,
+                "writebacks": 0,
+                "stage_cards": [],
+                "rail_entries": [],
+                "segments": [],
+            },
+            "api_a_observation": {
+                "lane": "supervisor_task",
+                "lane_scene_label": "替身改进",
+                "status_label": "他处执行中",
+                "subagent_foreground_count": 2,
+                "subagent_background_count": 1,
+                "session_id": "cli-session-supervisor",
+                "task_kind_label": "替身改进",
+                "task_id": "body-1234",
+                "task_title": "Refine executor shell",
+                "subagent_focus_tool": "apply_patch",
+                "subagent_focus_preview": "",
+                "lease_summary": "执行位: 会话 supervisor 正持有 supervisor_task 执行位（静默 3s）",
+                "chain_reason": "链路: 该链路项已被其他 API-A 自主执行面认领",
+                "activity_text": "执行流: 链路项正在其他 API-A 自主执行面中运行",
+            },
+            "observation_input": {
+                "headline": "API-B 判断输入",
+                "user_chain_quiet": False,
+                "user_chain_state": "活跃软信号",
+                "active_sessions": 2,
+                "quiet_after_seconds": 600,
+                "snapshot_source": "cached",
+                "scope": "soft_signal_only",
+                "summary": "用户链路只作为 API-B 判断让路参考，不展示聊天内容。",
+            },
+        },
+    )
+
+    dashboard.print_dashboard()
+    output = capsys.readouterr().out
+
+    assert "API-A 自主执行观察面" in output
+    assert "supervisor_task" in output
+    assert "apply_patch" in output
+    assert "Refine executor shell" in output
+    assert "grep app.py" not in output

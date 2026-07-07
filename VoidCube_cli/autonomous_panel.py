@@ -134,7 +134,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
         status_label = str(supervisor_descriptor.get("status_label") or "他处执行中")
         status_style = "class:auto-panel-info"
     else:
-        status_label = str(supervisor_descriptor.get("status_label") or "等待放行")
+        status_label = str(supervisor_descriptor.get("status_label") or "治理段观察中")
         status_style = "class:auto-panel-warn"
 
     rows.append(("class:auto-panel-title", f"API-A 自主执行面 · 会话 {session_short}"))
@@ -242,7 +242,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
     else:
         activity_text = str(
             supervisor_descriptor.get("activity_text")
-            or "执行流: 等待 API-B 放行链路项，或等待再读取后形成新的待认领窗口"
+            or "执行流: 等待 API-B 判断、重排或再读取后形成新的待认领窗口"
         )
     rows.append(("class:auto-panel-text", host._trim_status_bar_text(activity_text, inner_width)))
 

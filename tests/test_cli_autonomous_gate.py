@@ -102,6 +102,12 @@ def test_cli_does_not_rewrite_live_agent_base_url_to_gateway(monkeypatch):
     assert cli.agent.base_url == "https://runtime-base.example/v1"
 
 
+def test_main_cli_does_not_mount_autonomous_execution_panel_in_default_tui_widgets():
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+
+    assert cli._get_extra_tui_widgets() == []
+
+
 def test_cli_autonomous_gate_marks_learning_task_failed_after_agent_error(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._current_autonomous_task = {"task_id": "learn-1"}
@@ -1007,6 +1013,7 @@ def test_autonomous_panel_shows_no_api_a_executable_task_reason(monkeypatch):
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
+    assert "状态: 治理段观察中" in rendered
     assert "链路项: 当前没有被认领的自主链路项" in rendered
     assert "仍停留在 API-B 治理段" in rendered
 

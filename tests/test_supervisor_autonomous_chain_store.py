@@ -182,7 +182,7 @@ def _endogenous_drive_input_payload(
     }
 
 
-def _assert_compat_drive_input_mirror(
+def _assert_explicit_compat_drive_input_mirror(
     compat_payload: dict,
     drive_input: dict,
     *keys: str,
@@ -192,7 +192,7 @@ def _assert_compat_drive_input_mirror(
         assert compat_payload.get(key) == drive_input.get(key)
 
 
-def _compat_drive_input_fields(drive_input: dict) -> dict:
+def _explicit_compat_drive_input_fields(drive_input: dict) -> dict:
     return {
         "drive_input": dict(drive_input),
         "activity_guards": dict(drive_input),
@@ -300,7 +300,7 @@ def _drive_cycle_failure_replay_evaluation(
         ]
     return {
         "status": "evaluated",
-        **_compat_drive_input_fields(
+        **_explicit_compat_drive_input_fields(
             {
                 "checks": {},
                 "task_family_decisions": {
@@ -2544,7 +2544,7 @@ async def test_cognitive_self_regulation_tightens_adaptive_policy_when_lm_drift_
         result["drive_input"]["endogenous_drive_policy"]["dynamic_candidate_throttle_boost"]
         == regulation["dynamic_candidate_throttle_boost"]
     )
-    _assert_compat_drive_input_mirror(
+    _assert_explicit_compat_drive_input_mirror(
         result["activity_guards"],
         result["drive_input"],
         "endogenous_drive_policy",
@@ -6273,7 +6273,7 @@ async def test_run_endogenous_drive_cycle_only_judges_candidates_kept_after_runt
         }
         return {
             "status": "evaluated",
-            **_compat_drive_input_fields(
+            **_explicit_compat_drive_input_fields(
                 {
                     "task_family_decisions": {
                         "self_learning": {
@@ -16527,6 +16527,27 @@ async def test_batch_review_accepts_drive_input_request_without_guard_probe(tmp_
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_batch_review_keeps_legacy_activity_guards_for_explicit_compat_request(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    await supervisor.plan_autonomous_chain_task({"title": "Legacy review request"})
+
+    result = await supervisor.review_autonomous_chain_tasks(
+        {
+            "activity_guards": _endogenous_drive_input_payload(self_evolution_execution=True),
+        }
+    )
+
+    assert result["status"] == "reviewed"
+    _assert_explicit_compat_drive_input_mirror(
+        result["activity_guards"],
+        result["drive_input"],
+        "user_chain_signal",
+        "decisions",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_batch_review_can_reapprove_deferred_tasks_on_later_cycle(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     await supervisor.plan_autonomous_chain_task(
@@ -16644,7 +16665,90 @@ async def test_endogenous_drive_still_plans_learning_candidates_with_active_sess
     }
 
     assert result["status"] == "planned"
+    assert "activity_guards" not in result
     assert any(task["governance_task_type"] == "self_learning" for task in backlog_snapshot["tasks"])
+
+
+@pytest.mark.unit
+def test_annotated_endogenous_judgement_omits_legacy_context_for_formal_drive_input(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    supervisor._annotate_endogenous_drive_candidates(
+        deliberation={
+            "perception": {
+                "user_mode": "quiet",
+                "system_posture": "stable",
+                "active_sessions": 0,
+                "governance_backlog_count": 1,
+            }
+        },
+        drive_input={
+            "user_mode": "quiet",
+            "system_posture": "stable",
+            "active_sessions": 0,
+            "governance_backlog_count": 1,
+        },
+        candidate_items=[
+            {
+                "title": "Formal drive-input candidate",
+                "priority": "normal",
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+                "metadata": {"endogenous_drive_key": "formal-drive-input-candidate"},
+                "evidence": {},
+            }
+        ],
+    )
+
+    history = supervisor._load_endogenous_drive_history()
+    judgement = history["judgements"][0]
+
+    assert judgement["candidate_key"] == "formal-drive-input-candidate"
+    assert judgement["drive_input_context"]["active_sessions"] == 0
+    assert "legacy_drive_input_context" not in judgement
+
+
+@pytest.mark.unit
+def test_annotated_endogenous_judgement_keeps_legacy_context_for_explicit_compat_request(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    supervisor._annotate_endogenous_drive_candidates(
+        deliberation={
+            "perception": {
+                "user_mode": "quiet",
+                "system_posture": "stable",
+                "active_sessions": 0,
+            }
+        },
+        drive_input={
+            "user_mode": "quiet",
+            "system_posture": "stable",
+            "active_sessions": 0,
+        },
+        legacy_activity_guards={
+            "user_mode": "quiet",
+            "system_posture": "stable",
+            "active_sessions": 0,
+            "autonomous_chain_gate_active": True,
+        },
+        candidate_items=[
+            {
+                "title": "Compat mirror candidate",
+                "priority": "normal",
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+                "metadata": {"endogenous_drive_key": "compat-mirror-candidate"},
+                "evidence": {},
+            }
+        ],
+    )
+
+    history = supervisor._load_endogenous_drive_history()
+    judgement = history["judgements"][0]
+
+    assert judgement["candidate_key"] == "compat-mirror-candidate"
+    assert judgement["legacy_drive_input_context"]["active_sessions"] == 0
+    assert judgement["legacy_drive_input_context"]["autonomous_chain_gate_active"] is True
 
 
 @pytest.mark.asyncio
