@@ -3318,93 +3318,7 @@ function typeLabel(t) {
   };
   return typeMap[primary] || primary.replace(/_/g, ' ') || '链路项';
 }
-function taskIdentityHint(t) {
-  const identity = t.task_identity || {};
-  const family = String(identity.task_family || t.task_family || '').trim();
-  const displayKind = String(identity.display_kind || identity.execution_kind || '').trim();
-  if (family && displayKind && family !== displayKind) {
-    return '治理动作: ' + autonomousRuntimeLabel(family) + ' · 执行动作: ' + autonomousRuntimeLabel(displayKind);
-  }
-  if (displayKind) return '执行动作: ' + autonomousRuntimeLabel(displayKind);
-  if (family) return '治理动作: ' + autonomousRuntimeLabel(family);
-  return '';
-}
-function governanceHint(t) {
-  const preview = t.governance_preview || {};
-  const summary = String(preview.summary || '').trim();
-  if (summary) return summary.slice(0, 120);
-  const direct = preview.review_outcome || null;
-  const shadow = preview.followup_suggestion || null;
-  const priority = preview.priority_adjustment || null;
-  const actionLabel = action => ({
-    approve: '放行',
-    defer: '延后',
-    cancel: '清退',
-    pause: '暂停',
-    retire: '退休建议',
-    merge: '合并建议',
-    reprioritize: '重排优先级',
-    reprioritise: '重排优先级',
-  }[String(action || '').trim().toLowerCase()] || String(action || '').trim());
-  if (direct && direct.action) return '监督者已裁定: ' + actionLabel(direct.action) + ' · ' + String(direct.reason || '').slice(0, 80);
-  if (priority && priority.priority) return '监督者已重排优先级: ' + String(priority.priority_label || priority.priority).slice(0, 24) + ' · ' + String(priority.reason || '').slice(0, 80);
-  if (shadow && shadow.action) {
-    let extra = '';
-    if (shadow.merge_into_title) extra = ' -> ' + String(shadow.merge_into_title).slice(0, 24);
-    else if (shadow.merge_into) extra = ' -> ' + String(shadow.merge_into).slice(0, 16);
-    else if (shadow.priority) extra = ' -> ' + String(shadow.priority);
-    return '监督者建议: ' + actionLabel(shadow.action) + extra + ' · ' + String(shadow.reason || '').slice(0, 80);
-  }
-  return '';
-}
 
-function endogenousCandidateKindLabel(value) {
-  const normalized = String(value || '').trim().toLowerCase();
-  return {
-    memory_maintenance: '记忆维护',
-    truthfulness_review: '真实性复核',
-    exploratory_learning: '探索学习',
-    shell_baseline_learning: '替身基线学习',
-    governance_hygiene_review: '治理卫生复核',
-    body_improvement: '替身改进',
-  }[normalized] || String(value || '').trim() || '';
-}
-
-function endogenousTopicSourceLabel(value) {
-  const normalized = String(value || '').trim().toLowerCase();
-  return {
-    activity_metadata: '活动信号',
-    cognitive_assessment_memory: '认知评估记忆',
-    shell_codebase_baseline: '替身代码基线',
-    external_research: '外部研究',
-  }[normalized] || String(value || '').trim() || '';
-}
-
-function endogenousLearningBranchLabel(value) {
-  const normalized = String(value || '').trim().toLowerCase();
-  return {
-    exploratory: '探索分支',
-    cognitive_assessment_review: '认知评估复核',
-    codebase_baseline: '代码基线',
-  }[normalized] || String(value || '').trim() || '';
-}
-
-function candidateReasonHint(task) {
-  const meta = task.metadata || {};
-  const evidence = task.evidence || {};
-  const endogenous = evidence.endogenous_drive || {};
-  const scoreBreakdown = meta.score_breakdown || endogenous.score_breakdown || {};
-  const candidateKind = endogenousCandidateKindLabel(scoreBreakdown.candidate_kind || '');
-  const topicSource = endogenousTopicSourceLabel(endogenous.topic_source || evidence.topic_source || '');
-  const learningBranch = endogenousLearningBranchLabel(endogenous.learning_branch || evidence.learning_branch || meta.learning_branch || '');
-  const utility = Number(meta.utility != null ? meta.utility : task.utility);
-  const hints = [];
-  if (candidateKind) hints.push('候选类型: ' + candidateKind);
-  if (topicSource) hints.push('信号来源: ' + topicSource);
-  if (learningBranch) hints.push('学习分支: ' + learningBranch);
-  if (Number.isFinite(utility)) hints.push('价值度 ' + Math.round(utility * 100) + '%');
-  return hints.join(' · ');
-}
 function normalizeObservationStatus(s) {
   return String(s || '').trim().toLowerCase();
 }
@@ -3696,9 +3610,10 @@ function renderAutonomousLoop(loop, options) {
     const activity = autonomousLoopStageActivity(stage);
     const readRule = String(stage.read_rule || '').trim();
     const transitionHint = String(stage.transition_hint || '').trim();
+    const sourceLabel = String(stage.source_label || '—').trim() || '—';
     return '<div class="autonomous-loop-stage ' + esc(status) + '">' +
       '<div class="autonomous-loop-topline"><span class="autonomous-loop-label">' + esc(stage.label || '阶段') +
-      '</span><span class="autonomous-loop-owner">' + esc(stage.owner || '—') + '</span></div>' +
+      '</span><span class="autonomous-loop-owner">' + esc(sourceLabel) + '</span></div>' +
       '<div class="autonomous-loop-status">' + esc(statusText) + '</div>' +
       (focusTitle ? '<div class="autonomous-loop-focus">' + esc(focusTitle).substring(0, 72) + '</div>' : '') +
       '<div class="autonomous-loop-summary">' + esc(summary).substring(0, 120) + '</div>' +
@@ -3745,74 +3660,22 @@ function chainGroupByKey(observation, key) {
   return groups.find(group => String((group || {}).key || '').trim() === String(key || '').trim()) || null;
 }
 
-function loopStages(observation) {
-  const obs = observation || {};
-  const loop = obs.loop || {};
-  return Array.isArray(loop.stages) ? loop.stages : [];
+function observationLoopStageCards(loop) {
+  const cards = Array.isArray((loop || {}).stage_cards) ? loop.stage_cards : [];
+  return cards.filter(card => card && typeof card === 'object');
 }
 
-function loopStageByKey(loop, key) {
-  const stages = Array.isArray((loop || {}).stages) ? loop.stages : [];
-  return stages.find(stage => String((stage || {}).key || '').trim() === String(key || '').trim()) || null;
-}
-
-function loopStageObservationRole(stageKey) {
-  const normalized = String(stageKey || '').trim();
-  const roleMap = {
-    api_b_judgement: 'api_b_judgement',
-    api_a_execution: 'api_a_execution',
-    mem_writeback: 'mem_writeback',
-    api_b_reread: 'api_b_reread',
-  };
-  return roleMap[normalized] || normalized || 'autonomous_observation';
-}
-
-function observationLoopStageProjection(stage) {
-  const row = stage && typeof stage === 'object' ? stage : {};
-  const focusTask = row.focus_task && typeof row.focus_task === 'object' ? row.focus_task : {};
-  const owner = String(row.owner || '').trim();
-  const rawStatus = normalizeObservationStatus(row.status || focusTask.status || 'idle') || 'idle';
-  const lane = String(row.lane || '').trim() || (owner === 'API-A' ? 'agent' : (owner === 'Mem' ? 'mem' : 'supervisor'));
-  const observationRole = String(row.observation_role || '').trim() || loopStageObservationRole(row.key);
-  return {
-    ...focusTask,
-    title: String(focusTask.title || row.label || '阶段').trim() || '阶段',
-    status: rawStatus,
-    display_status: observationDisplayStatus(
-      {
-        ...focusTask,
-        status: rawStatus,
-        status_label: row.status_label,
-      },
-      autonomousLoopStageStatusText(row) || '等待中'
-    ),
-    summary: String(
-      focusTask.summary
-      || row.summary
-      || row.chain_reason
-      || row.activity_text
-      || ''
-    ).trim(),
-    read_rule: String(row.read_rule || '').trim(),
-    transition_hint: String(row.transition_hint || '').trim(),
-    observation_role: observationRole,
-    lane,
-    stage_key: String(row.key || '').trim(),
-    stage_owner: owner || '—',
-  };
+function observationLoopStageCardByKey(loop, key) {
+  const normalized = String(key || '').trim();
+  if (!normalized) return null;
+  return observationLoopStageCards(loop).find(
+    card => String((card || {}).stage_key || '').trim() === normalized
+  ) || null;
 }
 
 function observationCounts(observation) {
   const obs = observation || {};
   return obs.counts || {};
-}
-
-function isCreativityObservationTask(task) {
-  const row = task || {};
-  const governance = String(row.governance_task_type || '').trim().toLowerCase();
-  const taskFamily = String(row.task_family || '').trim().toLowerCase();
-  const executionKind = String(row.execution_kind || '').trim().toLowerCase();
-  return governance === 'self_learning' || taskFamily === 'self_learning' || taskFamily === 'body_upgrade' || executionKind === 'body_improvement';
 }
 
 function observationRuntime(observation) {
@@ -3848,7 +3711,7 @@ function observationFocus(observation) {
     status: String(primary.status || '等待中').trim() || '等待中',
     stage_status: String(primary.stage_status || 'idle').trim().toLowerCase() || 'idle',
     stage_key: String(primary.stage_key || '').trim(),
-    stage_owner: String(primary.stage_owner || '').trim(),
+    source_label: String(primary.source_label || '').trim(),
     summary: String(primary.summary || board.summary || '').trim(),
     observation_role: String(primary.observation_role || '').trim(),
   };
@@ -3868,39 +3731,22 @@ function derivedHeroPills(observation) {
 
 function derivedMetricCards(observation) {
   const board = ((observation || {}).board || {});
-  if (Array.isArray(board.metric_cards) && board.metric_cards.length) return board.metric_cards;
-  const counts = observationCounts(observation);
-  return [
-    {key:'api_b_candidates', cls:'candidate', label:'候选形成', value:intOrZero(counts.candidates), note:'API-B'},
-    {key:'api_b_backlog', cls:'api-b', label:'治理在途', value:intOrZero(counts.api_b_backlog), note:'API-B'},
-    {key:'api_a_ready', cls:'api-a', label:'待认领窗口', value:intOrZero(counts.api_a_ready), note:'API-A'},
-    {key:'mem_recent', cls:'mem', label:'写回回流', value:intOrZero(counts.writebacks), note:'Mem'},
-  ];
+  return Array.isArray(board.metric_cards) ? board.metric_cards : [];
 }
 
 function derivedLoopRailEntries(observation) {
   const obs = observation || {};
   const loop = obs.loop || {};
-  const stages = Array.isArray(loop.stages) ? loop.stages : [];
-  const focus = observationFocus(observation);
-  return stages.map(stage => {
-    const stageKey = String((stage || {}).key || '').trim();
-    const focusRole = String(focus.observation_role || '').trim();
-    const fallbackFocus =
-      (stageKey === 'api_b_judgement' && focusRole === 'api_b_judgement') ||
-      (stageKey === 'api_a_execution' && focusRole === 'api_a_execution') ||
-      (stageKey === 'mem_writeback' && focusRole === 'mem_writeback') ||
-      (stageKey === 'api_b_reread' && focusRole === 'api_b_reread');
-    return {
-      key: stageKey,
-      label: String((stage || {}).label || '阶段').trim() || '阶段',
-      owner: String((stage || {}).owner || '—').trim() || '—',
-      status: String((stage || {}).status || 'idle').trim().toLowerCase() || 'idle',
-      state: String((stage || {}).rail_state || '').trim() || autonomousLoopStageStatusText(stage),
-      note: String((stage || {}).rail_note || '').trim() || autonomousLoopStageFocusTitle(stage) || String((stage || {}).summary || (stage || {}).read_rule || '').trim(),
-      focus: typeof (stage || {}).is_focus === 'boolean' ? stage.is_focus : fallbackFocus,
-    };
-  });
+  const projected = Array.isArray(loop.rail_entries) ? loop.rail_entries : [];
+  return projected.map(entry => ({
+    key: String((entry || {}).key || '').trim(),
+    label: String((entry || {}).label || '阶段').trim() || '阶段',
+    sourceLabel: String((entry || {}).source_label || '—').trim() || '—',
+    status: String((entry || {}).status || 'idle').trim().toLowerCase() || 'idle',
+    state: String((entry || {}).state || '').trim() || '等待中',
+    note: String((entry || {}).note || '').trim(),
+    focus: Boolean((entry || {}).focus),
+  }));
 }
 
 function derivedObservationNotes(observation) {
@@ -4109,66 +3955,17 @@ function observationGroupBadgeClass(group) {
   return observationStateBadgeClass((group || {}).segment_status || 'planned');
 }
 
-function observationSegmentDecor(group) {
-  const projected = group && typeof group.display_decor === 'object' ? group.display_decor : null;
-  if (projected) {
-    return {
-      cls: String(projected.cls || 'supervisor'),
-      icon: String(projected.icon || '🧠'),
-    };
-  }
-  const key = String((group || {}).key || '').trim();
-  if (key === 'api_b_candidates') return {cls: 'candidate', icon: '🪄'};
-  if (key === 'api_a_ready') return {cls: 'agent', icon: '🤖'};
-  if (key === 'mem_recent') return {cls: 'mem', icon: '💾'};
-  return {cls: 'supervisor', icon: '🧠'};
-}
-
-function observationSegmentDisplayCopy(group) {
-  const projected = group && typeof group.display_copy === 'object' ? group.display_copy : null;
-  if (projected) {
-    return {
-      itemLabel: String(projected.item_label || '链路项'),
-      eventLabel: String(projected.event_label || '链路事件'),
-      traceLabel: String(projected.trace_label || '闭环回合'),
-      footerLabel: String(projected.footer_label || '查看最近闭环记录'),
-      drillLabel: String(projected.drill_label || '🔬 闭环细节'),
-    };
-  }
-  const key = String((group || {}).key || '').trim();
-  if (key === 'api_b_candidates') {
-    return {
-      itemLabel: '候选',
-      eventLabel: '候选事件',
-      traceLabel: '候选回合',
-      footerLabel: '查看候选形成段的最近闭环记录',
-      drillLabel: '🔬 候选细节',
-    };
-  }
-  if (key === 'api_a_ready') {
-    return {
-      itemLabel: '待认领项',
-      eventLabel: '执行回报',
-      traceLabel: '执行回合',
-      footerLabel: '查看待认领窗口与执行回报记录',
-      drillLabel: '🔬 执行细节',
-    };
-  }
-  if (key === 'mem_recent') {
-    return {
-      itemLabel: '回流结果',
-      eventLabel: '回流事件',
-      traceLabel: '回流回合',
-      footerLabel: '查看 Mem 回流后的最近闭环记录',
-      drillLabel: '🔬 回流细节',
-    };
-  }
+function observationSegmentPresentation(group) {
+  const row = group && typeof group === 'object' ? group : {};
   return {
-    itemLabel: '治理项',
-    eventLabel: '治理事件',
-    traceLabel: '治理回合',
-    footerLabel: '查看治理在途段的最近闭环记录',
-    drillLabel: '🔬 治理细节',
+    sourceLabel: String(row.source_label || '自主链路').trim() || '自主链路',
+    decorClass: String(row.decor_class || 'supervisor').trim() || 'supervisor',
+    decorIcon: String(row.decor_icon || '🧠').trim() || '🧠',
+    itemLabel: String(row.item_label || '链路项').trim() || '链路项',
+    eventLabel: String(row.event_label || '链路事件').trim() || '链路事件',
+    traceLabel: String(row.trace_label || '闭环回合').trim() || '闭环回合',
+    footerLabel: String(row.footer_label || '查看最近闭环记录').trim() || '查看最近闭环记录',
+    drillLabel: String(row.drill_label || '🔬 闭环细节').trim() || '🔬 闭环细节',
   };
 }
 
@@ -4183,7 +3980,7 @@ function buildChainSectionBand(group, options) {
   const payloadCount = observationGroupCount(group);
   const eventCount = observationGroupEventCount(group);
   const traceCount = observationGroupTraceCount(group);
-  const copy = observationSegmentDisplayCopy(group);
+  const presentation = observationSegmentPresentation(group);
   const latestSummary = String(
     group.latest_summary
     || (latestEvent && (latestEvent.summary || autonomousEventTypeLabel(latestEvent.event_type)))
@@ -4200,7 +3997,7 @@ function buildChainSectionBand(group, options) {
     '<div class="watch-band-title-wrap">' +
       '<div class="watch-band-title">' + esc(group.label || '闭环分段') + '</div>' +
       '<div class="watch-band-subline">' +
-        '<span class="watch-band-owner">' + esc(group.owner || '自主链路') + '</span>' +
+        '<span class="watch-band-owner">' + esc(presentation.sourceLabel) + '</span>' +
         '<span class="watch-band-stage">' + esc(group.stage_label || '闭环阶段') + '</span>' +
       '</div>' +
       '<div class="watch-band-summary">' + esc(latestSummary) + '</div>' +
@@ -4233,9 +4030,9 @@ function buildChainSectionBand(group, options) {
     (nextStep ? '<div class="game-card-sub" style="margin-top:4px;color:rgba(226,176,74,.86);">下一跳: ' +
       esc(String(nextStep).substring(0, 120)) + '</div>' : '') +
     '<div class="game-card-meta"><div class="game-card-tags">' +
-    '<span class="game-card-tag memory">' + esc(copy.itemLabel) + ' ' + esc(payloadCount) + '</span>' +
-    '<span class="game-card-tag truthfulness">' + esc(copy.eventLabel) + ' ' + esc(eventCount) + '</span>' +
-    '<span class="game-card-tag creativity">' + esc(copy.traceLabel) + ' ' + esc(traceCount) + '</span>' +
+    '<span class="game-card-tag memory">' + esc(presentation.itemLabel) + ' ' + esc(payloadCount) + '</span>' +
+    '<span class="game-card-tag truthfulness">' + esc(presentation.eventLabel) + ' ' + esc(eventCount) + '</span>' +
+    '<span class="game-card-tag creativity">' + esc(presentation.traceLabel) + ' ' + esc(traceCount) + '</span>' +
     '</div></div>';
   body.append(summaryCard);
   const items = Array.isArray(group.items) ? group.items : [];
@@ -4264,24 +4061,21 @@ function buildChainSectionBand(group, options) {
   footer.className = 'watch-band-footer';
     footer.innerHTML =
     '<span class="watch-band-footnote">' +
-    esc(
-      payloadCount || eventCount || traceCount
-        ? (copy.itemLabel + ' ' + payloadCount + ' · ' + copy.eventLabel + ' ' + eventCount + ' · ' + copy.traceLabel + ' ' + traceCount)
-        : copy.footerLabel
-    ) +
+    esc(String(group.footer_text || presentation.footerLabel || '').trim()) +
     '</span>' +
-    '<span class="drill-link" data-drill="autonomous" data-chain-group="' + esc(group.key || '') + '">' + esc(copy.drillLabel) + '</span>';
+    '<span class="drill-link" data-drill="autonomous" data-chain-group="' + esc(group.key || '') + '">' + esc(presentation.drillLabel) + '</span>';
   band.append(footer);
   return band;
 }
 
 function appendLoopStageGrid(container, observation, stageKeys, title) {
-  const stages = loopStages(observation);
+  const loop = (observation || {}).loop || {};
+  const projectedCards = observationLoopStageCards(loop);
+  const projectedByKey = new Map(projectedCards.map(card => [String(card.stage_key || '').trim(), card]));
   const items = (Array.isArray(stageKeys) && stageKeys.length
-    ? stageKeys.map(key => loopStageByKey((observation || {}).loop || {}, key)).filter(Boolean)
-    : stages
-  ).map(stage => observationLoopStageProjection(stage))
-   .filter(item => item && Object.keys(item).length);
+    ? stageKeys.map(key => projectedByKey.get(String(key || '').trim())).filter(Boolean)
+    : projectedCards
+  ).filter(item => item && Object.keys(item).length);
   if (!container || !items.length) return;
   const section = document.createElement('section');
   section.className = 'observation-stack';
@@ -4319,8 +4113,7 @@ function buildChainHero(state) {
   const focus = observationFocus(obs);
   const recent = recentAutonomousActivity(obs);
   const railEntries = derivedLoopRailEntries(obs);
-  const focusStage = loopStageByKey(loop, focus.stage_key) || {};
-  const focusCard = observationLoopStageProjection(focusStage);
+  const focusCard = observationLoopStageCardByKey(loop, focus.stage_key) || {};
   const focusBadgeClass = observationStateBadgeClass(focus.stage_status || focusCard.status || focus.status);
   const focusStatusText = String(focus.status || observationDisplayStatus(focusCard, '等待中')).trim() || '等待中';
   const hero = document.createElement('section');
@@ -4328,7 +4121,7 @@ function buildChainHero(state) {
   hero.innerHTML =
     '<div class="chain-hero-top">' +
       '<div class="chain-hero-main">' +
-        '<div class="chain-hero-label">API-B 主视角观测协议 · v' + esc(obs.read_model_version != null ? obs.read_model_version : 10) + '</div>' +
+        '<div class="chain-hero-label">API-B 主视角观测协议 · v' + esc(obs.read_model_version != null ? obs.read_model_version : 11) + '</div>' +
         '<div class="chain-hero-title">' + esc(board.headline || 'API-B 主视角自主闭环总览') + '</div>' +
         '<div class="chain-hero-summary">' + esc(board.hero_summary || board.summary || chain.summary || 'Web 小屋以 API-B 为主视角，只读观察判断、治理、API-A 执行回报、Mem 回流与再读取闭环。').substring(0, 220) + '</div>' +
       '</div>' +
@@ -4348,7 +4141,7 @@ function buildChainHero(state) {
     rail.className = 'chain-stage-rail';
     rail.innerHTML = railEntries.map(entry =>
       '<div class="chain-stage-stop ' + esc(entry.status || 'idle') + (entry.focus ? ' focus' : '') + '">' +
-        '<div class="chain-stage-kicker"><span>' + esc(entry.owner || '—') + '</span>' +
+        '<div class="chain-stage-kicker"><span>' + esc(entry.sourceLabel || '—') + '</span>' +
         '<span>' + esc(entry.focus ? '当前落点' : '闭环段') + '</span></div>' +
         '<div class="chain-stage-name">' + esc(entry.label || '阶段') + '</div>' +
         '<div class="chain-stage-state">' + esc(entry.state || '等待中') + '</div>' +
@@ -4393,7 +4186,7 @@ function renderAutonomousDrawer(state) {
   const recent = recentAutonomousActivity(obs);
   const loop = obs.loop || {};
   const orderedGroups = chainGroups(obs);
-  const rereadCard = observationLoopStageProjection(loopStageByKey(loop, 'api_b_reread') || {});
+  const rereadCard = observationLoopStageCardByKey(loop, 'api_b_reread') || {};
   const focusGroupKey = String((drawerContext || {}).chainGroup || '').trim();
   const focusTraceId = String((drawerContext || {}).chainTrace || '').trim();
   const focusTraceExpanded = Boolean((drawerContext || {}).chainTraceExpanded);
@@ -4412,14 +4205,8 @@ function renderAutonomousDrawer(state) {
     const payloadCount = observationGroupCount(group);
     const eventCount = observationGroupEventCount(group);
     const traceCount = observationGroupTraceCount(group);
-    const copy = observationSegmentDisplayCopy(group);
-    const focusSummary = String(
-      (group && group.latest_summary)
-      || (focusItem && focusItem.summary)
-      || (group && group.summary)
-      || (group && group.empty_text)
-      || '暂无链路信号'
-    ).substring(0, 72);
+    const presentation = observationSegmentPresentation(group);
+    const focusSummary = String((group && group.latest_summary) || '').substring(0, 72);
     const readRule = String((group && group.read_rule) || '').trim();
     const focusTitle = focusItem && focusItem.title
       ? String(focusItem.title).substring(0, 48)
@@ -4427,9 +4214,9 @@ function renderAutonomousDrawer(state) {
     return '<div class="segment-col ' + cls + '">' +
       '<div class="segment-col-head">' + icon + ' ' + esc(group.label || '闭环分段') +
       ' <span class="segment-col-tag">' + esc(group.stage_label || '闭环阶段') + '</span></div>' +
-      '<div class="segment-metric"><span>' + esc(copy.itemLabel) + '</span><b>' + payloadCount + '</b></div>' +
-      '<div class="segment-metric"><span>' + esc(copy.eventLabel) + '</span><b>' + eventCount + '</b></div>' +
-      '<div class="segment-metric"><span>' + esc(copy.traceLabel) + '</span><b>' + traceCount + '</b></div>' +
+      '<div class="segment-metric"><span>' + esc(presentation.itemLabel) + '</span><b>' + payloadCount + '</b></div>' +
+      '<div class="segment-metric"><span>' + esc(presentation.eventLabel) + '</span><b>' + eventCount + '</b></div>' +
+      '<div class="segment-metric"><span>' + esc(presentation.traceLabel) + '</span><b>' + traceCount + '</b></div>' +
       '<div class="segment-active"><div class="la-title">' + esc(focusTitle) +
       '</div><div style="margin-top:3px;">' + esc(group.segment_status_label || '闭环观察') +
       (focusSummary ? ' · ' + esc(focusSummary) : '') +
@@ -4447,21 +4234,14 @@ function renderAutonomousDrawer(state) {
       esc(String(recent.summary || '').substring(0, 160)) + '</div>';
   }
   if (focusGroup) {
-    const copy = observationSegmentDisplayCopy(focusGroup);
+    const presentation = observationSegmentPresentation(focusGroup);
     const focusItems = Array.isArray(focusGroup.items) ? focusGroup.items : [];
     const focusReadRule = String(focusGroup.read_rule || '').trim();
     const focusNextStep = String(focusGroup.next_step || '').trim();
-    const focusTraceIds = [];
-    focusEvents.forEach(event => {
-      const traceId = String(event.trace_id || '').trim();
-      if (traceId && !focusTraceIds.includes(traceId)) focusTraceIds.push(traceId);
-    });
     html += '<div class="drawer-section">' +
       '<div class="drawer-section-label">' + esc(focusGroup.label || '闭环分段') + '</div>' +
       '<div class="drawer-sub" style="margin:0;">' +
-      esc(focusGroup.owner || '自主链路') + ' · ' +
-      esc(focusGroup.stage_label || '闭环阶段') + ' · ' +
-      esc(focusGroup.summary || focusGroup.empty_text || '暂无链路说明') +
+      esc(String(focusGroup.drawer_summary || focusGroup.summary || focusGroup.empty_text || '暂无链路说明').substring(0, 220)) +
       '</div>' +
       (focusReadRule
         ? '<div class="drawer-sub" style="margin-top:8px;">读法: ' + esc(focusReadRule).substring(0, 140) + '</div>'
@@ -4469,22 +4249,21 @@ function renderAutonomousDrawer(state) {
       (focusNextStep
         ? '<div class="drawer-sub" style="margin-top:4px;">下一跳: ' + esc(focusNextStep).substring(0, 140) + '</div>'
         : '') +
-      '<div class="drawer-sub" style="margin-top:8px;">当前可见' + esc(copy.itemLabel) + ' ' + focusItems.length +
-      ' · 最近' + esc(copy.eventLabel) + ' ' + focusEvents.length +
-      (focusTraceIds.length ? (' · 回合 ' + esc(focusTraceIds.slice(0, 3).join(' / '))) : '') +
+      '<div class="drawer-sub" style="margin-top:8px;">' +
+      esc(String(focusGroup.drawer_counts_summary || '').substring(0, 220)) +
       '</div>' +
       (focusItems.length
         ? focusItems.slice(0, 4).map(item =>
             '<div class="segment-active" style="margin-top:6px;"><div class="la-title">' +
             esc(String(item.title || '未命名').substring(0, 56)) + '</div>' +
             '<div style="margin-top:3px;">状态: ' + esc(observationDisplayStatus(item, '—')) +
-            (governanceHint(item) ? ' · ' + esc(String(governanceHint(item)).substring(0, 88)) : '') +
+            (item.governance_hint ? ' · ' + esc(String(item.governance_hint).substring(0, 88)) : '') +
             (item.summary ? ' · ' + esc(String(item.summary).substring(0, 88)) : '') +
             '</div></div>'
           ).join('')
-        : '<div class="drawer-sub" style="margin-top:8px;">当前这一段没有可见' + esc(copy.itemLabel) + '，但仍可能有最近' + esc(copy.eventLabel) + '。</div>') +
+        : '<div class="drawer-sub" style="margin-top:8px;">' + esc(String(focusGroup.drawer_empty_items_text || '').substring(0, 160)) + '</div>') +
       '</div>';
-    html += '<div class="drawer-section"><div class="drawer-section-label">最近' + esc(copy.eventLabel) + '</div>' +
+    html += '<div class="drawer-section"><div class="drawer-section-label">' + esc(String(focusGroup.drawer_recent_events_label || presentation.eventLabel || '最近链路事件').substring(0, 36)) + '</div>' +
       (selectedTraceEvents.length
         ? selectedTraceEvents.slice(0, 6).map(event =>
             '<div class="segment-active" style="margin-top:6px;"><div class="la-title">' +
@@ -4497,7 +4276,7 @@ function renderAutonomousDrawer(state) {
           ).join('')
         : '<div class="drawer-sub" style="margin:0;">这一段暂时没有命中最近闭环回合记录。</div>') +
       '</div>';
-    html += '<div class="drawer-section"><div class="drawer-section-label">最近' + esc(copy.traceLabel) + '</div>' +
+    html += '<div class="drawer-section"><div class="drawer-section-label">' + esc(String(focusGroup.drawer_recent_traces_label || presentation.traceLabel || '最近闭环回合').substring(0, 36)) + '</div>' +
       (focusTraces.length
         ? '<div class="trace-chip-row">' +
           focusTraces.slice(0, 5).map(trace =>
@@ -4594,8 +4373,8 @@ function renderAutonomousDrawer(state) {
   if (orderedGroups.length) {
     html += '<div class="segment-grid">' +
       orderedGroups.map(group => {
-        const decor = observationSegmentDecor(group);
-        return segmentColFromGroup(decor.cls, decor.icon, group);
+        const presentation = observationSegmentPresentation(group);
+        return segmentColFromGroup(presentation.decorClass, presentation.decorIcon, group);
       }).join('') +
       '</div>';
   }
@@ -4691,19 +4470,9 @@ function renderProvenanceDrawer(state) {
       const rawTags = Array.isArray(meta.core_values) ? meta.core_values : (Array.isArray(c.value_tags) ? c.value_tags : []);
       const rationale = c.rationale || meta.rationale || '';
       const tags = rawTags.map(tag => esc(cognitionTypeLabel('core_value', tag))).join(' · ');
-      const candidateKind = endogenousCandidateKindLabel(scoreBreakdown.candidate_kind || '');
-      const topicSource = endogenousTopicSourceLabel(endogenous.topic_source || evidence.topic_source || '');
-      const learningBranch = endogenousLearningBranchLabel(endogenous.learning_branch || evidence.learning_branch || meta.learning_branch || '');
-      const reasonHint = candidateReasonHint(c);
+      const reasonHint = String(c.candidate_hint || '').trim();
       return '<div class="segment-active" style="margin-top:6px;"><div class="la-title">' + esc(String(c.title || '未命名').substring(0, 52)) + '</div>' +
         (reasonHint ? '<div style="margin-top:3px;">浮出原因: ' + esc(String(reasonHint).substring(0, 120)) + '</div>' : '') +
-        ((candidateKind || topicSource || learningBranch)
-          ? '<div style="margin-top:3px;">' +
-            (candidateKind ? '候选类型: ' + esc(candidateKind) : '') +
-            (topicSource ? (candidateKind ? ' · ' : '') + '信号来源: ' + esc(topicSource) : '') +
-            (learningBranch ? ((candidateKind || topicSource) ? ' · ' : '') + '学习分支: ' + esc(learningBranch) : '') +
-            '</div>'
-          : '') +
         (rationale ? '<div style="margin-top:3px;">理由: ' + esc(String(rationale).substring(0, 120)) + '</div>' : '') +
         (tags ? '<div style="margin-top:3px;color:var(--text-muted);">价值标签: ' + tags + '</div>' : '') + '</div>';
     }).join('');
@@ -4786,6 +4555,8 @@ function renderChainPanel(state) {
 }
 
 function observationRoleStageLabel(task) {
+  const projected = String(task.observation_stage_label || '').trim();
+  if (projected) return projected;
   const role = String(task.observation_role || '').trim();
   const labels = {
     api_b_judgement: 'API-B 判断阶段',
@@ -4892,13 +4663,8 @@ function buildObservationCard(task, options) {
 }
 
 function buildStageCard(task) {
-  const subtitle = [
-    observationRoleStageLabel(task),
-    task.stage_owner ? ('责任侧: ' + String(task.stage_owner).substring(0, 24)) : '',
-    task.read_rule ? String(task.read_rule).substring(0, 88) : '',
-    task.transition_hint ? ('下一跳: ' + String(task.transition_hint).substring(0, 56)) : '',
-    task.summary ? String(task.summary).substring(0, 100) : '',
-  ].filter(Boolean).join(' · ') || '自主闭环阶段观察';
+  const projected = String(task.card_subtitle || '').trim();
+  const subtitle = projected || '自主闭环阶段观察';
   return buildObservationCard(task, {
     subtitle,
     extraTags: [{text: '闭环阶段', cls: 'truthfulness'}],
@@ -4909,13 +4675,8 @@ function buildStageCard(task) {
 }
 
 function buildSectionCard(task) {
-  const hints = [];
-  const ih = taskIdentityHint(task);
-  if (ih) hints.push(ih);
-  const gh = governanceHint(task);
-  if (gh) hints.push(gh);
-  if (task.summary) hints.push(String(task.summary).substring(0, 100));
-  const subtitle = hints.join(' · ').substring(0, 160) || typeLabel(task);
+  const projected = String(task.observation_card_subtitle || '').trim();
+  const subtitle = projected || typeLabel(task);
   return buildObservationCard(task, {
     subtitle,
     extraTags: [{text: '闭环观察', cls: 'memory'}],
@@ -4926,11 +4687,8 @@ function buildSectionCard(task) {
 }
 
 function buildCandidateCard(task) {
-  const subtitle = [
-    '内生驱动候选形成',
-    candidateReasonHint(task),
-    task.summary ? String(task.summary).substring(0, 100) : '',
-  ].filter(Boolean).join(' · ') || '等待 API-B 判断';
+  const projected = String(task.observation_card_subtitle || '').trim();
+  const subtitle = projected || '等待 API-B 判断';
   return buildObservationCard(task, {
     subtitle,
     extraTags: [{text: '候选形成', cls: 'creativity'}],
@@ -5298,7 +5056,8 @@ function renderObservationPanel(state) {
   const boundaryNote = document.createElement('div');
   boundaryNote.className = 'watch-inline-note';
   boundaryNote.textContent = String(
-    loop.boundary
+    (obs.board || {}).boundary_note
+    || loop.boundary
     || 'Web 小屋只观察 API-B 主导的自主链路，不展示用户聊天内容。'
   );
   body.append(boundaryNote);
@@ -6849,18 +6608,6 @@ class SupervisorUIMixin:
             "retry",
         }
 
-    def _ui_task_sort_key(self, task: Dict[str, Any]) -> tuple[int, str]:
-        status = self._normalize_observation_status(task.get("status"))
-        order = {
-            "running": 0,
-            "approved": 1,
-            "planned": 2,
-            "deferred": 3,
-            "paused": 4,
-        }
-        updated = str(task.get("updated_at") or task.get("created_at") or "")
-        return (order.get(status, 9), updated)
-
     def _chain_projection_phase_rank(self, task: Dict[str, Any]) -> int:
         status = self._observation_status_value(task)
         if status in {"active", "running"}:
@@ -6895,6 +6642,256 @@ class SupervisorUIMixin:
 
     def _observation_role_tag(self, task: Dict[str, Any]) -> str:
         return "agent" if self._is_api_a_lane_family_task(task) else "supervisor"
+
+    def _ui_observation_task_type_label(self, task: Dict[str, Any]) -> str:
+        observation_role = str(task.get("observation_role") or "").strip()
+        mapping = {
+            "mem_writeback": "Mem 写回",
+            "api_b_reread": "再次判断",
+            "api_b_judgement": "API-B 判断",
+            "api_a_execution": "API-A 执行回报",
+            "candidate": "候选形成",
+        }
+        if observation_role in mapping:
+            return mapping[observation_role]
+        identity = dict(task.get("task_identity") or {})
+        display_label = str(identity.get("display_label") or "").strip()
+        if display_label:
+            return display_label
+        display_kind = str(
+            identity.get("display_kind") or task.get("execution_kind") or ""
+        ).strip()
+        governance = str(task.get("governance_task_type") or "").strip()
+        family = str(task.get("task_family") or "").strip()
+        primary = display_kind or governance or family
+        labels = {
+            "self_learning": "自主学习",
+            "body_improvement": "替身改进",
+            "memory_maintenance": "记忆维护",
+            "self_evolution": "自主改进",
+            "general_self_evolution": "通用自主改进",
+            "body_switch": "身体切换",
+            "body_upgrade": "替身升级",
+        }
+        return labels.get(primary, primary.replace("_", " ") if primary else "链路项")
+
+    def _ui_observation_identity_hint(self, task: Dict[str, Any]) -> str:
+        identity = dict(task.get("task_identity") or {})
+        family = str(identity.get("task_family") or task.get("task_family") or "").strip()
+        display_kind = str(
+            identity.get("display_kind") or identity.get("execution_kind") or ""
+        ).strip()
+        if family and display_kind and family != display_kind:
+            return (
+                f"治理动作: {self._ui_runtime_activity_label(family)}"
+                f" · 执行动作: {self._ui_runtime_activity_label(display_kind)}"
+            )
+        if display_kind:
+            return f"执行动作: {self._ui_runtime_activity_label(display_kind)}"
+        if family:
+            return f"治理动作: {self._ui_runtime_activity_label(family)}"
+        return ""
+
+    def _ui_observation_governance_hint(self, task: Dict[str, Any]) -> str:
+        preview = dict(task.get("governance_preview") or {})
+        summary = str(preview.get("summary") or "").strip()
+        if summary:
+            return summary[:120]
+        direct = dict(preview.get("review_outcome") or {})
+        shadow = dict(preview.get("followup_suggestion") or {})
+        priority = dict(preview.get("priority_adjustment") or {})
+        action_labels = {
+            "approve": "放行",
+            "defer": "延后",
+            "cancel": "清退",
+            "pause": "暂停",
+            "retire": "退休建议",
+            "merge": "合并建议",
+            "reprioritize": "重排优先级",
+            "reprioritise": "重排优先级",
+        }
+
+        def action_label(value: Any) -> str:
+            normalized = str(value or "").strip().lower()
+            return action_labels.get(normalized, str(value or "").strip())
+
+        if direct.get("action"):
+            return (
+                f"监督者已裁定: {action_label(direct.get('action'))}"
+                f" · {str(direct.get('reason') or '').strip()[:80]}"
+            ).strip(" ·")
+        if priority.get("priority"):
+            return (
+                f"监督者已重排优先级: "
+                f"{str(priority.get('priority_label') or priority.get('priority') or '').strip()[:24]}"
+                f" · {str(priority.get('reason') or '').strip()[:80]}"
+            ).strip(" ·")
+        if shadow.get("action"):
+            extra = ""
+            if shadow.get("merge_into_title"):
+                extra = f" -> {str(shadow.get('merge_into_title') or '').strip()[:24]}"
+            elif shadow.get("merge_into"):
+                extra = f" -> {str(shadow.get('merge_into') or '').strip()[:16]}"
+            elif shadow.get("priority"):
+                extra = f" -> {str(shadow.get('priority') or '').strip()}"
+            return (
+                f"监督者建议: {action_label(shadow.get('action'))}{extra}"
+                f" · {str(shadow.get('reason') or '').strip()[:80]}"
+            ).strip(" ·")
+        return ""
+
+    def _ui_observation_candidate_hint(self, task: Dict[str, Any]) -> str:
+        metadata = dict(task.get("metadata") or {})
+        evidence = dict(task.get("evidence") or {})
+        endogenous = dict(evidence.get("endogenous_drive") or {})
+        score_breakdown = dict(
+            metadata.get("score_breakdown")
+            or endogenous.get("score_breakdown")
+            or {}
+        )
+        candidate_kind = str(score_breakdown.get("candidate_kind") or "").strip().lower()
+        topic_source = str(
+            endogenous.get("topic_source")
+            or evidence.get("topic_source")
+            or ""
+        ).strip().lower()
+        learning_branch = str(
+            endogenous.get("learning_branch")
+            or evidence.get("learning_branch")
+            or metadata.get("learning_branch")
+            or ""
+        ).strip().lower()
+        candidate_kind_label = {
+            "memory_maintenance": "记忆维护",
+            "truthfulness_review": "真实性复核",
+            "exploratory_learning": "探索学习",
+            "shell_baseline_learning": "替身基线学习",
+            "governance_hygiene_review": "治理卫生复核",
+            "body_improvement": "替身改进",
+        }.get(candidate_kind, "")
+        topic_source_label = {
+            "activity_metadata": "活动信号",
+            "cognitive_assessment_memory": "认知评估记忆",
+            "shell_codebase_baseline": "替身代码基线",
+            "external_research": "外部研究",
+        }.get(topic_source, "")
+        learning_branch_label = {
+            "exploratory": "探索分支",
+            "cognitive_assessment_review": "认知评估复核",
+            "codebase_baseline": "代码基线",
+        }.get(learning_branch, "")
+        try:
+            utility = float(
+                metadata.get("utility")
+                if metadata.get("utility") is not None
+                else task.get("utility")
+            )
+        except Exception:
+            utility = float("nan")
+        hints: List[str] = []
+        if candidate_kind_label:
+            hints.append(f"候选类型: {candidate_kind_label}")
+        if topic_source_label:
+            hints.append(f"信号来源: {topic_source_label}")
+        if learning_branch_label:
+            hints.append(f"学习分支: {learning_branch_label}")
+        if utility == utility:
+            hints.append(f"价值度 {round(utility * 100)}%")
+        return " · ".join(hints)
+
+    def _ui_observation_card_subtitle(self, task: Dict[str, Any]) -> str:
+        observation_role = str(task.get("observation_role") or "").strip()
+        summary = str(task.get("summary") or "").strip()[:100]
+        if observation_role == "candidate":
+            parts = ["内生驱动候选形成", self._ui_observation_candidate_hint(task), summary]
+            return " · ".join([part for part in parts if part]) or "等待 API-B 判断"
+        parts = [
+            self._ui_observation_identity_hint(task),
+            self._ui_observation_governance_hint(task),
+            summary,
+        ]
+        return " · ".join([part for part in parts if part])[:160] or self._ui_observation_task_type_label(task)
+
+    def _ui_observation_stage_subtitle(self, stage: Dict[str, Any]) -> str:
+        parts = [
+            str(stage.get("observation_stage_label") or stage.get("label") or "").strip(),
+            (
+                f"观测来源: {str(stage.get('source_label') or '').strip()}"
+                if str(stage.get("source_label") or "").strip()
+                else ""
+            ),
+            str(stage.get("read_rule") or "").strip()[:88],
+            (
+                f"下一跳: {str(stage.get('transition_hint') or '').strip()[:56]}"
+                if str(stage.get("transition_hint") or "").strip()
+                else ""
+            ),
+            str(stage.get("summary") or "").strip()[:100],
+        ]
+        return " · ".join([part for part in parts if part])[:200] or "自主闭环阶段观察"
+
+    def _project_ui_observation_stage_card(
+        self,
+        stage: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        row = dict(stage or {})
+        focus_task = dict(row.get("focus_task") or {})
+        raw_status = self._observation_status_value(
+            {
+                **focus_task,
+                "status": row.get("status") or focus_task.get("status") or "idle",
+            }
+        ) or "idle"
+        lane = str(row.get("lane") or focus_task.get("lane") or "").strip() or "supervisor"
+        observation_role = (
+            str(row.get("observation_role") or "").strip()
+            or str(row.get("key") or "").strip()
+            or "autonomous_observation"
+        )
+        observation_stage_label = (
+            str(row.get("observation_stage_label") or row.get("label") or "").strip()
+            or "自主闭环阶段"
+        )
+        display_payload = {
+            **focus_task,
+            "status": raw_status,
+            "status_label": row.get("status_label"),
+            "display_status": row.get("display_status"),
+        }
+        return {
+            **focus_task,
+            "title": str(focus_task.get("title") or row.get("label") or "阶段").strip() or "阶段",
+            "status": raw_status,
+            "display_status": self._observation_display_status(display_payload),
+            "summary": str(
+                focus_task.get("summary")
+                or row.get("summary")
+                or row.get("chain_reason")
+                or row.get("activity_text")
+                or ""
+            ).strip(),
+            "read_rule": str(row.get("read_rule") or "").strip(),
+            "transition_hint": str(row.get("transition_hint") or "").strip(),
+            "observation_role": observation_role,
+            "observation_stage_label": observation_stage_label,
+            "lane": lane,
+            "stage_key": str(row.get("key") or "").strip(),
+            "source_label": str(row.get("source_label") or "").strip() or "—",
+            "card_subtitle": str(row.get("card_subtitle") or "").strip(),
+        }
+
+    @staticmethod
+    def _project_ui_observation_rail_entry(stage: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        row = dict(stage or {})
+        return {
+            "key": str(row.get("key") or "").strip(),
+            "label": str(row.get("label") or "阶段").strip() or "阶段",
+            "source_label": str(row.get("source_label") or "—").strip() or "—",
+            "status": str(row.get("status") or "idle").strip().lower() or "idle",
+            "state": str(row.get("rail_state") or "").strip() or "等待中",
+            "note": str(row.get("rail_note") or row.get("summary") or "").strip(),
+            "focus": bool(row.get("is_focus")),
+        }
 
     def _build_observation_card(
         self,
@@ -6931,6 +6928,11 @@ class SupervisorUIMixin:
             card["display_status"] = str(display_status).strip() or "待定"
         elif card.get("display_status") is None:
             card["display_status"] = self._observation_display_status(card)
+        card["identity_hint"] = self._ui_observation_identity_hint(card)
+        card["governance_hint"] = self._ui_observation_governance_hint(card)
+        card["candidate_hint"] = self._ui_observation_candidate_hint(card)
+        card["observation_type_label"] = self._ui_observation_task_type_label(card)
+        card["observation_card_subtitle"] = self._ui_observation_card_subtitle(card)
         return card
 
     def _build_observation_group(
@@ -6941,7 +6943,7 @@ class SupervisorUIMixin:
         empty_text: str,
         items: List[Dict[str, Any]],
         emphasis: str = "neutral",
-        owner: str = "",
+        source_label: str = "",
         stage_label: str = "",
         summary: str = "",
         order: int = 0,
@@ -6961,22 +6963,18 @@ class SupervisorUIMixin:
             "label": label,
             "empty_text": empty_text,
             "emphasis": emphasis,
-            "owner": owner,
+            "source_label": str(source_label or "").strip() or "自主链路",
             "stage_label": stage_label,
             "summary": summary,
             "order": order,
             "segment_kind": segment_kind,
-            "display_decor": {
-                "cls": str(decor_cls or "").strip() or "supervisor",
-                "icon": str(decor_icon or "").strip() or "🧠",
-            },
-            "display_copy": {
-                "item_label": str(item_label or "").strip() or "链路项",
-                "event_label": str(event_label or "").strip() or "链路事件",
-                "trace_label": str(trace_label or "").strip() or "闭环回合",
-                "footer_label": str(footer_label or "").strip() or "查看最近闭环记录",
-                "drill_label": str(drill_label or "").strip() or "🔬 闭环细节",
-            },
+            "decor_class": str(decor_cls or "").strip() or "supervisor",
+            "decor_icon": str(decor_icon or "").strip() or "🧠",
+            "item_label": str(item_label or "").strip() or "链路项",
+            "event_label": str(event_label or "").strip() or "链路事件",
+            "trace_label": str(trace_label or "").strip() or "闭环回合",
+            "footer_label": str(footer_label or "").strip() or "查看最近闭环记录",
+            "drill_label": str(drill_label or "").strip() or "🔬 闭环细节",
             "read_rule": str(read_rule or "").strip(),
             "next_step": str(next_step or "").strip(),
             "count": len(items),
@@ -7237,6 +7235,10 @@ class SupervisorUIMixin:
                 if items
                 else (dict(focus_item) if isinstance(focus_item, dict) else None)
             )
+            item_label = str(section.get("item_label") or "").strip() or "链路项"
+            event_label = str(section.get("event_label") or "").strip() or "链路事件"
+            trace_label = str(section.get("trace_label") or "").strip() or "闭环回合"
+            footer_label = str(section.get("footer_label") or "").strip() or "查看最近闭环记录"
             latest_summary = ""
             if recent_events:
                 latest_summary = str(recent_events[0].get("summary") or "").strip()
@@ -7245,6 +7247,35 @@ class SupervisorUIMixin:
             if not latest_summary:
                 latest_summary = str(section.get("summary") or section.get("empty_text") or "").strip()
             section["latest_summary"] = latest_summary[:160]
+            trace_ids = [
+                str(trace.get("trace_id") or "").strip()
+                for trace in recent_traces
+                if str(trace.get("trace_id") or "").strip()
+            ]
+            summary_line_parts = [
+                str(section.get("source_label") or "").strip(),
+                str(section.get("stage_label") or "").strip(),
+                str(section.get("summary") or section.get("empty_text") or "").strip(),
+            ]
+            section["drawer_summary"] = " · ".join(
+                [part for part in summary_line_parts if part]
+            )[:220]
+            counts_summary = (
+                f"当前可见{item_label} {len(items)} · 最近{event_label} {len(recent_events)}"
+            )
+            if trace_ids:
+                counts_summary += f" · 回合 {' / '.join(trace_ids[:3])}"
+            section["drawer_counts_summary"] = counts_summary[:220]
+            section["drawer_empty_items_text"] = (
+                f"当前这一段没有可见{item_label}，但仍可能有最近{event_label}。"
+            )[:160]
+            section["drawer_recent_events_label"] = f"最近{event_label}"
+            section["drawer_recent_traces_label"] = f"最近{trace_label}"
+            section["footer_text"] = (
+                f"{item_label} {len(items)} · {event_label} {len(recent_events)} · {trace_label} {len(recent_traces)}"
+                if items or recent_events or recent_traces
+                else footer_label
+            )[:180]
             section["projection_scope"] = "chain_segment_projection"
             enriched.append(section)
         return enriched
@@ -7653,7 +7684,7 @@ class SupervisorUIMixin:
                 empty_text="当前没有新的候选形成信号",
                 items=candidates[:6],
                 emphasis="candidate",
-                owner="API-B",
+                source_label="API-B",
                 stage_label="刚形成",
                 summary="API-B 内生驱动刚形成的新候选，尚未进入治理闭环。",
                 order=0,
@@ -7674,7 +7705,7 @@ class SupervisorUIMixin:
                 empty_text="当前没有新的治理在途链路项",
                 items=governance_backlog_cards[:6],
                 emphasis="supervisor",
-                owner="API-B",
+                source_label="API-B",
                 stage_label="判断与治理",
                 summary="仍由 API-B 判断、补证、重排或延后的自主链路项。",
                 order=1,
@@ -7695,7 +7726,7 @@ class SupervisorUIMixin:
                 empty_text="当前没有进入 API-A 待认领窗口的自主链路项",
                 items=api_a_ready[:6],
                 emphasis="agent",
-                owner="API-A",
+                source_label="API-A",
                 stage_label="执行前窗口",
                 summary="已经被 API-B 放行，等待 API-A 认领执行的自主链路项。",
                 order=2,
@@ -7716,7 +7747,7 @@ class SupervisorUIMixin:
                 empty_text="尚未观察到新的 Mem 写回记录",
                 items=recent_writeback_cards[:4],
                 emphasis="mem",
-                owner="Mem",
+                source_label="Mem",
                 stage_label="写回回流",
                 summary="最近完成并已经回流到 Mem 的自主链路结果。",
                 order=3,
@@ -7778,14 +7809,21 @@ class SupervisorUIMixin:
                 "Web 小屋以 API-B 为主视角，只读观察判断、治理、API-A 执行回报、Mem 回流与再读取闭环；"
                 "用户链路仅作软感知。"
             ),
+            "boundary_note": (
+                "Web 小屋只观察 API-B 主导的自主链路，不展示用户聊天内容。"
+            ),
             "primary_focus": {
                 "title": str((focus_card or {}).get("title") or "自主闭环当前落点").strip(),
                 "status": str((focus_card or {}).get("display_status") or "等待中").strip(),
                 "stage_status": str((focus_card or {}).get("status") or "idle").strip().lower(),
                 "summary": str((focus_card or {}).get("summary") or "").strip(),
                 "observation_role": str((focus_card or {}).get("observation_role") or "").strip(),
-                "stage_key": str((focus_card or {}).get("observation_role") or "").strip(),
-                "stage_owner": str((focus_card or {}).get("lane") or "").strip(),
+                "stage_key": str(
+                    (focus_card or {}).get("stage_key")
+                    or (focus_card or {}).get("observation_role")
+                    or ""
+                ).strip(),
+                "source_label": str((focus_card or {}).get("source_label") or "").strip(),
             },
             "metric_cards": [
                 {
@@ -7819,8 +7857,115 @@ class SupervisorUIMixin:
             ],
         }
 
+        loop_stages = [
+            {
+                "key": "api_b_judgement",
+                "label": "API-B 判断",
+                "observation_stage_label": "API-B 判断阶段",
+                "source_label": "API-B",
+                "lane": "supervisor",
+                "observation_role": "api_b_judgement",
+                "status": api_b_status,
+                "rail_state": self._loop_stage_status_label(api_b_status),
+                "rail_note": api_b_summary,
+                "is_focus": focus_role == "api_b_judgement",
+                "summary": api_b_summary,
+                "read_rule": "这一段表示 API-B 正在形成候选、治理在途项或处理闭环内部维护。",
+                "transition_hint": "被放行的链路项会进入 API-A 待认领窗口。",
+                "focus_task": (
+                    api_b_active_task
+                    or (candidates[0] if candidates else None)
+                    or (
+                        governance_backlog_cards[0]
+                        if governance_backlog_cards
+                        else None
+                    )
+                ),
+            },
+            {
+                "key": "api_a_execution",
+                "label": "API-A 自主执行",
+                "observation_stage_label": "API-A 待认领 / 执行回报阶段",
+                "source_label": "API-A",
+                "lane": "agent",
+                "observation_role": "api_a_execution",
+                "status": api_a_status,
+                "rail_state": api_a_stage_label,
+                "rail_note": api_a_chain_reason,
+                "is_focus": focus_role == "api_a_execution",
+                "summary": api_a_summary,
+                "status_label": api_a_stage_label,
+                "chain_reason": api_a_chain_reason,
+                "activity_text": api_a_activity_text,
+                "reason_style": api_a_reason_style,
+                "read_rule": "这里只展示 API-A 对 API-B 可见的待认领窗口与执行回报，不展示用户主 CLI 会话。",
+                "transition_hint": "执行完成后会把结果写回 Mem，形成回流证据。",
+                "focus_task": api_a_active_task or api_a_ready_focus,
+            },
+            {
+                "key": "mem_writeback",
+                "label": "Mem 写回",
+                "observation_stage_label": "Mem 写回阶段",
+                "source_label": "Mem",
+                "lane": "mem",
+                "observation_role": "mem_writeback",
+                "status": writeback_status,
+                "rail_state": self._loop_stage_status_label(writeback_status),
+                "rail_note": writeback_summary,
+                "is_focus": focus_role == "mem_writeback",
+                "summary": writeback_summary,
+                "read_rule": "这一段表示执行结果已经回流到 Mem，正在形成可供再读取的记忆证据。",
+                "transition_hint": "这些回流结果会供下一轮 API-B 再读取。",
+                "focus_task": recent_writeback_cards[0] if recent_writeback_cards else None,
+            },
+            {
+                "key": "api_b_reread",
+                "label": "API-B 再读取",
+                "observation_stage_label": "API-B 再读取阶段",
+                "source_label": "API-B",
+                "lane": "supervisor",
+                "observation_role": "api_b_reread",
+                "status": reread_status,
+                "rail_state": self._loop_stage_status_label(reread_status),
+                "rail_note": reread_summary,
+                "is_focus": focus_role == "api_b_reread",
+                "summary": reread_summary,
+                "read_rule": "这一段表示 API-B 正重新读取 Mem 回流，并决定继续形成候选还是结束本轮。",
+                "transition_hint": "再读取后会回到候选形成，或在本轮收束闭环。",
+                "focus_task": recent_writeback_cards[0] if recent_writeback_cards else None,
+            },
+        ]
+        for stage in loop_stages:
+            stage["card_subtitle"] = self._ui_observation_stage_subtitle(stage)
+
+        focus_stage_projection = next(
+            (
+                stage
+                for stage in loop_stages
+                if str(stage.get("observation_role") or "").strip() == focus_role
+            ),
+            None,
+        )
+        if isinstance(focus_stage_projection, dict):
+            board["primary_focus"]["source_label"] = str(
+                focus_stage_projection.get("source_label") or ""
+            ).strip()
+
+        loop_stage_cards = [
+            self._project_ui_observation_stage_card(stage)
+            for stage in loop_stages
+        ]
+        rail_entries = [
+            self._project_ui_observation_rail_entry(stage)
+            for stage in loop_stages
+        ]
+        boundary_note = (
+            "自主链路闭环只展示 API-B 判断、API-A 自主执行、Mem 写回回流和 API-B 再读取；"
+            "用户链路只作为让路软感知，不展示聊天内容。"
+        )
+
         return {
-            "read_model_version": 10,
+            "read_model_version": 11,
             "mode": {
                 "label": "观测模式",
                 "scope": "api_b_autonomous_chain_only",
@@ -7834,84 +7979,10 @@ class SupervisorUIMixin:
             },
             "board": board,
             "loop": {
-                "boundary": (
-                    "自主链路闭环只展示 API-B 判断、API-A 自主执行、Mem 写回回流和 API-B 再读取；"
-                    "用户链路只作为让路软感知，不展示聊天内容。"
-                ),
-                "stages": [
-                    {
-                        "key": "api_b_judgement",
-                        "label": "API-B 判断",
-                        "owner": "API-B",
-                        "lane": "supervisor",
-                        "observation_role": "api_b_judgement",
-                        "status": api_b_status,
-                        "rail_state": self._loop_stage_status_label(api_b_status),
-                        "rail_note": api_b_summary,
-                        "is_focus": focus_role == "api_b_judgement",
-                        "summary": api_b_summary,
-                        "read_rule": "这一段表示 API-B 正在形成候选、治理在途项或处理闭环内部维护。",
-                        "transition_hint": "被放行的链路项会进入 API-A 待认领窗口。",
-                        "focus_task": (
-                            api_b_active_task
-                            or (candidates[0] if candidates else None)
-                            or (
-                                governance_backlog_cards[0]
-                                if governance_backlog_cards
-                                else None
-                            )
-                        ),
-                    },
-                    {
-                        "key": "api_a_execution",
-                        "label": "API-A 自主执行",
-                        "owner": "API-A",
-                        "lane": "agent",
-                        "observation_role": "api_a_execution",
-                        "status": api_a_status,
-                        "rail_state": api_a_stage_label,
-                        "rail_note": api_a_chain_reason,
-                        "is_focus": focus_role == "api_a_execution",
-                        "summary": api_a_summary,
-                        "status_label": api_a_stage_label,
-                        "chain_reason": api_a_chain_reason,
-                        "activity_text": api_a_activity_text,
-                        "reason_style": api_a_reason_style,
-                        "read_rule": "这里只展示 API-A 对 API-B 可见的待认领窗口与执行回报，不展示用户主 CLI 会话。",
-                        "transition_hint": "执行完成后会把结果写回 Mem，形成回流证据。",
-                        "focus_task": api_a_active_task or api_a_ready_focus,
-                    },
-                    {
-                        "key": "mem_writeback",
-                        "label": "Mem 写回",
-                        "owner": "Mem",
-                        "lane": "mem",
-                        "observation_role": "mem_writeback",
-                        "status": writeback_status,
-                        "rail_state": self._loop_stage_status_label(writeback_status),
-                        "rail_note": writeback_summary,
-                        "is_focus": focus_role == "mem_writeback",
-                        "summary": writeback_summary,
-                        "read_rule": "这一段表示执行结果已经回流到 Mem，正在形成可供再读取的记忆证据。",
-                        "transition_hint": "这些回流结果会供下一轮 API-B 再读取。",
-                        "focus_task": recent_writeback_cards[0] if recent_writeback_cards else None,
-                    },
-                    {
-                        "key": "api_b_reread",
-                        "label": "API-B 再读取",
-                        "owner": "API-B",
-                        "lane": "supervisor",
-                        "observation_role": "api_b_reread",
-                        "status": reread_status,
-                        "rail_state": self._loop_stage_status_label(reread_status),
-                        "rail_note": reread_summary,
-                        "is_focus": focus_role == "api_b_reread",
-                        "summary": reread_summary,
-                        "read_rule": "这一段表示 API-B 正重新读取 Mem 回流，并决定继续形成候选还是结束本轮。",
-                        "transition_hint": "再读取后会回到候选形成，或在本轮收束闭环。",
-                        "focus_task": recent_writeback_cards[0] if recent_writeback_cards else None,
-                    },
-                ],
+                "boundary": boundary_note,
+                "rail_entries": rail_entries,
+                "stage_cards": loop_stage_cards,
+                "stages": loop_stages,
                 "recent_writebacks": recent_writebacks,
             },
             "counts": {

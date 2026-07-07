@@ -975,7 +975,7 @@ def test_autonomous_panel_shows_no_api_a_executable_task_reason(monkeypatch):
                     {
                         "key": "api_b_judgement",
                         "label": "API-B 判断",
-                        "owner": "API-B",
+                        "source_label": "API-B",
                         "status": "active",
                         "summary": "API-B 仍在判断下一步动作。",
                     }
@@ -1036,7 +1036,7 @@ def test_autonomous_panel_prefers_loop_focus_when_present(monkeypatch):
                     {
                         "key": "api_a_execution",
                         "label": "API-A 自主执行",
-                        "owner": "API-A",
+                        "source_label": "API-A",
                         "status": "ready",
                         "focus_task": {
                             "task_id": "learn-board-1",
@@ -1857,7 +1857,7 @@ def test_cli_formats_supervisor_status_snapshot():
                         {
                             "key": "api_b_judgement",
                             "label": "API-B 判断",
-                            "owner": "API-B",
+                            "source_label": "API-B",
                             "status": "active",
                             "focus_task": {
                                 "title": "复核治理在途卫生",
@@ -1867,7 +1867,7 @@ def test_cli_formats_supervisor_status_snapshot():
                         {
                             "key": "mem_writeback",
                             "label": "Mem 写回",
-                            "owner": "Mem",
+                            "source_label": "Mem",
                             "status": "ready",
                             "focus_task": {
                                 "title": "改进 shell 替身",

@@ -283,6 +283,15 @@ def _drive_cycle_failure_replay_evaluation(
         ]
     return {
         "status": "evaluated",
+        "drive_input": {
+            "checks": {},
+            "task_family_decisions": {
+                task_family: {"eligible_for_planning": True, "eligible_for_execution": True},
+            },
+            "governance_task_type_decisions": {
+                governance_type: {"eligible_for_planning": True, "eligible_for_execution": True},
+            },
+        },
         "activity_guards": {
             "checks": {},
             "task_family_decisions": {
@@ -2092,7 +2101,7 @@ def test_candidate_annotation_adds_canonical_drive_judgement_and_evidence_contex
             ],
             "signals": [],
         },
-        activity_guards={"autonomous_chain_gate_active": True},
+        drive_input={"autonomous_chain_gate_active": True},
         candidate_items=[
             {
                 "title": "Review correction signals",
@@ -2208,7 +2217,8 @@ async def test_evaluate_endogenous_drive_accepts_drive_input_request_without_gua
 
     assert result["drive_input"]["activity"]["counts"]["error_count"] == 1
     assert result["drive_input"]["user_chain_signal"]["scope"] == "soft_signal_only"
-    assert result["activity_guards"]["user_chain_signal"]["scope"] == "soft_signal_only"
+    compat_drive_input = result["activity_guards"]
+    assert compat_drive_input["user_chain_signal"] == result["drive_input"]["user_chain_signal"]
 
 
 @pytest.mark.asyncio
@@ -2521,6 +2531,15 @@ async def test_cognitive_self_regulation_tightens_adaptive_policy_when_lm_drift_
     assert result["cognitive_self_regulation"]["dynamic_candidate_throttle_boost"] > 0.2
     assert result["cognitive_self_regulation"]["dynamic_learning_expansion_suppression"] > 0.1
     assert regulation["dynamic_observation_bias_boost"] >= result["cognitive_self_regulation"]["dynamic_observation_bias_boost"]
+    assert (
+        result["drive_input"]["endogenous_drive_policy"]["dynamic_candidate_throttle_boost"]
+        == regulation["dynamic_candidate_throttle_boost"]
+    )
+    compat_drive_input = result["activity_guards"]
+    assert (
+        compat_drive_input["endogenous_drive_policy"]["dynamic_candidate_throttle_boost"]
+        == result["drive_input"]["endogenous_drive_policy"]["dynamic_candidate_throttle_boost"]
+    )
     assert adaptive_policy["preferred_focus"] == "observation"
     assert adaptive_policy["candidate_budget"] <= 2
     assert "proposal_drift_is_active" in str(regulation["last_reason"] or "")
@@ -3475,7 +3494,13 @@ async def test_run_autonomous_chain_review_cycle_consumes_governance_review_even
     supervisor._persist_endogenous_governance_events(events_snapshot)
 
     async def fake_review(request=None):
-        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "activity_guards": {}}
+        return {
+            "count": 0,
+            "tasks": [],
+            "decision": "approved",
+            "reviewed_statuses": [],
+            "drive_input": {},
+        }
 
     supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
@@ -3512,7 +3537,13 @@ async def test_run_autonomous_chain_review_cycle_consumes_alignment_events_into_
     supervisor._persist_endogenous_governance_events(events_snapshot)
 
     async def fake_review(request=None):
-        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "activity_guards": {}}
+        return {
+            "count": 0,
+            "tasks": [],
+            "decision": "approved",
+            "reviewed_statuses": [],
+            "drive_input": {},
+        }
 
     supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
@@ -3556,7 +3587,13 @@ async def test_duplicate_governance_event_ids_are_deduped_before_consumption(tmp
     supervisor._persist_endogenous_governance_events(events_snapshot)
 
     async def fake_review(request=None):
-        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "activity_guards": {}}
+        return {
+            "count": 0,
+            "tasks": [],
+            "decision": "approved",
+            "reviewed_statuses": [],
+            "drive_input": {},
+        }
 
     supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
@@ -3735,7 +3772,13 @@ async def test_run_autonomous_chain_review_cycle_consumes_truthfulness_alerts_in
     supervisor._persist_endogenous_governance_events(events_snapshot)
 
     async def fake_review(request=None):
-        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "activity_guards": {}}
+        return {
+            "count": 0,
+            "tasks": [],
+            "decision": "approved",
+            "reviewed_statuses": [],
+            "drive_input": {},
+        }
 
     supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
@@ -6116,7 +6159,7 @@ async def test_run_endogenous_drive_cycle_observation_posture_defers_non_stabili
     async def fake_evaluate_endogenous_drive(_request=None):
         return {
             "status": "evaluated",
-            "activity_guards": {},
+            "drive_input": {},
             "drive_posture": {
                 "signal_type": "drive_posture_signal",
                 "payload": {
@@ -6221,6 +6264,24 @@ async def test_run_endogenous_drive_cycle_only_judges_candidates_kept_after_runt
         }
         return {
             "status": "evaluated",
+            "drive_input": {
+                "task_family_decisions": {
+                    "self_learning": {
+                        "eligible_for_planning": True,
+                        "eligible_for_execution": True,
+                    },
+                },
+                "governance_task_type_decisions": {
+                    "self_learning": {
+                        "eligible_for_planning": True,
+                        "eligible_for_execution": True,
+                    },
+                },
+                "decisions": {
+                    "eligible_for_planning": True,
+                    "eligible_for_execution": True,
+                },
+            },
             "activity_guards": {
                 "task_family_decisions": {
                     "self_learning": {
@@ -6338,7 +6399,13 @@ async def test_governance_consumption_survives_drive_plan_failure_and_context_sw
     supervisor._persist_endogenous_governance_events(events_snapshot)
 
     async def fake_review(_request=None):
-        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "activity_guards": {}}
+        return {
+            "count": 0,
+            "tasks": [],
+            "decision": "approved",
+            "reviewed_statuses": [],
+            "drive_input": {},
+        }
 
     supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
@@ -6425,7 +6492,13 @@ async def test_repeated_governance_consumption_drive_failure_and_context_switch_
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
     async def fake_review(_request=None):
-        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "activity_guards": {}}
+        return {
+            "count": 0,
+            "tasks": [],
+            "decision": "approved",
+            "reviewed_statuses": [],
+            "drive_input": {},
+        }
 
     supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
     supervisor._fetch_gateway_active_cli_executor = AsyncMock(return_value={})  # type: ignore[method-assign]
@@ -16010,7 +16083,7 @@ def test_recent_completed_static_governance_candidates_are_not_recreated_immedia
     }
 
     candidates = engine.generate_candidates(
-        activity_guards=idle,
+        drive_input=idle,
         existing_drive_keys=set(),
         max_candidates=5,
     )
@@ -16077,7 +16150,7 @@ def test_static_governance_candidates_reopen_after_completion_cooldown():
     }
 
     candidates = engine.generate_candidates(
-        activity_guards=idle,
+        drive_input=idle,
         existing_drive_keys=set(),
         max_candidates=5,
     )
@@ -16109,7 +16182,7 @@ def test_generate_candidates_allows_empty_when_default_path_has_no_evidence():
     }
 
     candidates = engine.generate_candidates(
-        activity_guards=idle,
+        drive_input=idle,
         existing_drive_keys=set(),
         max_candidates=3,
     )
@@ -16356,8 +16429,13 @@ async def test_auto_decision_approves_task_when_drive_input_allows_execution(tmp
     assert result["task"]["decision_history"][-1]["governance_task_type"] == "self_evolution"
     assert result["task"]["decision_history"][-1]["task_family"] == "general_self_evolution"
     assert result["task"]["decision_history"][-1]["execution_kind"] == "general_self_evolution"
-    assert result["task"]["decision_history"][-1]["context"]["drive_input"]["decisions"]["eligible_for_execution"] is True
-    assert result["task"]["decision_history"][-1]["context"]["drive_input"]["user_chain_signal"]["scope"] == "soft_signal_only"
+    decision_context = result["task"]["decision_history"][-1]["context"]
+    decision_drive_input = decision_context["drive_input"]
+    decision_drive_compat = decision_context["activity_guards"]
+    assert decision_drive_input["decisions"]["eligible_for_execution"] is True
+    assert decision_drive_input["user_chain_signal"]["scope"] == "soft_signal_only"
+    assert decision_drive_input["user_chain_signal"]["active_sessions"] == 0
+    assert decision_drive_compat["user_chain_signal"] == decision_drive_input["user_chain_signal"]
 
 
 @pytest.mark.asyncio
@@ -16604,7 +16682,7 @@ async def test_batch_review_accepts_lm_governance_override(tmp_path, monkeypatch
         assert len(tasks) == 2
         drive_input = review_context["drive_input"]
         assert drive_input["user_chain_signal"]["is_quiet"] is True
-        assert review_context["activity_guards"]["user_chain_signal"] == drive_input["user_chain_signal"]
+        assert "activity_guards" not in review_context
         return {
             tasks_by_title["Weak duplicate follow-up"]: {
                 "action": "cancel",
@@ -17328,12 +17406,6 @@ async def test_body_self_evolution_approval_builds_formal_execution_request(tmp_
             "actor": "mem_supervisor",
             "reason": "Probe and lineage evidence are sufficient for autonomous-chain handoff.",
             "context": {
-                "activity_guards": {
-                    "user_chain_signal": {
-                        "scope": "soft_signal_only",
-                        "active_sessions": 1,
-                    }
-                },
                 "drive_input": {
                     "user_chain_signal": {
                         "scope": "soft_signal_only",
@@ -17364,8 +17436,15 @@ async def test_body_self_evolution_approval_builds_formal_execution_request(tmp_
     assert execution_request["governor_decision"]["actor"] == "mem_supervisor"
     assert execution_request["drive_input_evidence"]["user_chain_signal"]["active_sessions"] == 0
     assert execution_request["drive_input_evidence"]["decisions"]["eligible_for_execution"] is True
-    assert execution_request["activity_guard_evidence"]["user_chain_signal"]["active_sessions"] == 0
-    assert execution_request["activity_guard_evidence"]["decisions"]["eligible_for_execution"] is True
+    assert execution_request["drive_input_evidence"]["user_chain_signal"]["scope"] == "soft_signal_only"
+    assert execution_request["activity_guard_evidence"]["user_chain_signal"] == execution_request["drive_input_evidence"]["user_chain_signal"]
+    assert execution_request["activity_guard_evidence"]["decisions"] == execution_request["drive_input_evidence"]["decisions"]
+    decision_context = result["task"]["decision_history"][-1]["context"]
+    assert decision_context["drive_input"]["user_chain_signal"]["active_sessions"] == 0
+    assert (
+        decision_context["activity_guards"]["user_chain_signal"]
+        == decision_context["drive_input"]["user_chain_signal"]
+    )
 
 
 @pytest.mark.unit
@@ -17623,7 +17702,8 @@ async def test_self_learning_followup_auto_approval_does_not_build_execution_req
         task_id,
         {
             "decision": "auto",
-            "activity_guards": {
+            "drive_input": {
+                **_endogenous_drive_input_payload(self_learning_execution=True),
                 "now": "2026-05-25T12:00:00",
             },
         },
@@ -17696,7 +17776,7 @@ async def test_memory_maintenance_auto_decision_defers_when_memory_activity_is_r
     assert result["task"]["decision_history"][-1]["governance_task_type"] == "memory_maintenance"
     assert result["task"]["decision_history"][-1]["task_family"] == "memory_maintenance"
     assert result["task"]["decision_history"][-1]["execution_kind"] == "memory_maintenance"
-    assert "memory maintenance still sees in-flight runtime or memory work" in result["task"]["decision_reason"]
+    assert "该记忆维护链路项暂缓" in result["task"]["decision_reason"]
 
 
 @pytest.mark.asyncio
@@ -17909,7 +17989,13 @@ async def test_run_autonomous_chain_review_cycle_recovers_orphaned_agent_pull_ru
         }
 
     async def fake_review(request=None):
-        return {"count": 0, "tasks": [], "decision": "approved", "reviewed_statuses": [], "activity_guards": {}}
+        return {
+            "count": 0,
+            "tasks": [],
+            "decision": "approved",
+            "reviewed_statuses": [],
+            "drive_input": {},
+        }
 
     supervisor._fetch_gateway_cli_session = fake_owner_session  # type: ignore[method-assign]
     supervisor.review_autonomous_chain_tasks = fake_review  # type: ignore[method-assign]
@@ -18482,7 +18568,7 @@ async def test_run_autonomous_chain_review_cycle_limits_formal_execution_handoff
             ],
             "decision": "approved",
             "reviewed_statuses": ["approved"] * len(task_ids),
-            "activity_guards": {},
+            "drive_input": {},
         }
 
     handed_off = []
