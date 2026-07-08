@@ -32,7 +32,7 @@ async def test_supervisor_activity_guard_allows_planning_and_execution_when_gate
 
     supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
 
-    result = await supervisor.evaluate_activity_guards(
+    result = await supervisor.evaluate_drive_input(
         {
             "now": "2026-05-25T00:15:00",
         }
@@ -70,7 +70,7 @@ async def test_supervisor_activity_guard_compares_gateway_naive_timestamps_as_ut
 
     supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
 
-    result = await supervisor.evaluate_activity_guards(
+    result = await supervisor.evaluate_drive_input(
         {
             "now": "2026-05-25T08:15:00+08:00",
         }
@@ -114,7 +114,7 @@ async def test_supervisor_activity_guard_uses_configured_thresholds_and_reports_
 
     supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
 
-    result = await supervisor.evaluate_activity_guards({"now": "2026-05-25T00:05:00"})
+    result = await supervisor.evaluate_drive_input({"now": "2026-05-25T00:05:00"})
 
     assert result["thresholds"]["user_idle_seconds"] == 120
     assert result["thresholds"]["memory_idle_seconds"] == 240
@@ -141,7 +141,7 @@ async def test_supervisor_activity_guard_keeps_user_chain_activity_as_soft_signa
 
     supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
 
-    result = await supervisor.evaluate_activity_guards(
+    result = await supervisor.evaluate_drive_input(
         {
             "now": "2026-05-25T00:15:00",
         }
@@ -179,7 +179,7 @@ async def test_supervisor_activity_guard_blocks_execution_when_autonomous_execut
 
     supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
 
-    result = await supervisor.evaluate_activity_guards(
+    result = await supervisor.evaluate_drive_input(
         {
             "now": "2026-05-25T00:15:00",
         }
@@ -209,7 +209,7 @@ async def test_supervisor_activity_guard_allows_self_learning_followup_outside_e
 
     supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
 
-    result = await supervisor.evaluate_activity_guards(
+    result = await supervisor.evaluate_drive_input(
         {
             "now": "2026-05-25T12:00:00",
             "task_family": "self_learning",
@@ -244,7 +244,7 @@ async def test_supervisor_activity_guard_blocks_memory_maintenance_when_recent_m
 
     supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
 
-    result = await supervisor.evaluate_activity_guards(
+    result = await supervisor.evaluate_drive_input(
         {
             "now": "2026-05-25T00:15:00",
             "task_family": "memory_maintenance",
@@ -280,7 +280,7 @@ async def test_supervisor_activity_guard_exposes_body_switch_family_without_coll
 
     supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
 
-    result = await supervisor.evaluate_activity_guards(
+    result = await supervisor.evaluate_drive_input(
         {
             "now": "2026-05-25T00:15:00",
             "task_family": "body_switch",
@@ -297,5 +297,6 @@ async def test_supervisor_activity_guard_exposes_body_switch_family_without_coll
     }
     assert result["governance_task_type_decisions"]["self_evolution"] == result["decisions"]
     assert result["task_family_decisions"]["body_switch"] == result["decisions"]
+
 
 

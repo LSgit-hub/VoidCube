@@ -126,7 +126,7 @@ class Supervisor(
         self.app.add_api_route("/runtime/timeline", self.get_runtime_timeline, methods=["GET"])
         self.app.add_api_route("/runtime/traces", self.list_runtime_traces, methods=["GET"])
         self.app.add_api_route("/runtime/traces/{trace_id}", self.get_runtime_trace, methods=["GET"])
-        self.app.add_api_route("/runtime/activity-guards/evaluate", self.evaluate_activity_guards, methods=["POST"])
+        self.app.add_api_route("/runtime/drive-input/evaluate", self.evaluate_drive_input, methods=["POST"])
         self.app.add_api_route("/runtime/endogenous-drive/evaluate", self.evaluate_endogenous_drive, methods=["POST"])
         self.app.add_api_route("/runtime/endogenous-drive/events", self.get_endogenous_governance_events, methods=["GET"])
         self.app.add_api_route("/runtime/endogenous-drive/self-regulation", self.get_endogenous_self_regulation, methods=["GET"])
@@ -280,4 +280,5 @@ if __name__ == "__main__":
     
     import asyncio
     asyncio.run(supervisor.start())
+
 

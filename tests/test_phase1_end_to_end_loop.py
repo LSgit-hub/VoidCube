@@ -106,7 +106,7 @@ async def _drive_input_from_runtime_probe(
     now: str,
     task_family: str,
 ) -> Dict[str, Any]:
-    runtime_probe_snapshot = await supervisor.evaluate_activity_guards(
+    runtime_probe_snapshot = await supervisor.evaluate_drive_input(
         {
             "now": now,
             "task_family": task_family,
@@ -286,7 +286,7 @@ class TestPhase1IdleWindowGovernance:
         snapshot["last_autonomous_chain_execute_at"] = "2026-06-20T02:00:00"  # recent
         sv._fetch_gateway_activity_snapshot = AsyncMock(return_value=snapshot)
 
-        idle = await sv.evaluate_activity_guards({
+        idle = await sv.evaluate_drive_input({
             "now": "2026-06-20T02:15:00",
             "task_family": "memory_maintenance",
         })
@@ -308,7 +308,7 @@ class TestPhase1IdleWindowGovernance:
         snapshot["last_self_learning_activity_at"] = "2026-06-20T01:00:00"  # 75min ago → idle
         sv._fetch_gateway_activity_snapshot = AsyncMock(return_value=snapshot)
 
-        idle = await sv.evaluate_activity_guards({
+        idle = await sv.evaluate_drive_input({
             "now": "2026-06-20T02:15:00",
             "task_family": "body_upgrade",
         })
@@ -393,7 +393,7 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
                     "eligible_for_execution": True,
                 },
             }
-        sv.evaluate_activity_guards = fake_idle_for_handoff  # type: ignore[method-assign]
+        sv.evaluate_drive_input = fake_idle_for_handoff  # type: ignore[method-assign]
 
         # 跑完整复核与交接闭环。
         result = await sv._run_autonomous_chain_review_cycle()
@@ -495,7 +495,7 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
                     "eligible_for_execution": True,
                 },
             }
-        sv.evaluate_activity_guards = fake_idle  # type: ignore[method-assign]
+        sv.evaluate_drive_input = fake_idle  # type: ignore[method-assign]
 
         await sv._run_autonomous_chain_review_cycle()
 
@@ -531,7 +531,7 @@ class TestPhase1TimezoneSafety:
         )
 
         # 不应抛出 TypeError。
-        result = await sv.evaluate_activity_guards({
+        result = await sv.evaluate_drive_input({
             "now": "2026-06-20T02:15:00",
             "task_family": "self_learning",
         })
@@ -572,7 +572,7 @@ class TestPhase1GatewayErrorTracking:
             return_value=_idle_snapshot(error_count=5, uncertainty_high_count=3)
         )
 
-        idle = await sv.evaluate_activity_guards({
+        idle = await sv.evaluate_drive_input({
             "now": "2026-06-20T02:15:00",
             "task_family": "self_learning",
         })
@@ -677,7 +677,7 @@ class TestPhase1GovernorMode:
                 },
                 "decisions": {"eligible_for_planning": True, "eligible_for_execution": True},
             }
-        sv.evaluate_activity_guards = fake_idle  # type: ignore[method-assign]
+        sv.evaluate_drive_input = fake_idle  # type: ignore[method-assign]
 
         # 手工造一条已获批的 self_learning 链路项。
         sv._autonomous_chain_store.create_task(
@@ -711,7 +711,7 @@ class TestPhase1GovernorMode:
             user_idle=False  # 用户此刻仍在活跃
         ))
 
-        idle = await sv.evaluate_activity_guards({"task_family": "self_learning"})
+        idle = await sv.evaluate_drive_input({"task_family": "self_learning"})
         assert idle["autonomous_chain_gate_active"] is True
         # 即便用户活跃，self_learning 规划资格也应保留。
         assert idle["task_family_decisions"]["self_learning"]["eligible_for_planning"] is True
@@ -755,6 +755,7 @@ class TestPhase1LearningTopicExtraction:
         engine = EndogenousDriveEngine()
         assert engine._extract_learning_topic({}) == ""
         assert engine._extract_learning_topic({"recent_metadata": {}}) == ""
+
 
 
 

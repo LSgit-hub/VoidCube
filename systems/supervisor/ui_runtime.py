@@ -1164,7 +1164,7 @@ body[data-action="work"] .xz-prop { opacity: 0; }
 body[data-action="work"] .xz-eye { animation: work-blink 4s ease-in-out infinite; }
 @keyframes work-blink { 95% { height: 14px; } 97% { height: 2px; } 100% { height: 14px; } }
 
-/* 在写字桌前进行任务审核 */
+/* 在写字桌前进行判断观察 */
 body[data-action="write"] .xizi {
   left: 86%; margin-left: -65px;
   bottom: 20%;
@@ -1494,7 +1494,7 @@ body[data-action="work"] .xs-arm.r { transform: rotate(40deg) translate(-2px, 6p
 body[data-action="work"] .xs-prop { opacity: 0; }
 body[data-action="work"] .xs-eye { animation: work-blink 4s ease-in-out infinite; }
 
-/* 在写字桌前任务审核 */
+/* 在写字桌前判断观察 */
 body[data-action="write"] .xingzi {
   left: 86%; margin-left: -70px;
   bottom: 19%;
@@ -3132,8 +3132,8 @@ function normalizeObservationStatus(s) {
 function statusLabel(s) {
   const normalized = normalizeObservationStatus(s);
   const map = {
-    planned:'待审核',
-    approved:'待执行',
+    planned:'待判断',
+    approved:'已转交',
     running:'执行中',
     active:'当前在途',
     ready:'已观察到',
@@ -3144,7 +3144,7 @@ function statusLabel(s) {
     completed:'已完成',
     failed:'失败',
     cancelled:'已取消',
-    awaiting_review:'待审查',
+    awaiting_review:'待复核',
     retry:'重试',
   };
   return map[normalized] || normalized || '待定';
@@ -3528,7 +3528,7 @@ function autonomousEventTypeLabel(value) {
     trace_marker: '回合标记',
     completed: '已完成',
     running: '执行中',
-    approved: '已放行',
+    approved: '已转交',
     planned: '已规划',
     failed: '执行失败',
     cancelled: '已取消',
@@ -3598,7 +3598,7 @@ function cognitionTypeLabel(kind, value) {
       truthfulness_repair: '修补真实性风险',
       exploratory_learning: '发起自主学习',
       shell_baseline_learning: '替身基线学习',
-      governance_hygiene_review: '治理卫生复核',
+      governance_hygiene_review: '判断在途卫生观察',
       body_improvement: '推进替身改进',
       memory_continuity: '维护记忆连续性',
       memory_maintenance: '记忆维护',
@@ -3606,7 +3606,7 @@ function cognitionTypeLabel(kind, value) {
       '未分类需求': '未分类需求',
     },
     intent_type: {
-      review_governance_hygiene: '观察治理卫生',
+      review_governance_hygiene: '观察判断卫生',
       expand_learning: '扩展学习',
       protect_truthfulness: '保护真实性',
       preserve_memory_continuity: '维持记忆连续性',
@@ -3625,7 +3625,7 @@ function cognitionTypeLabel(kind, value) {
     },
     output_channel: {
       task_candidates: '候选形成段',
-      governance_review: 'API-B 复核观察',
+      governance_review: 'API-B 判断观察',
       observation_only: '只读观察',
       memory_maintenance: '记忆维护',
       body_improvement: '替身改进',
@@ -4268,7 +4268,7 @@ function observationRoleStageLabel(task) {
   const role = String(task.observation_role || '').trim();
   const labels = {
     api_b_judgement: 'API-B 判断阶段',
-    api_a_execution: 'API-A 认领 / 执行观测阶段',
+    api_a_execution: 'API-A 接手 / 执行观测阶段',
     mem_writeback: 'Mem 写回阶段',
     api_b_reread: 'API-B 再读取阶段',
     candidate: '候选形成阶段',
@@ -4320,7 +4320,7 @@ function buildObservationCard(task, options) {
     laneTag.textContent = 'Mem 写回';
   } else {
     laneTag.className = 'game-card-tag memory';
-    laneTag.textContent = 'API-B 治理';
+    laneTag.textContent = 'API-B 判断';
   }
   tags.append(laneTag);
   (Array.isArray(opts.extraTags) ? opts.extraTags : []).forEach(tag => {
@@ -5055,7 +5055,7 @@ class SupervisorUIMixin:
             (
                 "autonomous_chain_plan",
                 _parse_iso_token(activity_snapshot.get("last_autonomous_chain_plan_at")),
-                "治理放行",
+                "判断转交",
                 "info",
             ),
             (
@@ -5121,7 +5121,7 @@ class SupervisorUIMixin:
         if kind == "autonomous_chain_execute":
             summary = f"{source_label} 已向 API-B 回报 {label or '自主链路项'} 的执行进展。"
         elif kind == "autonomous_chain_plan":
-            summary = f"API-B 已更新 {label or '自主链路项'} 的治理判断，并决定是否继续放行。"
+            summary = f"API-B 已更新 {label or '自主链路项'} 的判断，并决定是否转交 API-A。"
         elif kind == "self_learning":
             summary = f"API-A 子执行面正在围绕 {label or '自主学习'} 回传学习进展，供 API-B 后续吸收。"
         elif kind == "memory_write_failure":
@@ -5342,7 +5342,7 @@ class SupervisorUIMixin:
                 "truthfulness_repair": "修补真实性风险",
                 "exploratory_learning": "发起自主学习",
                 "shell_baseline_learning": "替身基线学习",
-                "governance_hygiene_review": "治理卫生复核",
+                "governance_hygiene_review": "判断在途卫生观察",
                 "body_improvement": "推进替身改进",
                 "memory_continuity": "维护记忆连续性",
                 "memory_maintenance": "记忆维护",
@@ -5351,7 +5351,7 @@ class SupervisorUIMixin:
                 "未分类需求": "未分类需求",
             },
             "intent_type": {
-                "review_governance_hygiene": "观察治理卫生",
+                "review_governance_hygiene": "观察判断卫生",
                 "expand_learning": "扩展学习",
                 "protect_truthfulness": "保护真实性",
                 "preserve_memory_continuity": "维持记忆连续性",
@@ -5361,7 +5361,7 @@ class SupervisorUIMixin:
             },
             "output_channel": {
                 "task_candidates": "候选形成段",
-                "governance_review": "API-B 复核观察",
+                "governance_review": "API-B 判断观察",
                 "observation_only": "只读观察",
                 "memory_maintenance": "记忆维护",
                 "body_improvement": "替身改进",
@@ -5547,7 +5547,7 @@ class SupervisorUIMixin:
         if api_a_running_count > 0:
             api_a_lane_summary = f"API-A 执行中 {api_a_running_count} 个链路项。"
         elif api_a_ready_count > 0:
-            api_a_lane_summary = f"API-A 可认领 {api_a_ready_count} 个链路项。"
+            api_a_lane_summary = f"API-A 可接手 {api_a_ready_count} 个链路项。"
 
         reasons: List[str] = []
         explicit_reason = self._ui_cognition_reason_label(
@@ -5594,7 +5594,7 @@ class SupervisorUIMixin:
         if api_a_running_count > 0:
             summary_parts.append(f"API-A 执行中 {api_a_running_count} 个链路项")
         elif api_a_ready_count > 0:
-            summary_parts.append(f"API-A 可认领 {api_a_ready_count} 个链路项")
+            summary_parts.append(f"API-A 可接手 {api_a_ready_count} 个链路项")
         summary = "，".join(summary_parts) or "当前认知判断尚未稳定。"
 
         return {
@@ -5944,11 +5944,15 @@ class SupervisorUIMixin:
         autonomous_runtime["snapshot_source"] = str(
             observation_input_snapshot.get("snapshot_source") or "default"
         )
-        autonomous_runtime["api_a_ready_count"] = self._ui_autonomous_observation_count(
-            dict(autonomous_observation.get("counts") or {}).get("api_a_ready")
+        autonomous_counts = dict(autonomous_observation.get("counts") or {})
+        autonomous_runtime["api_a_handoff_count"] = self._ui_autonomous_observation_count(
+            autonomous_counts.get("api_a_handoff")
         )
+        # Keep the cognition-facing perception name, but source it from the new
+        # Web observation projection so the UI no longer exposes api_a_ready.
+        autonomous_runtime["api_a_ready_count"] = autonomous_runtime["api_a_handoff_count"]
         autonomous_runtime["api_a_running_count"] = self._ui_autonomous_observation_count(
-            dict(autonomous_observation.get("counts") or {}).get("api_a_running")
+            autonomous_counts.get("api_a_running")
         )
         autonomous_observation["runtime"] = autonomous_runtime
         autonomous_board = self._project_ui_observation_board(
@@ -6150,7 +6154,7 @@ class SupervisorUIMixin:
             "truthfulness_review": "真实性复核",
             "exploratory_learning": "探索学习",
             "shell_baseline_learning": "替身基线学习",
-            "governance_hygiene_review": "治理卫生复核",
+            "governance_hygiene_review": "判断在途卫生观察",
             "body_improvement": "替身改进",
         }.get(candidate_kind, "")
         topic_source_label = {
@@ -6943,7 +6947,7 @@ class SupervisorUIMixin:
             api_a_summary = f"{str(api_a_running_task.get('title') or '自主链路项').strip()} 正在 API-A 执行"
         elif api_a_ready:
             api_a_status = "ready"
-            api_a_summary = f"API-A 可认领 {len(api_a_ready)} 个链路项"
+            api_a_summary = f"API-A 可接手 {len(api_a_ready)} 个链路项"
         elif api_a_pre_handoff_cards:
             api_a_status = "idle"
             api_a_summary = f"{len(api_a_pre_handoff_cards)} 个链路项仍由 API-B 判断"
@@ -6978,9 +6982,9 @@ class SupervisorUIMixin:
             api_a_activity_text = "执行流: 完成后写回 Mem"
             api_a_reason_style = "info"
         elif api_a_ready:
-            api_a_stage_label = "可认领"
-            api_a_chain_reason = "链路: API-B 已放行，可由 API-A 认领"
-            api_a_activity_text = "执行流: 认领后执行，结果写回 Mem"
+            api_a_stage_label = "可接手"
+            api_a_chain_reason = "链路: API-B 已转交，可由 API-A 接手"
+            api_a_activity_text = "执行流: API-A 接手后执行，结果写回 Mem"
             api_a_reason_style = "warn"
         elif deferred_api_a_pre_handoff:
             api_a_chain_reason = "链路: 当前学习链路项仍由 API-B 判断"
@@ -7104,30 +7108,30 @@ class SupervisorUIMixin:
                 item_label="判断项",
                 event_label="动作",
                 trace_label="回合",
-                footer_label="查看治理最近状态",
-                drill_label="查看治理详情",
+                footer_label="查看判断最近状态",
+                drill_label="查看判断详情",
                 read_rule="这里只看 API-B 正在判断的事。",
-                next_step="API-B 放行后交给 API-A。",
+                next_step="API-B 判断通过后交给 API-A。",
             ),
             self._build_observation_group(
                 key="api_a_ready",
-                label="API-A 可认领",
-                empty_text="当前没有可认领项",
+                label="API-A 可接手",
+                empty_text="当前没有可接手项",
                 items=api_a_ready[:6],
                 emphasis="agent",
                 source_label="API-A",
-                stage_label="认领状态",
-                summary="API-B 已放行，可由 API-A 接手的自主链路项。",
+                stage_label="接手状态",
+                summary="API-B 已转交，可由 API-A 接手的自主链路项。",
                 order=2,
                 segment_kind="execution_ready",
                 decor_cls="agent",
                 decor_icon="🤖",
-                item_label="可认领项",
+                item_label="可接手项",
                 event_label="动作",
                 trace_label="回合",
                 footer_label="查看执行最近状态",
                 drill_label="查看执行详情",
-                read_rule="这里只看可认领项；执行中看上方阶段。",
+                read_rule="这里只看可接手项；执行中看上方阶段。",
                 next_step="API-A 接手后执行，结果回流到 Mem。",
             ),
             self._build_observation_group(
@@ -7226,7 +7230,7 @@ class SupervisorUIMixin:
                 "is_focus": focus_role == "api_b_judgement",
                 "summary": api_b_summary,
                 "read_rule": "这里看 API-B 这轮判断。",
-                "transition_hint": "放行后交给 API-A 认领。",
+                "transition_hint": "判断通过后交给 API-A 接手。",
                 "focus_task": (
                     api_b_active_task
                     or (candidates[0] if candidates else None)
@@ -7240,7 +7244,7 @@ class SupervisorUIMixin:
             {
                 "key": "api_a_execution",
                 "label": "API-A 自主执行",
-                "observation_stage_label": "API-A 认领 / 执行观测阶段",
+                "observation_stage_label": "API-A 接手 / 执行观测阶段",
                 "source_label": "API-A",
                 "lane": "agent",
                 "observation_role": "api_a_execution",
@@ -7253,7 +7257,7 @@ class SupervisorUIMixin:
                 "chain_reason": api_a_chain_reason,
                 "activity_text": api_a_activity_text,
                 "reason_style": api_a_reason_style,
-                "read_rule": "这里只看 API-A 对 API-B 可见的认领与执行状态。",
+                "read_rule": "这里只看 API-A 对 API-B 可见的接手与执行状态。",
                 "transition_hint": "执行完成后会把结果写回 Mem，形成回流证据。",
                 "focus_task": api_a_active_task or api_a_ready_focus,
             },
@@ -7329,7 +7333,7 @@ class SupervisorUIMixin:
             "runtime": {},
             "chain": {
                 "headline": "自主闭环分段观察",
-                "summary": "这里按候选形成、API-B 判断在途、API-A 认领与执行、Mem 回流来看这一条自主链路。",
+                "summary": "这里按候选形成、API-B 判断在途、API-A 接手与执行、Mem 回流来看这一条自主链路。",
                 "segments": chain_segments,
             },
             "board": board,
@@ -7708,7 +7712,7 @@ class SupervisorUIMixin:
         if normalized == "running":
             return "API-A 正在改"
         if normalized in {"approved", "retry"}:
-            return "API-B 已放行"
+            return "API-B 已转交"
         return "API-B 正在安排"
 
     @staticmethod
@@ -7910,6 +7914,7 @@ class SupervisorUIMixin:
         timer = threading.Timer(delay, open_later)
         timer.daemon = True
         timer.start()
+
 
 
 

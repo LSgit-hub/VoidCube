@@ -209,7 +209,7 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
                             "label": "API-A 自主执行",
                             "source_label": "API-A",
                             "status": "ready",
-                            "state": "待认领",
+                            "state": "可接手",
                         },
                     ],
                     "stage_cards": [
@@ -226,8 +226,8 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
                             "title": "API-A execution",
                             "source_label": "API-A",
                             "status": "ready",
-                            "display_status": "可认领",
-                            "summary": "API-B 已放行，可由 API-A 认领。",
+                            "display_status": "可接手",
+                            "summary": "API-B 已转交，可由 API-A 接手。",
                         },
                     ],
                 },
@@ -239,14 +239,14 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
                             "label": "API-B 判断在途投影",
                             "source_label": "API-B",
                             "stage_label": "判断与治理",
-                            "items": [{"title": "Governance backlog task", "display_status": "待审核"}],
+                            "items": [{"title": "Governance backlog task", "display_status": "待判断"}],
                         },
                         {
                             "key": "api_a_ready",
-                            "label": "API-A 可认领投影",
+                            "label": "API-A 可接手投影",
                             "source_label": "API-A",
-                            "stage_label": "认领状态",
-                            "items": [{"title": "Autonomous ready task", "display_status": "待执行"}],
+                            "stage_label": "接手状态",
+                            "items": [{"title": "Autonomous ready task", "display_status": "已转交"}],
                         },
                         {
                             "key": "api_b_candidates",
@@ -293,7 +293,7 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
     assert built["chain"]["segments"][0]["stage_label"] == "判断与治理"
     assert built["chain"]["segments"][0]["source_label"] == "API-B"
     assert "owner" not in built["chain"]["segments"][0]
-    assert built["chain"]["segments"][1]["label"] == "API-A 可认领投影"
+    assert built["chain"]["segments"][1]["label"] == "API-A 可接手投影"
     assert built["chain"]["segments"][0]["title"] == "Governance backlog task"
 
 

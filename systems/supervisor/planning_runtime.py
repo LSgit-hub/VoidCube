@@ -1280,6 +1280,11 @@ class PlanningRuntimeMixin:
         include_gate_default: bool = False,
     ) -> tuple[Dict[str, Any], Dict[str, Any]]:
         request = dict(request or {})
+        if "activity_guards" in request:
+            raise HTTPException(
+                status_code=400,
+                detail="activity_guards is no longer accepted; use drive_input.",
+            )
         default_governance_task_type = None
         if default_task_family is not None:
             default_governance_task_type = self._normalize_runtime_task_type(
@@ -1312,19 +1317,18 @@ class PlanningRuntimeMixin:
                 )
             return drive_input
 
-        legacy_activity_guard_request = dict(request.get("activity_guards") or {})
-        explicit_legacy_activity_guard_request = bool(legacy_activity_guard_request)
+        drive_input_request: Dict[str, Any] = {}
         if default_task_family is not None:
-            legacy_activity_guard_request.setdefault("task_family", default_task_family)
+            drive_input_request.setdefault("task_family", default_task_family)
         if default_execution_kind is not None:
-            legacy_activity_guard_request.setdefault("execution_kind", default_execution_kind)
+            drive_input_request.setdefault("execution_kind", default_execution_kind)
         if default_governance_task_type is not None:
-            legacy_activity_guard_request.setdefault(
+            drive_input_request.setdefault(
                 "governance_task_type",
                 default_governance_task_type,
             )
         if include_gate_default:
-            legacy_activity_guard_request.setdefault(
+            drive_input_request.setdefault(
                 "autonomous_chain_gate_active",
                 getattr(
                     getattr(self, "_service_runtime", None),
@@ -1332,12 +1336,7 @@ class PlanningRuntimeMixin:
                     False,
                 ),
             )
-        if explicit_legacy_activity_guard_request:
-            drive_input = self._project_drive_input_snapshot(legacy_activity_guard_request)
-            return drive_input
-        drive_input = await self.evaluate_activity_guards(
-            legacy_activity_guard_request
-        )
+        drive_input = await self.evaluate_drive_input(drive_input_request)
         return self._project_drive_input_snapshot(drive_input)
 
     def _build_endogenous_cognition_state(
@@ -5383,7 +5382,7 @@ class PlanningRuntimeMixin:
         }
 
     async def get_runtime_observation_input(self):
-        payload = await self.evaluate_activity_guards({})
+        payload = await self.evaluate_drive_input({})
         observation_input = self._project_runtime_observation_input(
             payload,
             snapshot_source="live",
@@ -5394,7 +5393,7 @@ class PlanningRuntimeMixin:
             "observation_input": observation_input,
         }
 
-    async def evaluate_activity_guards(self, request: dict | None = None):
+    async def evaluate_drive_input(self, request: dict | None = None):
         request = request or {}
         snapshot = await self._fetch_gateway_activity_snapshot()
 
@@ -6721,7 +6720,6 @@ class PlanningRuntimeMixin:
             governor_decision=governor_decision,
             rollback_plan=rollback_plan,
         )
-        execution_request.activity_guard_evidence = {}
         return execution_request
 
     @staticmethod
@@ -6729,19 +6727,11 @@ class PlanningRuntimeMixin:
         execution_request_payload: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
         payload = dict(execution_request_payload or {})
-        legacy_activity_guard_evidence = dict(payload.get("activity_guard_evidence") or {})
-        drive_input_evidence = dict(
-            payload.get("drive_input_evidence")
-            or legacy_activity_guard_evidence
-            or {}
-        )
+        drive_input_evidence = dict(payload.get("drive_input_evidence") or {})
+        payload.pop("activity_guard_evidence", None)
         if not drive_input_evidence:
             return payload
         payload["drive_input_evidence"] = dict(drive_input_evidence)
-        if legacy_activity_guard_evidence:
-            payload["activity_guard_evidence"] = dict(legacy_activity_guard_evidence)
-        else:
-            payload.pop("activity_guard_evidence", None)
         return payload
 
     def _serialize_autonomous_chain_task(self, task: AutonomousChainTask) -> Dict[str, Any]:

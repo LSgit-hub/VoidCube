@@ -367,35 +367,19 @@ class EndogenousDriveEngine:
         self,
         *,
         drive_input: Optional[Dict[str, Any]] = None,
-        legacy_activity_guards: Optional[Dict[str, Any]] = None,
-        **legacy_aliases: Any,
     ) -> Dict[str, Any]:
-        compat_activity_guards = legacy_aliases.pop("activity_guards", None)
-        if legacy_aliases:
-            unexpected = ", ".join(sorted(legacy_aliases))
-            raise TypeError(f"Unexpected legacy drive-input aliases: {unexpected}")
         if isinstance(drive_input, dict):
             return dict(drive_input)
-        # `activity_guards` survives only as a legacy alias while runtime callers
-        # finish moving to `drive_input`.
-        if isinstance(legacy_activity_guards, dict):
-            return dict(legacy_activity_guards)
-        if isinstance(compat_activity_guards, dict):
-            return dict(compat_activity_guards)
         return {}
 
     def resolve_cognitive_posture_state(
         self,
         *,
         drive_input: Optional[Dict[str, Any]] = None,
-        legacy_activity_guards: Optional[Dict[str, Any]] = None,
         deliberation_dict: Dict[str, Any],
-        **legacy_aliases: Any,
     ) -> Dict[str, Any]:
         drive_input = self._resolve_drive_input(
             drive_input=drive_input,
-            legacy_activity_guards=legacy_activity_guards,
-            **legacy_aliases,
         )
         drive_context = self._build_drive_context(drive_input)
         runtime_config = getattr(self.config, "service_runtime", None)
@@ -456,17 +440,13 @@ class EndogenousDriveEngine:
         self,
         *,
         drive_input: Optional[Dict[str, Any]] = None,
-        legacy_activity_guards: Optional[Dict[str, Any]] = None,
         existing_drive_keys: Iterable[str],
         max_candidates: int = 3,
         deliberation_report: DriveDeliberationReport | None = None,
         lm_proposals_override: Optional[List[Dict[str, Any]]] = None,
-        **legacy_aliases: Any,
     ) -> List[EndogenousTaskCandidate]:
         drive_input = self._resolve_drive_input(
             drive_input=drive_input,
-            legacy_activity_guards=legacy_activity_guards,
-            **legacy_aliases,
         )
         existing_keys = set(existing_drive_keys)
         candidates = self._candidate_stream(
@@ -482,13 +462,9 @@ class EndogenousDriveEngine:
         self,
         *,
         drive_input: Optional[Dict[str, Any]] = None,
-        legacy_activity_guards: Optional[Dict[str, Any]] = None,
-        **legacy_aliases: Any,
     ) -> DriveDeliberationReport:
         drive_input = self._resolve_drive_input(
             drive_input=drive_input,
-            legacy_activity_guards=legacy_activity_guards,
-            **legacy_aliases,
         )
         activity = dict(drive_input.get("activity") or {})
         drive_context = self._build_drive_context(drive_input)
@@ -3033,7 +3009,6 @@ class EndogenousDriveEngine:
         self,
         *,
         drive_input: Optional[Dict[str, Any]] = None,
-        legacy_activity_guards: Optional[Dict[str, Any]] = None,
         existing_keys: set[str],
         deliberation: DriveDeliberationReport,
         drive_context: Dict[str, Any],
@@ -3041,12 +3016,9 @@ class EndogenousDriveEngine:
         self_learning_plan: Dict[str, Any],
         autonomous_improvement_plan: Dict[str, Any],
         proposals_override: Optional[List[Dict[str, Any]]] = None,
-        **legacy_aliases: Any,
     ) -> List[EndogenousTaskCandidate]:
         drive_input = self._resolve_drive_input(
             drive_input=drive_input,
-            legacy_activity_guards=legacy_activity_guards,
-            **legacy_aliases,
         )
         service_runtime = getattr(self.config, "service_runtime", None)
         if service_runtime is None:
@@ -3080,18 +3052,14 @@ class EndogenousDriveEngine:
         self,
         *,
         drive_input: Optional[Dict[str, Any]] = None,
-        legacy_activity_guards: Optional[Dict[str, Any]] = None,
         deliberation: DriveDeliberationReport,
         drive_context: Dict[str, Any],
         memory_plan: Dict[str, Any],
         self_learning_plan: Dict[str, Any],
         autonomous_improvement_plan: Dict[str, Any],
-        **legacy_aliases: Any,
     ) -> Dict[str, Any]:
         drive_input = self._resolve_drive_input(
             drive_input=drive_input,
-            legacy_activity_guards=legacy_activity_guards,
-            **legacy_aliases,
         )
         cognition_charter = self._resolve_endogenous_cognition_charter(
             getattr(self.config, "service_runtime", None)

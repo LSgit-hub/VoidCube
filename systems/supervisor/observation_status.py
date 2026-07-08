@@ -3,9 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 _OBSERVATION_STATUS_LABELS = {
-    "planned": "待审核",
-    "awaiting_review": "待审查",
-    "approved": "待执行",
+    "planned": "待判断",
+    "awaiting_review": "待复核",
+    "approved": "已转交",
     "running": "执行中",
     "retry": "重试",
     "deferred": "已推迟",

@@ -58,7 +58,6 @@ class AutonomousChainExecutionRequest(BaseModel):
     session_id: Optional[str] = None
     git_lineage: AutonomousChainGitLineage = Field(default_factory=AutonomousChainGitLineage)
     probe_report_ref: Optional[str] = None
-    activity_guard_evidence: Dict[str, Any] = Field(default_factory=dict)
     drive_input_evidence: Dict[str, Any] = Field(default_factory=dict)
     governor_decision: Dict[str, Any] = Field(default_factory=dict)
     rollback_plan: Dict[str, Any] = Field(default_factory=dict)
@@ -77,11 +76,7 @@ class AutonomousChainExecutionRequest(BaseModel):
         self.governance_task_type = runtime_task_profile["governance_task_type"]
         self.task_family = runtime_task_profile["task_family"]
         self.execution_kind = runtime_task_profile["execution_kind"]
-        normalized_drive_input_evidence = dict(
-            self.drive_input_evidence or self.activity_guard_evidence or {}
-        )
-        self.drive_input_evidence = dict(normalized_drive_input_evidence)
-        self.activity_guard_evidence = dict(self.activity_guard_evidence or {})
+        self.drive_input_evidence = dict(self.drive_input_evidence or {})
         return self
 
 

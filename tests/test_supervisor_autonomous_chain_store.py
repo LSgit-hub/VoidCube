@@ -440,7 +440,7 @@ async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_dupli
             uncertainty_count=2,
         )
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
 
     first = await supervisor._run_endogenous_drive_cycle()
     second = await supervisor._run_endogenous_drive_cycle()
@@ -560,7 +560,7 @@ async def test_evaluate_endogenous_drive_exposes_deliberation_report(tmp_path):
             uncertainty_count=1,
         )
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
 
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     deliberation = result["deliberation"]
@@ -588,7 +588,7 @@ async def test_endogenous_drive_governance_backlog_count_excludes_api_a_executio
             uncertainty_count=0,
         )
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     await supervisor.plan_autonomous_chain_task(
         {
             "title": "治理中的记忆维护",
@@ -697,7 +697,7 @@ async def test_endogenous_drive_suppresses_body_growth_while_api_a_execution_lan
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     running_task = await supervisor.plan_autonomous_chain_task(
         {
             "title": "正在执行的自主学习链路项",
@@ -744,7 +744,7 @@ async def test_endogenous_drive_evaluation_persists_judgement_history(tmp_path):
             uncertainty_count=1,
         )
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     history = supervisor._load_endogenous_drive_history()
 
@@ -774,7 +774,7 @@ async def test_endogenous_drive_preview_evaluation_does_not_persist_runtime_stat
             uncertainty_count=1,
         )
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive(
         {"record_activity": False, "persist_evaluation": False}
     )
@@ -807,7 +807,7 @@ async def test_endogenous_drive_persistent_evaluation_rolls_back_history_when_la
     def fail_cognition_persist(_state):
         raise RuntimeError("cognition persist failed")
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     supervisor._persist_endogenous_cognition_state = fail_cognition_persist  # type: ignore[method-assign]
 
     with pytest.raises(RuntimeError, match="cognition persist failed"):
@@ -833,7 +833,7 @@ async def test_evaluate_endogenous_drive_exposes_non_task_signals(tmp_path):
             uncertainty_count=1,
         )
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     await supervisor.plan_autonomous_chain_task(
         {
             "title": "Revisit deferred governance note",
@@ -898,7 +898,7 @@ async def test_endogenous_drive_preserves_truthfulness_channel_under_observe_bef
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
 
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     needs = list(result["deliberation"]["needs"])
@@ -1002,7 +1002,7 @@ async def test_evaluate_endogenous_drive_exposes_cognition_state(tmp_path):
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     cognition = result["cognition_state"]
 
@@ -1130,7 +1130,7 @@ async def test_evaluate_endogenous_drive_exposes_alignment_signal_when_reflectio
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     await supervisor.plan_autonomous_chain_task(
         {
             "title": "Stale endogenous backlog item",
@@ -1212,7 +1212,7 @@ async def test_endogenous_drive_history_records_planned_and_decision_outcomes(tm
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     cycle = await supervisor._run_endogenous_drive_cycle()
     task_id = cycle["tasks"][0]["task_id"]
 
@@ -1332,7 +1332,7 @@ async def test_endogenous_drive_outcome_dedup_scans_full_retained_history_window
             uncertainty_count=1,
         )
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     cycle = await supervisor._run_endogenous_drive_cycle()
     task_id = cycle["tasks"][0]["task_id"]
     task = supervisor._autonomous_chain_store.get_task(task_id)
@@ -1451,7 +1451,7 @@ async def test_planned_outcomes_do_not_count_as_dragging_before_any_real_decisio
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     cycle = await supervisor._run_endogenous_drive_cycle()
     history = supervisor._load_endogenous_drive_history()
 
@@ -1525,7 +1525,7 @@ async def test_single_evaluation_counts_focus_judged_once_even_with_multiple_can
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     history = supervisor._load_endogenous_drive_history()
 
@@ -1920,7 +1920,7 @@ async def test_run_endogenous_drive_cycle_exposes_drive_posture(tmp_path):
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     cycle = await supervisor._run_endogenous_drive_cycle()
 
     assert cycle["drive_input"]["activity"]["active_sessions"] == 0
@@ -1936,7 +1936,7 @@ async def test_run_endogenous_drive_cycle_exposes_drive_posture(tmp_path):
 @pytest.mark.unit
 async def test_evaluate_endogenous_drive_accepts_drive_input_request_without_guard_probe(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    supervisor.evaluate_activity_guards = AsyncMock(side_effect=AssertionError("should not probe guards"))  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = AsyncMock(side_effect=AssertionError("should not probe guards"))  # type: ignore[method-assign]
 
     drive_input = _formal_endogenous_drive_input_payload(
         error_count=1,
@@ -2009,7 +2009,7 @@ async def test_endogenous_governance_events_persist_to_runtime_file(tmp_path):
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     events_path = supervisor._get_endogenous_governance_events_path()
     events_snapshot = supervisor._load_endogenous_governance_events()
@@ -2106,7 +2106,7 @@ async def test_endogenous_cognition_state_persists_to_runtime_file(tmp_path):
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     path = supervisor._get_endogenous_cognition_state_path()
     snapshot = supervisor._load_endogenous_cognition_state()
@@ -2254,7 +2254,7 @@ async def test_cognitive_self_regulation_tightens_adaptive_policy_when_lm_drift_
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     regulation = result["self_regulation"]
@@ -2392,7 +2392,7 @@ async def test_cognitive_self_regulation_stays_light_when_lm_alignment_and_evide
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     adaptive_policy = result["deliberation"]["adaptive_policy"]
@@ -2617,7 +2617,7 @@ async def test_cognitive_self_regulation_uses_charter_control_policy_thresholds(
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     assert result["cognitive_self_regulation"]["dynamic_observation_bias_boost"] >= 0.22
@@ -2719,7 +2719,7 @@ async def test_cognitive_posture_profile_observe_first_amplifies_observation_bia
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     assert result["cognition_state"]["proposal_cognition"]["active_cognitive_posture_profile"]["name"] == "observe_first"
@@ -2822,7 +2822,7 @@ async def test_cognitive_posture_profile_truthfulness_first_amplifies_truthfulne
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     assert result["cognition_state"]["proposal_cognition"]["active_cognitive_posture_profile"]["name"] == "truthfulness_first"
@@ -2884,7 +2884,7 @@ async def test_cognitive_posture_profile_auto_switches_to_conservative_under_ser
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     profile = result["cognition_state"]["proposal_cognition"]["active_cognitive_posture_profile"]
@@ -2943,7 +2943,7 @@ async def test_cognitive_posture_profile_auto_switches_to_evidence_repair_first_
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     profile = result["cognition_state"]["proposal_cognition"]["active_cognitive_posture_profile"]
@@ -2998,7 +2998,7 @@ async def test_cognitive_posture_profile_auto_switches_to_truthfulness_first_whe
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     profile = result["cognition_state"]["proposal_cognition"]["active_cognitive_posture_profile"]
@@ -3053,7 +3053,7 @@ async def test_cognitive_posture_profile_auto_switches_to_observe_first_when_exp
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     profile = result["cognition_state"]["proposal_cognition"]["active_cognitive_posture_profile"]
@@ -3108,7 +3108,7 @@ async def test_cognitive_posture_profile_auto_switches_to_truthfulness_first_whe
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     profile = result["cognition_state"]["proposal_cognition"]["active_cognitive_posture_profile"]
@@ -3191,7 +3191,7 @@ async def test_cognitive_self_regulation_tightens_when_proposal_explanations_are
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     regulation = result["cognitive_self_regulation"]
@@ -3699,7 +3699,7 @@ async def test_decayed_persistent_self_regulation_does_not_keep_runtime_stuck_in
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -3806,7 +3806,7 @@ async def test_get_endogenous_governance_state_aggregates_cognition_events_and_r
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     await supervisor.evaluate_endogenous_drive({"record_activity": False})
     state = await supervisor.get_endogenous_governance_state()
     regulation_view = await supervisor.get_endogenous_self_regulation()
@@ -3848,7 +3848,7 @@ async def test_supervisor_ui_state_reads_wrapped_cognition_state_lm_trace(tmp_pa
     async def fake_drive_input(_request=None):
         return _formal_endogenous_drive_input_payload()
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     cognition_state = supervisor._endogenous_cognition_state_default()["state"]
     cognition_state["perception"] = {
         "system_posture": "strained",
@@ -3909,7 +3909,7 @@ async def test_supervisor_ui_state_does_not_refresh_drive_candidates_from_live_e
     async def fail_live_refresh(_request=None):
         raise AssertionError("web observation must not trigger live endogenous-drive refresh")
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     supervisor.evaluate_endogenous_drive = fail_live_refresh  # type: ignore[method-assign]
 
     ui_state = await supervisor.get_supervisor_ui_state()
@@ -3983,7 +3983,7 @@ async def test_cognition_state_attention_agenda_prioritizes_observe_before_actin
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     await supervisor.plan_autonomous_chain_task(
         {
             "title": "Stale endogenous backlog item",
@@ -4073,7 +4073,7 @@ async def test_cognition_state_uncertainty_ledger_tracks_truthfulness_backlog_an
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     ledger = result["cognition_state"]["uncertainty_ledger"]
     domains = {entry["domain"] for entry in ledger["entries"]}
@@ -4145,7 +4145,7 @@ async def test_observation_program_is_generated_from_uncertainty_ledger_and_requ
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     observation_program = result["cognition_state"]["observation_program"]
     strategy_memory = result["cognition_state"]["strategy_memory"]
@@ -4221,7 +4221,7 @@ async def test_observation_program_builds_cross_cycle_target_memory(tmp_path):
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     await supervisor.evaluate_endogenous_drive({"record_activity": False})
     await supervisor.evaluate_endogenous_drive({"record_activity": False})
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
@@ -4304,7 +4304,7 @@ async def test_repeated_observation_history_does_not_saturate_observation_bias_w
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     first = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     second = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
@@ -4412,7 +4412,7 @@ async def test_strategy_memory_memory_focus_history_does_not_override_learning_p
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -4527,7 +4527,7 @@ async def test_strategy_memory_observation_history_does_not_reenter_observation_
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -4646,7 +4646,7 @@ async def test_contextual_focus_history_does_not_leak_stable_truthfulness_bias_i
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -4756,7 +4756,7 @@ async def test_contextual_focus_history_allows_strained_truthfulness_context_to_
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -4896,7 +4896,7 @@ async def test_observe_first_posture_strategy_memory_and_persistent_self_regulat
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -5000,7 +5000,7 @@ async def test_multicycle_continuity_writeback_does_not_block_truthfulness_takeo
             },
         }
 
-    supervisor.evaluate_activity_guards = stable_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = stable_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
     wrote_back_cycles = 0
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -5051,7 +5051,7 @@ async def test_multicycle_continuity_writeback_does_not_block_truthfulness_takeo
             },
         }
 
-    supervisor.evaluate_activity_guards = strained_truthfulness_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = strained_truthfulness_drive_input  # type: ignore[method-assign]
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
@@ -5129,7 +5129,7 @@ async def test_multicycle_memory_writeback_does_not_keep_learning_recovery_stuck
             },
         }
 
-    supervisor.evaluate_activity_guards = stable_memory_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = stable_memory_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
     observed_focuses = []
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -5255,7 +5255,7 @@ async def test_mixed_multicycle_writeback_and_context_switch_do_not_lock_primary
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         for drive_input_fn, outcome_status in sequence:
-            supervisor.evaluate_activity_guards = drive_input_fn  # type: ignore[method-assign]
+            supervisor.evaluate_drive_input = drive_input_fn  # type: ignore[method-assign]
             cycle = await _plan_and_write_back_endogenous_cycle(
                 supervisor,
                 outcome_status=outcome_status,
@@ -5274,7 +5274,7 @@ async def test_mixed_multicycle_writeback_and_context_switch_do_not_lock_primary
             observed_meta_modes.add(cycle["cognition_state"]["meta_governance"]["mode"])
             observed_focuses.add(cycle["deliberation"]["adaptive_policy"]["preferred_focus"])
 
-        supervisor.evaluate_activity_guards = strained_drive_input  # type: ignore[method-assign]
+        supervisor.evaluate_drive_input = strained_drive_input  # type: ignore[method-assign]
         final = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     history = supervisor._load_endogenous_drive_history()
@@ -5389,7 +5389,7 @@ async def test_accumulated_focus_context_and_observation_stats_do_not_block_lear
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         for drive_input_fn, outcome_status in sequence:
-            supervisor.evaluate_activity_guards = drive_input_fn  # type: ignore[method-assign]
+            supervisor.evaluate_drive_input = drive_input_fn  # type: ignore[method-assign]
             cycle = await _plan_and_write_back_endogenous_cycle(
                 supervisor,
                 outcome_status=outcome_status,
@@ -5457,9 +5457,9 @@ async def test_accumulated_focus_context_and_observation_stats_do_not_block_lear
         reason="probe",
     )
 
-    learning_supervisor.evaluate_activity_guards = recovered_learning_drive_input  # type: ignore[method-assign]
-    truthfulness_supervisor.evaluate_activity_guards = strained_truthfulness_drive_input  # type: ignore[method-assign]
-    memory_supervisor.evaluate_activity_guards = memory_governance_drive_input  # type: ignore[method-assign]
+    learning_supervisor.evaluate_drive_input = recovered_learning_drive_input  # type: ignore[method-assign]
+    truthfulness_supervisor.evaluate_drive_input = strained_truthfulness_drive_input  # type: ignore[method-assign]
+    memory_supervisor.evaluate_drive_input = memory_governance_drive_input  # type: ignore[method-assign]
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         learning_result = await learning_supervisor.evaluate_endogenous_drive({"record_activity": False})
@@ -5568,7 +5568,7 @@ async def test_meta_governance_switches_toward_observe_when_uncertainty_pressure
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     meta = result["cognition_state"]["meta_governance"]
 
@@ -5638,7 +5638,7 @@ async def test_meta_governance_switches_toward_expand_when_uncertainty_recovers(
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     meta = result["cognition_state"]["meta_governance"]
 
@@ -5722,7 +5722,7 @@ async def test_meta_governance_uses_recent_mode_history_to_reduce_flip_flop(tmp_
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     meta = result["cognition_state"]["meta_governance"]
 
@@ -5793,7 +5793,7 @@ async def test_meta_governance_persists_mode_history_across_cycles(tmp_path):
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     first = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     second = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     history = supervisor._load_endogenous_drive_history()
@@ -5861,7 +5861,7 @@ async def test_attention_agenda_builds_cross_cycle_persistence_memory(tmp_path):
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     first = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     second = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     third = await supervisor.evaluate_endogenous_drive({"record_activity": False})
@@ -6454,7 +6454,7 @@ async def test_endogenous_drive_lm_task_generation_is_disabled_by_default(tmp_pa
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     assert all(
         not bool(dict(candidate.get("metadata") or {}).get("llm_task_generated"))
@@ -6542,7 +6542,7 @@ async def test_endogenous_drive_can_materialize_llm_task_proposals_from_evidence
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
 
     fake_client = _FakeLLMClient(
         {
@@ -6709,7 +6709,7 @@ async def test_endogenous_drive_reuses_lm_proposals_when_cognitive_self_regulati
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient(
         {
             "proposals": [
@@ -7225,7 +7225,7 @@ async def test_endogenous_drive_passes_cognition_charter_to_lm_system_prompt(tmp
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -7296,7 +7296,7 @@ async def test_endogenous_drive_passes_configurable_task_generation_focus_to_pay
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -7526,7 +7526,7 @@ async def test_endogenous_drive_lm_evidence_packet_stays_on_slim_default_path(tm
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     supervisor.config = supervisor.config.model_copy(
         update={
             "service_runtime": supervisor.config.service_runtime.model_copy(
@@ -7613,7 +7613,7 @@ async def test_run_endogenous_drive_cycle_does_not_expose_cognitive_feedback_tra
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     proposal_cognition = result["cognition_state"]["proposal_cognition"]
@@ -7668,7 +7668,7 @@ async def test_run_endogenous_drive_cycle_does_not_expose_cognitive_strategy_del
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     proposal_cognition = result["cognition_state"]["proposal_cognition"]
@@ -7760,7 +7760,7 @@ async def test_run_endogenous_drive_cycle_does_not_expose_cognitive_evolution_dr
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
     proposal_cognition = result["cognition_state"]["proposal_cognition"]
@@ -7873,7 +7873,7 @@ async def test_endogenous_drive_uses_default_task_generation_focus_when_not_conf
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -7929,7 +7929,7 @@ async def test_endogenous_drive_passes_cognitive_posture_semantics_to_lm_system_
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -7986,7 +7986,7 @@ async def test_endogenous_drive_constrains_high_risk_or_weak_evidence_lm_proposa
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
 
     fake_client = _FakeLLMClient(
         {
@@ -8083,7 +8083,7 @@ async def test_endogenous_drive_marks_improvement_proposal_weak_when_it_conflict
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient(
         {
             "proposals": [
@@ -8184,7 +8184,7 @@ async def test_endogenous_drive_prefers_conservative_review_over_weak_improvemen
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient(
         {
             "cognitive_assessment": {
@@ -8441,7 +8441,7 @@ async def test_endogenous_drive_passes_learning_and_shell_body_evidence_to_lm(tm
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
 
     fake_client = _FakeLLMClient({"proposals": []})
 
@@ -8501,7 +8501,7 @@ async def test_endogenous_drive_passes_configured_external_research_evidence_to_
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -8578,7 +8578,7 @@ async def test_endogenous_drive_passes_external_research_file_evidence_to_lm(tmp
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -8667,7 +8667,7 @@ async def test_endogenous_drive_passes_unified_evidence_channels_to_lm(tmp_path)
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -8752,7 +8752,7 @@ async def test_endogenous_drive_passes_recent_reference_alignment_feedback_to_lm
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -9145,7 +9145,7 @@ async def test_endogenous_drive_passes_grounding_focus_summary_to_lm(tmp_path):
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -9220,7 +9220,7 @@ async def test_endogenous_drive_passes_cognitive_assessment_memory_to_lm(tmp_pat
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -9292,7 +9292,7 @@ async def test_endogenous_drive_passes_self_iteration_hypotheses_to_lm(tmp_path)
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -9374,7 +9374,7 @@ async def test_endogenous_drive_passes_self_iteration_trend_memory_to_lm(tmp_pat
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -9452,7 +9452,7 @@ async def test_endogenous_drive_passes_switch_self_regulation_memory_to_lm(tmp_p
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -9526,7 +9526,7 @@ async def test_endogenous_drive_passes_post_task_effect_memory_to_lm(tmp_path):
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -9598,7 +9598,7 @@ async def test_endogenous_drive_passes_meta_cognition_profile_to_lm(tmp_path):
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -9663,7 +9663,7 @@ async def test_endogenous_drive_passes_cognitive_briefing_to_lm(tmp_path):
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -9725,7 +9725,7 @@ async def test_endogenous_drive_requests_cognitive_assessment_from_lm(tmp_path):
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -9825,7 +9825,7 @@ async def test_endogenous_drive_passes_self_model_snapshot_to_lm(tmp_path):
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -9913,7 +9913,7 @@ async def test_endogenous_drive_passes_evidence_credibility_and_task_shape_hint_
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -10006,7 +10006,7 @@ async def test_endogenous_drive_passes_proposal_drift_memory_to_lm(tmp_path):
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -10141,7 +10141,7 @@ async def test_runtime_cognition_exposes_posture_reasoning_memory(tmp_path):
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     proposal_cognition = result["cognition_state"]["proposal_cognition"]
     drift_memory = proposal_cognition["auxiliary_memory"]["proposal_drift_memory"]
@@ -10200,7 +10200,7 @@ async def test_endogenous_drive_passes_cognitive_posture_to_lm(tmp_path):
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -10274,7 +10274,7 @@ async def test_endogenous_drive_records_cognitive_posture_in_lm_generation_conte
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -10358,7 +10358,7 @@ async def test_endogenous_drive_records_lm_cognitive_assessment_in_generation_co
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient(
         {
             "cognitive_assessment": {
@@ -10436,7 +10436,7 @@ async def test_endogenous_drive_records_self_iteration_fields_in_generation_cont
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient(
         {
             "cognitive_assessment": {
@@ -10516,7 +10516,7 @@ async def test_endogenous_drive_keeps_lm_candidates_empty_when_weak_context_retu
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient(
         {
             "cognitive_assessment": {
@@ -10630,7 +10630,7 @@ async def test_run_endogenous_drive_cycle_exposes_stay_switch_trend_memory(tmp_p
             "completed_learning_tasks": [],
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -10686,7 +10686,7 @@ async def test_run_endogenous_drive_cycle_exposes_cognitive_assessment_memory(tm
             "completed_learning_tasks": [],
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -10791,7 +10791,7 @@ async def test_run_endogenous_drive_cycle_falls_back_to_history_reference_alignm
             "completed_learning_tasks": [],
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -10865,7 +10865,7 @@ async def test_run_endogenous_drive_cycle_exposes_self_iteration_trend_memory(tm
             "completed_learning_tasks": [],
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -10931,7 +10931,7 @@ async def test_run_endogenous_drive_cycle_exposes_switch_self_regulation_memory(
             "completed_learning_tasks": [],
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -10997,7 +10997,7 @@ async def test_run_endogenous_drive_cycle_exposes_post_task_effect_memory(tmp_pa
             "completed_learning_tasks": [],
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -11061,7 +11061,7 @@ async def test_run_endogenous_drive_cycle_exposes_meta_cognition_profile(tmp_pat
             "completed_learning_tasks": [],
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -12196,7 +12196,7 @@ async def test_single_recovery_outcome_does_not_immediately_flip_primary_need_ou
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -12286,7 +12286,7 @@ async def test_memory_maintenance_recovery_does_not_clear_self_learning_historic
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -12376,7 +12376,7 @@ async def test_two_self_learning_recoveries_can_clear_historical_underdelivery(
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -12474,7 +12474,7 @@ async def test_cleared_historical_underdelivery_does_not_reenter_observation_fro
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -12568,7 +12568,7 @@ async def test_cleared_historical_underdelivery_allows_truthfulness_to_take_prim
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -12664,7 +12664,7 @@ async def test_cleared_historical_underdelivery_keeps_learning_primary_under_wea
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -12778,7 +12778,7 @@ async def test_cleared_historical_underdelivery_shifts_to_memory_continuity_when
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -12890,7 +12890,7 @@ async def test_cleared_historical_underdelivery_with_light_backlog_debt_does_not
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -13006,7 +13006,7 @@ async def test_mixed_recovery_history_does_not_let_memory_need_override_observat
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -13121,7 +13121,7 @@ async def test_self_learning_recovery_then_block_again_keeps_preferred_focus_ali
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -13246,7 +13246,7 @@ async def test_recent_self_learning_relapse_reenters_historical_underdelivery_af
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -13390,7 +13390,7 @@ async def test_recorded_at_normalization_keeps_historical_underdelivery_stable_a
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     first_history = supervisor._endogenous_drive_history_default()
@@ -13535,7 +13535,7 @@ async def test_legacy_history_without_timestamps_stays_conservative_across_order
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     first_history = supervisor._endogenous_drive_history_default()
@@ -13693,7 +13693,7 @@ async def test_recent_relapse_retightens_candidate_budget_in_longer_mixed_histor
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -13865,7 +13865,7 @@ async def test_recent_completed_sequence_releases_observation_after_long_dirty_s
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -13956,7 +13956,7 @@ async def test_recent_relapse_reenters_observation_after_recovery_despite_stale_
             completed_at="2026-06-28T10:00:00+00:00",
         )
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -14028,7 +14028,7 @@ async def test_alternating_recovery_and_relapse_reacts_under_continuous_strategy
     ]
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         for drive_input_fn, status in writeback_sequence:
-            supervisor.evaluate_activity_guards = drive_input_fn  # type: ignore[method-assign]
+            supervisor.evaluate_drive_input = drive_input_fn  # type: ignore[method-assign]
             await _plan_and_write_back_endogenous_cycle(
                 supervisor,
                 outcome_status=status,
@@ -14064,7 +14064,7 @@ async def test_alternating_recovery_and_relapse_reacts_under_continuous_strategy
         build_history_with_strategy(relapse_outcomes, accumulated_strategy)
     )
     install_decayed_self_regulation()
-    supervisor.evaluate_activity_guards = stable_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = stable_drive_input  # type: ignore[method-assign]
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         relapse_result = await supervisor.evaluate_endogenous_drive(
@@ -14105,7 +14105,7 @@ async def test_alternating_recovery_and_relapse_reacts_under_continuous_strategy
         build_history_with_strategy(recovered_outcomes, accumulated_strategy)
     )
     install_decayed_self_regulation()
-    supervisor.evaluate_activity_guards = stable_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = stable_drive_input  # type: ignore[method-assign]
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         recovered_result = await supervisor.evaluate_endogenous_drive(
@@ -14159,7 +14159,7 @@ async def test_long_dirty_history_switches_between_relapse_tightening_and_recove
     ]
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         for drive_input_fn, status in writeback_sequence:
-            supervisor.evaluate_activity_guards = drive_input_fn  # type: ignore[method-assign]
+            supervisor.evaluate_drive_input = drive_input_fn  # type: ignore[method-assign]
             await _plan_and_write_back_endogenous_cycle(
                 supervisor,
                 outcome_status=status,
@@ -14223,7 +14223,7 @@ async def test_long_dirty_history_switches_between_relapse_tightening_and_recove
         },
     ]
     install_history(dirty_relapse_outcomes)
-    supervisor.evaluate_activity_guards = stable_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = stable_drive_input  # type: ignore[method-assign]
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         relapse_result = await supervisor.evaluate_endogenous_drive(
@@ -14261,7 +14261,7 @@ async def test_long_dirty_history_switches_between_relapse_tightening_and_recove
         _self_learning_outcome("Failed old self-learning", "failed", quality_score=0.20, recorded_hour=15),
     ]
     install_history(list(reversed(recovered_outcomes)))
-    supervisor.evaluate_activity_guards = stable_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = stable_drive_input  # type: ignore[method-assign]
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         recovered_result = await supervisor.evaluate_endogenous_drive(
@@ -14315,7 +14315,7 @@ async def test_writeback_history_replay_remains_time_ordered_when_outcomes_are_s
     ]
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         for drive_input_fn, status in writeback_sequence:
-            supervisor.evaluate_activity_guards = drive_input_fn  # type: ignore[method-assign]
+            supervisor.evaluate_drive_input = drive_input_fn  # type: ignore[method-assign]
             await _plan_and_write_back_endogenous_cycle(
                 supervisor,
                 outcome_status=status,
@@ -14371,7 +14371,7 @@ async def test_writeback_history_replay_remains_time_ordered_when_outcomes_are_s
         history["strategy_memory"] = json.loads(json.dumps(replay_strategy))
         supervisor._persist_endogenous_drive_history(history)
 
-    supervisor.evaluate_activity_guards = replay_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = replay_drive_input  # type: ignore[method-assign]
     _install_replay_history(replay_outcomes)
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         ordered_result = await supervisor.evaluate_endogenous_drive(
@@ -14436,7 +14436,7 @@ async def test_memory_success_does_not_reopen_candidate_budget_while_self_learni
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     base_bad3 = [
@@ -14596,7 +14596,7 @@ async def test_observation_mode_does_not_revive_filtered_learning_fallback_when_
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -14674,7 +14674,7 @@ async def test_observation_mode_does_not_fall_back_to_memory_maintenance_when_ob
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -14753,7 +14753,7 @@ async def test_governance_hygiene_candidate_path_does_not_crash_when_self_learni
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -14862,7 +14862,7 @@ async def test_truthfulness_candidate_survives_budget_trimming_when_truthfulness
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -14967,7 +14967,7 @@ async def test_weak_truthfulness_signal_does_not_materialize_truthfulness_candid
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -15071,7 +15071,7 @@ async def test_truthfulness_candidate_materializes_once_review_threshold_is_reac
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -15181,7 +15181,7 @@ async def test_drive_posture_signal_keeps_observation_intent_link_when_truthfuln
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -15281,7 +15281,7 @@ async def test_governance_hygiene_candidate_survives_budget_trimming_when_observ
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -15374,7 +15374,7 @@ async def test_weak_governance_backlog_debt_does_not_materialize_governance_hygi
             "stale_backlog_count": 0,
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -15478,7 +15478,7 @@ async def test_governance_hygiene_candidate_materializes_once_real_governance_ba
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     fake_client = _FakeLLMClient({"proposals": []})
 
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
@@ -15955,7 +15955,7 @@ async def test_proposal_drift_memory_biases_program_task_type_priors_toward_obse
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     deliberation = result["deliberation"]
     signals = deliberation["signals"]
@@ -16056,7 +16056,7 @@ async def test_endogenous_drive_fallback_learning_targets_shell_codebase_without
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
 
     result = await supervisor._run_endogenous_drive_cycle()
 
@@ -16160,7 +16160,7 @@ async def test_auto_decision_accepts_drive_input_request_without_guard_probe(tmp
     supervisor = _make_supervisor(tmp_path)
     planned = await supervisor.plan_autonomous_chain_task({"title": "Review body upgrade proposal"})
     task_id = planned["tasks"][0]["task_id"]
-    supervisor.evaluate_activity_guards = AsyncMock(side_effect=AssertionError("should not probe guards"))  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = AsyncMock(side_effect=AssertionError("should not probe guards"))  # type: ignore[method-assign]
 
     result = await supervisor.decide_autonomous_chain_task(
         task_id,
@@ -16230,7 +16230,7 @@ async def test_batch_review_defers_tasks_when_drive_input_is_not_ready(tmp_path)
 async def test_batch_review_accepts_drive_input_request_without_guard_probe(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     await supervisor.plan_autonomous_chain_task({"title": "Review body upgrade proposal"})
-    supervisor.evaluate_activity_guards = AsyncMock(side_effect=AssertionError("should not probe guards"))  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = AsyncMock(side_effect=AssertionError("should not probe guards"))  # type: ignore[method-assign]
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
@@ -16250,20 +16250,19 @@ async def test_batch_review_accepts_drive_input_request_without_guard_probe(tmp_
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_batch_review_accepts_legacy_activity_guards_as_drive_input_alias(tmp_path):
+async def test_batch_review_rejects_legacy_activity_guards_alias(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     await supervisor.plan_autonomous_chain_task({"title": "Legacy review request"})
 
-    result = await supervisor.review_autonomous_chain_tasks(
-        {
-            "activity_guards": _endogenous_drive_input_payload(self_evolution_execution=True),
-        }
-    )
+    with pytest.raises(HTTPException) as exc_info:
+        await supervisor.review_autonomous_chain_tasks(
+            {
+                "activity_guards": _endogenous_drive_input_payload(self_evolution_execution=True),
+            }
+        )
 
-    assert result["status"] == "reviewed"
-    assert "activity_guards" not in result
-    assert result["drive_input"]["user_chain_signal"]["scope"] == "soft_signal_only"
-    assert result["drive_input"]["decisions"]["eligible_for_execution"] is True
+    assert exc_info.value.status_code == 400
+    assert "drive_input" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -16376,7 +16375,7 @@ async def test_endogenous_drive_still_plans_learning_candidates_with_active_sess
             },
         }
 
-    supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
 
     result = await supervisor._run_endogenous_drive_cycle()
     backlog_snapshot = await supervisor.list_autonomous_chain_tasks()
@@ -17249,7 +17248,7 @@ async def test_body_self_evolution_approval_builds_formal_execution_request(tmp_
 
 
 @pytest.mark.unit
-def test_execution_request_legacy_activity_guard_evidence_backfills_drive_input_evidence():
+def test_execution_request_ignores_legacy_activity_guard_evidence():
     request = AutonomousChainExecutionRequest.model_validate(
         {
             "task_id": "task-1",
@@ -17265,12 +17264,12 @@ def test_execution_request_legacy_activity_guard_evidence_backfills_drive_input_
         }
     )
 
-    assert request.drive_input_evidence["user_chain_signal"]["active_sessions"] == 2
-    assert request.activity_guard_evidence["user_chain_signal"]["active_sessions"] == 2
+    assert request.drive_input_evidence == {}
+    assert "activity_guard_evidence" not in request.model_dump(mode="json")
 
 
 @pytest.mark.unit
-def test_execution_request_drive_input_evidence_does_not_backfill_legacy_activity_guard_evidence():
+def test_execution_request_drive_input_evidence_stays_primary():
     request = AutonomousChainExecutionRequest.model_validate(
         {
             "task_id": "task-2",
@@ -17287,12 +17286,12 @@ def test_execution_request_drive_input_evidence_does_not_backfill_legacy_activit
     )
 
     assert request.drive_input_evidence["user_chain_signal"]["active_sessions"] == 1
-    assert request.activity_guard_evidence == {}
+    assert "activity_guard_evidence" not in request.model_dump(mode="json")
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_serialized_task_execution_request_exposes_drive_input_evidence_from_legacy_field(tmp_path):
+async def test_serialized_task_execution_request_exposes_drive_input_evidence(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     planned = await supervisor.plan_autonomous_chain_task({"title": "Promote stabilized shell slot"})
     task_id = planned["tasks"][0]["task_id"]
@@ -17302,7 +17301,7 @@ async def test_serialized_task_execution_request_exposes_drive_input_evidence_fr
             "trace_id": planned["tasks"][0]["trace_id"],
             "task_type": "self_evolution",
             "kind": "general_self_evolution",
-            "activity_guard_evidence": {
+            "drive_input_evidence": {
                 "user_chain_signal": {
                     "scope": "soft_signal_only",
                     "active_sessions": 4,
@@ -17322,7 +17321,7 @@ async def test_serialized_task_execution_request_exposes_drive_input_evidence_fr
     task = await supervisor.get_autonomous_chain_task(task_id)
 
     assert task["execution_request"]["drive_input_evidence"]["user_chain_signal"]["active_sessions"] == 4
-    assert task["execution_request"]["activity_guard_evidence"]["user_chain_signal"]["active_sessions"] == 4
+    assert "activity_guard_evidence" not in task["execution_request"]
 
 
 @pytest.mark.asyncio
@@ -17578,7 +17577,7 @@ async def test_memory_maintenance_auto_decision_defers_when_memory_activity_is_r
     supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
 
     drive_input = supervisor._project_drive_input_snapshot(
-        await supervisor.evaluate_activity_guards(
+        await supervisor.evaluate_drive_input(
             {
                 "now": "2026-05-25T00:15:00",
                 "task_family": "memory_maintenance",
@@ -18452,6 +18451,7 @@ async def test_fetch_tier1_stats_reports_memory_service_unavailable(tmp_path, mo
     assert stats["memory_unavailable"] is True
     assert stats["memory_unavailable_reason"] == "memory_service_not_registered"
     assert stats["memory_active"] is False
+
 
 
 

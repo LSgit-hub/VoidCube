@@ -123,14 +123,6 @@ def _observation_section(observation: dict, key: str) -> dict:
     raise AssertionError(f"section not found: {key!r}")
 
 
-def _legacy_observation_loop_stage(observation: dict, key: str) -> dict:
-    loop = dict(observation.get("loop") or {})
-    for stage in list(loop.get("stages") or []):
-        if isinstance(stage, dict) and str(stage.get("key") or "").strip() == key:
-            return stage
-    return {}
-
-
 def _observation_stage_card(observation: dict, key: str) -> dict:
     loop = dict(observation.get("loop") or {})
     for card in list(loop.get("stage_cards") or []):
@@ -301,7 +293,8 @@ def test_supervisor_mounts_built_in_room_ui_when_enabled(tmp_path):
     assert "/runtime/traces" in route_paths
     assert "/runtime/traces/{trace_id}" in route_paths
     assert "/runtime/observation-input" in route_paths
-    assert "/runtime/activity-guards/evaluate" in route_paths
+    assert "/runtime/drive-input/evaluate" in route_paths
+    assert "/runtime/activity-guards/evaluate" not in route_paths
     assert "/runtime/idle-window/evaluate" not in route_paths
 
     with TestClient(supervisor.app) as client:
@@ -322,7 +315,7 @@ def test_supervisor_mounts_built_in_room_ui_when_enabled(tmp_path):
 @pytest.mark.unit
 async def test_supervisor_runtime_observation_input_projects_soft_signal_snapshot(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    supervisor.evaluate_activity_guards = AsyncMock(  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = AsyncMock(  # type: ignore[method-assign]
         return_value={
             "activity": {
                 "active_sessions": 2,
@@ -558,7 +551,7 @@ async def test_supervisor_runtime_trace_normalizes_execution_request_drive_input
             "task_type": "self_evolution",
             "decision_id": "decision-trace-execution-1",
             "kind": "general_self_evolution",
-            "activity_guard_evidence": {
+            "drive_input_evidence": {
                 "user_chain_signal": {
                     "scope": "soft_signal_only",
                     "active_sessions": 5,
@@ -583,7 +576,7 @@ async def test_supervisor_runtime_trace_normalizes_execution_request_drive_input
     )
     payload = execution_event["payload"]
     assert payload["drive_input_evidence"]["user_chain_signal"]["active_sessions"] == 5
-    assert payload["activity_guard_evidence"]["user_chain_signal"]["active_sessions"] == 5
+    assert "activity_guard_evidence" not in payload
 
 
 @pytest.mark.unit
@@ -673,10 +666,10 @@ def test_supervisor_builds_body_slot_cards_with_api_b_scheduled_upgrade_focus(tm
     shell_card = next(card for card in cards if card["slot_id"] == shell_slot)
 
     assert shell_card["upgrade_active"] is True
-    assert "API-B 已放行" in shell_card["focus_summary"]
+    assert "API-B 已转交" in shell_card["focus_summary"]
     assert any(node["key"] == "systems" and node["upgrade_active"] for node in shell_card["tree_nodes"])
     assert any(node["key"] == "prompts" and node["upgrade_active"] for node in shell_card["tree_nodes"])
-    assert shell_card["upgrade_signals"][0]["source_label"] == "API-B 已放行"
+    assert shell_card["upgrade_signals"][0]["source_label"] == "API-B 已转交"
 
 
 @pytest.mark.asyncio
@@ -921,7 +914,7 @@ async def test_supervisor_room_state_maps_memory_task_to_memory_scene(tmp_path):
 async def test_supervisor_room_state_read_does_not_create_timeline_events(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor.get_runtime_timeline = AsyncMock(return_value={"timeline": []})  # type: ignore[method-assign]
-    supervisor.evaluate_activity_guards = AsyncMock(
+    supervisor.evaluate_drive_input = AsyncMock(
         return_value={
             "checks": {},
             "idle_seconds": {},
@@ -973,7 +966,7 @@ async def test_supervisor_room_state_read_does_not_create_timeline_events(tmp_pa
 @pytest.mark.unit
 async def test_supervisor_room_state_falls_back_to_fast_default_snapshots_when_live_probes_fail(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    supervisor.evaluate_activity_guards = AsyncMock(side_effect=RuntimeError("gateway down"))  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = AsyncMock(side_effect=RuntimeError("gateway down"))  # type: ignore[method-assign]
     supervisor._fetch_tier1_stats = AsyncMock(side_effect=RuntimeError("memory down"))  # type: ignore[method-assign]
     supervisor.get_runtime_timeline = AsyncMock(side_effect=RuntimeError("timeline down"))  # type: ignore[method-assign]
 
@@ -1168,7 +1161,7 @@ async def test_supervisor_room_state_exposes_task_identity_for_body_improvement(
 async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
-    supervisor.evaluate_activity_guards = AsyncMock(  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = AsyncMock(  # type: ignore[method-assign]
         return_value={
             "checks": {},
             "idle_seconds": {},
@@ -1300,7 +1293,7 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
     assert api_a_ready["decor_class"] == "agent"
     assert api_a_ready["source_label"] == "API-A"
     assert api_b_backlog["item_label"] == "判断项"
-    assert api_a_ready["item_label"] == "可认领项"
+    assert api_a_ready["item_label"] == "可接手项"
     assert api_b_backlog["event_label"] == "动作"
     assert api_a_ready["trace_label"] == "回合"
     assert api_b_backlog["projection_scope"] == "chain_segment_projection"
@@ -1348,7 +1341,7 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
     assert [card["observation_role"] for card in observation["loop"]["stage_cards"]] == loop_stage_keys
     assert [card["observation_stage_label"] for card in observation["loop"]["stage_cards"]] == [
         "API-B 判断阶段",
-        "API-A 认领 / 执行观测阶段",
+        "API-A 接手 / 执行观测阶段",
         "Mem 写回阶段",
         "API-B 再读取阶段",
     ]
@@ -1371,24 +1364,24 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
     assert all("state" in entry and entry["state"] for entry in observation["loop"]["rail_entries"])
     assert all("note" in entry for entry in observation["loop"]["rail_entries"])
     assert all(isinstance(entry.get("focus"), bool) for entry in observation["loop"]["rail_entries"])
-    assert _observation_loop_stage(observation, "api_b_judgement")["transition_hint"] == "放行后交给 API-A 认领。"
+    assert _observation_loop_stage(observation, "api_b_judgement")["transition_hint"] == "判断通过后交给 API-A 接手。"
     assert _observation_loop_stage(observation, "api_b_judgement")["card_subtitle"].startswith("API-B 判断阶段")
     assert _observation_loop_stage(observation, "api_b_judgement")["focus_task"]["title"] == "Supervisor first task"
-    assert _observation_loop_stage(observation, "api_b_judgement")["focus_task"]["display_status"] == "待执行"
+    assert _observation_loop_stage(observation, "api_b_judgement")["focus_task"]["display_status"] == "已转交"
     assert _observation_loop_stage(observation, "api_a_execution")["focus_task"]["title"] == "第一个自主学习链路项"
-    assert _observation_loop_stage(observation, "api_a_execution")["focus_task"]["display_status"] == "待执行"
+    assert _observation_loop_stage(observation, "api_a_execution")["focus_task"]["display_status"] == "已转交"
     assert [item["title"] for item in api_b_backlog["items"]] == [
         "Supervisor first task",
         "Supervisor second task",
         "Agent second creative task",
     ]
-    assert [item["display_status"] for item in api_b_backlog["items"]] == ["待执行", "待审核", "待审核"]
+    assert [item["display_status"] for item in api_b_backlog["items"]] == ["已转交", "待判断", "待判断"]
     assert [item["lane"] for item in api_b_backlog["items"]] == ["supervisor", "supervisor", "supervisor"]
     assert api_b_backlog["items"][0]["observation_card_subtitle"]
     assert api_b_backlog["items"][0]["identity_hint"]
     assert api_a_ready["items"][0]["observation_card_subtitle"]
     assert [item["title"] for item in api_a_ready["items"]] == ["第一个自主学习链路项"]
-    assert [item["display_status"] for item in api_a_ready["items"]] == ["待执行"]
+    assert [item["display_status"] for item in api_a_ready["items"]] == ["已转交"]
     assert [item["lane"] for item in api_a_ready["items"]] == ["agent"]
     assert observation["metrics"]["slot_overview"] == "slot-A / slot-B"
     assert observation["metrics"]["chain_projection"]["governance_backlog"] == 3
@@ -1396,34 +1389,6 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
     assert observation["metrics"]["chain_projection"]["api_a_ready"] == 1
     assert observation["metrics"]["chain_projection"]["writeback_history"] == 0
     assert observation["runtime"]["snapshot_source"] == "live"
-
-
-@pytest.mark.asyncio
-@pytest.mark.unit
-def test_observation_loop_stage_helper_accepts_legacy_stage_compat_snapshot():
-    observation = {
-        "loop": {
-            "stages": [
-                {
-                    "key": "api_b_judgement",
-                    "label": "API-B 判断",
-                    "source_label": "API-B",
-                    "status": "active",
-                    "status_label": "当前在途",
-                    "focus_task": {"title": "Legacy compat task"},
-                }
-            ]
-        }
-    }
-
-    legacy_stage = _legacy_observation_loop_stage(observation, "api_b_judgement")
-
-    assert legacy_stage["label"] == "API-B 判断"
-    assert legacy_stage["source_label"] == "API-B"
-    assert legacy_stage["status"] == "active"
-    assert "owner" not in legacy_stage
-    with pytest.raises(AssertionError):
-        _observation_loop_stage(observation, "api_b_judgement")
 
 
 @pytest.mark.asyncio
@@ -1511,7 +1476,7 @@ async def test_supervisor_room_state_maps_running_api_a_task_to_handoff_scene(tm
 @pytest.mark.unit
 async def test_supervisor_room_state_observed_candidates_deduplicate_tasks_by_key(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    supervisor.evaluate_activity_guards = AsyncMock(  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = AsyncMock(  # type: ignore[method-assign]
         return_value={
             "checks": {},
             "idle_seconds": {},
@@ -1633,7 +1598,7 @@ async def test_supervisor_ui_state_projects_cognition_judgement_and_uncertainty_
     supervisor.evaluate_endogenous_drive = AsyncMock(  # type: ignore[method-assign]
         return_value={"candidates": []}
     )
-    supervisor.evaluate_activity_guards = AsyncMock(  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = AsyncMock(  # type: ignore[method-assign]
         return_value={
             "checks": {},
             "idle_seconds": {},
@@ -1773,7 +1738,7 @@ async def test_supervisor_ui_state_projects_cognition_judgement_and_uncertainty_
     assert "真实性" in judgement["summary"]
     assert judgement["api_a_ready_count"] == 1
     assert judgement["api_a_running_count"] == 0
-    assert judgement["api_a_lane_summary"] == "API-A 可认领 1 个链路项。"
+    assert judgement["api_a_lane_summary"] == "API-A 可接手 1 个链路项。"
     assert cognition["perception"]["api_a_ready_count"] == 1
     assert cognition["perception"]["api_a_running_count"] == 0
     assert uncertainty["highest_risk_label"] == "真实性侧"
@@ -1793,7 +1758,7 @@ async def test_supervisor_ui_state_projects_recent_autonomous_activity_for_web_r
     supervisor.evaluate_endogenous_drive = AsyncMock(  # type: ignore[method-assign]
         return_value={"candidates": []}
     )
-    supervisor.evaluate_activity_guards = AsyncMock(  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = AsyncMock(  # type: ignore[method-assign]
         return_value={
             "checks": {},
             "idle_seconds": {},
@@ -1847,7 +1812,7 @@ async def test_supervisor_room_state_keeps_supervisor_idle_when_only_agent_task_
     supervisor.evaluate_endogenous_drive = AsyncMock(  # type: ignore[method-assign]
         return_value={"candidates": []}
     )
-    supervisor.evaluate_activity_guards = AsyncMock(  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = AsyncMock(  # type: ignore[method-assign]
         return_value={
             "checks": {},
             "idle_seconds": {},
@@ -1985,7 +1950,7 @@ async def test_supervisor_autonomous_chain_review_cycle_hands_off_approved_forma
     )
     task_id = planned["tasks"][0]["task_id"]
 
-    supervisor.evaluate_activity_guards = AsyncMock(  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = AsyncMock(  # type: ignore[method-assign]
         return_value={
             "decisions": {
                 "eligible_for_planning": True,
@@ -2046,7 +2011,7 @@ async def test_execution_handoff_unknown_executor_status_retries_instead_of_comp
     )
     task_id = planned["tasks"][0]["task_id"]
 
-    supervisor.evaluate_activity_guards = AsyncMock(  # type: ignore[method-assign]
+    supervisor.evaluate_drive_input = AsyncMock(  # type: ignore[method-assign]
         return_value={
             "decisions": {
                 "eligible_for_planning": True,
@@ -2348,6 +2313,7 @@ def test_supervisor_display_and_trace_labels_do_not_absorb_queued_status(tmp_pat
     assert card["display_status"] == "queued"
     assert supervisor._observation_display_status({"status": "completed"}) == "已完成"
     assert supervisor._trace_status_label("completed") == "已写回"
+
 
 
 

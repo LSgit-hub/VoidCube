@@ -1232,7 +1232,7 @@ def test_autonomous_panel_reads_stage_card_projection_without_loop_stage(monkeyp
     assert "执行流: API-A 认领后执行，结果写回 Mem" in rendered
 
 
-def test_autonomous_panel_prefers_stage_card_over_legacy_loop_stage_when_both_exist(monkeypatch):
+def test_autonomous_panel_reads_stage_card_projection(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._autonomous_gate_active = True
     cli._agent_running = False
@@ -1271,27 +1271,12 @@ def test_autonomous_panel_prefers_stage_card_over_legacy_loop_stage_when_both_ex
                         "status_label": "API-A 可认领",
                         "display_status": "API-A 可认领",
                         "chain_reason": "链路: 以 stage_cards 正式投影为准，可由 API-A 自主执行面认领",
-                        "activity_text": "执行流: 该提示来自正式 stage_cards，而不是旧 compat 阶段快照",
+                        "activity_text": "执行流: 该提示来自正式 stage_cards",
                         "focus_task": {
                             "task_id": "learn-stage-card-wins-1",
                             "title": "Stage-card wins task",
                             "task_type": "self_learning",
                             "status": "approved",
-                            "lane": "agent",
-                        },
-                    }
-                ],
-                "stages": [
-                    {
-                        "key": "api_a_execution",
-                        "status": "active",
-                        "status_label": "旧兼容执行中",
-                        "chain_reason": "链路: 这是旧 compat 阶段，不应压过 stage_cards",
-                        "activity_text": "执行流: 这是旧 compat 提示，不应再出现在主观察面里",
-                        "focus_task": {
-                            "task_id": "legacy-stage-1",
-                            "title": "Legacy loop stage task",
-                            "status": "running",
                             "lane": "agent",
                         },
                     }
@@ -1314,8 +1299,6 @@ def test_autonomous_panel_prefers_stage_card_over_legacy_loop_stage_when_both_ex
     assert "Stage-card wins task" in rendered
     assert "状态: API-A 可认领" in rendered
     assert "以 stage_cards 正式投影为准" in rendered
-    assert "旧兼容执行中" not in rendered
-    assert "Legacy loop stage task" not in rendered
 
 
 def test_autonomous_panel_prefers_loop_stage_descriptor_for_non_local_reasoning(monkeypatch):
