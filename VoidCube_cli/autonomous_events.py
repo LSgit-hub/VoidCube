@@ -48,7 +48,7 @@ def sync_autonomous_supervisor_event(host: Any, state: Dict[str, Any]) -> None:
     raw_label = str(latest.get("event_type") or latest.get("source") or "supervisor").strip()
     label_map = {
         "task_decided": "链路裁决",
-        "tasks_reviewed": "批量复核",
+        "tasks_reviewed": "API-B 复核记录",
         "tasks_planned": "链路规划",
         "supervisor_activity": "监督活动",
     }

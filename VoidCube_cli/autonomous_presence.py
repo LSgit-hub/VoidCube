@@ -13,7 +13,7 @@ def current_cli_agent_role(host: Any) -> str:
     return "user_chat"
 
 
-def ensure_autonomous_executor_session(host: Any, *, logger_debug: Any) -> None:
+def ensure_supervisor_task_session(host: Any, *, logger_debug: Any) -> None:
     session_id = str(getattr(host, "session_id", "") or "").strip()
     if not session_id:
         return
@@ -25,7 +25,7 @@ def ensure_autonomous_executor_session(host: Any, *, logger_debug: Any) -> None:
         if existing is None:
             session_db.create_session(
                 session_id=session_id,
-                source="cli_autonomous_executor",
+                source="cli_supervisor_task_lane",
                 model=getattr(host, "model", None),
             )
             return
@@ -38,11 +38,11 @@ def ensure_autonomous_executor_session(host: Any, *, logger_debug: Any) -> None:
             if message_count == 0:
                 session_db._conn.execute(
                     "UPDATE sessions SET source = ? WHERE id = ?",
-                    ("cli_autonomous_executor", session_id),
+                    ("cli_supervisor_task_lane", session_id),
                 )
                 session_db._conn.commit()
     except Exception as exc:
-        logger_debug("Could not persist autonomous executor session: %s", exc)
+        logger_debug("Could not persist supervisor_task lane session: %s", exc)
 
 
 def push_cli_agent_scene(

@@ -194,9 +194,6 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
                         "status": "当前在途",
                         "summary": "API-B 正在处理当前链路焦点。",
                     },
-                    "hero_pills": [
-                        {"key": "focus", "text": "当前落点 · API-B 判断", "tone": "accent"}
-                    ],
                 },
                 "loop": {
                     "rail_entries": [
@@ -229,8 +226,8 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
                             "title": "API-A execution",
                             "source_label": "API-A",
                             "status": "ready",
-                            "display_status": "待认领",
-                            "summary": "已放行，等待 API-A 认领。",
+                            "display_status": "可认领",
+                            "summary": "API-B 已放行，可由 API-A 认领。",
                         },
                     ],
                 },
@@ -239,16 +236,16 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
                     "segments": [
                         {
                             "key": "api_b_backlog",
-                            "label": "治理在途投影",
+                            "label": "API-B 判断在途投影",
                             "source_label": "API-B",
                             "stage_label": "判断与治理",
                             "items": [{"title": "Governance backlog task", "display_status": "待审核"}],
                         },
                         {
                             "key": "api_a_ready",
-                            "label": "待认领窗口投影",
+                            "label": "API-A 可认领投影",
                             "source_label": "API-A",
-                            "stage_label": "执行前窗口",
+                            "stage_label": "认领状态",
                             "items": [{"title": "Autonomous ready task", "display_status": "待执行"}],
                         },
                         {
@@ -281,7 +278,7 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
     assert built["chain"]["headline"] == "API-B 主视角自主闭环总览"
     assert built["chain"]["hero_summary"] == "Supervisor projected hero summary"
     assert built["chain"]["primary_focus"]["title"] == "API-B 判断"
-    assert built["chain"]["hero_pills"][0]["text"] == "当前落点 · API-B 判断"
+    assert "hero_pills" not in built["chain"]
     assert built["chain"]["api_b_backlog"] == 1
     assert built["chain"]["api_a_running"] == 1
     assert built["chain"]["api_a_ready"] == 2
@@ -292,11 +289,11 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
     assert built["chain"]["stage_cards"][0]["status"] == "当前在途"
     assert built["chain"]["stage_cards"][0]["source_label"] == "API-B"
     assert built["chain"]["rail_entries"][0]["label"] == "API-B 判断"
-    assert built["chain"]["segments"][0]["label"] == "治理在途投影"
+    assert built["chain"]["segments"][0]["label"] == "API-B 判断在途投影"
     assert built["chain"]["segments"][0]["stage_label"] == "判断与治理"
     assert built["chain"]["segments"][0]["source_label"] == "API-B"
     assert "owner" not in built["chain"]["segments"][0]
-    assert built["chain"]["segments"][1]["label"] == "待认领窗口投影"
+    assert built["chain"]["segments"][1]["label"] == "API-A 可认领投影"
     assert built["chain"]["segments"][0]["title"] == "Governance backlog task"
 
 
@@ -376,9 +373,8 @@ def test_build_dashboard_api_a_observation_reads_supervisor_task_lane_only(monke
 
     built = dashboard.build_dashboard()
 
-    assert built["api_a_observation"]["lane"] == "supervisor_task"
-    assert built["api_a_observation"]["lane_scene"] == "learning"
-    assert built["api_a_observation"]["lane_scene_label"] == "自主学习"
+    assert built["api_a_observation"]["current_scene"] == "learning"
+    assert built["api_a_observation"]["current_scene_label"] == "自主学习"
     assert built["api_a_observation"]["status_label"] == "他处执行中"
     assert built["api_a_observation"]["task_id"] == "learn-supervisor-1"
     assert built["api_a_observation"]["task_title"] == "Supervisor autonomous task"
@@ -389,7 +385,7 @@ def test_build_dashboard_api_a_observation_reads_supervisor_task_lane_only(monke
     assert built["api_a_observation"]["subagent_focus_preview"] == ""
     assert built["api_a_observation"]["session_id"] == "cli-session-supervisor"
     assert built["api_a_observation"]["lease_status"] == "observed"
-    assert "cli-session-user" not in built["api_a_observation"]["lease_summary"]
+    assert "cli-session-user" not in built["api_a_observation"]["presence_summary"]
 
 
 def test_build_dashboard_does_not_fallback_to_gateway_recent_activity_projection(monkeypatch):
@@ -456,7 +452,7 @@ def test_print_dashboard_shows_api_b_observation_input(monkeypatch, capsys):
             "chain": {
                 "mode": "observation_unavailable",
                 "headline": "自主链路观测暂不可用",
-                "summary": "监督者尚未提供 API-B 主视角的自主链路读模型。",
+                "summary": "监督者还没给出可展示的闭环快照。",
             },
             "observation_input": {
                 "headline": "API-B 判断输入",
@@ -497,7 +493,6 @@ def test_print_dashboard_shows_chain_segments_headline(monkeypatch, capsys):
                 "segments_headline": "自主闭环分段观察",
                 "hero_summary": "Supervisor projected hero summary",
                 "primary_focus": {"title": "API-B 判断", "status": "当前在途"},
-                "hero_pills": [{"text": "当前落点 · API-B 判断"}],
                 "api_b_backlog": 1,
                 "api_a_running": 1,
                 "api_a_ready": 0,
@@ -545,7 +540,6 @@ def test_print_dashboard_shows_recent_autonomous_activity(monkeypatch, capsys):
                 "segments_headline": "自主闭环分段观察",
                 "hero_summary": "Supervisor projected hero summary",
                 "primary_focus": {"title": "API-B 判断", "status": "当前在途"},
-                "hero_pills": [{"text": "当前落点 · API-B 判断"}],
                 "api_b_backlog": 1,
                 "api_a_running": 0,
                 "api_a_ready": 0,
@@ -599,7 +593,6 @@ def test_print_dashboard_shows_supervisor_task_lane_without_user_chat_leak(monke
                 "segments_headline": "自主闭环分段观察",
                 "hero_summary": "Supervisor projected hero summary",
                 "primary_focus": {"title": "API-B 判断", "status": "当前在途"},
-                "hero_pills": [{"text": "当前落点 · API-B 判断"}],
                 "api_b_backlog": 1,
                 "api_a_running": 1,
                 "api_a_ready": 0,
@@ -610,8 +603,7 @@ def test_print_dashboard_shows_supervisor_task_lane_without_user_chat_leak(monke
                 "segments": [],
             },
             "api_a_observation": {
-                "lane": "supervisor_task",
-                "lane_scene_label": "替身改进",
+                "current_scene_label": "替身改进",
                 "status_label": "他处执行中",
                 "subagent_foreground_count": 2,
                 "subagent_background_count": 1,
@@ -621,7 +613,7 @@ def test_print_dashboard_shows_supervisor_task_lane_without_user_chat_leak(monke
                 "task_title": "Refine executor shell",
                 "subagent_focus_tool": "apply_patch",
                 "subagent_focus_preview": "",
-                "lease_summary": "执行位: 会话 supervisor 正持有 supervisor_task 执行位（静默 3s）",
+                "presence_summary": "执行面: 会话 supervisor 正在进行 API-A 自主执行（静默 3s）",
                 "chain_reason": "链路: 该链路项已被其他 API-A 自主执行面认领",
                 "activity_text": "执行流: 链路项正在其他 API-A 自主执行面中运行",
             },
@@ -642,7 +634,7 @@ def test_print_dashboard_shows_supervisor_task_lane_without_user_chat_leak(monke
     output = capsys.readouterr().out
 
     assert "API-A 自主执行观察面" in output
-    assert "supervisor_task" in output
+    assert "当前场景 替身改进" in output
     assert "apply_patch" in output
     assert "Refine executor shell" in output
     assert "grep app.py" not in output

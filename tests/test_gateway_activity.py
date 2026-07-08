@@ -272,7 +272,7 @@ def test_gateway_agent_query_rejects_legacy_proxy_but_still_records_user_activit
     activity = client.get("/admin/activity").json()
     assert activity["last_user_request_at"] is not None
     assert activity["counts"]["user_request_count"] == 1
-    assert activity["counts"]["agent_work_count"] == 1
+    assert activity["counts"]["agent_work_count"] == 0
 
 
 def test_gateway_agent_query_still_records_activity_while_autonomous_gate_is_active():
@@ -410,6 +410,7 @@ def test_gateway_agent_scene_touch_updates_scene_cache_and_prefers_cli_agent():
 
     assert response.status_code == 200
     scenes = client.get("/admin/scenes").json()["scenes"]
+    summary = client.get("/admin/scenes").json()["summary"]
     assert scenes["agent"]["scene"] == "learning"
     assert scenes["agent"]["scene_projection_scope"] == "agent_top_level_projection"
     assert scenes["agent"]["canonical_lanes"] == ["supervisor_task", "user_chat"]
@@ -420,6 +421,9 @@ def test_gateway_agent_scene_touch_updates_scene_cache_and_prefers_cli_agent():
     assert scenes["agent"]["subagent_foreground_count"] == 2
     assert scenes["agent"]["subagent_background_count"] == 1
     assert scenes["agent"]["subagent_focus_tool"] == "read_file"
+    assert summary["agent"] == "idle"
+    assert summary["agent_user_chat"] == "idle"
+    assert summary["agent_supervisor_task"] == "learning"
 
     health = client.get("/").json()
     active_cli = health["active_cli_executor"]
@@ -543,6 +547,41 @@ def test_gateway_idle_scene_does_not_steal_active_cli_executor():
     status = client.get("/admin/body/status").json()
     assert status["active_cli_executor"]["session_id"] == "cli-session-1"
     assert status["active_cli_executor"]["scene"] == "learning"
+
+
+def test_gateway_active_cli_executor_does_not_fallback_to_agent_top_level_scene():
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+
+    client.post(
+        "/v1/sessions/register",
+        json={
+            "session_id": "cli-session-1",
+            "model": "agnes-2.0-flash",
+            "provider": "agnesai",
+            "source": "cli",
+        },
+    )
+
+    # Simulate a stale top-level agent scene without a matching lane owner.
+    gateway._active_cli_session_id = "cli-session-1"
+    gateway._scenes_cache["agent"].update(
+        {
+            "scene": "executing",
+            "scene_projection_scope": "agent_top_level_projection",
+            "source_service": "cli_agent",
+            "subagent_focus_tool": "grep",
+        }
+    )
+
+    status = client.get("/admin/body/status").json()
+    active_cli = status["active_cli_executor"]
+
+    assert active_cli["session_id"] == "cli-session-1"
+    assert active_cli.get("scene") is None
+    assert active_cli.get("scene_projection_scope") is None
+    assert active_cli.get("agent_lane") is None
+    assert active_cli.get("subagent_focus_tool") is None
 
 
 def test_gateway_task_decision_forwards_metadata_to_supervisor(monkeypatch):
@@ -971,7 +1010,9 @@ def test_gateway_agent_lanes_keep_supervisor_and_user_chat_separate():
     )
     assert resp.status_code == 200
 
-    agent_scene = client.get("/admin/scenes").json()["scenes"]["agent"]
+    scenes_payload = client.get("/admin/scenes").json()
+    agent_scene = scenes_payload["scenes"]["agent"]
+    summary = scenes_payload["summary"]
     assert agent_scene["scene"] == "executing"
     assert agent_scene["scene_projection_scope"] == "agent_top_level_projection"
     assert agent_scene["subagent_focus_tool"] == "grep"
@@ -985,6 +1026,9 @@ def test_gateway_agent_lanes_keep_supervisor_and_user_chat_separate():
     # user_chat lane holds its own data
     assert lanes["user_chat"]["scene"] == "executing"
     assert lanes["user_chat"]["subagent_foreground_count"] == 1
+    assert summary["agent"] == "executing"
+    assert summary["agent_user_chat"] == "executing"
+    assert summary["agent_supervisor_task"] == "learning"
 
     active_cli = client.get("/").json()["active_cli_executor"]
     assert active_cli["session_id"] == "user-session"

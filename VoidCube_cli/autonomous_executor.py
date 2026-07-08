@@ -381,7 +381,7 @@ class AutonomousExecutorRuntime:
                         writeback_ok = self.post_task_decision(
                             str(recovered_task.get("task_id") or ""),
                             decision="failed",
-                            reason="API-A autonomous executor recovered the task but failed to restart autonomous execution.",
+                            reason="API-A 自主执行面认回链路项后，未能重新起跑执行。",
                             context={
                                 "error": "recovered_execution_start_failed",
                                 "execution_kind": recovered_execution_kind,
@@ -420,9 +420,9 @@ class AutonomousExecutorRuntime:
                     or turn_result.get("interrupted")
                 ) else "completed"
                 reason = (
-                    f"Autonomous {task_label} failed in the API-A autonomous executor: {turn_result.get('error', 'unknown error')}"
+                    f"API-A 自主执行面中的{task_label}执行失败：{turn_result.get('error', 'unknown error')}"
                     if decision == "failed"
-                    else f"Autonomous {task_label} completed by the API-A autonomous executor."
+                    else f"API-A 自主执行面已完成{task_label}。"
                 )
                 writeback_ok = self.post_task_decision(
                     task_id,
@@ -499,7 +499,7 @@ class AutonomousExecutorRuntime:
             run_payload = json.dumps({
                 "decision": "running",
                 "actor": "cli_agent",
-                "reason": "API-A autonomous executor pulled task for execution.",
+                "reason": "API-A 自主执行面已认领链路项并开始执行。",
                 "context": {
                     "session_id": getattr(self.host, "session_id", None),
                     "source": "cli_agent_pull",

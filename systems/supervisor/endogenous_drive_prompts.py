@@ -408,7 +408,7 @@ def _render_cognitive_briefing(packet: Dict[str, Any]) -> str:
         f"- 当前自我理解缺口: {', '.join(self_gaps) or '无'}",
         f"- 当前首要自我迭代域: {top_iteration_domain or '无'}",
         f"- 当前首要自我迭代假设: {dominant_iteration_hypothesis or '无'}",
-        f"- 当前治理在途上下文: {governance_backlog_summary or '无'}",
+        f"- 当前 API-B 判断在途上下文: {governance_backlog_summary or '无'}",
         f"- 当前不宜直接改进的原因: {', '.join(why_not_improvement_now) or '无'}",
         "- 先输出一个 `cognitive_assessment`，明确写出当前判断、主约束、grounding 缺口，以及为什么当前治理姿态成立。",
         "- 如果 evidence_packet 提供了 self_iteration_hypotheses，请在 cognitive_assessment 中写出 self_iteration_target 与 self_iteration_hypothesis。",
@@ -1342,13 +1342,13 @@ def _derive_governance_backlog_snapshot(packet: Dict[str, Any]) -> Dict[str, Any
         "recent_titles": recent_titles,
         "recent_statuses": statuses,
         "summary": (
-            f"治理在途={backlog_count}；"
+            f"API-B 判断在途={backlog_count}；"
             f"学习在途={learning_count}；"
             f"替身改进在途={body_count}；"
             f"最近标题={', '.join(recent_titles[:3]) or '暂无'}。"
         ),
         "guidance": (
-            "除非证据足以明确支持更强替代项，否则不要提出与现有治理在途重复的任务。"
+            "除非证据足以明确支持更强替代项，否则不要提出与现有 API-B 判断在途重复的任务。"
         ),
     }
 

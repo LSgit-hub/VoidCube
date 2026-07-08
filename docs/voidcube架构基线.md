@@ -596,7 +596,7 @@ API-A 自主执行面（最小迷你 CLI / 子代理通道；当前由 `/auto` �
 当前基线下，这个存储不应再被理解成“旧式人工任务台”。程序和观测层都应优先围绕三类投影读取：
 
 - `governance_backlog`：仍在治理中的活跃链路项
-- `api_a_execution_lane`：已放行并进入 API-A 执行段的链路项；其中 `approved/retry` 属于待认领窗口，`running` 属于执行中阶段
+- `api_a_execution_lane`：已放行并进入 API-A 执行段的链路项；其中 `approved/retry` 属于 API-A 可认领状态，`running` 属于执行中阶段
 - `writeback_history`：已完成并可回流 Mem 的写回历史
 
 Web 小屋只是这些投影的只读观测面，不承担人工任务调度职责。
@@ -730,9 +730,9 @@ Mem 记录“为什么演化”和“是否允许演化”；Git 记录“具体
 - 用户服务始终优先：用户在前端 CLI 的交互走主代理，与监督者的后台自进化子代理互不覆盖、互不抢占。
 - 监督者可随时规划与执行任务（self_learning / memory_maintenance / self_evolution 全类型，无时间段限制）。
 - **认知层软感知用户状态**：`active_sessions`（= gateway 会话缓存大小，用户普通 CLI 在主循环周期注册会话）进入内生驱动的感知快照，作为候选 utility 与优先级的**降权信号**——用户活跃时自进化倾向降低、择机让路，但**不被阻断**。
-- 仍保留的是**防自撞并发护栏**（memory / self_learning / self_evolution / agent 各自的 in-flight idle 判定），它防的是"对同一子系统重复并发派发"，与"等用户"无关。
+- 仍保留的是**防自撞并发护栏**（memory / self_learning / self_evolution / API-A 自主执行位各自的 in-flight idle 判定），它防的是"对同一子系统重复并发派发"，与"等用户"无关。
 
-> **活动信号拓扑（2026-06 核实，重要）**：gateway 的用户代理端点（`/v1/chat/completions`、`/v1/agent/query`）已废弃并返回 410，用户真实 CLI 直连 LLM provider、不经 gateway。因此 `last_user_request_at` 在实时系统**无活 feeder**，旧的"等用户空闲"硬门本就形同虚设——这也是全天候改造删除该门低风险的依据。`last_agent_work_at` 的实时 feeder 只有监督者任务自身（自主任务拉取开始 + 任务回写裁决），所以 `has_agent_idle` 等 idle 护栏只反映监督者自身在途工作、不耦合用户活动。对用户状态的感知由 `active_sessions` 这一独立信号承担（软适配），与 idle 护栏解耦。
+> **活动信号拓扑（2026-07 校正，重要）**：gateway 的用户代理端点（`/v1/chat/completions`、`/v1/agent/query`）已废弃并返回 410，用户真实 CLI 直连 LLM provider、不经 gateway。因此 `last_user_request_at` 在实时系统**无活 feeder**，旧的"等用户空闲"硬门本就形同虚设——这也是全天候改造删除该门低风险的依据。与此同时，gateway 的 `last_agent_work_at` 已是**泛化 agent 活动事实**，会吸收 `user_request`、agent route 工作等混合信号，因此它不应再直接充当自主链路 execution eligibility 的硬碰撞护栏。当前真正用于判断“API-A 自主执行位是否仍在途”的，应优先是 `last_autonomous_chain_execute_at` 与 `active_cli_executor(agent_lane=supervisor_task)` 这组自主链路事实；对用户状态的感知则继续由 `active_sessions` 这一独立信号承担（软适配），与自主执行碰撞护栏解耦。
 
 ### 6.2 执行触发方式
 
@@ -754,7 +754,7 @@ Mem 记录“为什么演化”和“是否允许演化”；Git 记录“具体
 自主任务状态：
 
 - `planned` — 监督者内生驱动产出，尚未放行
-- `approved` — 监督者放行，等待 API-A 自主执行面拉取执行
+- `approved` — 监督者放行，API-A 自主执行面可拉取执行
 - `running` — API-A 自主执行面已拉取，正在执行
 - `completed` — API-A 自主执行面执行成功，学习成果或改进进展已写入 Mem
 - `failed` — API-A 自主执行面执行失败
@@ -1026,7 +1026,7 @@ Governor (API-B)
    | <br />                      | <br />   | `drive`        | 内生驱动：产出候选          |
    | <br />                      | <br />   | `memory`       | 直接触摸长期记忆（Mem 内部操作） |
    | <br />                      | <br />   | `maintenance`  | 记忆维护/治理卫生          |
-   | <br />                      | <br />   | `handoff`      | 已完成执行交接，等待 API-A / 执行器处理 |
+   | <br />                      | <br />   | `handoff`      | 已完成执行交接，交给 API-A / 执行器处理 |
    | **API-A 自主执行面**         | 学习/升级执行体 | `idle`         | 无活动                |
    | <br />                      | <br />   | `learning`     | 正在执行 `self_learning` 学习任务 |
    | <br />                      | <br />   | `code_editing` | 正在执行 `body_improvement` / 编辑替身代码 |
@@ -1276,13 +1276,13 @@ Mem 中长期记忆 + 网关活动快照（7 个时间戳 + 错误/不确定性�
 
 **gateway 双泳道展示/活动架构**：`user_chat` 与 `supervisor_task` 是同一 API-A 域下的两个工作泳道。用户链路的主 CLI 交互走 `user_chat`，自主链路中监督者放行的学习/改造任务走 `supervisor_task`；两者互不覆盖。dashboard / Web 监控只作为 API-B 观测面按 lane 读取自主链路状态，不能退回单槽 last-writer-wins，也不能变成用户聊天入口。
 
-终端 dashboard / Web 小屋应优先消费 Supervisor 提供的 `autonomous_observation.chain.segments / loop.stage_cards / loop.rail_entries / board.primary_focus / board.hero_pills / board.observation_notes / board.recent_activity` 读模型；其中 `chain.segments + loop.stage_cards + loop.rail_entries` 是当前程序侧正式观测协议，`loop.stages` 只允许作为历史快照兼容镜像留在显式 compat helper/fallback 中。观测板暂不可用时可以显示空态，但不应回退成旧 `/self-evolution/tasks` 人工任务台视角，也不应再从 `protocol_notes` 或 gateway 活动快照反推一套兼容说明。
+终端 dashboard / Web 小屋应优先消费 Supervisor 提供的 `autonomous_observation.chain.segments / loop.stage_cards / loop.rail_entries / board.primary_focus` 这组主读模型；其中 `chain.segments + loop.stage_cards + loop.rail_entries` 是当前程序侧正式观测协议，`loop.stages` 只允许作为历史快照兼容镜像留在显式 compat helper/fallback 中。`board.recent_activity` 与 `board.observation_notes` 现在属于补充投影，只在需要表达最近动作或少量增量提示时使用；不应再把 `hero_pills`、指标板或其他摘要镜像当成主路径。观测板暂不可用时可以显示空态，但不应回退成旧 `/self-evolution/tasks` 人工任务台视角，也不应再从 `protocol_notes` 或 gateway 活动快照反推一套兼容说明。
 
 Web 小屋前端内部主面板也应以 `chain`/“API-B 主视角自主闭环总览”作为主语，而不是继续沿用 `tasks`/任务台命名；默认展开内容应先展示焦点、四段闭环和自主闭环分段观察，再展示更细的任务卡。这里的“分段观察”是对自主链路四段流动的只读投影，不是旧式人工任务台。
 
 对应地，Supervisor 的 `/ui/state` 不应再把顶层 `tasks`、`drive_candidates`，以及 `autonomous_observation.observed_tasks / autonomous_observation.candidates` 这类原始治理/候选切片作为前端主协议返回；前端应围绕 `autonomous_observation.chain.segments`、`loop.stage_cards / loop.rail_entries` 与 `board.primary_focus` 取数。
 
-一旦 Supervisor 已经稳定投影出 `board.primary_focus / hero_pills / observation_notes / recent_activity`，Web 与最小 CLI 就不应再各自从 `loop.stage_cards`、`loop.stages`、`protocol_notes` 或 gateway 活动快照反推一份“焦点/说明/最近动作”兼容视图；消费端应直接信任这组投影，避免同一闭环出现多套解释口径。
+一旦 Supervisor 已经稳定投影出 `board.primary_focus / board.recent_activity / board.observation_notes`，Web 与最小 CLI 就不应再各自从 `loop.stage_cards`、`loop.stages`、`protocol_notes` 或 gateway 活动快照反推一份“焦点/说明/最近动作”兼容视图；消费端应直接信任这组投影，避免同一闭环出现多套解释口径。与此同时，Web 小屋与最小 CLI 都不应继续把 `hero_pills`、指标板或其他总览摘要镜像当成正式前台必需层。
 
 同理，`drive_available`、`autonomous_chain_gate` 这类旧 Web 控制台式运行时信号不应再充当前台主说明；前台当前正式只读 `autonomous_observation.runtime.user_chain_signal / snapshot_source` 与 `/runtime/observation-input` 这一窄输入快照，用来表达“用户链路仅作 API-B 软感知输入”。
 
@@ -1292,12 +1292,12 @@ Web 小屋前端内部主面板也应以 `chain`/“API-B 主视角自主闭环�
 
 如果需要展示“链路分段”，也应把它理解成自主链路的观测投影，而不是旧任务台。推荐主协议为 `autonomous_observation.chain.segments`，显式区分 `api_b_backlog`、`api_a_ready`、`api_b_candidates`、`mem_recent` 四类链路分段；前端应直接消费这些分段，而不是再额外维护一层旧展示别名。每个 segment 还应允许携带 `recent_events` 一类最近链路事件摘要，以及 `recent_traces` 一类按 `trace_id` 聚合的轻量 trace 摘要；Web 小屋优先使用 Supervisor 本地记录来生成这些摘要，避免观测页刷新反向依赖慢速 live 探活。当某条 recent trace 值得展开时，还应允许内联少量 `detail`（如 source 分布、任务家族、timeline preview，以及有限条数的 `timeline_events` 事件流），并支持按 source 过滤事件流，便于 Web 小屋顺着这一段继续钻取最近的 timeline / trace。
 
-其中 `api_a_ready` 必须严格理解成“已放行、待 API-A 认领”的窗口，而不是 API-A 全部执行态总段。已经进入 `running` 的自主任务应继续通过 `loop.stage_cards[stage_key=api_a_execution]`、`loop.rail_entries`、最近事件和最近轨迹观察，不应再混回 `api_a_ready`，否则前端会重新退化成旧式任务台视角。
+其中 `api_a_ready` 必须严格理解成“已放行、API-A 可认领”的状态，而不是 API-A 全部执行态总段。已经进入 `running` 的自主任务应继续通过 `loop.stage_cards[stage_key=api_a_execution]`、`loop.rail_entries`、最近事件和最近轨迹观察，不应再混回 `api_a_ready`，否则前端会重新退化成旧式任务台视角。
 
 同样地，Supervisor 底层的治理在途存储虽然目前仍由 `systems/supervisor/autonomous_chain_store.py` 承载，但程序消费层不应继续把它当成一个无差别“总存储”。推荐底层统一围绕三类投影读取：
 
 - `governance_backlog`: 仍在治理中的活跃任务
-- `api_a_execution_lane`: 已进入或准备进入 API-A 执行段的任务；其中 `approved/retry` 属于待认领窗口，`running` 属于执行中阶段
+- `api_a_execution_lane`: 已进入或准备进入 API-A 执行段的任务；其中 `approved/retry` 属于 API-A 可认领状态，`running` 属于执行中阶段
 - `writeback_history`: 已产出结果并可回流 Mem 的历史记录
 
 即使暂时保留旧类名/文件名，新的 runtime、UI、dashboard 和 planning 路径也应优先消费这三类投影，而不是到处直接 `list_tasks()`。

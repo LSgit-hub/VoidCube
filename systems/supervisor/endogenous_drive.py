@@ -856,7 +856,7 @@ class EndogenousDriveEngine:
 
         rationale_parts = [
             f"近期学习收益状态为 {learning_yield_state}",
-            f"治理在途阻塞状态为 {governance_backlog_blockage_state}",
+            f"API-B 判断在途阻塞状态为 {governance_backlog_blockage_state}",
         ]
         if historical_total > 0:
             rationale_parts.append(
@@ -1623,7 +1623,7 @@ class EndogenousDriveEngine:
                     ),
                     rationale=(
                         "当近期证据仍有增益时，学习应继续扩展；"
-                        "但如果治理在途阻塞已说明继续产出只会加压，就应主动降温。"
+                        "但如果 API-B 判断在途阻塞已说明继续产出只会加压，就应主动降温。"
                     ),
                     source_evidence=[
                         f"learning_quality={perception.learning_quality:.2f}",
@@ -1933,11 +1933,11 @@ class EndogenousDriveEngine:
                         (backlog_need.severity if backlog_need else 0.45)
                         + (0.08 if world_model.governance_load_state == "strained" else 0.0)
                     ),
-                    message="治理在途状态提示：在继续累积更多自主工作前，应先进行一轮治理复核。",
+                    message="API-B 判断在途提示：在继续累积更多自主工作前，应先观察并复核判断段。",
                     rationale=(
                         backlog_need.rationale
                         if backlog_need is not None
-                        else "治理在途压力与复核债务都提示当前应先检查治理段。"
+                        else "API-B 判断在途压力与复核债务都提示当前应先检查判断段。"
                     ),
                     source_needs=(
                         [backlog_need.need_type]
@@ -2901,9 +2901,9 @@ class EndogenousDriveEngine:
             candidates.append(
                 self._build_scored_candidate(
                     stable_key="continuity:governance_hygiene_review",
-                    title="复核治理在途卫生",
+                    title="观察 API-B 判断积压",
                     summary=(
-                        "检查已规划、已延后或已暂停的治理在途工作是否仍具备"
+                        "检查已规划、已延后或已暂停的 API-B 判断在途工作是否仍具备"
                         "足够证据、责任归属和回滚约束。"
                     ),
                     priority="normal",
@@ -3351,13 +3351,13 @@ class EndogenousDriveEngine:
             "recent_titles": recent_titles,
             "recent_statuses": recent_statuses,
             "summary": (
-                f"治理在途 {len(governance_backlog_tasks)} 项；"
-                f"学习在途 {len(learning_backlog_titles)} 项；"
-                f"替身改进在途 {len(body_improvement_backlog_titles)} 项；"
-                f"最近标题：{', '.join(recent_titles[:3]) or '无'}。"
+                f"API-B 判断在途 {len(governance_backlog_tasks)} 项，"
+                f"学习 {len(learning_backlog_titles)} 项，"
+                f"替身改进 {len(body_improvement_backlog_titles)} 项；"
+                f"最近：{', '.join(recent_titles[:3]) or '无'}。"
             ),
             "guidance": (
-                "除非出现更强的新证据足以证明应该替换当前治理方向，否则不要重复提出与现有治理在途等价的工作。"
+                "除非新证据明显更强，否则不要重复提出与现有 API-B 判断在途等价的工作。"
             ),
         }
 
@@ -8290,9 +8290,14 @@ class EndogenousDriveEngine:
 
     def _memory_maintenance_urgency(self, drive_input: Dict[str, Any]) -> float:
         idle_seconds = dict(drive_input.get("idle_seconds") or {})
+        api_a_execution_idle = idle_seconds.get("api_a_execution")
         coverage = [
-            self._clamp01(float(idle_seconds.get(name) or 0) / 900.0)
-            for name in ("user", "agent", "memory")
+            self._clamp01(float(value or 0) / 900.0)
+            for value in (
+                idle_seconds.get("user"),
+                api_a_execution_idle,
+                idle_seconds.get("memory"),
+            )
         ]
         avg_idle_coverage = sum(coverage) / len(coverage) if coverage else 0.0
         # Whole-day execution (baseline §6): no time-of-day window bonus anymore.

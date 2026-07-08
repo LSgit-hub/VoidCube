@@ -11,7 +11,7 @@ from VoidCube_cli.autonomous_executor import (
     autonomous_task_execution_kind,
     autonomous_task_label,
 )
-from VoidCube_cli.autonomous_presence import ensure_autonomous_executor_session
+from VoidCube_cli.autonomous_presence import ensure_supervisor_task_session
 from VoidCube_cli.autonomous_status_host import (
     preview_supervisor_status_lines,
 )
@@ -25,7 +25,7 @@ def _enter_autonomous_gate_locally(
     refresh_gateway_cli_presence_callback: Any,
 ) -> None:
     host._autonomous_gate_active = True
-    ensure_autonomous_executor_session(host, logger_debug=logger.debug)
+    ensure_supervisor_task_session(host, logger_debug=logger.debug)
     append_autonomous_execution_event(
         host,
         "自主链路已激活，API-A 自主执行面等待任务",

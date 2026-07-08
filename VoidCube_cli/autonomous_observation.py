@@ -38,66 +38,6 @@ def observation_loop(state: Dict[str, Any]) -> Dict[str, Any]:
     return dict(observation.get("loop") or {})
 
 
-def _compat_loop_stage(loop: Dict[str, Any], stage_key: str) -> Dict[str, Any]:
-    """Read legacy loop stage snapshots only as a compatibility fallback."""
-    normalized_key = str(stage_key or "").strip()
-    for stage in list(loop.get("stages") or []):
-        if not isinstance(stage, dict):
-            continue
-        if str(stage.get("key") or "").strip() == normalized_key:
-            return dict(stage)
-    return {}
-
-
-def _compat_loop_stage_projections(loop: Dict[str, Any]) -> list[Dict[str, Any]]:
-    projected: list[Dict[str, Any]] = []
-    for stage_key in ("api_b_judgement", "api_a_execution", "mem_writeback", "api_b_reread"):
-        stage = _compat_loop_stage(loop, stage_key)
-        if not stage:
-            continue
-        focus_task = dict(stage.get("focus_task") or {})
-        projected.append(
-            {
-                **focus_task,
-                "title": str(focus_task.get("title") or stage.get("label") or "阶段"),
-                "status": str(stage.get("status") or focus_task.get("status") or "idle"),
-                "display_status": str(
-                    focus_task.get("display_status")
-                    or stage.get("status_label")
-                    or stage.get("label")
-                    or "等待中"
-                ),
-                "summary": str(
-                    focus_task.get("summary")
-                    or stage.get("summary")
-                    or stage.get("chain_reason")
-                    or stage.get("activity_text")
-                    or ""
-                ),
-                "observation_role": str(stage.get("key") or ""),
-            }
-        )
-    return projected
-
-
-def compat_observation_loop_stage_projections(state: Dict[str, Any]) -> list[Dict[str, Any]]:
-    """Read legacy loop stage projections only from explicit compatibility call sites."""
-    loop = observation_loop(state)
-    return _compat_loop_stage_projections(loop)
-
-
-def compat_observation_loop_stage(
-    state: Dict[str, Any],
-    stage_key: str,
-) -> Dict[str, Any]:
-    """Read a legacy loop stage snapshot only from explicit compatibility call sites."""
-    loop = observation_loop(state)
-    normalized_key = str(stage_key or "").strip()
-    if not normalized_key:
-        return {}
-    return _compat_loop_stage(loop, normalized_key)
-
-
 def observation_group_items(
     state: Dict[str, Any],
     group_key: str,
@@ -255,7 +195,7 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
         "focus_task": {},
         "status_label": "治理段观察中",
         "chain_reason": "链路: 当前没有已批准的 API-A 可执行链路项",
-        "activity_text": "执行流: 等待 API-B 判断、重排或再读取后形成新的待认领窗口",
+        "activity_text": "执行流: API-B 判断、重排或再读取后再交给 API-A",
         "reason_style": "dim",
     }
     approved_focus = (
@@ -278,9 +218,9 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
             "stage": "waiting_api_a_claim",
             "cli_focus_stage": "waiting_api_a_claim",
             "focus_task": approved_focus,
-            "status_label": "已放行待认领",
-            "chain_reason": "链路: 监督者已放行该链路项，等待 API-A 自主执行面认领",
-            "activity_text": "执行流: 监督者已放行链路项，等待 API-A 自主执行面认领",
+            "status_label": "API-A 可认领",
+            "chain_reason": "链路: API-B 已放行，可由 API-A 自主执行面认领",
+            "activity_text": "执行流: API-A 认领后执行，结果写回 Mem",
             "reason_style": "warn",
         }
     elif deferred_governance:
@@ -289,8 +229,8 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
             "cli_focus_stage": "idle",
             "focus_task": {},
             "status_label": "治理段观察中",
-            "chain_reason": "链路: 当前学习链路项大多仍停留在 API-B 治理段并被延后，尚未进入 API-A 待认领窗口",
-            "activity_text": "执行流: 等待 API-B 重新放行、重排或补充证据后形成待认领窗口",
+            "chain_reason": "链路: 当前学习链路项仍由 API-B 判断",
+            "activity_text": "执行流: API-B 补判断后再决定是否交给 API-A",
             "reason_style": "warn",
         }
     elif creativity_governance:
@@ -299,8 +239,8 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
             "cli_focus_stage": "idle",
             "focus_task": {},
             "status_label": "治理段观察中",
-            "chain_reason": "链路: 当前自主链路项仍停留在 API-B 治理段，尚未进入 API-A 待认领窗口",
-            "activity_text": "执行流: 等待 API-B 审核、放行或重新排序链路项后形成待认领窗口",
+            "chain_reason": "链路: 当前自主链路项仍由 API-B 判断",
+            "activity_text": "执行流: API-B 审核、放行或重排后再交给 API-A",
             "reason_style": "info",
         }
     elif chain_focus_cards:
@@ -310,7 +250,7 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
             "focus_task": {},
             "status_label": "治理段观察中",
             "chain_reason": "链路: 当前没有新的 API-A 可执行链路项；API-B 正在判断、回收写回或推进下一轮再读取",
-            "activity_text": "执行流: 等待 API-B 判断、重排或再读取后形成新的待认领窗口",
+            "activity_text": "执行流: API-B 判断、重排或再读取后再交给 API-A",
             "reason_style": "info",
         }
     if stage_label:
@@ -425,7 +365,7 @@ def resolve_autonomous_no_task_reason(supervisor_state: Dict[str, Any]) -> tuple
         if approved:
             return (
                 "class:auto-panel-warn",
-                "链路: 监督者已放行链路项，等待 API-A 自主执行面认领",
+                "链路: API-B 已放行链路项，可由 API-A 自主执行面认领",
             )
 
     creativity_governance = [
@@ -442,11 +382,11 @@ def resolve_autonomous_no_task_reason(supervisor_state: Dict[str, Any]) -> tuple
         if deferred:
             return (
                 "class:auto-panel-warn",
-                "链路: 当前学习链路项大多仍停留在 API-B 治理段并被延后，尚未进入 API-A 待认领窗口",
+                "链路: 当前学习链路项仍由 API-B 判断",
             )
         return (
             "class:auto-panel-info",
-            "链路: 当前自主链路项仍停留在 API-B 治理段，尚未进入 API-A 待认领窗口",
+            "链路: 当前自主链路项仍由 API-B 判断",
         )
 
     stage_projections = observation_loop_stage_projections(supervisor_state)
@@ -483,7 +423,7 @@ def format_supervisor_status_snapshot(state: Dict[str, Any]) -> list[str]:
     lines: list[str] = []
     observation = dict(state.get("autonomous_observation") or {})
     metrics = dict(observation.get("metrics") or {})
-    by_path = dict(metrics.get("by_path") or {})
+    chain_projection = dict(metrics.get("chain_projection") or {})
     governance = dict(metrics.get("governance") or {})
     board = dict(observation.get("board") or {})
     chain = dict(observation.get("chain") or {})
@@ -497,7 +437,7 @@ def format_supervisor_status_snapshot(state: Dict[str, Any]) -> list[str]:
     timeline = list(state.get("timeline") or [])
     event_label_map = {
         "task_decided": "链路裁决",
-        "tasks_reviewed": "批量复核",
+        "tasks_reviewed": "API-B 复核记录",
         "tasks_planned": "链路规划",
         "supervisor_activity": "监督活动",
         "execution_handoff_started": "自主交接",
@@ -508,11 +448,12 @@ def format_supervisor_status_snapshot(state: Dict[str, Any]) -> list[str]:
 
     lines.append(f"场景: {_scene_label(state.get('scene'))} — {_display_text(state.get('title'), '自主链路观测')}")
     lines.append(
-        "链路统计: "
-        f"learning={by_path.get('learning', 0)}, "
-        f"maintenance={by_path.get('maintenance', 0)}, "
-        f"evolution={by_path.get('evolution', 0)}, "
-        f"running={metrics.get('running_count', 0)}"
+        "闭环统计: "
+        f"API-B 判断在途={chain_projection.get('governance_backlog', 0)}, "
+        f"API-A 执行中={chain_projection.get('api_a_running', 0)}, "
+        f"API-A 可认领={chain_projection.get('api_a_ready', 0)}, "
+        f"候选={chain_projection.get('candidate_signals', 0)}, "
+        f"回流={chain_projection.get('writeback_history', 0)}"
     )
     lines.append(
         "治理统计: "

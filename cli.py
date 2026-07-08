@@ -1952,14 +1952,14 @@ class VoidcubeCLI:
             auto_resume = CLI_CONFIG["display"].get("auto_resume_last_session", False)
             if auto_resume and self._session_db:
                 try:
-                    # Prefer an unclosed autonomous executor session even when it has
+                    # Prefer an unclosed supervisor_task lane session even when it has
                     # no user messages: autonomous tasks can be supervisor-pulled and
                     # never produce a user row, so message_count alone can skip
                     # the owner session after a crash/restart.
                     recent_sessions = self._session_db.list_sessions_rich(limit=20)
                     selected_session = None
                     for sess in recent_sessions:
-                        if sess.get("source") == "cli_autonomous_executor" and sess.get("ended_at") is None:
+                        if sess.get("source") == "cli_supervisor_task_lane" and sess.get("ended_at") is None:
                             selected_session = sess
                             break
                     if selected_session is None:
@@ -3723,8 +3723,9 @@ class VoidcubeCLI:
                     self._pending_title = None
 
             # ── Gateway observability ───────────────────────────────────
-            # The interactive CLI remains the canonical API-A executor for
-            # direct user turns and autonomous task execution.  We still
+            # The interactive CLI remains the canonical API-A runtime for
+            # direct user turns, and it also hosts the supervisor_task lane
+            # when autonomous chain work is claimed here. We still
             # register the session with Gateway for observability, but we do
             # NOT rewrite the CLI agent's base_url to Gateway here; doing so
             # would proxy the live CLI session through the daemon-side 6080
@@ -9552,10 +9553,10 @@ class VoidcubeCLI:
         are inserted between the spacer and the status bar.
 
         The main CLI intentionally does not mount the API-A autonomous
-        execution window. That execution-flow display belongs to the dedicated
-        autonomous-chain mini CLI / observer surface, so wrapper CLIs should
-        inject their own observation widget here instead of reusing the main
-        CLI as the execution window.
+        execution-flow window. That detailed observation belongs to the
+        dedicated autonomous-chain mini CLI / observer surface, so wrapper
+        CLIs should inject their own observation widget here instead of
+        reusing the main CLI as the execution window.
         """
         return []
 

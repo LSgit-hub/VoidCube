@@ -497,7 +497,7 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
     result: Dict[str, Any] = {}
 
     # Default stable path: Mem → Gateway → Supervisor.
-    # The live CLI session is the canonical API-A executor; body/agent
+    # The live CLI session is the canonical API-A runtime; body/agent
     # subprocesses are only started explicitly for body-runtime workflows.
     startup_order = ["memory", "gateway", "supervisor"]
     for name in startup_order:

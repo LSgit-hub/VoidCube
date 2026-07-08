@@ -27,7 +27,7 @@ class TestEndogenousDriveWithGatewayData:
         engine = EndogenousDriveEngine()
         drive_input = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {"counts": {}, "active_sessions": 0},
             "task_family_decisions": {
                 "memory_maintenance": {"eligible_for_planning": True},
@@ -51,11 +51,49 @@ class TestEndogenousDriveWithGatewayData:
         assert "observation_checks" in mem.evidence
         assert "activity_guard_checks" not in mem.evidence
 
+    def test_memory_maintenance_urgency_ignores_generic_agent_idle(self):
+        engine = EndogenousDriveEngine()
+
+        formal = {
+            "idle_seconds": {
+                "user": 900,
+                "api_a_execution": 0,
+                "agent": 900,
+                "memory": 900,
+            }
+        }
+        missing_api_a_execution = {
+            "idle_seconds": {
+                "user": 900,
+                "agent": 900,
+                "memory": 900,
+            }
+        }
+        no_agent = {
+            "idle_seconds": {
+                "user": 900,
+                "memory": 900,
+            }
+        }
+
+        formal_idle = {
+            "idle_seconds": {
+                "user": 900,
+                "api_a_execution": 900,
+                "agent": 0,
+                "memory": 900,
+            }
+        }
+
+        assert engine._memory_maintenance_urgency(missing_api_a_execution) == engine._memory_maintenance_urgency(no_agent)
+        assert engine._memory_maintenance_urgency(formal) == engine._memory_maintenance_urgency(no_agent)
+        assert engine._memory_maintenance_urgency(formal_idle) > engine._memory_maintenance_urgency(missing_api_a_execution)
+
     def test_drive_generates_truthfulness_when_errors_exist(self):
         engine = EndogenousDriveEngine()
         drive_input = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000},
             "activity": {"counts": {"error_count": 5, "uncertainty_high_count": 3}, "active_sessions": 0},
             "correction_signals": 8,
             "task_family_decisions": {
@@ -83,7 +121,7 @@ class TestEndogenousDriveWithGatewayData:
         engine = EndogenousDriveEngine()
         drive_input = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {"counts": {}, "active_sessions": 0},
             "task_family_decisions": {
                 "memory_maintenance": {"eligible_for_planning": True},
@@ -107,7 +145,7 @@ class TestEndogenousDriveWithGatewayData:
         engine = EndogenousDriveEngine()
         drive_input = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {"counts": {"error_count": 2}, "active_sessions": 0},
             "task_family_decisions": {
                 "memory_maintenance": {"eligible_for_planning": True},
@@ -307,7 +345,7 @@ class TestEndogenousDriveErrorBridge:
         engine = EndogenousDriveEngine()
         idle = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000},
             "activity": {"counts": {"error_count": 4, "uncertainty_high_count": 2}, "active_sessions": 0},
             "task_family_decisions": {
                 "self_learning": {"eligible_for_planning": True},
@@ -330,7 +368,7 @@ class TestEndogenousDriveErrorBridge:
         engine = EndogenousDriveEngine()
         idle = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {
                 "counts": {"error_count": 4, "uncertainty_high_count": 2},
                 "active_sessions": 0,
@@ -366,7 +404,7 @@ class TestEndogenousDriveErrorBridge:
         engine = EndogenousDriveEngine()
         idle = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {"counts": {}, "active_sessions": 0},
             "task_family_decisions": {
                 "memory_maintenance": {"eligible_for_planning": True},
@@ -402,7 +440,7 @@ class TestEndogenousDriveErrorBridge:
         engine = EndogenousDriveEngine()
         idle = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {"counts": {"error_count": 3, "uncertainty_high_count": 1}, "active_sessions": 0},
             "task_family_decisions": {
                 "self_learning": {"eligible_for_planning": True},
@@ -430,7 +468,7 @@ class TestEndogenousDriveErrorBridge:
         engine = EndogenousDriveEngine()
         idle = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {"counts": {}, "active_sessions": 0, "recent_metadata": {}},
             "shell_slot": {
                 "slot_id": "slot-B",
@@ -463,7 +501,7 @@ class TestEndogenousDriveErrorBridge:
         engine = EndogenousDriveEngine()
         idle = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {"counts": {"error_count": 2, "uncertainty_high_count": 1}, "active_sessions": 0},
             "task_family_decisions": {
                 "self_learning": {"eligible_for_planning": True},
@@ -491,7 +529,7 @@ class TestEndogenousDriveErrorBridge:
         engine = EndogenousDriveEngine()
         idle = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {"counts": {}, "active_sessions": 0},
             "governance_backlog_tasks": [
                 {
@@ -547,7 +585,7 @@ class TestEndogenousDriveErrorBridge:
         engine = EndogenousDriveEngine()
         idle = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {"counts": {}, "active_sessions": 0},
             "drive_history": {
                 "outcomes": [
@@ -581,7 +619,7 @@ class TestEndogenousDriveErrorBridge:
         engine = EndogenousDriveEngine()
         base_idle = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {
                 "counts": {},
                 "active_sessions": 0,
@@ -643,7 +681,7 @@ class TestEndogenousDriveErrorBridge:
         engine = EndogenousDriveEngine()
         idle = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {
                 "counts": {"error_count": 2, "uncertainty_high_count": 1},
                 "active_sessions": 0,
@@ -686,7 +724,7 @@ class TestEndogenousDriveErrorBridge:
         engine = EndogenousDriveEngine()
         idle = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {
                 "counts": {"error_count": 3, "uncertainty_high_count": 1},
                 "active_sessions": 0,
@@ -733,7 +771,7 @@ class TestEndogenousDriveErrorBridge:
         engine = EndogenousDriveEngine()
         idle = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {"counts": {}, "active_sessions": 0},
             "completed_learning_tasks": [
                 {
@@ -800,7 +838,7 @@ class TestEndogenousDriveErrorBridge:
         engine = EndogenousDriveEngine()
         idle = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {"counts": {}, "active_sessions": 0},
             "task_family_decisions": {
                 "self_learning": {"eligible_for_planning": True},
@@ -824,7 +862,7 @@ class TestEndogenousDriveErrorBridge:
         engine = EndogenousDriveEngine()
         idle = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {
                 "counts": {"error_count": 1, "uncertainty_high_count": 1},
                 "active_sessions": 0,
@@ -879,7 +917,7 @@ class TestEndogenousDriveErrorBridge:
         engine = EndogenousDriveEngine()
         idle = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {
                 "counts": {"error_count": 0, "uncertainty_high_count": 0},
                 "active_sessions": 0,
@@ -944,7 +982,7 @@ class TestEndogenousDriveErrorBridge:
         engine = EndogenousDriveEngine()
         idle = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {
                 "counts": {"error_count": 2, "uncertainty_high_count": 1},
                 "active_sessions": 0,
@@ -1017,7 +1055,7 @@ class TestEndogenousDriveErrorBridge:
         engine = EndogenousDriveEngine()
         idle = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {"counts": {"error_count": 4, "uncertainty_high_count": 1}, "active_sessions": 0},
             "governance_backlog_tasks": [
                 {
@@ -1050,7 +1088,7 @@ class TestEndogenousDriveErrorBridge:
         engine = EndogenousDriveEngine()
         idle = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {"counts": {"error_count": 4, "uncertainty_high_count": 1}, "active_sessions": 0},
             "task_family_decisions": {
                 "self_learning": {"eligible_for_planning": True},
@@ -1075,7 +1113,7 @@ class TestEndogenousDriveErrorBridge:
         engine = EndogenousDriveEngine()
         idle = {
             "checks": {},
-            "idle_seconds": {"user": 100, "agent": 100, "memory": 100},
+            "idle_seconds": {"user": 100, "api_a_execution": 100, "memory": 100},
             "activity": {"counts": {"error_count": 0, "uncertainty_high_count": 0}, "active_sessions": 5},
             "task_family_decisions": {
                 "self_learning": {"eligible_for_planning": False},
@@ -1095,7 +1133,7 @@ class TestEndogenousDriveErrorBridge:
         engine = EndogenousDriveEngine()
         idle = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {
                 "counts": {"error_count": 4, "uncertainty_high_count": 1},
                 "active_sessions": 3,
@@ -1121,7 +1159,7 @@ class TestEndogenousDriveErrorBridge:
         engine = EndogenousDriveEngine()
         idle = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {
                 "counts": {},
                 "active_sessions": 0,
@@ -1166,7 +1204,7 @@ class TestEndogenousDriveErrorBridge:
         engine = EndogenousDriveEngine()
         idle = {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {"counts": {}, "active_sessions": 0, "recent_metadata": {}},
             "shell_slot": {
                 "slot_id": "slot-B",

@@ -84,6 +84,8 @@ def _self_learning_outcome(
     return row
 
 
+# Formal drive-input sample payload. New work should see API-A execution idle
+# as the primary contract rather than generic agent idle.
 def _endogenous_drive_input_payload(
     *,
     quality_score: float = 0.46,
@@ -93,7 +95,7 @@ def _endogenous_drive_input_payload(
     uncertainty_count: int = 0,
     active_sessions: int = 0,
     user_idle: int = 900,
-    agent_idle: int = 900,
+    api_a_execution_idle: int = 900,
     memory_idle: int = 900,
     quiet_after_seconds: int = 600,
     memory_planning: bool = True,
@@ -106,12 +108,12 @@ def _endogenous_drive_input_payload(
     is_quiet = active_sessions == 0
     return {
         "checks": {
-            "has_agent_idle": True,
+            "has_api_a_execution_idle": True,
             "has_memory_idle": True,
         },
         "idle_seconds": {
             "user": user_idle,
-            "agent": agent_idle,
+            "api_a_execution": api_a_execution_idle,
             "memory": memory_idle,
         },
         "user_chain_signal": {
@@ -182,21 +184,12 @@ def _endogenous_drive_input_payload(
     }
 
 
-def _assert_explicit_compat_drive_input_mirror(
-    compat_payload: dict,
-    drive_input: dict,
-    *keys: str,
-) -> None:
-    mirror_keys = keys or ("user_chain_signal", "decisions")
-    for key in mirror_keys:
-        assert compat_payload.get(key) == drive_input.get(key)
+def _formal_endogenous_drive_input_payload(**kwargs) -> dict:
+    return _endogenous_drive_input_payload(**kwargs)
 
 
-def _explicit_compat_drive_input_fields(drive_input: dict) -> dict:
-    return {
-        "drive_input": dict(drive_input),
-        "activity_guards": dict(drive_input),
-    }
+def _drive_input_response_fields(drive_input: dict) -> dict:
+    return {"drive_input": dict(drive_input)}
 
 
 def _drive_cycle_failure_replay_evaluation(
@@ -300,7 +293,7 @@ def _drive_cycle_failure_replay_evaluation(
         ]
     return {
         "status": "evaluated",
-        **_explicit_compat_drive_input_fields(
+        **_drive_input_response_fields(
             {
                 "checks": {},
                 "task_family_decisions": {
@@ -442,52 +435,10 @@ async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_dupli
     )
 
     async def fake_drive_input(_request=None):
-        return {
-            "checks": {
-                "has_agent_idle": True,
-                "has_memory_idle": True,
-            },
-            "idle_seconds": {
-                "user": 900,
-                "agent": 900,
-                "memory": 900,
-            },
-            "activity": {
-                "active_sessions": 0,
-                "counts": {
-                    "recent_errors": 1,
-                    "high_uncertainty": 2,
-                },
-            },
-            "task_family_decisions": {
-                "memory_maintenance": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "self_learning": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "general_self_evolution": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": False,
-                },
-            },
-            "governance_task_type_decisions": {
-                "memory_maintenance": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "self_learning": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "self_evolution": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": False,
-                },
-            },
-        }
+        return _formal_endogenous_drive_input_payload(
+            error_count=1,
+            uncertainty_count=2,
+        )
 
     supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
 
@@ -604,52 +555,10 @@ async def test_evaluate_endogenous_drive_exposes_deliberation_report(tmp_path):
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
     async def fake_drive_input(_request=None):
-        return {
-            "checks": {
-                "has_agent_idle": True,
-                "has_memory_idle": True,
-            },
-            "idle_seconds": {
-                "user": 900,
-                "agent": 900,
-                "memory": 900,
-            },
-            "activity": {
-                "active_sessions": 0,
-                "counts": {
-                    "error_count": 2,
-                    "uncertainty_high_count": 1,
-                },
-            },
-            "task_family_decisions": {
-                "memory_maintenance": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "self_learning": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "general_self_evolution": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": False,
-                },
-            },
-            "governance_task_type_decisions": {
-                "memory_maintenance": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "self_learning": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "self_evolution": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": False,
-                },
-            },
-        }
+        return _formal_endogenous_drive_input_payload(
+            error_count=2,
+            uncertainty_count=1,
+        )
 
     supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
 
@@ -674,52 +583,10 @@ async def test_endogenous_drive_governance_backlog_count_excludes_api_a_executio
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
     async def fake_drive_input(_request=None):
-        return {
-            "checks": {
-                "has_agent_idle": True,
-                "has_memory_idle": True,
-            },
-            "idle_seconds": {
-                "user": 900,
-                "agent": 900,
-                "memory": 900,
-            },
-            "activity": {
-                "active_sessions": 0,
-                "counts": {
-                    "error_count": 0,
-                    "uncertainty_high_count": 0,
-                },
-            },
-            "task_family_decisions": {
-                "memory_maintenance": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "self_learning": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "general_self_evolution": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": False,
-                },
-            },
-            "governance_task_type_decisions": {
-                "memory_maintenance": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "self_learning": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "self_evolution": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": False,
-                },
-            },
-        }
+        return _formal_endogenous_drive_input_payload(
+            error_count=0,
+            uncertainty_count=0,
+        )
 
     supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
     await supervisor.plan_autonomous_chain_task(
@@ -770,12 +637,12 @@ async def test_endogenous_drive_suppresses_body_growth_while_api_a_execution_lan
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 1200,
-                "agent": 1200,
+                "api_a_execution": 1200,
                 "memory": 1200,
             },
             "activity": {
@@ -872,52 +739,10 @@ async def test_endogenous_drive_evaluation_persists_judgement_history(tmp_path):
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
     async def fake_drive_input(_request=None):
-        return {
-            "checks": {
-                "has_agent_idle": True,
-                "has_memory_idle": True,
-            },
-            "idle_seconds": {
-                "user": 900,
-                "agent": 900,
-                "memory": 900,
-            },
-            "activity": {
-                "active_sessions": 0,
-                "counts": {
-                    "error_count": 2,
-                    "uncertainty_high_count": 1,
-                },
-            },
-            "task_family_decisions": {
-                "memory_maintenance": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "self_learning": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "general_self_evolution": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": False,
-                },
-            },
-            "governance_task_type_decisions": {
-                "memory_maintenance": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "self_learning": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "self_evolution": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": False,
-                },
-            },
-        }
+        return _formal_endogenous_drive_input_payload(
+            error_count=2,
+            uncertainty_count=1,
+        )
 
     supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
@@ -944,27 +769,10 @@ async def test_endogenous_drive_preview_evaluation_does_not_persist_runtime_stat
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
     async def fake_drive_input(_request=None):
-        return {
-            "checks": {
-                "has_agent_idle": True,
-                "has_memory_idle": True,
-            },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
-            "activity": {
-                "active_sessions": 0,
-                "counts": {"error_count": 2, "uncertainty_high_count": 1},
-            },
-            "task_family_decisions": {
-                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
-                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
-                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
-            },
-            "governance_task_type_decisions": {
-                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
-                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
-                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
-            },
-        }
+        return _formal_endogenous_drive_input_payload(
+            error_count=2,
+            uncertainty_count=1,
+        )
 
     supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
     result = await supervisor.evaluate_endogenous_drive(
@@ -991,27 +799,10 @@ async def test_endogenous_drive_persistent_evaluation_rolls_back_history_when_la
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
     async def fake_drive_input(_request=None):
-        return {
-            "checks": {
-                "has_agent_idle": True,
-                "has_memory_idle": True,
-            },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
-            "activity": {
-                "active_sessions": 0,
-                "counts": {"error_count": 2, "uncertainty_high_count": 1},
-            },
-            "task_family_decisions": {
-                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
-                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
-                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
-            },
-            "governance_task_type_decisions": {
-                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
-                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
-                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
-            },
-        }
+        return _formal_endogenous_drive_input_payload(
+            error_count=2,
+            uncertainty_count=1,
+        )
 
     def fail_cognition_persist(_state):
         raise RuntimeError("cognition persist failed")
@@ -1037,52 +828,10 @@ async def test_evaluate_endogenous_drive_exposes_non_task_signals(tmp_path):
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
     async def fake_drive_input(_request=None):
-        return {
-            "checks": {
-                "has_agent_idle": True,
-                "has_memory_idle": True,
-            },
-            "idle_seconds": {
-                "user": 900,
-                "agent": 900,
-                "memory": 900,
-            },
-            "activity": {
-                "active_sessions": 0,
-                "counts": {
-                    "error_count": 4,
-                    "uncertainty_high_count": 1,
-                },
-            },
-            "task_family_decisions": {
-                "memory_maintenance": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "self_learning": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "general_self_evolution": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": False,
-                },
-            },
-            "governance_task_type_decisions": {
-                "memory_maintenance": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "self_learning": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "self_evolution": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": False,
-                },
-            },
-        }
+        return _formal_endogenous_drive_input_payload(
+            error_count=4,
+            uncertainty_count=1,
+        )
 
     supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
     await supervisor.plan_autonomous_chain_task(
@@ -1122,12 +871,12 @@ async def test_endogenous_drive_preserves_truthfulness_channel_under_observe_bef
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 900,
-                "agent": 900,
+                "api_a_execution": 900,
                 "memory": 900,
             },
             "activity": {
@@ -1138,32 +887,14 @@ async def test_endogenous_drive_preserves_truthfulness_channel_under_observe_bef
                 },
             },
             "task_family_decisions": {
-                "memory_maintenance": {
-                    "eligible_for_planning": False,
-                    "eligible_for_execution": False,
-                },
-                "self_learning": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "general_self_evolution": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": False,
-                },
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
             },
             "governance_task_type_decisions": {
-                "memory_maintenance": {
-                    "eligible_for_planning": False,
-                    "eligible_for_execution": False,
-                },
-                "self_learning": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "self_evolution": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": False,
-                },
+                "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
             },
         }
 
@@ -1244,12 +975,12 @@ async def test_evaluate_endogenous_drive_exposes_cognition_state(tmp_path):
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 1200,
-                "agent": 1200,
+                "api_a_execution": 1200,
                 "memory": 1200,
             },
             "activity": {
@@ -1260,32 +991,14 @@ async def test_evaluate_endogenous_drive_exposes_cognition_state(tmp_path):
                 },
             },
             "task_family_decisions": {
-                "memory_maintenance": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "self_learning": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "general_self_evolution": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": False,
-                },
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "general_self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
             },
             "governance_task_type_decisions": {
-                "memory_maintenance": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "self_learning": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": True,
-                },
-                "self_evolution": {
-                    "eligible_for_planning": True,
-                    "eligible_for_execution": False,
-                },
+                "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+                "self_evolution": {"eligible_for_planning": True, "eligible_for_execution": False},
             },
         }
 
@@ -1305,9 +1018,12 @@ async def test_evaluate_endogenous_drive_exposes_cognition_state(tmp_path):
     assert "candidate_count" not in cognition["governance"]
     assert "task_type_priors" not in cognition["proposal_cognition"]
     assert cognition["proposal_cognition"]["active_cognitive_posture_profile"]["name"]
-    assert cognition["proposal_cognition"]["summary"] == (
-        f"LM 认知状态=completed；"
-        f"提案漂移={cognition['proposal_cognition']['auxiliary_memory']['proposal_drift_memory']['drift_state']}。"
+    proposal_summary = cognition["proposal_cognition"]["summary"]
+    active_posture_name = cognition["proposal_cognition"]["active_cognitive_posture_profile"]["name"]
+    assert f"posture={active_posture_name}" in proposal_summary
+    assert (
+        f"drift={cognition['proposal_cognition']['auxiliary_memory']['proposal_drift_memory']['drift_state']}"
+        in proposal_summary
     )
     assert "current_count=" not in cognition["proposal_cognition"]["summary"]
     assert "summary" not in cognition["proposal_cognition"]["meta_cognition_profile"]
@@ -1365,12 +1081,12 @@ async def test_evaluate_endogenous_drive_exposes_alignment_signal_when_reflectio
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 900,
-                "agent": 900,
+                "api_a_execution": 900,
                 "memory": 900,
             },
             "activity": {
@@ -1451,12 +1167,12 @@ async def test_endogenous_drive_history_records_planned_and_decision_outcomes(tm
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 900,
-                "agent": 900,
+                "api_a_execution": 900,
                 "memory": 900,
             },
             "activity": {
@@ -1564,7 +1280,7 @@ async def test_completed_autonomous_task_finding_flows_into_next_drive_context(t
         {
             "decision": "running",
             "actor": "cli_agent",
-            "reason": "API-A autonomous executor pulled task",
+            "reason": "API-A 自主执行面已认领链路项",
             "session_id": "cli-autonomous-1",
             "context": {"source": "cli_agent_pull", "execution_kind": "self_learning"},
         },
@@ -1574,7 +1290,7 @@ async def test_completed_autonomous_task_finding_flows_into_next_drive_context(t
         {
             "decision": "completed",
             "actor": "cli_agent",
-            "reason": "API-A autonomous executor completed task",
+            "reason": "API-A 自主执行面已完成学习链路项",
             "session_id": "cli-autonomous-1",
             "context": {"source": "cli_agent_pull", "execution_kind": "self_learning"},
             "final_response": final_response,
@@ -1592,7 +1308,10 @@ async def test_completed_autonomous_task_finding_flows_into_next_drive_context(t
     assert completed_outcome["autonomous_executor_final_response"] == final_response
     assert completed_outcome["outcome_summary"] == final_response
 
-    drive_input = _endogenous_drive_input_payload(error_count=0, uncertainty_count=0)
+    drive_input = _formal_endogenous_drive_input_payload(
+        error_count=0,
+        uncertainty_count=0,
+    )
     drive_input["completed_learning_tasks"] = supervisor._completed_learning_task_summaries()
     drive_input["drive_history"] = supervisor._history_for_endogenous_drive(history)
     drive_context = supervisor._endogenous_drive_engine._build_drive_context(drive_input)
@@ -1608,7 +1327,10 @@ async def test_endogenous_drive_outcome_dedup_scans_full_retained_history_window
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
     async def fake_drive_input(_request=None):
-        return _endogenous_drive_input_payload(error_count=2, uncertainty_count=1)
+        return _formal_endogenous_drive_input_payload(
+            error_count=2,
+            uncertainty_count=1,
+        )
 
     supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
     cycle = await supervisor._run_endogenous_drive_cycle()
@@ -1684,12 +1406,12 @@ async def test_planned_outcomes_do_not_count_as_dragging_before_any_real_decisio
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 900,
-                "agent": 900,
+                "api_a_execution": 900,
                 "memory": 900,
             },
             "activity": {
@@ -1758,12 +1480,12 @@ async def test_single_evaluation_counts_focus_judged_once_even_with_multiple_can
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 900,
-                "agent": 900,
+                "api_a_execution": 900,
                 "memory": 900,
             },
             "activity": {
@@ -2153,12 +1875,12 @@ async def test_run_endogenous_drive_cycle_exposes_drive_posture(tmp_path):
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 900,
-                "agent": 900,
+                "api_a_execution": 900,
                 "memory": 900,
             },
             "activity": {
@@ -2216,7 +1938,10 @@ async def test_evaluate_endogenous_drive_accepts_drive_input_request_without_gua
     supervisor = _make_supervisor(tmp_path)
     supervisor.evaluate_activity_guards = AsyncMock(side_effect=AssertionError("should not probe guards"))  # type: ignore[method-assign]
 
-    drive_input = _endogenous_drive_input_payload(error_count=1, uncertainty_count=1)
+    drive_input = _formal_endogenous_drive_input_payload(
+        error_count=1,
+        uncertainty_count=1,
+    )
     result = await supervisor.evaluate_endogenous_drive(
         {
             "drive_input": drive_input,
@@ -2239,12 +1964,12 @@ async def test_endogenous_governance_events_persist_to_runtime_file(tmp_path):
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 900,
-                "agent": 900,
+                "api_a_execution": 900,
                 "memory": 900,
             },
             "activity": {
@@ -2336,12 +2061,12 @@ async def test_endogenous_cognition_state_persists_to_runtime_file(tmp_path):
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 900,
-                "agent": 900,
+                "api_a_execution": 900,
                 "memory": 900,
             },
             "activity": {
@@ -2484,12 +2209,12 @@ async def test_cognitive_self_regulation_tightens_adaptive_policy_when_lm_drift_
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 1500,
-                "agent": 1500,
+                "api_a_execution": 1500,
                 "memory": 1500,
             },
             "activity": {
@@ -2544,11 +2269,8 @@ async def test_cognitive_self_regulation_tightens_adaptive_policy_when_lm_drift_
         result["drive_input"]["endogenous_drive_policy"]["dynamic_candidate_throttle_boost"]
         == regulation["dynamic_candidate_throttle_boost"]
     )
-    _assert_explicit_compat_drive_input_mirror(
-        result["activity_guards"],
-        result["drive_input"],
-        "endogenous_drive_policy",
-    )
+    assert "activity_guards" not in result
+    assert "endogenous_drive_policy" in result["drive_input"]
     assert adaptive_policy["preferred_focus"] == "observation"
     assert adaptive_policy["candidate_budget"] <= 2
     assert "proposal_drift_is_active" in str(regulation["last_reason"] or "")
@@ -2618,12 +2340,12 @@ async def test_cognitive_self_regulation_stays_light_when_lm_alignment_and_evide
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 1200,
-                "agent": 1200,
+                "api_a_execution": 1200,
                 "memory": 1200,
             },
             "activity": {
@@ -2843,12 +2565,12 @@ async def test_cognitive_self_regulation_uses_charter_control_policy_thresholds(
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 1200,
-                "agent": 1200,
+                "api_a_execution": 1200,
                 "memory": 1200,
             },
             "activity": {
@@ -2952,12 +2674,12 @@ async def test_cognitive_posture_profile_observe_first_amplifies_observation_bia
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 1200,
-                "agent": 1200,
+                "api_a_execution": 1200,
                 "memory": 1200,
             },
             "activity": {
@@ -3055,12 +2777,12 @@ async def test_cognitive_posture_profile_truthfulness_first_amplifies_truthfulne
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 1200,
-                "agent": 1200,
+                "api_a_execution": 1200,
                 "memory": 1200,
             },
             "activity": {
@@ -3128,12 +2850,12 @@ async def test_cognitive_posture_profile_auto_switches_to_conservative_under_ser
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 900,
-                "agent": 900,
+                "api_a_execution": 900,
                 "memory": 900,
             },
             "activity": {
@@ -3194,12 +2916,12 @@ async def test_cognitive_posture_profile_auto_switches_to_evidence_repair_first_
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 1000,
-                "agent": 1000,
+                "api_a_execution": 1000,
                 "memory": 1000,
             },
             "activity": {
@@ -3249,12 +2971,12 @@ async def test_cognitive_posture_profile_auto_switches_to_truthfulness_first_whe
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 900,
-                "agent": 900,
+                "api_a_execution": 900,
                 "memory": 900,
             },
             "activity": {
@@ -3314,10 +3036,10 @@ async def test_cognitive_posture_profile_auto_switches_to_observe_first_when_exp
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
             "task_family_decisions": {
                 "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
@@ -3369,10 +3091,10 @@ async def test_cognitive_posture_profile_auto_switches_to_truthfulness_first_whe
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
             "task_family_decisions": {
                 "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
@@ -3452,10 +3174,10 @@ async def test_cognitive_self_regulation_tightens_when_proposal_explanations_are
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 1200, "agent": 1200, "memory": 1200},
+            "idle_seconds": {"user": 1200, "api_a_execution": 1200, "memory": 1200},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
             "task_family_decisions": {
                 "memory_maintenance": {"eligible_for_planning": True, "eligible_for_execution": True},
@@ -3953,10 +3675,10 @@ async def test_decayed_persistent_self_regulation_does_not_keep_runtime_stuck_in
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
             "completed_learning_tasks": [
                 {
@@ -4039,12 +3761,12 @@ async def test_get_endogenous_governance_state_aggregates_cognition_events_and_r
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 900,
-                "agent": 900,
+                "api_a_execution": 900,
                 "memory": 900,
             },
             "activity": {
@@ -4124,7 +3846,7 @@ async def test_supervisor_ui_state_reads_wrapped_cognition_state_lm_trace(tmp_pa
     supervisor._recent_supervisor_observation_timeline = AsyncMock(return_value=[])  # type: ignore[method-assign]
 
     async def fake_drive_input(_request=None):
-        return _endogenous_drive_input_payload()
+        return _formal_endogenous_drive_input_payload()
 
     supervisor.evaluate_activity_guards = fake_drive_input  # type: ignore[method-assign]
     cognition_state = supervisor._endogenous_cognition_state_default()["state"]
@@ -4166,6 +3888,7 @@ async def test_supervisor_ui_state_reads_wrapped_cognition_state_lm_trace(tmp_pa
     assert ui_state["lm_input"]["model_role"] == "endogenous_drive_task_generation"
     assert ui_state["lm_input"]["proposal_count"] == 2
     assert "prompt_estimate" not in ui_state["lm_input"]
+    assert "prompt_preview" not in ui_state["lm_input"]
     assert ui_state["lm_input"]["recent_evidence_nodes"][0]["node"] == "evidence:self_structure"
     assert ui_state["cognition"]["perception"]["system_posture"] == "strained"
     assert ui_state["cognition"]["world_model"]["governance_load_state"] == "dragging"
@@ -4181,7 +3904,7 @@ async def test_supervisor_ui_state_does_not_refresh_drive_candidates_from_live_e
     supervisor._recent_supervisor_observation_timeline = AsyncMock(return_value=[])  # type: ignore[method-assign]
 
     async def fake_drive_input(_request=None):
-        return _endogenous_drive_input_payload()
+        return _formal_endogenous_drive_input_payload()
 
     async def fail_live_refresh(_request=None):
         raise AssertionError("web observation must not trigger live endogenous-drive refresh")
@@ -4211,12 +3934,12 @@ async def test_cognition_state_attention_agenda_prioritizes_observe_before_actin
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 900,
-                "agent": 900,
+                "api_a_execution": 900,
                 "memory": 900,
             },
             "activity": {
@@ -4298,12 +4021,12 @@ async def test_cognition_state_uncertainty_ledger_tracks_truthfulness_backlog_an
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 900,
-                "agent": 900,
+                "api_a_execution": 900,
                 "memory": 900,
             },
             "activity": {
@@ -4370,12 +4093,12 @@ async def test_observation_program_is_generated_from_uncertainty_ledger_and_requ
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 900,
-                "agent": 900,
+                "api_a_execution": 900,
                 "memory": 900,
             },
             "activity": {
@@ -4446,12 +4169,12 @@ async def test_observation_program_builds_cross_cycle_target_memory(tmp_path):
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 900,
-                "agent": 900,
+                "api_a_execution": 900,
                 "memory": 900,
             },
             "activity": {
@@ -4529,12 +4252,12 @@ async def test_repeated_observation_history_does_not_saturate_observation_bias_w
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 900,
-                "agent": 900,
+                "api_a_execution": 900,
                 "memory": 900,
             },
             "activity": {
@@ -4665,10 +4388,10 @@ async def test_strategy_memory_memory_focus_history_does_not_override_learning_p
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
             "completed_learning_tasks": [
                 {
@@ -4780,10 +4503,10 @@ async def test_strategy_memory_observation_history_does_not_reenter_observation_
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
             "completed_learning_tasks": [
                 {
@@ -4896,10 +4619,10 @@ async def test_contextual_focus_history_does_not_leak_stable_truthfulness_bias_i
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {"error_count": 0, "uncertainty_high_count": 1},
@@ -5006,10 +4729,10 @@ async def test_contextual_focus_history_allows_strained_truthfulness_context_to_
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {"error_count": 3, "uncertainty_high_count": 1},
@@ -5149,10 +4872,10 @@ async def test_observe_first_posture_strategy_memory_and_persistent_self_regulat
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 1200, "agent": 1200, "memory": 1200},
+            "idle_seconds": {"user": 1200, "api_a_execution": 1200, "memory": 1200},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 1}},
             "completed_learning_tasks": [
                 {
@@ -5253,10 +4976,10 @@ async def test_multicycle_continuity_writeback_does_not_block_truthfulness_takeo
     async def stable_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
             "completed_learning_tasks": [
                 {
@@ -5304,10 +5027,10 @@ async def test_multicycle_continuity_writeback_does_not_block_truthfulness_takeo
     async def strained_truthfulness_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 3, "uncertainty_high_count": 1}},
             "completed_learning_tasks": [
                 {
@@ -5382,10 +5105,10 @@ async def test_multicycle_memory_writeback_does_not_keep_learning_recovery_stuck
     async def stable_memory_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
             "completed_learning_tasks": [
                 {
@@ -5439,10 +5162,10 @@ async def test_mixed_multicycle_writeback_and_context_switch_do_not_lock_primary
     async def stable_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
             "completed_learning_tasks": [
                 {
@@ -5466,10 +5189,10 @@ async def test_mixed_multicycle_writeback_and_context_switch_do_not_lock_primary
     async def degrading_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 1, "uncertainty_high_count": 1}},
             "completed_learning_tasks": [
                 {
@@ -5493,10 +5216,10 @@ async def test_mixed_multicycle_writeback_and_context_switch_do_not_lock_primary
     async def strained_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 3, "uncertainty_high_count": 1}},
             "completed_learning_tasks": [
                 {
@@ -5610,10 +5333,10 @@ async def test_accumulated_focus_context_and_observation_stats_do_not_block_lear
     ) -> dict:
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {
@@ -5793,12 +5516,12 @@ async def test_meta_governance_switches_toward_observe_when_uncertainty_pressure
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 900,
-                "agent": 900,
+                "api_a_execution": 900,
                 "memory": 900,
             },
             "activity": {
@@ -5863,12 +5586,12 @@ async def test_meta_governance_switches_toward_expand_when_uncertainty_recovers(
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 900,
-                "agent": 900,
+                "api_a_execution": 900,
                 "memory": 900,
             },
             "activity": {
@@ -5947,12 +5670,12 @@ async def test_meta_governance_uses_recent_mode_history_to_reduce_flip_flop(tmp_
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 900,
-                "agent": 900,
+                "api_a_execution": 900,
                 "memory": 900,
             },
             "activity": {
@@ -6018,12 +5741,12 @@ async def test_meta_governance_persists_mode_history_across_cycles(tmp_path):
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 900,
-                "agent": 900,
+                "api_a_execution": 900,
                 "memory": 900,
             },
             "activity": {
@@ -6093,12 +5816,12 @@ async def test_attention_agenda_builds_cross_cycle_persistence_memory(tmp_path):
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 900,
-                "agent": 900,
+                "api_a_execution": 900,
                 "memory": 900,
             },
             "activity": {
@@ -6273,7 +5996,7 @@ async def test_run_endogenous_drive_cycle_only_judges_candidates_kept_after_runt
         }
         return {
             "status": "evaluated",
-            **_explicit_compat_drive_input_fields(
+            **_drive_input_response_fields(
                 {
                     "task_family_decisions": {
                         "self_learning": {
@@ -6713,10 +6436,10 @@ async def test_endogenous_drive_lm_task_generation_is_disabled_by_default(tmp_pa
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -6793,10 +6516,10 @@ async def test_endogenous_drive_can_materialize_llm_task_proposals_from_evidence
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {"error_count": 1, "uncertainty_high_count": 1},
@@ -6965,10 +6688,10 @@ async def test_endogenous_drive_reuses_lm_proposals_when_cognitive_self_regulati
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {"error_count": 1, "uncertainty_high_count": 1},
@@ -7484,10 +7207,10 @@ async def test_endogenous_drive_passes_cognition_charter_to_lm_system_prompt(tmp
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -7555,10 +7278,10 @@ async def test_endogenous_drive_passes_configurable_task_generation_focus_to_pay
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -7581,9 +7304,9 @@ async def test_endogenous_drive_passes_configurable_task_generation_focus_to_pay
 
     payload = fake_client.calls[0]["user_payload"]["task_generation"]
     assert "【本轮任务生成焦点】" in payload
-    assert "【decision_core】" in payload
-    assert "【supporting_detail】" in payload
-    assert "【long_tail_context】" in payload
+    assert "【判断核心】" in payload
+    assert "【支撑细节】" in payload
+    assert "【长尾上下文】" in payload
     assert "先判断当前最值得修复的是 grounding 还是 self_model。" in payload
     assert "如果存在趋势记忆，先判断延续还是切换。" in payload
     assert "【本轮输出附加要求】" in payload
@@ -7619,10 +7342,10 @@ async def test_endogenous_drive_builds_context_layers_in_evidence_packet(tmp_pat
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -7705,10 +7428,10 @@ async def test_endogenous_drive_context_layers_follow_charter_layering_policy(tm
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -7766,10 +7489,10 @@ async def test_endogenous_drive_lm_evidence_packet_stays_on_slim_default_path(tm
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [
                 {
@@ -7872,10 +7595,10 @@ async def test_run_endogenous_drive_cycle_does_not_expose_cognitive_feedback_tra
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 1200, "agent": 1200, "memory": 1200},
+            "idle_seconds": {"user": 1200, "api_a_execution": 1200, "memory": 1200},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -7927,10 +7650,10 @@ async def test_run_endogenous_drive_cycle_does_not_expose_cognitive_strategy_del
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 1200, "agent": 1200, "memory": 1200},
+            "idle_seconds": {"user": 1200, "api_a_execution": 1200, "memory": 1200},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -8019,10 +7742,10 @@ async def test_run_endogenous_drive_cycle_does_not_expose_cognitive_evolution_dr
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 1200, "agent": 1200, "memory": 1200},
+            "idle_seconds": {"user": 1200, "api_a_execution": 1200, "memory": 1200},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -8063,7 +7786,7 @@ async def test_endogenous_drive_cognitive_briefing_prefers_context_layers(tmp_pa
                 "top_self_iteration_hypothesis": "在激进自我迭代前，先修补 evidence-to-agenda grounding",
                 "primary_evidence_nodes": ["self_structure"],
                 "primary_agenda_nodes": ["focus:learning_expansion"],
-                "governance_backlog_summary": "治理在途 2 项；最近标题：Existing backlog task A。",
+                "governance_backlog_summary": "API-B 判断在途 2 项，学习 0 项，替身改进 0 项；最近：Existing backlog task A。",
                 "cognitive_posture": {
                     "name": "truthfulness_first",
                     "selection_reason": "grounding remains unstable",
@@ -8087,7 +7810,7 @@ async def test_endogenous_drive_cognitive_briefing_prefers_context_layers(tmp_pa
             "governance_backlog_snapshot": {
                 "governance_backlog_task_count": 2,
                 "recent_titles": ["Existing backlog task A"],
-                "summary": "治理在途 2 项；最近标题：Existing backlog task A。",
+                "summary": "API-B 判断在途 2 项，学习 0 项，替身改进 0 项；最近：Existing backlog task A。",
             },
             "meta_cognition_profile": {
                 "summary": "stale fallback summary",
@@ -8109,7 +7832,7 @@ async def test_endogenous_drive_cognitive_briefing_prefers_context_layers(tmp_pa
     assert "- 当前主约束: self structure grounding 偏弱" in payload
     assert "- 当前首要自我迭代域: grounding" in payload
     assert "- 当前不宜直接改进的原因: 直接改进会跑在 grounding 之前" in payload
-    assert "- 当前治理在途上下文: 治理在途 2 项；最近标题：Existing backlog task A。" in payload
+    assert "- 当前 API-B 判断在途上下文: API-B 判断在途 2 项，学习 0 项，替身改进 0 项；最近：Existing backlog task A。" in payload
 
 
 @pytest.mark.asyncio
@@ -8132,10 +7855,10 @@ async def test_endogenous_drive_uses_default_task_generation_focus_when_not_conf
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -8185,10 +7908,10 @@ async def test_endogenous_drive_passes_cognitive_posture_semantics_to_lm_system_
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {"error_count": 2, "uncertainty_high_count": 1},
@@ -8242,10 +7965,10 @@ async def test_endogenous_drive_constrains_high_risk_or_weak_evidence_lm_proposa
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {"error_count": 0, "uncertainty_high_count": 0},
@@ -8331,10 +8054,10 @@ async def test_endogenous_drive_marks_improvement_proposal_weak_when_it_conflict
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {"error_count": 1, "uncertainty_high_count": 1},
@@ -8432,10 +8155,10 @@ async def test_endogenous_drive_prefers_conservative_review_over_weak_improvemen
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {"error_count": 1, "uncertainty_high_count": 1},
@@ -8674,10 +8397,10 @@ async def test_endogenous_drive_passes_learning_and_shell_body_evidence_to_lm(tm
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {"error_count": 0, "uncertainty_high_count": 0},
@@ -8760,10 +8483,10 @@ async def test_endogenous_drive_passes_configured_external_research_evidence_to_
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -8837,10 +8560,10 @@ async def test_endogenous_drive_passes_external_research_file_evidence_to_lm(tmp
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -8914,10 +8637,10 @@ async def test_endogenous_drive_passes_unified_evidence_channels_to_lm(tmp_path)
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "shell_slot": {
                 "slot_id": "slot-B",
@@ -9011,10 +8734,10 @@ async def test_endogenous_drive_passes_recent_reference_alignment_feedback_to_lm
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -9389,10 +9112,10 @@ async def test_endogenous_drive_passes_grounding_focus_summary_to_lm(tmp_path):
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {"error_count": 1, "uncertainty_high_count": 1},
@@ -9479,10 +9202,10 @@ async def test_endogenous_drive_passes_cognitive_assessment_memory_to_lm(tmp_pat
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -9551,10 +9274,10 @@ async def test_endogenous_drive_passes_self_iteration_hypotheses_to_lm(tmp_path)
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -9633,10 +9356,10 @@ async def test_endogenous_drive_passes_self_iteration_trend_memory_to_lm(tmp_pat
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -9711,10 +9434,10 @@ async def test_endogenous_drive_passes_switch_self_regulation_memory_to_lm(tmp_p
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -9785,10 +9508,10 @@ async def test_endogenous_drive_passes_post_task_effect_memory_to_lm(tmp_path):
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -9857,10 +9580,10 @@ async def test_endogenous_drive_passes_meta_cognition_profile_to_lm(tmp_path):
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"uncertainty_high_count": 1}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -9912,10 +9635,10 @@ async def test_endogenous_drive_passes_cognitive_briefing_to_lm(tmp_path):
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {"error_count": 1, "uncertainty_high_count": 1},
@@ -9981,10 +9704,10 @@ async def test_endogenous_drive_requests_cognitive_assessment_from_lm(tmp_path):
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {"uncertainty_high_count": 1},
@@ -10017,7 +9740,7 @@ async def test_endogenous_drive_requests_cognitive_assessment_from_lm(tmp_path):
     assert "\"why_this_task_type_now\":[\"...\"]" in payload
     assert "\"stay_or_switch\":\"stay\"" in payload
     assert "\"switch_reason\":\"...\"" in payload
-    assert "先输出一个 cognitive_assessment" in payload
+    assert "先输出一个 `cognitive_assessment`" in payload
 
 
 @pytest.mark.asyncio
@@ -10063,10 +9786,10 @@ async def test_endogenous_drive_passes_self_model_snapshot_to_lm(tmp_path):
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {"error_count": 1, "uncertainty_high_count": 1},
@@ -10157,10 +9880,10 @@ async def test_endogenous_drive_passes_evidence_credibility_and_task_shape_hint_
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {"error_count": 2, "uncertainty_high_count": 1},
@@ -10265,10 +9988,10 @@ async def test_endogenous_drive_passes_proposal_drift_memory_to_lm(tmp_path):
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -10373,12 +10096,12 @@ async def test_runtime_cognition_exposes_posture_reasoning_memory(tmp_path):
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 900,
-                "agent": 900,
+                "api_a_execution": 900,
                 "memory": 900,
             },
             "activity": {
@@ -10456,10 +10179,10 @@ async def test_endogenous_drive_passes_cognitive_posture_to_lm(tmp_path):
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {"error_count": 3, "uncertainty_high_count": 1},
@@ -10533,10 +10256,10 @@ async def test_endogenous_drive_records_cognitive_posture_in_lm_generation_conte
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -10617,10 +10340,10 @@ async def test_endogenous_drive_records_lm_cognitive_assessment_in_generation_co
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -10695,10 +10418,10 @@ async def test_endogenous_drive_records_self_iteration_fields_in_generation_cont
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -10764,10 +10487,10 @@ async def test_endogenous_drive_keeps_lm_candidates_empty_when_weak_context_retu
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {"error_count": 1, "uncertainty_high_count": 1},
@@ -10889,10 +10612,10 @@ async def test_run_endogenous_drive_cycle_exposes_stay_switch_trend_memory(tmp_p
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "task_family_decisions": {
                 "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
@@ -10945,10 +10668,10 @@ async def test_run_endogenous_drive_cycle_exposes_cognitive_assessment_memory(tm
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "task_family_decisions": {
                 "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
@@ -11050,10 +10773,10 @@ async def test_run_endogenous_drive_cycle_falls_back_to_history_reference_alignm
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "task_family_decisions": {
                 "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
@@ -11124,10 +10847,10 @@ async def test_run_endogenous_drive_cycle_exposes_self_iteration_trend_memory(tm
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "task_family_decisions": {
                 "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
@@ -11190,10 +10913,10 @@ async def test_run_endogenous_drive_cycle_exposes_switch_self_regulation_memory(
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "task_family_decisions": {
                 "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
@@ -11256,10 +10979,10 @@ async def test_run_endogenous_drive_cycle_exposes_post_task_effect_memory(tmp_pa
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "task_family_decisions": {
                 "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
@@ -11320,10 +11043,10 @@ async def test_run_endogenous_drive_cycle_exposes_meta_cognition_profile(tmp_pat
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "task_family_decisions": {
                 "memory_maintenance": {"eligible_for_planning": False, "eligible_for_execution": False},
@@ -11413,10 +11136,10 @@ async def test_endogenous_drive_builds_meta_cognition_profile_in_evidence_packet
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -11781,7 +11504,7 @@ def test_detect_needs_sorts_primary_need_by_strength_instead_of_append_order():
             stale_backlog_count=0,
             pending_review_count=0,
             checks={"has_memory_idle": True},
-            idle_seconds={"user": 1200, "agent": 1200, "memory": 1200},
+            idle_seconds={"user": 1200, "api_a_execution": 1200, "memory": 1200},
         ),
         world_model=DriveWorldModel(
             user_mode="user_chain_quiet",
@@ -11855,7 +11578,7 @@ def test_detect_needs_prefers_observe_before_learning_when_historical_underdeliv
             stale_backlog_count=0,
             pending_review_count=0,
             checks={"has_memory_idle": True},
-            idle_seconds={"user": 900, "agent": 900, "memory": 900},
+            idle_seconds={"user": 900, "api_a_execution": 900, "memory": 900},
         ),
         world_model=DriveWorldModel(
             user_mode="user_chain_quiet",
@@ -11928,7 +11651,7 @@ def test_detect_needs_does_not_let_memory_continuity_override_observation_under_
             stale_backlog_count=0,
             pending_review_count=0,
             checks={"has_memory_idle": True},
-            idle_seconds={"user": 900, "agent": 900, "memory": 900},
+            idle_seconds={"user": 900, "api_a_execution": 900, "memory": 900},
         ),
         world_model=DriveWorldModel(
             user_mode="user_chain_quiet",
@@ -12001,7 +11724,7 @@ def test_detect_needs_keeps_memory_continuity_primary_before_observation_gate_tr
             stale_backlog_count=0,
             pending_review_count=0,
             checks={"has_memory_idle": True},
-            idle_seconds={"user": 900, "agent": 900, "memory": 900},
+            idle_seconds={"user": 900, "api_a_execution": 900, "memory": 900},
         ),
         world_model=DriveWorldModel(
             user_mode="user_chain_quiet",
@@ -12074,7 +11797,7 @@ def test_detect_needs_enters_observation_when_historical_underdelivery_and_obser
             stale_backlog_count=0,
             pending_review_count=0,
             checks={"has_memory_idle": True},
-            idle_seconds={"user": 900, "agent": 900, "memory": 900},
+            idle_seconds={"user": 900, "api_a_execution": 900, "memory": 900},
         ),
         world_model=DriveWorldModel(
             user_mode="user_chain_quiet",
@@ -12149,7 +11872,7 @@ def test_detect_needs_keeps_historical_underdelivery_boundary_deterministic_for_
                 stale_backlog_count=0,
                 pending_review_count=0,
                 checks={"has_memory_idle": True},
-                idle_seconds={"user": 900, "agent": 900, "memory": 900},
+                idle_seconds={"user": 900, "api_a_execution": 900, "memory": 900},
             ),
             world_model=DriveWorldModel(
                 user_mode="user_chain_quiet",
@@ -12228,7 +11951,7 @@ def test_detect_needs_crosses_from_memory_to_observation_monotonically_near_hist
                 stale_backlog_count=0,
                 pending_review_count=0,
                 checks={"has_memory_idle": True},
-                idle_seconds={"user": 900, "agent": 900, "memory": 900},
+                idle_seconds={"user": 900, "api_a_execution": 900, "memory": 900},
             ),
             world_model=DriveWorldModel(
                 user_mode="user_chain_quiet",
@@ -12314,7 +12037,7 @@ def test_detect_needs_does_not_prepare_body_growth_while_api_a_lane_is_unsettled
             api_a_ready_count=1,
             api_a_running_count=0,
             checks={"has_memory_idle": True},
-            idle_seconds={"user": 1200, "agent": 1200, "memory": 1200},
+            idle_seconds={"user": 1200, "api_a_execution": 1200, "memory": 1200},
         ),
         world_model=DriveWorldModel(
             user_mode="user_chain_quiet",
@@ -12449,10 +12172,10 @@ async def test_single_recovery_outcome_does_not_immediately_flip_primary_need_ou
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [
                 {
@@ -12539,10 +12262,10 @@ async def test_memory_maintenance_recovery_does_not_clear_self_learning_historic
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [
                 {
@@ -12629,10 +12352,10 @@ async def test_two_self_learning_recoveries_can_clear_historical_underdelivery(
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [
                 {
@@ -12727,10 +12450,10 @@ async def test_cleared_historical_underdelivery_does_not_reenter_observation_fro
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [
                 {
@@ -12818,10 +12541,10 @@ async def test_cleared_historical_underdelivery_allows_truthfulness_to_take_prim
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {"error_count": 2, "uncertainty_high_count": 1},
@@ -12914,10 +12637,10 @@ async def test_cleared_historical_underdelivery_keeps_learning_primary_under_wea
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {"error_count": 0, "uncertainty_high_count": 1},
@@ -13028,10 +12751,10 @@ async def test_cleared_historical_underdelivery_shifts_to_memory_continuity_when
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {"error_count": 0, "uncertainty_high_count": 1},
@@ -13143,10 +12866,10 @@ async def test_cleared_historical_underdelivery_with_light_backlog_debt_does_not
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
             "completed_learning_tasks": [
                 {
@@ -13259,10 +12982,10 @@ async def test_mixed_recovery_history_does_not_let_memory_need_override_observat
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [
                 {
@@ -13374,10 +13097,10 @@ async def test_self_learning_recovery_then_block_again_keeps_preferred_focus_ali
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [
                 {
@@ -13499,10 +13222,10 @@ async def test_recent_self_learning_relapse_reenters_historical_underdelivery_af
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [
                 {
@@ -13643,10 +13366,10 @@ async def test_recorded_at_normalization_keeps_historical_underdelivery_stable_a
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [
                 {
@@ -13788,10 +13511,10 @@ async def test_legacy_history_without_timestamps_stays_conservative_across_order
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [
                 {
@@ -13946,10 +13669,10 @@ async def test_recent_relapse_retightens_candidate_budget_in_longer_mixed_histor
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [
                 {
@@ -14118,10 +13841,10 @@ async def test_recent_completed_sequence_releases_observation_after_long_dirty_s
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [
                 {
@@ -14227,7 +13950,7 @@ async def test_recent_relapse_reenters_observation_after_recovery_despite_stale_
     )
 
     async def fake_drive_input(_request=None):
-        return _endogenous_drive_input_payload(
+        return _formal_endogenous_drive_input_payload(
             quality_score=0.72,
             completed_title="近期混合恢复学习",
             completed_at="2026-06-28T10:00:00+00:00",
@@ -14282,7 +14005,7 @@ async def test_alternating_recovery_and_relapse_reacts_under_continuous_strategy
         )
 
     def idle_payload(*, quality: float, error_count: int = 0, uncertainty_count: int = 0) -> dict:
-        return _endogenous_drive_input_payload(
+        return _formal_endogenous_drive_input_payload(
             quality_score=quality,
             completed_title="近期交替波动学习",
             completed_at="2026-06-28T12:00:00+00:00",
@@ -14411,14 +14134,14 @@ async def test_long_dirty_history_switches_between_relapse_tightening_and_recove
     fake_client = _FakeLLMClient({"proposals": []})
 
     async def stable_drive_input(_request=None):
-        return _endogenous_drive_input_payload(
+        return _formal_endogenous_drive_input_payload(
             quality_score=0.84,
             completed_title="长周期稳定学习",
             completed_at="2026-06-29T12:00:00+00:00",
         )
 
     async def strained_drive_input(_request=None):
-        return _endogenous_drive_input_payload(
+        return _formal_endogenous_drive_input_payload(
             quality_score=0.38,
             completed_title="长周期紧张学习",
             completed_at="2026-06-29T12:00:00+00:00",
@@ -14567,14 +14290,14 @@ async def test_writeback_history_replay_remains_time_ordered_when_outcomes_are_s
     fake_client = _FakeLLMClient({"proposals": []})
 
     async def stable_drive_input(_request=None):
-        return _endogenous_drive_input_payload(
+        return _formal_endogenous_drive_input_payload(
             quality_score=0.82,
             completed_title="稳定写回学习",
             completed_at="2026-06-28T12:00:00+00:00",
         )
 
     async def strained_drive_input(_request=None):
-        return _endogenous_drive_input_payload(
+        return _formal_endogenous_drive_input_payload(
             quality_score=0.42,
             completed_title="紧张写回学习",
             completed_at="2026-06-28T12:00:00+00:00",
@@ -14636,7 +14359,7 @@ async def test_writeback_history_replay_remains_time_ordered_when_outcomes_are_s
     replay_strategy = json.loads(json.dumps(accumulated_history["strategy_memory"]))
 
     async def replay_drive_input(_request=None):
-        return _endogenous_drive_input_payload(
+        return _formal_endogenous_drive_input_payload(
             quality_score=0.76,
             completed_title="回放稳定学习",
             completed_at="2026-06-28T12:00:00+00:00",
@@ -14689,10 +14412,10 @@ async def test_memory_success_does_not_reopen_candidate_budget_while_self_learni
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [
                 {
@@ -14849,10 +14572,10 @@ async def test_observation_mode_does_not_revive_filtered_learning_fallback_when_
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [
                 {
@@ -14927,10 +14650,10 @@ async def test_observation_mode_does_not_fall_back_to_memory_maintenance_when_ob
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [
                 {
@@ -15006,10 +14729,10 @@ async def test_governance_hygiene_candidate_path_does_not_crash_when_self_learni
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [
                 {
@@ -15112,10 +14835,10 @@ async def test_truthfulness_candidate_survives_budget_trimming_when_truthfulness
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {"error_count": 4, "uncertainty_high_count": 1},
@@ -15217,10 +14940,10 @@ async def test_weak_truthfulness_signal_does_not_materialize_truthfulness_candid
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {"error_count": 0, "uncertainty_high_count": 1},
@@ -15321,10 +15044,10 @@ async def test_truthfulness_candidate_materializes_once_review_threshold_is_reac
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {"error_count": 2, "uncertainty_high_count": 1},
@@ -15431,10 +15154,10 @@ async def test_drive_posture_signal_keeps_observation_intent_link_when_truthfuln
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {
                 "active_sessions": 0,
                 "counts": {"error_count": 4, "uncertainty_high_count": 1},
@@ -15540,10 +15263,10 @@ async def test_governance_hygiene_candidate_survives_budget_trimming_when_observ
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -15625,10 +15348,10 @@ async def test_weak_governance_backlog_debt_does_not_materialize_governance_hygi
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
             "completed_learning_tasks": [
                 {
@@ -15731,10 +15454,10 @@ async def test_governance_hygiene_candidate_materializes_once_real_governance_ba
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {"error_count": 0, "uncertainty_high_count": 0}},
             "completed_learning_tasks": [
                 {
@@ -16025,7 +15748,7 @@ def test_recent_completed_static_governance_candidates_are_not_recreated_immedia
     now = datetime.now(timezone.utc)
     idle = {
         "checks": {},
-        "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+        "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
         "activity": {
             "active_sessions": 0,
             "counts": {},
@@ -16054,7 +15777,7 @@ def test_recent_completed_static_governance_candidates_are_not_recreated_immedia
                 },
             },
             {
-                "title": "待消化的复核债务",
+                "title": "仍待复核的修正债务",
                 "status": "deferred",
                 "governance_task_type": "self_learning",
                 "task_family": "self_learning",
@@ -16092,7 +15815,7 @@ def test_static_governance_candidates_reopen_after_completion_cooldown():
     now = datetime.now(timezone.utc)
     idle = {
         "checks": {},
-        "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+        "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
         "activity": {
             "active_sessions": 0,
             "counts": {},
@@ -16121,7 +15844,7 @@ def test_static_governance_candidates_reopen_after_completion_cooldown():
                 },
             },
             {
-                "title": "待消化的复核债务",
+                "title": "仍待复核的修正债务",
                 "status": "deferred",
                 "governance_task_type": "self_learning",
                 "task_family": "self_learning",
@@ -16158,7 +15881,7 @@ def test_generate_candidates_allows_empty_when_default_path_has_no_evidence():
     engine = EndogenousDriveEngine()
     idle = {
         "checks": {},
-        "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+        "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
         "activity": {"active_sessions": 0, "counts": {}},
         "completed_learning_tasks": [],
         "governance_backlog_tasks": [],
@@ -16214,10 +15937,10 @@ async def test_proposal_drift_memory_biases_program_task_type_priors_toward_obse
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
-            "idle_seconds": {"user": 900, "agent": 900, "memory": 900},
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
             "activity": {"active_sessions": 0, "counts": {}},
             "completed_learning_tasks": [],
             "task_family_decisions": {
@@ -16285,12 +16008,12 @@ async def test_endogenous_drive_fallback_learning_targets_shell_codebase_without
     async def fake_drive_input(_request=None):
         return {
             "checks": {
-                "has_agent_idle": True,
+                "has_api_a_execution_idle": True,
                 "has_memory_idle": True,
             },
             "idle_seconds": {
                 "user": 900,
-                "agent": 900,
+                "api_a_execution": 900,
                 "memory": 900,
             },
             "activity": {
@@ -16411,7 +16134,7 @@ async def test_auto_decision_approves_task_when_drive_input_allows_execution(tmp
         task_id,
         {
             "decision": "auto",
-            "drive_input": _endogenous_drive_input_payload(self_evolution_execution=True),
+            "drive_input": _formal_endogenous_drive_input_payload(self_evolution_execution=True),
         },
     )
 
@@ -16443,7 +16166,7 @@ async def test_auto_decision_accepts_drive_input_request_without_guard_probe(tmp
         task_id,
         {
             "decision": "auto",
-            "drive_input": _endogenous_drive_input_payload(self_evolution_execution=True),
+            "drive_input": _formal_endogenous_drive_input_payload(self_evolution_execution=True),
         },
     )
 
@@ -16479,7 +16202,7 @@ async def test_batch_review_defers_tasks_when_drive_input_is_not_ready(tmp_path)
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
-            "drive_input": _endogenous_drive_input_payload(
+            "drive_input": _formal_endogenous_drive_input_payload(
                 active_sessions=1,
                 user_idle=180,
                 quiet_after_seconds=600,
@@ -16511,7 +16234,7 @@ async def test_batch_review_accepts_drive_input_request_without_guard_probe(tmp_
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
-            "drive_input": _endogenous_drive_input_payload(self_evolution_execution=True),
+            "drive_input": _formal_endogenous_drive_input_payload(self_evolution_execution=True),
         }
     )
 
@@ -16527,7 +16250,7 @@ async def test_batch_review_accepts_drive_input_request_without_guard_probe(tmp_
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_batch_review_keeps_legacy_activity_guards_for_explicit_compat_request(tmp_path):
+async def test_batch_review_accepts_legacy_activity_guards_as_drive_input_alias(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     await supervisor.plan_autonomous_chain_task({"title": "Legacy review request"})
 
@@ -16538,12 +16261,9 @@ async def test_batch_review_keeps_legacy_activity_guards_for_explicit_compat_req
     )
 
     assert result["status"] == "reviewed"
-    _assert_explicit_compat_drive_input_mirror(
-        result["activity_guards"],
-        result["drive_input"],
-        "user_chain_signal",
-        "decisions",
-    )
+    assert "activity_guards" not in result
+    assert result["drive_input"]["user_chain_signal"]["scope"] == "soft_signal_only"
+    assert result["drive_input"]["decisions"]["eligible_for_execution"] is True
 
 
 @pytest.mark.asyncio
@@ -16573,7 +16293,7 @@ async def test_batch_review_can_reapprove_deferred_tasks_on_later_cycle(tmp_path
 
     first = await supervisor.review_autonomous_chain_tasks(
         {
-            "drive_input": _endogenous_drive_input_payload(
+            "drive_input": _formal_endogenous_drive_input_payload(
                 active_sessions=1,
                 user_idle=180,
                 quiet_after_seconds=600,
@@ -16600,7 +16320,7 @@ async def test_batch_review_can_reapprove_deferred_tasks_on_later_cycle(tmp_path
 
     second = await supervisor.review_autonomous_chain_tasks(
         {
-            "drive_input": _endogenous_drive_input_payload(self_evolution_execution=True),
+            "drive_input": _formal_endogenous_drive_input_payload(self_evolution_execution=True),
         }
     )
 
@@ -16618,7 +16338,7 @@ async def test_endogenous_drive_still_plans_learning_candidates_with_active_sess
         del request
         return {
             "checks": {},
-            "idle_seconds": {"user": 1000, "agent": 1000, "memory": 1000},
+            "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {
                 "counts": {},
                 "active_sessions": 2,
@@ -16709,46 +16429,31 @@ def test_annotated_endogenous_judgement_omits_legacy_context_for_formal_drive_in
 
 
 @pytest.mark.unit
-def test_annotated_endogenous_judgement_keeps_legacy_context_for_explicit_compat_request(tmp_path):
+def test_annotated_endogenous_judgement_rejects_legacy_context_argument(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    supervisor._annotate_endogenous_drive_candidates(
-        deliberation={
-            "perception": {
+    with pytest.raises(TypeError):
+        supervisor._annotate_endogenous_drive_candidates(
+            deliberation={
+                "perception": {
+                    "user_mode": "quiet",
+                    "system_posture": "stable",
+                    "active_sessions": 0,
+                }
+            },
+            drive_input={
                 "user_mode": "quiet",
                 "system_posture": "stable",
                 "active_sessions": 0,
-            }
-        },
-        drive_input={
-            "user_mode": "quiet",
-            "system_posture": "stable",
-            "active_sessions": 0,
-        },
-        legacy_activity_guards={
-            "user_mode": "quiet",
-            "system_posture": "stable",
-            "active_sessions": 0,
-            "autonomous_chain_gate_active": True,
-        },
-        candidate_items=[
-            {
-                "title": "Compat mirror candidate",
-                "priority": "normal",
-                "governance_task_type": "self_learning",
-                "task_family": "self_learning",
-                "metadata": {"endogenous_drive_key": "compat-mirror-candidate"},
-                "evidence": {},
-            }
-        ],
-    )
-
-    history = supervisor._load_endogenous_drive_history()
-    judgement = history["judgements"][0]
-
-    assert judgement["candidate_key"] == "compat-mirror-candidate"
-    assert judgement["legacy_drive_input_context"]["active_sessions"] == 0
-    assert judgement["legacy_drive_input_context"]["autonomous_chain_gate_active"] is True
+            },
+            legacy_activity_guards={
+                "user_mode": "quiet",
+                "system_posture": "stable",
+                "active_sessions": 0,
+                "autonomous_chain_gate_active": True,
+            },
+            candidate_items=[],
+        )
 
 
 @pytest.mark.asyncio
@@ -16794,7 +16499,7 @@ async def test_batch_review_accepts_lm_governance_override(tmp_path, monkeypatch
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
-            "drive_input": _endogenous_drive_input_payload(self_evolution_execution=True),
+            "drive_input": _formal_endogenous_drive_input_payload(self_evolution_execution=True),
         }
     )
 
@@ -16847,7 +16552,7 @@ async def test_autonomous_chain_gate_preserves_agent_pull_task_approval_when_lm_
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
-            "drive_input": _endogenous_drive_input_payload(self_learning_execution=False),
+            "drive_input": _formal_endogenous_drive_input_payload(self_learning_execution=False),
         }
     )
 
@@ -16896,7 +16601,7 @@ async def test_batch_review_preserves_agent_pull_task_approval_without_autonomou
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
-            "drive_input": _endogenous_drive_input_payload(
+            "drive_input": _formal_endogenous_drive_input_payload(
                 active_sessions=1,
                 user_idle=180,
                 quiet_after_seconds=600,
@@ -16942,7 +16647,7 @@ async def test_batch_review_auto_approves_body_improvement_agent_pull_task(tmp_p
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
-            "drive_input": _endogenous_drive_input_payload(
+            "drive_input": _formal_endogenous_drive_input_payload(
                 active_sessions=1,
                 user_idle=180,
                 quiet_after_seconds=600,
@@ -16996,7 +16701,7 @@ async def test_batch_review_defers_body_improvement_until_self_learning_finishes
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
-            "drive_input": _endogenous_drive_input_payload(
+            "drive_input": _formal_endogenous_drive_input_payload(
                 active_sessions=1,
                 user_idle=180,
                 quiet_after_seconds=600,
@@ -17052,7 +16757,7 @@ async def test_batch_review_releases_body_improvement_after_one_self_learning_pr
 
     first = await supervisor.review_autonomous_chain_tasks(
         {
-            "drive_input": _endogenous_drive_input_payload(
+            "drive_input": _formal_endogenous_drive_input_payload(
                 active_sessions=1,
                 user_idle=180,
                 quiet_after_seconds=600,
@@ -17065,7 +16770,7 @@ async def test_batch_review_releases_body_improvement_after_one_self_learning_pr
 
     second = await supervisor.review_autonomous_chain_tasks(
         {
-            "drive_input": _endogenous_drive_input_payload(
+            "drive_input": _formal_endogenous_drive_input_payload(
                 active_sessions=1,
                 user_idle=240,
                 quiet_after_seconds=600,
@@ -17179,7 +16884,7 @@ async def test_batch_review_records_shadow_governance_actions_without_mutating_s
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
-            "drive_input": _endogenous_drive_input_payload(self_evolution_execution=True),
+            "drive_input": _formal_endogenous_drive_input_payload(self_evolution_execution=True),
         }
     )
 
@@ -17233,7 +16938,7 @@ async def test_batch_review_can_apply_lm_reprioritize_to_real_task_priority(tmp_
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
-            "drive_input": _endogenous_drive_input_payload(self_evolution_execution=True),
+            "drive_input": _formal_endogenous_drive_input_payload(self_evolution_execution=True),
         }
     )
 
@@ -17318,7 +17023,7 @@ async def test_batch_review_defers_second_task_when_scheduled_for_conflicts(tmp_
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
-            "drive_input": _endogenous_drive_input_payload(self_evolution_execution=True),
+            "drive_input": _formal_endogenous_drive_input_payload(self_evolution_execution=True),
         }
     )
 
@@ -17820,7 +17525,7 @@ async def test_self_learning_followup_auto_approval_does_not_build_execution_req
         {
             "decision": "auto",
             "drive_input": {
-                **_endogenous_drive_input_payload(self_learning_execution=True),
+                **_formal_endogenous_drive_input_payload(self_learning_execution=True),
                 "now": "2026-05-25T12:00:00",
             },
         },

@@ -315,13 +315,6 @@ class InternalGateway:
                 projection_scope="agent_lane",
                 agent_lane=lane_key,
             )
-        elif agent_scene.get("source_service") == "cli_agent":
-            self._apply_agent_scene_projection_to_snapshot(
-                snapshot,
-                agent_scene,
-                projection_scope="agent_top_level_projection",
-                agent_lane=None,
-            )
         snapshot.update(self._build_session_lease_snapshot(session_id))
         return snapshot
 
@@ -551,6 +544,7 @@ class InternalGateway:
             },
             "recent_metadata": dict(self._activity_state["recent_metadata"]),
             "active_sessions": len(self._agent_session_cache),
+            "active_cli_executor": self._build_active_cli_executor_snapshot(),
         }
 
     def _serialize_agent_session_metadata(self, session_id: str) -> Dict[str, Any]:
@@ -599,10 +593,7 @@ class InternalGateway:
         if normalized == "user_request":
             self._activity_state["last_user_request_at"] = now
             self._activity_state["user_request_count"] += 1
-            self._activity_state["last_agent_work_at"] = now
-            self._activity_state["agent_work_count"] += 1
             self._activity_state["recent_metadata"]["user_request"] = activity_metadata
-            self._activity_state["recent_metadata"]["agent_work"] = activity_metadata
         elif normalized == "agent_scene":
             scene = self._validate_scene(
                 (activity_metadata or {}).get("scene"),
@@ -1312,11 +1303,24 @@ class InternalGateway:
         return {"status": "refreshed", "scenes": self._scenes_cache}
 
     def _build_scene_summary(self) -> Dict[str, str]:
-        """Three-segment headline view for the CLI status bar."""
+        """Compact scene summary with user/user-chat and autonomous lanes split."""
         scenes = self._scenes_cache
+        agent_scene = dict(scenes.get("agent") or {})
+        lanes = agent_scene.get("lanes") if isinstance(agent_scene.get("lanes"), dict) else {}
+        user_chat_scene = str(
+            dict(lanes.get("user_chat") or {}).get("scene") or "idle"
+        ).strip() or "idle"
+        supervisor_task_scene = str(
+            dict(lanes.get("supervisor_task") or {}).get("scene") or "idle"
+        ).strip() or "idle"
         return {
             "supervisor": scenes["supervisor"].get("scene") or "idle",
-            "agent": scenes["agent"].get("scene") or "idle",
+            # Keep `agent` as a compact user-chain alias so summary consumers
+            # do not accidentally treat top-level agent aggregation as the
+            # canonical API-A autonomous-execution fact source.
+            "agent": user_chat_scene,
+            "agent_user_chat": user_chat_scene,
+            "agent_supervisor_task": supervisor_task_scene,
             "executor": scenes["executor"].get("scene") or "idle",
         }
 

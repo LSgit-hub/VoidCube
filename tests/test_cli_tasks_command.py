@@ -230,7 +230,7 @@ def test_show_session_status_includes_subagent_summary(monkeypatch):
     app.agent = SimpleNamespace(session_total_tokens=1234)
     app.console = _FakeConsole(rendered)
     app._fetch_supervisor_status_snapshot = lambda: {}
-    app._fetch_gateway_agent_activity_snapshot = lambda: {}
+    app._fetch_gateway_autonomous_execute_snapshot = lambda: {}
     app._get_subagent_observability_snapshot = lambda: {
         "active": True,
         "foreground_count": 2,

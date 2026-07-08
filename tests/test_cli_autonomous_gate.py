@@ -20,7 +20,7 @@ from VoidCube_cli import autonomous_status_host as autonomous_status_host_module
 from VoidCube_cli.autonomous_observation import format_supervisor_status_snapshot
 from VoidCube_cli.autonomous_status_host import (
     autonomous_observation_summary_sections,
-    format_gateway_agent_activity_snapshot,
+    format_gateway_autonomous_execute_snapshot,
 )
 
 
@@ -561,7 +561,7 @@ def test_cli_autonomous_gate_recovers_owned_running_task_before_completion_write
         item for item in requests if item["url"].endswith("/v1/tasks/learn-restore-1/decision")
     )
     assert complete_request["data"]["decision"] == "completed"
-    assert "completed by the API-A autonomous executor" in complete_request["data"]["reason"]
+    assert "API-A 自主执行面已完成学习链路项" in complete_request["data"]["reason"]
     assert cli._current_autonomous_task is None
     assert cli._last_agent_turn_result is None
 
@@ -918,7 +918,7 @@ def test_autonomous_panel_fragments_include_focus_task_and_recent_events(monkeyp
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
     assert "API-A 自主执行面" in rendered
-    assert "执行位: 当前执行位 正常" in rendered
+    assert "执行面: 当前会话 正常" in rendered
     assert "Panel task title" in rendered
     assert "已接管任务 learn-panel-1" in rendered
     assert "工具启动: web_search" in rendered
@@ -950,7 +950,7 @@ def test_autonomous_panel_shows_stale_foreign_executor(monkeypatch):
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
-    assert "执行位: 他处执行位 " in rendered
+    assert "执行面: 其他会话 " in rendered
     assert "已陈旧（静默 120s，场景 executing）" in rendered
 
 
@@ -1015,7 +1015,7 @@ def test_autonomous_panel_shows_no_api_a_executable_task_reason(monkeypatch):
 
     assert "状态: 治理段观察中" in rendered
     assert "链路项: 当前没有被认领的自主链路项" in rendered
-    assert "仍停留在 API-B 治理段" in rendered
+    assert "当前学习链路项仍由 API-B 判断" in rendered
 
 
 def test_autonomous_panel_prefers_loop_focus_when_present(monkeypatch):
@@ -1057,10 +1057,10 @@ def test_autonomous_panel_prefers_loop_focus_when_present(monkeypatch):
                         "title": "Board approved task",
                         "source_label": "API-A",
                         "status": "ready",
-                        "display_status": "已放行待认领",
-                        "status_label": "已放行待认领",
-                        "chain_reason": "链路: 监督者已放行该链路项，等待 API-A 自主执行面认领",
-                        "activity_text": "执行流: 监督者已放行链路项，等待 API-A 自主执行面认领",
+                        "display_status": "API-A 可认领",
+                        "status_label": "API-A 可认领",
+                        "chain_reason": "链路: API-B 已放行该链路项，可由 API-A 自主执行面认领",
+                        "activity_text": "执行流: API-A 认领后执行，结果写回 Mem",
                         "focus_task": {
                             "task_id": "learn-board-1",
                             "title": "Board approved task",
@@ -1086,9 +1086,9 @@ def test_autonomous_panel_prefers_loop_focus_when_present(monkeypatch):
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
-    assert "状态: 已放行待认领" in rendered
+    assert "状态: API-A 可认领" in rendered
     assert "Board approved task" in rendered
-    assert "等待 API-A 自主执行面认领" in rendered
+    assert "可由 API-A 自主执行面认领" in rendered
 
 
 def test_autonomous_panel_shows_approved_task_waiting_for_claim(monkeypatch):
@@ -1127,10 +1127,10 @@ def test_autonomous_panel_shows_approved_task_waiting_for_claim(monkeypatch):
                     {
                         "stage_key": "api_a_execution",
                         "status": "ready",
-                        "display_status": "已放行待认领",
-                        "status_label": "已放行待认领",
-                        "chain_reason": "链路: 监督者已放行该链路项，等待 API-A 自主执行面认领",
-                        "activity_text": "执行流: 监督者已放行链路项，等待 API-A 自主执行面认领",
+                        "display_status": "API-A 可认领",
+                        "status_label": "API-A 可认领",
+                        "chain_reason": "链路: API-B 已放行该链路项，可由 API-A 自主执行面认领",
+                        "activity_text": "执行流: API-A 认领后执行，结果写回 Mem",
                         "focus_task": {
                             "task_id": "learn-approved-1",
                             "title": "Approved waiting task",
@@ -1155,10 +1155,10 @@ def test_autonomous_panel_shows_approved_task_waiting_for_claim(monkeypatch):
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
-    assert "状态: 已放行待认领" in rendered
+    assert "状态: API-A 可认领" in rendered
     assert "Approved waiting task" in rendered
-    assert "链路: 监督者已放行该链路项，等待 API-A 自主执行面认领" in rendered
-    assert "执行流: 监督者已放行链路项，等待 API-A 自主执行面认领" in rendered
+    assert "链路: API-B 已放行该链路项，可由 API-A 自主执行面认领" in rendered
+    assert "执行流: API-A 认领后执行，结果写回 Mem" in rendered
 
 
 def test_autonomous_panel_reads_stage_card_projection_without_loop_stage(monkeypatch):
@@ -1197,10 +1197,10 @@ def test_autonomous_panel_reads_stage_card_projection_without_loop_stage(monkeyp
                     {
                         "stage_key": "api_a_execution",
                         "status": "ready",
-                        "status_label": "已放行待认领",
-                        "display_status": "已放行待认领",
-                        "chain_reason": "链路: 监督者已放行该链路项，等待 API-A 自主执行面认领",
-                        "activity_text": "执行流: 监督者已放行链路项，等待 API-A 自主执行面认领",
+                        "status_label": "API-A 可认领",
+                        "display_status": "API-A 可认领",
+                        "chain_reason": "链路: API-B 已放行该链路项，可由 API-A 自主执行面认领",
+                        "activity_text": "执行流: API-A 认领后执行，结果写回 Mem",
                         "reason_style": "warn",
                         "focus_task": {
                             "task_id": "learn-approved-stage-card-1",
@@ -1226,10 +1226,10 @@ def test_autonomous_panel_reads_stage_card_projection_without_loop_stage(monkeyp
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
-    assert "状态: 已放行待认领" in rendered
+    assert "状态: API-A 可认领" in rendered
     assert "Stage-card waiting task" in rendered
-    assert "链路: 监督者已放行该链路项，等待 API-A 自主执行面认领" in rendered
-    assert "执行流: 监督者已放行链路项，等待 API-A 自主执行面认领" in rendered
+    assert "链路: API-B 已放行该链路项，可由 API-A 自主执行面认领" in rendered
+    assert "执行流: API-A 认领后执行，结果写回 Mem" in rendered
 
 
 def test_autonomous_panel_prefers_stage_card_over_legacy_loop_stage_when_both_exist(monkeypatch):
@@ -1268,9 +1268,9 @@ def test_autonomous_panel_prefers_stage_card_over_legacy_loop_stage_when_both_ex
                     {
                         "stage_key": "api_a_execution",
                         "status": "ready",
-                        "status_label": "已放行待认领",
-                        "display_status": "已放行待认领",
-                        "chain_reason": "链路: 以 stage_cards 正式投影为准，等待 API-A 自主执行面认领",
+                        "status_label": "API-A 可认领",
+                        "display_status": "API-A 可认领",
+                        "chain_reason": "链路: 以 stage_cards 正式投影为准，可由 API-A 自主执行面认领",
                         "activity_text": "执行流: 该提示来自正式 stage_cards，而不是旧 compat 阶段快照",
                         "focus_task": {
                             "task_id": "learn-stage-card-wins-1",
@@ -1312,7 +1312,7 @@ def test_autonomous_panel_prefers_stage_card_over_legacy_loop_stage_when_both_ex
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
     assert "Stage-card wins task" in rendered
-    assert "状态: 已放行待认领" in rendered
+    assert "状态: API-A 可认领" in rendered
     assert "以 stage_cards 正式投影为准" in rendered
     assert "旧兼容执行中" not in rendered
     assert "Legacy loop stage task" not in rendered
@@ -1340,10 +1340,10 @@ def test_autonomous_panel_prefers_loop_stage_descriptor_for_non_local_reasoning(
                         "status": "ready",
                         "stage": "waiting_api_a_claim",
                         "cli_focus_stage": "waiting_api_a_claim",
-                        "status_label": "已放行待认领",
-                        "display_status": "已放行待认领",
-                        "chain_reason": "链路: 监督者已放行该链路项，等待自主执行面认领",
-                        "activity_text": "执行流: 监督者等待某个自主执行面开始处理该链路项",
+                        "status_label": "API-A 可认领",
+                        "display_status": "API-A 可认领",
+                        "chain_reason": "链路: API-B 已放行该链路项，可由自主执行面认领",
+                        "activity_text": "执行流: API-A 自主执行面可开始处理该链路项",
                         "reason_style": "warn",
                         "focus_task": {
                             "task_id": "learn-approved-loop-stage-1",
@@ -1369,10 +1369,10 @@ def test_autonomous_panel_prefers_loop_stage_descriptor_for_non_local_reasoning(
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
-    assert "状态: 已放行待认领" in rendered
+    assert "状态: API-A 可认领" in rendered
     assert "Loop-stage driven task" in rendered
-    assert "链路: 监督者已放行该链路项，等待自主执行面认领" in rendered
-    assert "执行流: 监督者等待某个自主执行面开始处理该链路项" in rendered
+    assert "链路: API-B 已放行该链路项，可由自主执行面认领" in rendered
+    assert "执行流: API-A 自主执行面可开始处理该链路项" in rendered
 
 
 def test_autonomous_panel_shows_running_task_owned_elsewhere(monkeypatch):
@@ -1721,8 +1721,17 @@ def test_auto_command_reads_cached_supervisor_snapshot_instead_of_sync_fetch(mon
         "scene": "planning",
         "title": "治理安排",
         "autonomous_observation": {
-            "metrics": {"by_path": {}, "running_count": 0, "governance": {}},
-            "board": {"primary_focus": {"title": "复核治理在途卫生", "status": "当前在途"}},
+            "metrics": {
+                "chain_projection": {
+                    "governance_backlog": 0,
+                    "api_a_running": 0,
+                    "api_a_ready": 0,
+                    "candidate_signals": 0,
+                    "writeback_history": 0,
+                },
+                "governance": {},
+            },
+            "board": {"primary_focus": {"title": "观察 API-B 判断积压", "status": "当前在途"}},
             "chain": {"segments": []},
             "loop": {"stage_cards": [], "rail_entries": [], "recent_writebacks": []},
             "counts": {},
@@ -1775,8 +1784,8 @@ def test_auto_command_reads_cached_supervisor_snapshot_instead_of_sync_fetch(mon
             refresh_calls.append(host),
             [
                 "场景: 治理安排",
-                "闭环焦点: 复核治理在途卫生 (当前在途)",
-                "闭环分段: 治理在途=0, 待认领窗口=0, 候选形成=0, 写回回流=0",
+                "闭环焦点: 观察 API-B 判断积压 (当前在途)",
+                "闭环分段: API-B 判断在途=0, API-A 可认领=0, 候选形成=0, 写回回流=0",
                 "最近监督/事件: 暂无",
             ][:limit],
         )[1],
@@ -1792,7 +1801,7 @@ def test_auto_command_reads_cached_supervisor_snapshot_instead_of_sync_fetch(mon
     )
 
     assert refresh_calls == [cli]
-    assert any("闭环焦点: 复核治理在途卫生 (当前在途)" in line for line in printed)
+    assert any("闭环焦点: 观察 API-B 判断积压 (当前在途)" in line for line in printed)
     assert not any("监督者快照将在后台刷新后进入观测面。" in line for line in printed)
 
 
@@ -1815,12 +1824,12 @@ def test_autonomous_executor_session_is_persisted_before_agent_pull():
     db = _FakeSessionDB()
     cli._session_db = db
 
-    autonomous_gate_module.ensure_autonomous_executor_session(cli, logger_debug=lambda *args, **kwargs: None)
+    autonomous_gate_module.ensure_supervisor_task_session(cli, logger_debug=lambda *args, **kwargs: None)
 
     assert db.created == [
         {
             "session_id": "cli-auto-empty",
-            "source": "cli_autonomous_executor",
+            "source": "cli_supervisor_task_lane",
             "model": "test-model",
         }
     ]
@@ -2030,8 +2039,13 @@ def test_cli_formats_supervisor_status_snapshot():
             "title": "义子正在整理任务",
             "autonomous_observation": {
                 "metrics": {
-                    "by_path": {"learning": 2, "maintenance": 1, "evolution": 3},
-                    "running_count": 1,
+                    "chain_projection": {
+                        "governance_backlog": 1,
+                        "api_a_running": 1,
+                        "api_a_ready": 2,
+                        "candidate_signals": 3,
+                        "writeback_history": 1,
+                    },
                     "governance": {
                         "review_actions": 2,
                         "followup_suggestions": 1,
@@ -2040,7 +2054,7 @@ def test_cli_formats_supervisor_status_snapshot():
                 },
                 "board": {
                     "primary_focus": {
-                        "title": "复核治理在途卫生",
+                        "title": "观察 API-B 判断积压",
                         "status": "当前在途",
                     },
                 },
@@ -2048,12 +2062,12 @@ def test_cli_formats_supervisor_status_snapshot():
                     "stage_cards": [
                         {
                             "stage_key": "api_b_judgement",
-                            "title": "复核治理在途卫生",
+                            "title": "观察 API-B 判断积压",
                             "source_label": "API-B",
                             "status": "active",
                             "display_status": "当前在途",
                             "focus_task": {
-                                "title": "复核治理在途卫生",
+                                "title": "观察 API-B 判断积压",
                                 "display_status": "当前在途",
                             },
                         },
@@ -2072,8 +2086,8 @@ def test_cli_formats_supervisor_status_snapshot():
                 },
                 "chain": {
                     "segments": [
-                        {"label": "治理在途", "count": 1},
-                        {"label": "待认领窗口", "count": 2},
+                        {"label": "API-B 判断在途", "count": 1},
+                        {"label": "API-A 可认领", "count": 2},
                         {"label": "候选形成", "count": 3},
                         {"label": "写回回流", "count": 1},
                     ]
@@ -2089,21 +2103,21 @@ def test_cli_formats_supervisor_status_snapshot():
     )
 
     assert any("场景: 治理安排" in line for line in lines)
-    assert any("learning=2" in line and "evolution=3" in line for line in lines)
+    assert any("API-B 判断在途=1" in line and "API-A 可认领=2" in line for line in lines)
     assert any("裁定=2" in line and "建议=1" in line and "重排=1" in line for line in lines)
-    assert any("闭环焦点: 复核治理在途卫生 (当前在途)" in line for line in lines)
-    assert any("闭环分段: 治理在途=1, 待认领窗口=2, 候选形成=3, 写回回流=1" in line for line in lines)
+    assert any("闭环焦点: 观察 API-B 判断积压 (当前在途)" in line for line in lines)
+    assert any("闭环分段: API-B 判断在途=1, API-A 可认领=2, 候选形成=3, 写回回流=1" in line for line in lines)
     assert any("执行焦点: 改进 shell 替身 (等待写回)" in line for line in lines)
     assert any("改进 shell 替身" in line for line in lines)
-    assert any("最近监督/事件: 批量复核" in line for line in lines)
+    assert any("最近监督/事件: API-B 复核记录" in line for line in lines)
 
 
-def test_cli_formats_gateway_agent_activity_snapshot():
-    lines = format_gateway_agent_activity_snapshot(
+def test_cli_formats_gateway_autonomous_execute_snapshot():
+    lines = format_gateway_autonomous_execute_snapshot(
         {
-            "last_agent_work_at": "2026-06-26T10:00:00",
-            "agent_work_count": 3,
-            "agent_work": {
+            "last_autonomous_chain_execute_at": "2026-06-26T10:00:00",
+            "autonomous_chain_execute_count": 3,
+            "autonomous_chain_execute": {
                 "source_service": "cli_agent",
                 "task_id": "body-1",
                 "task_identity": {
@@ -2130,9 +2144,9 @@ def test_initialize_autonomous_status_caches_sets_observation_cache_fields():
     assert host._autonomous_gateway_status_cache == {}
     assert host._autonomous_gateway_status_ts == 0.0
     assert host._autonomous_gateway_status_refreshing is False
-    assert host._autonomous_gateway_activity_cache == {}
-    assert host._autonomous_gateway_activity_ts == 0.0
-    assert host._autonomous_gateway_activity_refreshing is False
+    assert host._autonomous_gateway_execute_cache == {}
+    assert host._autonomous_gateway_execute_ts == 0.0
+    assert host._autonomous_gateway_execute_refreshing is False
 
 
 def test_supervisor_activity_snapshot_prefers_host_override():
@@ -2154,11 +2168,11 @@ def test_preview_supervisor_status_lines_reads_cached_snapshot(monkeypatch):
     host._supervisor_state_cache = {
         "scene": "planning",
         "title": "治理安排",
-        "summary": "正在梳理治理在途",
+        "summary": "正在观察 API-B 判断在途",
         "autonomous_observation": {
             "board": {
                 "primary_focus": {
-                    "title": "复核治理在途卫生",
+                    "title": "观察 API-B 判断积压",
                     "status": "当前在途",
                 }
             },
@@ -2185,7 +2199,7 @@ def test_preview_supervisor_status_lines_reads_cached_snapshot(monkeypatch):
 
     assert refresh_calls == [host]
     assert len(lines) == 4
-    assert any("闭环焦点: 复核治理在途卫生 (当前在途)" in line for line in lines)
+    assert any("闭环焦点: 观察 API-B 判断积压 (当前在途)" in line for line in lines)
 
 
 def test_cli_autonomous_summary_sections_read_cached_observation_surfaces(monkeypatch):
@@ -2193,7 +2207,7 @@ def test_cli_autonomous_summary_sections_read_cached_observation_surfaces(monkey
     host._supervisor_state_cache = {
         "scene": "planning",
         "title": "治理安排",
-        "summary": "正在梳理治理在途",
+        "summary": "正在观察 API-B 判断在途",
         "autonomous_observation": {
             "counts": {
                 "api_b_backlog": 1,
@@ -2203,7 +2217,7 @@ def test_cli_autonomous_summary_sections_read_cached_observation_surfaces(monkey
             },
             "board": {
                 "primary_focus": {
-                    "title": "复核治理在途卫生",
+                    "title": "观察 API-B 判断积压",
                     "status": "当前在途",
                 }
             },
@@ -2226,10 +2240,10 @@ def test_cli_autonomous_summary_sections_read_cached_observation_surfaces(monkey
             "timeline": [],
         },
     }
-    host._autonomous_gateway_activity_cache = {
-        "last_agent_work_at": "2026-06-26T10:00:00",
-        "agent_work_count": 2,
-        "agent_work": {
+    host._autonomous_gateway_execute_cache = {
+        "last_autonomous_chain_execute_at": "2026-06-26T10:00:00",
+        "autonomous_chain_execute_count": 2,
+        "autonomous_chain_execute": {
             "source_service": "cli_agent",
             "task_identity": {
                 "task_id": "learn-1",
@@ -2238,7 +2252,7 @@ def test_cli_autonomous_summary_sections_read_cached_observation_surfaces(monkey
         },
     }
     host._supervisor_state_refreshing = False
-    host._autonomous_gateway_activity_refreshing = False
+    host._autonomous_gateway_execute_refreshing = False
 
     refresh_calls = []
     monkeypatch.setattr(
@@ -2248,8 +2262,8 @@ def test_cli_autonomous_summary_sections_read_cached_observation_surfaces(monkey
     )
     monkeypatch.setattr(
         autonomous_status_host_module,
-        "refresh_gateway_agent_activity_snapshot",
-        lambda current_host: refresh_calls.append(("gateway_activity", current_host)),
+        "refresh_gateway_autonomous_execute_snapshot",
+        lambda current_host: refresh_calls.append(("gateway_execute", current_host)),
     )
     monkeypatch.setattr(
         autonomous_status_host_module,
@@ -2258,30 +2272,30 @@ def test_cli_autonomous_summary_sections_read_cached_observation_surfaces(monkey
     )
     monkeypatch.setattr(
         autonomous_status_host_module,
-        "fetch_gateway_agent_activity_snapshot",
-        lambda current_host: (_ for _ in ()).throw(AssertionError("不应再走同步 gateway activity snapshot")),
+        "fetch_gateway_autonomous_execute_snapshot",
+        lambda current_host: (_ for _ in ()).throw(AssertionError("不应再走同步 gateway execute snapshot")),
     )
 
     lines = autonomous_observation_summary_sections(host)
 
-    assert refresh_calls == [("supervisor", host), ("gateway_activity", host)]
+    assert refresh_calls == [("supervisor", host), ("gateway_execute", host)]
     assert any("监督者快照:" == line for line in lines)
-    assert any("闭环焦点: 复核治理在途卫生 (当前在途)" in line for line in lines)
-    assert any("网关执行活动:" == line for line in lines)
+    assert any("闭环焦点: 观察 API-B 判断积压 (当前在途)" in line for line in lines)
+    assert any("最近自主执行回报:" == line for line in lines)
     assert any("最近链路项: 学习替身基线" in line for line in lines)
 
 
 def test_cli_autonomous_summary_sections_show_refreshing_hint_when_cache_empty(monkeypatch):
     host = type("_Host", (), {})()
     host._supervisor_state_cache = {}
-    host._autonomous_gateway_activity_cache = {}
+    host._autonomous_gateway_execute_cache = {}
     host._supervisor_state_refreshing = True
-    host._autonomous_gateway_activity_refreshing = True
+    host._autonomous_gateway_execute_refreshing = True
 
     monkeypatch.setattr(autonomous_status_host_module, "refresh_supervisor_status", lambda current_host: None)
     monkeypatch.setattr(
         autonomous_status_host_module,
-        "refresh_gateway_agent_activity_snapshot",
+        "refresh_gateway_autonomous_execute_snapshot",
         lambda current_host: None,
     )
 
@@ -2289,5 +2303,5 @@ def test_cli_autonomous_summary_sections_show_refreshing_hint_when_cache_empty(m
 
     assert any("监督者快照:" == line for line in lines)
     assert any("后台刷新中，稍后会回到当前自主闭环快照。" in line for line in lines)
-    assert any("网关执行活动:" == line for line in lines)
-    assert any("后台刷新中，稍后会回到最近 API-A 执行回报。" in line for line in lines)
+    assert any("最近自主执行回报:" == line for line in lines)
+    assert any("后台刷新中，稍后会回到最近自主执行回报。" in line for line in lines)

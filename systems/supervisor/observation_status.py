@@ -2,10 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-_LEGACY_STATUS_ALIASES = {
-    "queued": "planned",
-}
-
 _OBSERVATION_STATUS_LABELS = {
     "planned": "待审核",
     "awaiting_review": "待审查",
@@ -30,7 +26,7 @@ _TRACE_STATUS_LABELS = {
 
 def normalize_autonomous_status(value: Any) -> str:
     normalized = str(value or "").strip().lower()
-    return _LEGACY_STATUS_ALIASES.get(normalized, normalized)
+    return normalized
 
 
 def observation_status_label(value: Any, *, default: str = "待定") -> str:

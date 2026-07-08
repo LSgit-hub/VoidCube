@@ -1,6 +1,8 @@
 # 内生驱动与替身改进链路分析（修正版）
 
 > **2026-07 语义对齐说明**：本文保留“内生驱动 → 学习 → 替身改进 → 健康评分”的 gap 分析价值，但需按最新基线理解执行门控：监督者目标语义为全天候运行，旧时间窗口和“等用户空闲”硬门已移除；`active_sessions` 只作为认知层软感知/降权信号，不再是生成或执行的硬条件；`/auto` 开关只是当前自主链路的临时启停门控，不限制主 CLI 输入，也不阻断用户与主 Agent 交互。替身改进和 probe 可全天候自主进行，但真正 `activate_slot` 必须停在用户同意门（目标语义，待实现），不能写成 Governor 批准后自动切换。Web 小屋也只承担 API-B 动作、状态、反馈与任务的只读观测，不再应被理解成旧队列管理台或执行控制台。
+>
+> **2026-07-08 现状补记**：本文中的部分早期 gap 已被当前实现追上。`body_improvement` 现已进入正式 `execution_kind`、可被 API-A 自主执行面拉取执行，并已进入 Supervisor 的链路观测与 Web 小屋替身升级红点提示。当前更真实的缺口，已经从“有没有 `body_improvement` 这条链”转向“学习成果如何稳定驱动定向改进、如何自动形成建议切换、以及用户同意门如何落地”。
 
 ## 1. 当前内生驱动产生的任务
 
@@ -51,22 +53,47 @@ active_sessions 软感知 + self_learning eligible + 防自撞护栏通过
 - 防自撞并发护栏通过（不与同类在途任务重复派发）
 - 每周期最多产生 2 个创造力候选
 
-## 3. 替身改进的当前路径
+## 3. 替身改进的当前实现与缺口
 
-当前替身改进只有**手动触发**路径：
+当前替身改进已经有两条不同层级的实现路径，不能再混写成“只有手动触发”：
 
+### 3.1 已接上的自主链路路径
+
+```text
+监督者内生驱动
+  → 形成 body_improvement 候选 / 放行任务
+  → 进入自主链路治理在途
+  → API-A 自主执行面 pull 任务
+  → 在 shell worktree 中编辑替身代码
+  → 提交改进结果 / 报告 / 回写
+  → Mem / Supervisor 再读取并继续判断
 ```
+
+这条链已经接上了以下能力：
+
+- `body_improvement` 已是正式 `execution_kind`
+- API-A 自主执行面可以拉取并执行
+- Web 小屋替身卡片 / 树形图已能对对应节点亮红点
+- Supervisor 闭环观测里已能看到放行、执行、回写和再读取
+
+### 3.2 仍保留的身体生命周期路径
+
+```text
 POST /body/upgrade/execute
   → BodyUpgradeExecutionAdapter.execute_body_upgrade()
-    ├── 1. prepare_slot_workspace()    # 准备 Git worktree
-    ├── 2. mark_candidate()            # 标记为 candidate
-    ├── 3. health_review_request       # Governor 审批 → probe
-    ├── 4. 执行 probe                  # 健康检查（技术层面）
-    ├── 5. switch_request              # Governor 审批（旧路径）
-    └── 6. execute switch              # active ↔ retired（旧路径；目标语义需先停在用户同意门）
+    ├── prepare_slot_workspace()   # 准备 Git worktree
+    ├── mark_candidate()           # 标记 candidate
+    ├── health_review_request      # 审查 / probe 前置门
+    ├── 执行 probe                 # 技术健康检查
+    ├── switch_request             # 切换审批入口（旧程序路径）
+    └── execute switch             # active ↔ retired
 ```
 
-此路径**不由内生驱动触发，也不由自主链路治理在途 / 闭环分段投影直接驱动**。必须手动调用 API。
+这条路径更偏**身体生命周期 / probe / activate_slot**，不是“学习证据如何形成替身改进任务”的主问题。它当前最大的语义缺口也不是“能不能切”，而是：
+
+- Governor 批准后仍应先停在 `awaiting_user_consent`
+- 真正 `activate_slot` 需要用户同意门
+- 不应再被写成“Governor 批准后自动切换”
 
 ## 4. 架构基线要求的链路
 
@@ -105,11 +132,11 @@ POST /body/upgrade/execute
 
 | # | 缺失环节 | 描述 |
 |---|---------|------|
-| **1** | 学习→改进任务类型 | 当前自主链路治理在途 / 分段读模型里缺少稳定的 `body_improvement` 闭环投影。创造力候选更偏"只读研究"，而不是"基于研究编辑代码" |
-| **2** | 学习成果→替身改进的触发 | Agent 完成学习任务后，没有机制驱动它去读 Mem、了解替身代码、编辑替身 |
-| **3** | 替身改进任务的自动生成 | 监督者不会定期扫描 Mem 中的学习成果，自动生成身体升级候选 |
-| **4** | 改进范围约束 | 没有定义 Agent 编辑替身代码时的边界（白名单目录/禁止模式） |
-| **5** | 改进→建议切换的自动化 | 从"Agent 提交改进"到"Governor 形成建议切换"之间缺少自动桥接；从建议切换到 activate 还缺用户同意门 |
+| **1** | 学习证据→定向改进 | `body_improvement` 已存在，但“哪些学习结果足以推成具体改进、改哪个结构节点、为什么现在改”这层映射还不够稳定 |
+| **2** | 学习成果→替身改进的触发 | Agent 完成学习任务后，仍缺一条稳定、细粒度的“读 Mem 学习结论 → 锁定替身结构节点 → 生成定向改进任务”桥 |
+| **3** | 替身改进候选质量 | 监督者已具备 `body_improvement` 候选与放行能力；当前不足主要是证据累积、候选质量与触发条件还不够稳定，容易继续偏向“只读研究” |
+| **4** | 改进范围约束统一 | 白名单目录、禁止模式、文件数上限与 boundary 检查已存在；当前缺口在于让这组边界成为唯一正式入口，并和审查/回写链保持一致 |
+| **5** | 改进→建议切换的自动化 | 从“Agent 提交改进结果”到“Supervisor / Governor 形成建议切换”之间仍缺自动桥接；从建议切换到 activate 还缺用户同意门 |
 | **6** | 健康值时间衰减 | 健康值只增不减，无法反映代码腐化 |
 | **7** | 改进回滚机制 | 破坏性改进后无回滚路径 |
 
@@ -117,7 +144,10 @@ POST /body/upgrade/execute
 
 ```
 当前实际链路:
-  内生驱动 → 创造力候选(只读研究) → Agent 执行 → 写入 Mem → 断链 ✗
+  内生驱动 → self_learning / body_improvement 候选
+    → API-B 治理在途 → API-A 拉取执行 → 写入 Mem
+    → Supervisor 继续观察与再读取
+    → 在“学习成果如何稳定推成定向改进 / 如何形成建议切换”这里仍断链 ✗
 
 架构基线要求:
   内生驱动 → 学习任务 → Agent 学习 → Mem

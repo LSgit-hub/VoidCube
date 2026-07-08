@@ -26,22 +26,22 @@ def build_autonomous_executor_lease_row(
     current_session_id = str(session_id or "").strip()
     active_session_id = str(active.get("session_id") or "").strip()
     if not active_session_id:
-        text = "执行位: 当前还没有可见的 API-A 自主执行会话"
+        text = "执行面: 当前还没有可见的 API-A 自主执行会话"
         return "class:auto-panel-warn", trim_status_bar_text(text, inner_width)
 
     lease_status = str(active.get("lease_status") or "").strip().lower()
     idle_seconds = int(active.get("idle_seconds") or 0)
     scene = str(active.get("scene") or "idle").strip() or "idle"
     owner_label = (
-        "当前执行位"
+        "当前会话"
         if active_session_id == current_session_id
-        else f"他处执行位 {active_session_id[-8:]}"
+        else f"其他会话 {active_session_id[-8:]}"
     )
     if lease_status == "stale" or bool(active.get("is_stale")):
-        text = f"执行位: {owner_label} 已陈旧（静默 {idle_seconds}s，场景 {scene}）"
+        text = f"执行面: {owner_label} 已陈旧（静默 {idle_seconds}s，场景 {scene}）"
         return "class:auto-panel-bad", trim_status_bar_text(text, inner_width)
 
-    text = f"执行位: {owner_label} 正常（静默 {idle_seconds}s，场景 {scene}）"
+    text = f"执行面: {owner_label} 正常（静默 {idle_seconds}s，场景 {scene}）"
     if active_session_id != current_session_id:
         return "class:auto-panel-warn", trim_status_bar_text(text, inner_width)
     return "class:auto-panel-info", trim_status_bar_text(text, inner_width)
@@ -128,7 +128,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
         status_label = "模型处理中"
         status_style = "class:auto-panel-good"
     elif focus_stage == "waiting_api_a_claim":
-        status_label = str(supervisor_descriptor.get("status_label") or "已放行待认领")
+        status_label = str(supervisor_descriptor.get("status_label") or "API-A 可认领")
         status_style = "class:auto-panel-warn"
     elif focus_stage == "running_on_other_api_a":
         status_label = str(supervisor_descriptor.get("status_label") or "他处执行中")
@@ -196,7 +196,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
                     host._trim_status_bar_text(
                         str(
                             supervisor_descriptor.get("chain_reason")
-                            or "链路: 监督者已放行该链路项，等待 API-A 自主执行面认领"
+                            or "链路: API-B 已放行该链路项，可由 API-A 自主执行面认领"
                         ),
                         inner_width,
                     ),
@@ -232,7 +232,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
     elif focus_stage == "waiting_api_a_claim":
         activity_text = str(
             supervisor_descriptor.get("activity_text")
-            or "执行流: 监督者已放行链路项，等待 API-A 自主执行面认领"
+            or "执行流: API-A 认领后执行，结果写回 Mem"
         )
     elif focus_stage == "running_on_other_api_a":
         activity_text = str(
@@ -242,7 +242,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
     else:
         activity_text = str(
             supervisor_descriptor.get("activity_text")
-            or "执行流: 等待 API-B 判断、重排或再读取后形成新的待认领窗口"
+            or "执行流: API-B 判断、重排或再读取后再交给 API-A"
         )
     rows.append(("class:auto-panel-text", host._trim_status_bar_text(activity_text, inner_width)))
 

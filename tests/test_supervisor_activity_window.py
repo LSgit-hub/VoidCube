@@ -77,13 +77,13 @@ async def test_supervisor_activity_guard_compares_gateway_naive_timestamps_as_ut
     )
 
     assert result["idle_seconds"]["user"] == 900.0
-    assert result["idle_seconds"]["agent"] == 900.0
+    assert "agent" not in result["idle_seconds"]
     assert result["idle_seconds"]["memory"] == 900.0
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_supervisor_activity_guard_uses_configured_thresholds_and_reports_cli_lease(tmp_path):
+async def test_supervisor_activity_guard_uses_configured_thresholds_and_reports_cli_lease_reference(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor.config = supervisor.config.model_copy(
         update={
@@ -119,14 +119,14 @@ async def test_supervisor_activity_guard_uses_configured_thresholds_and_reports_
     assert result["thresholds"]["user_idle_seconds"] == 120
     assert result["thresholds"]["memory_idle_seconds"] == 240
     assert result["thresholds"]["workflow_idle_seconds"] == 300
-    assert result["thresholds"]["active_cli_stale_after_seconds"] == 90
+    assert result["thresholds"]["cli_lease_stale_after_seconds"] == 90
     assert result["user_chain_signal"]["is_quiet"] is False
-    assert result["checks"]["has_agent_idle"] is True
+    assert result["checks"]["has_api_a_execution_idle"] is True
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_supervisor_activity_guard_blocks_execution_when_recent_workflow_activity_exists(tmp_path):
+async def test_supervisor_activity_guard_keeps_user_chain_activity_as_soft_signal(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
     async def fake_snapshot():
@@ -148,8 +148,46 @@ async def test_supervisor_activity_guard_blocks_execution_when_recent_workflow_a
     )
 
     assert result["user_chain_signal"]["is_quiet"] is False
-    assert result["checks"]["has_agent_idle"] is False
+    assert result["checks"]["has_api_a_execution_idle"] is True
+    assert result["idle_seconds"]["api_a_execution"] is None
     assert result["decisions"]["eligible_for_planning"] is True
+    assert result["decisions"]["eligible_for_execution"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_activity_guard_blocks_execution_when_autonomous_executor_is_active(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    async def fake_snapshot():
+        return {
+            "last_user_request_at": "2026-05-25T00:12:00",
+            "last_agent_work_at": "2026-05-25T00:12:00",
+            "last_memory_task_at": None,
+            "last_autonomous_chain_execute_at": "2026-05-25T00:14:30",
+            "last_autonomous_chain_activity_at": "2026-05-25T00:14:30",
+            "counts": {},
+            "active_sessions": 1,
+            "active_cli_executor": {
+                "session_id": "cli-supervisor-1",
+                "agent_lane": "supervisor_task",
+                "idle_seconds": 30,
+                "stale_after_seconds": 90,
+                "lease_status": "healthy",
+            },
+        }
+
+    supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
+
+    result = await supervisor.evaluate_activity_guards(
+        {
+            "now": "2026-05-25T00:15:00",
+        }
+    )
+
+    assert result["user_chain_signal"]["is_quiet"] is False
+    assert result["checks"]["has_api_a_execution_idle"] is False
+    assert result["idle_seconds"]["api_a_execution"] == 30.0
     assert result["decisions"]["eligible_for_execution"] is False
 
 

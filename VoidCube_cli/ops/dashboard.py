@@ -1,8 +1,8 @@
 """
-VoidCube Live Dashboard — supervisor autonomous-chain visibility and API-B observation input.
+VoidCube Live Dashboard — API-B observation and API-A execution visibility.
 
-Fetches the minimal shared state needed to surface what is happening and how
-the supervisor currently observes the autonomous chain.
+Fetches the minimal shared state needed to surface what is happening in the
+autonomous chain and what API-B is currently observing.
 """
 
 from __future__ import annotations
@@ -208,21 +208,11 @@ def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
         "summary": str(board.get("summary") or chain.get("summary") or "").strip(),
         "hero_summary": str(board.get("hero_summary") or "").strip(),
         "primary_focus": {
-            "title": str(primary_focus.get("title") or "当前没有显著闭环焦点").strip()
-            or "当前没有显著闭环焦点",
+            "title": str(primary_focus.get("title") or "当前没有明显焦点").strip()
+            or "当前没有明显焦点",
             "status": str(primary_focus.get("status") or "等待中").strip() or "等待中",
             "summary": str(primary_focus.get("summary") or "").strip(),
         },
-        "hero_pills": [
-            dict(item)
-            for item in list(board.get("hero_pills") or [])
-            if isinstance(item, dict)
-        ][:4],
-        "observation_notes": [
-            dict(item)
-            for item in list(board.get("observation_notes") or [])
-            if isinstance(item, dict)
-        ][:4],
         "segments_headline": str(chain.get("headline") or "").strip(),
     }
 
@@ -299,7 +289,7 @@ def _build_api_a_observation(
         active_executor = {}
 
     focus_task = dict(hint.get("focus_task") or {})
-    lane_scene = str(
+    execution_scene = str(
         supervisor_lane.get("scene")
         or active_executor.get("scene")
         or "idle"
@@ -365,30 +355,29 @@ def _build_api_a_observation(
         lease_status = str(active_executor.get("lease_status") or "healthy").strip().lower()
         if lease_status == "stale" or bool(active_executor.get("is_stale")):
             lease_summary = (
-                f"执行位: 会话 {_session_tail(session_id)} 的自主执行位已陈旧"
+                f"执行面: 会话 {_session_tail(session_id)} 的 API-A 自主执行已陈旧"
                 f"（静默 {idle_seconds}s）"
             )
         else:
             lease_summary = (
-                f"执行位: 会话 {_session_tail(session_id)} 正持有 supervisor_task 执行位"
+                f"执行面: 会话 {_session_tail(session_id)} 正在进行 API-A 自主执行"
                 f"（静默 {idle_seconds}s）"
             )
-    elif session_id and lane_scene != "idle":
+    elif session_id and execution_scene != "idle":
         lease_status = "observed"
         lease_summary = (
-            f"执行位: 已观测到会话 {_session_tail(session_id)} 正在自主执行 lane 中活动"
+            f"执行面: 已观测到会话 {_session_tail(session_id)} 正在 API-A 自主执行中活动"
         )
     else:
         lease_status = "idle"
-        lease_summary = "执行位: 当前没有可见的 supervisor_task 执行位"
+        lease_summary = "执行面: 当前没有可见的 API-A 自主执行会话"
 
     return {
-        "mode": "supervisor_task_lane" if has_signal else "unavailable",
+        "mode": "api_a_execution_observer" if has_signal else "unavailable",
         "headline": "API-A 自主执行观察面",
-        "summary": "只读 gateway 的 supervisor_task 泳道与 Supervisor 的 API-A 执行投影，不展示 user_chat。",
-        "lane": "supervisor_task",
-        "lane_scene": lane_scene,
-        "lane_scene_label": SCENE_LABEL.get(lane_scene, lane_scene or "idle"),
+        "summary": "这里只看 API-A 的自主执行位，不展示用户链路。",
+        "current_scene": execution_scene,
+        "current_scene_label": SCENE_LABEL.get(execution_scene, execution_scene or "idle"),
         "status_label": str(hint.get("status_label") or "治理段观察中").strip() or "治理段观察中",
         "chain_reason": str(hint.get("chain_reason") or "").strip(),
         "activity_text": str(hint.get("activity_text") or "").strip(),
@@ -397,7 +386,7 @@ def _build_api_a_observation(
         "task_kind_label": _human_execution_kind(execution_kind),
         "session_id": session_id,
         "lease_status": lease_status,
-        "lease_summary": lease_summary,
+        "presence_summary": lease_summary,
         "subagent_foreground_count": fg_count,
         "subagent_background_count": bg_count,
         "subagent_focus_tool": focus_tool,
@@ -473,12 +462,10 @@ def build_dashboard() -> Dict[str, Any]:
             "mode": "autonomous_chain_board",
             "headline": chain_snapshot.get("headline") or "API-B 主视角自主闭环总览",
             "hero_summary": chain_snapshot.get("hero_summary")
-            or "Web 小屋与最小 dashboard 只消费 Supervisor 投影出的 API-B 主视角自主闭环读模型。",
+            or "这里只看 Supervisor 给出的 API-B 自主闭环状态。",
             "summary": chain_snapshot.get("summary")
             or "API-B 主视角下的判断、治理、执行回报、Mem 回流与再读取闭环。",
             "primary_focus": dict(chain_snapshot.get("primary_focus") or {}),
-            "hero_pills": list(chain_snapshot.get("hero_pills") or []),
-            "observation_notes": list(chain_snapshot.get("observation_notes") or []),
             "api_b_backlog": chain_snapshot.get("api_b_backlog", 0),
             "api_a_running": chain_snapshot.get("api_a_running", 0),
             "api_a_ready": chain_snapshot.get("api_a_ready", 0),
@@ -492,12 +479,10 @@ def build_dashboard() -> Dict[str, Any]:
     else:
         chain_view = {
             "mode": "observation_unavailable",
-            "headline": "自主链路观测暂不可用",
-            "hero_summary": "监督者尚未提供 API-B 主视角的自主闭环总览投影。",
-            "summary": "监督者尚未提供 API-B 主视角的自主链路读模型。",
+            "headline": "还没有 API-B 闭环快照",
+            "hero_summary": "还没有这一轮闭环总览。",
+            "summary": "监督者还没给出可展示的闭环快照。",
             "primary_focus": {},
-            "hero_pills": [],
-            "observation_notes": [],
             "api_b_backlog": 0,
             "api_a_running": 0,
             "api_a_ready": 0,
@@ -553,8 +538,8 @@ def print_dashboard() -> None:
             f"  ║  {chain.get('segments_headline', '自主闭环分段观察')[:46]:<46s}          ║"
         )
         print(
-            f"  ║  候选形成 {chain.get('candidates', 0)}  ·  治理在途 {chain.get('api_b_backlog', 0)}  ·  "
-            f"执行中 {chain.get('api_a_running', 0)}  ·  待认领 {chain.get('api_a_ready', 0)}  ·  回流 {chain.get('writebacks', 0)}   ║"
+            f"  ║  候选形成 {chain.get('candidates', 0)}  ·  API-B 判断在途 {chain.get('api_b_backlog', 0)}  ·  "
+            f"执行中 {chain.get('api_a_running', 0)}  ·  可认领 {chain.get('api_a_ready', 0)}  ·  回流 {chain.get('writebacks', 0)}   ║"
         )
         print(
             f"  ║  {chain.get('hero_summary', chain.get('summary', 'API-B 主视角下的闭环观测'))[:54]:<54s}  ║"
@@ -572,19 +557,12 @@ def print_dashboard() -> None:
             title = str(item.get("title") or "?")[:28]
             status = str(item.get("status") or "?")[:10]
             print(f"  ║  • {group:<12s} {title:<28s} {status:<10s}              ║")
-        hero_pills = [
-            str(item.get("text") or "").strip()
-            for item in list(chain.get("hero_pills") or [])
-            if isinstance(item, dict) and str(item.get("text") or "").strip()
-        ]
-        if hero_pills:
-            print(f"  ║  {hero_pills[0][:54]:<54s}  ║")
     else:
         print(
-            f"  ║  {chain.get('headline', '自主链路观测暂不可用')[:46]:<46s}          ║"
+            f"  ║  {chain.get('headline', '还没有 API-B 闭环快照')[:46]:<46s}          ║"
         )
         print(
-            f"  ║  {chain.get('summary', '监督者尚未提供 API-B 主视角的自主链路读模型。')[:54]:<54s}  ║"
+            f"  ║  {chain.get('summary', '监督者还没给出可展示的闭环快照。')[:54]:<54s}  ║"
         )
     if recent_activity:
         phase = str(recent_activity.get("phase_label") or "最近动作")[:10]
@@ -594,16 +572,16 @@ def print_dashboard() -> None:
         print(f"  ║  最近自主动作 {phase:<10s} {title:<30s} {display_at:>8s}    ║")
         print(f"  ║  {summary:<54s}  ║")
 
-    # ── API-A supervisor_task lane ──────────────────────────────────
+    # ── API-A execution observer ────────────────────────────────────
     print(f"  ╠══════════════════════════════════════════════════════════╣")
     print(f"  ║  API-A 自主执行观察面                                   ║")
-    lane_scene = str(api_a_observation.get("lane_scene_label") or "静置")[:10]
+    execution_scene = str(api_a_observation.get("current_scene_label") or "静置")[:10]
     status_label = str(api_a_observation.get("status_label") or "治理段观察中")[:18]
     fg_count = max(0, int(api_a_observation.get("subagent_foreground_count") or 0))
     bg_count = max(0, int(api_a_observation.get("subagent_background_count") or 0))
     sa_counts = f"{fg_count}+{bg_count}" if bg_count else str(fg_count)
-    print(f"  ║    泳道 supervisor_task · 场景 {lane_scene:<10s} · 状态 {status_label:<18s} ║")
-    print(f"  ║    子代理 SA {sa_counts:<7s}  会话 {_session_tail(api_a_observation.get('session_id')):<10s}        ║")
+    print(f"  ║    当前场景 {execution_scene:<10s} · 状态 {status_label:<18s} · SA {sa_counts:<7s} ║")
+    print(f"  ║    会话 {_session_tail(api_a_observation.get('session_id')):<10s}  这里只看 API-A 自主执行       ║")
     if str(api_a_observation.get("task_id") or "").strip():
         task_kind = str(api_a_observation.get("task_kind_label") or "自主链路项")[:8]
         task_id = str(api_a_observation.get("task_id") or "")[:8]
@@ -616,7 +594,7 @@ def print_dashboard() -> None:
     ).strip()
     if focus_hint:
         print(f"  ║    聚焦 {focus_hint[:48]:<48s}  ║")
-    print(f"  ║    {str(api_a_observation.get('lease_summary') or '执行位: 当前没有可见的 supervisor_task 执行位')[:50]:<50s}    ║")
+    print(f"  ║    {str(api_a_observation.get('presence_summary') or '执行面: 当前没有可见的 API-A 自主执行会话')[:50]:<50s}    ║")
     chain_reason = str(api_a_observation.get("chain_reason") or "").strip()
     if chain_reason:
         print(f"  ║    {chain_reason[:50]:<50s}    ║")

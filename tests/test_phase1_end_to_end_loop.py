@@ -357,7 +357,7 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
             return {
                 "status": "evaluated",
                 "checks": {
-                    "has_agent_idle": True,
+                    "has_api_a_execution_idle": True,
                     "has_memory_idle": True,
                 },
                 "task_family_decisions": {
@@ -475,7 +475,7 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
             return {
                 "status": "evaluated",
                 "checks": {
-                    "has_agent_idle": True,
+                    "has_api_a_execution_idle": True,
                     "has_memory_idle": True,
                 },
                 "task_family_decisions": {
@@ -665,7 +665,10 @@ class TestPhase1GovernorMode:
         async def fake_idle(_request=None):
             return {
                 "status": "evaluated",
-                "checks": {"has_agent_idle": True, "has_memory_idle": True},
+                "checks": {
+                    "has_api_a_execution_idle": True,
+                    "has_memory_idle": True,
+                },
                 "task_family_decisions": {
                     "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
                 },
