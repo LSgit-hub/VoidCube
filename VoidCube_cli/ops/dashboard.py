@@ -31,7 +31,7 @@ REQUEST_TIMEOUT = 5  # seconds per HTTP call
 SCENE_LABEL: Dict[str, str] = {
     # Supervisor (API-B)
     "idle": "静置",
-    "planning": "治理安排",
+    "planning": "判断安排",
     "drive": "内生判断",
     "memory": "记忆整理",
     "maintenance": "连续性维护",
@@ -196,9 +196,9 @@ def _build_autonomous_chain_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
         return {}
 
     return {
-        "api_b_backlog": int(counts.get("api_b_backlog") or 0),
+        "api_b_judgement": int(counts.get("api_b_judgement") or 0),
         "api_a_running": int(counts.get("api_a_running") or 0),
-        "api_a_ready": int(counts.get("api_a_ready") or 0),
+        "api_a_handoff": int(counts.get("api_a_handoff") or 0),
         "candidates": int(counts.get("candidates") or 0),
         "writebacks": int(counts.get("writebacks") or 0),
         "stage_cards": stage_cards[:4],
@@ -344,7 +344,7 @@ def _build_api_a_observation(
             bool(supervisor_lane),
             bool(active_executor),
             bool(task_id),
-            str(hint.get("status_label") or "").strip() != "治理段观察中",
+            str(hint.get("status_label") or "").strip() != "API-B 判断中",
             str(hint.get("chain_reason") or "").strip(),
             str(hint.get("activity_text") or "").strip(),
         ]
@@ -378,7 +378,7 @@ def _build_api_a_observation(
         "summary": "这里只看 API-A 的自主执行位，不展示用户链路。",
         "current_scene": execution_scene,
         "current_scene_label": SCENE_LABEL.get(execution_scene, execution_scene or "idle"),
-        "status_label": str(hint.get("status_label") or "治理段观察中").strip() or "治理段观察中",
+        "status_label": str(hint.get("status_label") or "API-B 判断中").strip() or "API-B 判断中",
         "chain_reason": str(hint.get("chain_reason") or "").strip(),
         "activity_text": str(hint.get("activity_text") or "").strip(),
         "task_id": task_id,
@@ -464,11 +464,11 @@ def build_dashboard() -> Dict[str, Any]:
             "hero_summary": chain_snapshot.get("hero_summary")
             or "这里只看 Supervisor 给出的 API-B 自主闭环状态。",
             "summary": chain_snapshot.get("summary")
-            or "API-B 主视角下的判断、治理、执行回报、Mem 回流与再读取闭环。",
+            or "API-B 主视角下的判断、执行回报、Mem 回流与再读取闭环。",
             "primary_focus": dict(chain_snapshot.get("primary_focus") or {}),
-            "api_b_backlog": chain_snapshot.get("api_b_backlog", 0),
+            "api_b_judgement": chain_snapshot.get("api_b_judgement", 0),
             "api_a_running": chain_snapshot.get("api_a_running", 0),
-            "api_a_ready": chain_snapshot.get("api_a_ready", 0),
+            "api_a_handoff": chain_snapshot.get("api_a_handoff", 0),
             "candidates": chain_snapshot.get("candidates", 0),
             "writebacks": chain_snapshot.get("writebacks", 0),
             "stage_cards": list(chain_snapshot.get("stage_cards") or []),
@@ -483,9 +483,9 @@ def build_dashboard() -> Dict[str, Any]:
             "hero_summary": "还没有这一轮闭环总览。",
             "summary": "监督者还没给出可展示的闭环快照。",
             "primary_focus": {},
-            "api_b_backlog": 0,
+            "api_b_judgement": 0,
             "api_a_running": 0,
-            "api_a_ready": 0,
+            "api_a_handoff": 0,
             "candidates": 0,
             "writebacks": 0,
             "stage_cards": [],
@@ -538,8 +538,8 @@ def print_dashboard() -> None:
             f"  ║  {chain.get('segments_headline', '自主闭环分段观察')[:46]:<46s}          ║"
         )
         print(
-            f"  ║  候选形成 {chain.get('candidates', 0)}  ·  API-B 判断在途 {chain.get('api_b_backlog', 0)}  ·  "
-            f"执行中 {chain.get('api_a_running', 0)}  ·  可认领 {chain.get('api_a_ready', 0)}  ·  回流 {chain.get('writebacks', 0)}   ║"
+            f"  ║  候选形成 {chain.get('candidates', 0)}  ·  API-B 判断在途 {chain.get('api_b_judgement', 0)}  ·  "
+            f"执行中 {chain.get('api_a_running', 0)}  ·  已转交 {chain.get('api_a_handoff', 0)}  ·  回流 {chain.get('writebacks', 0)}   ║"
         )
         print(
             f"  ║  {chain.get('hero_summary', chain.get('summary', 'API-B 主视角下的闭环观测'))[:54]:<54s}  ║"
@@ -576,7 +576,7 @@ def print_dashboard() -> None:
     print(f"  ╠══════════════════════════════════════════════════════════╣")
     print(f"  ║  API-A 自主执行观察面                                   ║")
     execution_scene = str(api_a_observation.get("current_scene_label") or "静置")[:10]
-    status_label = str(api_a_observation.get("status_label") or "治理段观察中")[:18]
+    status_label = str(api_a_observation.get("status_label") or "API-B 判断中")[:18]
     fg_count = max(0, int(api_a_observation.get("subagent_foreground_count") or 0))
     bg_count = max(0, int(api_a_observation.get("subagent_background_count") or 0))
     sa_counts = f"{fg_count}+{bg_count}" if bg_count else str(fg_count)

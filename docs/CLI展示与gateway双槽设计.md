@@ -42,7 +42,7 @@
 | --- | --- | --- |
 | 主 CLI 自身的子代理展示 | 主 CLI 与用户交互时的子代理 | 本进程 user_chat 子代理（本地 manager，已隔离） |
 | 最小 CLI（`VoidCube_cli/ops/dashboard.py`） | 自主链路中 API-A 子代理执行学习 / 改造任务的专用观测面 | 仅 supervisor_task 子代理，不掺入用户交互子代理 |
-| Web 小屋（`systems/supervisor/ui_runtime.py`） | API-B / 监督者认知核心总览 | 监督者动作、反馈、任务治理、记忆状态与自主任务回报；不展示用户聊天内容 |
+| Web 小屋（`systems/supervisor/ui_runtime.py`） | API-B / 监督者认知核心总览 | 监督者动作、反馈、API-B 判断、记忆状态与自主任务回报；不展示用户聊天内容 |
 
 收敛判据：最小 CLI 在“主 CLI 正与用户交互 + 监督者任务同时在跑子代理”时，仍只显示监督者任务那一套，不被用户交互子代理覆盖或混入。
 
@@ -63,7 +63,7 @@
 reporter 必须显式打 `agent_role`：
 
 - `user_chat`：主 CLI 与用户交互
-- `supervisor_task`：API-A 执行 API-B 放行的自主链路任务
+- `supervisor_task`：API-A 执行 API-B 已转交的自主链路任务
 
 scene 名只作为展示字段，不作为主判别事实。
 

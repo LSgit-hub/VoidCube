@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 _SCENE_LABELS = {
     "idle": "静置",
-    "planning": "治理安排",
+    "planning": "判断安排",
     "drive": "内生判断",
     "memory": "记忆整理",
     "maintenance": "连续性维护",
@@ -163,22 +163,22 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
     stage_reason = str(api_a_stage.get("chain_reason") or "").strip()
     stage_activity = str(api_a_stage.get("activity_text") or "").strip()
     stage_style = str(api_a_stage.get("reason_style") or "").strip().lower()
-    api_a_ready_items = observation_group_items(supervisor_state, "api_a_ready")
-    api_b_backlog = observation_group_items(supervisor_state, "api_b_backlog")
-    creativity_governance = [
-        task for task in api_b_backlog
+    api_a_handoff_items = observation_group_items(supervisor_state, "api_a_handoff")
+    api_b_judgement_items = observation_group_items(supervisor_state, "api_b_judgement")
+    creativity_judgement = [
+        task for task in api_b_judgement_items
         if _is_creativity_observation_task(task)
     ]
     focus_task = dict(api_a_stage.get("focus_task") or {})
     focus_status = str(focus_task.get("status") or "").strip().lower()
     approved_api_a = [
         task
-        for task in api_a_ready_items
+        for task in api_a_handoff_items
         if str(task.get("status") or "").strip().lower() in {"approved", "retry"}
     ]
-    deferred_governance = [
+    deferred_judgement = [
         task
-        for task in creativity_governance
+        for task in creativity_judgement
         if str(task.get("status") or "").strip().lower() == "deferred"
     ]
     stage_projections = observation_loop_stage_projections(supervisor_state)
@@ -193,8 +193,8 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
         "stage": "idle",
         "cli_focus_stage": "idle",
         "focus_task": {},
-        "status_label": "治理段观察中",
-        "chain_reason": "链路: 当前没有已批准的 API-A 可执行链路项",
+        "status_label": "API-B 判断中",
+        "chain_reason": "链路: 当前没有 API-B 已转交待接手链路项",
         "activity_text": "执行流: API-B 判断、重排或再读取后再交给 API-A",
         "reason_style": "dim",
     }
@@ -218,29 +218,29 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
             "stage": "waiting_api_a_claim",
             "cli_focus_stage": "waiting_api_a_claim",
             "focus_task": approved_focus,
-            "status_label": "API-A 可认领",
-            "chain_reason": "链路: API-B 已放行，可由 API-A 自主执行面认领",
+            "status_label": "API-B 已转交",
+            "chain_reason": "链路: API-B 已转交，可由 API-A 自主执行面接手",
             "activity_text": "执行流: API-A 认领后执行，结果写回 Mem",
             "reason_style": "warn",
         }
-    elif deferred_governance:
+    elif deferred_judgement:
         hint = {
-            "stage": "governance_waiting",
+            "stage": "judgement_waiting",
             "cli_focus_stage": "idle",
             "focus_task": {},
-            "status_label": "治理段观察中",
+            "status_label": "API-B 判断中",
             "chain_reason": "链路: 当前学习链路项仍由 API-B 判断",
             "activity_text": "执行流: API-B 补判断后再决定是否交给 API-A",
             "reason_style": "warn",
         }
-    elif creativity_governance:
+    elif creativity_judgement:
         hint = {
-            "stage": "governance_waiting",
+            "stage": "judgement_waiting",
             "cli_focus_stage": "idle",
             "focus_task": {},
-            "status_label": "治理段观察中",
+            "status_label": "API-B 判断中",
             "chain_reason": "链路: 当前自主链路项仍由 API-B 判断",
-            "activity_text": "执行流: API-B 审核、放行或重排后再交给 API-A",
+            "activity_text": "执行流: API-B 判断、转交或重排后再交给 API-A",
             "reason_style": "info",
         }
     elif chain_focus_cards:
@@ -248,7 +248,7 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
             "stage": "api_b_or_mem_focus",
             "cli_focus_stage": "idle",
             "focus_task": {},
-            "status_label": "治理段观察中",
+            "status_label": "API-B 判断中",
             "chain_reason": "链路: 当前没有新的 API-A 可执行链路项；API-B 正在判断、回收写回或推进下一轮再读取",
             "activity_text": "执行流: API-B 判断、重排或再读取后再交给 API-A",
             "reason_style": "info",
@@ -261,8 +261,8 @@ def supervisor_api_a_execution_hint(supervisor_state: Dict[str, Any]) -> Dict[st
         hint["activity_text"] = stage_activity
     if stage_style:
         hint["reason_style"] = stage_style
-    if hint["focus_task"] and not hint["focus_task"].get("task_id") and counts.get("api_a_ready"):
-        hint["focus_task"] = dict(api_a_ready_items[0]) if api_a_ready_items else {}
+    if hint["focus_task"] and not hint["focus_task"].get("task_id") and counts.get("api_a_handoff"):
+        hint["focus_task"] = dict(api_a_handoff_items[0]) if api_a_handoff_items else {}
     return hint
 
 
@@ -283,7 +283,7 @@ def resolve_autonomous_panel_focus_task(
     if hinted_focus.get("task_id"):
         hinted_focus["_supervisor_stage"] = hinted_stage
         return hinted_focus
-    for task in observation_group_items(supervisor_state, "api_a_ready"):
+    for task in observation_group_items(supervisor_state, "api_a_handoff"):
         task_status = str(task.get("status") or "").strip().lower()
         if task_status in {"approved", "retry"} and task.get("task_id"):
             return task
@@ -356,27 +356,27 @@ def resolve_autonomous_no_task_reason(supervisor_state: Dict[str, Any]) -> tuple
         }.get(hinted_style, "class:auto-panel-dim")
         return (style, hinted_reason)
 
-    ready_items = observation_group_items(supervisor_state, "api_a_ready")
-    if ready_items:
+    handoff_items = observation_group_items(supervisor_state, "api_a_handoff")
+    if handoff_items:
         approved = [
-            task for task in ready_items
+            task for task in handoff_items
             if str(task.get("status") or "").strip().lower() in {"approved", "retry"}
         ]
         if approved:
             return (
                 "class:auto-panel-warn",
-                "链路: API-B 已放行链路项，可由 API-A 自主执行面认领",
+                "链路: API-B 已转交链路项，可由 API-A 自主执行面接手",
             )
 
-    creativity_governance = [
+    creativity_judgement = [
         task
-        for task in observation_group_items(supervisor_state, "api_b_backlog")
+        for task in observation_group_items(supervisor_state, "api_b_judgement")
         if _is_creativity_observation_task(task)
     ]
-    if creativity_governance:
+    if creativity_judgement:
         deferred = [
             task
-            for task in creativity_governance
+            for task in creativity_judgement
             if str(task.get("status") or "").strip().lower() == "deferred"
         ]
         if deferred:
@@ -415,7 +415,7 @@ def resolve_autonomous_no_task_reason(supervisor_state: Dict[str, Any]) -> tuple
 
     return (
         "class:auto-panel-dim",
-        "链路: 当前没有已批准的 API-A 可执行链路项",
+        "链路: 当前没有 API-B 已转交待接手链路项",
     )
 
 
@@ -424,7 +424,7 @@ def format_supervisor_status_snapshot(state: Dict[str, Any]) -> list[str]:
     observation = dict(state.get("autonomous_observation") or {})
     metrics = dict(observation.get("metrics") or {})
     chain_projection = dict(metrics.get("chain_projection") or {})
-    governance = dict(metrics.get("governance") or {})
+    observation_metrics = dict(metrics.get("observation") or {})
     board = dict(observation.get("board") or {})
     chain = dict(observation.get("chain") or {})
     focus = dict(board.get("primary_focus") or {})
@@ -449,17 +449,17 @@ def format_supervisor_status_snapshot(state: Dict[str, Any]) -> list[str]:
     lines.append(f"场景: {_scene_label(state.get('scene'))} — {_display_text(state.get('title'), '自主链路观测')}")
     lines.append(
         "闭环统计: "
-        f"API-B 判断在途={chain_projection.get('governance_backlog', 0)}, "
+        f"API-B 判断在途={chain_projection.get('api_b_judgement', 0)}, "
         f"API-A 执行中={chain_projection.get('api_a_running', 0)}, "
-        f"API-A 可认领={chain_projection.get('api_a_ready', 0)}, "
+        f"API-B 已转交={chain_projection.get('api_a_handoff', 0)}, "
         f"候选={chain_projection.get('candidate_signals', 0)}, "
         f"回流={chain_projection.get('writeback_history', 0)}"
     )
     lines.append(
-        "治理统计: "
-        f"裁定={governance.get('review_actions', 0)}, "
-        f"建议={governance.get('followup_suggestions', 0)}, "
-        f"重排={governance.get('priority_adjustments', 0)}"
+        "观测信号: "
+        f"判断记录={observation_metrics.get('judgement_records', 0)}, "
+        f"后续信号={observation_metrics.get('followup_signals', 0)}, "
+        f"优先级变化={observation_metrics.get('priority_change_signals', 0)}"
     )
 
     if focus:

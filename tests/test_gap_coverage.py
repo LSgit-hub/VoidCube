@@ -167,7 +167,7 @@ class TestEndogenousDriveWithGatewayData:
         )
 
         assert report["perception"]["recent_errors"] == 2
-        assert report["perception"]["governance_backlog_count"] == 0
+        assert report["perception"]["api_b_judgement_count"] == 0
         assert len(candidates) >= 1
 
 
@@ -531,7 +531,7 @@ class TestEndogenousDriveErrorBridge:
             "checks": {},
             "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {"counts": {}, "active_sessions": 0},
-            "governance_backlog_tasks": [
+            "api_b_judgement_tasks": [
                 {
                     "title": "Deferred endogenous review A",
                     "status": "deferred",
@@ -571,9 +571,10 @@ class TestEndogenousDriveErrorBridge:
         }
         report = engine.build_deliberation_report(drive_input=idle).to_dict()
 
+        assert report["reflection"]["api_b_judgement_blockage_state"] in {"dragging", "blocked"}
         assert report["reflection"]["governance_backlog_blockage_state"] in {"dragging", "blocked"}
         assert report["reflection"]["dominant_constraint"] in {
-            "governance_backlog_blockage",
+            "api_b_judgement_blockage",
             "weak_learning_yield",
         }
         assert any(need["need_type"] == "observe_before_acting" for need in report["needs"])
@@ -992,7 +993,7 @@ class TestEndogenousDriveErrorBridge:
                     }
                 },
             },
-            "governance_backlog_tasks": [
+            "api_b_judgement_tasks": [
                 {
                     "title": "Deferred endogenous review A",
                     "status": "deferred",
@@ -1057,7 +1058,7 @@ class TestEndogenousDriveErrorBridge:
             "checks": {},
             "idle_seconds": {"user": 1000, "api_a_execution": 1000, "memory": 1000},
             "activity": {"counts": {"error_count": 4, "uncertainty_high_count": 1}, "active_sessions": 0},
-            "governance_backlog_tasks": [
+            "api_b_judgement_tasks": [
                 {
                     "title": "Revisit weak backlog evidence",
                     "status": "deferred",
@@ -1176,7 +1177,7 @@ class TestEndogenousDriveErrorBridge:
                     "quality_score": 0.9,
                 }
             ],
-            "governance_backlog_tasks": [],
+            "api_b_judgement_tasks": [],
             "endogenous_drive_policy": {
                 "learning_topic_cooldown_hours": 72,
                 "topic_overlap_threshold": 0.5,
@@ -1217,7 +1218,7 @@ class TestEndogenousDriveErrorBridge:
                     "quality_score": 1.0,
                 }
             ],
-            "governance_backlog_tasks": [
+            "api_b_judgement_tasks": [
                 {
                     "title": "改进 shell 替身：收紧治理在途复核",
                     "status": "approved",
@@ -1286,9 +1287,4 @@ class TestSelfLearningConclusionStoreLifecycle:
 
         submission = svc.build_supervisor_submission(conclusion)
         assert submission.conclusion_id == conclusion.conclusion_id
-
-
-
-
-
 

@@ -973,7 +973,7 @@ def test_autonomous_panel_shows_no_api_a_executable_task_reason(monkeypatch):
             "chain": {
                 "segments": [
                     {
-                        "key": "api_b_backlog",
+                        "key": "api_b_judgement",
                         "items": [
                             {
                                 "task_id": "deferred-1",
@@ -1013,7 +1013,7 @@ def test_autonomous_panel_shows_no_api_a_executable_task_reason(monkeypatch):
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
-    assert "状态: 治理段观察中" in rendered
+    assert "状态: API-B 判断中" in rendered
     assert "链路项: 当前没有被认领的自主链路项" in rendered
     assert "当前学习链路项仍由 API-B 判断" in rendered
 
@@ -1037,7 +1037,7 @@ def test_autonomous_panel_prefers_loop_focus_when_present(monkeypatch):
             "chain": {
                 "segments": [
                     {
-                        "key": "api_a_ready",
+                        "key": "api_a_handoff",
                         "items": [
                             {
                                 "task_id": "learn-board-1",
@@ -1057,9 +1057,9 @@ def test_autonomous_panel_prefers_loop_focus_when_present(monkeypatch):
                         "title": "Board approved task",
                         "source_label": "API-A",
                         "status": "ready",
-                        "display_status": "API-A 可认领",
-                        "status_label": "API-A 可认领",
-                        "chain_reason": "链路: API-B 已放行该链路项，可由 API-A 自主执行面认领",
+                        "display_status": "API-B 已转交",
+                        "status_label": "API-B 已转交",
+                        "chain_reason": "链路: API-B 已转交该链路项，可由 API-A 自主执行面接手",
                         "activity_text": "执行流: API-A 认领后执行，结果写回 Mem",
                         "focus_task": {
                             "task_id": "learn-board-1",
@@ -1086,9 +1086,9 @@ def test_autonomous_panel_prefers_loop_focus_when_present(monkeypatch):
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
-    assert "状态: API-A 可认领" in rendered
+    assert "状态: API-B 已转交" in rendered
     assert "Board approved task" in rendered
-    assert "可由 API-A 自主执行面认领" in rendered
+    assert "可由 API-A 自主执行面接手" in rendered
 
 
 def test_autonomous_panel_shows_approved_task_waiting_for_claim(monkeypatch):
@@ -1109,7 +1109,7 @@ def test_autonomous_panel_shows_approved_task_waiting_for_claim(monkeypatch):
             "chain": {
                 "segments": [
                     {
-                        "key": "api_a_ready",
+                        "key": "api_a_handoff",
                         "items": [
                             {
                                 "task_id": "learn-approved-1",
@@ -1127,9 +1127,9 @@ def test_autonomous_panel_shows_approved_task_waiting_for_claim(monkeypatch):
                     {
                         "stage_key": "api_a_execution",
                         "status": "ready",
-                        "display_status": "API-A 可认领",
-                        "status_label": "API-A 可认领",
-                        "chain_reason": "链路: API-B 已放行该链路项，可由 API-A 自主执行面认领",
+                        "display_status": "API-B 已转交",
+                        "status_label": "API-B 已转交",
+                        "chain_reason": "链路: API-B 已转交该链路项，可由 API-A 自主执行面接手",
                         "activity_text": "执行流: API-A 认领后执行，结果写回 Mem",
                         "focus_task": {
                             "task_id": "learn-approved-1",
@@ -1155,9 +1155,9 @@ def test_autonomous_panel_shows_approved_task_waiting_for_claim(monkeypatch):
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
-    assert "状态: API-A 可认领" in rendered
+    assert "状态: API-B 已转交" in rendered
     assert "Approved waiting task" in rendered
-    assert "链路: API-B 已放行该链路项，可由 API-A 自主执行面认领" in rendered
+    assert "链路: API-B 已转交该链路项，可由 API-A 自主执行面接手" in rendered
     assert "执行流: API-A 认领后执行，结果写回 Mem" in rendered
 
 
@@ -1179,7 +1179,7 @@ def test_autonomous_panel_reads_stage_card_projection_without_loop_stage(monkeyp
             "chain": {
                 "segments": [
                     {
-                        "key": "api_a_ready",
+                        "key": "api_a_handoff",
                         "items": [
                             {
                                 "task_id": "learn-approved-stage-card-1",
@@ -1197,9 +1197,9 @@ def test_autonomous_panel_reads_stage_card_projection_without_loop_stage(monkeyp
                     {
                         "stage_key": "api_a_execution",
                         "status": "ready",
-                        "status_label": "API-A 可认领",
-                        "display_status": "API-A 可认领",
-                        "chain_reason": "链路: API-B 已放行该链路项，可由 API-A 自主执行面认领",
+                        "status_label": "API-B 已转交",
+                        "display_status": "API-B 已转交",
+                        "chain_reason": "链路: API-B 已转交该链路项，可由 API-A 自主执行面接手",
                         "activity_text": "执行流: API-A 认领后执行，结果写回 Mem",
                         "reason_style": "warn",
                         "focus_task": {
@@ -1226,9 +1226,9 @@ def test_autonomous_panel_reads_stage_card_projection_without_loop_stage(monkeyp
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
-    assert "状态: API-A 可认领" in rendered
+    assert "状态: API-B 已转交" in rendered
     assert "Stage-card waiting task" in rendered
-    assert "链路: API-B 已放行该链路项，可由 API-A 自主执行面认领" in rendered
+    assert "链路: API-B 已转交该链路项，可由 API-A 自主执行面接手" in rendered
     assert "执行流: API-A 认领后执行，结果写回 Mem" in rendered
 
 
@@ -1250,7 +1250,7 @@ def test_autonomous_panel_reads_stage_card_projection(monkeypatch):
             "chain": {
                 "segments": [
                     {
-                        "key": "api_a_ready",
+                        "key": "api_a_handoff",
                         "items": [
                             {
                                 "task_id": "learn-stage-card-wins-1",
@@ -1268,9 +1268,9 @@ def test_autonomous_panel_reads_stage_card_projection(monkeypatch):
                     {
                         "stage_key": "api_a_execution",
                         "status": "ready",
-                        "status_label": "API-A 可认领",
-                        "display_status": "API-A 可认领",
-                        "chain_reason": "链路: 以 stage_cards 正式投影为准，可由 API-A 自主执行面认领",
+                        "status_label": "API-B 已转交",
+                        "display_status": "API-B 已转交",
+                        "chain_reason": "链路: 以 stage_cards 正式投影为准，可由 API-A 自主执行面接手",
                         "activity_text": "执行流: 该提示来自正式 stage_cards",
                         "focus_task": {
                             "task_id": "learn-stage-card-wins-1",
@@ -1297,7 +1297,7 @@ def test_autonomous_panel_reads_stage_card_projection(monkeypatch):
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
     assert "Stage-card wins task" in rendered
-    assert "状态: API-A 可认领" in rendered
+    assert "状态: API-B 已转交" in rendered
     assert "以 stage_cards 正式投影为准" in rendered
 
 
@@ -1323,9 +1323,9 @@ def test_autonomous_panel_prefers_loop_stage_descriptor_for_non_local_reasoning(
                         "status": "ready",
                         "stage": "waiting_api_a_claim",
                         "cli_focus_stage": "waiting_api_a_claim",
-                        "status_label": "API-A 可认领",
-                        "display_status": "API-A 可认领",
-                        "chain_reason": "链路: API-B 已放行该链路项，可由自主执行面认领",
+                        "status_label": "API-B 已转交",
+                        "display_status": "API-B 已转交",
+                        "chain_reason": "链路: API-B 已转交该链路项，可由自主执行面接手",
                         "activity_text": "执行流: API-A 自主执行面可开始处理该链路项",
                         "reason_style": "warn",
                         "focus_task": {
@@ -1352,9 +1352,9 @@ def test_autonomous_panel_prefers_loop_stage_descriptor_for_non_local_reasoning(
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
-    assert "状态: API-A 可认领" in rendered
+    assert "状态: API-B 已转交" in rendered
     assert "Loop-stage driven task" in rendered
-    assert "链路: API-B 已放行该链路项，可由自主执行面认领" in rendered
+    assert "链路: API-B 已转交该链路项，可由自主执行面接手" in rendered
     assert "执行流: API-A 自主执行面可开始处理该链路项" in rendered
 
 
@@ -1376,7 +1376,7 @@ def test_autonomous_panel_shows_running_task_owned_elsewhere(monkeypatch):
             "chain": {
                 "segments": [
                     {
-                        "key": "api_a_ready",
+                        "key": "api_a_handoff",
                         "items": [
                             {
                                 "task_id": "learn-running-2",
@@ -1702,19 +1702,19 @@ def test_auto_command_reads_cached_supervisor_snapshot_instead_of_sync_fetch(mon
     cli.session_id = "cli-session-auto-cache"
     cli._supervisor_state_cache = {
         "scene": "planning",
-        "title": "治理安排",
+        "title": "判断安排",
         "autonomous_observation": {
             "metrics": {
                 "chain_projection": {
-                    "governance_backlog": 0,
+                    "api_b_judgement": 0,
                     "api_a_running": 0,
-                    "api_a_ready": 0,
+                    "api_a_handoff": 0,
                     "candidate_signals": 0,
                     "writeback_history": 0,
                 },
-                "governance": {},
+                "observation": {},
             },
-            "board": {"primary_focus": {"title": "观察 API-B 判断积压", "status": "当前在途"}},
+            "board": {"primary_focus": {"title": "观察 API-B 判断在途", "status": "当前在途"}},
             "chain": {"segments": []},
             "loop": {"stage_cards": [], "rail_entries": [], "recent_writebacks": []},
             "counts": {},
@@ -1766,9 +1766,9 @@ def test_auto_command_reads_cached_supervisor_snapshot_instead_of_sync_fetch(mon
         lambda host, limit=4: (
             refresh_calls.append(host),
             [
-                "场景: 治理安排",
-                "闭环焦点: 观察 API-B 判断积压 (当前在途)",
-                "闭环分段: API-B 判断在途=0, API-A 可认领=0, 候选形成=0, 写回回流=0",
+                "场景: 判断安排",
+                "闭环焦点: 观察 API-B 判断在途 (当前在途)",
+                "闭环分段: API-B 判断在途=0, API-B 已转交=0, 候选形成=0, 写回回流=0",
                 "最近监督/事件: 暂无",
             ][:limit],
         )[1],
@@ -1784,7 +1784,7 @@ def test_auto_command_reads_cached_supervisor_snapshot_instead_of_sync_fetch(mon
     )
 
     assert refresh_calls == [cli]
-    assert any("闭环焦点: 观察 API-B 判断积压 (当前在途)" in line for line in printed)
+    assert any("闭环焦点: 观察 API-B 判断在途 (当前在途)" in line for line in printed)
     assert not any("监督者快照将在后台刷新后进入观测面。" in line for line in printed)
 
 
@@ -2023,21 +2023,21 @@ def test_cli_formats_supervisor_status_snapshot():
             "autonomous_observation": {
                 "metrics": {
                     "chain_projection": {
-                        "governance_backlog": 1,
+                        "api_b_judgement": 1,
                         "api_a_running": 1,
-                        "api_a_ready": 2,
+                        "api_a_handoff": 2,
                         "candidate_signals": 3,
                         "writeback_history": 1,
                     },
-                    "governance": {
-                        "review_actions": 2,
-                        "followup_suggestions": 1,
-                        "priority_adjustments": 1,
+                    "observation": {
+                        "judgement_records": 2,
+                        "followup_signals": 1,
+                        "priority_change_signals": 1,
                     },
                 },
                 "board": {
                     "primary_focus": {
-                        "title": "观察 API-B 判断积压",
+                        "title": "观察 API-B 判断在途",
                         "status": "当前在途",
                     },
                 },
@@ -2045,12 +2045,12 @@ def test_cli_formats_supervisor_status_snapshot():
                     "stage_cards": [
                         {
                             "stage_key": "api_b_judgement",
-                            "title": "观察 API-B 判断积压",
+                            "title": "观察 API-B 判断在途",
                             "source_label": "API-B",
                             "status": "active",
                             "display_status": "当前在途",
                             "focus_task": {
-                                "title": "观察 API-B 判断积压",
+                                "title": "观察 API-B 判断在途",
                                 "display_status": "当前在途",
                             },
                         },
@@ -2070,7 +2070,7 @@ def test_cli_formats_supervisor_status_snapshot():
                 "chain": {
                     "segments": [
                         {"label": "API-B 判断在途", "count": 1},
-                        {"label": "API-A 可认领", "count": 2},
+                        {"label": "API-B 已转交", "count": 2},
                         {"label": "候选形成", "count": 3},
                         {"label": "写回回流", "count": 1},
                     ]
@@ -2085,11 +2085,11 @@ def test_cli_formats_supervisor_status_snapshot():
         }
     )
 
-    assert any("场景: 治理安排" in line for line in lines)
-    assert any("API-B 判断在途=1" in line and "API-A 可认领=2" in line for line in lines)
-    assert any("裁定=2" in line and "建议=1" in line and "重排=1" in line for line in lines)
-    assert any("闭环焦点: 观察 API-B 判断积压 (当前在途)" in line for line in lines)
-    assert any("闭环分段: API-B 判断在途=1, API-A 可认领=2, 候选形成=3, 写回回流=1" in line for line in lines)
+    assert any("场景: 判断安排" in line for line in lines)
+    assert any("API-B 判断在途=1" in line and "API-B 已转交=2" in line for line in lines)
+    assert any("判断记录=2" in line and "后续信号=1" in line and "优先级变化=1" in line for line in lines)
+    assert any("闭环焦点: 观察 API-B 判断在途 (当前在途)" in line for line in lines)
+    assert any("闭环分段: API-B 判断在途=1, API-B 已转交=2, 候选形成=3, 写回回流=1" in line for line in lines)
     assert any("执行焦点: 改进 shell 替身 (等待写回)" in line for line in lines)
     assert any("改进 shell 替身" in line for line in lines)
     assert any("最近监督/事件: API-B 复核记录" in line for line in lines)
@@ -2150,23 +2150,23 @@ def test_preview_supervisor_status_lines_reads_cached_snapshot(monkeypatch):
     host = type("_Host", (), {})()
     host._supervisor_state_cache = {
         "scene": "planning",
-        "title": "治理安排",
+        "title": "判断安排",
         "summary": "正在观察 API-B 判断在途",
         "autonomous_observation": {
             "board": {
                 "primary_focus": {
-                    "title": "观察 API-B 判断积压",
+                    "title": "观察 API-B 判断在途",
                     "status": "当前在途",
                 }
             },
             "counts": {
-                "api_b_backlog": 1,
-                "api_a_ready": 0,
+                "api_b_judgement": 1,
+                "api_a_handoff": 0,
                 "candidates": 0,
                 "writebacks": 0,
             },
             "loop": {"stage_cards": [], "rail_entries": [], "recent_writebacks": []},
-            "metrics": {"chain_projection": {}, "governance": {}},
+            "metrics": {"chain_projection": {}, "observation": {}},
             "timeline": [],
         },
     }
@@ -2182,25 +2182,25 @@ def test_preview_supervisor_status_lines_reads_cached_snapshot(monkeypatch):
 
     assert refresh_calls == [host]
     assert len(lines) == 4
-    assert any("闭环焦点: 观察 API-B 判断积压 (当前在途)" in line for line in lines)
+    assert any("闭环焦点: 观察 API-B 判断在途 (当前在途)" in line for line in lines)
 
 
 def test_cli_autonomous_summary_sections_read_cached_observation_surfaces(monkeypatch):
     host = type("_Host", (), {})()
     host._supervisor_state_cache = {
         "scene": "planning",
-        "title": "治理安排",
+        "title": "判断安排",
         "summary": "正在观察 API-B 判断在途",
         "autonomous_observation": {
             "counts": {
-                "api_b_backlog": 1,
-                "api_a_ready": 1,
+                "api_b_judgement": 1,
+                "api_a_handoff": 1,
                 "candidates": 0,
                 "writebacks": 0,
             },
             "board": {
                 "primary_focus": {
-                    "title": "观察 API-B 判断积压",
+                    "title": "观察 API-B 判断在途",
                     "status": "当前在途",
                 }
             },
@@ -2214,10 +2214,10 @@ def test_cli_autonomous_summary_sections_read_cached_observation_surfaces(monkey
                     "api_a_running": 0,
                     "body_improvement": 0,
                 },
-                "governance": {
-                    "review_actions": 0,
-                    "followup_suggestions": 0,
-                    "priority_adjustments": 0,
+                "observation": {
+                    "judgement_records": 0,
+                    "followup_signals": 0,
+                    "priority_change_signals": 0,
                 },
             },
             "timeline": [],
@@ -2263,7 +2263,7 @@ def test_cli_autonomous_summary_sections_read_cached_observation_surfaces(monkey
 
     assert refresh_calls == [("supervisor", host), ("gateway_execute", host)]
     assert any("监督者快照:" == line for line in lines)
-    assert any("闭环焦点: 观察 API-B 判断积压 (当前在途)" in line for line in lines)
+    assert any("闭环焦点: 观察 API-B 判断在途 (当前在途)" in line for line in lines)
     assert any("最近自主执行回报:" == line for line in lines)
     assert any("最近链路项: 学习替身基线" in line for line in lines)
 

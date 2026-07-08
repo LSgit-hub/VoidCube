@@ -128,13 +128,13 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
         status_label = "模型处理中"
         status_style = "class:auto-panel-good"
     elif focus_stage == "waiting_api_a_claim":
-        status_label = str(supervisor_descriptor.get("status_label") or "API-A 可认领")
+        status_label = str(supervisor_descriptor.get("status_label") or "API-B 已转交")
         status_style = "class:auto-panel-warn"
     elif focus_stage == "running_on_other_api_a":
         status_label = str(supervisor_descriptor.get("status_label") or "他处执行中")
         status_style = "class:auto-panel-info"
     else:
-        status_label = str(supervisor_descriptor.get("status_label") or "治理段观察中")
+        status_label = str(supervisor_descriptor.get("status_label") or "API-B 判断中")
         status_style = "class:auto-panel-warn"
 
     rows.append(("class:auto-panel-title", f"API-A 自主执行面 · 会话 {session_short}"))
@@ -196,7 +196,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
                     host._trim_status_bar_text(
                         str(
                             supervisor_descriptor.get("chain_reason")
-                            or "链路: API-B 已放行该链路项，可由 API-A 自主执行面认领"
+                            or "链路: API-B 已转交该链路项，可由 API-A 自主执行面接手"
                         ),
                         inner_width,
                     ),

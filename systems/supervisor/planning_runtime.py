@@ -4955,7 +4955,7 @@ class PlanningRuntimeMixin:
     def _occupied_scheduled_for_tokens(self) -> set[str]:
         terminal = {"completed", "failed", "cancelled"}
         occupied: set[str] = set()
-        for task in self._autonomous_chain_store.list_governance_backlog_tasks():
+        for task in self._active_autonomous_chain_tasks():
             if str(task.status or "").strip().lower() in terminal:
                 continue
             token = self._task_schedule_token(task)
@@ -5068,7 +5068,7 @@ class PlanningRuntimeMixin:
         excluded = exclude_task_ids or set()
         conflicts: Dict[str, AutonomousChainTask] = {}
         for task in sorted(
-            self._autonomous_chain_store.list_governance_backlog_tasks(),
+            self._active_autonomous_chain_tasks(),
             key=self._task_sort_key,
         ):
             if task.task_id in excluded:
@@ -5080,6 +5080,20 @@ class PlanningRuntimeMixin:
                 continue
             conflicts.setdefault(schedule_token, task)
         return conflicts
+
+    def _active_autonomous_chain_tasks(self) -> list[AutonomousChainTask]:
+        """Return active autonomous-chain rows across API-B and API-A lanes."""
+        rows: list[AutonomousChainTask] = []
+        seen: set[str] = set()
+        for task in [
+            *self._autonomous_chain_store.list_api_b_judgement_tasks(),
+            *self._autonomous_chain_store.list_api_a_execution_lane_tasks(),
+        ]:
+            if task.task_id in seen:
+                continue
+            seen.add(task.task_id)
+            rows.append(task)
+        return rows
 
     def _task_activity_metadata(self, task: AutonomousChainTask) -> Dict[str, Any]:
         profile = self._task_runtime_profile(task)
@@ -5244,9 +5258,9 @@ class PlanningRuntimeMixin:
             },
         }
 
-    def _governance_backlog_task_summaries(self, limit: int = 20) -> list[Dict[str, Any]]:
+    def _api_b_judgement_task_summaries(self, limit: int = 20) -> list[Dict[str, Any]]:
         rows: list[tuple[str, Dict[str, Any]]] = []
-        for task in self._autonomous_chain_store.list_governance_backlog_tasks():
+        for task in self._autonomous_chain_store.list_api_b_judgement_tasks():
             if self._is_api_a_execution_lane_task_record(task):
                 continue
             rows.append(
@@ -5257,6 +5271,10 @@ class PlanningRuntimeMixin:
             )
         rows.sort(key=lambda item: item[0], reverse=True)
         return [payload for _, payload in rows[: max(0, limit)]]
+
+    def _governance_backlog_task_summaries(self, limit: int = 20) -> list[Dict[str, Any]]:
+        """Compatibility alias for older tests/callers; use API-B judgement naming."""
+        return self._api_b_judgement_task_summaries(limit=limit)
 
     def _api_a_execution_lane_task_summaries(self, limit: int = 20) -> list[Dict[str, Any]]:
         rows: list[tuple[str, Dict[str, Any]]] = []
@@ -5716,7 +5734,7 @@ class PlanningRuntimeMixin:
         """
         terminal = {"completed", "failed", "cancelled"}
         keys: set[str] = set()
-        for task in self._autonomous_chain_store.list_governance_backlog_tasks():
+        for task in self._active_autonomous_chain_tasks():
             if task.status in terminal:
                 continue
             key = task.metadata.get("endogenous_drive_key")
@@ -5735,12 +5753,13 @@ class PlanningRuntimeMixin:
             include_gate_default=True,
         )
         persisted_self_regulation = self._load_endogenous_self_regulation()
-        governance_backlog_tasks = self._governance_backlog_task_summaries(limit=24)
+        api_b_judgement_tasks = self._api_b_judgement_task_summaries(limit=24)
         api_a_execution_lane_tasks = self._api_a_execution_lane_task_summaries(limit=24)
-        drive_input["governance_backlog_tasks"] = governance_backlog_tasks
+        drive_input["api_b_judgement_tasks"] = api_b_judgement_tasks
+        drive_input["governance_backlog_tasks"] = api_b_judgement_tasks
         drive_input["api_a_execution_lane_tasks"] = api_a_execution_lane_tasks
         drive_input["autonomous_chain_live_tasks"] = [
-            *governance_backlog_tasks,
+            *api_b_judgement_tasks,
             *api_a_execution_lane_tasks,
         ]
         drive_input["endogenous_drive_policy"] = {
@@ -6408,11 +6427,11 @@ class PlanningRuntimeMixin:
                     )
                 return (
                     "approved",
-                    "Agent-pull body-improvement task approved for API-A autonomous execution. Autonomous-chain baseline keeps this path directly pull -> execute -> write back.",
+                    "Agent-pull body-improvement task transferred by API-B for API-A autonomous execution. Autonomous-chain baseline keeps this path pull -> execute -> write back.",
                 )
             return (
                 "approved",
-                "Agent-pull self-learning task approved for API-A autonomous execution. Autonomous-chain baseline keeps this path directly pull -> execute -> write back.",
+                "Agent-pull self-learning task transferred by API-B for API-A autonomous execution. Autonomous-chain baseline keeps this path pull -> execute -> write back.",
             )
 
         # With the autonomous-chain gate active, self_learning and
@@ -6422,12 +6441,12 @@ class PlanningRuntimeMixin:
             if task_type == "self_learning":
                 return (
                     "approved",
-                    "Autonomous-chain gate active: self-learning task approved without waiting for user-chain quiet signals. Learn-only constraints still apply.",
+                    "Autonomous-chain gate active: self-learning task transferred without waiting for user-chain quiet signals. Learn-only constraints still apply.",
                 )
             if task_type == "memory_maintenance":
                 return (
                     "approved",
-                    "Autonomous-chain gate active: memory-maintenance task approved without waiting for user-chain quiet signals.",
+                    "Autonomous-chain gate active: memory-maintenance task transferred without waiting for user-chain quiet signals.",
                 )
 
         decision = (
@@ -6440,16 +6459,16 @@ class PlanningRuntimeMixin:
             if task_type == "self_learning":
                 return (
                     "approved",
-                    "该学习链路项已获放行：当前没有冲突中的内部流程活动；用户链路只作为软感知信号，不构成自学习证据工作的硬门控。",
+                    "该学习链路项已由 API-B 转交：当前没有冲突中的内部流程活动；用户链路只作为软感知信号，不构成自学习证据工作的硬门控。",
                 )
             if task_type == "memory_maintenance":
                 return (
                     "approved",
-                    "该记忆维护链路项已获放行：当前运行时与记忆并发护栏满足要求；用户链路仍只作为软感知信号。",
+                    "该记忆维护链路项已由 API-B 转交：当前运行时与记忆并发护栏满足要求；用户链路仍只作为软感知信号。",
                 )
             return (
                 "approved",
-                "该链路项已获放行，将进入下一轮自主交接；当前运行时并发护栏满足要求。",
+                "该链路项已由 API-B 转交，将进入下一轮自主交接；当前运行时并发护栏满足要求。",
             )
         if task_type == "self_learning":
             return (
@@ -6463,7 +6482,7 @@ class PlanningRuntimeMixin:
             )
         return (
             "deferred",
-            "该链路项暂缓：当前运行时并发护栏尚未满足；任务继续留在治理积压中等待后续复核。",
+            "该链路项暂缓：当前运行时并发护栏尚未满足；任务继续留在 API-B 判断在途中等待后续复核。",
         )
 
     def _has_pending_self_learning_prerequisite(
@@ -6471,7 +6490,7 @@ class PlanningRuntimeMixin:
         body_task: Optional[AutonomousChainTask] = None,
     ) -> bool:
         backlog_self_learning_pending = False
-        for task in self._autonomous_chain_store.list_governance_backlog_tasks():
+        for task in self._active_autonomous_chain_tasks():
             if self._task_governance_type(task) != "self_learning":
                 continue
             if task.status not in {"planned", "approved", "running"}:
@@ -6774,12 +6793,14 @@ class PlanningRuntimeMixin:
             latest = decision_history[-1]
             if isinstance(latest, dict):
                 latest_context = dict(latest.get("context") or {})
-        governance_preview = self._governance_preview_projection(
+        judgement_preview = self._judgement_preview_projection(
             latest_context=latest_context,
             current_task=task,
         )
-        if governance_preview:
-            payload["governance_preview"] = governance_preview
+        if judgement_preview:
+            payload["judgement_preview"] = judgement_preview
+            # Legacy mirror for older cached consumers; new read models use judgement_preview.
+            payload["governance_preview"] = judgement_preview
         display_kind = (
             requested_kind
             or payload.get("execution_kind")
@@ -6809,7 +6830,7 @@ class PlanningRuntimeMixin:
     def _governance_action_label(self, value: Any) -> str:
         normalized = str(value or "").strip().lower()
         return {
-            "approve": "放行",
+            "approve": "转交",
             "defer": "延后",
             "cancel": "清退",
             "pause": "暂停",
@@ -6817,7 +6838,7 @@ class PlanningRuntimeMixin:
             "merge": "合并建议",
             "reprioritize": "重排优先级",
             "reprioritise": "重排优先级",
-        }.get(normalized, str(value or "").strip() or "治理动作")
+        }.get(normalized, str(value or "").strip() or "判断动作")
 
     def _governance_priority_label(self, value: Any) -> str:
         normalized = str(value or "").strip().lower()
@@ -6836,13 +6857,13 @@ class PlanningRuntimeMixin:
             return ""
         return str(target.title or "").strip()
 
-    def _governance_preview_projection(
+    def _judgement_preview_projection(
         self,
         *,
         latest_context: Dict[str, Any],
         current_task: AutonomousChainTask,
     ) -> Dict[str, Any]:
-        governance_preview: Dict[str, Any] = {}
+        judgement_preview: Dict[str, Any] = {}
         notes: list[str] = []
 
         review_context = latest_context.get("supervisor_review_outcome")
@@ -6851,14 +6872,14 @@ class PlanningRuntimeMixin:
             action_label = self._governance_action_label(review_payload.get("action"))
             review_payload["action_label"] = action_label
             review_payload["summary"] = (
-                f"监督者已采纳治理动作: {action_label}"
+                f"监督者已采纳判断动作: {action_label}"
                 + (
                     f" · {str(review_payload.get('reason') or '').strip()[:120]}"
                     if str(review_payload.get("reason") or "").strip()
                     else ""
                 )
             )
-            governance_preview["review_outcome"] = review_payload
+            judgement_preview["review_outcome"] = review_payload
             notes.append(str(review_payload["summary"]))
 
         followup_context = latest_context.get("supervisor_followup_suggestion")
@@ -6885,7 +6906,7 @@ class PlanningRuntimeMixin:
                     else ""
                 )
             )
-            governance_preview["followup_suggestion"] = followup_payload
+            judgement_preview["followup_suggestion"] = followup_payload
             notes.append(str(followup_payload["summary"]))
 
         priority_context = latest_context.get("supervisor_priority_adjustment")
@@ -6901,15 +6922,27 @@ class PlanningRuntimeMixin:
                     else ""
                 )
             )
-            governance_preview["priority_adjustment"] = priority_payload
+            judgement_preview["priority_adjustment"] = priority_payload
             notes.append(str(priority_payload["summary"]))
 
         if notes:
-            governance_preview["notes"] = notes[:3]
-            governance_preview["summary"] = notes[0]
-        if governance_preview:
-            governance_preview["task_title"] = str(current_task.title or "").strip()
-        return governance_preview
+            judgement_preview["notes"] = notes[:3]
+            judgement_preview["summary"] = notes[0]
+        if judgement_preview:
+            judgement_preview["task_title"] = str(current_task.title or "").strip()
+        return judgement_preview
+
+    def _governance_preview_projection(
+        self,
+        *,
+        latest_context: Dict[str, Any],
+        current_task: AutonomousChainTask,
+    ) -> Dict[str, Any]:
+        """Compatibility alias. New callers should use _judgement_preview_projection."""
+        return self._judgement_preview_projection(
+            latest_context=latest_context,
+            current_task=current_task,
+        )
 
     def _build_supervisor_review_snapshot(
         self,
@@ -7020,11 +7053,11 @@ class PlanningRuntimeMixin:
 
         backlog_snapshot = self._build_supervisor_review_snapshot(tasks)
         prompt = (
-            "你是 VoidCube 的监督者任务治理层。你的职责不是产出新任务，"
+            "你是 VoidCube 的 API-B 判断层。你的职责不是产出新任务，"
             "而是观察并裁定当前 API-B 判断在途链路项。\n\n"
             "请基于当前 drive_input、API-B 判断在途快照和用户优先级，"
-            "为每个链路项给出一个结构化治理动作建议。你可以使用以下动作：\n"
-            "- approve: 建议当前任务本轮放行\n"
+            "为每个链路项给出一个结构化判断动作建议。你可以使用以下动作：\n"
+            "- approve: 建议当前任务本轮由 API-B 转交给 API-A 接手\n"
             "- defer: 建议当前任务继续等待\n"
             "- cancel: 建议当前任务清退/取消\n"
             "- pause: 建议当前任务暂停\n"
@@ -7036,10 +7069,10 @@ class PlanningRuntimeMixin:
             "2. 不要改写 task_id\n"
             "3. 不要为同一任务返回多个动作\n"
             "4. 优先考虑避免重复、无证据、陈旧或与当前系统状态冲突的任务\n"
-            "5. body_improvement 只有在学习证据足够时才建议 approve\n\n"
+            "5. body_improvement 只有在学习证据足够时才建议 approve；这里的 approve 只表示转交 API-A 接手，不表示 Web 小屋可控制执行\n\n"
             "6. 同一个 scheduled_for / preset_time 只能保留一个活跃任务；"
             "如果时间重叠，按先后顺序只保留一个，不能与现有定时任务重复，其余建议 defer 或 cancel；"
-            "该保留/顺延建议由监督者 LM 治理判断\n\n"
+            "该保留/顺延建议由监督者 LM 判断\n\n"
             "输出 JSON 对象，格式为：\n"
             "{\n"
             '  "actions": [\n'
@@ -7047,7 +7080,7 @@ class PlanningRuntimeMixin:
             "  ]\n"
             "}\n\n"
             f"【drive_input】\n{json.dumps(drive_input, ensure_ascii=False, default=str)[:3000]}\n\n"
-            f"【governance_backlog】\n{json.dumps(backlog_snapshot, ensure_ascii=False, default=str)[:5000]}"
+            f"【api_b_judgement】\n{json.dumps(backlog_snapshot, ensure_ascii=False, default=str)[:5000]}"
         )
 
         try:
@@ -7426,7 +7459,7 @@ class PlanningRuntimeMixin:
         )
 
         candidate_tasks: list[AutonomousChainTask] = []
-        for task in self._autonomous_chain_store.list_governance_backlog_tasks():
+        for task in self._autonomous_chain_store.list_api_b_judgement_tasks():
             if task.status not in normalized_statuses or task.status == "cancelled":
                 continue
             candidate_tasks.append(task)

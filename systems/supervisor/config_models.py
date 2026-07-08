@@ -118,6 +118,7 @@ class EndogenousDriveCognitiveContextLayeringPolicyConfig(BaseModel):
         "top_self_iteration_hypothesis",
         "primary_evidence_nodes",
         "primary_agenda_nodes",
+        "api_b_judgement_summary",
         "governance_backlog_summary",
         "cognitive_posture",
         "decision_summary",
@@ -151,6 +152,7 @@ class EndogenousDrivePromptAttentionPolicyConfig(BaseModel):
         "decision_core",
         "supporting_detail",
         "long_tail_context",
+        "api_b_judgement_snapshot",
         "governance_backlog_snapshot",
         "perception",
         "world_model",
@@ -184,6 +186,7 @@ class EndogenousDrivePromptAttentionPolicyConfig(BaseModel):
         "plans",
         "learning_backlog_titles",
         "body_improvement_backlog_titles",
+        "api_b_judgement_tasks",
         "governance_backlog_tasks",
         "shell_slot",
     ]
@@ -191,6 +194,7 @@ class EndogenousDrivePromptAttentionPolicyConfig(BaseModel):
         "decision_core",
         "supporting_detail",
         "long_tail_context",
+        "api_b_judgement_snapshot",
         "governance_backlog_snapshot",
     ]
     trim_stage_order: list[str] = [

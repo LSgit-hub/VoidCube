@@ -133,7 +133,7 @@ def _print_three_segment_scene_bar() -> None:
     scene_labels = {
         # supervisor (API-B)
         "idle": "静置",
-        "planning": "治理安排",
+        "planning": "判断安排",
         "drive": "内生判断",
         "memory": "记忆整理",
         "maintenance": "连续性维护",

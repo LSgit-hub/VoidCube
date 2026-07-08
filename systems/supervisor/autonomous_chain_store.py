@@ -171,7 +171,7 @@ class AutonomousChainStoreSnapshot(BaseModel):
 
 
 class AutonomousChainStore:
-    _GOVERNANCE_BACKLOG_STATUSES: frozenset[str] = frozenset(
+    _AUTONOMOUS_CHAIN_LIVE_STATUSES: frozenset[str] = frozenset(
         {
             "planned",
             "deferred",
@@ -180,6 +180,14 @@ class AutonomousChainStore:
             "paused",
             "awaiting_review",
             "retry",
+        }
+    )
+    _API_B_JUDGEMENT_STATUSES: frozenset[str] = frozenset(
+        {
+            "planned",
+            "deferred",
+            "paused",
+            "awaiting_review",
         }
     )
     _API_A_EXECUTION_LANE_STATUSES: frozenset[str] = frozenset(
@@ -215,12 +223,45 @@ class AutonomousChainStore:
         *,
         status: Optional[AutonomousChainTaskStatus] = None,
     ) -> List[AutonomousChainTask]:
-        """Return live governance backlog items still participating in the chain."""
+        """Return live autonomous-chain items still participating in the chain.
+
+        Compatibility name kept for older callers. New read paths should prefer
+        list_api_b_judgement_tasks(), list_api_a_handoff_tasks(), and
+        list_api_a_running_tasks() so the UI does not regress into a queue view.
+        """
         allowed = self._status_filter(
             status=status,
-            default_statuses=self._GOVERNANCE_BACKLOG_STATUSES,
+            default_statuses=self._AUTONOMOUS_CHAIN_LIVE_STATUSES,
         )
         return self._list_tasks_by_statuses(allowed)
+
+    def list_api_b_judgement_tasks(
+        self,
+        *,
+        status: Optional[AutonomousChainTaskStatus] = None,
+    ) -> List[AutonomousChainTask]:
+        """Return items still owned by API-B judgement, before API-A handoff."""
+        allowed = self._status_filter(
+            status=status,
+            default_statuses=self._API_B_JUDGEMENT_STATUSES,
+        )
+        return self._list_tasks_by_statuses(allowed)
+
+    def list_api_a_handoff_tasks(
+        self,
+        *,
+        status: Optional[AutonomousChainTaskStatus] = None,
+    ) -> List[AutonomousChainTask]:
+        """Return items API-B has transferred and API-A may pick up."""
+        allowed = self._status_filter(
+            status=status,
+            default_statuses=frozenset({"approved", "retry"}),
+        )
+        return self._list_tasks_by_statuses(allowed)
+
+    def list_api_a_running_tasks(self) -> List[AutonomousChainTask]:
+        """Return items currently reported as running on the API-A execution side."""
+        return self._list_tasks_by_statuses(frozenset({"running"}))
 
     def list_api_a_execution_lane_tasks(
         self,
@@ -255,15 +296,18 @@ class AutonomousChainStore:
         """Return autonomous-chain task records without exposing raw storage semantics."""
         normalized_status = self._normalized_status_value(status)
         if normalized_status:
-            if normalized_status in self._GOVERNANCE_BACKLOG_STATUSES:
-                return self.list_governance_backlog_tasks(status=status)
+            if normalized_status in self._API_B_JUDGEMENT_STATUSES:
+                return self.list_api_b_judgement_tasks(status=status)
+            if normalized_status in self._API_A_EXECUTION_LANE_STATUSES:
+                return self.list_api_a_execution_lane_tasks(status=status)
             if normalized_status in self._WRITEBACK_HISTORY_STATUSES:
                 return self.list_writeback_history(status=status)
             if include_cancelled and normalized_status == "cancelled":
                 return self._list_tasks_by_statuses(frozenset({"cancelled"}))
             return []
 
-        allowed_statuses = set(self._GOVERNANCE_BACKLOG_STATUSES)
+        allowed_statuses = set(self._API_B_JUDGEMENT_STATUSES)
+        allowed_statuses.update(self._API_A_EXECUTION_LANE_STATUSES)
         allowed_statuses.update(self._WRITEBACK_HISTORY_STATUSES)
         if include_cancelled:
             allowed_statuses.add("cancelled")

@@ -84,6 +84,21 @@ def _self_learning_outcome(
     return row
 
 
+def test_lm_execution_mode_legacy_backlog_alias_normalizes_to_handoff():
+    engine = EndogenousDriveEngine()
+
+    assert (
+        engine._normalize_lm_execution_mode(
+            "review_then_backlog",
+            candidate_kind="exploratory_learning",
+            evidence_level="moderate",
+            risk_level="medium",
+            observation_required=False,
+        )
+        == "review_then_handoff"
+    )
+
+
 # Formal drive-input sample payload. New work should see API-A execution idle
 # as the primary contract rather than generic agent idle.
 def _endogenous_drive_input_payload(
@@ -479,7 +494,7 @@ async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_dupli
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_governance_backlog_task_summaries_include_constraints_for_runtime_cooldown_checks(tmp_path):
+async def test_api_b_judgement_task_summaries_include_constraints_for_runtime_cooldown_checks(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
     await supervisor.plan_autonomous_chain_task(
@@ -499,7 +514,7 @@ async def test_governance_backlog_task_summaries_include_constraints_for_runtime
         }
     )
 
-    summaries = supervisor._governance_backlog_task_summaries(limit=5)
+    summaries = supervisor._api_b_judgement_task_summaries(limit=5)
 
     assert summaries[0]["constraints"]["target_slot_id"] == "slot-B"
     assert summaries[0]["evidence"]["learning_quality_score"] == 88.0
@@ -508,12 +523,12 @@ async def test_governance_backlog_task_summaries_include_constraints_for_runtime
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_governance_backlog_task_summaries_keep_api_a_execution_lane_out_of_api_b_backlog(tmp_path):
+async def test_api_b_judgement_task_summaries_keep_api_a_execution_lane_out_of_api_b_judgement(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
     governance = await supervisor.plan_autonomous_chain_task(
         {
-            "title": "仍在治理段的记忆维护",
+            "title": "仍在 API-B 判断在途的记忆维护",
             "task_family": "memory_maintenance",
             "metadata": {"task_family": "memory_maintenance"},
         }
@@ -541,10 +556,10 @@ async def test_governance_backlog_task_summaries_keep_api_a_execution_lane_out_o
         reason="claimed by API-A",
     )
 
-    backlog = supervisor._governance_backlog_task_summaries(limit=5)
+    judgement = supervisor._api_b_judgement_task_summaries(limit=5)
     lane = supervisor._api_a_execution_lane_task_summaries(limit=5)
 
-    assert [item["title"] for item in backlog] == ["仍在治理段的记忆维护"]
+    assert [item["title"] for item in judgement] == ["仍在 API-B 判断在途的记忆维护"]
     assert [item["title"] for item in lane] == ["已交给 API-A 的自主学习"]
 
 
@@ -2483,11 +2498,11 @@ def test_cognition_charter_prompt_attention_policy_can_be_overridden_from_env(mo
     )
     monkeypatch.setenv(
         "SUPERVISOR_ENDOGENOUS_DRIVE_PROMPT_ATTENTION_PRIORITY_ORDER",
-        '["decision_core","governance_backlog_snapshot","identity"]',
+        '["decision_core","api_b_judgement_snapshot","identity"]',
     )
     monkeypatch.setenv(
         "SUPERVISOR_ENDOGENOUS_DRIVE_PROMPT_ATTENTION_STRUCTURE_KEYS",
-        '["decision_core","governance_backlog_snapshot"]',
+        '["decision_core","api_b_judgement_snapshot"]',
     )
     monkeypatch.setenv(
         "SUPERVISOR_ENDOGENOUS_DRIVE_PROMPT_ATTENTION_TRIM_STAGE_ORDER",
@@ -2502,12 +2517,12 @@ def test_cognition_charter_prompt_attention_policy_can_be_overridden_from_env(mo
     assert policy.max_chars == 4200
     assert policy.priority_order == [
         "decision_core",
-        "governance_backlog_snapshot",
+        "api_b_judgement_snapshot",
         "identity",
     ]
     assert policy.structure_keys == [
         "decision_core",
-        "governance_backlog_snapshot",
+        "api_b_judgement_snapshot",
     ]
     assert policy.trim_stage_order == [
         "graph_compaction",
@@ -6724,7 +6739,7 @@ async def test_endogenous_drive_reuses_lm_proposals_when_cognitive_self_regulati
                     "risk_level": "medium",
                     "evidence_level": "moderate",
                     "observation_required": True,
-                    "execution_mode": "review_then_backlog",
+                    "execution_mode": "review_then_handoff",
                     "blocking_factors": [],
                     "referenced_evidence_nodes": ["reference_alignment"],
                     "referenced_agenda_nodes": ["repair_truthfulness"],
@@ -6861,7 +6876,7 @@ async def test_prompt_packet_budget_preserves_backlog_state_snapshot_under_large
             "top_self_iteration_domain": "grounding",
             "primary_evidence_nodes": ["self_structure"],
             "primary_agenda_nodes": ["focus:learning_expansion"],
-            "governance_backlog_summary": "治理在途 2 项",
+            "api_b_judgement_summary": "API-B 判断在途 2 项",
             "summary": "Decision core summary",
         },
         "supporting_detail": {
@@ -6880,7 +6895,7 @@ async def test_prompt_packet_budget_preserves_backlog_state_snapshot_under_large
             "evidence_channels": [{"channel": "recent_learning", "evidence_strength": "weak", "item_count": 6}],
             "summary": "Long tail summary",
         },
-        "governance_backlog_tasks": [
+        "api_b_judgement_tasks": [
             {
                 "title": "Existing backlog task A",
                 "status": "planned",
@@ -6931,11 +6946,13 @@ async def test_prompt_packet_budget_preserves_backlog_state_snapshot_under_large
     ]
     assert "long_tail_context" in compact
     assert "Learning A" in compact["long_tail_context"]["recent_learning_titles"]
-    assert "governance_backlog_snapshot" in compact
-    backlog_snapshot = compact["governance_backlog_snapshot"]
-    assert backlog_snapshot["governance_backlog_task_count"] == 2
-    assert "Existing backlog task A" in backlog_snapshot["recent_titles"]
-    assert "guidance" in backlog_snapshot
+    assert "api_b_judgement_snapshot" in compact
+    judgement_snapshot = compact["api_b_judgement_snapshot"]
+    assert judgement_snapshot["api_b_judgement_task_count"] == 2
+    assert judgement_snapshot["governance_backlog_task_count"] == 2
+    assert "Existing backlog task A" in judgement_snapshot["recent_titles"]
+    assert "guidance" in judgement_snapshot
+    assert compact["governance_backlog_snapshot"] == judgement_snapshot
 
 
 @pytest.mark.unit
@@ -6946,13 +6963,13 @@ def test_prompt_packet_priority_order_follows_charter_attention_policy():
         {
             "identity": {"role": "endogenous_supervisory_core"},
             "decision_core": {"current_judgement": "先复核"},
-            "governance_backlog_snapshot": {"summary": "治理在途 1 项"},
+            "api_b_judgement_snapshot": {"summary": "API-B 判断在途 1 项"},
             "supporting_detail": {"grounding_gaps": ["missing_evidence:self_structure"]},
         },
         cognition_charter={
             "prompt_attention_policy": {
                 "priority_order": [
-                    "governance_backlog_snapshot",
+                    "api_b_judgement_snapshot",
                     "decision_core",
                     "identity",
                     "supporting_detail",
@@ -6962,7 +6979,7 @@ def test_prompt_packet_priority_order_follows_charter_attention_policy():
     )
 
     assert list(compact.keys())[:4] == [
-        "governance_backlog_snapshot",
+        "api_b_judgement_snapshot",
         "decision_core",
         "identity",
         "supporting_detail",
@@ -7138,7 +7155,7 @@ def test_prompt_packet_trim_stage_order_follows_charter_attention_policy():
             "top_self_iteration_domain": "grounding",
             "primary_evidence_nodes": ["self_structure"] * 10,
             "primary_agenda_nodes": ["focus:learning_expansion"] * 10,
-                "governance_backlog_summary": "治理在途 2 项；" + ("q" * 500),
+            "api_b_judgement_summary": "API-B 判断在途 2 项；" + ("q" * 500),
             "summary": "s" * 500,
         },
         "agenda_graph": {
@@ -7786,7 +7803,7 @@ async def test_endogenous_drive_cognitive_briefing_prefers_context_layers(tmp_pa
                 "top_self_iteration_hypothesis": "在激进自我迭代前，先修补 evidence-to-agenda grounding",
                 "primary_evidence_nodes": ["self_structure"],
                 "primary_agenda_nodes": ["focus:learning_expansion"],
-                "governance_backlog_summary": "API-B 判断在途 2 项，学习 0 项，替身改进 0 项；最近：Existing backlog task A。",
+                "api_b_judgement_summary": "API-B 判断在途 2 项，学习 0 项，替身改进 0 项；最近：Existing backlog task A。",
                 "cognitive_posture": {
                     "name": "truthfulness_first",
                     "selection_reason": "grounding remains unstable",
@@ -7807,8 +7824,8 @@ async def test_endogenous_drive_cognitive_briefing_prefers_context_layers(tmp_pa
                 "recent_learning_titles": ["Learning A"],
                 "summary": "Long tail summary",
             },
-            "governance_backlog_snapshot": {
-                "governance_backlog_task_count": 2,
+            "api_b_judgement_snapshot": {
+                "api_b_judgement_task_count": 2,
                 "recent_titles": ["Existing backlog task A"],
                 "summary": "API-B 判断在途 2 项，学习 0 项，替身改进 0 项；最近：Existing backlog task A。",
             },
@@ -8029,7 +8046,7 @@ async def test_endogenous_drive_constrains_high_risk_or_weak_evidence_lm_proposa
         "missing cross-check validation",
     ]
     assert candidate["metadata"]["supervisor_advisory"]["recommended_observation_required"] is True
-    assert candidate["metadata"]["supervisor_advisory"]["recommended_execution_mode"] == "review_then_backlog"
+    assert candidate["metadata"]["supervisor_advisory"]["recommended_execution_mode"] == "review_then_handoff"
     assert "high_risk_requires_governance_review" in candidate["metadata"]["supervisor_advisory"]["advisory_reasons"]
     assert candidate["metadata"]["cognitive_alignment"]["quality"] in {"weak", "partial", "strong"}
 
@@ -8226,7 +8243,7 @@ async def test_endogenous_drive_prefers_conservative_review_over_weak_improvemen
                     "risk_level": "medium",
                     "evidence_level": "weak",
                     "observation_required": True,
-                    "execution_mode": "review_then_backlog",
+                    "execution_mode": "review_then_handoff",
                     "blocking_factors": ["grounding gaps remain unresolved"],
                     "referenced_evidence_nodes": ["self_structure"],
                     "referenced_agenda_nodes": ["focus:learning_expansion"],
@@ -8351,7 +8368,7 @@ async def test_endogenous_drive_softly_weakens_lm_proposal_when_it_omits_graph_b
     assert "proposal_does_not_reference_evidence_graph" in cognitive_alignment["reasons"]
     assert "proposal_does_not_reference_agenda_graph" in cognitive_alignment["reasons"]
     assert advisory["recommended_observation_required"] is True
-    assert advisory["recommended_execution_mode"] == "review_then_backlog"
+    assert advisory["recommended_execution_mode"] == "review_then_handoff"
     assert "reference_binding_is_not_grounded_enough" in advisory["advisory_reasons"] or (
         "primary_evidence_or_agenda_binding_is_missing" in advisory["advisory_reasons"]
     )
@@ -11438,7 +11455,7 @@ def test_judgement_core_keeps_primary_intent_aligned_with_primary_need(tmp_path)
 
     judgement_core = supervisor._build_endogenous_judgement_core(
         deliberation={
-            "reflection": {"dominant_constraint": "governance_backlog_blockage"},
+            "reflection": {"dominant_constraint": "api_b_judgement_blockage"},
             "adaptive_policy": {"preferred_focus": "truthfulness"},
             "needs": [
                 {
@@ -15540,7 +15557,7 @@ async def test_observation_mode_prefers_candidate_with_stronger_drive_judgement_
             "score_breakdown": {"candidate_kind": "governance_hygiene_review"},
             "drive_judgement": {
                 "intent": {"priority": 0.54},
-                "needs": [{"need_type": "clear_governance_backlog", "severity": 0.56, "urgency": 0.48}],
+                "needs": [{"need_type": "review_api_b_judgement", "severity": 0.56, "urgency": 0.48}],
             },
         },
     )
@@ -15604,7 +15621,7 @@ def test_observation_mode_tie_break_is_stable_across_input_order_when_truthfulne
             "score_breakdown": {"candidate_kind": "governance_hygiene_review"},
             "drive_judgement": {
                 "intent": {"priority": 0.7},
-                "needs": [{"need_type": "clear_governance_backlog", "severity": 0.7, "urgency": 0.7}],
+                "needs": [{"need_type": "review_api_b_judgement", "severity": 0.7, "urgency": 0.7}],
             },
         },
     )
@@ -15692,7 +15709,7 @@ def test_observation_mode_keeps_monotonic_switch_when_backlog_review_becomes_sli
             "score_breakdown": {"candidate_kind": "governance_hygiene_review"},
             "drive_judgement": {
                 "intent": {"priority": 0.71},
-                "needs": [{"need_type": "clear_governance_backlog", "severity": 0.71, "urgency": 0.70}],
+                "needs": [{"need_type": "review_api_b_judgement", "severity": 0.71, "urgency": 0.70}],
             },
         },
     )
@@ -15753,7 +15770,7 @@ def test_recent_completed_static_governance_candidates_are_not_recreated_immedia
             "active_sessions": 0,
             "counts": {},
         },
-        "governance_backlog_tasks": [
+        "api_b_judgement_tasks": [
             {
                 "title": "Recent memory sweep",
                 "status": "completed",
@@ -15820,7 +15837,7 @@ def test_static_governance_candidates_reopen_after_completion_cooldown():
             "active_sessions": 0,
             "counts": {},
         },
-        "governance_backlog_tasks": [
+        "api_b_judgement_tasks": [
             {
                 "title": "Old memory sweep",
                 "status": "completed",
@@ -15884,7 +15901,7 @@ def test_generate_candidates_allows_empty_when_default_path_has_no_evidence():
         "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
         "activity": {"active_sessions": 0, "counts": {}},
         "completed_learning_tasks": [],
-        "governance_backlog_tasks": [],
+        "api_b_judgement_tasks": [],
         "task_family_decisions": {
             "memory_maintenance": {"eligible_for_planning": False},
             "self_learning": {"eligible_for_planning": True},
@@ -18212,11 +18229,22 @@ def test_autonomous_chain_store_exposes_backlog_api_a_execution_lane_and_writeba
         reason="cancelled before execution handoff",
     )
 
-    backlog_titles = [task.title for task in store.list_governance_backlog_tasks()]
+    chain_projection_titles = [task.title for task in store.list_chain_projection_tasks()]
+    api_b_judgement_titles = [task.title for task in store.list_api_b_judgement_tasks()]
+    api_a_handoff_titles = [task.title for task in store.list_api_a_handoff_tasks()]
+    api_a_running_titles = [task.title for task in store.list_api_a_running_tasks()]
     api_a_lane_titles = [task.title for task in store.list_api_a_execution_lane_tasks()]
     writeback_titles = [task.title for task in store.list_writeback_history()]
 
-    assert backlog_titles == ["治理在途链路项", "API-A 执行段链路项"]
+    assert chain_projection_titles == [
+        "治理在途链路项",
+        "API-A 执行段链路项",
+        "已完成写回链路项",
+        "写回失败链路项",
+    ]
+    assert api_b_judgement_titles == ["治理在途链路项"]
+    assert api_a_handoff_titles == []
+    assert api_a_running_titles == ["API-A 执行段链路项"]
     assert api_a_lane_titles == ["API-A 执行段链路项"]
     assert writeback_titles == ["已完成写回链路项", "写回失败链路项"]
 

@@ -42,7 +42,7 @@ def test_dashboard_builds_supervisor_only_status_summary(monkeypatch):
             "scene": "drive",
             "title": "监督者正在推进自主判断",
             "autonomous_observation": {
-                "read_model_version": 12,
+                "read_model_version": 13,
                 "mode": {
                     "scope": "api_b_autonomous_chain_only",
                     "status_text": "只读观测 API-B 与自主链路",
@@ -64,7 +64,7 @@ def test_dashboard_builds_supervisor_only_status_summary(monkeypatch):
     assert built["status"]["snapshot_source"] == "cached"
     assert built["status"]["scope"] == "api_b_autonomous_chain_only"
     assert built["status"]["status_text"] == "只读观测 API-B 与自主链路"
-    assert built["status"]["read_model_version"] == "12"
+    assert built["status"]["read_model_version"] == "13"
 
 
 def test_status_scene_bar_includes_subagent_summary(monkeypatch, capsys):
@@ -142,7 +142,7 @@ def test_status_scene_bar_prefers_user_chat_lane(monkeypatch, capsys):
     assert "read_file" not in output
 
 
-def test_build_dashboard_reads_supervisor_observation_input_without_legacy_guard_shell(monkeypatch):
+def test_build_dashboard_reads_supervisor_observation_input_without_extra_guard_shell(monkeypatch):
     monkeypatch.setattr(
         dashboard,
         "fetch_supervisor_state",
@@ -180,9 +180,9 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
         lambda: {
             "autonomous_observation": {
                 "counts": {
-                    "api_b_backlog": 1,
+                    "api_b_judgement": 1,
                     "api_a_running": 1,
-                    "api_a_ready": 2,
+                    "api_a_handoff": 2,
                     "candidates": 3,
                     "writebacks": 1,
                 },
@@ -209,7 +209,7 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
                             "label": "API-A 自主执行",
                             "source_label": "API-A",
                             "status": "ready",
-                            "state": "可接手",
+                            "state": "已转交",
                         },
                     ],
                     "stage_cards": [
@@ -226,7 +226,7 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
                             "title": "API-A execution",
                             "source_label": "API-A",
                             "status": "ready",
-                            "display_status": "可接手",
+                            "display_status": "已转交",
                             "summary": "API-B 已转交，可由 API-A 接手。",
                         },
                     ],
@@ -235,15 +235,15 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
                     "headline": "自主闭环分段观察",
                     "segments": [
                         {
-                            "key": "api_b_backlog",
+                            "key": "api_b_judgement",
                             "label": "API-B 判断在途投影",
                             "source_label": "API-B",
-                            "stage_label": "判断与治理",
-                            "items": [{"title": "Governance backlog task", "display_status": "待判断"}],
+                            "stage_label": "判断在途",
+                            "items": [{"title": "API-B judgement task", "display_status": "待判断"}],
                         },
                         {
-                            "key": "api_a_ready",
-                            "label": "API-A 可接手投影",
+                            "key": "api_a_handoff",
+                            "label": "API-B 已转交投影",
                             "source_label": "API-A",
                             "stage_label": "接手状态",
                             "items": [{"title": "Autonomous ready task", "display_status": "已转交"}],
@@ -279,9 +279,9 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
     assert built["chain"]["hero_summary"] == "Supervisor projected hero summary"
     assert built["chain"]["primary_focus"]["title"] == "API-B 判断"
     assert "hero_pills" not in built["chain"]
-    assert built["chain"]["api_b_backlog"] == 1
+    assert built["chain"]["api_b_judgement"] == 1
     assert built["chain"]["api_a_running"] == 1
-    assert built["chain"]["api_a_ready"] == 2
+    assert built["chain"]["api_a_handoff"] == 2
     assert built["chain"]["candidates"] == 3
     assert built["chain"]["writebacks"] == 1
     assert built["chain"]["segments_headline"] == "自主闭环分段观察"
@@ -290,11 +290,11 @@ def test_build_dashboard_prefers_supervisor_autonomous_observation_board(monkeyp
     assert built["chain"]["stage_cards"][0]["source_label"] == "API-B"
     assert built["chain"]["rail_entries"][0]["label"] == "API-B 判断"
     assert built["chain"]["segments"][0]["label"] == "API-B 判断在途投影"
-    assert built["chain"]["segments"][0]["stage_label"] == "判断与治理"
+    assert built["chain"]["segments"][0]["stage_label"] == "判断在途"
     assert built["chain"]["segments"][0]["source_label"] == "API-B"
     assert "owner" not in built["chain"]["segments"][0]
-    assert built["chain"]["segments"][1]["label"] == "API-A 可接手投影"
-    assert built["chain"]["segments"][0]["title"] == "Governance backlog task"
+    assert built["chain"]["segments"][1]["label"] == "API-B 已转交投影"
+    assert built["chain"]["segments"][0]["title"] == "API-B judgement task"
 
 
 def test_build_dashboard_api_a_observation_reads_supervisor_task_lane_only(monkeypatch):
@@ -415,9 +415,9 @@ def test_build_dashboard_prefers_supervisor_recent_activity_projection(monkeypat
             "autonomous_observation": {
                 "board": {
                     "recent_activity": {
-                        "phase_label": "治理放行",
+                        "phase_label": "判断转交",
                         "title": "Supervisor projected summary",
-                        "summary": "API-B 已更新 替身改进 的治理判断，并决定是否继续放行。",
+                        "summary": "API-B 已更新 替身改进 的判断，并决定是否转交 API-A。",
                         "source_label": "API-B",
                         "recorded_at": "2026-07-06T10:20:00",
                     }
@@ -432,9 +432,9 @@ def test_build_dashboard_prefers_supervisor_recent_activity_projection(monkeypat
 
     built = dashboard.build_dashboard()
 
-    assert built["recent_activity"]["phase_label"] == "治理放行"
+    assert built["recent_activity"]["phase_label"] == "判断转交"
     assert built["recent_activity"]["title"] == "Supervisor projected summary"
-    assert built["recent_activity"]["summary"] == "API-B 已更新 替身改进 的治理判断，并决定是否继续放行。"
+    assert built["recent_activity"]["summary"] == "API-B 已更新 替身改进 的判断，并决定是否转交 API-A。"
     assert built["recent_activity"]["source_label"] == "API-B"
 
 
@@ -446,7 +446,7 @@ def test_print_dashboard_shows_api_b_observation_input(monkeypatch, capsys):
             "status": {
                 "scene_label": "静置",
                 "snapshot_source": "live",
-                "read_model_version": "12",
+                "read_model_version": "13",
                 "title": "自主链路观测",
             },
             "chain": {
@@ -482,9 +482,9 @@ def test_print_dashboard_shows_chain_segments_headline(monkeypatch, capsys):
         "build_dashboard",
         lambda: {
             "status": {
-                "scene_label": "治理安排",
+                "scene_label": "判断安排",
                 "snapshot_source": "cached",
-                "read_model_version": "12",
+                "read_model_version": "13",
                 "title": "API-B 主视角观测",
             },
             "chain": {
@@ -493,9 +493,9 @@ def test_print_dashboard_shows_chain_segments_headline(monkeypatch, capsys):
                 "segments_headline": "自主闭环分段观察",
                 "hero_summary": "Supervisor projected hero summary",
                 "primary_focus": {"title": "API-B 判断", "status": "当前在途"},
-                "api_b_backlog": 1,
+                "api_b_judgement": 1,
                 "api_a_running": 1,
-                "api_a_ready": 0,
+                "api_a_handoff": 0,
                 "candidates": 2,
                 "writebacks": 0,
                 "stage_cards": [],
@@ -518,7 +518,7 @@ def test_print_dashboard_shows_chain_segments_headline(monkeypatch, capsys):
     dashboard.print_dashboard()
     output = capsys.readouterr().out
 
-    assert "监督者 治理安排" in output
+    assert "监督者 判断安排" in output
     assert "自主闭环分段观察" in output
     assert "执行中 1" in output
 
@@ -531,7 +531,7 @@ def test_print_dashboard_shows_recent_autonomous_activity(monkeypatch, capsys):
             "status": {
                 "scene_label": "内生判断",
                 "snapshot_source": "live",
-                "read_model_version": "12",
+                "read_model_version": "13",
                 "title": "API-B 主视角观测",
             },
             "chain": {
@@ -540,9 +540,9 @@ def test_print_dashboard_shows_recent_autonomous_activity(monkeypatch, capsys):
                 "segments_headline": "自主闭环分段观察",
                 "hero_summary": "Supervisor projected hero summary",
                 "primary_focus": {"title": "API-B 判断", "status": "当前在途"},
-                "api_b_backlog": 1,
+                "api_b_judgement": 1,
                 "api_a_running": 0,
-                "api_a_ready": 0,
+                "api_a_handoff": 0,
                 "candidates": 2,
                 "writebacks": 0,
                 "stage_cards": [],
@@ -550,9 +550,9 @@ def test_print_dashboard_shows_recent_autonomous_activity(monkeypatch, capsys):
                 "segments": [],
             },
             "recent_activity": {
-                "phase_label": "治理放行",
+                "phase_label": "判断转交",
                 "title": "替身改进验收 (替身改进)",
-                "summary": "API-B 已更新 替身改进 的治理判断，并决定是否继续放行。",
+                "summary": "API-B 已更新 替身改进 的判断，并决定是否转交 API-A。",
                 "display_at": "10:15:30",
             },
             "observation_input": {
@@ -572,7 +572,7 @@ def test_print_dashboard_shows_recent_autonomous_activity(monkeypatch, capsys):
     output = capsys.readouterr().out
 
     assert "最近自主动作" in output
-    assert "治理放行" in output
+    assert "判断转交" in output
     assert "替身改进验收 (替身改进)" in output
 
 
@@ -582,9 +582,9 @@ def test_print_dashboard_shows_supervisor_task_lane_without_user_chat_leak(monke
         "build_dashboard",
         lambda: {
             "status": {
-                "scene_label": "治理安排",
+                "scene_label": "判断安排",
                 "snapshot_source": "cached",
-                "read_model_version": "12",
+                "read_model_version": "13",
                 "title": "API-B 主视角观测",
             },
             "chain": {
@@ -593,9 +593,9 @@ def test_print_dashboard_shows_supervisor_task_lane_without_user_chat_leak(monke
                 "segments_headline": "自主闭环分段观察",
                 "hero_summary": "Supervisor projected hero summary",
                 "primary_focus": {"title": "API-B 判断", "status": "当前在途"},
-                "api_b_backlog": 1,
+                "api_b_judgement": 1,
                 "api_a_running": 1,
-                "api_a_ready": 0,
+                "api_a_handoff": 0,
                 "candidates": 2,
                 "writebacks": 0,
                 "stage_cards": [],

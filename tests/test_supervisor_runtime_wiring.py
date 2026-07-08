@@ -189,6 +189,8 @@ def test_supervisor_room_frontend_uses_chain_panel_contract():
     assert "body_tree" in UI_HTML
     assert "data-body-slot" in UI_HTML
     assert "renderBodyTreeDrawer" in UI_HTML
+    assert "context.bodySlot = String(trigger.dataset.bodySlot)" in UI_HTML
+    assert "openDrawer(trigger.dataset.drill, context)" in UI_HTML
     assert 'data-action-btn=' not in UI_HTML
     assert "__manual__" not in UI_HTML
     assert 'panelTasks' not in UI_HTML
@@ -613,6 +615,7 @@ def test_supervisor_builds_body_slot_cards_with_upgrade_tree_focus(tmp_path):
                     "target_slot_id": shell_slot,
                     "editable_dirs": ["systems", "agent"],
                 },
+                "changed_files": ["systems/supervisor/ui_runtime.py"],
             }
         ],
     )
@@ -625,6 +628,14 @@ def test_supervisor_builds_body_slot_cards_with_upgrade_tree_focus(tmp_path):
     assert "API-A 正在改" in shell_card["focus_summary"]
     assert any(node["key"] == "systems" and node["upgrade_active"] for node in shell_card["tree_nodes"])
     assert any(node["key"] == "agent" and node["upgrade_active"] for node in shell_card["tree_nodes"])
+    assert any(
+        node["key"] == "systems/supervisor/ui_runtime.py"
+        and node["label"] == "ui_runtime.py"
+        and node["upgrade_dot"] is True
+        and node["upgrade_status"] == "running"
+        and node["upgrade_task_id"] == "body-1"
+        for node in shell_card["tree_nodes"]
+    )
     assert any(node["key"] == "run_agent.py" for node in shell_card["tree_nodes"])
     assert shell_card["upgrade_signals"][0]["source_label"] == "API-A 正在改"
     assert active_card["upgrade_active"] is False
@@ -659,6 +670,9 @@ def test_supervisor_builds_body_slot_cards_with_api_b_scheduled_upgrade_focus(tm
                     "target_slot_id": shell_slot,
                     "editable_dirs": ["systems", "prompts"],
                 },
+                "metadata": {
+                    "changed_files": ["prompts/body_upgrade.md"],
+                },
             }
         ],
     )
@@ -669,6 +683,14 @@ def test_supervisor_builds_body_slot_cards_with_api_b_scheduled_upgrade_focus(tm
     assert "API-B 已转交" in shell_card["focus_summary"]
     assert any(node["key"] == "systems" and node["upgrade_active"] for node in shell_card["tree_nodes"])
     assert any(node["key"] == "prompts" and node["upgrade_active"] for node in shell_card["tree_nodes"])
+    assert any(
+        node["key"] == "prompts/body_upgrade.md"
+        and node["label"] == "body_upgrade.md"
+        and node["upgrade_dot"] is True
+        and node["upgrade_status"] == "approved"
+        and node["upgrade_task_id"] == "body-2"
+        for node in shell_card["tree_nodes"]
+    )
     assert shell_card["upgrade_signals"][0]["source_label"] == "API-B 已转交"
 
 
@@ -901,8 +923,8 @@ async def test_supervisor_room_state_maps_memory_task_to_memory_scene(tmp_path):
     state = await supervisor.get_supervisor_ui_state()
 
     assert state["scene"] == "maintenance"
-    backlog = _observation_section(state["autonomous_observation"], "api_b_backlog")
-    assert backlog["items"][0]["title"] == "Run memory continuity sweep"
+    judgement = _observation_section(state["autonomous_observation"], "api_b_judgement")
+    assert judgement["items"][0]["title"] == "Run memory continuity sweep"
     assert "tasks" not in state
     assert "整理记忆" in state["title"]
     assert "tasks_planned" in [event["event_type"] for event in state["timeline"]]
@@ -990,7 +1012,7 @@ def test_supervisor_room_labels_active_sessions_as_user_chain_idle_signal():
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_supervisor_room_state_exposes_governance_preview_for_shadow_review(tmp_path, monkeypatch):
+async def test_supervisor_room_state_exposes_judgement_preview_for_shadow_review(tmp_path, monkeypatch):
     supervisor = _make_supervisor(tmp_path)
     supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
 
@@ -1044,19 +1066,20 @@ async def test_supervisor_room_state_exposes_governance_preview_for_shadow_revie
         state,
         title="Duplicate learning branch",
     )
-    assert "lm_review_shadow" not in duplicate["governance_preview"]
+    assert "lm_review_shadow" not in duplicate["judgement_preview"]
     assert all(
         "lm_review_shadow" not in dict(entry.get("context") or {})
         for entry in duplicate.get("decision_history", [])
         if isinstance(entry, dict)
     )
-    preview = duplicate["governance_preview"]["followup_suggestion"]
+    preview = duplicate["judgement_preview"]["followup_suggestion"]
     assert preview["action"] == "merge"
     assert preview["merge_into"] == tasks_by_title["Canonical learning branch"]
     assert preview["merge_into_title"] == "Canonical learning branch"
     assert "监督者保留建议" in preview["summary"]
-    assert "Canonical learning branch" in duplicate["governance_preview"]["summary"]
-    assert state["autonomous_observation"]["metrics"]["governance"]["followup_suggestions"] >= 1
+    assert "Canonical learning branch" in duplicate["judgement_preview"]["summary"]
+    assert duplicate["governance_preview"] == duplicate["judgement_preview"]
+    assert state["autonomous_observation"]["metrics"]["observation"]["followup_signals"] >= 1
 
 
 @pytest.mark.asyncio
@@ -1110,16 +1133,17 @@ async def test_supervisor_room_state_exposes_applied_priority_updates(tmp_path, 
         task_id=task_id,
     )
     assert task["priority"] == "high"
-    assert "lm_review_priority" not in task["governance_preview"]
+    assert "lm_review_priority" not in task["judgement_preview"]
     assert all(
         "lm_review_priority" not in dict(entry.get("context") or {})
         for entry in task.get("decision_history", [])
         if isinstance(entry, dict)
     )
-    assert task["governance_preview"]["priority_adjustment"]["priority"] == "high"
-    assert task["governance_preview"]["priority_adjustment"]["priority_label"] == "高"
-    assert "监督者已重排优先级" in task["governance_preview"]["summary"]
-    assert state["autonomous_observation"]["metrics"]["governance"]["priority_adjustments"] >= 1
+    assert task["judgement_preview"]["priority_adjustment"]["priority"] == "high"
+    assert task["judgement_preview"]["priority_adjustment"]["priority_label"] == "高"
+    assert "监督者已重排优先级" in task["judgement_preview"]["summary"]
+    assert task["governance_preview"] == task["judgement_preview"]
+    assert state["autonomous_observation"]["metrics"]["observation"]["priority_change_signals"] >= 1
 
 
 @pytest.mark.asyncio
@@ -1229,12 +1253,12 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
     observation = state["autonomous_observation"]
     loop_stage_keys = [item["stage_key"] for item in observation["loop"]["stage_cards"]]
     group_keys = [group["key"] for group in observation["chain"]["segments"]]
-    api_b_backlog = _observation_section(observation, "api_b_backlog")
-    api_a_ready = _observation_section(observation, "api_a_ready")
+    api_b_judgement = _observation_section(observation, "api_b_judgement")
+    api_a_handoff = _observation_section(observation, "api_a_handoff")
 
     assert "queue_layout" not in state
     assert "panels" not in state
-    assert observation["read_model_version"] == 12
+    assert observation["read_model_version"] == 13
     assert "observed_tasks" not in observation
     assert "candidates" not in observation
     assert observation["mode"]["scope"] == "api_b_autonomous_chain_only"
@@ -1257,7 +1281,7 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
         "mem_writeback",
         "api_b_reread",
     ]
-    assert group_keys == ["api_b_candidates", "api_b_backlog", "api_a_ready", "mem_recent"]
+    assert group_keys == ["api_b_candidates", "api_b_judgement", "api_a_handoff", "mem_recent"]
     assert "queue" not in observation
     assert observation["chain"]["headline"] == "自主闭环分段观察"
     assert "presentation" not in observation
@@ -1283,52 +1307,52 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
     assert _observation_loop_stage(observation, "api_a_execution")["status"] == "ready"
     assert _observation_loop_stage(observation, "api_a_execution")["focus_task"]["title"] == "第一个自主学习链路项"
     assert [group["key"] for group in observation["chain"]["segments"]] == group_keys
-    assert api_b_backlog["source_label"] == "API-B"
-    assert "owner" not in api_b_backlog
-    assert api_b_backlog["stage_label"] == "判断与治理"
-    assert api_b_backlog["segment_kind"] == "governance_backlog"
-    assert api_b_backlog["decor_class"] == "supervisor"
-    assert "display_decor" not in api_b_backlog
-    assert "display_copy" not in api_b_backlog
-    assert api_a_ready["decor_class"] == "agent"
-    assert api_a_ready["source_label"] == "API-A"
-    assert api_b_backlog["item_label"] == "判断项"
-    assert api_a_ready["item_label"] == "可接手项"
-    assert api_b_backlog["event_label"] == "动作"
-    assert api_a_ready["trace_label"] == "回合"
-    assert api_b_backlog["projection_scope"] == "chain_segment_projection"
-    assert api_b_backlog["payload_count"] == 3
-    assert api_b_backlog["event_count"] >= 1
-    assert api_b_backlog["trace_count"] >= 1
-    assert api_b_backlog["segment_status"] in {"active", "ready"}
-    assert api_b_backlog["segment_status_label"] in {"当前有流动", "已有观测"}
-    assert api_b_backlog["focus_item"]["observation_role"] == "api_b_judgement"
-    assert api_b_backlog["latest_item"]["title"] == "Supervisor first task"
-    assert api_b_backlog["latest_summary"]
-    assert api_b_backlog["drawer_summary"].startswith("API-B")
-    assert "当前可见判断项" in api_b_backlog["drawer_counts_summary"]
-    assert "没有可见判断项" in api_b_backlog["drawer_empty_items_text"]
-    assert api_b_backlog["drawer_recent_events_label"] == "最近动作"
-    assert api_b_backlog["drawer_recent_traces_label"] == "最近回合"
-    assert "判断项" in api_b_backlog["footer_text"]
-    assert isinstance(api_b_backlog["recent_events"], list)
-    assert api_b_backlog["recent_event_count"] >= 1
-    assert isinstance(api_b_backlog["recent_traces"], list)
-    assert api_b_backlog["recent_traces"][0]["trace_id"] == supervisor_task_1["tasks"][0]["trace_id"]
-    assert api_b_backlog["recent_traces"][0]["detail"]["record_count"] >= 1
+    assert api_b_judgement["source_label"] == "API-B"
+    assert "owner" not in api_b_judgement
+    assert api_b_judgement["stage_label"] == "判断在途"
+    assert api_b_judgement["segment_kind"] == "api_b_judgement"
+    assert api_b_judgement["decor_class"] == "supervisor"
+    assert "display_decor" not in api_b_judgement
+    assert "display_copy" not in api_b_judgement
+    assert api_a_handoff["decor_class"] == "agent"
+    assert api_a_handoff["source_label"] == "API-A"
+    assert api_b_judgement["item_label"] == "判断项"
+    assert api_a_handoff["item_label"] == "待接手项"
+    assert api_b_judgement["event_label"] == "动作"
+    assert api_a_handoff["trace_label"] == "回合"
+    assert api_b_judgement["projection_scope"] == "chain_segment_projection"
+    assert api_b_judgement["payload_count"] == 3
+    assert api_b_judgement["event_count"] >= 1
+    assert api_b_judgement["trace_count"] >= 1
+    assert api_b_judgement["segment_status"] in {"active", "ready"}
+    assert api_b_judgement["segment_status_label"] in {"当前有流动", "已有观测"}
+    assert api_b_judgement["focus_item"]["observation_role"] == "api_b_judgement"
+    assert api_b_judgement["latest_item"]["title"] == "Supervisor first task"
+    assert api_b_judgement["latest_summary"]
+    assert api_b_judgement["drawer_summary"].startswith("API-B")
+    assert "当前可见判断项" in api_b_judgement["drawer_counts_summary"]
+    assert "没有可见判断项" in api_b_judgement["drawer_empty_items_text"]
+    assert api_b_judgement["drawer_recent_events_label"] == "最近动作"
+    assert api_b_judgement["drawer_recent_traces_label"] == "最近回合"
+    assert "判断项" in api_b_judgement["footer_text"]
+    assert isinstance(api_b_judgement["recent_events"], list)
+    assert api_b_judgement["recent_event_count"] >= 1
+    assert isinstance(api_b_judgement["recent_traces"], list)
+    assert api_b_judgement["recent_traces"][0]["trace_id"] == supervisor_task_1["tasks"][0]["trace_id"]
+    assert api_b_judgement["recent_traces"][0]["detail"]["record_count"] >= 1
     assert isinstance(
-        api_b_backlog["recent_traces"][0]["detail"]["source_counts"],
+        api_b_judgement["recent_traces"][0]["detail"]["source_counts"],
         dict,
     )
     assert isinstance(
-        api_b_backlog["recent_traces"][0]["detail"]["timeline_preview"],
+        api_b_judgement["recent_traces"][0]["detail"]["timeline_preview"],
         list,
     )
     assert isinstance(
-        api_b_backlog["recent_traces"][0]["detail"]["timeline_events"],
+        api_b_judgement["recent_traces"][0]["detail"]["timeline_events"],
         list,
     )
-    assert api_b_backlog["latest_trace_detail"]["trace_id"] == supervisor_task_1["tasks"][0]["trace_id"]
+    assert api_b_judgement["latest_trace_detail"]["trace_id"] == supervisor_task_1["tasks"][0]["trace_id"]
     assert "api_b" not in observation
     assert "api_a" not in observation
     assert "mem" not in observation
@@ -1370,23 +1394,28 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
     assert _observation_loop_stage(observation, "api_b_judgement")["focus_task"]["display_status"] == "已转交"
     assert _observation_loop_stage(observation, "api_a_execution")["focus_task"]["title"] == "第一个自主学习链路项"
     assert _observation_loop_stage(observation, "api_a_execution")["focus_task"]["display_status"] == "已转交"
-    assert [item["title"] for item in api_b_backlog["items"]] == [
+    assert [item["title"] for item in api_b_judgement["items"]] == [
         "Supervisor first task",
         "Supervisor second task",
         "Agent second creative task",
     ]
-    assert [item["display_status"] for item in api_b_backlog["items"]] == ["已转交", "待判断", "待判断"]
-    assert [item["lane"] for item in api_b_backlog["items"]] == ["supervisor", "supervisor", "supervisor"]
-    assert api_b_backlog["items"][0]["observation_card_subtitle"]
-    assert api_b_backlog["items"][0]["identity_hint"]
-    assert api_a_ready["items"][0]["observation_card_subtitle"]
-    assert [item["title"] for item in api_a_ready["items"]] == ["第一个自主学习链路项"]
-    assert [item["display_status"] for item in api_a_ready["items"]] == ["已转交"]
-    assert [item["lane"] for item in api_a_ready["items"]] == ["agent"]
+    assert "第一个自主学习链路项" not in [
+        item["title"] for item in api_b_judgement["items"]
+    ]
+    assert [item["display_status"] for item in api_b_judgement["items"]] == ["已转交", "待判断", "待判断"]
+    assert [item["lane"] for item in api_b_judgement["items"]] == ["supervisor", "supervisor", "supervisor"]
+    assert api_b_judgement["items"][0]["observation_card_subtitle"]
+    assert api_b_judgement["items"][0]["identity_hint"]
+    assert "judgement_hint" in api_b_judgement["items"][0]
+    assert api_b_judgement["items"][0]["governance_hint"] == api_b_judgement["items"][0]["judgement_hint"]
+    assert api_a_handoff["items"][0]["observation_card_subtitle"]
+    assert [item["title"] for item in api_a_handoff["items"]] == ["第一个自主学习链路项"]
+    assert [item["display_status"] for item in api_a_handoff["items"]] == ["已转交"]
+    assert [item["lane"] for item in api_a_handoff["items"]] == ["agent"]
     assert observation["metrics"]["slot_overview"] == "slot-A / slot-B"
-    assert observation["metrics"]["chain_projection"]["governance_backlog"] == 3
+    assert observation["metrics"]["chain_projection"]["api_b_judgement"] == 3
     assert observation["metrics"]["chain_projection"]["api_a_running"] == 0
-    assert observation["metrics"]["chain_projection"]["api_a_ready"] == 1
+    assert observation["metrics"]["chain_projection"]["api_a_handoff"] == 1
     assert observation["metrics"]["chain_projection"]["writeback_history"] == 0
     assert observation["runtime"]["snapshot_source"] == "live"
 
@@ -1420,12 +1449,12 @@ async def test_supervisor_room_state_keeps_running_api_a_task_out_of_ready_segme
 
     state = await supervisor.get_supervisor_ui_state()
     observation = state["autonomous_observation"]
-    api_a_ready = _observation_section(observation, "api_a_ready")
+    api_a_handoff = _observation_section(observation, "api_a_handoff")
     api_a_execution = _observation_loop_stage(observation, "api_a_execution")
     notes = list(observation["board"].get("observation_notes") or [])
 
-    assert api_a_ready["items"] == []
-    assert api_a_ready["payload_count"] == 0
+    assert api_a_handoff["items"] == []
+    assert api_a_handoff["payload_count"] == 0
     assert api_a_execution["status"] == "active"
     assert api_a_execution["focus_task"]["title"] == "运行中的自主学习链路项"
     assert observation["counts"]["api_a_running"] == 1
@@ -1534,10 +1563,10 @@ async def test_supervisor_room_state_observed_candidates_deduplicate_tasks_by_ke
     state = await supervisor.get_supervisor_ui_state()
     observation = state["autonomous_observation"]
 
-    backlog = _observation_section(observation, "api_b_backlog")
+    judgement = _observation_section(observation, "api_b_judgement")
     candidates = _observation_section(observation, "api_b_candidates")
 
-    assert backlog["items"][0]["title"] == "已被观察到的治理任务"
+    assert judgement["items"][0]["title"] == "已被观察到的治理任务"
     assert [item["title"] for item in candidates["items"]] == ["唯一链路候选"]
     assert candidates["items"][0]["display_status"] == "候选形成"
 
@@ -1612,7 +1641,9 @@ async def test_supervisor_ui_state_projects_cognition_judgement_and_uncertainty_
             "perception": {
                 "system_posture": "truth_guarded",
                 "user_mode": "quiet",
-                "governance_backlog_count": 2,
+                "api_b_judgement_count": 2,
+                "api_a_handoff_count": 1,
+                "api_a_running_count": 0,
                 "active_sessions": 0,
                 "recent_errors": 1,
                 "learning_quality": 61,
@@ -1670,16 +1701,12 @@ async def test_supervisor_ui_state_projects_cognition_judgement_and_uncertainty_
             },
             "governance": {
                 "preferred_focus": "truthfulness",
-                "dominant_constraint": "governance_backlog_blockage",
-            },
-            "perception": {
-                "api_a_ready_count": 1,
-                "api_a_running_count": 0,
+                "dominant_constraint": "api_b_judgement_blockage",
             },
             "proposal_cognition": {
                 "assessment_trace": {
                     "available": True,
-                    "dominant_constraint": "governance_backlog_blockage",
+                    "dominant_constraint": "api_b_judgement_blockage",
                     "current_judgement": "在 grounding 修复前，复核应保持主导",
                     "why_not_improvement_now": "在直接进行身体改进前，应优先处理 truthfulness 治理。",
                     "why_not_improvement_now_count": 1,
@@ -1736,10 +1763,10 @@ async def test_supervisor_ui_state_projects_cognition_judgement_and_uncertainty_
     assert judgement["observation_target_label"] == "真实性侧"
     assert judgement["why_not_direct_improvement"][0] == "先处理真实性风险，再考虑直接替身改进"
     assert "真实性" in judgement["summary"]
-    assert judgement["api_a_ready_count"] == 1
+    assert judgement["api_a_handoff_count"] == 1
     assert judgement["api_a_running_count"] == 0
-    assert judgement["api_a_lane_summary"] == "API-A 可接手 1 个链路项。"
-    assert cognition["perception"]["api_a_ready_count"] == 1
+    assert judgement["api_a_lane_summary"] == "API-B 已转交 1 个链路项，等待 API-A 接手。"
+    assert cognition["perception"]["api_a_handoff_count"] == 1
     assert cognition["perception"]["api_a_running_count"] == 0
     assert uncertainty["highest_risk_label"] == "真实性侧"
     assert uncertainty["summary"] == "当前最需要补证据的是真实性侧。"
@@ -2299,18 +2326,18 @@ async def test_supervisor_accepts_self_learning_conclusion_submission_into_backl
 
 
 @pytest.mark.unit
-def test_supervisor_display_and_trace_labels_do_not_absorb_queued_status(tmp_path):
+def test_supervisor_display_and_trace_labels_leave_unknown_status_unchanged(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
-    assert supervisor._observation_display_status({"status": "queued"}) == "queued"
-    assert supervisor._trace_status_label("queued") == "queued"
+    assert supervisor._observation_display_status({"status": "orphaned"}) == "orphaned"
+    assert supervisor._trace_status_label("orphaned") == "orphaned"
     card = supervisor._build_observation_card(
-        {"title": "未知旧状态链路项", "status": "queued"},
+        {"title": "未知状态链路项", "status": "orphaned"},
         lane="supervisor",
     )
     assert card is not None
-    assert card["status"] == "queued"
-    assert card["display_status"] == "queued"
+    assert card["status"] == "orphaned"
+    assert card["display_status"] == "orphaned"
     assert supervisor._observation_display_status({"status": "completed"}) == "已完成"
     assert supervisor._trace_status_label("completed") == "已写回"
 
