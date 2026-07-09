@@ -14,6 +14,7 @@ Usage:
     VoidCube api                  # Configure API settings
     VoidCube logout              # Clear stored authentication
     VoidCube status              # Show status of all components
+    VoidCube autonomous          # Run API-A autonomous execution mini CLI
     VoidCube cron                # Manage cron jobs
     VoidCube cron list           # List cron jobs
     VoidCube cron status         # Check if cron scheduler is running
@@ -1063,6 +1064,19 @@ def cmd_status(args):
     show_status(args)
 
 
+def cmd_autonomous(args):
+    """Run the dedicated API-A autonomous execution mini CLI."""
+    from VoidCube_cli.autonomous_runner import run_autonomous_minicli
+
+    run_autonomous_minicli(
+        model=getattr(args, "model", None),
+        provider=getattr(args, "provider", None),
+        interval=float(getattr(args, "interval", 2.0) or 2.0),
+        once=bool(getattr(args, "once", False)),
+        clear=not bool(getattr(args, "no_clear", False)),
+    )
+
+
 def cmd_doctor(args):
     """Run configuration and agent runtime diagnostics."""
     from VoidCube_cli.config_validator import print_diagnosis
@@ -1579,6 +1593,24 @@ For more help on a command:
         help="Run deep checks (may take longer)"
     )
     status_parser.set_defaults(func=cmd_status)
+
+    autonomous_parser = subparsers.add_parser(
+        "autonomous",
+        aliases=["auto-cli"],
+        help="Run the API-A autonomous execution mini CLI",
+        description="Dedicated mini CLI for autonomous-chain API-A task execution and observation.",
+    )
+    autonomous_parser.add_argument("--interval", type=float, default=2.0, help="Refresh interval in seconds")
+    autonomous_parser.add_argument("--once", action="store_true", help="Poll and render once, then exit")
+    autonomous_parser.add_argument("--no-clear", action="store_true", help="Do not clear the terminal between refreshes")
+    autonomous_parser.add_argument("-m", "--model", help="Model override for the autonomous API-A executor")
+    autonomous_parser.add_argument(
+        "--provider",
+        choices=["auto", "openrouter", "nous", "openai-codex", "copilot-acp", "copilot", "gemini", "huggingface", "zai", "kimi-coding", "minimax", "minimax-cn", "kilocode", "xiaomi"],
+        default=None,
+        help="Inference provider for the autonomous API-A executor",
+    )
+    autonomous_parser.set_defaults(func=cmd_autonomous)
 
     # =========================================================================
     # doctor command
@@ -2408,7 +2440,7 @@ Examples:
     # name that happens to match a subcommand takes priority.
     _KNOWN_COMMANDS = {
         "chat", "model", "gateway", "whatsapp", "login", "logout",
-        "body", "agent", "serve", "status", "doctor", "config", "tools",
+        "body", "agent", "serve", "status", "autonomous", "auto-cli", "doctor", "config", "tools",
         "mcp", "sessions", "insights", "version", "api", "acp", "logs",
         "memory", "profile", "update", "uninstall",
     }

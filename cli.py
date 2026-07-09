@@ -6514,13 +6514,6 @@ class VoidcubeCLI:
                 self,
                 cmd_original,
                 cprint=_cprint,
-                poll_autonomous_workflow_callback=_autonomous_executor_runtime_view(
-                    self,
-                    push_cli_agent_scene=_push_cli_agent_scene,
-                    git_head_commit=_git_head_commit,
-                    git_improvement_diff=_git_improvement_diff,
-                    cprint=_cprint,
-                ).poll_workflow,
                 refresh_gateway_cli_presence_callback=lambda *, force=False: _refresh_gateway_cli_presence_view(
                     self,
                     force=force,
@@ -10951,7 +10944,7 @@ class VoidcubeCLI:
 
         def _get_autonomous_gate_text():
             return [
-                ("class:auto-mode", " 🤖 自主链路 | /auto-q 退出"),
+                ("class:auto-mode", " 🤖 自主链路已开 | 执行: VoidCube autonomous | /auto-q 退出"),
             ]
 
         autonomous_gate_bar = ConditionalContainer(
@@ -11185,13 +11178,6 @@ class VoidcubeCLI:
                                     push_cli_agent_scene=_push_cli_agent_scene,
                                     monotonic_time=time.monotonic,
                                 ),
-                                poll_autonomous_workflow=_autonomous_executor_runtime_view(
-                                    self,
-                                    push_cli_agent_scene=_push_cli_agent_scene,
-                                    git_head_commit=_git_head_commit,
-                                    git_improvement_diff=_git_improvement_diff,
-                                    cprint=_cprint,
-                                ).poll_workflow,
                             )
                             # Check for background process notifications (completions
                             # and watch pattern matches) while agent is idle.

@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import subprocess
+import sys
 import urllib.request
-from typing import Any, Dict
+from pathlib import Path
+from typing import Any, Dict, Tuple
 
 from systems.supervisor.autonomous_chain_contract import AUTONOMOUS_CHAIN_CYCLE_ROUTE
 from VoidCube_cli.autonomous_events import append_autonomous_execution_event
@@ -87,12 +91,53 @@ def trigger_autonomous_cycle(*, focus: str = "") -> Dict[str, Any] | None:
     return json.loads(urllib.request.urlopen(request, timeout=30).read())
 
 
+def launch_autonomous_minicli(host: Any) -> Tuple[bool, str]:
+    """Launch the dedicated autonomous mini CLI as a separate process.
+
+    The main CLI must not host autonomous task execution. This helper only
+    starts the separate execution surface and remembers the process handle.
+    """
+    current = getattr(host, "_autonomous_minicli_process", None)
+    if current is not None:
+        try:
+            if current.poll() is None:
+                return True, "API-A 自主执行最小 CLI 已在独立窗口运行。"
+        except Exception:
+            pass
+
+    cmd = [sys.executable, "-m", "VoidCube_cli.main", "autonomous"]
+    cwd = str(Path(__file__).resolve().parents[1])
+    env = os.environ.copy()
+    try:
+        if os.name == "nt":
+            creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+            process = subprocess.Popen(
+                cmd,
+                cwd=cwd,
+                env=env,
+                creationflags=creationflags,
+            )
+        else:
+            process = subprocess.Popen(
+                cmd,
+                cwd=cwd,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        host._autonomous_minicli_process = process
+        return True, "API-A 自主执行最小 CLI 已在独立进程启动。"
+    except Exception as exc:
+        return False, f"未能自动启动最小 CLI，请手动运行: VoidCube autonomous ({exc})"
+
+
 def handle_auto_command(
     host: Any,
     cmd: str,
     *,
     cprint: Any,
-    poll_autonomous_workflow_callback: Any,
     refresh_gateway_cli_presence_callback: Any,
     thread_factory: Any,
 ) -> None:
@@ -156,10 +201,6 @@ def handle_auto_command(
                     cycle_result = trigger_autonomous_cycle(focus=focus)
                 except Exception as exc:
                     cprint(f"     ⚠️  Initial autonomous cycle failed: {exc}")
-                try:
-                    poll_autonomous_workflow_callback()
-                except Exception:
-                    pass
                 cprint("  ✅ 自主链路 [bold green]已激活[/]")
                 cprint(f"     内生驱动循环: {'运行中' if resp.get('drive_loop_running') else '未运行'}")
                 cprint(f"     治理复核循环: {'运行中' if resp.get('review_loop_running') else '未运行'}")
@@ -177,6 +218,10 @@ def handle_auto_command(
                 else:
                     cprint("     监督者快照将在后台刷新后进入观测面。")
                 cprint("     前台主 CLI 交互仍保持可用。")
+                launched, launch_message = launch_autonomous_minicli(host)
+                cprint(f"     {launch_message}")
+                if not launched:
+                    cprint("     主 CLI 不会代替最小 CLI 执行自主任务。")
                 cprint("     使用 /auto-q 停止自主链路。")
                 cprint(f"     监视地址: {supervisor_url}/ui")
             else:
@@ -253,11 +298,6 @@ def exit_autonomous_gate_fast(
         return True
 
     cprint("  🔄 正在退出自主链路（fast path）...")
-    if host._agent_running:
-        try:
-            host._interrupt_queue.put("__AUTONOMOUS_Q_EXIT__")
-        except Exception:
-            pass
 
     supervisor_url = _resolve_supervisor_url()
     try:
@@ -318,12 +358,6 @@ def force_quit_autonomous_gate(
     push_cli_agent_scene_callback: Any,
 ) -> bool:
     cprint("\n  🚨 强制退出自主链路 —— 正在尝试紧急清理...")
-
-    if host._agent_running:
-        try:
-            host._interrupt_queue.put("__FORCE_QUIT__")
-        except Exception:
-            pass
 
     supervisor_url = _resolve_supervisor_url()
     try:

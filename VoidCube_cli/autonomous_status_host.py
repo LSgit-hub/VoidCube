@@ -180,15 +180,16 @@ def refresh_autonomous_observation_surfaces(
     host: Any,
     *,
     refresh_gateway_cli_presence: Any,
-    poll_autonomous_workflow: Any,
 ) -> None:
-    """Refresh cached autonomous observation surfaces while the CLI is idle."""
+    """Refresh cached autonomous observation surfaces while the CLI is idle.
+
+    The main CLI is only the user-chain surface. Autonomous task polling and
+    execution live in the dedicated minimal autonomous CLI.
+    """
     refresh_supervisor_status(host)
     refresh_autonomous_gateway_status(host)
     refresh_gateway_autonomous_execute_snapshot(host)
     refresh_gateway_cli_presence()
-    if getattr(host, "_autonomous_gate_active", False):
-        poll_autonomous_workflow()
 
 
 def fetch_supervisor_status_snapshot(host: Any) -> Dict[str, Any]:

@@ -41,12 +41,20 @@
 | 组件 | 角色 | 应显示 |
 | --- | --- | --- |
 | 主 CLI 自身的子代理展示 | 主 CLI 与用户交互时的子代理 | 本进程 user_chat 子代理（本地 manager，已隔离） |
-| 最小 CLI（`VoidCube_cli/ops/dashboard.py`） | 自主链路中 API-A 子代理执行学习 / 改造任务的专用观测面 | 仅 supervisor_task 子代理，不掺入用户交互子代理 |
+| 自主执行最小 CLI（`VoidCube_cli/autonomous_runner.py`，命令 `VoidCube autonomous`） | 自主链路中 API-A 子代理执行学习 / 改造任务的专用执行面 | poll / 认领 / 执行 / 回写 `supervisor_task` 链路项，不掺入用户交互子代理 |
+| 只读 dashboard（`VoidCube_cli/ops/dashboard.py`） | 自主链路 API-A 执行位的只读观测面 | 仅展示 `supervisor_task` 和 API-B 观测投影，不执行任务 |
 | Web 小屋（`systems/supervisor/ui_runtime.py`） | API-B / 监督者认知核心总览 | 监督者动作、反馈、API-B 判断、记忆状态与自主任务回报；不展示用户聊天内容 |
 
-收敛判据：最小 CLI 在“主 CLI 正与用户交互 + 监督者任务同时在跑子代理”时，仍只显示监督者任务那一套，不被用户交互子代理覆盖或混入。
+收敛判据：自主执行最小 CLI 在“主 CLI 正与用户交互 + 监督者任务同时在跑子代理”时，仍只执行 / 显示监督者任务那一套，不被用户交互子代理覆盖或混入。
 
-补充边界：主 CLI 当前不再挂载 `API-A 自主执行面` 的执行流程窗口。主 CLI 只保留用户链路输入输出、`/auto` 门控提示与用户链路状态栏；API-A 自主执行流程的细节观察应只出现在最小 CLI / 专用观察面里。
+补充边界：主 CLI 当前不再挂载 `API-A 自主执行面` 的执行流程窗口，也不再在 idle 循环里 poll、认领或注入自主任务 prompt。主 CLI 只保留用户链路输入输出、`/auto` 门控提示与用户链路状态栏；API-A 自主执行流程应只出现在 `VoidCube autonomous` 专用最小 CLI / 观察面里。
+
+### 3.1 使用方式
+
+- 用户链路：运行 `VoidCube` 或 `VoidCube chat`，主 CLI 只服务用户输入和 API-A 主 Agent 输出。
+- 自主链路：在主 CLI 内执行 `/auto` 激活 API-B 自主链路；主 CLI 会尝试启动独立的 `VoidCube autonomous` 最小 CLI 进程。
+- 如果自动启动失败，手动另开终端运行 `VoidCube autonomous`。这个窗口专门负责 API-A 自主任务的 poll、认领、执行和回写。
+- 只读观察：运行 dashboard 或打开 Web 小屋；它们只读 `supervisor_task` / API-B 投影，不执行任务。
 
 ## 4. gateway 双槽现行协议
 

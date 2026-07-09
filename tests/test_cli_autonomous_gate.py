@@ -1615,18 +1615,20 @@ def test_cli_force_quit_marks_body_improvement_task_interrupted(monkeypatch):
     assert cli._current_autonomous_task is None
 
 
-def test_auto_command_marks_cli_agent_surface_active(monkeypatch):
+def test_auto_command_only_activates_gate_and_points_to_minicli(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._autonomous_gate_active = False
     cli.session_id = "cli-session-auto"
 
     pushed = []
-    polled = []
     cycle_calls = []
     presence_refreshes = []
+    printed = []
+    launches = []
 
     def fake_cprint(*args, **kwargs):
-        del args, kwargs
+        del kwargs
+        printed.append(" ".join(str(arg) for arg in args))
 
     def fake_push(scene, *, session_id=None, task_id=None, execution_kind=None, subagent_summary=None, agent_role=None):
         pushed.append(
@@ -1663,9 +1665,6 @@ def test_auto_command_marks_cli_agent_surface_active(monkeypatch):
         cycle_calls.append(focus)
         return {"summary": {"planned": 1, "handed_off": 0}}
 
-    def fake_poll():
-        polled.append(True)
-
     def fake_refresh_gateway_cli_presence(*, force=False):
         presence_refreshes.append(force)
         fake_push("executing", session_id=cli.session_id)
@@ -1675,6 +1674,11 @@ def test_auto_command_marks_cli_agent_surface_active(monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr(autonomous_gate_module, "trigger_autonomous_cycle", fake_cycle)
     monkeypatch.setattr(
+        autonomous_gate_module,
+        "launch_autonomous_minicli",
+        lambda host: (launches.append(host), (True, "API-A 自主执行最小 CLI 已在独立进程启动。"))[1],
+    )
+    monkeypatch.setattr(
         "VoidCube_cli.config.load_config",
         lambda: {"supervisor": {"host": "127.0.0.1", "port": 6002}},
     )
@@ -1683,7 +1687,6 @@ def test_auto_command_marks_cli_agent_surface_active(monkeypatch):
         cli,
         "/auto",
         cprint=fake_cprint,
-        poll_autonomous_workflow_callback=fake_poll,
         refresh_gateway_cli_presence_callback=fake_refresh_gateway_cli_presence,
         thread_factory=_ImmediateThread,
     )
@@ -1693,7 +1696,8 @@ def test_auto_command_marks_cli_agent_surface_active(monkeypatch):
     assert pushed[0]["scene"] == "executing"
     assert pushed[0]["session_id"] == "cli-session-auto"
     assert cycle_calls == [""]
-    assert polled == [True]
+    assert launches == [cli]
+    assert any("独立进程" in line or "最小 CLI" in line for line in printed)
 
 
 def test_auto_command_reads_cached_supervisor_snapshot_instead_of_sync_fetch(monkeypatch):
@@ -1778,7 +1782,6 @@ def test_auto_command_reads_cached_supervisor_snapshot_instead_of_sync_fetch(mon
         cli,
         "/auto",
         cprint=fake_cprint,
-        poll_autonomous_workflow_callback=lambda: None,
         refresh_gateway_cli_presence_callback=lambda *, force=False: None,
         thread_factory=_ImmediateThread,
     )
@@ -1786,6 +1789,48 @@ def test_auto_command_reads_cached_supervisor_snapshot_instead_of_sync_fetch(mon
     assert refresh_calls == [cli]
     assert any("闭环焦点: 观察 API-B 判断在途 (当前在途)" in line for line in printed)
     assert not any("监督者快照将在后台刷新后进入观测面。" in line for line in printed)
+
+
+def test_launch_autonomous_minicli_reuses_running_process(monkeypatch):
+    host = type("_Host", (), {})()
+
+    class _RunningProcess:
+        def poll(self):
+            return None
+
+    host._autonomous_minicli_process = _RunningProcess()
+    monkeypatch.setattr(
+        autonomous_gate_module.subprocess,
+        "Popen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not spawn")),
+    )
+
+    launched, message = autonomous_gate_module.launch_autonomous_minicli(host)
+
+    assert launched is True
+    assert "已在独立窗口运行" in message
+
+
+def test_launch_autonomous_minicli_spawns_separate_process(monkeypatch):
+    host = type("_Host", (), {})()
+    calls = []
+
+    class _Process:
+        def poll(self):
+            return 0
+
+    def fake_popen(cmd, **kwargs):
+        calls.append({"cmd": cmd, "kwargs": kwargs})
+        return _Process()
+
+    monkeypatch.setattr(autonomous_gate_module.subprocess, "Popen", fake_popen)
+
+    launched, message = autonomous_gate_module.launch_autonomous_minicli(host)
+
+    assert launched is True
+    assert "独立进程启动" in message
+    assert calls[0]["cmd"][-1] == "autonomous"
+    assert getattr(host, "_autonomous_minicli_process", None) is not None
 
 
 def test_autonomous_executor_session_is_persisted_before_agent_pull():
@@ -1927,9 +1972,9 @@ def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
 
     printed = []
     cycle_calls = []
-    polled = []
     presence_refreshes = []
     pushed = []
+    launches = []
     attempts = {"count": 0}
 
     def fake_cprint(*args, **kwargs):
@@ -1975,9 +2020,6 @@ def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
         cycle_calls.append(focus)
         return {"summary": {"planned": 1, "handed_off": 0}}
 
-    def fake_poll():
-        polled.append(True)
-
     def fake_refresh_gateway_cli_presence(*, force=False):
         presence_refreshes.append(force)
         fake_push("executing", session_id=cli.session_id)
@@ -1986,6 +2028,11 @@ def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
     monkeypatch.setattr("threading.Thread", _ImmediateThread)
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr(autonomous_gate_module, "trigger_autonomous_cycle", fake_cycle)
+    monkeypatch.setattr(
+        autonomous_gate_module,
+        "launch_autonomous_minicli",
+        lambda host: (launches.append(host), (True, "API-A 自主执行最小 CLI 已在独立进程启动。"))[1],
+    )
     monkeypatch.setattr(
         "VoidCube_cli.config.load_config",
         lambda: {"supervisor": {"host": "127.0.0.1", "port": 6002}},
@@ -2001,7 +2048,6 @@ def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
         cli,
         "/auto",
         cprint=fake_cprint,
-        poll_autonomous_workflow_callback=fake_poll,
         refresh_gateway_cli_presence_callback=fake_refresh_gateway_cli_presence,
         thread_factory=_ImmediateThread,
     )
@@ -2012,7 +2058,8 @@ def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
     assert presence_refreshes == [True]
     assert pushed[0]["scene"] == "executing"
     assert cycle_calls == [""]
-    assert polled == [True]
+    assert launches == [cli]
+    assert any("独立进程" in line or "最小 CLI" in line for line in printed)
 
 
 def test_cli_formats_supervisor_status_snapshot():
@@ -2288,3 +2335,37 @@ def test_cli_autonomous_summary_sections_show_refreshing_hint_when_cache_empty(m
     assert any("后台刷新中，稍后会回到当前自主闭环快照。" in line for line in lines)
     assert any("最近自主执行回报:" == line for line in lines)
     assert any("后台刷新中，稍后会回到最近自主执行回报。" in line for line in lines)
+
+
+def test_main_cli_observation_refresh_does_not_poll_autonomous_tasks(monkeypatch):
+    host = type("_Host", (), {})()
+    host._autonomous_gate_active = True
+    calls = []
+
+    monkeypatch.setattr(
+        autonomous_status_host_module,
+        "refresh_supervisor_status",
+        lambda current_host: calls.append(("supervisor", current_host)),
+    )
+    monkeypatch.setattr(
+        autonomous_status_host_module,
+        "refresh_autonomous_gateway_status",
+        lambda current_host: calls.append(("gateway_status", current_host)),
+    )
+    monkeypatch.setattr(
+        autonomous_status_host_module,
+        "refresh_gateway_autonomous_execute_snapshot",
+        lambda current_host: calls.append(("gateway_execute", current_host)),
+    )
+
+    autonomous_status_host_module.refresh_autonomous_observation_surfaces(
+        host,
+        refresh_gateway_cli_presence=lambda: calls.append(("presence", host)),
+    )
+
+    assert calls == [
+        ("supervisor", host),
+        ("gateway_status", host),
+        ("gateway_execute", host),
+        ("presence", host),
+    ]

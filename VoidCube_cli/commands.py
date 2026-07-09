@@ -126,7 +126,7 @@ COMMAND_REGISTRY: list[CommandDef] = [
                cli_only=True),
 
     # Auto - 自主规划
-    CommandDef("auto", "开启自主链路，启动治理循环（drive+review）", "会话管理",
+    CommandDef("auto", "开启自主链路；API-A 执行请用 VoidCube autonomous", "会话管理",
                aliases=("autonomous",),
                args_hint="[focus]"),
     CommandDef("auto-q", "关闭自主链路，回到主 CLI 交互", "会话管理",
