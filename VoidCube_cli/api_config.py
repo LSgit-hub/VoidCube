@@ -89,6 +89,21 @@ def save_provider_config(
         return False
 
 
+def memory_llm_provider_defaults(provider_key: str, current_config: dict) -> dict:
+    """Return the persisted Mem/API-B LLM fields for a provider choice."""
+    try:
+        from memai.model_config import PROVIDER_DEFAULTS
+
+        defaults = dict(PROVIDER_DEFAULTS.get(provider_key) or {})
+    except Exception:
+        defaults = {}
+    return {
+        "api_key_env": str(defaults.get("api_key_env") or "").strip(),
+        "base_url": str(defaults.get("base_url") or "").strip(),
+        "provider_profile": str(defaults.get("provider_profile") or "openai").strip() or "openai",
+    }
+
+
 def test_api_connection(provider: str, api_key: str, base_url: str = "") -> bool:
     """测试 API 连接"""
     try:
@@ -606,8 +621,9 @@ class DisplayComponents:
                         
                         result.append(f"    {icon} {DisplayComponents.colored(filename, color)}")
                 
-                if len(status.split('\n')) > 10:
-                    result.append(f"    ... 还有 {len(status.split('\n')) - 10} 个文件")
+                status_lines = status.split('\n')
+                if len(status_lines) > 10:
+                    result.append(f"    ... 还有 {len(status_lines) - 10} 个文件")
         
         return '\n'.join(result)
 
@@ -1175,6 +1191,14 @@ def run_api_config_wizard(console=None):
                 
                 if save_config_value("memory.llm.model", memory_model):
                     ps(f"记忆系统模型保存成功: {memory_model}")
+
+                provider_defaults = memory_llm_provider_defaults(mem_provider, current_config)
+                if provider_defaults.get("api_key_env"):
+                    save_config_value("memory.llm.api_key_env", provider_defaults["api_key_env"])
+                if provider_defaults.get("base_url"):
+                    save_config_value("memory.llm.base_url", provider_defaults["base_url"])
+                if provider_defaults.get("provider_profile"):
+                    save_config_value("memory.llm.provider_profile", provider_defaults["provider_profile"])
                 
                 ph("配置完成")
                 ps("记忆系统模型配置完成！")

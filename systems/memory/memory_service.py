@@ -701,15 +701,15 @@ class MemoryService:
         self.app.add_api_route("/tier2/compress", self.tier2_compress, methods=["POST"])
         self.app.add_api_route("/tier1/stats", self.tier1_stats, methods=["GET"])
         self.app.add_api_route("/compressed/search", self.search_compressed, methods=["POST"])
-        self.app.add_api_route("/compressed/{memory_id}", self.get_compressed, methods=["GET"])
         self.app.add_api_route("/compressed/trace/{turn_id}", self.trace_compressed_by_turn, methods=["GET"])
         self.app.add_api_route("/compressed/lifecycle", self.trigger_lifecycle, methods=["POST"])
-        self.app.add_api_route("/compressed/{memory_id}/pin", self.pin_memory, methods=["POST"])
-        self.app.add_api_route("/compressed/{memory_id}/hide", self.hide_memory, methods=["POST"])
-        self.app.add_api_route("/compressed/{memory_id}/unpin", self.unpin_memory, methods=["POST"])
         self.app.add_api_route("/compressed/semantic-search", self.semantic_search, methods=["POST"])
         self.app.add_api_route("/compressed/run-all-rules", self.run_all_rules, methods=["POST"])
         self.app.add_api_route("/compressed/rules-status", self.rules_status, methods=["GET"])
+        self.app.add_api_route("/compressed/{memory_id}", self.get_compressed, methods=["GET"])
+        self.app.add_api_route("/compressed/{memory_id}/pin", self.pin_memory, methods=["POST"])
+        self.app.add_api_route("/compressed/{memory_id}/hide", self.hide_memory, methods=["POST"])
+        self.app.add_api_route("/compressed/{memory_id}/unpin", self.unpin_memory, methods=["POST"])
         self.app.add_api_route("/llm/health", self.llm_health, methods=["GET"])
 
     def _resolve_mem_llm_client(self):
@@ -1756,7 +1756,7 @@ class MemoryService:
         client, model = self._resolve_mem_llm_client()
         if client is None:
             self._llm_healthy = False
-            self._llm_model = "none"
+            self._llm_model = model or "none"
             return False
         try:
             import asyncio as _asyncio

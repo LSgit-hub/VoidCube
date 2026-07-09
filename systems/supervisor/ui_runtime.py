@@ -7423,9 +7423,17 @@ class SupervisorUIMixin:
                             "memory_unavailable_reason": f"gateway_services_status_{resp.status}",
                             "memory_active": False,
                         }
-                    services = (await resp.json()).get("services", {})
+                    services_payload = (await resp.json()).get("services", {})
                 memory_url = None
-                for svc in services.values():
+                if isinstance(services_payload, dict):
+                    services = list(services_payload.values())
+                elif isinstance(services_payload, list):
+                    services = list(services_payload)
+                else:
+                    services = []
+                for svc in services:
+                    if not isinstance(svc, dict):
+                        continue
                     if svc.get("service_type") == "memory":
                         memory_url = svc.get("address")
                         break

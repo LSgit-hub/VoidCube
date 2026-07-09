@@ -827,6 +827,48 @@ def test_gateway_task_pull_preserves_supervisor_http_status(monkeypatch):
     assert "Supervisor returned 503" in response.json()["detail"]
 
 
+def test_gateway_task_pull_forwards_running_status(monkeypatch):
+    gateway = InternalGateway(GatewayConfig())
+    _register_supervisor(gateway)
+    client = TestClient(gateway.app)
+    calls = []
+
+    class _FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {"tasks": [{"task_id": "running-1", "status": "running"}]}
+
+    class _FakeSession:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, params=None, timeout=None):
+            calls.append({"url": url, "params": dict(params or {}), "timeout": timeout})
+            return _FakeResponse()
+
+    monkeypatch.setattr("systems.gateway.internal_gateway.aiohttp.ClientSession", _FakeSession)
+
+    response = client.get("/v1/tasks?status=running&execution_kind=body_improvement")
+
+    assert response.status_code == 200
+    assert response.json()["tasks"][0]["status"] == "running"
+    assert calls[0]["params"]["status"] == "running"
+    assert calls[0]["params"]["execution_kind"] == "body_improvement"
+
+
 def test_gateway_executor_registration_adds_standard_route_and_health_count():
     gateway = InternalGateway(GatewayConfig())
     client = TestClient(gateway.app)

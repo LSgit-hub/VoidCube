@@ -115,7 +115,11 @@ class MemModelConfig:
         configured_api_key_env = str(llm.get("api_key_env") or "").strip()
         base_url = configured_base_url or str(defaults["base_url"])
         api_key_env = configured_api_key_env or str(defaults["api_key_env"])
-
+        if (
+            provider != "openai"
+            and configured_api_key_env == PROVIDER_DEFAULTS["openai"]["api_key_env"]
+        ):
+            api_key_env = str(defaults["api_key_env"])
         # Legacy configs sometimes mirrored memory.llm.* from the main
         # agent provider and pointed Mem back into the local Gateway.
         # That causes API-B (Mem/supervisor) calls to re-enter API-A's

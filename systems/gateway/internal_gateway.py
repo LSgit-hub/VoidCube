@@ -1599,6 +1599,7 @@ class InternalGateway:
 
     async def get_approved_tasks(
         self,
+        status: Optional[str] = "approved",
         task_type: Optional[str] = None,
         execution_kind: Optional[str] = None,
     ):
@@ -1620,7 +1621,10 @@ class InternalGateway:
             raise HTTPException(status_code=503, detail=detail)
 
         url = f"{supervisor_service.address}{AUTONOMOUS_CHAIN_TASKS_ROUTE}"
-        params = {"status": "approved"}
+        requested_status = str(status or "approved").strip().lower() or "approved"
+        if requested_status not in {"approved", "running"}:
+            raise HTTPException(status_code=400, detail="Unsupported task status for gateway task pull")
+        params = {"status": requested_status}
         if task_type:
             params["task_type"] = task_type
         if execution_kind:

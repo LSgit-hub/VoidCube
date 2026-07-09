@@ -18481,6 +18481,69 @@ async def test_fetch_tier1_stats_reports_memory_service_unavailable(tmp_path, mo
     assert stats["memory_active"] is False
 
 
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_fetch_tier1_stats_accepts_gateway_service_list(tmp_path, monkeypatch):
+    supervisor = _make_supervisor(tmp_path)
+
+    class _FakeResponse:
+        status = 200
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return self._payload
+
+    class _FakeSession:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, timeout=None):
+            del timeout
+            if url.endswith("/admin/services"):
+                return _FakeResponse(
+                    {
+                        "services": [
+                            {"service_type": "supervisor", "address": "http://127.0.0.1:6002"},
+                            {"service_type": "memory", "address": "http://memory.local"},
+                        ]
+                    }
+                )
+            if url.endswith("/tier1/stats"):
+                return _FakeResponse({"turn_count": 3})
+            if url.endswith("/compressed/rules-status"):
+                return _FakeResponse(
+                    {
+                        "rules": {"tier1_decay": {"run_count": 1}},
+                        "llm_healthy": True,
+                        "effective_activity_at": None,
+                        "llm_health_checked_at": "2026-07-09T00:00:00",
+                    }
+                )
+            raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr("aiohttp.ClientSession", _FakeSession)
+
+    stats = await supervisor._fetch_tier1_stats()
+
+    assert stats["turn_count"] == 3
+    assert stats["llm_healthy"] is True
+    assert stats["rules"] == {"tier1_decay": {"run_count": 1}}
+
+
 
 
 

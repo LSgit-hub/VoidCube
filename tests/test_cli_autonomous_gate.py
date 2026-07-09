@@ -1301,6 +1301,90 @@ def test_autonomous_panel_reads_stage_card_projection(monkeypatch):
     assert "以 stage_cards 正式投影为准" in rendered
 
 
+def test_autonomous_panel_is_visible_for_api_b_state_without_api_a_task(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._autonomous_gate_active = True
+    cli._agent_running = False
+    cli._spinner_text = ""
+    cli.session_id = "cli-session-local"
+    cli._current_autonomous_task = None
+    cli._current_autonomous_task_started_at = 0.0
+    cli._last_agent_turn_result = None
+    cli._autonomous_execution_events = []
+    cli._autonomous_last_supervisor_event_key = ""
+
+    monkeypatch.setattr(VoidcubeCLI, "_get_tui_terminal_width", staticmethod(lambda default=(80, 24): 80))
+    cli._supervisor_state_cache = {
+        "scene": "planning",
+        "timeline": [],
+        "lm_input": {
+            "generation_enabled": False,
+            "proposal_count": 0,
+        },
+        "autonomous_observation": {
+            "chain": {
+                "segments": [
+                    {
+                        "key": "api_b_candidates",
+                        "items": [
+                            {
+                                "task_id": "candidate-1",
+                                "title": "Review endogenous cognition",
+                                "status": "candidate",
+                                "display_status": "候选形成",
+                            }
+                        ],
+                    }
+                ]
+            },
+            "loop": {"stage_cards": []},
+            "runtime": {"api_a_handoff_count": 0, "api_a_running_count": 0},
+        },
+    }
+    cli._autonomous_gateway_status_cache = {}
+
+    assert autonomous_panel_module.has_visible_autonomous_work(cli) is True
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
+
+    assert "API-B 模型: LM生成=未启用" in rendered
+    assert "API-B 阶段: 候选=1 · 判断在途=0" in rendered
+    assert "API-B 焦点: Review endogenous cognition" in rendered
+
+
+def test_autonomous_panel_shows_api_b_model_health(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._autonomous_gate_active = True
+    cli._agent_running = False
+    cli._spinner_text = ""
+    cli.session_id = "cli-session-local"
+    cli._current_autonomous_task = None
+    cli._current_autonomous_task_started_at = 0.0
+    cli._last_agent_turn_result = None
+    cli._autonomous_execution_events = []
+    cli._autonomous_last_supervisor_event_key = ""
+
+    monkeypatch.setattr(VoidcubeCLI, "_get_tui_terminal_width", staticmethod(lambda default=(80, 24): 80))
+    cli._supervisor_state_cache = {
+        "scene": "planning",
+        "timeline": [],
+        "lm_input": {
+            "generation_enabled": True,
+            "proposal_count": 0,
+        },
+        "tier1_stats": {"llm_healthy": False},
+        "autonomous_observation": {
+            "chain": {"segments": []},
+            "loop": {"stage_cards": []},
+            "runtime": {"api_a_handoff_count": 0, "api_a_running_count": 0},
+        },
+    }
+    cli._autonomous_gateway_status_cache = {}
+
+    rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
+
+    assert "API-B 模型: LM生成=已启用 · 模型=异常" in rendered
+
+
 def test_autonomous_panel_prefers_loop_stage_descriptor_for_non_local_reasoning(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._autonomous_gate_active = True
@@ -1615,7 +1699,75 @@ def test_cli_force_quit_marks_body_improvement_task_interrupted(monkeypatch):
     assert cli._current_autonomous_task is None
 
 
-def test_auto_command_only_activates_gate_and_points_to_minicli(monkeypatch):
+def test_body_improvement_completion_requires_improvement_report(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._agent_running = False
+    cli.session_id = "cli-body-report-required"
+    cli._current_autonomous_task = {
+        "task_id": "body-report-1",
+        "execution_kind": "body_improvement",
+        "_autonomous_task_run_id": "run-body-report-1",
+    }
+    cli._current_autonomous_task_started_at = time.time() - 5
+    cli._last_agent_turn_result = {
+        "failed": False,
+        "partial": False,
+        "interrupted": False,
+        "response": "done",
+        "autonomous_task_run_id": "run-body-report-1",
+    }
+    cli._autonomous_execution_events = []
+
+    runtime = _autonomous_runtime(cli)
+    decisions = []
+    runtime.submit_body_improvement_report = lambda *args, **kwargs: False
+    runtime.post_task_decision = lambda task_id, **kwargs: decisions.append((task_id, kwargs)) or True
+    runtime._push_cli_agent_scene = lambda *args, **kwargs: True
+
+    runtime.poll_workflow()
+
+    assert decisions[0][0] == "body-report-1"
+    assert decisions[0][1]["decision"] == "failed"
+    assert decisions[0][1]["context"]["error"] == "missing_or_failed_body_improvement_report"
+    assert cli._current_autonomous_task is None
+
+
+def test_body_improvement_completion_posts_after_successful_report(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._agent_running = False
+    cli.session_id = "cli-body-report-ok"
+    cli._current_autonomous_task = {
+        "task_id": "body-report-ok",
+        "execution_kind": "body_improvement",
+        "_autonomous_task_run_id": "run-body-report-ok",
+    }
+    cli._current_autonomous_task_started_at = time.time() - 5
+    cli._last_agent_turn_result = {
+        "failed": False,
+        "partial": False,
+        "interrupted": False,
+        "response": "done",
+        "autonomous_task_run_id": "run-body-report-ok",
+    }
+    cli._autonomous_execution_events = []
+
+    runtime = _autonomous_runtime(cli)
+    reports = []
+    decisions = []
+    runtime.submit_body_improvement_report = lambda *args, **kwargs: reports.append((args, kwargs)) or True
+    runtime.post_task_decision = lambda task_id, **kwargs: decisions.append((task_id, kwargs)) or True
+    runtime._push_cli_agent_scene = lambda *args, **kwargs: True
+
+    runtime.poll_workflow()
+
+    assert reports
+    assert decisions[0][0] == "body-report-ok"
+    assert decisions[0][1]["decision"] == "completed"
+    assert decisions[0][1]["context"]["failed"] is False
+    assert cli._current_autonomous_task is None
+
+
+def test_auto_command_activates_gate_and_embedded_component(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._autonomous_gate_active = False
     cli.session_id = "cli-session-auto"
@@ -1675,8 +1827,8 @@ def test_auto_command_only_activates_gate_and_points_to_minicli(monkeypatch):
     monkeypatch.setattr(autonomous_gate_module, "trigger_autonomous_cycle", fake_cycle)
     monkeypatch.setattr(
         autonomous_gate_module,
-        "launch_autonomous_minicli",
-        lambda host: (launches.append(host), (True, "API-A 自主执行最小 CLI 已在独立进程启动。"))[1],
+        "activate_autonomous_execution_component",
+        lambda host: (launches.append(host), (True, "API-A 自主执行组件已接入当前 CLI。"))[1],
     )
     monkeypatch.setattr(
         "VoidCube_cli.config.load_config",
@@ -1697,7 +1849,7 @@ def test_auto_command_only_activates_gate_and_points_to_minicli(monkeypatch):
     assert pushed[0]["session_id"] == "cli-session-auto"
     assert cycle_calls == [""]
     assert launches == [cli]
-    assert any("独立进程" in line or "最小 CLI" in line for line in printed)
+    assert any("组件已接入当前 CLI" in line for line in printed)
 
 
 def test_auto_command_reads_cached_supervisor_snapshot_instead_of_sync_fetch(monkeypatch):
@@ -1791,46 +1943,79 @@ def test_auto_command_reads_cached_supervisor_snapshot_instead_of_sync_fetch(mon
     assert not any("监督者快照将在后台刷新后进入观测面。" in line for line in printed)
 
 
-def test_launch_autonomous_minicli_reuses_running_process(monkeypatch):
+def test_activate_autonomous_execution_component_reuses_embedded_thread(monkeypatch):
     host = type("_Host", (), {})()
+    starts = []
+    host._start_autonomous_execution_component = lambda: starts.append("start") or True
 
-    class _RunningProcess:
-        def poll(self):
-            return None
-
-    host._autonomous_minicli_process = _RunningProcess()
-    monkeypatch.setattr(
-        autonomous_gate_module.subprocess,
-        "Popen",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not spawn")),
-    )
-
-    launched, message = autonomous_gate_module.launch_autonomous_minicli(host)
+    launched, message = autonomous_gate_module.activate_autonomous_execution_component(host)
 
     assert launched is True
-    assert "已在独立窗口运行" in message
+    assert starts == ["start"]
+    assert "当前 CLI" in message
 
 
-def test_launch_autonomous_minicli_spawns_separate_process(monkeypatch):
+def test_activate_autonomous_execution_component_reports_start_failure():
     host = type("_Host", (), {})()
-    calls = []
+    host._start_autonomous_execution_component = lambda: False
 
-    class _Process:
-        def poll(self):
-            return 0
+    launched, message = autonomous_gate_module.activate_autonomous_execution_component(host)
 
-    def fake_popen(cmd, **kwargs):
-        calls.append({"cmd": cmd, "kwargs": kwargs})
-        return _Process()
+    assert launched is False
+    assert "未启动" in message
 
-    monkeypatch.setattr(autonomous_gate_module.subprocess, "Popen", fake_popen)
 
-    launched, message = autonomous_gate_module.launch_autonomous_minicli(host)
+def test_autonomous_component_panel_stays_hidden_when_idle():
+    host = type("_Host", (), {})()
+    host._autonomous_gate_active = True
+    host._agent_running = False
+    host._current_autonomous_task = None
+    host._last_agent_turn_result = None
+    host._autonomous_execution_events = []
 
-    assert launched is True
-    assert "独立进程启动" in message
-    assert calls[0]["cmd"][-1] == "autonomous"
-    assert getattr(host, "_autonomous_minicli_process", None) is not None
+    class _EmptyQueue:
+        def empty(self):
+            return True
+
+    host._pending_input = _EmptyQueue()
+
+    assert autonomous_panel_module.has_visible_autonomous_work(host) is False
+
+
+def test_autonomous_component_panel_becomes_visible_for_execution_events():
+    host = type("_Host", (), {})()
+    host._autonomous_gate_active = True
+    host._agent_running = False
+    host._current_autonomous_task = None
+    host._last_agent_turn_result = None
+    host._autonomous_execution_events = [{"stage": "claim", "message": "已接手"}]
+
+    class _EmptyQueue:
+        def empty(self):
+            return True
+
+    host._pending_input = _EmptyQueue()
+
+    assert autonomous_panel_module.has_visible_autonomous_work(host) is True
+
+
+def test_autonomous_panel_reads_embedded_component_state():
+    host = type("_Host", (), {})()
+    component = type("_Component", (), {})()
+    host._autonomous_gate_active = True
+    host._autonomous_component_host = component
+    component._agent_running = False
+    component._current_autonomous_task = None
+    component._last_agent_turn_result = None
+    component._autonomous_execution_events = [{"stage": "claim", "message": "已接手"}]
+
+    class _EmptyQueue:
+        def empty(self):
+            return True
+
+    component._pending_input = _EmptyQueue()
+
+    assert autonomous_panel_module.has_visible_autonomous_work(host) is True
 
 
 def test_autonomous_executor_session_is_persisted_before_agent_pull():
@@ -2030,8 +2215,8 @@ def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
     monkeypatch.setattr(autonomous_gate_module, "trigger_autonomous_cycle", fake_cycle)
     monkeypatch.setattr(
         autonomous_gate_module,
-        "launch_autonomous_minicli",
-        lambda host: (launches.append(host), (True, "API-A 自主执行最小 CLI 已在独立进程启动。"))[1],
+        "activate_autonomous_execution_component",
+        lambda host: (launches.append(host), (True, "API-A 自主执行组件已接入当前 CLI。"))[1],
     )
     monkeypatch.setattr(
         "VoidCube_cli.config.load_config",
@@ -2059,7 +2244,7 @@ def test_auto_command_recovers_supervisor_before_failing(monkeypatch):
     assert pushed[0]["scene"] == "executing"
     assert cycle_calls == [""]
     assert launches == [cli]
-    assert any("独立进程" in line or "最小 CLI" in line for line in printed)
+    assert any("组件已接入当前 CLI" in line for line in printed)
 
 
 def test_cli_formats_supervisor_status_snapshot():

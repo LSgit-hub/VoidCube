@@ -2,11 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import subprocess
-import sys
 import urllib.request
-from pathlib import Path
 from typing import Any, Dict, Tuple
 
 from systems.supervisor.autonomous_chain_contract import AUTONOMOUS_CHAIN_CYCLE_ROUTE
@@ -29,7 +25,6 @@ def _enter_autonomous_gate_locally(
     refresh_gateway_cli_presence_callback: Any,
 ) -> None:
     host._autonomous_gate_active = True
-    ensure_supervisor_task_session(host, logger_debug=logger.debug)
     append_autonomous_execution_event(
         host,
         "自主链路已激活，API-A 自主执行面等待任务",
@@ -50,6 +45,7 @@ def _exit_autonomous_gate_locally(
     event_message: str = "",
     event_tone: str = "warn",
 ) -> None:
+    component_host = getattr(host, "_autonomous_component_host", None) or host
     if interrupt_reason and interrupt_source:
         interrupt_current_task_callback(
             reason=interrupt_reason,
@@ -59,11 +55,14 @@ def _exit_autonomous_gate_locally(
     host._autonomous_gate_active = False
     push_cli_agent_scene_callback(
         "idle",
-        session_id=getattr(host, "session_id", None),
+        session_id=getattr(component_host, "session_id", None),
         agent_role="supervisor_task",
     )
     if event_message:
         append_autonomous_execution_event(host, event_message, tone=event_tone)
+    stopper = getattr(host, "_stop_autonomous_execution_component", None)
+    if callable(stopper):
+        stopper(interrupt=False)
 
 
 def _resolve_supervisor_url() -> str:
@@ -91,46 +90,18 @@ def trigger_autonomous_cycle(*, focus: str = "") -> Dict[str, Any] | None:
     return json.loads(urllib.request.urlopen(request, timeout=30).read())
 
 
-def launch_autonomous_minicli(host: Any) -> Tuple[bool, str]:
-    """Launch the dedicated autonomous mini CLI as a separate process.
-
-    The main CLI must not host autonomous task execution. This helper only
-    starts the separate execution surface and remembers the process handle.
-    """
-    current = getattr(host, "_autonomous_minicli_process", None)
-    if current is not None:
+def activate_autonomous_execution_component(host: Any) -> Tuple[bool, str]:
+    """Activate the embedded API-A autonomous execution component."""
+    starter = getattr(host, "_start_autonomous_execution_component", None)
+    if callable(starter):
         try:
-            if current.poll() is None:
-                return True, "API-A 自主执行最小 CLI 已在独立窗口运行。"
-        except Exception:
-            pass
-
-    cmd = [sys.executable, "-m", "VoidCube_cli.main", "autonomous"]
-    cwd = str(Path(__file__).resolve().parents[1])
-    env = os.environ.copy()
-    try:
-        if os.name == "nt":
-            creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
-            process = subprocess.Popen(
-                cmd,
-                cwd=cwd,
-                env=env,
-                creationflags=creationflags,
-            )
-        else:
-            process = subprocess.Popen(
-                cmd,
-                cwd=cwd,
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        host._autonomous_minicli_process = process
-        return True, "API-A 自主执行最小 CLI 已在独立进程启动。"
-    except Exception as exc:
-        return False, f"未能自动启动最小 CLI，请手动运行: VoidCube autonomous ({exc})"
+            started = bool(starter())
+        except Exception as exc:
+            logger.warning("Failed to start autonomous execution component: %s", exc)
+            return False, f"API-A 自主执行组件启动失败: {exc}"
+        if not started:
+            return False, "API-A 自主执行组件未启动。"
+    return True, "API-A 自主执行组件已接入当前 CLI；有链路项执行时会自动显示。"
 
 
 def handle_auto_command(
@@ -218,10 +189,10 @@ def handle_auto_command(
                 else:
                     cprint("     监督者快照将在后台刷新后进入观测面。")
                 cprint("     前台主 CLI 交互仍保持可用。")
-                launched, launch_message = launch_autonomous_minicli(host)
+                launched, launch_message = activate_autonomous_execution_component(host)
                 cprint(f"     {launch_message}")
                 if not launched:
-                    cprint("     主 CLI 不会代替最小 CLI 执行自主任务。")
+                    cprint("     自主执行组件未就绪，暂不会认领自主链路任务。")
                 cprint("     使用 /auto-q 停止自主链路。")
                 cprint(f"     监视地址: {supervisor_url}/ui")
             else:
@@ -372,7 +343,8 @@ def force_quit_autonomous_gate(
     except Exception as exc:
         cprint(f"  ⚠️  自主链路停用失败: {exc}")
 
-    current = getattr(host, "_current_autonomous_task", None)
+    component_host = getattr(host, "_autonomous_component_host", None) or host
+    current = getattr(component_host, "_current_autonomous_task", None)
     if current is not None:
         task_id = str(current.get("task_id") or "")
         execution_kind = autonomous_task_execution_kind(current)
@@ -388,7 +360,7 @@ def force_quit_autonomous_gate(
             cprint("  ⚠️  未能向 Gateway 回报链路项终态")
 
     try:
-        session_id = getattr(host, "session_id", "")
+        session_id = getattr(component_host, "session_id", "")
         if session_id:
             gateway_base = "http://127.0.0.1:6000"
             request = urllib.request.Request(

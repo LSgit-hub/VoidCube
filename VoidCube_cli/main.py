@@ -14,7 +14,7 @@ Usage:
     VoidCube api                  # Configure API settings
     VoidCube logout              # Clear stored authentication
     VoidCube status              # Show status of all components
-    VoidCube autonomous          # Run API-A autonomous execution mini CLI
+    VoidCube autonomous          # Debug the API-A autonomous execution component
     VoidCube cron                # Manage cron jobs
     VoidCube cron list           # List cron jobs
     VoidCube cron status         # Check if cron scheduler is running
@@ -1065,15 +1065,16 @@ def cmd_status(args):
 
 
 def cmd_autonomous(args):
-    """Run the dedicated API-A autonomous execution mini CLI."""
-    from VoidCube_cli.autonomous_runner import run_autonomous_minicli
+    """Run a debug surface for the embedded API-A autonomous component."""
+    from VoidCube_cli.autonomous_runner import run_autonomous_component_debug
 
-    run_autonomous_minicli(
+    run_autonomous_component_debug(
         model=getattr(args, "model", None),
         provider=getattr(args, "provider", None),
         interval=float(getattr(args, "interval", 2.0) or 2.0),
         once=bool(getattr(args, "once", False)),
         clear=not bool(getattr(args, "no_clear", False)),
+        show_idle=bool(getattr(args, "show_idle", False)),
     )
 
 
@@ -1597,12 +1598,13 @@ For more help on a command:
     autonomous_parser = subparsers.add_parser(
         "autonomous",
         aliases=["auto-cli"],
-        help="Run the API-A autonomous execution mini CLI",
-        description="Dedicated mini CLI for autonomous-chain API-A task execution and observation.",
+        help="Debug the embedded API-A autonomous execution component",
+        description="Debug-only surface for autonomous-chain API-A task execution and observation; normal use is /auto inside the main CLI.",
     )
     autonomous_parser.add_argument("--interval", type=float, default=2.0, help="Refresh interval in seconds")
-    autonomous_parser.add_argument("--once", action="store_true", help="Poll and render once, then exit")
+    autonomous_parser.add_argument("--once", action="store_true", help="Poll once, then exit; no output when idle unless --show-idle is set")
     autonomous_parser.add_argument("--no-clear", action="store_true", help="Do not clear the terminal between refreshes")
+    autonomous_parser.add_argument("--show-idle", action="store_true", help="Show the idle observation panel for debugging")
     autonomous_parser.add_argument("-m", "--model", help="Model override for the autonomous API-A executor")
     autonomous_parser.add_argument(
         "--provider",

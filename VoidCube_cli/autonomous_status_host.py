@@ -181,11 +181,7 @@ def refresh_autonomous_observation_surfaces(
     *,
     refresh_gateway_cli_presence: Any,
 ) -> None:
-    """Refresh cached autonomous observation surfaces while the CLI is idle.
-
-    The main CLI is only the user-chain surface. Autonomous task polling and
-    execution live in the dedicated minimal autonomous CLI.
-    """
+    """Refresh cached autonomous observation surfaces while the CLI is idle."""
     refresh_supervisor_status(host)
     refresh_autonomous_gateway_status(host)
     refresh_gateway_autonomous_execute_snapshot(host)

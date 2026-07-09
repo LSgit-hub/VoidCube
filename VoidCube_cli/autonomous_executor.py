@@ -7,7 +7,6 @@ import urllib.request
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
-from systems.supervisor.autonomous_chain_contract import AUTONOMOUS_CHAIN_TASKS_ROUTE
 from VoidCube_cli.autonomous_events import append_autonomous_execution_event
 
 
@@ -60,6 +59,7 @@ def build_autonomous_task_prompt(
             prompt_parts.append(f"Forbidden patterns: {', '.join(str(x) for x in forbidden_patterns)}")
         if max_files:
             prompt_parts.append(f"Max files changed: {max_files}")
+        prompt_parts.append("Commit the shell worktree changes before reporting completion.")
         prompt_parts.append("Produce a concise implementation summary with the concrete files changed and reasoning.")
         return "\n\n".join(prompt_parts)
 
@@ -151,20 +151,9 @@ class AutonomousExecutorRuntime:
             return None
 
         try:
-            from VoidCube_cli.config import load_config
-
-            cfg = load_config()
-            sv_cfg = cfg.get("supervisor", {}) if isinstance(cfg, dict) else {}
-            host = sv_cfg.get("host", "127.0.0.1")
-            port = sv_cfg.get("port", 6002)
-            supervisor_url = f"http://{host}:{port}"
-        except Exception:
-            supervisor_url = "http://127.0.0.1:6002"
-
-        try:
             resp = json.loads(
                 urllib.request.urlopen(
-                    f"{supervisor_url}{AUTONOMOUS_CHAIN_TASKS_ROUTE}?status=running",
+                    "http://127.0.0.1:6000/v1/tasks?status=running",
                     timeout=10,
                 ).read()
             )
@@ -424,6 +413,21 @@ class AutonomousExecutorRuntime:
                     if decision == "failed"
                     else f"API-A 自主执行面已完成{task_label}。"
                 )
+                if decision == "completed" and execution_kind == "body_improvement":
+                    if not self.submit_body_improvement_report(
+                        current,
+                        task_id,
+                        gateway_base,
+                        improvement_description=str(turn_result.get("response") or "")[:4000],
+                    ):
+                        decision = "failed"
+                        reason = (
+                            "API-A 自主执行面报告替身改进完成，但未能形成可治理的 "
+                            "commit/diff 改进报告。"
+                        )
+                        turn_result["failed"] = True
+                        turn_result["error"] = "missing_or_failed_body_improvement_report"
+
                 writeback_ok = self.post_task_decision(
                     task_id,
                     decision=decision,
@@ -447,13 +451,6 @@ class AutonomousExecutorRuntime:
                         tone="error" if decision == "failed" else "success",
                         stage="writeback",
                     )
-                    if decision == "completed" and execution_kind == "body_improvement":
-                        self.submit_body_improvement_report(
-                            current,
-                            task_id,
-                            gateway_base,
-                            improvement_description=str(turn_result.get("response") or "")[:4000],
-                        )
                     self._push_cli_agent_scene(
                         "idle",
                         session_id=getattr(self.host, "session_id", None),
@@ -592,12 +589,12 @@ class AutonomousExecutorRuntime:
         gateway_base: str,
         *,
         improvement_description: str,
-    ) -> None:
+    ) -> bool:
         worktree_path = str(task.get("_improvement_worktree") or "").strip()
         baseline_head = str(task.get("_baseline_head") or "").strip()
         slot_id = str(task.get("_improvement_slot_id") or "").strip()
         if not worktree_path or not baseline_head or not slot_id:
-            return
+            return False
         diff = self._git_improvement_diff(worktree_path, baseline_head)
         if not diff or not diff.get("changed_files"):
             append_autonomous_execution_event(
@@ -606,7 +603,7 @@ class AutonomousExecutorRuntime:
                 tone="warn",
                 stage="improvement_report_skipped",
             )
-            return
+            return False
         learning_refs = []
         evidence = task.get("evidence") or {}
         if isinstance(evidence, dict) and evidence.get("learning_refs"):
@@ -634,6 +631,7 @@ class AutonomousExecutorRuntime:
                 tone="success",
                 stage="improvement_report",
             )
+            return True
         except Exception:
             append_autonomous_execution_event(
                 self.host,
@@ -641,3 +639,4 @@ class AutonomousExecutorRuntime:
                 tone="error",
                 stage="improvement_report_failed",
             )
+            return False

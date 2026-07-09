@@ -4,6 +4,7 @@ import time
 from typing import Any, Dict
 
 from VoidCube_cli.autonomous_observation import (
+    observation_group_items,
     resolve_autonomous_no_task_reason,
     resolve_autonomous_panel_focus_stage,
     resolve_autonomous_panel_focus_task,
@@ -13,6 +14,125 @@ from VoidCube_cli.autonomous_status_host import (
     fetch_autonomous_gateway_status,
     fetch_supervisor_status,
 )
+
+
+def has_visible_autonomous_work(host: Any) -> bool:
+    """Return True when the embedded autonomous panel should be visible."""
+    if not getattr(host, "_autonomous_gate_active", False):
+        return False
+    state_host = getattr(host, "_autonomous_component_host", None) or host
+    if getattr(state_host, "_agent_running", False):
+        return True
+    if getattr(state_host, "_current_autonomous_task", None):
+        return True
+    if getattr(state_host, "_last_agent_turn_result", None):
+        return True
+    try:
+        if not state_host._pending_input.empty():
+            return True
+    except Exception:
+        pass
+    visible_event_stages = {
+        "claim",
+        "autonomous_execution_started",
+        "autonomous_execution_start_failed",
+        "tool_started",
+        "tool_completed",
+        "model_turn_finished",
+        "writeback",
+        "writeback_failed",
+        "improvement_report",
+        "improvement_report_failed",
+        "improvement_report_skipped",
+    }
+    for event in list(getattr(state_host, "_autonomous_execution_events", []) or [])[-5:]:
+        if str(event.get("stage") or "").strip().lower() in visible_event_stages:
+            return True
+    supervisor_state = fetch_supervisor_status(host)
+    if _has_supervisor_chain_activity(supervisor_state):
+        return True
+    return False
+
+
+def _has_supervisor_chain_activity(supervisor_state: Dict[str, Any]) -> bool:
+    if not supervisor_state:
+        return False
+    if str(supervisor_state.get("scene") or "").strip().lower() not in {"", "idle"}:
+        return True
+    if dict(supervisor_state.get("lm_input") or {}):
+        return True
+    observation = dict(supervisor_state.get("autonomous_observation") or {})
+    runtime = dict(observation.get("runtime") or {})
+    if int(runtime.get("api_a_handoff_count") or 0) or int(runtime.get("api_a_running_count") or 0):
+        return True
+    for key in ("api_b_candidates", "api_b_judgement", "api_a_handoff"):
+        if observation_group_items(supervisor_state, key):
+            return True
+    loop = dict(observation.get("loop") or {})
+    for card in list(loop.get("stage_cards") or []):
+        if not isinstance(card, dict):
+            continue
+        if str(card.get("status") or "").strip().lower() in {"active", "ready"}:
+            return True
+    return False
+
+
+def _append_api_b_status_rows(
+    rows: list[tuple[str, str]],
+    supervisor_state: Dict[str, Any],
+    inner_width: int,
+    *,
+    trim_status_bar_text: Any,
+) -> None:
+    lm_input = dict(supervisor_state.get("lm_input") or {})
+    if lm_input:
+        enabled = bool(lm_input.get("generation_enabled"))
+        status = str(lm_input.get("status") or "").strip()
+        role = str(lm_input.get("model_role") or "").strip()
+        proposal_count = lm_input.get("proposal_count")
+        details = ["LM生成=已启用" if enabled else "LM生成=未启用"]
+        tier1_stats = dict(supervisor_state.get("tier1_stats") or {})
+        if enabled:
+            if "llm_healthy" in tier1_stats:
+                details.append("模型=健康" if bool(tier1_stats.get("llm_healthy")) else "模型=异常")
+            elif tier1_stats.get("memory_unavailable"):
+                details.append("模型健康=未知")
+        if status:
+            details.append(f"状态={status}")
+        if role:
+            details.append(f"角色={role}")
+        if proposal_count is not None:
+            details.append(f"提案={proposal_count}")
+        rows.append(
+            (
+                "class:auto-panel-info" if enabled else "class:auto-panel-warn",
+                trim_status_bar_text("API-B 模型: " + " · ".join(details), inner_width),
+            )
+        )
+
+    candidate_items = observation_group_items(supervisor_state, "api_b_candidates")
+    judgement_items = observation_group_items(supervisor_state, "api_b_judgement")
+    if candidate_items or judgement_items:
+        rows.append(
+            (
+                "class:auto-panel-info",
+                trim_status_bar_text(
+                    f"API-B 阶段: 候选={len(candidate_items)} · 判断在途={len(judgement_items)}",
+                    inner_width,
+                ),
+            )
+        )
+        focus = dict((judgement_items or candidate_items)[0] or {})
+        title = str(focus.get("title") or focus.get("summary") or "").strip()
+        status = str(focus.get("display_status") or focus.get("status") or "").strip()
+        if title:
+            suffix = f" · {status}" if status else ""
+            rows.append(
+                (
+                    "class:auto-panel-dim",
+                    trim_status_bar_text(f"API-B 焦点: {title}{suffix}", inner_width),
+                )
+            )
 
 
 def build_autonomous_executor_lease_row(
@@ -94,21 +214,22 @@ def resolve_autonomous_waiting_start_cause(
 
 
 def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
+    state_host = getattr(host, "_autonomous_component_host", None) or host
     width = host._get_tui_terminal_width()
     inner_width = max(34, min(width - 4, 92))
-    session_short = str(getattr(host, "session_id", "") or "")[-8:] or "unknown"
+    session_short = str(getattr(state_host, "session_id", "") or "")[-8:] or "unknown"
     rows: list[tuple[str, str]] = []
     supervisor_state = fetch_supervisor_status(host)
     gateway_state = fetch_autonomous_gateway_status(host)
     focus_task = resolve_autonomous_panel_focus_task(
         supervisor_state,
-        getattr(host, "_current_autonomous_task", None),
+        getattr(state_host, "_current_autonomous_task", None),
     )
     focus_stage = resolve_autonomous_panel_focus_stage(
         focus_task,
-        current_task=getattr(host, "_current_autonomous_task", None),
-        agent_running=bool(getattr(host, "_agent_running", False)),
-        last_agent_turn_result=getattr(host, "_last_agent_turn_result", None),
+        current_task=getattr(state_host, "_current_autonomous_task", None),
+        agent_running=bool(getattr(state_host, "_agent_running", False)),
+        last_agent_turn_result=getattr(state_host, "_last_agent_turn_result", None),
     )
     supervisor_descriptor = resolve_supervisor_stage_descriptor(
         supervisor_state,
@@ -124,7 +245,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
     elif focus_stage == "local_claimed_waiting_first_turn":
         status_label = "已认领待起跑"
         status_style = "class:auto-panel-warn"
-    elif getattr(host, "_agent_running", False):
+    elif getattr(state_host, "_agent_running", False):
         status_label = "模型处理中"
         status_style = "class:auto-panel-good"
     elif focus_stage == "waiting_api_a_claim":
@@ -139,11 +260,17 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
 
     rows.append(("class:auto-panel-title", f"API-A 自主执行面 · 会话 {session_short}"))
     rows.append((status_style, f"状态: {status_label}"))
+    _append_api_b_status_rows(
+        rows,
+        supervisor_state,
+        inner_width,
+        trim_status_bar_text=host._trim_status_bar_text,
+    )
     rows.append(
         build_autonomous_executor_lease_row(
             gateway_state,
             inner_width,
-            session_id=str(getattr(host, "session_id", "") or ""),
+            session_id=str(getattr(state_host, "session_id", "") or ""),
             trim_status_bar_text=host._trim_status_bar_text,
         )
     )
@@ -158,9 +285,9 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
     if task_id:
         label = "改进" if execution_kind == "body_improvement" else "学习"
         task_text = f"链路项: {label} · {task_id[:8]} · {task_title or '未命名'}"
-        current_task = getattr(host, "_current_autonomous_task", None)
+        current_task = getattr(state_host, "_current_autonomous_task", None)
         if focus_task is current_task:
-            started_at = float(getattr(host, "_current_autonomous_task_started_at", 0.0) or 0.0)
+            started_at = float(getattr(state_host, "_current_autonomous_task_started_at", 0.0) or 0.0)
             if started_at > 0:
                 elapsed = max(0, int(time.time() - started_at))
                 task_text += f" · {elapsed}s"
@@ -176,7 +303,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
                 )
             )
             cause_style, cause_text = resolve_autonomous_waiting_start_cause(
-                list(getattr(host, "_autonomous_execution_events", []) or [])
+                list(getattr(state_host, "_autonomous_execution_events", []) or [])
             )
             rows.append((cause_style, host._trim_status_bar_text(cause_text, inner_width)))
         elif focus_stage == "local_claimed_waiting_writeback":
@@ -220,10 +347,10 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
         reason_style, reason_text = resolve_autonomous_no_task_reason(supervisor_state)
         rows.append((reason_style, host._trim_status_bar_text(reason_text, inner_width)))
 
-    spinner_text = str(getattr(host, "_spinner_text", "") or "").strip()
+    spinner_text = str(getattr(state_host, "_spinner_text", "") or "").strip()
     if spinner_text:
         activity_text = f"执行流: {spinner_text}"
-    elif focus_stage == "local_claimed_active" or getattr(host, "_agent_running", False):
+    elif focus_stage == "local_claimed_active" or getattr(state_host, "_agent_running", False):
         activity_text = "执行流: 模型正在 API-A 自主执行面中工作"
     elif focus_stage == "local_claimed_waiting_first_turn":
         activity_text = "执行流: API-A 自主执行面已认领链路项，等待进入首个模型或工具回合"
@@ -258,7 +385,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
                 )
             )
 
-    for event in list(getattr(host, "_autonomous_execution_events", []) or [])[-3:]:
+    for event in list(getattr(state_host, "_autonomous_execution_events", []) or [])[-3:]:
         tone = str(event.get("tone") or "info").strip().lower()
         style = {
             "success": "class:auto-panel-good",

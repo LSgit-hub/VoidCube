@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -155,6 +156,27 @@ async def test_rules_status_exposes_effective_activity_and_llm_check_marker(tmp_
     assert "effective_activity_at" in status
     assert "llm_health_checked_at" in status
     assert "llm_healthy" in status
+
+
+def test_rules_status_route_is_not_shadowed_by_compressed_memory_id(tmp_path):
+    svc = _make_service(tmp_path)
+    client = TestClient(svc.app)
+
+    response = client.get("/compressed/rules-status")
+
+    assert response.status_code == 200
+    assert "llm_healthy" in response.json()
+
+
+@pytest.mark.asyncio
+async def test_llm_health_records_configured_model_when_key_missing(tmp_path):
+    svc = _make_service(tmp_path)
+    svc._resolve_mem_llm_client = lambda: (None, "deepseek-v4-flash")  # type: ignore[method-assign]
+
+    ok = await svc._check_llm_health()
+
+    assert ok is False
+    assert await svc.llm_health() == {"healthy": False, "model": "deepseek-v4-flash"}
 
 
 @pytest.mark.asyncio

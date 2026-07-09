@@ -4,6 +4,8 @@ import os
 import time
 from typing import Any, Optional
 
+from VoidCube_cli.autonomous_panel import has_visible_autonomous_work
+
 
 def _plain_cprint(message: str) -> None:
     print(str(message))
@@ -16,18 +18,19 @@ def _render_rows(host: Any) -> None:
         print(f"  {text}")
 
 
-def run_autonomous_minicli(
+def run_autonomous_component_debug(
     *,
     model: Optional[str] = None,
     provider: Optional[str] = None,
     interval: float = 2.0,
     once: bool = False,
     clear: bool = True,
+    show_idle: bool = False,
 ) -> None:
-    """Run the dedicated API-A autonomous execution surface.
+    """Run a debug surface for the embedded API-A autonomous component.
 
-    This is intentionally separate from the main CLI. It owns autonomous task
-    polling, claim, execution, writeback, and the compact observation panel.
+    Normal operation uses /auto inside the main CLI. This command is retained
+    only for diagnostics when the embedded component needs isolated inspection.
     """
     import cli as cli_module
 
@@ -56,9 +59,11 @@ def run_autonomous_minicli(
         cprint=_plain_cprint,
     )
 
-    print("\n  VoidCube API-A 自主执行最小 CLI")
-    print("  只处理自主链路的 API-A 执行位；主 CLI 可继续用于用户对话。")
-    print("  Ctrl+C 退出观察窗口。\n")
+    has_rendered = False
+    if show_idle:
+        print("\n  VoidCube API-A 自主执行组件调试面")
+        print("  正常使用请在主 CLI 内执行 /auto；此入口只用于隔离诊断。")
+        print("  空态调试显示已开启。Ctrl+C 退出。\n")
 
     try:
         while True:
@@ -84,17 +89,24 @@ def run_autonomous_minicli(
                     host._execute_pending_input(pending, app=None)
                     runtime.poll_workflow()
 
-            if clear and not once:
-                os.system("cls" if os.name == "nt" else "clear")
-            print(f"  刷新时间 {time.strftime('%H:%M:%S')}  （Ctrl+C 退出）\n")
-            _render_rows(host)
-            print()
+            should_render = show_idle or has_visible_autonomous_work(host)
+            if should_render:
+                if clear and not once:
+                    os.system("cls" if os.name == "nt" else "clear")
+                if not has_rendered and not show_idle:
+                    print("\n  VoidCube API-A 自主执行组件调试面")
+                    print("  正常路径是主 CLI 内嵌组件；此处只显示隔离诊断信息。")
+                    print("  Ctrl+C 退出。\n")
+                print(f"  刷新时间 {time.strftime('%H:%M:%S')}  （Ctrl+C 退出）\n")
+                _render_rows(host)
+                print()
+                has_rendered = True
 
             if once:
                 break
             time.sleep(max(0.5, float(interval or 2.0)))
     except KeyboardInterrupt:
-        print("\n  自主执行最小 CLI 已退出。\n")
+        print("\n  自主执行组件调试面已退出。\n")
     finally:
         try:
             cli_module._push_cli_agent_scene(

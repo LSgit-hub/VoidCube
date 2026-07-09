@@ -155,6 +155,24 @@ def test_mem_model_config_rewrites_local_gateway_loopback_base_url() -> None:
     assert model_config.api_key_env == "DEEPSEEK_API_KEY"
 
 
+def test_mem_model_config_repairs_stale_openai_key_env_when_provider_changed() -> None:
+    config = {
+        "memory": {
+            "provider": "mem",
+            "llm": {
+                "provider": "deepseek",
+                "model": "deepseek-v4-flash",
+                "api_key_env": "OPENAI_API_KEY",
+            },
+        }
+    }
+
+    model_config = MemModelConfig.from_voidcube_config(config)
+
+    assert model_config.provider == "deepseek"
+    assert model_config.api_key_env == "DEEPSEEK_API_KEY"
+
+
 def test_resolve_mem_llm_client_rejects_loopback_gateway_without_real_mem_key(monkeypatch) -> None:
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)

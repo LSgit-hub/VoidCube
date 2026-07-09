@@ -278,7 +278,7 @@ class SupervisorServiceRuntimeConfig(BaseModel):
     endogenous_drive_learning_topic_cooldown_hours: int = 24
     endogenous_drive_body_improvement_cooldown_hours: int = 12
     endogenous_drive_topic_overlap_threshold: float = 0.6
-    endogenous_drive_lm_task_generation_enabled: bool = False
+    endogenous_drive_lm_task_generation_enabled: bool = True
     endogenous_drive_lm_task_max_candidates: int = 3
     endogenous_drive_lm_task_model_role: str = "governance_reasoner"
     endogenous_drive_cognition_charter: EndogenousDriveCognitionCharterConfig = Field(

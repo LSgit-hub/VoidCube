@@ -32,6 +32,13 @@ SUPERVISOR_PORT = 6002
 # PID file directory
 PID_DIR = Path.home() / ".VoidCube" / "run"
 
+try:
+    from VoidCube_cli.env_loader import load_VoidCube_dotenv
+
+    load_VoidCube_dotenv(project_env=Path(__file__).resolve().parents[2] / ".env")
+except Exception:
+    pass
+
 
 def _safe_console_text(text: str) -> str:
     """Normalize Unicode-rich status text for legacy Windows consoles."""
@@ -217,18 +224,56 @@ def _health_check(port: int, timeout: float = 2.0) -> bool:
 _foreground_threads: list = []
 
 
-def _build_service_app(name: str, port: int):
-    """Build the FastAPI app for a named service (shared by fg/bg paths)."""
-    from systems.gateway.internal_gateway import InternalGateway, GatewayConfig
-    from systems.supervisor.supervisor import Supervisor, SupervisorConfig
-    from systems.memory.memory_service import MemoryService, MemoryServiceConfig
+def _build_service_config(name: str, port: int, system_config: Any | None = None) -> Any:
+    """Build the runtime config object used by a named service."""
+    from systems.gateway.internal_gateway import GatewayConfig
+    from systems.supervisor.supervisor import SupervisorConfig
+    from systems.memory.memory_service import MemoryServiceConfig
+    from systems.config import get_config
+
+    system_config = system_config or get_config()
 
     if name == "gateway":
-        return InternalGateway(GatewayConfig(port=port)).app
+        return GatewayConfig(
+            host=system_config.gateway.host,
+            port=port,
+            auth_token=system_config.gateway.auth_token,
+            log_level=system_config.gateway.log_level,
+        )
     elif name == "supervisor":
-        return Supervisor(config=SupervisorConfig(port=port)).app
+        if hasattr(system_config.supervisor, "model_copy"):
+            supervisor_config: SupervisorConfig = system_config.supervisor.model_copy(deep=True)
+        else:
+            supervisor_config = system_config.supervisor
+        supervisor_config.port = port
+        return supervisor_config
     elif name == "memory":
-        return MemoryService(config=MemoryServiceConfig(port=port)).app
+        return MemoryServiceConfig(
+            host=system_config.memory.host,
+            port=port,
+            db_path=system_config.memory.db_path,
+            gateway_address=system_config.memory.gateway_address,
+            llm_api_key=system_config.memory.llm_api_key,
+            llm_base_url=system_config.memory.llm_base_url,
+            decay_interval_hours=system_config.memory.decay_interval_hours,
+        )
+    raise ValueError(f"Unknown service: {name}")
+
+
+def _build_service_app(name: str, port: int):
+    """Build the FastAPI app for a named service (shared by fg/bg paths)."""
+    from systems.gateway.internal_gateway import InternalGateway
+    from systems.supervisor.supervisor import Supervisor
+    from systems.memory.memory_service import MemoryService
+
+    service_config = _build_service_config(name, port)
+
+    if name == "gateway":
+        return InternalGateway(service_config).app
+    elif name == "supervisor":
+        return Supervisor(config=service_config).app
+    elif name == "memory":
+        return MemoryService(config=service_config).app
     raise ValueError(f"Unknown service: {name}")
 
 
@@ -421,15 +466,15 @@ def start_all(foreground: bool = False) -> None:
     PID_DIR.mkdir(parents=True, exist_ok=True)
     _safe_print("\n  Starting VoidCube services...\n")
 
-    # 1. Memory (soul layer — must be ready first)
+    # 1. Memory process first. Its app startup registers with Gateway, so
+    # health is checked after Gateway is listening.
     start_service("memory", foreground=foreground)
-    if not foreground:
-        _wait_for_health("memory", SERVICES["memory"].port)
 
     # 2. Gateway (nerve centre — routes all internal traffic)
     start_service("gateway", foreground=foreground)
     if not foreground:
         _wait_for_health("gateway", GATEWAY_PORT)
+        _wait_for_health("memory", SERVICES["memory"].port)
 
     # 3. Supervisor (Mem's governance identity)
     start_service("supervisor", foreground=foreground)
