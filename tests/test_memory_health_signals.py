@@ -176,7 +176,33 @@ async def test_llm_health_records_configured_model_when_key_missing(tmp_path):
     ok = await svc._check_llm_health()
 
     assert ok is False
-    assert await svc.llm_health() == {"healthy": False, "model": "deepseek-v4-flash"}
+    assert await svc.llm_health() == {
+        "healthy": False,
+        "model": "deepseek-v4-flash",
+        "error": "llm_client_unavailable",
+    }
+
+
+@pytest.mark.asyncio
+async def test_llm_health_preserves_model_when_probe_fails(tmp_path, caplog):
+    svc = _make_service(tmp_path)
+
+    class _FailingClient:
+        def complete_json(self, **kwargs):
+            raise RuntimeError("remote auth failed")
+
+    svc._resolve_mem_llm_client = lambda: (_FailingClient(), "deepseek-v4-flash")  # type: ignore[method-assign]
+
+    with caplog.at_level(logging.WARNING, logger="memory_service"):
+        ok = await svc._check_llm_health()
+
+    assert ok is False
+    assert await svc.llm_health() == {
+        "healthy": False,
+        "model": "deepseek-v4-flash",
+        "error": "RuntimeError: remote auth failed",
+    }
+    assert "LLM health check failed for model=deepseek-v4-flash" in caplog.text
 
 
 @pytest.mark.asyncio

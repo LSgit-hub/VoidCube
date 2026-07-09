@@ -4,11 +4,6 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
-
-MEMORY_PROVIDER_PLUGINS = frozenset(
-    {"", "mem", "hindsight", "openviking", "holographic", "retaindb", "byterover"}
-)
-
 PROVIDER_DEFAULTS = {
     "openai": {
         "api_key_env": "OPENAI_API_KEY",
@@ -28,7 +23,7 @@ PROVIDER_DEFAULTS = {
     "ollama": {
         "api_key_env": "OLLAMA_API_KEY",
         "base_url": "http://localhost:11434/v1",
-        "provider_profile": "legacy-compatible",
+        "provider_profile": "openai",
     },
 }
 
@@ -102,15 +97,9 @@ class MemModelConfig:
         if not isinstance(llm, dict):
             llm = {}
 
-        legacy_provider = memory.get("provider")
-        legacy_model = memory.get("model")
-        provider = str(
-            llm.get("provider")
-            or _legacy_llm_provider(legacy_provider)
-            or "openai"
-        )
+        provider = str(llm.get("provider") or "openai")
         defaults = PROVIDER_DEFAULTS.get(provider, PROVIDER_DEFAULTS["openai"])
-        model = llm.get("model") or legacy_model or None
+        model = llm.get("model") or None
         configured_base_url = str(llm.get("base_url") or "").strip()
         configured_api_key_env = str(llm.get("api_key_env") or "").strip()
         base_url = configured_base_url or str(defaults["base_url"])
@@ -120,8 +109,8 @@ class MemModelConfig:
             and configured_api_key_env == PROVIDER_DEFAULTS["openai"]["api_key_env"]
         ):
             api_key_env = str(defaults["api_key_env"])
-        # Legacy configs sometimes mirrored memory.llm.* from the main
-        # agent provider and pointed Mem back into the local Gateway.
+        # Invalid/stale configs sometimes mirrored memory.llm.* from the
+        # main agent provider and pointed Mem back into the local Gateway.
         # That causes API-B (Mem/supervisor) calls to re-enter API-A's
         # /v1/chat/completions surface and leak the wrong model string
         # into active-agent execution.  Normalize such loopback URLs back
@@ -227,42 +216,21 @@ def resolve_mem_llm_client(role: str = "default"):
         caller can log which model was selected.
     """
     import logging
-    import os
-
     logger = logging.getLogger("memai.resolver")
 
-    mem_cfg: MemModelConfig | None = None
     try:
         config_set = load_voidcube_mem_model_config_set()
-        mem_cfg = config_set.for_role(role) if role else config_set.default
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("Failed to load MemModelConfigSet: %s", exc)
+        config_set = MemModelConfigSet(default=MemModelConfig(), roles={})
 
-    if mem_cfg is not None:
-        # Always use the config's model and base_url; only the API key
-        # may need a fallback when api_key_env is not set.
-        model = mem_cfg.model or "deepseek-chat"
-        base_url = (mem_cfg.base_url or "https://api.deepseek.com/v1").rstrip("/")
-        config_source = f"memory.llm.{role or 'default'} (provider={mem_cfg.provider})"
-        if mem_cfg.api_key_env:
-            api_key = os.environ.get(mem_cfg.api_key_env, "").strip()
-        else:
-            api_key = ""
-    else:
-        # Legacy fallback — keep older env-var driven installs working
-        # when the voidcube config has no memory.llm block at all.
-        api_key = (
-            os.environ.get("DEEPSEEK_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
-            or ""
-        ).strip()
-        model = os.environ.get("MEMAI_LLM_MODEL", "deepseek-chat")
-        base_url = os.environ.get(
-            "MEMAI_LLM_BASE_URL", "https://api.deepseek.com/v1"
-        ).rstrip("/")
-        config_source = "env fallback"
+    mem_cfg = config_set.for_role(role) if role else config_set.default
+    model = mem_cfg.model or "deepseek-chat"
+    base_url = (mem_cfg.base_url or "https://api.deepseek.com/v1").rstrip("/")
+    config_source = f"memory.llm.{role or 'default'} (provider={mem_cfg.provider})"
+    api_key = _resolve_mem_api_key(mem_cfg)
 
-    if not api_key and mem_cfg is not None and mem_cfg.provider == "ollama":
+    if not api_key and mem_cfg.provider == "ollama":
         api_key = "no-key-required"
     if not api_key:
         return None, model
@@ -285,13 +253,62 @@ def resolve_mem_llm_client(role: str = "default"):
         return None, model
 
 
-def _legacy_llm_provider(provider: object) -> str | None:
+def _resolve_mem_api_key(mem_cfg: MemModelConfig) -> str:
+    if mem_cfg.api_key_env:
+        try:
+            from VoidCube_cli.config import get_env_value
+
+            raw_api_key = get_env_value(mem_cfg.api_key_env) or ""
+        except Exception:
+            import os
+
+            raw_api_key = os.environ.get(mem_cfg.api_key_env, "")
+        api_key = _first_usable_secret(raw_api_key)
+        if api_key:
+            return api_key
+
+    provider = str(mem_cfg.provider or "").strip().lower()
     if not provider:
-        return None
-    provider_name = str(provider)
-    if provider_name in MEMORY_PROVIDER_PLUGINS:
-        return None
-    return provider_name
+        return ""
+
+    try:
+        from VoidCube_cli.auth import resolve_api_key_provider_credentials
+
+        creds = resolve_api_key_provider_credentials(provider) or {}
+        api_key = _first_usable_secret(str(creds.get("api_key") or ""))
+        if api_key:
+            return api_key
+    except Exception:
+        pass
+
+    try:
+        from agent.credential_pool import load_pool
+
+        pool = load_pool(provider)
+        entry = pool.select() if pool and pool.has_credentials() else None
+        if entry is not None:
+            return _first_usable_secret(
+                str(getattr(entry, "runtime_api_key", "") or ""),
+                str(getattr(entry, "access_token", "") or ""),
+            )
+    except Exception:
+        pass
+
+    return ""
+
+
+def _first_usable_secret(*values: object) -> str:
+    try:
+        from VoidCube_cli.auth import has_usable_secret
+    except Exception:
+        def has_usable_secret(value: str) -> bool:  # type: ignore[no-redef]
+            return bool(str(value or "").strip())
+
+    for value in values:
+        candidate = str(value or "").strip()
+        if has_usable_secret(candidate):
+            return candidate
+    return ""
 
 
 def _optional_str(value: object) -> str | None:

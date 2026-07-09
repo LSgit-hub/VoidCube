@@ -102,8 +102,6 @@ class MemoryServiceConfig(BaseModel):
     port: int = 6001
     db_path: str = "./memory.db"
     gateway_address: str = "http://127.0.0.1:6000"
-    llm_api_key: Optional[str] = None
-    llm_base_url: str = "https://api.deepseek.com"
     decay_interval_hours: int = 24
     compression_interval: int = 3600  # seconds between auto-compression runs
     # Tier 1 config
@@ -275,6 +273,7 @@ class MemoryService:
         # LLM status (re-verified each compression cycle, recovers after outage)
         self._llm_healthy: bool = False
         self._llm_model: str = ""
+        self._llm_error: str = ""
         self._last_llm_health_check_at: Optional[str] = None
         self._setup_database()
         self._setup_routes()
@@ -716,10 +715,9 @@ class MemoryService:
         """Resolve a configured Mem LLM client.
 
         Thin pass-through to the canonical resolver at
-        ``memai.model_config.resolve_mem_llm_client`` — kept as an
-        instance method for backwards compatibility with the rest of
-        MemoryService.  All resolution logic (memory.llm.* priority,
-        env fallback, OpenAICompatibleLLMClient construction) lives in
+        ``memai.model_config.resolve_mem_llm_client``.  All resolution
+        logic (memory.llm.* priority,
+        provider credential lookup, OpenAICompatibleLLMClient construction) lives in
         one place inside the memai package; this method is just a
         convenient accessor.
 
@@ -865,6 +863,7 @@ class MemoryService:
             "effective_activity_at": self._last_effective_activity_at,
             "llm_healthy": self._llm_healthy,
             "llm_model": self._llm_model,
+            "llm_error": self._llm_error,
             "llm_health_checked_at": self._last_llm_health_check_at,
         }
 
@@ -1312,7 +1311,7 @@ class MemoryService:
             def _run_sync() -> str:
                 client, _ = self._resolve_mem_llm_client()
                 if client is None:
-                    raise ValueError("No Mem LLM configured (memory.llm.* or env fallback)")
+                    raise ValueError("No Mem LLM configured through memory.llm.*")
                 result = client.complete_json(
                     system_prompt="You are a precise content summariser.",
                     user_payload={"text": prompt},
@@ -1754,9 +1753,11 @@ class MemoryService:
         """
         self._last_llm_health_check_at = datetime.now().isoformat()
         client, model = self._resolve_mem_llm_client()
+        self._llm_model = model or "none"
+        self._llm_error = ""
         if client is None:
             self._llm_healthy = False
-            self._llm_model = model or "none"
+            self._llm_error = "llm_client_unavailable"
             return False
         try:
             import asyncio as _asyncio
@@ -1769,15 +1770,26 @@ class MemoryService:
                 return isinstance(result, dict) and result.get("ok") is True
             ok = await _asyncio.to_thread(_ping)
             self._llm_healthy = ok
-            self._llm_model = model
+            if not ok:
+                self._llm_error = "health_check_returned_false"
             return ok
-        except Exception:
+        except Exception as exc:
             self._llm_healthy = False
+            self._llm_error = f"{type(exc).__name__}: {str(exc)}"[:240]
+            logger.warning(
+                "LLM health check failed for model=%s: %s",
+                self._llm_model,
+                exc,
+            )
             return False
 
     async def llm_health(self):
         """Return LLM status (verified at startup, not continuously monitored)."""
-        return {"healthy": self._llm_healthy, "model": self._llm_model}
+        return {
+            "healthy": self._llm_healthy,
+            "model": self._llm_model,
+            "error": self._llm_error,
+        }
 
     def _build_compression_pipeline(self):
         """Build ChroniclePipeline — LLM-first with explicit degraded fallback.
@@ -2249,8 +2261,8 @@ class MemoryService:
         """Generate embedding vector via the configured Mem LLM.
 
         Routes through ``_resolve_mem_llm_client`` so the embedding model
-        is whatever the user has selected in ``memory.llm.*`` (or the
-        legacy env fallback).  When the LLM is unavailable, callers should
+        is whatever the user has selected in ``memory.llm.*``. When the
+        LLM is unavailable, callers should
         degrade to keyword search instead of pretending hash vectors are
         semantic embeddings.
         """

@@ -1052,23 +1052,14 @@ class MemoryMaintenanceExecutionAdapter:
     def _build_scholar_backend(self):
         """Build LLMScholarBackend with HeuristicScholarBackend fallback."""
         try:
-            import os
-            api_key = (
-                os.environ.get("DEEPSEEK_API_KEY")
-                or os.environ.get("OPENAI_API_KEY")
-                or ""
-            )
-            if not api_key:
+            from memai.model_config import resolve_mem_llm_client
+
+            client, _ = resolve_mem_llm_client(role="default")
+            if client is None:
                 logger.info("No LLM API key configured; using heuristic scholar backend")
                 from memai.scholar import HeuristicScholarBackend
                 return HeuristicScholarBackend()
 
-            model = os.environ.get("MEMAI_LLM_MODEL", os.environ.get("OPENAI_MODEL", "deepseek-chat"))
-            base_url = os.environ.get(
-                "MEMAI_LLM_BASE_URL", os.environ.get("OPENAI_BASE_URL", "https://api.deepseek.com")
-            )
-            from memai.llm_client import OpenAICompatibleLLMClient
-            client = OpenAICompatibleLLMClient(model=model, api_key=api_key, base_url=base_url)
             from memai.scholar import LLMScholarBackend
             return LLMScholarBackend(client)
         except Exception as exc:

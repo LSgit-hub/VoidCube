@@ -78,7 +78,7 @@ EXHAUSTED_TTL_DEFAULT_SECONDS = 60 * 60      # 1 hour
 
 # Pool key prefix for custom OpenAI-compatible endpoints.
 # Custom endpoints all share provider='custom' but are keyed by their
-# custom_providers name: 'custom:<normalized_name>'.
+# providers.<name> config entry: 'custom:<normalized_name>'.
 CUSTOM_POOL_PREFIX = "custom:"
 
 
@@ -282,33 +282,43 @@ def _normalize_custom_pool_name(name: str) -> str:
     return name.strip().lower().replace(" ", "-")
 
 
-def _iter_custom_providers(config: Optional[dict] = None):
-    """Yield (normalized_name, entry_dict) for each valid custom_providers entry."""
+def _iter_custom_provider_entries(config: Optional[dict] = None):
+    """Yield (normalized_name, entry_dict) for each valid custom provider entry."""
     if config is None:
         config = _load_config_safe()
     if config is None:
         return
-    custom_providers = config.get("custom_providers")
-    if not isinstance(custom_providers, list):
+    providers = config.get("providers")
+    if not isinstance(providers, dict):
         return
-    for entry in custom_providers:
+    for provider_key, entry in providers.items():
         if not isinstance(entry, dict):
             continue
-        name = entry.get("name")
-        if not isinstance(name, str):
+        provider_key = str(provider_key or "").strip()
+        if not provider_key or provider_key in PROVIDER_REGISTRY:
             continue
-        yield _normalize_custom_pool_name(name), entry
+        base_url = str(entry.get("base_url") or entry.get("api") or entry.get("url") or "").strip()
+        if not base_url:
+            continue
+        provider_type = str(entry.get("type") or "").strip().lower()
+        if provider_type and provider_type not in {"openai_compatible", "custom"}:
+            continue
+        name = str(entry.get("label") or entry.get("name") or provider_key).strip()
+        normalized_entry = dict(entry)
+        normalized_entry["name"] = name or provider_key
+        normalized_entry["base_url"] = base_url
+        yield _normalize_custom_pool_name(provider_key), normalized_entry
 
 
 def get_custom_provider_pool_key(base_url: str) -> Optional[str]:
-    """Look up the custom_providers list in config.yaml and return 'custom:<name>' for a matching base_url.
+    """Look up providers in config.yaml and return 'custom:<name>' for a matching custom base_url.
 
     Returns None if no match is found.
     """
     if not base_url:
         return None
     normalized_url = base_url.strip().rstrip("/")
-    for norm_name, entry in _iter_custom_providers():
+    for norm_name, entry in _iter_custom_provider_entries():
         entry_url = str(entry.get("base_url") or "").strip().rstrip("/")
         if entry_url and entry_url == normalized_url:
             return f"{CUSTOM_POOL_PREFIX}{norm_name}"
@@ -327,11 +337,11 @@ def list_custom_pool_providers() -> List[str]:
 
 
 def _get_custom_provider_config(pool_key: str) -> Optional[Dict[str, Any]]:
-    """Return the custom_providers config entry matching a pool key like 'custom:together.ai'."""
+    """Return the custom provider config entry matching a pool key like 'custom:together-ai'."""
     if not pool_key.startswith(CUSTOM_POOL_PREFIX):
         return None
     suffix = pool_key[len(CUSTOM_POOL_PREFIX):]
-    for norm_name, entry in _iter_custom_providers():
+    for norm_name, entry in _iter_custom_provider_entries():
         if norm_name == suffix:
             return entry
     return None
@@ -1073,11 +1083,11 @@ def _prune_stale_seeded_entries(entries: List[PooledCredential], active_sources:
 
 
 def _seed_custom_pool(pool_key: str, entries: List[PooledCredential]) -> Tuple[bool, Set[str]]:
-    """Seed a custom endpoint pool from custom_providers config and model config."""
+    """Seed a custom endpoint pool from providers config and active model config."""
     changed = False
     active_sources: Set[str] = set()
 
-    # Seed from the custom_providers config entry's api_key field
+    # Seed from the custom provider config entry's api_key field.
     cp_config = _get_custom_provider_config(pool_key)
     if cp_config:
         api_key = str(cp_config.get("api_key") or "").strip()
@@ -1114,7 +1124,7 @@ def _seed_custom_pool(pool_key: str, entries: List[PooledCredential]) -> Tuple[b
                 if isinstance(v, str) and v.strip():
                     model_api_key = v.strip()
                     break
-            if active_provider == "custom" and model_base_url and model_api_key:
+            if active_provider and active_provider not in PROVIDER_REGISTRY and model_base_url and model_api_key:
                 matched_key = get_custom_provider_pool_key(model_base_url)
                 if matched_key == pool_key:
                     source = "model_config"
@@ -1143,7 +1153,7 @@ def load_pool(provider: str) -> CredentialPool:
     entries = [PooledCredential.from_dict(provider, payload) for payload in raw_entries]
 
     if provider.startswith(CUSTOM_POOL_PREFIX):
-        # Custom endpoint pool — seed from custom_providers config and model config
+        # Custom endpoint pool — seed from providers config and active model config.
         custom_changed, custom_sources = _seed_custom_pool(provider, entries)
         changed = custom_changed
         changed |= _prune_stale_seeded_entries(entries, custom_sources)

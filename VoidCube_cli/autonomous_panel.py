@@ -93,10 +93,19 @@ def _append_api_b_status_rows(
         details = ["LM生成=已启用" if enabled else "LM生成=未启用"]
         tier1_stats = dict(supervisor_state.get("tier1_stats") or {})
         if enabled:
+            model = str(tier1_stats.get("llm_model") or "").strip()
+            error = str(tier1_stats.get("llm_error") or "").strip()
             if "llm_healthy" in tier1_stats:
-                details.append("模型=健康" if bool(tier1_stats.get("llm_healthy")) else "模型=异常")
+                model_suffix = f"({model})" if model else ""
+                details.append(
+                    f"模型=健康{model_suffix}"
+                    if bool(tier1_stats.get("llm_healthy"))
+                    else f"模型=异常{model_suffix}"
+                )
             elif tier1_stats.get("memory_unavailable"):
                 details.append("模型健康=未知")
+            if error:
+                details.append(f"原因={error}")
         if status:
             details.append(f"状态={status}")
         if role:

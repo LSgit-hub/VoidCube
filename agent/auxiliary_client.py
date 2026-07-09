@@ -1404,7 +1404,7 @@ def resolve_provider_client(
                        "but no endpoint credentials found")
         return None, None
 
-    # ── Named custom providers (config.yaml custom_providers list) ───
+    # ── Named custom providers (config.yaml providers map) ───
     try:
         from VoidCube_cli.runtime_provider import _get_named_custom_provider
         custom_entry = _get_named_custom_provider(provider)

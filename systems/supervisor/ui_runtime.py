@@ -4894,6 +4894,8 @@ class SupervisorUIMixin:
                 continue
             event_type = str(event.get("event_type") or "").strip().lower()
             metadata = dict(event.get("metadata") or {})
+            if event_type == "endogenous_drive_idle":
+                return []
             if event_type == "endogenous_drive_evaluated":
                 candidates = metadata.get("candidates")
                 if isinstance(candidates, list):
@@ -6899,15 +6901,26 @@ class SupervisorUIMixin:
         api_a_pre_handoff_cards = [
             card for card in api_b_judgement_cards if self._is_api_a_lane_family_task(card)
         ]
+        terminal_history_tasks = [
+            task
+            for task in (history_tasks or all_tasks)
+            if str(task.get("status") or "").strip().lower()
+            in {"completed", "failed", "cancelled"}
+        ]
 
         seen_keys = {
             str(task.get("metadata", {}).get("endogenous_drive_key") or "").strip()
-            for task in [*api_b_judgement_cards, *api_a_lane_items]
+            for task in [*api_b_judgement_cards, *api_a_lane_items, *terminal_history_tasks]
             if isinstance(task, dict)
         }
         seen_titles = {
             str(task.get("title") or "").strip()
             for task in [*api_b_judgement_cards, *api_a_lane_items]
+            if isinstance(task, dict)
+        }
+        seen_task_ids = {
+            str(task.get("task_id") or "").strip()
+            for task in terminal_history_tasks
             if isinstance(task, dict)
         }
         candidates: List[Dict[str, Any]] = []
@@ -6920,7 +6933,10 @@ class SupervisorUIMixin:
                 or ""
             ).strip()
             candidate_title = str(candidate.get("title") or "").strip()
+            candidate_task_id = str(candidate.get("task_id") or "").strip()
             if candidate_key and candidate_key in seen_keys:
+                continue
+            if candidate_task_id and candidate_task_id in seen_task_ids:
                 continue
             if candidate_title and candidate_title in seen_titles:
                 continue
@@ -7459,6 +7475,8 @@ class SupervisorUIMixin:
                 result = dict(stats_data)
                 result["rules"] = rules_data.get("rules", {})
                 result["llm_healthy"] = rules_data.get("llm_healthy", False)
+                result["llm_model"] = rules_data.get("llm_model")
+                result["llm_error"] = rules_data.get("llm_error")
                 result["effective_activity_at"] = rules_data.get("effective_activity_at")
                 result["llm_health_checked_at"] = rules_data.get("llm_health_checked_at")
                 # P0-4 健康信号: memory_active reflects REAL write work in the last
@@ -7659,8 +7677,9 @@ class SupervisorUIMixin:
                 f"「{api_b_focus_title}」正处在 API-B 判断过程中。",
             )
 
-        # 3. 记忆模型正在主动压缩（由 memory_service rules_status 判定）
-        if memory_active:
+        # 3. 记忆模型正在主动压缩（由 memory_service rules_status 判定）。
+        # API-A 执行阶段已有焦点时，房间主 scene 不应被后台记忆活跃抢走。
+        if memory_active and not api_a_focus:
             return (
                 "memory",
                 f"正在整理记忆{error_note}",

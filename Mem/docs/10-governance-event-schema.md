@@ -377,8 +377,8 @@ Rules:
 - Mem parses this block through `MemModelConfig`.
 - Mem can resolve role-specific overrides through `MemModelConfigSet`.
 - Explicit Mem CLI flags still override saved config for tests and experiments.
-- Legacy `memory.model` is read as a compatibility fallback.
-- Legacy `memory.provider` is treated as an LLM provider only when it is not a known memory plugin name.
+- Retired `memory.model` / plugin-level `memory.provider` fields are not LLM config.
+- Saved VoidCube config must use `memory.llm.*` for Mem / API-B model selection.
 
 ## 19. Next Implementation Step
 

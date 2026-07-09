@@ -93,17 +93,14 @@ def get_auth_status(provider: str = None) -> Dict[str, Any]:
     if provider:
         # 检查特定 provider 的认证状态
         if provider in PROVIDER_REGISTRY:
-            pconfig = PROVIDER_REGISTRY[provider]
-            api_key_env_vars = pconfig.get("api_key_env_vars", [])
-            for env_var in api_key_env_vars:
-                api_key = os.getenv(env_var, "").strip()
-                if api_key:
-                    return {
-                        "authenticated": True,
-                        "provider": provider,
-                        "logged_in": True,
-                        "configured": True,
-                    }
+            creds = resolve_api_key_provider_credentials(provider) or {}
+            if has_usable_secret(str(creds.get("api_key") or "")):
+                return {
+                    "authenticated": True,
+                    "provider": provider,
+                    "logged_in": True,
+                    "configured": True,
+                }
         return {
             "authenticated": False,
             "provider": provider,
@@ -177,6 +174,8 @@ def has_usable_secret(api_key: str) -> bool:
     if not api_key:
         return False
     api_key = api_key.strip()
+    if is_placeholder_secret(api_key):
+        return False
     # 检查是否是有效的 API Key
     # 通常 API Key 至少有一定长度
     if len(api_key) < 10:
@@ -187,6 +186,32 @@ def has_usable_secret(api_key: str) -> bool:
         "OPENROUTER-", "DEEPSEEK-",
     ]
     return any(api_key.startswith(prefix) for prefix in valid_prefixes) or len(api_key) >= 32
+
+
+def is_placeholder_secret(value: str) -> bool:
+    """Return True for template/example secrets that must never authenticate."""
+    normalized = str(value or "").strip().strip('"\'').lower()
+    if not normalized:
+        return True
+    placeholders = {
+        "sk-your-key-here",
+        "sk-or-your-key-here",
+        "your-key-here",
+        "your-api-key",
+        "your_api_key",
+        "changeme",
+        "change-me",
+        "placeholder",
+        "***",
+    }
+    if normalized in placeholders:
+        return True
+    return (
+        "your-key" in normalized
+        or "your_api_key" in normalized
+        or normalized.endswith("-your-key-here")
+    )
+
 
 def resolve_api_key_provider_credentials(provider: str) -> Optional[Dict[str, Any]]:
     """解析 API Key 提供者凭证"""
@@ -199,15 +224,26 @@ def resolve_api_key_provider_credentials(provider: str) -> Optional[Dict[str, An
     # 查找API密钥
     api_key = None
     for env_var in api_key_env_vars:
-        api_key = os.getenv(env_var)
-        if api_key:
+        candidate = os.getenv(env_var, "").strip()
+        if has_usable_secret(candidate):
+            api_key = candidate
             break
+
+    if not api_key:
+        store = _load_auth_store()
+        provider_state = store.get(provider)
+        if isinstance(provider_state, dict):
+            for key_name in ("api_key", "access_token"):
+                candidate = str(provider_state.get(key_name) or "").strip()
+                if has_usable_secret(candidate):
+                    api_key = candidate
+                    break
     
     # 获取base_url
     base_url = pconfig.get("base_url", "")
     
     return {
-        "api_key": api_key,
+        "api_key": api_key or "",
         "base_url": base_url,
     }
 
@@ -328,13 +364,29 @@ def _save_provider_state(provider: str, state: Dict[str, Any]) -> None:
     """保存提供者状态"""
     pass
 
-def read_credential_pool() -> Dict[str, Any]:
-    """读取凭证池"""
-    return {}
+def read_credential_pool(provider: str = None) -> Any:
+    """Read the persistent credential pool from the auth store."""
+    store = _load_auth_store()
+    pool = store.get("credential_pool")
+    if not isinstance(pool, dict):
+        pool = {}
+    if provider is None:
+        return pool
+    entries = pool.get(str(provider or "").strip().lower(), [])
+    return entries if isinstance(entries, list) else []
 
-def write_credential_pool(pool: Dict[str, Any]) -> None:
-    """写入凭证池"""
-    pass
+
+def write_credential_pool(provider: str, entries: Any) -> None:
+    """Write a provider's persistent credential pool."""
+    with _auth_store_lock:
+        store = _load_auth_store()
+        pool = store.get("credential_pool")
+        if not isinstance(pool, dict):
+            pool = {}
+        key = str(provider or "").strip().lower()
+        pool[key] = entries if isinstance(entries, list) else []
+        store["credential_pool"] = pool
+        _save_auth_store(store)
 
 def _agent_key_is_usable(key: str = None) -> bool:
     """检查代理密钥是否可用"""
@@ -571,19 +623,19 @@ def _login_api_key(provider: str, args) -> None:
         return
 
     # Save to .env
+    env_key = PROVIDER_REGISTRY.get(provider, {}).get("api_key_env_vars", [None])[0]
+    if not env_key:
+        env_key = f"{provider.upper().replace('-', '_')}_API_KEY"
     try:
         from VoidCube_cli.config import get_env_path, save_env_value
         env_file = get_env_path()
-        env_key = PROVIDER_REGISTRY.get(provider, {}).get("api_key_env_vars", [None])[0]
-        if not env_key:
-            env_key = f"{provider.upper().replace('-', '_')}_API_KEY"
         save_env_value(env_key, api_key)
         print(f"  ✓ API key saved to {env_file}")
         _store_provider_credential(provider, {"api_key": api_key})
     except Exception as exc:
         print(f"  ✗ Failed to save: {exc}")
-        print(f"  Manually add to ~/.VoidCube/.env:")
-        print(f"  {env_key}={api_key}")
+        print("  Manually add the key to ~/.VoidCube/.env without printing it here:")
+        print(f"  {env_key}=<redacted>")
 
 
 def _store_provider_credential(provider: str, credential: dict) -> None:

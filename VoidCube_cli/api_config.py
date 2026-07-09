@@ -6,8 +6,24 @@ import os
 import subprocess
 import sys
 import re
-from typing import Optional
+from typing import Any
 
+
+API_A_ENV_VAR_MAP = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+}
+
+API_A_PROVIDER_LABELS = {
+    "anthropic": "Anthropic",
+    "openai": "OpenAI",
+    "deepseek": "DeepSeek",
+    "gemini": "Gemini",
+    "openrouter": "OpenRouter",
+    "ollama": "Ollama",
+}
 
 def load_current_config() -> dict:
     """加载当前配置"""
@@ -16,16 +32,6 @@ def load_current_config() -> dict:
         return load_config()
     except Exception:
         return {}
-
-
-def save_config_value(key_path: str, value: any) -> bool:
-    """保存配置值到 config.yaml"""
-    try:
-        from cli import save_config_value as _save
-        return _save(key_path, value)
-    except Exception:
-        return False
-
 
 def save_env_value(key: str, value: str) -> bool:
     """保存环境变量到 .env 文件"""
@@ -52,44 +58,60 @@ def save_provider_config(
     api_key: str = "",
     auth_mode: str = "",
 ) -> bool:
-    """Persist a provider entry and set it active.
-
-    This only updates the active API-A provider entry.  Mem / supervisor
-    LLM configuration lives under ``memory.llm.*`` and must be changed
-    explicitly through the dedicated memory-model flow so API-A and
-    API-B remain isolated.
-    """
+    """Persist API-A/user-interaction provider config and set it active."""
     try:
-        from VoidCube_cli.config import (
-            load_config,
-            save_config,
-            set_active_provider,
-            upsert_provider,
-        )
+        from VoidCube_cli.config import load_config, save_config
 
-        cfg = load_config()
-        cfg = upsert_provider(
-            cfg,
-            provider_key,
-            {
-                "label": label,
-                "type": provider_type,
-                "base_url": base_url,
-                "selected_model": selected_model,
-                "api_key_env": api_key_env,
-                "api_key": api_key,
-                "auth_mode": auth_mode,
-            },
-            make_active=True,
+        cfg = persist_api_a_config(
+            load_config(),
+            provider_key=provider_key,
+            label=label,
+            selected_model=selected_model,
+            provider_type=provider_type,
+            base_url=base_url,
+            api_key_env=api_key_env,
+            api_key=api_key,
+            auth_mode=auth_mode,
         )
-        cfg = set_active_provider(cfg, provider_key)
         save_config(cfg)
         return True
     except Exception:
         return False
 
 
-def memory_llm_provider_defaults(provider_key: str, current_config: dict) -> dict:
+def persist_api_a_config(
+    config: dict[str, Any],
+    *,
+    provider_key: str,
+    label: str,
+    selected_model: str,
+    provider_type: str,
+    base_url: str = "",
+    api_key_env: str = "",
+    api_key: str = "",
+    auth_mode: str = "",
+) -> dict[str, Any]:
+    """Return config with only API-A/user-interaction provider fields updated."""
+    from VoidCube_cli.config import set_active_provider, upsert_provider
+
+    cfg = upsert_provider(
+        dict(config or {}),
+        provider_key,
+        {
+            "label": label,
+            "type": provider_type,
+            "base_url": base_url,
+            "selected_model": selected_model,
+            "api_key_env": api_key_env,
+            "api_key": api_key,
+            "auth_mode": auth_mode,
+        },
+        make_active=True,
+    )
+    return set_active_provider(cfg, provider_key)
+
+
+def memory_llm_provider_defaults(provider_key: str) -> dict:
     """Return the persisted Mem/API-B LLM fields for a provider choice."""
     try:
         from memai.model_config import PROVIDER_DEFAULTS
@@ -102,6 +124,404 @@ def memory_llm_provider_defaults(provider_key: str, current_config: dict) -> dic
         "base_url": str(defaults.get("base_url") or "").strip(),
         "provider_profile": str(defaults.get("provider_profile") or "openai").strip() or "openai",
     }
+
+
+def memory_llm_provider_options() -> list[tuple[str, str]]:
+    """Providers supported by Mem/API-B's OpenAI-compatible resolver."""
+    try:
+        from memai.model_config import PROVIDER_DEFAULTS
+    except Exception:
+        return []
+    labels = {
+        "openrouter": "OpenRouter",
+        "deepseek": "DeepSeek",
+        "openai": "OpenAI",
+        "ollama": "Ollama",
+    }
+    preferred_order = ["openrouter", "deepseek", "openai", "ollama"]
+    return [
+        (provider, labels.get(provider, provider.title()))
+        for provider in preferred_order
+        if provider in PROVIDER_DEFAULTS
+    ]
+
+
+def persist_api_b_config(
+    config: dict[str, Any],
+    *,
+    provider: str,
+    model: str,
+) -> dict[str, Any]:
+    """Return config with only API-B/Mem ``memory.llm.*`` fields updated."""
+    defaults = memory_llm_provider_defaults(provider)
+    if not defaults.get("api_key_env") and provider != "ollama":
+        raise ValueError(f"Unsupported API-B provider: {provider}")
+
+    cfg = dict(config or {})
+    memory = dict(cfg.get("memory") or {})
+    llm = dict(memory.get("llm") or {})
+    llm.update(
+        {
+            "provider": provider,
+            "model": str(model or "").strip(),
+            "api_key_env": defaults.get("api_key_env", ""),
+            "base_url": defaults.get("base_url", ""),
+            "provider_profile": defaults.get("provider_profile", "openai"),
+        }
+    )
+    memory["llm"] = llm
+    cfg["memory"] = memory
+    return cfg
+
+
+def save_memory_llm_config(provider: str, model: str) -> bool:
+    """Persist API-B/Mem model config without touching API-A."""
+    try:
+        from VoidCube_cli.config import load_config, save_config
+
+        cfg = persist_api_b_config(load_config(), provider=provider, model=model)
+        save_config(cfg)
+        return True
+    except Exception:
+        return False
+
+
+def has_configured_api_key(api_key_env: str) -> bool:
+    if not api_key_env:
+        return True
+    try:
+        from VoidCube_cli.config import get_env_value
+        from VoidCube_cli.auth import has_usable_secret
+
+        return has_usable_secret(get_env_value(api_key_env) or "")
+    except Exception:
+        return False
+
+
+def _secret_source_status(value: object) -> str:
+    try:
+        from VoidCube_cli.auth import has_usable_secret
+
+        text = str(value or "").strip()
+        if not text:
+            return "missing"
+        return "usable" if has_usable_secret(text) else "present_unusable"
+    except Exception:
+        return "missing" if not str(value or "").strip() else "present_unusable"
+
+
+def _credential_source_entry(
+    source: str,
+    *,
+    status: str,
+    detail: str = "",
+) -> dict[str, str]:
+    return {"source": source, "status": status, "detail": detail}
+
+
+def provider_credential_sources(provider: str, api_key_env: str = "") -> list[dict[str, str]]:
+    """Return a secret-free report of credential sources checked for a provider."""
+    provider = str(provider or "").strip().lower()
+    api_key_env = str(api_key_env or "").strip()
+    sources: list[dict[str, str]] = []
+
+    if api_key_env:
+        try:
+            from VoidCube_cli.config import get_env_value
+
+            sources.append(
+                _credential_source_entry(
+                    "effective_env",
+                    status=_secret_source_status(get_env_value(api_key_env)),
+                    detail=api_key_env,
+                )
+            )
+        except Exception as exc:
+            sources.append(
+                _credential_source_entry(
+                    "effective_env",
+                    status="error",
+                    detail=f"{api_key_env}: {exc}",
+                )
+            )
+
+        try:
+            env_value = os.environ.get(api_key_env)
+            sources.append(
+                _credential_source_entry(
+                    "process_env",
+                    status=_secret_source_status(env_value),
+                    detail=api_key_env,
+                )
+            )
+        except Exception as exc:
+            sources.append(
+                _credential_source_entry(
+                    "process_env",
+                    status="error",
+                    detail=f"{api_key_env}: {exc}",
+                )
+            )
+
+        try:
+            from VoidCube_cli.config import get_env_path, load_env
+
+            env_vars = load_env()
+            sources.append(
+                _credential_source_entry(
+                    "voidcube_env",
+                    status=_secret_source_status(env_vars.get(api_key_env)),
+                    detail=f"{get_env_path()}::{api_key_env}",
+                )
+            )
+        except Exception as exc:
+            sources.append(
+                _credential_source_entry(
+                    "voidcube_env",
+                    status="error",
+                    detail=f"{api_key_env}: {exc}",
+                )
+            )
+    else:
+        sources.append(
+            _credential_source_entry(
+                "memory.llm.api_key_env",
+                status="missing",
+                detail="未设置",
+            )
+        )
+
+    if provider:
+        try:
+            from VoidCube_cli.auth import _get_auth_store_path, _load_auth_store
+
+            store = _load_auth_store()
+            state = store.get(provider)
+            if isinstance(state, dict):
+                status = "usable" if any(
+                    _secret_source_status(state.get(key_name)) == "usable"
+                    for key_name in ("api_key", "access_token")
+                ) else "present_unusable"
+            else:
+                status = "missing"
+            sources.append(
+                _credential_source_entry(
+                    "auth_store",
+                    status=status,
+                    detail=f"{_get_auth_store_path()}::{provider}",
+                )
+            )
+        except Exception as exc:
+            sources.append(
+                _credential_source_entry(
+                    "auth_store",
+                    status="error",
+                    detail=f"{provider}: {exc}",
+                )
+            )
+
+        try:
+            from VoidCube_cli.auth import read_credential_pool
+
+            entries = read_credential_pool(provider)
+            usable = False
+            present = False
+            if isinstance(entries, list):
+                present = bool(entries)
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    if any(
+                        _secret_source_status(entry.get(key_name)) == "usable"
+                        for key_name in ("runtime_api_key", "api_key", "access_token")
+                    ):
+                        usable = True
+                        break
+            sources.append(
+                _credential_source_entry(
+                    "credential_pool",
+                    status="usable" if usable else ("present_unusable" if present else "missing"),
+                    detail=provider,
+                )
+            )
+        except Exception as exc:
+            sources.append(
+                _credential_source_entry(
+                    "credential_pool",
+                    status="error",
+                    detail=f"{provider}: {exc}",
+                )
+            )
+
+    return sources
+
+
+def credential_sources_have_usable_secret(sources: list[dict[str, str]]) -> bool:
+    return any(source.get("status") == "usable" for source in sources)
+
+
+def provider_has_usable_credential(provider: str, api_key_env: str = "") -> bool:
+    """Return whether a provider has a usable credential in runtime-readable sources."""
+    provider = str(provider or "").strip().lower()
+    api_key_env = str(api_key_env or "").strip()
+    if credential_sources_have_usable_secret(provider_credential_sources(provider, api_key_env)):
+        return True
+
+    try:
+        from VoidCube_cli.auth import (
+            has_usable_secret,
+            resolve_api_key_provider_credentials,
+        )
+        from VoidCube_cli.config import get_env_value
+
+        if api_key_env and has_usable_secret(str(get_env_value(api_key_env) or "")):
+            return True
+
+        if provider:
+            creds = resolve_api_key_provider_credentials(provider) or {}
+            for key_name in ("api_key", "access_token"):
+                if has_usable_secret(str(creds.get(key_name) or "")):
+                    return True
+    except Exception:
+        pass
+
+    if provider:
+        try:
+            from agent.credential_pool import load_pool
+            from VoidCube_cli.auth import has_usable_secret
+
+            pool = load_pool(provider)
+            entry = pool.select() if pool and pool.has_credentials() else None
+            if entry is not None:
+                return any(
+                    has_usable_secret(str(value or ""))
+                    for value in (
+                        getattr(entry, "runtime_api_key", ""),
+                        getattr(entry, "access_token", ""),
+                        getattr(entry, "api_key", ""),
+                    )
+                )
+        except Exception:
+            pass
+
+    return False
+
+
+def api_a_key_configured(provider_cfg: dict[str, Any]) -> bool:
+    auth_mode = str(provider_cfg.get("auth_mode") or "").strip().lower()
+    if auth_mode == "none":
+        return True
+    try:
+        from VoidCube_cli.auth import has_usable_secret
+
+        if has_usable_secret(str(provider_cfg.get("api_key") or "")):
+            return True
+    except Exception:
+        pass
+    return has_configured_api_key(str(provider_cfg.get("api_key_env") or ""))
+
+
+def api_b_key_configured(memory_llm_cfg: dict[str, Any]) -> bool:
+    provider = str(memory_llm_cfg.get("provider") or "").strip().lower()
+    if provider == "ollama":
+        return True
+    defaults = memory_llm_provider_defaults(provider) if provider else {}
+    api_key_env = str(
+        memory_llm_cfg.get("api_key_env") or defaults.get("api_key_env") or ""
+    )
+    return provider_has_usable_credential(
+        provider,
+        api_key_env,
+    )
+
+
+def api_config_summary(config: dict[str, Any]) -> dict[str, Any]:
+    """Return a secret-free API-A/API-B configuration summary."""
+    cfg = dict(config or {})
+    runtime = cfg.get("runtime") if isinstance(cfg.get("runtime"), dict) else {}
+    providers = cfg.get("providers") if isinstance(cfg.get("providers"), dict) else {}
+    active_provider = str(runtime.get("active_provider") or "").strip()
+    active_cfg = providers.get(active_provider) if active_provider in providers else {}
+    if not isinstance(active_cfg, dict):
+        active_cfg = {}
+
+    memory = cfg.get("memory") if isinstance(cfg.get("memory"), dict) else {}
+    llm = memory.get("llm") if isinstance(memory.get("llm"), dict) else {}
+    api_b_provider = str(llm.get("provider") or "").strip().lower()
+    api_b_defaults = memory_llm_provider_defaults(api_b_provider)
+    api_b_key_env = str(
+        llm.get("api_key_env") or api_b_defaults.get("api_key_env") or ""
+    ).strip()
+
+    retired_fields = [
+        key
+        for key in ("model", "provider", "base_url", "custom_providers")
+        if key in cfg
+    ]
+
+    return {
+        "api_a": {
+            "provider": active_provider or "未设置",
+            "model": str(active_cfg.get("selected_model") or "").strip() or "未设置",
+            "auth_mode": str(active_cfg.get("auth_mode") or "").strip() or "env",
+            "api_key_env": str(active_cfg.get("api_key_env") or "").strip() or "无",
+            "key_configured": api_a_key_configured(active_cfg),
+        },
+        "api_b": {
+            "provider": api_b_provider or "未设置",
+            "model": str(llm.get("model") or "").strip() or "未设置",
+            "api_key_env": api_b_key_env or "无",
+            "base_url": str(llm.get("base_url") or api_b_defaults.get("base_url") or "").strip() or "未设置",
+            "provider_profile": str(
+                llm.get("provider_profile") or api_b_defaults.get("provider_profile") or "openai"
+            ).strip() or "openai",
+            "key_configured": api_b_key_configured(llm),
+            "credential_sources": provider_credential_sources(api_b_provider, api_b_key_env),
+        },
+        "retired_fields_present": retired_fields,
+    }
+
+
+def _render_credential_sources(sources: list[dict[str, str]]) -> list[str]:
+    labels = {
+        "usable": "可用",
+        "present_unusable": "存在但不可用",
+        "missing": "未找到",
+        "error": "检查失败",
+    }
+    return [
+        f"    - {source.get('source', 'unknown')}: "
+        f"{labels.get(source.get('status', ''), source.get('status', '未知'))}"
+        f" ({source.get('detail', '')})"
+        for source in sources
+    ]
+
+
+def render_api_config_summary(config: dict[str, Any]) -> list[str]:
+    """Render the secret-free API summary for the interactive /api menu."""
+    summary = api_config_summary(config)
+    api_a = summary["api_a"]
+    api_b = summary["api_b"]
+    retired = summary["retired_fields_present"]
+    return [
+        "API-A（用户交互 / 主 CLI）",
+        f"  Provider: {api_a['provider']}",
+        f"  Model: {api_a['model']}",
+        f"  Key: {'已配置' if api_a['key_configured'] else '未配置'} ({api_a['api_key_env']})",
+        f"  Auth mode: {api_a['auth_mode']}",
+        "",
+        "API-B（Mem / Supervisor 自主链路）",
+        f"  Provider: {api_b['provider']}",
+        f"  Model: {api_b['model']}",
+        f"  Key: {'已配置' if api_b['key_configured'] else '未配置'} ({api_b['api_key_env']})",
+        f"  Base URL: {api_b['base_url']}",
+        f"  Provider profile: {api_b['provider_profile']}",
+        "  Credential sources:",
+        *_render_credential_sources(api_b.get("credential_sources") or []),
+        "",
+        "废弃字段",
+        f"  {'无' if not retired else ', '.join(retired)}",
+    ]
 
 
 def test_api_connection(provider: str, api_key: str, base_url: str = "") -> bool:
@@ -773,16 +1193,22 @@ def run_api_config_wizard(console=None):
     current_provider = runtime_config.get("active_provider") or "未设置"
     current_provider_cfg = providers_config.get(current_provider, {}) if current_provider in providers_config else {}
     current_model = current_provider_cfg.get("selected_model") or "未设置"
-    p(f"   Provider: {current_provider}")
-    p(f"   Model: {current_model}")
+    current_api_a_key = "已配置" if api_a_key_configured(current_provider_cfg) else "未配置"
+    p(f"   API-A Provider: {current_provider}")
+    p(f"   API-A Model: {current_model}")
+    p(f"   API-A Key: {current_api_a_key}")
     
     # 显示记忆系统配置
     memory_config = current_config.get("memory", {})
     memory_llm_config = memory_config.get("llm", {})
     memory_provider = memory_llm_config.get("provider", "未设置")
     memory_model = memory_llm_config.get("model", "未设置")
-    p(f"   Memory Provider: {memory_provider}")
-    p(f"   Memory Model: {memory_model}")
+    memory_defaults = memory_llm_provider_defaults(str(memory_provider or "").strip().lower())
+    memory_key_env = memory_llm_config.get("api_key_env") or memory_defaults.get("api_key_env") or "无"
+    memory_key_state = "已配置" if api_b_key_configured(memory_llm_config) else "未配置"
+    p(f"   API-B Provider: {memory_provider}")
+    p(f"   API-B Model: {memory_model}")
+    p(f"   API-B Key: {memory_key_state} ({memory_key_env})")
     p("")
     
     # 主菜单循环
@@ -1022,19 +1448,12 @@ def run_api_config_wizard(console=None):
                 
                 p(f"\n将使用模型: {selected_model}")
                 
-                env_var_map = {
-                    "anthropic": "ANTHROPIC_API_KEY",
-                    "openai": "OPENAI_API_KEY",
-                    "deepseek": "DEEPSEEK_API_KEY",
-                    "gemini": "GEMINI_API_KEY",
-                }
-                
-                env_var = env_var_map.get(selected_provider, "")
+                env_var = API_A_ENV_VAR_MAP.get(selected_provider, "")
                 
                 p("\n💾 保存配置...")
                 
                 provider_key = selected_provider
-                provider_label = selected_provider.title()
+                provider_label = API_A_PROVIDER_LABELS.get(selected_provider, selected_provider.title())
                 provider_type = selected_provider
                 auth_mode = "env"
                 api_key_env = env_var
@@ -1104,18 +1523,16 @@ def run_api_config_wizard(console=None):
                 current_memory_model = memory_llm_config.get("model", "未设置")
                 
                 p(f"\n当前记忆系统配置：")
-                p(f"   Provider: {current_memory_provider}")
-                p(f"   Model: {current_memory_model}")
+                p(f"   API-B Provider: {current_memory_provider}")
+                p(f"   API-B Model: {current_memory_model}")
                 
-                p("\n记忆系统用于存储对话历史和上下文信息。")
-                p("建议使用与主模型相同的 Provider，但可以选择更轻量的模型。\n")
+                p("\nAPI-B 是 Mem / Supervisor 自主链路专用模型配置。")
+                p("它与 API-A 用户交互模型独立，不会读取 agnes-ai 或主 CLI Provider。\n")
                 
-                memory_providers = [
-                    ("openrouter", "OpenRouter"),
-                    ("deepseek", "DeepSeek"),
-                    ("openai", "OpenAI"),
-                    ("anthropic", "Anthropic"),
-                ]
+                memory_providers = memory_llm_provider_options()
+                if not memory_providers:
+                    pe("没有可用的 API-B Provider 默认配置")
+                    break
                 
                 p("请选择记忆系统 Provider：")
                 for i, (pid, desc) in enumerate(memory_providers, 1):
@@ -1186,19 +1603,29 @@ def run_api_config_wizard(console=None):
                 
                 p("\n💾 保存配置...")
                 
-                if save_config_value("memory.llm.provider", mem_provider):
+                if save_memory_llm_config(mem_provider, memory_model):
                     ps("记忆系统 Provider 保存成功")
-                
-                if save_config_value("memory.llm.model", memory_model):
                     ps(f"记忆系统模型保存成功: {memory_model}")
+                else:
+                    pe("保存 API-B / memory.llm 配置失败")
+                    continue
 
-                provider_defaults = memory_llm_provider_defaults(mem_provider, current_config)
-                if provider_defaults.get("api_key_env"):
-                    save_config_value("memory.llm.api_key_env", provider_defaults["api_key_env"])
-                if provider_defaults.get("base_url"):
-                    save_config_value("memory.llm.base_url", provider_defaults["base_url"])
-                if provider_defaults.get("provider_profile"):
-                    save_config_value("memory.llm.provider_profile", provider_defaults["provider_profile"])
+                provider_defaults = memory_llm_provider_defaults(mem_provider)
+
+                mem_api_key_env = provider_defaults.get("api_key_env", "")
+                if mem_api_key_env:
+                    if provider_has_usable_credential(mem_provider, mem_api_key_env):
+                        ps(f"API-B 凭据已存在: {mem_api_key_env}")
+                    else:
+                        p(f"\nAPI-B 凭据未配置: {mem_api_key_env}")
+                        mem_api_key = inp(f"请输入 {mem_provider} API Key（留空跳过）")
+                        if mem_api_key:
+                            if save_env_value(mem_api_key_env, mem_api_key):
+                                ps(f"{mem_api_key_env} 保存成功")
+                            else:
+                                pe(f"保存 {mem_api_key_env} 失败")
+                        else:
+                            pi("已跳过 API-B key 保存；自主链路会显示 LLM 未启用")
                 
                 ph("配置完成")
                 ps("记忆系统模型配置完成！")
@@ -1206,13 +1633,14 @@ def run_api_config_wizard(console=None):
         
         elif choice == "4":
             ph("当前配置")
-            
+
+            current_config = load_current_config()
             if not current_config:
                 pi("未找到配置文件")
                 continue
-            
-            import json
-            p(json.dumps(current_config, indent=2, ensure_ascii=False))
+
+            for line in render_api_config_summary(current_config):
+                p(line)
             continue
         
         else:

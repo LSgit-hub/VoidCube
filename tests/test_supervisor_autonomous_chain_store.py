@@ -18529,6 +18529,8 @@ async def test_fetch_tier1_stats_accepts_gateway_service_list(tmp_path, monkeypa
                     {
                         "rules": {"tier1_decay": {"run_count": 1}},
                         "llm_healthy": True,
+                        "llm_model": "deepseek-v4-flash",
+                        "llm_error": "",
                         "effective_activity_at": None,
                         "llm_health_checked_at": "2026-07-09T00:00:00",
                     }
@@ -18541,6 +18543,8 @@ async def test_fetch_tier1_stats_accepts_gateway_service_list(tmp_path, monkeypa
 
     assert stats["turn_count"] == 3
     assert stats["llm_healthy"] is True
+    assert stats["llm_model"] == "deepseek-v4-flash"
+    assert stats["llm_error"] == ""
     assert stats["rules"] == {"tier1_decay": {"run_count": 1}}
 
 

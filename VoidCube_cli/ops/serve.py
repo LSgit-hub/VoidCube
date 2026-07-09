@@ -1,12 +1,13 @@
 """VoidCube integrated service launcher.
 
 Implements the default stable startup sequence:
-  1. Memory            (port 6001)
-  2. Internal Gateway  (port 6000)
+  1. Internal Gateway  (port 6000)
+  2. Memory            (port 6001)
   3. Supervisor        (port 6002)
 Usage:
-  VoidCube serve                 # start all services in background
-  VoidCube serve --foreground    # start all services in foreground
+  VoidCube serve start           # start all services in background
+  VoidCube serve start --foreground
+                               # start all services in foreground
   VoidCube serve stop            # stop all running services
   VoidCube serve status          # show service status
 """
@@ -109,11 +110,10 @@ SERVICES: Dict[str, ServiceInfo] = {
         pid_file=str(PID_DIR / "memory.pid"),
         log_file=str(PID_DIR / "memory.log"),
     ),
-    # ── Embedded/compatibility surfaces (not standalone processes) ──
-    # Self-learning is now a legacy conclusion contract/store plus Supervisor
-    # payload builder, not an autonomous execution daemon. The autonomous chain
-    # executes learning tasks through the API-A pull path. The executor remains
-    # the conceptual body-switch execution surface, not a separate CLI mode.
+    # ── Embedded surfaces (not standalone processes) ──
+    # Autonomous-chain display and execution tracking live inside the main CLI.
+    # Body/agent execution is triggered through the API-A pull path and tracked
+    # by the embedded minimal CLI panel, not by a separate terminal process.
 }
 
 
@@ -253,8 +253,6 @@ def _build_service_config(name: str, port: int, system_config: Any | None = None
             port=port,
             db_path=system_config.memory.db_path,
             gateway_address=system_config.memory.gateway_address,
-            llm_api_key=system_config.memory.llm_api_key,
-            llm_base_url=system_config.memory.llm_base_url,
             decay_interval_hours=system_config.memory.decay_interval_hours,
         )
     raise ValueError(f"Unknown service: {name}")
@@ -275,6 +273,16 @@ def _build_service_app(name: str, port: int):
     elif name == "memory":
         return MemoryService(config=service_config).app
     raise ValueError(f"Unknown service: {name}")
+
+
+def _service_python_path_entries() -> list[str]:
+    """Return repo-local import roots required by service subprocesses."""
+    repo_root = Path(__file__).resolve().parents[2]
+    entries = [str(repo_root)]
+    mem_src = repo_root / "Mem" / "src"
+    if mem_src.exists():
+        entries.append(str(mem_src))
+    return entries
 
 
 def _run_service_in_thread(name: str, port: int) -> None:
@@ -339,14 +347,20 @@ def start_service(name: str, foreground: bool = False) -> Optional[subprocess.Po
 
     venv_python = sys.executable  # use the same Python that's running the CLI
     log_path = json.dumps(str(Path(svc.log_file).resolve()))
+    path_entries = json.dumps(_service_python_path_entries())
+    project_env_path = json.dumps(str(Path(__file__).resolve().parents[2] / ".env"))
 
     script = f"""
 import sys, os
 log_file = open({log_path}, 'a', buffering=1)
 sys.stdout = log_file
 sys.stderr = log_file
-sys.path.insert(0, {json.dumps(str(Path(__file__).resolve().parents[2]))})
+for path_entry in reversed({path_entries}):
+    if path_entry not in sys.path:
+        sys.path.insert(0, path_entry)
 os.chdir({json.dumps(str(Path.cwd()))})
+from VoidCube_cli.env_loader import load_VoidCube_dotenv
+load_VoidCube_dotenv(project_env={project_env_path}, force_reload=True)
 import uvicorn
 from VoidCube_cli.ops.serve import _build_service_app
 app = _build_service_app({json.dumps(name)}, {svc.port})
@@ -456,8 +470,8 @@ def print_status(full: bool = False) -> None:
 def start_all(foreground: bool = False) -> None:
     """Start default stable services.
 
-    1. Mem (soul layer, API-B) — must be ready first
-    2. Gateway (nerve centre) — routes all traffic, accepts registrations
+    1. Gateway (nerve centre) — routes all traffic, accepts registrations
+    2. Mem (soul layer, API-B) — registers with Gateway during startup
     3. Supervisor (Mem's governance identity, API-B) — registers with Gateway
 
     Body/agent subprocesses are not part of the default startup path.
@@ -466,15 +480,20 @@ def start_all(foreground: bool = False) -> None:
     PID_DIR.mkdir(parents=True, exist_ok=True)
     _safe_print("\n  Starting VoidCube services...\n")
 
-    # 1. Memory process first. Its app startup registers with Gateway, so
-    # health is checked after Gateway is listening.
-    start_service("memory", foreground=foreground)
-
-    # 2. Gateway (nerve centre — routes all internal traffic)
+    # 1. Gateway (nerve centre — routes all internal traffic)
     start_service("gateway", foreground=foreground)
     if not foreground:
         _wait_for_health("gateway", GATEWAY_PORT)
+
+    # 2. Memory registers with Gateway during app startup.
+    start_service("memory", foreground=foreground)
+    if not foreground:
         _wait_for_health("memory", SERVICES["memory"].port)
+        if not _wait_for_gateway_service_type("memory"):
+            stop_service("memory", silent=True)
+            start_service("memory", foreground=foreground)
+            _wait_for_health("memory", SERVICES["memory"].port)
+            _wait_for_gateway_service_type("memory")
 
     # 3. Supervisor (Mem's governance identity)
     start_service("supervisor", foreground=foreground)
@@ -529,6 +548,37 @@ def _wait_for_health(name: str, port: int, timeout: float = 15.0) -> bool:
     return False
 
 
+def _gateway_has_service_type(service_type: str) -> bool:
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(f"http://127.0.0.1:{GATEWAY_PORT}/admin/services", timeout=3) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return False
+    services = payload.get("services", []) if isinstance(payload, dict) else []
+    if isinstance(services, dict):
+        iterable = services.values()
+    elif isinstance(services, list):
+        iterable = services
+    else:
+        iterable = []
+    for service in iterable:
+        if isinstance(service, dict) and service.get("service_type") == service_type:
+            return True
+    return False
+
+
+def _wait_for_gateway_service_type(service_type: str, timeout: float = 20.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _gateway_has_service_type(service_type):
+            return True
+        time.sleep(0.3)
+    _safe_print(f"  ⚠ gateway did not list service_type={service_type} within {timeout}s")
+    return False
+
+
 def ensure_running(silent: bool = True) -> Dict[str, Any]:
     """Idempotent: ensure all daemon services are running.
 
@@ -541,10 +591,10 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
     PID_DIR.mkdir(parents=True, exist_ok=True)
     result: Dict[str, Any] = {}
 
-    # Default stable path: Mem → Gateway → Supervisor.
+    # Default stable path: Gateway → Mem → Supervisor.
     # The live CLI session is the canonical API-A runtime; body/agent
     # subprocesses are only started explicitly for body-runtime workflows.
-    startup_order = ["memory", "gateway", "supervisor"]
+    startup_order = ["gateway", "memory", "supervisor"]
     for name in startup_order:
         svc = SERVICES.get(name)
         if svc is None:
@@ -554,15 +604,23 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
         if existing_pid and _pid_alive(existing_pid):
             healthy = _health_check(svc.port)
             if healthy:
-                result[name] = {"running": True, "healthy": True, "pid": existing_pid, "started": False}
-                if not silent:
-                    _safe_print(f"  ✓ {svc.name:12s} already running (pid {existing_pid}, port {svc.port})")
-                svc.pid = existing_pid
-                continue
+                if name == "memory" and not _gateway_has_service_type("memory"):
+                    if not silent:
+                        _safe_print(f"  ⚠ {svc.name:12s} healthy but not registered with gateway — restarting...")
+                    stop_service(name, silent=True)
+                else:
+                    result[name] = {"running": True, "healthy": True, "pid": existing_pid, "started": False}
+                    if name == "memory":
+                        result[name]["registered"] = True
+                    if not silent:
+                        _safe_print(f"  ✓ {svc.name:12s} already running (pid {existing_pid}, port {svc.port})")
+                    svc.pid = existing_pid
+                    continue
 
-            if not silent:
+            elif not silent:
                 _safe_print(f"  ⚠ {svc.name:12s} unhealthy (pid {existing_pid}, port {svc.port}) — restarting...")
-            stop_service(name, silent=True)
+            if not healthy:
+                stop_service(name, silent=True)
 
         if not silent:
             _safe_print(f"  ▶ {svc.name:12s} starting on port {svc.port}...")
@@ -586,5 +644,11 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
         if not silent:
             tag = "✓" if healthy else "⚠"
             _safe_print(f"     {tag} ready" if healthy else f"     {tag} not responding (may still be starting)")
+        if name == "memory" and healthy:
+            registered = _wait_for_gateway_service_type("memory", timeout=20.0)
+            result[name]["registered"] = registered
+            if not silent:
+                tag = "✓" if registered else "⚠"
+                _safe_print(f"     {tag} registered with gateway" if registered else "     ⚠ not registered with gateway")
 
     return result

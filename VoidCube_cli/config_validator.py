@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 from types import SimpleNamespace
 from typing import Any, Iterator, List, Optional
+from urllib.parse import urlparse
 
 
 class Severity(Enum):
@@ -58,9 +59,16 @@ def load_config() -> dict:
 
 def validate_config() -> List[ConfigIssue]:
     """验证配置完整性，返回问题列表。"""
-    issues = []
     cfg = load_config()
+    issues: list[ConfigIssue] = []
+    issues.extend(_validate_api_a_config(cfg))
+    issues.extend(_validate_api_b_config(cfg))
+    return issues
 
+
+def _validate_api_a_config(cfg: dict[str, Any]) -> list[ConfigIssue]:
+    """Validate API-A: the main user-facing CLI agent."""
+    issues: list[ConfigIssue] = []
     runtime_cfg = cfg.get("runtime") if isinstance(cfg.get("runtime"), dict) else {}
     providers_cfg = cfg.get("providers") if isinstance(cfg.get("providers"), dict) else {}
     active_provider = str(runtime_cfg.get("active_provider") or "").strip()
@@ -114,20 +122,142 @@ def validate_config() -> List[ConfigIssue]:
     if auth_mode == "none":
         return issues
 
-    stored_api_key = str(active_cfg.get("api_key") or "").strip()
-    api_key_env = str(active_cfg.get("api_key_env") or "").strip()
-    env_api_key = os.environ.get(api_key_env) if api_key_env else ""
-    if not stored_api_key and not env_api_key:
+    try:
+        from VoidCube_cli.api_config import api_a_key_configured
+
+        key_configured = api_a_key_configured(active_cfg)
+    except Exception:
+        from VoidCube_cli.auth import has_usable_secret
+
+        key_configured = has_usable_secret(str(active_cfg.get("api_key") or ""))
+
+    if not key_configured:
         issues.append(
             ConfigIssue(
                 severity=Severity.ERROR,
                 key_path=f"providers.{active_provider}.api_key",
-                message="当前激活 Provider 缺少可用凭证",
+                message="API-A 当前激活 Provider 缺少可用凭证",
                 suggestion="运行 /api 配置该 Provider 的 API Key",
             )
         )
 
     return issues
+
+
+def _validate_api_b_config(cfg: dict[str, Any]) -> list[ConfigIssue]:
+    """Validate API-B: Mem/supervisor autonomous-chain LLM config."""
+    issues: list[ConfigIssue] = []
+    memory_cfg = cfg.get("memory") if isinstance(cfg.get("memory"), dict) else {}
+    llm_cfg = memory_cfg.get("llm") if isinstance(memory_cfg.get("llm"), dict) else {}
+
+    provider = str(llm_cfg.get("provider") or "").strip().lower()
+    if not provider:
+        issues.append(
+            ConfigIssue(
+                severity=Severity.ERROR,
+                key_path="memory.llm.provider",
+                message="API-B 未配置 Mem/Supervisor 模型 Provider",
+                suggestion="运行 /api -> 3 记忆系统模型配置，选择 API-B Provider",
+            )
+        )
+        return issues
+
+    try:
+        from VoidCube_cli.api_config import (
+            memory_llm_provider_defaults,
+            memory_llm_provider_options,
+        )
+
+        supported_providers = {key for key, _label in memory_llm_provider_options()}
+        defaults = memory_llm_provider_defaults(provider)
+    except Exception:
+        supported_providers = {"openrouter", "deepseek", "openai", "ollama"}
+        defaults = {}
+
+    if provider not in supported_providers:
+        issues.append(
+            ConfigIssue(
+                severity=Severity.ERROR,
+                key_path="memory.llm.provider",
+                message=f"API-B Provider '{provider}' 不在 Mem 支持列表中",
+                suggestion="运行 /api -> 3 记忆系统模型配置，选择 openrouter/deepseek/openai/ollama",
+            )
+        )
+        return issues
+
+    model = str(llm_cfg.get("model") or "").strip()
+    if not model:
+        issues.append(
+            ConfigIssue(
+                severity=Severity.ERROR,
+                key_path="memory.llm.model",
+                message=f"API-B Provider '{provider}' 未选择模型",
+                suggestion="运行 /api -> 3 记忆系统模型配置，为 API-B 选择模型",
+            )
+        )
+
+    base_url = str(llm_cfg.get("base_url") or defaults.get("base_url") or "").strip()
+    if _is_local_gateway_loop_base_url(base_url):
+        issues.append(
+            ConfigIssue(
+                severity=Severity.ERROR,
+                key_path="memory.llm.base_url",
+                message="API-B base_url 指向本地 Gateway，会把 Mem/Supervisor 绕回 API-A",
+                suggestion="运行 /api -> 3 记忆系统模型配置，保存该 Provider 的直接模型 endpoint",
+            )
+        )
+
+    if provider == "ollama":
+        return issues
+
+    api_key_env = str(llm_cfg.get("api_key_env") or defaults.get("api_key_env") or "").strip()
+    if not api_key_env:
+        issues.append(
+            ConfigIssue(
+                severity=Severity.ERROR,
+                key_path="memory.llm.api_key_env",
+                message=f"API-B Provider '{provider}' 未配置专用 key 环境变量",
+                suggestion="运行 /api -> 3 记忆系统模型配置，让 API-B 写入 memory.llm.api_key_env",
+            )
+        )
+        return issues
+
+    from VoidCube_cli.api_config import (
+        credential_sources_have_usable_secret,
+        provider_credential_sources,
+    )
+
+    credential_sources = provider_credential_sources(provider, api_key_env)
+    if not credential_sources_have_usable_secret(credential_sources):
+        checked_sources = ", ".join(
+            f"{source.get('source')}={source.get('status')}"
+            for source in credential_sources
+        )
+        issues.append(
+            ConfigIssue(
+                severity=Severity.ERROR,
+                key_path="memory.llm.api_key_env",
+                message=(
+                    f"API-B Provider '{provider}' 缺少当前可读取的可用凭证: "
+                    f"{api_key_env}；已检查 {checked_sources}"
+                ),
+                suggestion=(
+                    f"运行 /api -> 3 记忆系统模型配置，并把 API-B key 保存到 {api_key_env}；"
+                    "API-A 的 agnes-ai 凭证不会用于 Mem/Supervisor"
+                ),
+            )
+        )
+
+    return issues
+
+
+def _is_local_gateway_loop_base_url(base_url: str) -> bool:
+    try:
+        parsed = urlparse(str(base_url or "").strip())
+    except Exception:
+        return False
+    host = (parsed.hostname or "").strip().lower()
+    return host in {"127.0.0.1", "localhost", "0.0.0.0"} and parsed.port == 6000
 
 
 def _icon_for_severity(severity: Severity) -> str:

@@ -22,6 +22,7 @@ from VoidCube_cli.config import (
     redact_key,
 )
 from VoidCube_cli.models import provider_label
+from VoidCube_cli.auth import has_usable_secret
 from VoidCube_core.constants import OPENROUTER_MODELS_URL
 from tools.tool_backend_helpers import managed_nous_tools_enabled
 
@@ -70,12 +71,6 @@ def _configured_model_label(config: dict) -> str:
     model = ""
     if active_provider and isinstance(providers.get(active_provider), dict):
         model = str(providers[active_provider].get("selected_model") or "").strip()
-    if not model:
-        model_cfg = config.get("model")
-        if isinstance(model_cfg, dict):
-            model = (model_cfg.get("default") or model_cfg.get("name") or "").strip()
-        elif isinstance(model_cfg, str):
-            model = model_cfg.strip()
     return model or "(not set)"
 
 
@@ -231,6 +226,7 @@ def show_status(args):
     keys = {
         "OpenRouter": "OPENROUTER_API_KEY",
         "OpenAI": "OPENAI_API_KEY",
+        "DeepSeek": "DEEPSEEK_API_KEY",
         "Z.AI/GLM": "GLM_API_KEY",
         "Kimi": "KIMI_API_KEY",
         "MiniMax": "MINIMAX_API_KEY",
@@ -248,7 +244,7 @@ def show_status(args):
     
     for name, env_var in keys.items():
         value = get_env_value(env_var) or ""
-        has_key = bool(value)
+        has_key = has_usable_secret(value)
         display = redact_key(value) if not show_all else value
         print(f"  {name:<12}  {check_mark(has_key)} {display}")
 
@@ -362,9 +358,9 @@ def show_status(args):
         key_val = ""
         for ev in env_vars:
             key_val = get_env_value(ev) or ""
-            if key_val:
+            if has_usable_secret(key_val):
                 break
-        configured = bool(key_val)
+        configured = has_usable_secret(key_val)
         label = "configured" if configured else "not configured (run: VoidCube model)"
         print(f"  {pname:<16} {check_mark(configured)} {label}")
 

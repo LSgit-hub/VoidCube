@@ -895,7 +895,7 @@ def test_autonomous_panel_fragments_include_focus_task_and_recent_events(monkeyp
         tone="info",
     )
 
-    monkeypatch.setattr(VoidcubeCLI, "_get_tui_terminal_width", staticmethod(lambda default=(80, 24): 80))
+    monkeypatch.setattr(VoidcubeCLI, "_get_tui_terminal_width", staticmethod(lambda default=(80, 24): 160))
     cli._supervisor_state_cache = {
         "timeline": [
             {
@@ -936,7 +936,7 @@ def test_autonomous_panel_shows_stale_foreign_executor(monkeypatch):
     cli._autonomous_execution_events = []
     cli._autonomous_last_supervisor_event_key = ""
 
-    monkeypatch.setattr(VoidcubeCLI, "_get_tui_terminal_width", staticmethod(lambda default=(80, 24): 80))
+    monkeypatch.setattr(VoidcubeCLI, "_get_tui_terminal_width", staticmethod(lambda default=(80, 24): 160))
     cli._supervisor_state_cache = {"timeline": [], "tasks": []}
     cli._autonomous_gateway_status_cache = {
         "active_cli_executor": {
@@ -1371,7 +1371,11 @@ def test_autonomous_panel_shows_api_b_model_health(monkeypatch):
             "generation_enabled": True,
             "proposal_count": 0,
         },
-        "tier1_stats": {"llm_healthy": False},
+        "tier1_stats": {
+            "llm_healthy": False,
+            "llm_model": "deepseek-v4-flash",
+            "llm_error": "HTTPError: HTTP Error 401: Authorization Required",
+        },
         "autonomous_observation": {
             "chain": {"segments": []},
             "loop": {"stage_cards": []},
@@ -1382,7 +1386,8 @@ def test_autonomous_panel_shows_api_b_model_health(monkeypatch):
 
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
-    assert "API-B 模型: LM生成=已启用 · 模型=异常" in rendered
+    assert "API-B 模型: LM生成=已启用 · 模型=异常(deepseek-v4-flash)" in rendered
+    assert "原因=HTTPError" in rendered
 
 
 def test_autonomous_panel_prefers_loop_stage_descriptor_for_non_local_reasoning(monkeypatch):

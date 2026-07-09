@@ -59,8 +59,6 @@ class MemoryServiceConfig(BaseModel):
     port: int = 6001
     db_path: str = "./memory.db"
     gateway_address: str = "http://127.0.0.1:6000"
-    llm_api_key: Optional[str] = None
-    llm_base_url: str = "https://api.deepseek.com"
     decay_interval_hours: int = 24
 
 class AgentConfig(BaseModel):
@@ -88,8 +86,6 @@ def load_config_from_env() -> SystemConfig:
     config.memory.port = int(os.getenv("MEMORY_PORT", config.memory.port))
     config.memory.db_path = os.getenv("MEMORY_DB_PATH", config.memory.db_path)
     config.memory.gateway_address = os.getenv("MEMORY_GATEWAY_ADDRESS", config.memory.gateway_address)
-    config.memory.llm_api_key = os.getenv("DEEPSEEK_API_KEY", config.memory.llm_api_key)
-    config.memory.llm_base_url = os.getenv("MEMORY_LLM_BASE_URL", config.memory.llm_base_url)
     config.memory.decay_interval_hours = int(os.getenv("MEMORY_DECAY_INTERVAL", config.memory.decay_interval_hours))
     
     config.supervisor.host = os.getenv("SUPERVISOR_HOST", config.supervisor.host)

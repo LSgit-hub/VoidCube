@@ -1,26 +1,24 @@
 # Mem LLM-First 架构改进方案
 
+> 2026-07 状态说明：当前 Mem / API-B 的唯一保存与解析入口是 `memory.llm.*`。例如 DeepSeek 必须通过 `memory.llm.provider=deepseek` 与 `memory.llm.api_key_env=DEEPSEEK_API_KEY` 配置，不从 API-A、主 CLI Provider 或其他 provider key 回退推断。
+
 ## 1. 问题诊断
 
 当前 Mem 系统的根本缺陷不是"缺少 LLM 调用"，而是**架构设计上 LLM 被定位为"可选的锦上添花"——系统设计默认不需要 LLM 就能完整运行，LLM 只是一个 if-api-key-exists 的后补**。
 
 ### 1.1 当前反模式
 
-代码库中反复出现的模式：
+旧实现曾经出现过的反模式：
 
 ```python
-# memory_service.py, endogenous_drive.py, governor.py 等多处:
-api_key = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
-if not api_key:
-    return fallback_mechanical_behavior()  # ← 这是默认路径！
-try:
-    # LLM 路径 —— 永远不会是默认，因为依赖于用户手动设置环境变量
-    ...
-except Exception:
-    return fallback_mechanical_behavior()  # ← LLM 挂了也静默降级
+provider = config["memory"]["llm"]["provider"]
+api_key_env = config["memory"]["llm"]["api_key_env"]
+api_key = get_env_value(api_key_env)
+if provider != "deepseek" or api_key_env != "DEEPSEEK_API_KEY":
+    return wrong_slot_or_wrong_provider()
 ```
 
-**后果**：系统在没有 LLM 的情况下"安静地变傻"——压缩用关键词正则、升级用 `[L2]` 前缀、内生驱动器截取文本前 80 字符、治理完全靠布尔代数。用户无从知晓系统正在以极低质量运行。
+**后果**：API-B 配置不清晰时，系统会在没有 Mem LLM 的情况下"安静地变傻"——压缩用关键词正则、升级用 `[L2]` 前缀、内生驱动器截取文本前 80 字符、治理完全靠布尔代数。用户无从知晓系统正在以极低质量运行。
 
 ### 1.2 哪些环节必须由 LLM 驱动
 
@@ -147,7 +145,7 @@ class LLMProvider:
 - `LLMProviderConfig` — 统一配置
 - `LLMProvider` — 启动验证 + 健康循环 + 工作队列
 - `get_llm_provider()` — 全局单例
-- CLI 配置入口: `VoidCube config set memory.llm.provider deepseek --model deepseek-chat --api-key xxx`
+- CLI 配置入口：`/api -> 3 记忆系统模型配置`。该入口只写 `memory.llm.*`，并把 API-B key 保存到对应的 `memory.llm.api_key_env`（例如 `DEEPSEEK_API_KEY`）。
 
 **修改文件**: `VoidCube_cli/ops/serve.py`
 - 启动序列中增加 LLM Provider 初始化
@@ -199,7 +197,7 @@ class LLMProvider:
 # VoidCube 配置
 memory:
   llm:
-    provider: deepseek              # deepseek | openai | anthropic | openrouter
+    provider: deepseek              # deepseek | openai | openrouter | ollama
     model: deepseek-chat
     api_key_env: DEEPSEEK_API_KEY   # 从环境变量读取
     base_url: https://api.deepseek.com/v1

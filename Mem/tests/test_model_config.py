@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from memai import MEM_MODEL_ROLES, MemModelConfig, MemModelConfigSet
-from memai.model_config import resolve_mem_llm_client
+from memai.model_config import _resolve_mem_api_key, resolve_mem_llm_client
 
 
 def test_mem_model_config_reads_new_voidcube_cli_memory_llm_block() -> None:
@@ -38,7 +38,7 @@ def test_mem_model_config_keeps_memory_provider_as_plugin_identity() -> None:
     assert model_config.api_key_env == "OPENAI_API_KEY"
 
 
-def test_mem_model_config_reads_legacy_memory_model_without_stealing_plugin_provider() -> None:
+def test_mem_model_config_ignores_memory_plugin_level_model() -> None:
     config = {
         "memory": {
             "provider": "mem",
@@ -49,10 +49,10 @@ def test_mem_model_config_reads_legacy_memory_model_without_stealing_plugin_prov
     model_config = MemModelConfig.from_voidcube_config(config)
 
     assert model_config.provider == "openai"
-    assert model_config.model == "gpt-4o-mini"
+    assert model_config.model is None
 
 
-def test_mem_model_config_reads_legacy_memory_provider_when_it_was_llm_provider() -> None:
+def test_mem_model_config_does_not_treat_memory_provider_as_llm_provider() -> None:
     config = {
         "memory": {
             "provider": "openrouter",
@@ -62,10 +62,10 @@ def test_mem_model_config_reads_legacy_memory_provider_when_it_was_llm_provider(
 
     model_config = MemModelConfig.from_voidcube_config(config)
 
-    assert model_config.provider == "openrouter"
-    assert model_config.model == "google/gemini-2.5-flash"
-    assert model_config.api_key_env == "OPENROUTER_API_KEY"
-    assert model_config.base_url == "https://openrouter.ai/api/v1"
+    assert model_config.provider == "openai"
+    assert model_config.model is None
+    assert model_config.api_key_env == "OPENAI_API_KEY"
+    assert model_config.base_url == "https://api.openai.com/v1"
 
 
 def test_mem_model_config_cli_args_override_saved_config() -> None:
@@ -73,7 +73,7 @@ def test_mem_model_config_cli_args_override_saved_config() -> None:
         model = "override-model"
         api_key_env = "OVERRIDE_API_KEY"
         base_url = "https://override.example/v1"
-        provider_profile = "legacy-compatible"
+        provider_profile = "openai"
         provider_profile_file = None
         chat_completions_path = "/override/chat"
         system_prompt_style = None
@@ -88,7 +88,7 @@ def test_mem_model_config_cli_args_override_saved_config() -> None:
     assert model_config.model == "override-model"
     assert model_config.api_key_env == "OVERRIDE_API_KEY"
     assert model_config.base_url == "https://override.example/v1"
-    assert model_config.provider_profile == "legacy-compatible"
+    assert model_config.provider_profile == "openai"
     assert model_config.chat_completions_path == "/override/chat"
     assert model_config.response_format_style == "none"
 
@@ -197,3 +197,79 @@ def test_resolve_mem_llm_client_rejects_loopback_gateway_without_real_mem_key(mo
 
     assert client is None
     assert model == "deepseek-v4-flash"
+
+
+def test_resolve_mem_api_key_uses_matching_provider_auth_store(monkeypatch) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(
+        "VoidCube_cli.auth._load_auth_store",
+        lambda: {"deepseek": {"api_key": "sk-deepseek-auth-store-token-123456"}},
+    )
+
+    api_key = _resolve_mem_api_key(
+        MemModelConfig(
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            api_key_env="DEEPSEEK_API_KEY",
+            base_url="https://api.deepseek.com/v1",
+        )
+    )
+
+    assert api_key == "sk-deepseek-auth-store-token-123456"
+
+
+def test_resolve_mem_api_key_reads_selected_voidcube_env_value(monkeypatch) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(
+        "VoidCube_cli.config.get_env_value",
+        lambda key: "sk-deepseek-dotenv-token-123456789" if key == "DEEPSEEK_API_KEY" else "",
+    )
+
+    api_key = _resolve_mem_api_key(
+        MemModelConfig(
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            api_key_env="DEEPSEEK_API_KEY",
+            base_url="https://api.deepseek.com/v1",
+        )
+    )
+
+    assert api_key == "sk-deepseek-dotenv-token-123456789"
+
+
+def test_resolve_mem_api_key_does_not_read_user_chat_provider(monkeypatch) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(
+        "VoidCube_cli.auth._load_auth_store",
+        lambda: {"agnes-ai": {"api_key": "sk-agnes-user-chat-token-123456"}},
+    )
+
+    api_key = _resolve_mem_api_key(
+        MemModelConfig(
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            api_key_env="DEEPSEEK_API_KEY",
+            base_url="https://api.deepseek.com/v1",
+        )
+    )
+
+    assert api_key == ""
+
+
+def test_resolve_mem_api_key_ignores_placeholder_env(monkeypatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-your-key-here")
+    monkeypatch.setattr(
+        "VoidCube_cli.auth._load_auth_store",
+        lambda: {"deepseek": {"api_key": "sk-real-deepseek-token-123456789"}},
+    )
+
+    api_key = _resolve_mem_api_key(
+        MemModelConfig(
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            api_key_env="DEEPSEEK_API_KEY",
+            base_url="https://api.deepseek.com/v1",
+        )
+    )
+
+    assert api_key == "sk-real-deepseek-token-123456789"

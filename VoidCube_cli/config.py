@@ -35,7 +35,9 @@ _EXTRA_ENV_KEYS = frozenset({
     "DEEPSEEK_API_KEY",
     "DASHSCOPE_API_KEY",
     "TERMINAL_ENV", "TERMINAL_SSH_KEY", "TERMINAL_SSH_PORT",
+    "LLM_MODEL", "LLM_BASE_URL", "OPENAI_MODEL",
 })
+_RETIRED_MODEL_ENV_VARS = ("LLM_MODEL", "LLM_BASE_URL", "OPENAI_MODEL")
 import yaml
 
 from VoidCube_cli.colors import Colors, color
@@ -280,7 +282,6 @@ def _ensure_VoidCube_home_managed(home: Path):
 # =============================================================================
 
 DEFAULT_CONFIG = {
-    "model": "",
     "runtime": {
         "active_provider": "",
     },
@@ -1588,14 +1589,6 @@ def validate_config_structure(config: Optional[Dict[str, Any]] = None) -> List["
 
     issues: List[ConfigWarning] = []
 
-    # ── legacy provider schema ─────────────────────────────────────────────
-    if "custom_providers" in config:
-        issues.append(ConfigWarning(
-            "warning",
-            "custom_providers is a legacy config key",
-            "Use 'providers:' with 'runtime.active_provider'. Saving config will migrate legacy entries automatically.",
-        ))
-
     # ── fallback_model must be a top-level dict with provider + model ────
     fb = config.get("fallback_model")
     if fb is not None:
@@ -1722,83 +1715,18 @@ def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, A
                 tz_display = config["timezone"] or "(server-local)"
                 print(f"  ✓ Added timezone to config.yaml: {tz_display}")
 
-    # ── Version 11 → 12: migrate custom_providers list → providers dict ──
-    if current_ver < 12:
-        config = load_config()
-        custom_list = config.get("custom_providers")
-        if isinstance(custom_list, list) and custom_list:
-            providers_dict = config.get("providers", {})
-            if not isinstance(providers_dict, dict):
-                providers_dict = {}
-            migrated_count = 0
-            for entry in custom_list:
-                if not isinstance(entry, dict):
-                    continue
-                old_name = entry.get("name", "")
-                old_url = entry.get("base_url", "") or entry.get("url", "") or ""
-                old_key = entry.get("api_key", "")
-                if not old_url:
-                    continue  # skip entries with no URL
-
-                # Generate a kebab-case key from the display name
-                key = old_name.strip().lower().replace(" ", "-").replace("(", "").replace(")", "")
-                # Remove consecutive hyphens and trailing hyphens
-                while "--" in key:
-                    key = key.replace("--", "-")
-                key = key.strip("-")
-                if not key:
-                    # Fallback: derive from URL hostname
-                    try:
-                        from urllib.parse import urlparse
-                        parsed = urlparse(old_url)
-                        key = (parsed.hostname or "endpoint").replace(".", "-")
-                    except Exception:
-                        key = f"endpoint-{migrated_count}"
-
-                # Don't overwrite existing entries
-                if key in providers_dict:
-                    key = f"{key}-{migrated_count}"
-
-                new_entry = {"api": old_url}
-                if old_name:
-                    new_entry["name"] = old_name
-                if old_key and old_key not in ("no-key", "no-key-required", ""):
-                    new_entry["api_key"] = old_key
-
-                # Carry over model and api_mode if present
-                if entry.get("model"):
-                    new_entry["default_model"] = entry["model"]
-                if entry.get("api_mode"):
-                    new_entry["transport"] = entry["api_mode"]
-
-                providers_dict[key] = new_entry
-                migrated_count += 1
-
-            if migrated_count > 0:
-                config["providers"] = providers_dict
-                # Remove the old list
-                del config["custom_providers"]
-                save_config(config)
-                if not quiet:
-                    print(f"  ✓ Migrated {migrated_count} legacy provider(s) to providers: section")
-                    for key in list(providers_dict.keys())[-migrated_count:]:
-                        ep = providers_dict[key]
-                        print(f"    → {key}: {ep.get('api', '')}")
-
-    # ── Version 12 → 13: clear dead LLM_MODEL / OPENAI_MODEL from .env ──
+    # ── Always: remove retired model env vars from .env ──
     # These env vars were written by the old setup wizard but nothing reads
-    # them anymore (config.yaml is the sole source of truth since March 2026).
-    # Stale entries cause user confusion — see issue report.
-    if current_ver < 13:
-        for dead_var in ("LLM_MODEL", "OPENAI_MODEL"):
-            try:
-                old_val = get_env_value(dead_var)
-                if old_val:
-                    save_env_value(dead_var, "")
-                    if not quiet:
-                        print(f"  ✓ Cleared {dead_var} from .env (no longer used — config.yaml is source of truth)")
-            except Exception:
-                pass
+    # them anymore.  Delete them rather than preserving empty compatibility
+    # placeholders, so they cannot be mistaken for API-A/API-B config later.
+    for dead_var in _RETIRED_MODEL_ENV_VARS:
+        try:
+            old_val = get_env_value(dead_var)
+            if old_val is not None and remove_env_value(dead_var):
+                if not quiet:
+                    print(f"  ✓ Removed {dead_var} from .env (retired; config.yaml and memory.llm.* are source of truth)")
+        except Exception:
+            pass
 
     # ── Version 13 → 14: migrate legacy flat stt.model to provider section ──
     # Old configs (and cli-config.yaml.example) had a flat `stt.model` key
@@ -2080,33 +2008,11 @@ def _expand_env_vars(obj):
     return obj
 
 
-def _normalize_root_model_keys(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Move stale root-level provider/base_url into model section.
-
-    Some users (or older code) placed ``provider:`` and ``base_url:`` at the
-    config root instead of inside ``model:``.  These root-level keys are only
-    used as a fallback when the corresponding ``model.*`` key is empty — they
-    never override an existing ``model.provider`` or ``model.base_url``.
-    After migration the root-level keys are removed so they can't cause
-    confusion on subsequent loads.
-    """
-    # Only act if there are root-level keys to migrate
-    has_root = any(config.get(k) for k in ("provider", "base_url"))
-    if not has_root:
-        return config
-
+def _drop_root_model_keys(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop retired root-level model/provider/base_url fields."""
     config = dict(config)
-    model = config.get("model")
-    if not isinstance(model, dict):
-        model = {"default": model} if model else {}
-        config["model"] = model
-
-    for key in ("provider", "base_url"):
-        root_val = config.get(key)
-        if root_val and not model.get(key):
-            model[key] = root_val
+    for key in ("model", "provider", "base_url"):
         config.pop(key, None)
-
     return config
 
 
@@ -2221,113 +2127,9 @@ def _normalize_provider_entry(
     return normalized
 
 
-def _sync_legacy_model_from_runtime(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Mirror unified runtime/providers selection into legacy model.* fields."""
-    config = dict(config)
-    runtime = config.get("runtime") if isinstance(config.get("runtime"), dict) else {}
-    providers = config.get("providers") if isinstance(config.get("providers"), dict) else {}
-    active_provider = str(runtime.get("active_provider") or "").strip()
-
-    model_cfg = config.get("model")
-    if isinstance(model_cfg, dict):
-        model = dict(model_cfg)
-    elif isinstance(model_cfg, str) and model_cfg.strip():
-        model = {"default": model_cfg.strip()}
-    else:
-        model = {}
-
-    if active_provider and active_provider in providers and isinstance(providers.get(active_provider), dict):
-        provider_entry = providers[active_provider]
-        selected_model = str(provider_entry.get("selected_model") or "").strip()
-        base_url = str(provider_entry.get("base_url") or "").strip()
-        api_mode = str(provider_entry.get("api_mode") or "").strip()
-        api_key = str(provider_entry.get("api_key") or "").strip()
-        model["provider"] = active_provider
-        model["default"] = selected_model
-        if base_url:
-            model["base_url"] = base_url
-        else:
-            model.pop("base_url", None)
-        if api_mode:
-            model["api_mode"] = api_mode
-        else:
-            model.pop("api_mode", None)
-        if api_key:
-            model["api_key"] = api_key
-        else:
-            model.pop("api_key", None)
-    else:
-        model.setdefault("provider", "")
-        model.setdefault("default", "")
-
-    config["model"] = model
-    return config
-
-
-def _strip_legacy_model_mirror(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Drop the persisted ``model`` compatibility mirror before writing config.
-
-    The on-disk source of truth is ``runtime.active_provider`` plus
-    ``providers.<key>``. ``model`` is synthesized at load-time for backward
-    compatibility and should not be treated as a primary persisted schema.
-    """
-    stripped = dict(config or {})
-    stripped.pop("model", None)
-    return stripped
-
-
-def _migrate_legacy_custom_providers(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Migrate legacy ``custom_providers`` into the unified ``providers`` map.
-
-    This migration only exists at the file/config boundary so runtime code can
-    operate on a single normalized schema.
-    """
-    config = dict(config or {})
-    custom_list = config.get("custom_providers")
-    if not isinstance(custom_list, list) or not custom_list:
-        return config
-
-    raw_providers = config.get("providers")
-    providers = dict(raw_providers) if isinstance(raw_providers, dict) else {}
-    migrated_any = False
-
-    for entry in custom_list:
-        if not isinstance(entry, dict):
-            continue
-        display_name = str(entry.get("name") or "").strip()
-        base_url = str(entry.get("base_url") or entry.get("url") or entry.get("api") or "").strip()
-        if not display_name or not base_url:
-            continue
-
-        provider_key = _provider_key_from_name(display_name, "custom-provider")
-        if provider_key in providers:
-            continue
-
-        migrated = _normalize_provider_entry(
-            provider_key,
-            {
-                "label": display_name,
-                "base_url": base_url,
-                "selected_model": entry.get("model", ""),
-                "api_key": entry.get("api_key", ""),
-                "api_mode": entry.get("api_mode", ""),
-                "type": "openai_compatible",
-            },
-        )
-        if migrated is None:
-            continue
-        providers[provider_key] = migrated
-        migrated_any = True
-
-    config["providers"] = providers
-    if migrated_any:
-        config.pop("custom_providers", None)
-    return config
-
-
 def _normalize_provider_runtime_config(config: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize config to unified runtime.active_provider + providers schema."""
-    config = _migrate_legacy_custom_providers(config)
+    config = dict(config or {})
     runtime = config.get("runtime")
     if not isinstance(runtime, dict):
         runtime = {}
@@ -2344,49 +2146,7 @@ def _normalize_provider_runtime_config(config: Dict[str, Any]) -> Dict[str, Any]
         if normalized is not None:
             normalized_providers[str(provider_key)] = normalized
 
-    model_cfg = config.get("model")
-    if isinstance(model_cfg, str):
-        model_cfg = {"default": model_cfg} if model_cfg.strip() else {}
-    elif not isinstance(model_cfg, dict):
-        model_cfg = {}
-    else:
-        model_cfg = dict(model_cfg)
-
-    legacy_provider = str(model_cfg.get("provider") or "").strip()
-    legacy_model = str(model_cfg.get("default") or model_cfg.get("model") or "").strip()
-    legacy_base_url = str(model_cfg.get("base_url") or "").strip()
-    legacy_api_mode = str(model_cfg.get("api_mode") or "").strip()
-    legacy_api_key = str(model_cfg.get("api_key") or model_cfg.get("api") or "").strip()
-
-    if legacy_provider and legacy_provider not in normalized_providers:
-        migrated = _normalize_provider_entry(
-            legacy_provider,
-            {
-                "label": legacy_provider,
-                "base_url": legacy_base_url,
-                "selected_model": legacy_model,
-                "api_mode": legacy_api_mode,
-                "api_key": legacy_api_key,
-                "type": _provider_type_from_key(legacy_provider, {"base_url": legacy_base_url}),
-            },
-        )
-        if migrated is not None:
-            normalized_providers[legacy_provider] = migrated
-    elif legacy_provider and legacy_provider in normalized_providers:
-        provider_entry = dict(normalized_providers[legacy_provider])
-        if legacy_model and not provider_entry.get("selected_model"):
-            provider_entry["selected_model"] = legacy_model
-        if legacy_base_url and not provider_entry.get("base_url"):
-            provider_entry["base_url"] = legacy_base_url
-        if legacy_api_mode and not provider_entry.get("api_mode"):
-            provider_entry["api_mode"] = legacy_api_mode
-        if legacy_api_key and not provider_entry.get("api_key"):
-            provider_entry["api_key"] = legacy_api_key
-        normalized_providers[legacy_provider] = provider_entry
-
     active_provider = str(runtime.get("active_provider") or "").strip()
-    if not active_provider and legacy_provider:
-        active_provider = legacy_provider
     if active_provider and active_provider not in normalized_providers:
         active_provider = ""
 
@@ -2394,7 +2154,7 @@ def _normalize_provider_runtime_config(config: Dict[str, Any]) -> Dict[str, Any]
     config["runtime"] = runtime
     config["providers"] = normalized_providers
     config.pop("custom_providers", None)
-    config = _sync_legacy_model_from_runtime(config)
+    config.pop("model", None)
     return config
 
 
@@ -2435,15 +2195,6 @@ def get_active_model_config(config: Optional[Dict[str, Any]] = None) -> Dict[str
             "api_mode": str(provider_cfg.get("api_mode") or "").strip(),
             "api_key": str(provider_cfg.get("api_key") or "").strip(),
         }
-
-    model_cfg = cfg.get("model")
-    if isinstance(model_cfg, dict):
-        fallback = dict(model_cfg)
-        if not fallback.get("default") and fallback.get("model"):
-            fallback["default"] = fallback["model"]
-        return fallback
-    if isinstance(model_cfg, str) and model_cfg.strip():
-        return {"default": model_cfg.strip(), "model": model_cfg.strip()}
     return {}
 
 
@@ -2455,7 +2206,8 @@ def set_active_provider(config: Dict[str, Any], provider_key: str) -> Dict[str, 
     runtime = dict(normalized.get("runtime") or {})
     runtime["active_provider"] = key if key and key in providers else ""
     normalized["runtime"] = runtime
-    return _sync_legacy_model_from_runtime(normalized)
+    normalized.pop("model", None)
+    return normalized
 
 
 def upsert_provider(
@@ -2476,8 +2228,7 @@ def upsert_provider(
     normalized["providers"] = providers
     if make_active:
         normalized = set_active_provider(normalized, key)
-    else:
-        normalized = _sync_legacy_model_from_runtime(normalized)
+    normalized.pop("model", None)
     return normalized
 
 
@@ -2500,8 +2251,7 @@ def set_provider_model(
     normalized["providers"] = providers
     if make_active:
         normalized = set_active_provider(normalized, key)
-    else:
-        normalized = _sync_legacy_model_from_runtime(normalized)
+    normalized.pop("model", None)
     return normalized
 
 
@@ -2548,7 +2298,7 @@ def load_config() -> Dict[str, Any]:
         except Exception as e:
             print(f"Warning: Failed to load config: {e}")
 
-    normalized = _normalize_root_model_keys(_normalize_max_turns_config(config))
+    normalized = _drop_root_model_keys(_normalize_max_turns_config(config))
     normalized = _normalize_provider_runtime_config(normalized)
     return _expand_env_vars(normalized)
 
@@ -2657,23 +2407,22 @@ def save_config(config: Dict[str, Any]):
 
     ensure_VoidCube_home()
     config_path = get_config_path()
-    normalized = _normalize_root_model_keys(_normalize_max_turns_config(config))
+    normalized = _drop_root_model_keys(_normalize_max_turns_config(config))
     normalized = _normalize_provider_runtime_config(normalized)
-    persisted = _strip_legacy_model_mirror(normalized)
 
     # Build optional commented-out sections for features that are off by
     # default or only relevant when explicitly configured.
     parts = []
-    sec = persisted.get("security", {})
+    sec = normalized.get("security", {})
     if not sec or sec.get("redact_secrets") is None:
         parts.append(_SECURITY_COMMENT)
-    fb = persisted.get("fallback_model", {})
+    fb = normalized.get("fallback_model", {})
     if not fb or not (fb.get("provider") and fb.get("model")):
         parts.append(_FALLBACK_COMMENT)
 
     atomic_yaml_write(
         config_path,
-        persisted,
+        normalized,
         extra_content="".join(parts) if parts else None,
     )
     _secure_file(config_path)
@@ -2722,6 +2471,11 @@ def _sanitize_env_lines(lines: list) -> list:
             sanitized.append(raw + "\n")
             continue
 
+        key, sep, value = stripped.partition("=")
+        if sep and key in known_keys and _is_placeholder_env_value(value):
+            sanitized.append(f"# {stripped}\n")
+            continue
+
         # Detect concatenated KEY=VALUE pairs on one line.
         # Search for known KEY= patterns at any position in the line.
         split_positions = []
@@ -2745,6 +2499,28 @@ def _sanitize_env_lines(lines: list) -> list:
             sanitized.append(stripped + "\n")
 
     return sanitized
+
+
+def _is_placeholder_env_value(value: str) -> bool:
+    normalized = str(value or "").strip().strip('"\'').lower()
+    if not normalized:
+        return False
+    return (
+        normalized in {
+            "sk-your-key-here",
+            "sk-or-your-key-here",
+            "your-key-here",
+            "your-api-key",
+            "your_api_key",
+            "changeme",
+            "change-me",
+            "placeholder",
+            "***",
+        }
+        or "your-key" in normalized
+        or "your_api_key" in normalized
+        or normalized.endswith("-your-key-here")
+    )
 
 
 def sanitize_env_file() -> int:

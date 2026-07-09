@@ -1573,6 +1573,95 @@ async def test_supervisor_room_state_observed_candidates_deduplicate_tasks_by_ke
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_supervisor_room_state_does_not_show_completed_drive_candidate_residue(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.evaluate_drive_input = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "checks": {},
+            "idle_seconds": {},
+            "activity": {"active_sessions": 0, "counts": {}},
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": True, "eligible_for_execution": True},
+            },
+        }
+    )
+    drive_key = "creativity:self_learning:cognitive_review:memory"
+    supervisor._record_supervisor_ui_activity(
+        "endogenous_drive_evaluated",
+        scene="planning",
+        summary="旧候选快照。",
+        metadata={
+            "candidates": [
+                {
+                    "title": "已完成但仍在快照中的候选",
+                    "stable_key": drive_key,
+                    "metadata": {"endogenous_drive_key": drive_key},
+                }
+            ]
+        },
+    )
+
+    planned = await supervisor.plan_autonomous_chain_task(
+        {
+            "title": "已完成但仍在快照中的候选",
+            "task_family": "self_learning",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+                "endogenous_drive_key": drive_key,
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+    supervisor._autonomous_chain_store.update_status(
+        task_id,
+        status="approved",
+        reason="approved for API-A",
+    )
+    supervisor._autonomous_chain_store.update_status(
+        task_id,
+        status="running",
+        reason="claimed by API-A",
+    )
+    supervisor._autonomous_chain_store.update_status(
+        task_id,
+        status="completed",
+        reason="writeback completed",
+    )
+
+    state = await supervisor.get_supervisor_ui_state()
+    observation = state["autonomous_observation"]
+
+    candidates = _observation_section(observation, "api_b_candidates")
+    writebacks = _observation_section(observation, "mem_recent")
+
+    assert candidates["items"] == []
+    assert writebacks["items"][0]["task_id"] == task_id
+    assert writebacks["items"][0]["status"] == "completed"
+
+
+def test_latest_drive_candidate_snapshot_stops_at_newer_idle_event(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._record_supervisor_ui_activity(
+        "endogenous_drive_evaluated",
+        scene="planning",
+        summary="旧候选快照。",
+        metadata={"candidates": [{"title": "旧候选"}]},
+    )
+    supervisor._record_supervisor_ui_activity(
+        "endogenous_drive_idle",
+        scene="idle",
+        summary="本轮没有候选。",
+    )
+
+    assert supervisor._latest_drive_candidate_snapshot() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_supervisor_room_state_exposes_recent_mem_writebacks_in_autonomous_loop(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]

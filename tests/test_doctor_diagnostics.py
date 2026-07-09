@@ -87,6 +87,125 @@ def test_cli_doctor_command_invokes_print_diagnosis(monkeypatch):
     printer.assert_called_once_with()
 
 
+def _valid_api_a_api_b_config() -> dict:
+    return {
+        "runtime": {"active_provider": "agnes-ai"},
+        "providers": {
+            "agnes-ai": {
+                "label": "agnes-ai",
+                "selected_model": "agnes-2.0-flash",
+                "api_key": "sk-agnes-user-chat-token-123456",
+                "auth_mode": "stored",
+            }
+        },
+        "memory": {
+            "provider": "mem",
+            "llm": {
+                "provider": "deepseek",
+                "model": "deepseek-v4-flash",
+                "api_key_env": "DEEPSEEK_API_KEY",
+                "base_url": "https://api.deepseek.com/v1",
+                "provider_profile": "openai",
+            },
+        },
+    }
+
+
+def _stub_api_b_key_sources(monkeypatch, *, env_value: str = "") -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr("VoidCube_cli.config.get_env_value", lambda key: env_value)
+    monkeypatch.setattr("VoidCube_cli.config.load_env", lambda: {})
+    monkeypatch.setattr(
+        "VoidCube_cli.auth.resolve_api_key_provider_credentials",
+        lambda provider: {"api_key": "", "access_token": ""},
+    )
+    monkeypatch.setattr("VoidCube_cli.auth.read_credential_pool", lambda provider=None: [])
+    monkeypatch.setattr("agent.credential_pool.load_pool", lambda provider: _EmptyCredentialPool())
+
+
+class _EmptyCredentialPool:
+    def has_credentials(self) -> bool:
+        return False
+
+    def select(self):
+        return None
+
+
+@pytest.mark.unit
+def test_validate_config_reports_missing_api_b_deepseek_key(monkeypatch):
+    monkeypatch.setattr(config_validator, "load_config", _valid_api_a_api_b_config)
+    _stub_api_b_key_sources(monkeypatch)
+
+    issues = config_validator.validate_config()
+
+    assert any(issue.key_path == "memory.llm.api_key_env" for issue in issues)
+    assert any("DEEPSEEK_API_KEY" in issue.message for issue in issues)
+
+
+@pytest.mark.unit
+def test_validate_config_does_not_use_api_a_agnes_key_for_api_b(monkeypatch):
+    cfg = _valid_api_a_api_b_config()
+    cfg["providers"]["agnes-ai"]["api_key"] = "sk-agnes-user-chat-token-abcdef"
+    monkeypatch.setattr(config_validator, "load_config", lambda: cfg)
+    _stub_api_b_key_sources(monkeypatch)
+
+    issues = config_validator.validate_config()
+
+    assert any(
+        issue.key_path == "memory.llm.api_key_env"
+        and "agnes-ai" in issue.suggestion
+        for issue in issues
+    )
+
+
+@pytest.mark.unit
+def test_validate_config_treats_template_api_b_key_as_missing(monkeypatch):
+    monkeypatch.setattr(config_validator, "load_config", _valid_api_a_api_b_config)
+    _stub_api_b_key_sources(monkeypatch, env_value="sk-your-key-here")
+
+    issues = config_validator.validate_config()
+
+    assert any(issue.key_path == "memory.llm.api_key_env" for issue in issues)
+
+
+@pytest.mark.unit
+def test_validate_config_accepts_valid_api_b_env_key(monkeypatch):
+    monkeypatch.setattr(config_validator, "load_config", _valid_api_a_api_b_config)
+    _stub_api_b_key_sources(monkeypatch, env_value="sk-real-deepseek-token-123456789")
+
+    issues = config_validator.validate_config()
+
+    assert not [issue for issue in issues if issue.key_path.startswith("memory.llm.")]
+
+
+@pytest.mark.unit
+def test_validate_config_rejects_unsupported_api_b_provider(monkeypatch):
+    cfg = _valid_api_a_api_b_config()
+    cfg["memory"]["llm"]["provider"] = "anthropic"
+    monkeypatch.setattr(config_validator, "load_config", lambda: cfg)
+    _stub_api_b_key_sources(monkeypatch, env_value="sk-real-anthropic-token-123456789")
+
+    issues = config_validator.validate_config()
+
+    assert any(
+        issue.key_path == "memory.llm.provider" and "anthropic" in issue.message
+        for issue in issues
+    )
+
+
+@pytest.mark.unit
+def test_validate_config_rejects_api_b_gateway_loopback_base_url(monkeypatch):
+    cfg = _valid_api_a_api_b_config()
+    cfg["memory"]["llm"]["base_url"] = "http://127.0.0.1:6000/v1"
+    monkeypatch.setattr(config_validator, "load_config", lambda: cfg)
+    _stub_api_b_key_sources(monkeypatch, env_value="sk-real-deepseek-token-123456789")
+
+    issues = config_validator.validate_config()
+
+    assert any(issue.key_path == "memory.llm.base_url" for issue in issues)
+
+
 @pytest.mark.unit
 def test_docker_fix_suggestion_mentions_docker_desktop_for_windows_pipe_error():
     suggestion = config_validator._suggest_docker_fix(

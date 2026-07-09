@@ -273,6 +273,46 @@ async def test_memory_maintenance_uses_canonical_rule_compression_endpoint(monke
     assert result["execution_route_hint"]["interface_id"] == "memory.compress"
 
 
+@pytest.mark.unit
+def test_memory_maintenance_scholar_backend_uses_mem_model_resolver(monkeypatch):
+    fake_client = object()
+
+    class FakeLLMScholarBackend:
+        def __init__(self, client):
+            self.client = client
+
+    class FakeHeuristicScholarBackend:
+        pass
+
+    monkeypatch.setitem(
+        sys.modules,
+        "memai.model_config",
+        SimpleNamespace(resolve_mem_llm_client=lambda role="default": (fake_client, "deepseek-v4-flash")),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "memai.scholar",
+        SimpleNamespace(
+            LLMScholarBackend=FakeLLMScholarBackend,
+            HeuristicScholarBackend=FakeHeuristicScholarBackend,
+        ),
+    )
+
+    adapter = MemoryMaintenanceExecutionAdapter(
+        config=SimpleNamespace(
+            gateway_address="http://gateway",
+            memory_gateway_path="/mem/",
+        ),
+        attach_execution_route_hint=_attach_route_hint,
+        mem_state_path="missing-state.json",
+    )
+
+    backend = adapter._build_scholar_backend()
+
+    assert isinstance(backend, FakeLLMScholarBackend)
+    assert backend.client is fake_client
+
+
 
 
 @pytest.mark.unit

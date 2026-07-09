@@ -301,8 +301,7 @@ def _resolve_named_custom_runtime(
     # Check if a credential pool exists for this custom endpoint
     pool_result = _try_resolve_from_custom_pool(base_url, "custom", custom_provider.get("api_mode"))
     if pool_result:
-        # Propagate the model name even when using pooled credentials —
-        # the pool doesn't know about the custom_providers model field.
+        # Propagate the model name even when using pooled credentials.
         model_name = custom_provider.get("model")
         if model_name:
             pool_result["model"] = model_name

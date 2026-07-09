@@ -5,15 +5,45 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 
 # Track if we've already loaded the env to prevent duplicate loading
 _env_loaded = False
 
 
 def _load_dotenv_with_fallback(path: Path, *, override: bool) -> None:
-    # Always use UTF-8 encoding for .env files
-    load_dotenv(dotenv_path=path, override=override, encoding="utf-8")
+    # Always use UTF-8 encoding for .env files.  Load manually so template
+    # placeholders copied from example files never mask a real process/user env.
+    values = dotenv_values(dotenv_path=path, encoding="utf-8")
+    for key, value in values.items():
+        if not key or value is None:
+            continue
+        if _is_placeholder_secret(value):
+            continue
+        if override or key not in os.environ:
+            os.environ[key] = value
+
+
+def _is_placeholder_secret(value: str) -> bool:
+    normalized = str(value or "").strip().strip('"\'').lower()
+    if not normalized:
+        return False
+    return (
+        normalized in {
+            "sk-your-key-here",
+            "sk-or-your-key-here",
+            "your-key-here",
+            "your-api-key",
+            "your_api_key",
+            "changeme",
+            "change-me",
+            "placeholder",
+            "***",
+        }
+        or "your-key" in normalized
+        or "your_api_key" in normalized
+        or normalized.endswith("-your-key-here")
+    )
 
 
 def load_VoidCube_dotenv(
