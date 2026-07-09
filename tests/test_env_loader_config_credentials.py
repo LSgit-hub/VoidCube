@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from types import SimpleNamespace
 
 from VoidCube_cli.env_loader import load_VoidCube_dotenv
 from VoidCube_cli.auth import get_auth_status, read_credential_pool, write_credential_pool
@@ -118,3 +119,20 @@ def test_auth_status_rejects_placeholder_provider_key(tmp_path, monkeypatch):
 
     assert status["authenticated"] is False
     assert status["configured"] is False
+
+
+def test_login_api_key_save_failure_does_not_echo_secret(monkeypatch, capsys):
+    from VoidCube_cli.auth import _login_api_key
+
+    monkeypatch.setattr("getpass.getpass", lambda prompt="": "sk-real-secret-token-123456789")
+    monkeypatch.setattr(
+        "VoidCube_cli.config.save_env_value",
+        lambda key, value: (_ for _ in ()).throw(RuntimeError("disk full")),
+    )
+    monkeypatch.setattr("VoidCube_cli.config.get_env_path", lambda: "C:/Users/test/.VoidCube/.env")
+
+    _login_api_key("deepseek", SimpleNamespace())
+
+    output = capsys.readouterr().out
+    assert "sk-real-secret-token-123456789" not in output
+    assert "DEEPSEEK_API_KEY=<redacted>" in output

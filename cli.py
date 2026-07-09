@@ -2063,6 +2063,7 @@ class VoidcubeCLI:
         self._gateway_presence_refresh_interval_seconds: float = 30.0
         self._autonomous_execution_events: List[Dict[str, str]] = []
         self._autonomous_last_supervisor_event_key: str = ""
+        self._autonomous_parent_host = None
         self._autonomous_component_host = None
         self._autonomous_component_thread = None
         self._autonomous_component_stop = threading.Event()
@@ -2071,6 +2072,14 @@ class VoidcubeCLI:
     def _quiet_autonomous_component_cprint(self, *args: Any, **kwargs: Any) -> None:
         """Keep autonomous component execution out of the user's scrollback."""
         del args, kwargs
+
+    def _is_embedded_autonomous_component(self) -> bool:
+        """Return True when this host only exists for the embedded mini CLI."""
+        return getattr(self, "_autonomous_parent_host", None) is not None
+
+    def _should_emit_scrollback_output(self) -> bool:
+        """Return whether this host may write into the user's main CLI transcript."""
+        return not self._is_embedded_autonomous_component()
 
     def _ensure_autonomous_component_host(self):
         component_host = getattr(self, "_autonomous_component_host", None)
@@ -2568,6 +2577,7 @@ class VoidcubeCLI:
         if not user_input:
             return False
 
+        should_emit_scrollback = self._should_emit_scrollback_output()
         submit_images = []
         if isinstance(user_input, tuple):
             user_input, submit_images = user_input
@@ -2579,15 +2589,18 @@ class VoidcubeCLI:
             if _file_drop["is_image"]:
                 submit_images.append(_drop_path)
                 user_input = _remainder or f"[User attached image: {_drop_path.name}]"
-                _cprint(f"  📎 Auto-attached image: {_drop_path.name}")
+                if should_emit_scrollback:
+                    _cprint(f"  📎 Auto-attached image: {_drop_path.name}")
             else:
-                _cprint(f"  📄 Detected file: {_drop_path.name}")
+                if should_emit_scrollback:
+                    _cprint(f"  📄 Detected file: {_drop_path.name}")
                 user_input = f"[User attached file: {_drop_path}]"
                 if _remainder:
                     user_input += f"\n{_remainder}"
 
         if not _file_drop and isinstance(user_input, str) and _looks_like_slash_command(user_input):
-            _cprint(f"\n>️  {user_input}")
+            if should_emit_scrollback:
+                _cprint(f"\n>️  {user_input}")
             logger.info("CLI command executed: %s", user_input)
             if not self.process_command(user_input):
                 self._should_exit = True
@@ -2610,40 +2623,42 @@ class VoidcubeCLI:
             expanded = _paste_ref_re.sub(_expand_ref, user_input)
             total_lines = expanded.count('\n') + 1
             n_pastes = len(paste_refs)
-            _user_bar = f"[#34D399]{'~' * 40}[/]"
-            print()
-            ChatConsole().print(_user_bar)
-            split_parts = _paste_ref_re.split(user_input)
-            visible_user_text = " ".join(
-                split_parts[i].strip() for i in range(0, len(split_parts), 2) if split_parts[i].strip()
-            )
-            if visible_user_text:
-                ChatConsole().print(
-                    f"[bold {_accent_hex()}]\u25cf[/] [bold]{_escape(visible_user_text)}[/] "
-                    f"[dim]({n_pastes} pasted block{'s' if n_pastes > 1 else ''}, {total_lines} lines total)[/]"
+            if should_emit_scrollback:
+                _user_bar = f"[#34D399]{'~' * 40}[/]"
+                print()
+                ChatConsole().print(_user_bar)
+                split_parts = _paste_ref_re.split(user_input)
+                visible_user_text = " ".join(
+                    split_parts[i].strip() for i in range(0, len(split_parts), 2) if split_parts[i].strip()
                 )
-            else:
-                ChatConsole().print(
-                    f"[bold {_accent_hex()}]\u25cf[/] [bold]{_escape(f'[Pasted text: {total_lines} lines]')}[/]"
-                )
+                if visible_user_text:
+                    ChatConsole().print(
+                        f"[bold {_accent_hex()}]\u25cf[/] [bold]{_escape(visible_user_text)}[/] "
+                        f"[dim]({n_pastes} pasted block{'s' if n_pastes > 1 else ''}, {total_lines} lines total)[/]"
+                    )
+                else:
+                    ChatConsole().print(
+                        f"[bold {_accent_hex()}]\u25cf[/] [bold]{_escape(f'[Pasted text: {total_lines} lines]')}[/]"
+                    )
             user_input = expanded
         else:
-            _user_bar = f"[#34D399]{'~' * 40}[/]"
-            if isinstance(user_input, str) and '\n' in user_input:
-                first_line = user_input.split('\n')[0]
-                line_count = user_input.count('\n') + 1
-                print()
-                ChatConsole().print(_user_bar)
-                ChatConsole().print(
-                    f"[bold {_accent_hex()}]●[/] [bold]{_escape(first_line)}[/] "
-                    f"[dim](+{line_count - 1} lines)[/]"
-                )
-            else:
-                print()
-                ChatConsole().print(_user_bar)
-                ChatConsole().print(f"[bold {_accent_hex()}]●[/] [bold]{_escape(str(user_input))}[/]")
+            if should_emit_scrollback:
+                _user_bar = f"[#34D399]{'~' * 40}[/]"
+                if isinstance(user_input, str) and '\n' in user_input:
+                    first_line = user_input.split('\n')[0]
+                    line_count = user_input.count('\n') + 1
+                    print()
+                    ChatConsole().print(_user_bar)
+                    ChatConsole().print(
+                        f"[bold {_accent_hex()}]●[/] [bold]{_escape(first_line)}[/] "
+                        f"[dim](+{line_count - 1} lines)[/]"
+                    )
+                else:
+                    print()
+                    ChatConsole().print(_user_bar)
+                    ChatConsole().print(f"[bold {_accent_hex()}]●[/] [bold]{_escape(str(user_input))}[/]")
 
-        if submit_images:
+        if submit_images and should_emit_scrollback:
             n = len(submit_images)
             _cprint(f"  {_DIM}📎 {n} image{'s' if n > 1 else ''} attached{_RST}")
 
@@ -3334,6 +3349,8 @@ class VoidcubeCLI:
         rendering — a late thinking block (e.g. after an interrupt) would
         otherwise draw a reasoning box inside the response box.
         """
+        if not self._should_emit_scrollback_output():
+            return
         if not text:
             return
         self._reasoning_shown_this_turn = True
@@ -3361,6 +3378,11 @@ class VoidcubeCLI:
 
     def _close_reasoning_box(self) -> None:
         """Close the live reasoning box if it's open."""
+        if not self._should_emit_scrollback_output():
+            self._reasoning_box_opened = False
+            self._reasoning_buf = ""
+            self._deferred_content = ""
+            return
         if getattr(self, "_reasoning_box_opened", False):
             # Flush remaining reasoning buffer
             buf = getattr(self, "_reasoning_buf", "")
@@ -3392,6 +3414,12 @@ class VoidcubeCLI:
         about to execute).  Flushes any open boxes and resets state so
         tool feed lines render cleanly between turns.
         """
+        if not self._should_emit_scrollback_output():
+            if text is None:
+                self._reset_stream_state()
+            elif text:
+                self._stream_started = True
+            return
         if text is None:
             self._flush_stream()
             self._reset_stream_state()
@@ -3519,6 +3547,8 @@ class VoidcubeCLI:
 
     def _emit_stream_text(self, text: str) -> None:
         """Emit filtered text to the streaming display."""
+        if not self._should_emit_scrollback_output():
+            return
         if not text:
             return
 
@@ -3570,6 +3600,12 @@ class VoidcubeCLI:
 
     def _flush_stream(self) -> None:
         """Emit any remaining partial line from the stream buffer and close the box."""
+        if not self._should_emit_scrollback_output():
+            self._stream_buf = ""
+            self._stream_box_opened = False
+            self._stream_prefilt = ""
+            self._in_reasoning_block = False
+            return
         # If we're still inside a "reasoning block" at end-of-stream, it was
         # a false positive — the model mentioned a tag like <think> in prose
         # but never closed it.  Recover the buffered content as regular text.
@@ -3891,7 +3927,11 @@ class VoidcubeCLI:
             _active_agent_ref = self.agent
             # Route agent status output through prompt_toolkit so ANSI escape
             # sequences aren't garbled by patch_stdout's StdoutProxy (#2262).
-            self.agent._print_fn = _cprint  # type: ignore[assignment]
+            self.agent._print_fn = (  # type: ignore[assignment]
+                self._quiet_autonomous_component_cprint
+                if self._is_embedded_autonomous_component()
+                else _cprint
+            )
             self._active_agent_route_signature = (
                 effective_model,
                 runtime.get("provider"),
@@ -3928,7 +3968,8 @@ class VoidcubeCLI:
 
             return True
         except Exception as e:
-            ChatConsole().print(f"[bold red]Failed to initialize agent: {e}[/]")
+            if self._should_emit_scrollback_output():
+                ChatConsole().print(f"[bold red]Failed to initialize agent: {e}[/]")
             return False
     
     def show_banner(self):
@@ -8047,6 +8088,8 @@ class VoidcubeCLI:
         then prints a short status line so the user sees activity instead of
         a frozen screen while a large payload (e.g. 45 KB write_file) streams.
         """
+        if not self._should_emit_scrollback_output():
+            return
         if getattr(self, "_stream_box_opened", False):
             self._flush_stream()
             self._stream_box_opened = False
@@ -8106,14 +8149,15 @@ class VoidcubeCLI:
                     self._invalidate()
                     return
                 self._last_scrollback_tool = function_name
-                try:
-                    from agent.display import get_cute_tool_message
-                    line = get_cute_tool_message(function_name, stored_args, duration)
-                    if is_error:
-                        line = f"{line} [error]"
-                    _cprint(f"  {line}")
-                except Exception:
-                    pass
+                if self._should_emit_scrollback_output():
+                    try:
+                        from agent.display import get_cute_tool_message
+                        line = get_cute_tool_message(function_name, stored_args, duration)
+                        if is_error:
+                            line = f"{line} [error]"
+                        _cprint(f"  {line}")
+                    except Exception:
+                        pass
             self._invalidate()
             return
         if event_type != "tool.started":
@@ -8170,6 +8214,9 @@ class VoidcubeCLI:
 
     def _on_tool_complete(self, tool_call_id: str, function_name: str, function_args: dict, function_result: str):
         """Render file edits with inline diff after write-capable tools complete."""
+        if not self._should_emit_scrollback_output():
+            self._pending_edit_snapshots.pop(tool_call_id, None)
+            return
         snapshot = self._pending_edit_snapshots.pop(tool_call_id, None)
         try:
             from agent.display import render_edit_diff_with_delta
@@ -9067,7 +9114,7 @@ class VoidcubeCLI:
             self.agent = None
 
         # Initialize agent if needed
-        if self.agent is None:
+        if self.agent is None and self._should_emit_scrollback_output():
             _cprint(f"{_DIM}Initializing agent...{_RST}")
         if not self._init_agent(
             model_override=turn_route["model"],
@@ -9096,11 +9143,13 @@ class VoidcubeCLI:
                     message, cwd=os.getcwd(), context_length=_ctx_len)
                 if _ctx_result.expanded or _ctx_result.blocked:
                     if _ctx_result.references:
-                        _cprint(
-                            f"  {_DIM}[@ context: {len(_ctx_result.references)} ref(s), "
-                            f"{_ctx_result.injected_tokens} tokens]{_RST}")
+                        if self._should_emit_scrollback_output():
+                            _cprint(
+                                f"  {_DIM}[@ context: {len(_ctx_result.references)} ref(s), "
+                                f"{_ctx_result.injected_tokens} tokens]{_RST}")
                     for w in _ctx_result.warnings:
-                        _cprint(f"  {_DIM}⚠ {w}{_RST}")
+                        if self._should_emit_scrollback_output():
+                            _cprint(f"  {_DIM}⚠ {w}{_RST}")
                     if _ctx_result.blocked:
                         return "\n".join(_ctx_result.warnings) or "Context injection refused."
                     message = _ctx_result.message
@@ -9117,8 +9166,9 @@ class VoidcubeCLI:
         # Add user message to history
         self.conversation_history.append({"role": "user", "content": message})
 
-        ChatConsole().print(f"[#34D399]{'~' * 40}[/]")
-        print(flush=True)
+        if self._should_emit_scrollback_output():
+            ChatConsole().print(f"[#34D399]{'~' * 40}[/]")
+            print(flush=True)
         
         autonomous_timeout_reported = False
         autonomous_timeout_writeback_succeeded = False
@@ -9446,9 +9496,10 @@ class VoidcubeCLI:
                         display_reasoning += f"\n{_DIM}  ... ({len(lines) - 10} more lines){_RST}"
                     else:
                         display_reasoning = reasoning.strip()
-                    _cprint(f"\n{r_top}\n{_DIM}{display_reasoning}{_RST}\n{r_bot}")
+                    if self._should_emit_scrollback_output():
+                        _cprint(f"\n{r_top}\n{_DIM}{display_reasoning}{_RST}\n{r_bot}")
 
-            if response and not response_previewed:
+            if response and not response_previewed and self._should_emit_scrollback_output():
                 # Use skin engine for label/color with fallback
                 try:
                     from VoidCube_cli.skin_engine import get_active_skin
@@ -9486,7 +9537,7 @@ class VoidcubeCLI:
 
             # Play terminal bell when agent finishes (if enabled).
             # Works over SSH — the bell propagates to the user's terminal.
-            if self.bell_on_complete:
+            if self.bell_on_complete and self._should_emit_scrollback_output():
                 sys.stdout.write("\a")
                 sys.stdout.flush()
 
@@ -9545,7 +9596,8 @@ class VoidcubeCLI:
                 self._last_agent_turn_result = error_result
             elif not getattr(self, "_current_autonomous_task", None):
                 self._last_agent_turn_result = error_result
-            print(f"Error: {e}")
+            if self._should_emit_scrollback_output():
+                print(f"Error: {e}")
             return None
         finally:
             self._active_chat_agent_role = previous_active_role
