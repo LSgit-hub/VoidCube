@@ -6442,6 +6442,23 @@ class PlanningRuntimeMixin:
                         "deferred",
                         "Body-improvement task deferred because there are still planned/approved/running self-learning tasks awaiting completion. Supervisor must let learning evidence settle before code-improvement execution is released.",
                     )
+                learning_quality_score = self._body_improvement_learning_quality_score(task)
+                min_quality = float(
+                    getattr(
+                        self.config.service_runtime,
+                        "body_improvement_min_quality",
+                        60.0,
+                    )
+                    or 60.0
+                )
+                if learning_quality_score < min_quality:
+                    return (
+                        "cancelled",
+                        (
+                            "Body-improvement task cancelled because learning evidence is insufficient; "
+                            f"current score {learning_quality_score:.2f} is below required {min_quality:.2f}."
+                        ),
+                    )
                 return (
                     "approved",
                     "Agent-pull body-improvement task transferred by API-B for API-A autonomous execution. Autonomous-chain baseline keeps this path pull -> execute -> write back.",
@@ -6533,6 +6550,26 @@ class PlanningRuntimeMixin:
             self._task_governance_type(task) == "self_learning"
             or execution_kind == "body_improvement"
         )
+
+    def _body_improvement_learning_quality_score(self, task: AutonomousChainTask) -> float:
+        evidence = dict(task.evidence or {})
+        metadata = dict(task.metadata or {})
+        candidates = [
+            evidence.get("learning_quality_score"),
+            metadata.get("learning_quality_score"),
+            metadata.get("quality_score"),
+        ]
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            try:
+                score = float(candidate)
+            except (TypeError, ValueError):
+                continue
+            if 0.0 < score <= 1.0:
+                score *= 100.0
+            return max(0.0, min(100.0, score))
+        return self._calculate_learning_quality_score()
 
     async def _fetch_gateway_cli_session(self, session_id: str) -> Dict[str, Any]:
         import aiohttp
@@ -7608,6 +7645,10 @@ class PlanningRuntimeMixin:
                     current_status=str(task.status),
                 )
                 if suggested_status is not None:
+                    keep_deterministic_body_improvement_gate = (
+                        self._task_execution_kind(task) == "body_improvement"
+                        and target_status in {"cancelled", "deferred"}
+                    )
                     preserve_agent_pull_approval = (
                         target_status == "approved"
                         and suggested_status in {"deferred", "paused"}
@@ -7619,10 +7660,19 @@ class PlanningRuntimeMixin:
                             "reason": str(review_action.get("reason") or "").strip(),
                             "preserved_status": target_status,
                         }
+                    elif keep_deterministic_body_improvement_gate:
+                        decision_context["supervisor_followup_suggestion"] = {
+                            "action": suggested_status,
+                            "reason": str(review_action.get("reason") or "").strip(),
+                            "preserved_status": target_status,
+                        }
                     else:
                         target_status = suggested_status
                     lm_reason = str(review_action.get("reason") or "").strip()
-                    if lm_reason:
+                    if (
+                        lm_reason
+                        and not keep_deterministic_body_improvement_gate
+                    ):
                         default_reason = f"Supervisor review: {lm_reason}"
                     decision_context["supervisor_review_outcome"] = {
                         "action": suggested_status,

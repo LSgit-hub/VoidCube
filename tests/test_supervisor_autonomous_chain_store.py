@@ -16666,6 +16666,7 @@ async def test_batch_review_auto_approves_body_improvement_agent_pull_task(tmp_p
             "title": "学习后改进 shell 替身",
             "task_family": "body_upgrade",
             "execution_kind": "body_improvement",
+            "evidence": {"learning_quality_score": 88.0},
             "metadata": {
                 "task_family": "body_upgrade",
                 "execution_kind": "body_improvement",
@@ -16706,6 +16707,91 @@ async def test_batch_review_auto_approves_body_improvement_agent_pull_task(tmp_p
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_batch_review_cancels_body_improvement_without_learning_evidence(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    planned = await supervisor.plan_autonomous_chain_task(
+        {
+            "title": "缺少学习证据的 shell 替身改进",
+            "task_family": "body_upgrade",
+            "execution_kind": "body_improvement",
+            "metadata": {
+                "task_family": "body_upgrade",
+                "execution_kind": "body_improvement",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+
+    result = await supervisor.review_autonomous_chain_tasks(
+        {
+            "drive_input": _formal_endogenous_drive_input_payload(
+                active_sessions=1,
+                user_idle=180,
+                quiet_after_seconds=600,
+                self_learning_execution=False,
+            ),
+        }
+    )
+
+    task = result["tasks"][0]
+    assert task["task_id"] == task_id
+    assert task["status"] == "cancelled"
+    assert "learning evidence is insufficient" in task["decision_reason"]
+    assert task["execution_request"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_batch_review_preserves_body_improvement_learning_gate_against_lm_approval(
+    tmp_path, monkeypatch
+):
+    supervisor = _make_supervisor(tmp_path)
+    planned = await supervisor.plan_autonomous_chain_task(
+        {
+            "title": "缺少学习证据的 shell 替身改进",
+            "task_family": "body_upgrade",
+            "execution_kind": "body_improvement",
+            "metadata": {
+                "task_family": "body_upgrade",
+                "execution_kind": "body_improvement",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+
+    async def fake_lm_review(tasks, **review_context):
+        del review_context
+        assert len(tasks) == 1
+        return {
+            task_id: {
+                "action": "approve",
+                "reason": "The reviewer wants to release the body-improvement task.",
+            }
+        }
+
+    monkeypatch.setattr(supervisor, "_review_task_governance_with_supervisor", fake_lm_review)
+
+    result = await supervisor.review_autonomous_chain_tasks(
+        {
+            "drive_input": _formal_endogenous_drive_input_payload(
+                active_sessions=1,
+                user_idle=180,
+                quiet_after_seconds=600,
+                self_learning_execution=False,
+            ),
+        }
+    )
+
+    task = result["tasks"][0]
+    latest_context = task["decision_history"][-1]["context"]
+    assert task["task_id"] == task_id
+    assert task["status"] == "cancelled"
+    assert latest_context["supervisor_review_outcome"]["action"] == "approved"
+    assert latest_context["supervisor_followup_suggestion"]["preserved_status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_batch_review_defers_body_improvement_until_self_learning_finishes(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     await supervisor.plan_autonomous_chain_task(
@@ -16720,6 +16806,7 @@ async def test_batch_review_defers_body_improvement_until_self_learning_finishes
             "title": "学习后改进 shell 替身",
             "task_family": "body_upgrade",
             "execution_kind": "body_improvement",
+            "evidence": {"learning_quality_score": 88.0},
             "metadata": {
                 "task_family": "body_upgrade",
                 "execution_kind": "body_improvement",
@@ -16776,6 +16863,7 @@ async def test_batch_review_releases_body_improvement_after_one_self_learning_pr
             "title": "学习后改进 shell 替身",
             "task_family": "body_upgrade",
             "execution_kind": "body_improvement",
+            "evidence": {"learning_quality_score": 88.0},
             "metadata": {
                 "task_family": "body_upgrade",
                 "execution_kind": "body_improvement",
