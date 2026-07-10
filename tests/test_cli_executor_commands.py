@@ -39,7 +39,7 @@ def test_body_status_command_uses_executor_ops_client(capsys):
 @pytest.mark.unit
 def test_body_upgrade_command_uses_executor_ops_client(capsys):
     client = Mock()
-    client.execute_body_upgrade.return_value = {"status": "upgrade_executed"}
+    client.execute_body_upgrade.return_value = {"status": "upgrade_awaiting_user_consent"}
 
     with patch("VoidCube_cli.ops.executor.ExecutorOpsClient", return_value=client):
         cmd_body(
@@ -53,10 +53,37 @@ def test_body_upgrade_command_uses_executor_ops_client(capsys):
         )
 
     output = capsys.readouterr().out
-    assert '"status": "upgrade_executed"' in output
+    assert '"status": "upgrade_awaiting_user_consent"' in output
     client.execute_body_upgrade.assert_called_once_with(
         {
             "body_version": "v2",
+            "watch_window_seconds": 120,
+        }
+    )
+
+
+@pytest.mark.unit
+def test_body_consent_command_uses_executor_ops_client(capsys):
+    client = Mock()
+    client.confirm_body_switch.return_value = {"status": "body_switch_activated"}
+
+    with patch("VoidCube_cli.ops.executor.ExecutorOpsClient", return_value=client):
+        cmd_body(
+            SimpleNamespace(
+                body_action="consent",
+                slot_id="slot-B",
+                watch_window_seconds=120,
+                gateway_url="http://gateway.local",
+                timeout=5.0,
+            )
+        )
+
+    output = capsys.readouterr().out
+    assert '"status": "body_switch_activated"' in output
+    client.confirm_body_switch.assert_called_once_with(
+        {
+            "slot_id": "slot-B",
+            "approved": True,
             "watch_window_seconds": 120,
         }
     )

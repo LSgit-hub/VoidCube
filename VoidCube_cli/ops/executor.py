@@ -34,6 +34,9 @@ class ExecutorOpsClient:
     def execute_body_upgrade(self, payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
         return self.post_executor("/body/upgrade/execute", payload or {})
 
+    def confirm_body_switch(self, payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        return self.post_executor("/body/switch/consent", payload or {})
+
     def get_body_registry(self) -> Dict[str, Any]:
         return self.get_executor("/body/registry")
 

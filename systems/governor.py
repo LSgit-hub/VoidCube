@@ -22,12 +22,14 @@ GovernorDecisionType = Literal[
     "approve",
     "reject",
     "approve_with_watch",
+    "awaiting_user_consent",
     "rollback_required",
     "request_more_evidence",
 ]
 GovernorRiskLevel = Literal["low", "medium", "high", "critical"]
 GovernorActionType = Literal[
     "issue_probe_lease",
+    "await_user_consent",
     "activate_slot",
     "restore_retired_slot",
     "recycle_retired_slot",
@@ -224,12 +226,17 @@ class GovernorDecisionEngine:
 
         if target_transition == "probe_to_active":
             probe_passed = self._probe_passed(request.evidence)
-            if slot_meta and slot_meta.body_state != "probe":
+            user_consent_approved = bool(request.evidence.get("user_consent_approved"))
+            if slot_meta and slot_meta.body_state != "awaiting_user_consent":
                 return self._reject(
-                    f"Slot {slot_meta.slot_id} must be in probe state before activation approval."
+                    f"Slot {slot_meta.slot_id} must be awaiting user consent before activation approval."
                 )
             if not probe_passed:
                 return self._reject("Probe report indicates the candidate is not yet safe to activate.")
+            if not user_consent_approved:
+                return self._request_more_evidence(
+                    "Activation requires explicit user consent after probe and governor review."
+                )
             watch_window_hint = int(request.constraints.get("watch_window_seconds", 300))
             return GovernorResponse(
                 decision="approve_with_watch",
@@ -245,6 +252,7 @@ class GovernorDecisionEngine:
                         slot_id=request.body_id,
                         payload={
                             "watch_window_seconds": watch_window_hint,
+                            "reason": "user_consented_switch",
                             "runtime_task_profile": self._runtime_task_profile(request),
                         },
                     )
@@ -285,19 +293,21 @@ class GovernorDecisionEngine:
 
         watch_window_hint = int(request.constraints.get("watch_window_seconds", 300))
         return GovernorResponse(
-            decision="approve_with_watch",
+            decision="awaiting_user_consent",
             confidence=0.9,
             risk_level="medium",
             reasoning_summary=(
-                "The candidate passed probe validation and may receive the active lease "
-                "through a controlled switch."
+                "The candidate passed probe validation and the governor allows a switch "
+                "recommendation, but activation must wait for explicit user consent."
             ),
             required_actions=[
                 GovernorAction(
-                    action_type="activate_slot",
+                    action_type="await_user_consent",
                     slot_id=request.body_id,
                     payload={
                         "watch_window_seconds": watch_window_hint,
+                        "requires_user_consent": True,
+                        "reason": "governor_approved_pending_user_consent",
                         "runtime_task_profile": self._runtime_task_profile(request),
                     },
                 )
@@ -310,7 +320,8 @@ class GovernorDecisionEngine:
                         request,
                         {
                             "body_id": request.body_id,
-                            "decision": "approved_pending_execution",
+                            "decision": "approved_pending_user_consent",
+                            "requires_user_consent": True,
                         },
                     ),
                 )

@@ -852,6 +852,49 @@ def test_auto_q_fast_path_marks_current_task_interrupted(monkeypatch):
     assert cli._last_agent_turn_result is None
 
 
+def test_auto_q_fast_path_keeps_boot_owned_supervisor_runtime(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._autonomous_gate_active = True
+    cli._current_autonomous_task = None
+    cli.session_id = "cli-autoq-boot"
+    cli._autonomous_execution_events = []
+
+    requests = []
+    printed = []
+    pushed = []
+
+    def fake_urlopen(request, timeout=0):
+        del timeout
+        if isinstance(request, Request):
+            requests.append(request.full_url)
+            if request.full_url.endswith("/autonomous-chain-gate/status"):
+                return _FakeUrlopenResponse(
+                    {
+                        "autonomous_chain_gate_active": True,
+                        "autonomous_chain_start_on_boot": True,
+                        "autonomous_chain_runtime_mode": "boot",
+                    }
+                )
+            if request.full_url.endswith("/autonomous-chain-gate/deactivate"):
+                raise AssertionError("boot-owned /auto-q must not deactivate Supervisor")
+        return _FakeUrlopenResponse({})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    assert autonomous_gate_module.exit_autonomous_gate_fast(
+        cli,
+        cprint=lambda *args, **kwargs: printed.append(" ".join(str(arg) for arg in args)),
+        interrupt_current_task_callback=lambda **kwargs: True,
+        push_cli_agent_scene_callback=lambda *args, **kwargs: pushed.append((args, kwargs)) or True,
+    ) is True
+
+    assert cli._autonomous_gate_active is False
+    assert any(url.endswith("/autonomous-chain-gate/status") for url in requests)
+    assert not any(url.endswith("/autonomous-chain-gate/deactivate") for url in requests)
+    assert any("保持常驻运行" in line for line in printed)
+    assert pushed
+
+
 def test_refresh_gateway_cli_presence_registers_session_and_scene(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli.session_id = "cli-session-keepalive"

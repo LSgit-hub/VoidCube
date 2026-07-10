@@ -179,9 +179,9 @@ class ServiceRuntimeMixin:
     async def _start_periodic_tasks(self) -> None:
         """Start baseline supervisor background tasks.
 
-        This always starts the health-check loop. The review loop and
-        endogenous-drive loop remain behind the autonomous-chain gate and are
-        activated by _start_autonomous_chain_gate().
+        This always starts the health-check loop. By default the autonomous
+        chain also starts on boot, so Supervisor owns its drive/review cadence
+        without waiting for the CLI /auto surface.
         """
         runtime_config = self.config.service_runtime
         if self._health_check_task:
@@ -225,9 +225,6 @@ class ServiceRuntimeMixin:
         # The memory service runs its own background compression loop via
         # its FastAPI lifespan.
 
-        # Autonomous-chain loops are NOT started here — they are activated
-        # on demand via _start_autonomous_chain_gate().
-
         # ── Structured memory maintenance loop (baseline background task) ──
         maintenance_interval = getattr(
             runtime_config, "structured_memory_maintenance_interval", 0
@@ -268,6 +265,9 @@ class ServiceRuntimeMixin:
 
             self._structured_maintenance_task = asyncio.create_task(structured_maintenance_loop())
             logger.info("Structured memory maintenance loop started (interval=%ds)", maintenance_interval)
+
+        if runtime_config.autonomous_chain_start_on_boot:
+            await self._start_autonomous_chain_gate()
 
         self._ensure_watch_window_task()
         self._service_runtime_started = True
@@ -386,6 +386,10 @@ class ServiceRuntimeMixin:
         """
         return {
             "autonomous_chain_gate_active": self._service_runtime.autonomous_chain_gate_active,
+            "autonomous_chain_start_on_boot": self.config.service_runtime.autonomous_chain_start_on_boot,
+            "autonomous_chain_runtime_mode": (
+                "boot" if self.config.service_runtime.autonomous_chain_start_on_boot else "manual"
+            ),
             "review_loop_running": (
                 self._service_runtime.autonomous_chain_review_task is not None
                 and not self._service_runtime.autonomous_chain_review_task.done()

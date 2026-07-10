@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from VoidCube_core.utils import atomic_json_write
 
-BodyState = Literal["shell", "candidate", "probe", "active", "retired"]
+BodyState = Literal["shell", "candidate", "probe", "awaiting_user_consent", "active", "retired"]
 
 DEFAULT_SLOT_IDS: tuple[str, str] = ("slot-A", "slot-B")
 DEFAULT_SLOT_COPY_IGNORE_NAMES: tuple[str, ...] = (
@@ -29,7 +29,8 @@ DEFAULT_SLOT_COPY_IGNORE_NAMES: tuple[str, ...] = (
 ALLOWED_STATE_TRANSITIONS: dict[str, set[str]] = {
     "shell": {"candidate"},
     "candidate": {"probe"},
-    "probe": {"active", "shell"},
+    "probe": {"awaiting_user_consent", "shell"},
+    "awaiting_user_consent": {"shell"},
     "active": {"retired"},
     "retired": {"active", "shell"},
 }
@@ -77,6 +78,9 @@ class BodySlotMeta(BaseModel):
     materialized_from: Optional[str] = None
     last_materialized_at: Optional[datetime] = None
     runtime_bootstrapped_at: Optional[datetime] = None
+    switch_consent_request: Optional[Dict[str, Any]] = None
+    switch_consent_requested_at: Optional[datetime] = None
+    switch_consent_approved_at: Optional[datetime] = None
 
     health_score: float = 0.0
     health_history: list[dict] = Field(default_factory=list)
@@ -305,9 +309,9 @@ class BodyRegistryManager:
         now = datetime.utcnow()
 
         target = self.load_slot_meta(slot_id)
-        if target.body_state not in {"probe", "retired"}:
+        if target.body_state not in {"awaiting_user_consent", "retired"}:
             raise ValueError(
-                f"Slot {slot_id} must be in probe or retired before activation; "
+                f"Slot {slot_id} must be awaiting user consent or retired before activation; "
                 f"got {target.body_state!r}"
             )
 
@@ -328,6 +332,7 @@ class BodyRegistryManager:
         target.body_state = "active"
         target.lease = lease
         target.last_switch_at = now
+        target.switch_consent_approved_at = target.switch_consent_approved_at or now
         target.generation = registry.current_generation + 1
         target.active_ref = target.active_ref or f"body/{slot_id}"
         target.active_commit = (
@@ -375,6 +380,56 @@ class BodyRegistryManager:
                     registry.last_switch_result[key] = value
         self.save_registry(registry)
         self.write_active_body_pointer(slot_id)
+        return registry
+
+    def await_user_consent(
+        self,
+        slot_id: str,
+        *,
+        reason: str = "governor_approved_pending_user_consent",
+        request_payload: Optional[Dict[str, Any]] = None,
+        runtime_task_profile: Optional[Dict[str, Any]] = None,
+    ) -> BodyRegistry:
+        """Hold a probe-passed slot at the final user-consent gate."""
+        self._validate_slot_id(slot_id)
+        registry = self.load_registry()
+        now = datetime.utcnow()
+
+        meta = self.load_slot_meta(slot_id)
+        if meta.body_state != "probe":
+            raise ValueError(
+                f"Slot {slot_id} must be in probe before awaiting user consent; "
+                f"got {meta.body_state!r}"
+            )
+
+        meta.body_state = "awaiting_user_consent"
+        meta.lease = "awaiting_user_consent"
+        meta.switch_consent_requested_at = now
+        meta.switch_consent_approved_at = None
+        meta.switch_consent_request = dict(request_payload or {})
+        if isinstance(runtime_task_profile, dict):
+            meta.switch_consent_request["runtime_task_profile"] = dict(runtime_task_profile)
+        self.save_slot_meta(meta)
+
+        registry.last_switch_result = {
+            "decision": "awaiting_user_consent",
+            "slot_id": slot_id,
+            "previous_active_slot": registry.active_slot,
+            "reason": reason,
+            "timestamp": now.isoformat(),
+            "candidate_branch": meta.candidate_branch,
+            "candidate_commit": meta.candidate_commit,
+            "rollback_ref": meta.rollback_ref,
+            "rollback_commit": meta.rollback_commit,
+            "requires_user_consent": True,
+        }
+        if isinstance(runtime_task_profile, dict):
+            registry.last_switch_result["runtime_task_profile"] = dict(runtime_task_profile)
+            for key in ("governance_task_type", "task_family", "execution_kind"):
+                value = runtime_task_profile.get(key)
+                if value is not None:
+                    registry.last_switch_result[key] = value
+        self.save_registry(registry)
         return registry
 
     def recycle_retired_slot(
@@ -440,6 +495,9 @@ class BodyRegistryManager:
         if new_state == "shell":
             meta.pid = None
             meta.lease = None
+            meta.switch_consent_request = None
+            meta.switch_consent_requested_at = None
+            meta.switch_consent_approved_at = None
         self.save_slot_meta(meta)
 
         registry = self.load_registry()

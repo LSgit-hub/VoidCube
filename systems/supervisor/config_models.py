@@ -119,7 +119,6 @@ class EndogenousDriveCognitiveContextLayeringPolicyConfig(BaseModel):
         "primary_evidence_nodes",
         "primary_agenda_nodes",
         "api_b_judgement_summary",
-        "governance_backlog_summary",
         "cognitive_posture",
         "decision_summary",
     ]
@@ -153,7 +152,6 @@ class EndogenousDrivePromptAttentionPolicyConfig(BaseModel):
         "supporting_detail",
         "long_tail_context",
         "api_b_judgement_snapshot",
-        "governance_backlog_snapshot",
         "perception",
         "world_model",
         "reflection",
@@ -187,7 +185,6 @@ class EndogenousDrivePromptAttentionPolicyConfig(BaseModel):
         "learning_backlog_titles",
         "body_improvement_backlog_titles",
         "api_b_judgement_tasks",
-        "governance_backlog_tasks",
         "shell_slot",
     ]
     structure_keys: list[str] = [
@@ -195,7 +192,6 @@ class EndogenousDrivePromptAttentionPolicyConfig(BaseModel):
         "supporting_detail",
         "long_tail_context",
         "api_b_judgement_snapshot",
-        "governance_backlog_snapshot",
     ]
     trim_stage_order: list[str] = [
         "primary_context_compaction",
@@ -264,6 +260,7 @@ class SupervisorExecutionConfig(BaseModel):
 
 class SupervisorServiceRuntimeConfig(BaseModel):
     health_check_interval: int = 30
+    autonomous_chain_start_on_boot: bool = True
     autonomous_chain_review_interval: int = 300
     autonomous_chain_handoff_limit_per_cycle: int = 1
     activity_guard_user_seconds: int = DEFAULT_ACTIVITY_GUARD_SECONDS

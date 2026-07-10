@@ -1145,6 +1145,17 @@ def cmd_body(args):
             result = client.execute_body_upgrade(payload)
             _print_ops_json(result)
             return
+
+        if action == "consent":
+            payload = {
+                "slot_id": getattr(args, "slot_id", None),
+                "approved": True,
+                "watch_window_seconds": getattr(args, "watch_window_seconds", None),
+            }
+            payload = {key: value for key, value in payload.items() if value is not None}
+            result = client.confirm_body_switch(payload)
+            _print_ops_json(result)
+            return
     except requests.RequestException as exc:
         _exit_executor_ops_error("Body command", exc)
 
@@ -1661,6 +1672,21 @@ For more help on a command:
         help="Candidate body version label",
     )
     body_upgrade.add_argument(
+        "--watch-window-seconds",
+        type=int,
+        default=None,
+        help="Watch-window duration after switch",
+    )
+    body_consent = body_subparsers.add_parser(
+        "consent",
+        help="Approve activating a probe-passed body slot waiting at the user-consent gate",
+    )
+    body_consent.add_argument(
+        "--slot-id",
+        default=None,
+        help="Body slot to activate; optional when exactly one slot is awaiting consent",
+    )
+    body_consent.add_argument(
         "--watch-window-seconds",
         type=int,
         default=None,

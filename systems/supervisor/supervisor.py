@@ -87,6 +87,10 @@ class Supervisor(
         assemble_supervisor_runtime_state(self)
         self._initialize_supervisor_ui_runtime()
         assemble_supervisor_execution_runtime(self)
+        try:
+            self._recover_autonomous_chain_store_from_mem_governance(only_if_empty=True)
+        except Exception:
+            logger.debug("Autonomous-chain Mem governance recovery skipped", exc_info=True)
         # Proxy supervisor._watch_window_runtime → adapter._state
         if hasattr(self, '_watch_window_executor'):
             self._watch_window_runtime = self._watch_window_executor._state
@@ -145,6 +149,11 @@ class Supervisor(
             methods=["POST"],
         )
         self.app.add_api_route(
+            "/autonomous-chain/recover-from-mem",
+            self.recover_autonomous_chain_from_mem,
+            methods=["POST"],
+        )
+        self.app.add_api_route(
             "/self-learning/conclusions/submit",
             self.submit_self_learning_conclusion,
             methods=["POST"],
@@ -161,6 +170,7 @@ class Supervisor(
         self.app.add_api_route("/body/slots", self.list_body_slots, methods=["GET"])
         self.app.add_api_route("/body/slots/{slot_id}", self.get_body_slot, methods=["GET"])
         self.app.add_api_route("/body/review", execute_governor_review_request, methods=["POST"])
+        self.app.add_api_route("/body/switch/consent", self.confirm_body_switch, methods=["POST"])
         self.app.add_api_route("/body/governor/history", self.get_governor_history, methods=["GET"])
         self.app.add_api_route("/body/improvement-report", self.receive_improvement_report, methods=["POST"])
         self.app.add_api_route("/body/{slot_id}/health", self.get_slot_health, methods=["GET"])
@@ -174,12 +184,25 @@ class Supervisor(
         self.app.add_api_route("/autonomous-chain-gate/status", self.get_autonomous_chain_gate_status, methods=["GET"])
 
     async def activate_autonomous_chain_gate(self, request: dict | None = None) -> Dict[str, Any]:
-        """Enable the autonomous-chain gate: start drive + review loops."""
+        """Ensure the autonomous chain runtime is active."""
         await self._start_autonomous_chain_gate()
         return self._autonomous_chain_gate_status()
 
     async def deactivate_autonomous_chain_gate(self, request: dict | None = None) -> Dict[str, Any]:
-        """Disable the autonomous-chain gate: stop drive + review loops, keep health-check."""
+        """Disable the manual autonomous-chain runtime, keeping health-check alive.
+
+        Boot-owned autonomous cadence is intentionally sticky; callers must pass
+        {"force": true} for emergency/admin shutdown.
+        """
+        payload = request or {}
+        if (
+            self.config.service_runtime.autonomous_chain_start_on_boot
+            and not bool(payload.get("force"))
+        ):
+            status = self._autonomous_chain_gate_status()
+            status["deactivation_skipped"] = True
+            status["reason"] = "autonomous_chain_start_on_boot"
+            return status
         await self._stop_autonomous_chain_gate()
         return self._autonomous_chain_gate_status()
 
@@ -202,6 +225,9 @@ class Supervisor(
 
     async def get_active_body_target(self) -> Dict[str, Any]:
         return self._execution_facade.get_active_body_target()
+
+    async def confirm_body_switch(self, request: dict | None = None) -> Dict[str, Any]:
+        return await self._execution_facade.confirm_body_switch(request)
 
     async def receive_improvement_report(self, report: dict) -> Dict[str, Any]:
         """Agent 提交替身改进报告 → 监督者审查评分"""

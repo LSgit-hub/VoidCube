@@ -4,7 +4,7 @@ import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Iterable, List, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -203,6 +203,17 @@ class AutonomousChainStore:
             "failed",
         }
     )
+    _GOVERNANCE_DECISION_TO_STATUS: Dict[str, AutonomousChainTaskStatus] = {
+        "approve": "approved",
+        "approve_with_watch": "approved",
+        "defer": "deferred",
+        "reject": "cancelled",
+        "cancel": "cancelled",
+        "pause": "paused",
+        "rollback_required": "failed",
+        "completed": "completed",
+        "failed": "failed",
+    }
 
     def __init__(self, storage_path: str | Path) -> None:
         self.storage_path = Path(storage_path).resolve()
@@ -217,23 +228,6 @@ class AutonomousChainStore:
         if status is not None:
             tasks = [task for task in tasks if task.status == status]
         return tasks
-
-    def list_governance_backlog_tasks(
-        self,
-        *,
-        status: Optional[AutonomousChainTaskStatus] = None,
-    ) -> List[AutonomousChainTask]:
-        """Return live autonomous-chain items still participating in the chain.
-
-        Compatibility name kept for older callers. New read paths should prefer
-        list_api_b_judgement_tasks(), list_api_a_handoff_tasks(), and
-        list_api_a_running_tasks() so the UI does not regress into a queue view.
-        """
-        allowed = self._status_filter(
-            status=status,
-            default_statuses=self._AUTONOMOUS_CHAIN_LIVE_STATUSES,
-        )
-        return self._list_tasks_by_statuses(allowed)
 
     def list_api_b_judgement_tasks(
         self,
@@ -490,6 +484,75 @@ class AutonomousChainStore:
                 return task
         raise KeyError(task_id)
 
+    def recover_from_governance_events(
+        self,
+        events: Iterable[Any],
+        *,
+        replace: bool = False,
+    ) -> Dict[str, Any]:
+        """Merge task projections rebuilt from Mem governance events.
+
+        The JSON store is runtime coordination state. This replay keeps Mem's
+        append-only governance log authoritative after the runtime file is lost,
+        while preserving existing runtime tasks unless an explicit replacement
+        is requested.
+        """
+        event_rows = sorted(
+            (
+                row
+                for event in events
+                if (row := self._governance_event_to_payload(event))
+            ),
+            key=self._governance_event_sort_key,
+        )
+        by_task_id: Dict[str, List[Dict[str, Any]]] = {}
+        skipped_without_task_id = 0
+        for row in event_rows:
+            task_id = str(row.get("task_id") or "").strip()
+            if not task_id:
+                skipped_without_task_id += 1
+                continue
+            if self._status_from_governance_event(row) is None:
+                continue
+            by_task_id.setdefault(task_id, []).append(row)
+
+        recovered_tasks = [
+            self._task_from_governance_events(task_id, rows)
+            for task_id, rows in by_task_id.items()
+        ]
+        recovered_tasks = [task for task in recovered_tasks if task is not None]
+
+        with self._lock:
+            snapshot = AutonomousChainStoreSnapshot() if replace else self._load_snapshot()
+            existing_ids = {task.task_id for task in snapshot.tasks}
+            added = 0
+            updated = 0
+            for task in recovered_tasks:
+                if task.task_id in existing_ids:
+                    if not replace:
+                        continue
+                    for index, existing in enumerate(snapshot.tasks):
+                        if existing.task_id == task.task_id:
+                            snapshot.tasks[index] = task
+                            updated += 1
+                            break
+                    continue
+                snapshot.tasks.append(task)
+                existing_ids.add(task.task_id)
+                added += 1
+            if added or updated or replace:
+                self._write_snapshot(snapshot)
+
+        return {
+            "status": "recovered",
+            "event_count": len(event_rows),
+            "candidate_task_count": len(by_task_id),
+            "added_task_count": added,
+            "updated_task_count": updated,
+            "skipped_without_task_id": skipped_without_task_id,
+            "replace": replace,
+        }
+
     def _load_snapshot(self) -> AutonomousChainStoreSnapshot:
         if not self.storage_path.exists():
             return AutonomousChainStoreSnapshot()
@@ -531,4 +594,228 @@ class AutonomousChainStore:
         if status is None:
             return default_statuses
         return frozenset({str(status).strip().lower()})
+
+    @classmethod
+    def _governance_event_to_payload(cls, event: Any) -> Dict[str, Any]:
+        if event is None:
+            return {}
+        if isinstance(event, dict):
+            return dict(event)
+        if hasattr(event, "to_dict"):
+            try:
+                payload = event.to_dict()
+                if isinstance(payload, dict):
+                    return dict(payload)
+            except Exception:
+                pass
+        payload: Dict[str, Any] = {}
+        for key in (
+            "id",
+            "event_type",
+            "source_actor",
+            "decision",
+            "reason",
+            "created_at",
+            "task_id",
+            "body_id",
+            "risk_level",
+            "confidence",
+            "git_lineage",
+            "probe_report_ref",
+            "execution_result",
+            "evidence_refs",
+        ):
+            if hasattr(event, key):
+                payload[key] = getattr(event, key)
+        return payload
+
+    @classmethod
+    def _governance_event_sort_key(cls, event: Dict[str, Any]) -> tuple[str, str]:
+        created_at = cls._governance_event_datetime(event)
+        event_id = str(event.get("id") or "")
+        return (created_at.isoformat(), event_id)
+
+    @staticmethod
+    def _governance_event_datetime(event: Dict[str, Any]) -> datetime:
+        raw = event.get("created_at")
+        if isinstance(raw, datetime):
+            return raw
+        text = str(raw or "").strip()
+        if not text:
+            return datetime.utcnow()
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return datetime.utcnow()
+
+    @classmethod
+    def _status_from_governance_event(
+        cls,
+        event: Dict[str, Any],
+    ) -> Optional[AutonomousChainTaskStatus]:
+        decision = cls._enum_value(event.get("decision")).strip().lower()
+        if decision in cls._GOVERNANCE_DECISION_TO_STATUS:
+            return cls._GOVERNANCE_DECISION_TO_STATUS[decision]
+        event_type = cls._enum_value(event.get("event_type")).strip().lower()
+        if event_type == "memory_maintenance":
+            return "approved"
+        if event_type == "self_evolution_approval":
+            return "approved"
+        if event_type == "self_evolution_defer":
+            return "deferred"
+        if event_type == "self_evolution_cancel":
+            return "cancelled"
+        return None
+
+    @classmethod
+    def _task_from_governance_events(
+        cls,
+        task_id: str,
+        rows: List[Dict[str, Any]],
+    ) -> Optional[AutonomousChainTask]:
+        concrete_rows = [
+            row for row in rows if cls._status_from_governance_event(row) is not None
+        ]
+        if not concrete_rows:
+            return None
+        first = concrete_rows[0]
+        latest = concrete_rows[-1]
+        status = cls._status_from_governance_event(latest)
+        if status is None:
+            return None
+
+        runtime_profile = cls._runtime_profile_from_governance_event(latest)
+        execution_result = cls._dict_value(latest.get("execution_result"))
+        git_lineage = cls._dict_value(latest.get("git_lineage"))
+        event_ids = [
+            str(row.get("id") or "").strip()
+            for row in concrete_rows
+            if str(row.get("id") or "").strip()
+        ]
+        event_types = [
+            cls._enum_value(row.get("event_type")).strip()
+            for row in concrete_rows
+            if cls._enum_value(row.get("event_type")).strip()
+        ]
+        title = (
+            str(execution_result.get("title") or execution_result.get("task_title") or "").strip()
+            or cls._reason_title(latest)
+            or f"Recovered autonomous task {task_id[:8]}"
+        )
+        summary = (
+            str(execution_result.get("summary") or execution_result.get("task_summary") or "").strip()
+            or str(latest.get("reason") or "").strip()
+            or "Recovered from Mem governance event history."
+        )
+
+        task = AutonomousChainTask(
+            task_id=task_id,
+            trace_id=str(execution_result.get("trace_id") or uuid.uuid4()),
+            title=title,
+            summary=summary,
+            task_type=str(execution_result.get("task_type") or runtime_profile["governance_task_type"]),
+            governance_task_type=runtime_profile["governance_task_type"],
+            task_family=runtime_profile["task_family"],
+            execution_kind=runtime_profile["execution_kind"],
+            source="mem_governance_recovery",
+            priority=str(execution_result.get("priority") or "normal"),
+            status=status,
+            created_at=cls._governance_event_datetime(first),
+            updated_at=cls._governance_event_datetime(latest),
+            metadata={
+                "source": "mem_governance_recovery",
+                "recovered_from_mem_governance": True,
+                "recovered_event_ids": event_ids,
+                "recovered_event_types": event_types,
+                "latest_governance_event_id": str(latest.get("id") or ""),
+                "latest_governance_decision": cls._enum_value(latest.get("decision")),
+                "body_id": str(latest.get("body_id") or ""),
+                "execution_result": execution_result,
+            },
+            evidence={
+                "mem_governance": {
+                    "event_ids": event_ids,
+                    "latest_event_type": cls._enum_value(latest.get("event_type")),
+                    "latest_reason": str(latest.get("reason") or ""),
+                    "git_lineage": git_lineage,
+                    "evidence_refs": list(latest.get("evidence_refs") or []),
+                }
+            },
+            constraints=cls._dict_value(execution_result.get("constraints")),
+        )
+        task.decision_reason = str(latest.get("reason") or "")
+        task.decision_history = [
+            AutonomousChainTaskDecision(
+                decision_id=str(row.get("id") or uuid.uuid4()),
+                status=row_status,
+                task_type=task.task_type,
+                governance_task_type=task.governance_task_type,
+                task_family=task.task_family,
+                execution_kind=task.execution_kind,
+                trace_id=task.trace_id,
+                decided_at=cls._governance_event_datetime(row),
+                actor=str(row.get("source_actor") or "mem_governance"),
+                reason=str(row.get("reason") or ""),
+                context={
+                    "source": "mem_governance_recovery",
+                    "event_type": cls._enum_value(row.get("event_type")),
+                    "body_id": str(row.get("body_id") or ""),
+                },
+            )
+            for row in concrete_rows
+            if (row_status := cls._status_from_governance_event(row)) is not None
+        ]
+        return task
+
+    @classmethod
+    def _runtime_profile_from_governance_event(cls, event: Dict[str, Any]) -> Dict[str, Any]:
+        execution_result = cls._dict_value(event.get("execution_result"))
+        runtime_profile = cls._dict_value(execution_result.get("runtime_task_profile"))
+        event_type = cls._enum_value(event.get("event_type")).strip().lower()
+        default_family = "general_self_evolution"
+        if event_type == "memory_maintenance":
+            default_family = "memory_maintenance"
+        return derive_runtime_task_profile(
+            task_type=(
+                runtime_profile.get("governance_task_type")
+                or execution_result.get("task_type")
+                or "self_evolution"
+            ),
+            governance_task_type=runtime_profile.get("governance_task_type"),
+            task_family=(
+                runtime_profile.get("task_family")
+                or execution_result.get("task_family")
+            ),
+            execution_kind=(
+                runtime_profile.get("execution_kind")
+                or execution_result.get("execution_kind")
+            ),
+            default_task_family=default_family,
+        )
+
+    @staticmethod
+    def _enum_value(value: Any) -> str:
+        return str(value.value if hasattr(value, "value") else value or "")
+
+    @staticmethod
+    def _dict_value(value: Any) -> Dict[str, Any]:
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return dict(value)
+        if hasattr(value, "to_dict"):
+            try:
+                payload = value.to_dict()
+                if isinstance(payload, dict):
+                    return dict(payload)
+            except Exception:
+                pass
+        return {}
+
+    @staticmethod
+    def _reason_title(event: Dict[str, Any]) -> str:
+        reason = str(event.get("reason") or "").strip()
+        if not reason:
+            return ""
+        return reason[:80]
 

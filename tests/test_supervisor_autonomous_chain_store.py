@@ -231,7 +231,7 @@ def _drive_cycle_failure_replay_evaluation(
             "system_posture": posture,
             "active_sessions": 0,
             "correction_signals": 3 if truthfulness_focus else 0,
-            "governance_backlog_count": 0,
+            "api_b_judgement_count": 0,
         },
         "reflection": {
             "dominant_constraint": constraint,
@@ -593,7 +593,7 @@ async def test_evaluate_endogenous_drive_exposes_deliberation_report(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_endogenous_drive_governance_backlog_count_excludes_api_a_execution_lane(tmp_path):
+async def test_endogenous_drive_api_b_judgement_count_excludes_api_a_execution_lane(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
 
@@ -637,7 +637,7 @@ async def test_endogenous_drive_governance_backlog_count_excludes_api_a_executio
     result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
     perception = result["deliberation"]["perception"]
 
-    assert perception["governance_backlog_count"] == 1
+    assert perception["api_b_judgement_count"] == 1
     assert perception["learning_backlog_count"] == 1
     assert perception["api_a_ready_count"] == 0
     assert perception["api_a_running_count"] == 1
@@ -3867,7 +3867,7 @@ async def test_supervisor_ui_state_reads_wrapped_cognition_state_lm_trace(tmp_pa
     cognition_state = supervisor._endogenous_cognition_state_default()["state"]
     cognition_state["perception"] = {
         "system_posture": "strained",
-        "governance_backlog_count": 3,
+        "api_b_judgement_count": 3,
         "recent_errors": 1,
         "learning_quality": 0.42,
         "correction_signals": 2,
@@ -6861,7 +6861,7 @@ async def test_endogenous_drive_prefers_lm_led_candidate_stream_with_small_heuri
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_prompt_packet_budget_preserves_backlog_state_snapshot_under_large_context(tmp_path):
+async def test_prompt_packet_budget_preserves_api_b_judgement_snapshot_under_large_context(tmp_path):
     from systems.supervisor.endogenous_drive_prompts import _prompt_facing_evidence_packet
 
     large_packet = {
@@ -6949,10 +6949,35 @@ async def test_prompt_packet_budget_preserves_backlog_state_snapshot_under_large
     assert "api_b_judgement_snapshot" in compact
     judgement_snapshot = compact["api_b_judgement_snapshot"]
     assert judgement_snapshot["api_b_judgement_task_count"] == 2
-    assert judgement_snapshot["governance_backlog_task_count"] == 2
     assert "Existing backlog task A" in judgement_snapshot["recent_titles"]
     assert "guidance" in judgement_snapshot
-    assert compact["governance_backlog_snapshot"] == judgement_snapshot
+    assert "governance_backlog_snapshot" not in compact
+
+
+@pytest.mark.unit
+def test_prompt_packet_reads_legacy_governance_backlog_snapshot_without_reemitting_it():
+    from systems.supervisor.endogenous_drive_prompts import _prompt_facing_evidence_packet
+
+    compact = _prompt_facing_evidence_packet(
+        {
+            "governance_backlog_snapshot": {
+                "governance_backlog_task_count": 1,
+                "recent_titles": ["Legacy judgement item"],
+                "summary": "legacy snapshot",
+            },
+            "governance_backlog_tasks": [
+                {
+                    "title": "Legacy judgement item",
+                    "status": "planned",
+                    "governance_task_type": "self_learning",
+                }
+            ],
+        }
+    )
+
+    assert compact["api_b_judgement_snapshot"]["api_b_judgement_task_count"] == 1
+    assert "governance_backlog_snapshot" not in compact
+    assert "governance_backlog_tasks" not in compact
 
 
 @pytest.mark.unit
@@ -11515,7 +11540,7 @@ def test_detect_needs_sorts_primary_need_by_strength_instead_of_append_order():
             has_learning_history=True,
             shell_slot_present=False,
             shell_slot_id="",
-            governance_backlog_count=0,
+            api_b_judgement_count=0,
             learning_backlog_count=0,
             body_improvement_backlog_count=0,
             stale_backlog_count=0,
@@ -11537,8 +11562,8 @@ def test_detect_needs_sorts_primary_need_by_strength_instead_of_append_order():
             recent_learning_count=1,
             recent_learning_quality=0.24,
             learning_yield_state="weak",
-            governance_backlog_blockage_pressure=0.08,
-            governance_backlog_blockage_state="light",
+            api_b_judgement_blockage_pressure=0.08,
+            api_b_judgement_blockage_state="light",
             body_growth_blocked=False,
             repeated_drive_pressure=0.04,
             autonomy_readiness=0.34,
@@ -11589,7 +11614,7 @@ def test_detect_needs_prefers_observe_before_learning_when_historical_underdeliv
             has_learning_history=True,
             shell_slot_present=False,
             shell_slot_id="",
-            governance_backlog_count=0,
+            api_b_judgement_count=0,
             learning_backlog_count=0,
             body_improvement_backlog_count=0,
             stale_backlog_count=0,
@@ -11611,8 +11636,8 @@ def test_detect_needs_prefers_observe_before_learning_when_historical_underdeliv
             recent_learning_count=1,
             recent_learning_quality=0.46,
             learning_yield_state="mixed",
-            governance_backlog_blockage_pressure=0.0,
-            governance_backlog_blockage_state="clear",
+            api_b_judgement_blockage_pressure=0.0,
+            api_b_judgement_blockage_state="clear",
             body_growth_blocked=False,
             repeated_drive_pressure=0.0,
             autonomy_readiness=0.3519,
@@ -11662,7 +11687,7 @@ def test_detect_needs_does_not_let_memory_continuity_override_observation_under_
             has_learning_history=True,
             shell_slot_present=False,
             shell_slot_id="",
-            governance_backlog_count=0,
+            api_b_judgement_count=0,
             learning_backlog_count=0,
             body_improvement_backlog_count=0,
             stale_backlog_count=0,
@@ -11684,8 +11709,8 @@ def test_detect_needs_does_not_let_memory_continuity_override_observation_under_
             recent_learning_count=1,
             recent_learning_quality=0.46,
             learning_yield_state="mixed",
-            governance_backlog_blockage_pressure=0.0,
-            governance_backlog_blockage_state="clear",
+            api_b_judgement_blockage_pressure=0.0,
+            api_b_judgement_blockage_state="clear",
             body_growth_blocked=False,
             repeated_drive_pressure=0.0,
             autonomy_readiness=0.3519,
@@ -11735,7 +11760,7 @@ def test_detect_needs_keeps_memory_continuity_primary_before_observation_gate_tr
             has_learning_history=True,
             shell_slot_present=False,
             shell_slot_id="",
-            governance_backlog_count=0,
+            api_b_judgement_count=0,
             learning_backlog_count=0,
             body_improvement_backlog_count=0,
             stale_backlog_count=0,
@@ -11757,8 +11782,8 @@ def test_detect_needs_keeps_memory_continuity_primary_before_observation_gate_tr
             recent_learning_count=1,
             recent_learning_quality=0.46,
             learning_yield_state="mixed",
-            governance_backlog_blockage_pressure=0.0,
-            governance_backlog_blockage_state="clear",
+            api_b_judgement_blockage_pressure=0.0,
+            api_b_judgement_blockage_state="clear",
             body_growth_blocked=False,
             repeated_drive_pressure=0.0,
             autonomy_readiness=0.4386,
@@ -11808,7 +11833,7 @@ def test_detect_needs_enters_observation_when_historical_underdelivery_and_obser
             has_learning_history=True,
             shell_slot_present=False,
             shell_slot_id="",
-            governance_backlog_count=0,
+            api_b_judgement_count=0,
             learning_backlog_count=0,
             body_improvement_backlog_count=0,
             stale_backlog_count=0,
@@ -11830,8 +11855,8 @@ def test_detect_needs_enters_observation_when_historical_underdelivery_and_obser
             recent_learning_count=1,
             recent_learning_quality=0.46,
             learning_yield_state="mixed",
-            governance_backlog_blockage_pressure=0.0,
-            governance_backlog_blockage_state="clear",
+            api_b_judgement_blockage_pressure=0.0,
+            api_b_judgement_blockage_state="clear",
             body_growth_blocked=False,
             repeated_drive_pressure=0.0,
             autonomy_readiness=0.4386,
@@ -11883,7 +11908,7 @@ def test_detect_needs_keeps_historical_underdelivery_boundary_deterministic_for_
                 has_learning_history=True,
                 shell_slot_present=False,
                 shell_slot_id="",
-                governance_backlog_count=0,
+                api_b_judgement_count=0,
                 learning_backlog_count=0,
                 body_improvement_backlog_count=0,
                 stale_backlog_count=0,
@@ -11905,8 +11930,8 @@ def test_detect_needs_keeps_historical_underdelivery_boundary_deterministic_for_
                 recent_learning_count=1,
                 recent_learning_quality=0.46,
                 learning_yield_state="mixed",
-                governance_backlog_blockage_pressure=0.0,
-                governance_backlog_blockage_state="clear",
+                api_b_judgement_blockage_pressure=0.0,
+                api_b_judgement_blockage_state="clear",
                 body_growth_blocked=False,
                 repeated_drive_pressure=0.0,
                 autonomy_readiness=0.4386,
@@ -11962,7 +11987,7 @@ def test_detect_needs_crosses_from_memory_to_observation_monotonically_near_hist
                 has_learning_history=True,
                 shell_slot_present=False,
                 shell_slot_id="",
-                governance_backlog_count=0,
+                api_b_judgement_count=0,
                 learning_backlog_count=0,
                 body_improvement_backlog_count=0,
                 stale_backlog_count=0,
@@ -11984,8 +12009,8 @@ def test_detect_needs_crosses_from_memory_to_observation_monotonically_near_hist
                 recent_learning_count=1,
                 recent_learning_quality=0.46,
                 learning_yield_state="mixed",
-                governance_backlog_blockage_pressure=0.0,
-                governance_backlog_blockage_state="clear",
+                api_b_judgement_blockage_pressure=0.0,
+                api_b_judgement_blockage_state="clear",
                 body_growth_blocked=False,
                 repeated_drive_pressure=0.0,
                 autonomy_readiness=0.4386,
@@ -12046,7 +12071,7 @@ def test_detect_needs_does_not_prepare_body_growth_while_api_a_lane_is_unsettled
             has_learning_history=True,
             shell_slot_present=True,
             shell_slot_id="slot-shell-a",
-            governance_backlog_count=0,
+            api_b_judgement_count=0,
             learning_backlog_count=1,
             body_improvement_backlog_count=0,
             stale_backlog_count=0,
@@ -12070,8 +12095,8 @@ def test_detect_needs_does_not_prepare_body_growth_while_api_a_lane_is_unsettled
             recent_learning_count=2,
             recent_learning_quality=0.84,
             learning_yield_state="strong",
-            governance_backlog_blockage_pressure=0.0,
-            governance_backlog_blockage_state="clear",
+            api_b_judgement_blockage_pressure=0.0,
+            api_b_judgement_blockage_state="clear",
             body_growth_blocked=False,
             repeated_drive_pressure=0.02,
             autonomy_readiness=0.79,
@@ -16415,14 +16440,14 @@ def test_annotated_endogenous_judgement_omits_legacy_context_for_formal_drive_in
                 "user_mode": "quiet",
                 "system_posture": "stable",
                 "active_sessions": 0,
-                "governance_backlog_count": 1,
+                "api_b_judgement_count": 1,
             }
         },
         drive_input={
             "user_mode": "quiet",
             "system_posture": "stable",
             "active_sessions": 0,
-            "governance_backlog_count": 1,
+            "api_b_judgement_count": 1,
         },
         candidate_items=[
             {
@@ -18305,6 +18330,97 @@ def test_autonomous_chain_store_exposes_chain_projection_without_raw_total_backl
     ]
     assert completed_titles == ["已完成写回链路项"]
     assert cancelled_titles == ["已取消链路项"]
+
+
+def test_autonomous_chain_store_recovers_projection_from_mem_governance_events(tmp_path):
+    from memai.governance import (
+        GovernanceDecision,
+        GovernanceEvent,
+        GovernanceEventType,
+    )
+
+    supervisor = _make_supervisor(tmp_path)
+    store = supervisor._autonomous_chain_store
+    approval = GovernanceEvent.create(
+        event_type=GovernanceEventType.SELF_EVOLUTION_APPROVAL,
+        source_actor="supervisor",
+        decision=GovernanceDecision.APPROVE,
+        reason="Approved recovered learning task.",
+        task_id="recover-task-1",
+        execution_result={
+            "title": "Recovered learning task",
+            "summary": "Recovered from Mem governance.",
+            "constraints": {"window": "night"},
+            "runtime_task_profile": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+                "execution_kind": "self_learning",
+            },
+        },
+    )
+    completed = GovernanceEvent.create(
+        event_type=GovernanceEventType.EXECUTION_OUTCOME,
+        source_actor="executor",
+        decision=GovernanceDecision.COMPLETED,
+        reason="Recovered execution completed.",
+        task_id="recover-task-2",
+        execution_result={
+            "title": "Recovered completed task",
+            "runtime_task_profile": {
+                "governance_task_type": "self_evolution",
+                "task_family": "body_switch",
+                "execution_kind": "body_switch",
+            },
+        },
+    )
+
+    result = store.recover_from_governance_events([approval, completed])
+
+    assert result["added_task_count"] == 2
+    recovered = {task.task_id: task for task in store.list_chain_projection_tasks()}
+    assert recovered["recover-task-1"].status == "approved"
+    assert recovered["recover-task-1"].source == "mem_governance_recovery"
+    assert recovered["recover-task-1"].metadata["recovered_from_mem_governance"] is True
+    assert recovered["recover-task-1"].governance_task_type == "self_learning"
+    assert recovered["recover-task-1"].constraints == {"window": "night"}
+    assert recovered["recover-task-2"].status == "completed"
+    assert [task.task_id for task in store.list_api_a_handoff_tasks()] == ["recover-task-1"]
+    assert [task.task_id for task in store.list_writeback_history()] == ["recover-task-2"]
+
+
+def test_supervisor_boot_recovers_empty_autonomous_store_from_mem_governance(tmp_path):
+    from memai.governance import (
+        GovernanceDecision,
+        GovernanceEvent,
+        GovernanceEventType,
+    )
+    from memai.governance_repository import GovernanceEventRepository
+
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True, exist_ok=True)
+    (repo / ".git").mkdir(exist_ok=True)
+    runtime_root = tmp_path / ".soul-runtime"
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    GovernanceEventRepository(runtime_root / "mem_governance.jsonl").append(
+        GovernanceEvent.create(
+            event_type=GovernanceEventType.SELF_EVOLUTION_APPROVAL,
+            source_actor="supervisor",
+            decision=GovernanceDecision.APPROVE,
+            reason="Approved before runtime store loss.",
+            task_id="boot-recover-task",
+            execution_result={"title": "Boot recovered task"},
+        )
+    )
+
+    cfg = SupervisorConfig()
+    cfg.execution.git_repo_path = str(repo)
+    cfg.soul_store_path = str(runtime_root)
+    supervisor = Supervisor(config=cfg)
+
+    tasks = supervisor._autonomous_chain_store.list_tasks()
+    assert [task.task_id for task in tasks] == ["boot-recover-task"]
+    assert tasks[0].title == "Boot recovered task"
+    assert tasks[0].status == "approved"
 
 
 @pytest.mark.asyncio

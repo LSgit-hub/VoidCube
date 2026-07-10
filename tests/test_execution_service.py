@@ -38,7 +38,8 @@ def _make_service() -> tuple[VoidCubeExecutionService, SimpleNamespace]:
             run_body_probe=AsyncMock(return_value={"status": "probe_executed"}),
         ),
         body_upgrade=SimpleNamespace(
-            execute_body_upgrade=AsyncMock(return_value={"status": "upgrade_executed"}),
+            execute_body_upgrade=AsyncMock(return_value={"status": "upgrade_awaiting_user_consent"}),
+            confirm_body_switch=AsyncMock(return_value={"status": "body_switch_activated"}),
         ),
         memory_maintenance=SimpleNamespace(
             trigger_memory_compression=AsyncMock(return_value={"status": "compressed"}),
@@ -70,6 +71,7 @@ def test_execution_service_health_describes_execution_only_boundary():
     assert payload["direct_executor_prefix"] == "/executor"
     assert payload["executor_access_policy"]["failure_mode"] == "executor_required"
     assert "/body/upgrade/execute" in payload["routes"]["body_upgrade"]
+    assert "/body/switch/consent" in payload["routes"]["body_upgrade"]
     assert "/autonomous-chain/execute" in payload["routes"]["autonomous_chain_execution"]
     assert "/body/watch-window/status" in payload["routes"]["body_lifecycle"]
     assert "self_learning" not in payload["routes"]
@@ -84,7 +86,7 @@ def test_execution_service_accepts_gateway_executor_prefix_routes():
     upgrade = client.post("/executor/body/upgrade/execute", json={"slot_id": "slot-B"})
 
     assert upgrade.status_code == 200
-    assert upgrade.json()["status"] == "upgrade_executed"
+    assert upgrade.json()["status"] == "upgrade_awaiting_user_consent"
     adapters.body_upgrade.execute_body_upgrade.assert_awaited_once_with({"slot_id": "slot-B"})
 
 
@@ -125,15 +127,18 @@ def test_execution_service_delegates_body_lifecycle_and_upgrade_routes():
     probe_report = client.post("/executor/body/probe/report", json={"slot_id": "slot-B", "checks": []})
     probe_run = client.post("/executor/body/probe/run", json={"slot_id": "slot-B"})
     upgrade = client.post("/executor/body/upgrade/execute", json={"slot_id": "slot-B"})
+    consent = client.post("/executor/body/switch/consent", json={"slot_id": "slot-B", "approved": True})
 
     assert prepare.json()["status"] == "slot_prepared"
     assert candidate.json()["status"] == "candidate_marked"
     assert probe_report.json()["status"] == "probe_report_recorded"
     assert probe_run.json()["status"] == "probe_executed"
-    assert upgrade.json()["status"] == "upgrade_executed"
+    assert upgrade.json()["status"] == "upgrade_awaiting_user_consent"
+    assert consent.json()["status"] == "body_switch_activated"
     adapters.body_lifecycle.prepare_body_slot.assert_awaited_once_with("slot-B", {"clear_existing": False})
     adapters.body_lifecycle.mark_body_candidate.assert_awaited_once_with("slot-B", {"body_version": "v2"})
     adapters.body_upgrade.execute_body_upgrade.assert_awaited_once_with({"slot_id": "slot-B"})
+    adapters.body_upgrade.confirm_body_switch.assert_awaited_once_with({"slot_id": "slot-B", "approved": True})
 
 
 @pytest.mark.unit

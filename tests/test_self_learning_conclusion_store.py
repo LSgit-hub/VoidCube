@@ -4,6 +4,7 @@ from systems.self_learning import (
 )
 from systems.self_learning.conclusion_store import SelfLearningConclusionStore
 from systems.supervisor.autonomous_chain_store import AutonomousChainStore
+from memai.governance_repository import GovernanceEventRepository
 
 
 def test_self_learning_conclusion_store_persists_conclusion_and_only_builds_payload(tmp_path):
@@ -50,6 +51,23 @@ def test_self_learning_conclusion_store_persists_conclusion_and_only_builds_payl
     assert payload["proposals"][0]["task_family"] == "general_self_evolution"
     assert payload["proposals"][0]["execution_kind"] == "general_self_evolution"
     assert (tmp_path / "self-learning" / "conclusions" / f"{conclusion.conclusion_id}.json").exists()
+
+    events = GovernanceEventRepository(
+        tmp_path / "self-learning" / "mem_governance.jsonl"
+    ).list_events()
+    assert len(events) == 1
+    execution_result = events[0].execution_result or {}
+    assert execution_result["title"] == "Gateway idle-window policy"
+    assert execution_result["summary"] == (
+        "Use gateway facts for idle judgement and keep clock time as a hint."
+    )
+    assert execution_result["runtime_task_profile"] == {
+        "governance_task_type": "self_learning",
+        "task_family": "self_learning",
+        "execution_kind": None,
+    }
+    assert execution_result["constraints"] == {}
+    assert execution_result["recommendations_count"] == 1
 
 
 def test_self_learning_conclusion_store_can_submit_recommendations_into_supervisor_backlog(tmp_path):

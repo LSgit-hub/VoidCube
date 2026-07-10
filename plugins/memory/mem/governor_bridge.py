@@ -458,10 +458,40 @@ class MemGovernorBridge:
             violations=list(boundary_raw.get("violations") or []),
         ) if boundary_raw else None
 
+        runtime_task_profile = derive_runtime_task_profile(
+            task_type=(
+                req.get("task_type")
+                or lineage.get("task_type")
+                or "self_evolution"
+            ),
+            governance_task_type=(
+                req.get("governance_task_type")
+                or lineage.get("governance_task_type")
+            ),
+            task_family=req.get("task_family") or lineage.get("task_family"),
+            execution_kind=req.get("execution_kind") or lineage.get("execution_kind"),
+            default_task_family="general_self_evolution",
+        )
+        execution_result = dict(record.execution_report or {})
+        if not execution_result.get("title"):
+            execution_result["title"] = req.get("title") or req.get("summary") or record.kind
+        if not execution_result.get("summary"):
+            execution_result["summary"] = req.get("summary") or resp.get("reason") or record.kind
+        if not execution_result.get("trace_id"):
+            execution_result["trace_id"] = req.get("trace_id") or lineage.get("trace_id")
+        if not execution_result.get("task_type"):
+            execution_result["task_type"] = req.get("task_type") or lineage.get("task_type")
+        if not execution_result.get("decision_id"):
+            execution_result["decision_id"] = req.get("decision_id") or lineage.get("decision_id")
+        if not execution_result.get("runtime_task_profile"):
+            execution_result["runtime_task_profile"] = runtime_task_profile
+        if req.get("constraints"):
+            execution_result.setdefault("constraints", dict(req.get("constraints") or {}))
+
         return GovernanceEvent.create(
             event_type=event_type,
             decision=decision,
-            task_id=str(req.get("task_id") or record.record_id),
+            task_id=str(req.get("task_id") or req.get("request_id") or record.record_id),
             body_id=str(
                 lineage.get("body_id")
                 or req.get("body_id")
@@ -475,5 +505,5 @@ class MemGovernorBridge:
             git_lineage=gl,
             evolution_boundary=boundary,
             probe_report_ref=str(lineage.get("probe_report_ref") or ""),
-            execution_result=dict(record.execution_report or {}),
+            execution_result=execution_result,
         )

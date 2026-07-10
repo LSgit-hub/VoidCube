@@ -45,6 +45,16 @@ EXECUTION_ROUTE_HINTS: tuple[dict[str, Any], ...] = (
         },
     },
     {
+        "interface_id": "body.switch.consent",
+        "method": "POST",
+        "path": "/body/switch/consent",
+        "implemented_by": "BodyUpgradeExecutionAdapter",
+        "preferred_entrypoint": {
+            "gateway_path": "/api/executor/body/switch/consent",
+            "executor_path": "/executor/body/switch/consent",
+        },
+    },
+    {
         "interface_id": "body.probe.report",
         "method": "POST",
         "path": "/body/probe/report",

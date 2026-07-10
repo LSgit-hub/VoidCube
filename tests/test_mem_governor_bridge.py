@@ -12,6 +12,7 @@ from plugins.memory.mem.governor_bridge import MemGovernorBridge
 from systems.body_registry import BodyRegistry, BodySlotMeta
 from systems.governor import GovernorRequest
 from systems.lifecycle import LifecycleExecutionReport
+from memai.governance_repository import GovernanceEventRepository
 
 
 class _FailingGovernanceRepo:
@@ -67,6 +68,21 @@ def test_mem_governor_bridge_records_review_and_latest(tmp_path):
     assert latest["evolution_lineage"]["governance_task_type"] == "self_evolution"
     assert latest["evolution_lineage"]["task_family"] == "body_switch"
     assert latest["evolution_lineage"]["execution_kind"] == "body_switch"
+
+    events = GovernanceEventRepository(tmp_path / "soul" / "mem_governance.jsonl").list_events()
+    assert len(events) == 1
+    execution_result = events[0].execution_result or {}
+    assert execution_result["title"] == "Candidate ready"
+    assert execution_result["summary"] == "Candidate ready"
+    assert execution_result["trace_id"] == "trace-1"
+    assert execution_result["task_type"] == "self_evolution"
+    assert execution_result["decision_id"] == "decision-1"
+    assert execution_result["constraints"]["target_transition"] == "candidate_to_probe"
+    assert execution_result["runtime_task_profile"] == {
+        "governance_task_type": "self_evolution",
+        "task_family": "body_switch",
+        "execution_kind": "body_switch",
+    }
 
 
 @pytest.mark.unit
@@ -150,6 +166,20 @@ def test_mem_governor_bridge_records_execution_outcome(tmp_path):
     assert history[-1]["evolution_lineage"]["task_family"] == "body_switch"
     assert history[-1]["evolution_lineage"]["execution_kind"] == "body_switch"
     assert history[-1]["evolution_lineage"]["decision_id"] == "decision-2"
+
+    events = GovernanceEventRepository(tmp_path / "soul" / "mem_governance.jsonl").list_events()
+    execution_event = events[-1]
+    execution_result = execution_event.execution_result or {}
+    assert execution_event.task_id == "switch-1"
+    assert execution_result["title"] == "Switch candidate"
+    assert execution_result["summary"] == "Switch candidate"
+    assert execution_result["trace_id"] == "trace-2"
+    assert execution_result["decision_id"] == "decision-2"
+    assert execution_result["runtime_task_profile"] == {
+        "governance_task_type": "self_evolution",
+        "task_family": "body_switch",
+        "execution_kind": "body_switch",
+    }
 
 
 @pytest.mark.unit
@@ -283,3 +313,17 @@ def test_mem_governor_bridge_records_boundary_defer_event(tmp_path):
     assert latest["evolution_lineage"]["decision_id"] == "decision-3"
     assert latest["evolution_lineage"]["candidate_commit"] == "bbb222"
     assert latest["evolution_lineage"]["evolution_boundary"]["ok"] is False
+
+    events = GovernanceEventRepository(tmp_path / "soul" / "mem_governance.jsonl").list_events()
+    execution_result = events[-1].execution_result or {}
+    assert execution_result["title"] == "Reject mixed boundary candidate"
+    assert execution_result["summary"] == (
+        "Task deferred because body self-evolution changes cross the child-agent boundary."
+    )
+    assert execution_result["trace_id"] == "trace-3"
+    assert execution_result["decision_id"] == "decision-3"
+    assert execution_result["runtime_task_profile"] == {
+        "governance_task_type": "self_evolution",
+        "task_family": "body_switch",
+        "execution_kind": "body_switch",
+    }

@@ -162,7 +162,8 @@ async def test_execution_facade_delegates_to_current_adapters():
         evaluate_watch_window=AsyncMock(return_value={"status": "watch_window_evaluated"}),
     )
     body_upgrade = SimpleNamespace(
-        execute_body_upgrade=AsyncMock(return_value={"status": "upgrade_executed"}),
+        execute_body_upgrade=AsyncMock(return_value={"status": "upgrade_awaiting_user_consent"}),
+        confirm_body_switch=AsyncMock(return_value={"status": "body_switch_activated"}),
     )
     memory_maintenance = SimpleNamespace(
         trigger_memory_compression=AsyncMock(return_value={"status": "compressed"}),
@@ -182,7 +183,8 @@ async def test_execution_facade_delegates_to_current_adapters():
     assert facade.get_body_slot("slot-A") == {"slot_id": "slot-A"}
     assert await facade.prepare_body_slot("slot-B", {}) == {"status": "slot_prepared"}
     assert await facade.mark_body_candidate("slot-B", {}) == {"status": "candidate_marked"}
-    assert await facade.execute_body_upgrade({}) == {"status": "upgrade_executed"}
+    assert await facade.execute_body_upgrade({}) == {"status": "upgrade_awaiting_user_consent"}
+    assert await facade.confirm_body_switch({"approved": True}) == {"status": "body_switch_activated"}
     formal_result = await facade.execute_autonomous_chain_request(
         {
             "task_id": "task-1",
@@ -212,6 +214,7 @@ async def test_execution_facade_delegates_to_current_adapters():
             "execution_request": formal_result["execution_request"],
         }
     )
+    body_upgrade.confirm_body_switch.assert_awaited_once_with({"approved": True})
     assert formal_result["status"] == "autonomous_chain_execution_executed"
     memory_maintenance.trigger_memory_compression.assert_awaited_once_with({})
 
@@ -318,10 +321,10 @@ def test_memory_maintenance_scholar_backend_uses_mem_model_resolver(monkeypatch)
 @pytest.mark.unit
 def test_governor_review_execution_adapter_coordinates_review_and_runtime_followup():
     slot_meta = SimpleNamespace(last_probe_result={"overall_passed": True, "summary": "probe ok"})
-    registry = SimpleNamespace(model_dump=lambda mode="json": {"active_slot": "slot-B", "retired_slot": "slot-A"})
+    registry = SimpleNamespace(model_dump=lambda mode="json": {"active_slot": "slot-A", "retired_slot": None})
     governor_response = SimpleNamespace(
-        decision="approve_with_watch",
-        model_dump=lambda mode="json": {"decision": "approve_with_watch"},
+        decision="awaiting_user_consent",
+        model_dump=lambda mode="json": {"decision": "awaiting_user_consent"},
     )
     execution_report = SimpleNamespace(model_dump=lambda mode="json": {"status": "applied"})
     body_registry = SimpleNamespace(
@@ -334,7 +337,7 @@ def test_governor_review_execution_adapter_coordinates_review_and_runtime_follow
     )
     lifecycle = SimpleNamespace(apply_governor_response=Mock(return_value=execution_report))
     sync_runtime_after_governor_response = Mock(
-        return_value={"status": "watch_window_runtime_ensured"},
+        return_value={"status": "no_watch_window_runtime_change"},
     )
     adapter = GovernorReviewExecutionAdapter(
         body_registry=body_registry,
@@ -359,9 +362,9 @@ def test_governor_review_execution_adapter_coordinates_review_and_runtime_follow
         )
     )
 
-    assert result["governor_response"]["decision"] == "approve_with_watch"
     assert result["execution_report"]["status"] == "applied"
-    assert result["runtime_followup"] == {"status": "watch_window_runtime_ensured"}
+    assert result["governor_response"]["decision"] == "awaiting_user_consent"
+    assert result["runtime_followup"] == {"status": "no_watch_window_runtime_change"}
     governor.review.assert_called_once()
     reviewed_request = governor.review.call_args.args[0]
     assert reviewed_request.evidence["probe_report"]["overall_passed"] is True
@@ -554,12 +557,21 @@ async def test_body_upgrade_execution_adapter_persists_formal_git_lineage(tmp_pa
         }
     )
 
+    assert result["status"] == "upgrade_awaiting_user_consent"
+    assert result["requires_user_consent"] is True
+    assert result["switch_review"]["governor_response"]["decision"] == "awaiting_user_consent"
+    assert runtime.manager.load_slot_meta("slot-B").body_state == "awaiting_user_consent"
+
+    confirmation = await runtime.adapter.confirm_body_switch(
+        {"slot_id": "slot-B", "approved": True}
+    )
+
     registry = runtime.manager.load_registry()
     slot_b = runtime.manager.load_slot_meta("slot-B")
     pointer = runtime.manager.load_active_body_pointer()
 
-    assert result["status"] == "upgrade_executed"
     assert result["execution_route_hint"]["interface_id"] == "body.upgrade.execute"
+    assert confirmation["status"] == "body_switch_activated"
     assert slot_b.source_commit == "aaa111"
     assert slot_b.source_branch == "main"
     assert slot_b.candidate_commit == "bbb222"
@@ -569,6 +581,7 @@ async def test_body_upgrade_execution_adapter_persists_formal_git_lineage(tmp_pa
     assert slot_b.rollback_commit == "aaa111"
     assert slot_b.last_probe_result["candidate_commit"] == "bbb222"
     assert slot_b.last_probe_result["changed_files"] == ["systems/execution/adapters.py"]
+    assert registry.last_switch_result["decision"] == "activated"
     assert registry.last_switch_result["active_ref"] == "stable/v2"
     assert registry.last_switch_result["active_commit"] == "bbb222"
     assert pointer.slot_id == "slot-B"
@@ -600,7 +613,7 @@ async def test_body_upgrade_execution_adapter_propagates_trace_and_decision_ids_
         }
     )
 
-    assert result["status"] == "upgrade_executed"
+    assert result["status"] == "upgrade_awaiting_user_consent"
     assert len(runtime.recorded_requests) == 2
     first_request = runtime.recorded_requests[0]
     second_request = runtime.recorded_requests[1]
@@ -628,7 +641,25 @@ async def test_body_upgrade_execution_adapter_propagates_trace_and_decision_ids_
         "task_family": "general_self_evolution",
         "execution_kind": "general_self_evolution",
     }
+    assert result["switch_review"]["governor_response"]["decision"] == "awaiting_user_consent"
     assert runtime.manager.load_registry().last_switch_result["task_family"] == "general_self_evolution"
+
+    confirmation = await runtime.adapter.confirm_body_switch(
+        {
+            "slot_id": "slot-B",
+            "approved": True,
+            "trace_id": "trace-formal-1",
+            "decision_id": "decision-formal-1",
+        }
+    )
+
+    assert confirmation["switch_activation"]["governor_response"]["decision"] == "approve_with_watch"
+    assert len(runtime.recorded_requests) == 3
+    consent_request = runtime.recorded_requests[2]
+    assert consent_request.event_type == "health_review_request"
+    assert consent_request.trace_id == "trace-formal-1"
+    assert consent_request.decision_id == "decision-formal-1"
+    assert consent_request.evidence["user_consent_approved"] is True
 
 
 @pytest.mark.asyncio
@@ -679,6 +710,9 @@ async def test_body_upgrade_then_watch_window_pass_recycles_retired_slot_end_to_
             },
         }
     )
+    confirmation = await runtime.adapter.confirm_body_switch(
+        {"slot_id": "slot-B", "approved": True}
+    )
     watch = WatchWindowExecutionAdapter(
         body_registry=runtime.manager,
         agents=agents,
@@ -693,9 +727,10 @@ async def test_body_upgrade_then_watch_window_pass_recycles_retired_slot_end_to_
     slot_a = runtime.manager.load_slot_meta("slot-A")
     slot_b = runtime.manager.load_slot_meta("slot-B")
     pointer = runtime.manager.load_active_body_pointer()
-    assert upgrade["status"] == "upgrade_executed"
+    assert upgrade["status"] == "upgrade_awaiting_user_consent"
     assert upgrade["previous_active_slot"] == "slot-A"
-    assert upgrade["retired_slot"] == "slot-A"
+    assert upgrade["retired_slot"] is None
+    assert confirmation["status"] == "body_switch_activated"
     assert result["status"] == "watch_window_evaluated"
     assert result["governor_response"]["decision"] == "approve"
     assert result["execution_report"]["action_results"][0]["action_type"] == "recycle_retired_slot"
@@ -715,10 +750,11 @@ async def test_body_upgrade_then_watch_window_pass_recycles_retired_slot_end_to_
     assert stopped_instances == ["old-active"]
     assert old_agent.status == "stopped"
     assert new_agent.status == "running"
-    assert len(runtime.recorded_requests) == 3
+    assert len(runtime.recorded_requests) == 4
     assert [request.event_type for request in runtime.recorded_requests] == [
         "health_review_request",
         "switch_request",
+        "health_review_request",
         "post_switch_review",
     ]
 
@@ -771,6 +807,9 @@ async def test_body_upgrade_then_watch_window_failure_rolls_back_to_retired_slot
             },
         }
     )
+    confirmation = await runtime.adapter.confirm_body_switch(
+        {"slot_id": "slot-B", "approved": True}
+    )
     watch = WatchWindowExecutionAdapter(
         body_registry=runtime.manager,
         agents=agents,
@@ -785,7 +824,8 @@ async def test_body_upgrade_then_watch_window_failure_rolls_back_to_retired_slot
     slot_a = runtime.manager.load_slot_meta("slot-A")
     slot_b = runtime.manager.load_slot_meta("slot-B")
     pointer = runtime.manager.load_active_body_pointer()
-    assert upgrade["status"] == "upgrade_executed"
+    assert upgrade["status"] == "upgrade_awaiting_user_consent"
+    assert confirmation["status"] == "body_switch_activated"
     assert result["status"] == "watch_window_evaluated"
     assert result["governor_response"]["decision"] == "rollback_required"
     assert result["execution_report"]["action_results"][0]["action_type"] == "restore_retired_slot"
@@ -806,10 +846,11 @@ async def test_body_upgrade_then_watch_window_failure_rolls_back_to_retired_slot
     assert stopped_instances == ["failed-new"]
     assert failed_agent.status == "stopped"
     assert restored_agent.status == "running"
-    assert len(runtime.recorded_requests) == 3
+    assert len(runtime.recorded_requests) == 4
     assert [request.event_type for request in runtime.recorded_requests] == [
         "health_review_request",
         "switch_request",
+        "health_review_request",
         "rollback_request",
     ]
 

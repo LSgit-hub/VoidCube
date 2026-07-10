@@ -141,6 +141,21 @@ class SelfLearningConclusionStore:
                 decision=GovernanceDecision.RECORD_ONLY,
                 reason=f"Self-learning conclusion: {summary[:120]}",
                 task_id=conclusion.conclusion_id,
+                execution_result={
+                    "title": conclusion.topic.title,
+                    "summary": conclusion.summary,
+                    "task_type": "self_learning",
+                    "runtime_task_profile": {
+                        "governance_task_type": "self_learning",
+                        "task_family": "self_learning",
+                        "execution_kind": None,
+                    },
+                    "constraints": {},
+                    "topic_id": conclusion.topic.topic_id,
+                    "session_id": conclusion.session.session_id,
+                    "verified": conclusion.verified,
+                    "recommendations_count": len(conclusion.recommendations),
+                },
             ))
         except Exception:
             pass

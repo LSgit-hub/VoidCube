@@ -126,10 +126,10 @@ COMMAND_REGISTRY: list[CommandDef] = [
                cli_only=True),
 
     # Auto - 自主规划
-    CommandDef("auto", "开启自主链路；API-A 执行组件会在当前 CLI 内按需显示", "会话管理",
+    CommandDef("auto", "接入自主链路观测/执行面；API-A 执行组件会按需显示", "会话管理",
                aliases=("autonomous",),
                args_hint="[focus]"),
-    CommandDef("auto-q", "关闭自主链路，回到主 CLI 交互", "会话管理",
+    CommandDef("auto-q", "退出本地自主链路观测/执行面，回到主 CLI 交互", "会话管理",
                aliases=("auto-quit", "auto-stop"),
                cli_only=True),
 

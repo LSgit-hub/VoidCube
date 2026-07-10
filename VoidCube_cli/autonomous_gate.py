@@ -90,6 +90,48 @@ def trigger_autonomous_cycle(*, focus: str = "") -> Dict[str, Any] | None:
     return json.loads(urllib.request.urlopen(request, timeout=30).read())
 
 
+def fetch_autonomous_chain_gate_status(*, timeout: float = 10) -> Dict[str, Any]:
+    supervisor_url = _resolve_supervisor_url()
+    request = urllib.request.Request(
+        f"{supervisor_url}/autonomous-chain-gate/status",
+        method="GET",
+    )
+    return json.loads(urllib.request.urlopen(request, timeout=timeout).read())
+
+
+def _status_is_boot_owned(status: Dict[str, Any] | None) -> bool:
+    if not isinstance(status, dict):
+        return False
+    return bool(status.get("autonomous_chain_start_on_boot")) or (
+        str(status.get("autonomous_chain_runtime_mode") or "").strip().lower() == "boot"
+    )
+
+
+def _exit_boot_owned_autonomous_surface(
+    host: Any,
+    *,
+    cprint: Any,
+    interrupt_current_task_callback: Any,
+    push_cli_agent_scene_callback: Any,
+    fast_path: bool = False,
+) -> bool:
+    label = "fast-path /auto-q" if fast_path else "/auto-q"
+    _exit_autonomous_gate_locally(
+        host,
+        push_cli_agent_scene_callback=push_cli_agent_scene_callback,
+        interrupt_current_task_callback=interrupt_current_task_callback,
+        interrupt_reason=f"自主链路本地观测/执行面已通过 {label} 退出；当前链路项被用户中断。",
+        interrupt_source="auto_q_fast_path" if fast_path else "auto_q",
+        interrupt_timeout=5,
+        event_message="/auto 本地观测面已退出",
+        event_tone="warn",
+    )
+    cprint("  💤 本地自主链路观测/执行面 [bold]已退出[/].")
+    cprint("     Supervisor 自主链路保持常驻运行。")
+    cprint("     使用 /auto 可重新接入观测面。")
+    return True
+
+
 def activate_autonomous_execution_component(host: Any) -> Tuple[bool, str]:
     """Activate the embedded API-A autonomous execution component."""
     starter = getattr(host, "_start_autonomous_execution_component", None)
@@ -115,7 +157,7 @@ def handle_auto_command(
     parts = cmd.strip().split(maxsplit=1)
     focus = parts[1].strip() if len(parts) > 1 else ""
 
-    cprint("  🧠 正在激活自主链路...")
+    cprint("  🧠 正在接入自主链路观测/执行面...")
     if focus:
         cprint(f"     聚焦: {focus}")
 
@@ -172,9 +214,15 @@ def handle_auto_command(
                     cycle_result = trigger_autonomous_cycle(focus=focus)
                 except Exception as exc:
                     cprint(f"     ⚠️  Initial autonomous cycle failed: {exc}")
-                cprint("  ✅ 自主链路 [bold green]已激活[/]")
+                mode = str(resp.get("autonomous_chain_runtime_mode") or "").strip().lower()
+                if _status_is_boot_owned(resp):
+                    cprint("  ✅ Supervisor 自主链路 [bold green]常驻运行中[/]")
+                else:
+                    cprint("  ✅ 自主链路 [bold green]已激活[/]")
                 cprint(f"     内生驱动循环: {'运行中' if resp.get('drive_loop_running') else '未运行'}")
                 cprint(f"     治理复核循环: {'运行中' if resp.get('review_loop_running') else '未运行'}")
+                if mode == "manual":
+                    cprint("     当前为手动诊断模式。")
                 if not resp.get("endogenous_drive_enabled", True):
                     cprint("     ⚠️  endogenous_drive_enabled=False，内生驱动循环未启用")
                 if isinstance(cycle_result, dict):
@@ -193,7 +241,7 @@ def handle_auto_command(
                 cprint(f"     {launch_message}")
                 if not launched:
                     cprint("     自主执行组件未就绪，暂不会认领自主链路任务。")
-                cprint("     使用 /auto-q 停止自主链路。")
+                cprint("     使用 /auto-q 退出本地观测/执行面。")
                 cprint(f"     监视地址: {supervisor_url}/ui")
             else:
                 cprint("  ⚠️  自主链路激活失败。")
@@ -217,10 +265,23 @@ def handle_auto_q_command(
     push_cli_agent_scene_callback: Any,
     thread_factory: Any,
 ) -> None:
-    cprint("  🔄 正在停止自主链路...")
+    cprint("  🔄 正在退出自主链路观测/执行面...")
 
     def _call_deactivate_autonomous_chain_gate():
         supervisor_url = _resolve_supervisor_url()
+        try:
+            status = fetch_autonomous_chain_gate_status(timeout=10)
+            if _status_is_boot_owned(status):
+                _exit_boot_owned_autonomous_surface(
+                    host,
+                    cprint=cprint,
+                    interrupt_current_task_callback=interrupt_current_task_callback,
+                    push_cli_agent_scene_callback=push_cli_agent_scene_callback,
+                )
+                return
+        except Exception:
+            status = None
+
         try:
             request = urllib.request.Request(
                 f"{supervisor_url}/autonomous-chain-gate/deactivate",
@@ -247,7 +308,7 @@ def handle_auto_q_command(
             )
             cprint("  💤 自主链路 [bold]已停止[/].")
             cprint("     基线健康检查循环仍会继续运行。")
-            cprint("     使用 /auto 可重新进入自主链路。")
+            cprint("     使用 /auto 可重新接入自主链路观测/执行面。")
         else:
             cprint("  ⚠️  自主链路未能停止，当前仍处于激活状态。")
 
@@ -268,10 +329,20 @@ def exit_autonomous_gate_fast(
     if not host._autonomous_gate_active:
         return True
 
-    cprint("  🔄 正在退出自主链路（fast path）...")
+    cprint("  🔄 正在退出自主链路观测/执行面（fast path）...")
 
     supervisor_url = _resolve_supervisor_url()
     try:
+        status = fetch_autonomous_chain_gate_status(timeout=5)
+        if _status_is_boot_owned(status):
+            return _exit_boot_owned_autonomous_surface(
+                host,
+                cprint=cprint,
+                interrupt_current_task_callback=interrupt_current_task_callback,
+                push_cli_agent_scene_callback=push_cli_agent_scene_callback,
+                fast_path=True,
+            )
+
         request = urllib.request.Request(
             f"{supervisor_url}/autonomous-chain-gate/deactivate",
             data=b"{}",
@@ -292,7 +363,7 @@ def exit_autonomous_gate_fast(
             )
             cprint("  💤 自主链路 [bold]已停止[/].")
             cprint("     基线健康检查循环仍会继续运行。")
-            cprint("     使用 /auto 可重新进入自主链路。")
+            cprint("     使用 /auto 可重新接入自主链路观测/执行面。")
             try:
                 host._record_supervisor_ui_activity_safe(
                     "autonomous_gate_exit",
@@ -334,7 +405,7 @@ def force_quit_autonomous_gate(
     try:
         request = urllib.request.Request(
             f"{supervisor_url}/autonomous-chain-gate/deactivate",
-            data=b"{}",
+            data=json.dumps({"force": True}).encode(),
             headers={"Content-Type": "application/json"},
             method="POST",
         )

@@ -46,6 +46,7 @@ class VoidCubeExecutionService:
         self.app.add_api_route(f"{prefix}/body/slots/{{slot_id}}/prepare", self.prepare_body_slot, methods=["POST"])
         self.app.add_api_route(f"{prefix}/body/slots/{{slot_id}}/candidate", self.mark_body_candidate, methods=["POST"])
         self.app.add_api_route(f"{prefix}/body/upgrade/execute", self.execute_body_upgrade, methods=["POST"])
+        self.app.add_api_route(f"{prefix}/body/switch/consent", self.confirm_body_switch, methods=["POST"])
         self.app.add_api_route(f"{prefix}/body/probe/report", self.record_body_probe_report, methods=["POST"])
         self.app.add_api_route(f"{prefix}/body/probe/run", self.run_body_probe, methods=["POST"])
         self.app.add_api_route(f"{prefix}/autonomous-chain/execute", self.execute_autonomous_chain_request, methods=["POST"])
@@ -82,7 +83,7 @@ class VoidCubeExecutionService:
                     "/body/watch-window/status",
                     "/body/watch-window/evaluate",
                 ],
-                "body_upgrade": ["/body/upgrade/execute"],
+                "body_upgrade": ["/body/upgrade/execute", "/body/switch/consent"],
                 "autonomous_chain_execution": ["/autonomous-chain/execute"],
                 "memory_maintenance": ["/memory/compress"],
             },
@@ -172,6 +173,9 @@ class VoidCubeExecutionService:
 
     async def execute_body_upgrade(self, request: Optional[dict] = Body(default=None)) -> Dict[str, Any]:
         return await self.facade.execute_body_upgrade(request)
+
+    async def confirm_body_switch(self, request: Optional[dict] = Body(default=None)) -> Dict[str, Any]:
+        return await self.facade.confirm_body_switch(request)
 
     async def execute_autonomous_chain_request(self, request: dict = Body(default_factory=dict)) -> Dict[str, Any]:
         try:

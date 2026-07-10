@@ -1,6 +1,6 @@
 # 内生驱动与替身改进链路分析（修正版）
 
-> **2026-07 语义对齐说明**：本文保留“内生驱动 → 学习 → 替身改进 → 健康评分”的 gap 分析价值，但需按最新基线理解执行门控：监督者目标语义为全天候运行，旧时间窗口和“等用户空闲”硬门已移除；`active_sessions` 只作为认知层软感知/降权信号，不再是生成或执行的硬条件；`/auto` 开关只是当前自主链路的临时启停门控，不限制主 CLI 输入，也不阻断用户与主 Agent 交互。替身改进和 probe 可全天候自主进行，但真正 `activate_slot` 必须停在用户同意门（目标语义，待实现），不能写成 Governor 批准后自动切换。Web 小屋也只承担 API-B 动作、状态、反馈与任务的只读观测，不再应被理解成旧队列管理台或执行控制台。
+> **2026-07 语义对齐说明**：本文保留“内生驱动 → 学习 → 替身改进 → 健康评分”的 gap 分析价值，但需按最新基线理解执行门控：监督者目标语义为全天候运行，旧时间窗口和“等用户空闲”硬门已移除；`active_sessions` 只作为认知层软感知/降权信号，不再是生成或执行的硬条件；Supervisor 默认随服务启动自主链路，`/auto` 只接入主 CLI 内的本地观测/执行面，不限制主 CLI 输入，也不阻断用户与主 Agent 交互。替身改进和 probe 可全天候自主进行，但真正 `activate_slot` 必须停在用户同意门，不能写成 Governor 批准后自动切换。Web 小屋也只承担 API-B 动作、状态、反馈与任务的只读观测，不再应被理解成旧队列管理台或执行控制台。
 >
 > **2026-07-08 现状补记**：本文中的部分早期 gap 已被当前实现追上。`body_improvement` 现已进入正式 `execution_kind`、可被 API-A 自主执行面拉取执行，并已进入 Supervisor 的链路观测与 Web 小屋替身升级红点提示。当前更真实的缺口，已经从“有没有 `body_improvement` 这条链”转向“学习成果如何稳定驱动定向改进、如何自动形成建议切换、以及用户同意门如何落地”。
 
@@ -113,7 +113,7 @@ POST /body/upgrade/execute
                     → 执行器执行身体切换
 ```
 
-**架构约束（§3.8 / §7.5）**：身体切换不由自主链路治理在途直接驱动。Governor 保有否决权，但健康值/Governor 批准都只是“建议切换”的程序前置门；真正 `activate_slot` 需用户同意（目标语义，待实现）。
+**架构约束（§3.8 / §7.5）**：身体切换不由自主链路治理在途直接驱动。Governor 保有否决权，但健康值/Governor 批准都只是“建议切换”的程序前置门；真正 `activate_slot` 需用户同意。
 
 ## 5. 差距分析
 
@@ -196,7 +196,7 @@ Supervisor LLM 审查 → 健康值评分（细粒度）→ 累加至 BodySlotMe
 产生"建议切换"事件 → Governor 审查（保有否决权）
         │
         ▼（Governor 批准后）
-awaiting_user_consent → 用户同意后 → probe（技术健康检查）→ activate_slot → 新 active body
+probe（技术健康检查）通过 → awaiting_user_consent → 用户同意后 → activate_slot → 新 active body
 ```
 
 **Governor 权力边界**：`health_score` 达标只是"建议触发"，不是"自动切换"。Governor 接收"建议切换"事件后，进行独立审查，可批准或否决；批准后也必须停在用户同意门，不能直接 activate。
@@ -387,7 +387,7 @@ created → running → awaiting_review → completed / failed / retry
         ▼
 ⑨ Governor 审查（保有否决权）→ 批准/否决 [修正: 明确权力边界]
         ▼（批准后）
-⑩ awaiting_user_consent → 用户同意后 → probe / activate_slot → active [目标语义；待实现用户同意门]
+⑩ awaiting_user_consent → 用户同意后 → activate_slot → active
 ```
 
 ### 8.2 新增数据结构（修正版）
@@ -834,7 +834,7 @@ async def _rollback_to_healthy_commit(self, slot_id: str):
 | **P1** | 健康值时间衰减机制 | P0 |
 | **P2** | 相对阈值触发 + "建议切换"事件 | P1 |
 | **P2** | Governor 事件处理（接收建议切换事件） | P2 |
-| **P2** | `awaiting_user_consent` 用户同意门（阻断自动 activate） | P2 |
+| **P2** | `awaiting_user_consent` 用户同意门（阻断自动 activate，已落地） | P2 |
 | **P2** | 改进回滚机制 | P0 |
 | **P2** | 学习成果新鲜度衡量 | P0 |
 | **P3** | UI 健康值可视化 | P0 |
@@ -859,7 +859,7 @@ async def _rollback_to_healthy_commit(self, slot_id: str):
 | 13 | 并发改进无隔离 | 候选生成前检查 slot.state != "improving" |
 | 14 | 改进回滚机制缺失 | 新增 `previous_healthy_commit` 字段 + 回滚方法 |
 | 15 | 学习成果无新鲜度衡量 | 新增 `_calc_learning_freshness()` 考虑时间衰减 |
-| 16 | 建议切换后缺用户同意门 | 新增 `awaiting_user_consent`，Governor 批准后仍不得自动 activate |
+| 16 | 建议切换后缺用户同意门 | 已新增 `awaiting_user_consent`，Governor 批准后仍不得自动 activate |
 
 ## 10. 安全边界清单
 

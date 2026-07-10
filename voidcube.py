@@ -98,10 +98,10 @@ def _handle_daemon_lifecycle(args: list[str]) -> bool:
 
 
 def _auto_start_daemons() -> None:
-    """Start Memory → Gateway → Supervisor if not already running.
+    """Start Gateway → Memory → Supervisor if not already running.
 
-    Per architecture baseline §7.2 the soul layer (Mem) comes up first,
-    then the nerve centre (Gateway), then the supervisor registers.
+    The gateway comes up first so Memory and Supervisor can register
+    themselves during startup.
     Sets ``VOIDCUBE_DAEMONS_STARTED`` so that downstream CLI code
     (cli.py) does not attempt a second auto-start.
     """
@@ -110,7 +110,7 @@ def _auto_start_daemons() -> None:
     except ImportError:
         return
 
-    print("\n  ⚡ Auto-starting VoidCube daemons (Memory → Gateway → Supervisor)...\n")
+    print("\n  ⚡ Auto-starting VoidCube daemons (Gateway → Memory → Supervisor)...\n")
     ensure_running(silent=False)
     print()
     os.environ["VOIDCUBE_DAEMONS_STARTED"] = "1"

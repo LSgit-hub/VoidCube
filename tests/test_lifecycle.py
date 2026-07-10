@@ -40,7 +40,7 @@ def test_lifecycle_applies_probe_lease_action(tmp_path):
 
 
 @pytest.mark.unit
-def test_lifecycle_applies_activate_slot_action(tmp_path):
+def test_lifecycle_applies_user_consent_gate_before_activate_slot_action(tmp_path):
     manager = BodyRegistryManager(tmp_path)
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
@@ -69,6 +69,7 @@ def test_lifecycle_applies_activate_slot_action(tmp_path):
     executor = BodyLifecycleExecutor(manager)
     report = executor.apply_governor_response(response)
     registry = manager.load_registry()
+    slot_meta = manager.load_slot_meta("slot-B")
 
     assert report.action_results[0].status == "applied"
     assert report.runtime_task_profile == {
@@ -79,11 +80,47 @@ def test_lifecycle_applies_activate_slot_action(tmp_path):
     }
     assert report.writeback_events[0]["payload"]["runtime_task_profile"]["task_family"] == "body_switch"
     assert report.action_results[0].details["task_family"] == "body_switch"
-    assert registry.active_slot == "slot-B"
-    assert registry.retired_slot == "slot-A"
+    assert registry.active_slot == "slot-A"
+    assert registry.retired_slot is None
+    assert slot_meta.body_state == "awaiting_user_consent"
+    assert slot_meta.lease == "awaiting_user_consent"
+    assert registry.last_switch_result["decision"] == "awaiting_user_consent"
     assert registry.last_switch_result["task_family"] == "body_switch"
     assert registry.last_switch_result["execution_kind"] == "body_switch"
+
+
+@pytest.mark.unit
+def test_lifecycle_activates_slot_after_user_consent(tmp_path):
+    manager = BodyRegistryManager(tmp_path)
+    manager.initialize_layout()
+    manager.mark_candidate("slot-B")
+    manager.start_probe("slot-B")
+    manager.await_user_consent("slot-B")
+
+    engine = GovernorDecisionEngine()
+    request = GovernorRequest(
+        request_id="switch-consent-1",
+        event_type="health_review_request",
+        body_id="slot-B",
+        source_actor="user",
+        summary="User approved switch",
+        evidence={
+            "probe_passed": True,
+            "user_consent_approved": True,
+        },
+        constraints={"target_transition": "probe_to_active", "watch_window_seconds": 90},
+    )
+    response = engine.evaluate(request, slot_meta=manager.load_slot_meta("slot-B"))
+
+    executor = BodyLifecycleExecutor(manager)
+    report = executor.apply_governor_response(response)
+    registry = manager.load_registry()
+
+    assert report.action_results[0].status == "applied"
+    assert registry.active_slot == "slot-B"
+    assert registry.retired_slot == "slot-A"
     assert manager.load_slot_meta("slot-A").body_state == "retired"
+    assert manager.load_slot_meta("slot-B").body_state == "active"
 
 
 @pytest.mark.unit
@@ -92,6 +129,7 @@ def test_lifecycle_applies_rollback_restore_action(tmp_path):
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
     manager.start_probe("slot-B")
+    manager.await_user_consent("slot-B")
     manager.activate_slot("slot-B")
 
     engine = GovernorDecisionEngine()
@@ -122,6 +160,7 @@ def test_lifecycle_applies_recycle_action_after_post_switch_review(tmp_path):
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
     manager.start_probe("slot-B")
+    manager.await_user_consent("slot-B")
     manager.activate_slot("slot-B")
     retired = manager.load_slot_meta("slot-A")
 

@@ -939,11 +939,24 @@ class PlanningRuntimeMixin:
 
         if str(reflection.get("dominant_constraint") or "").strip().lower() != "none":
             return adjusted
-        if float(reflection.get("governance_backlog_blockage_pressure") or 0.0) >= 0.18:
+        if float(
+            reflection.get("api_b_judgement_blockage_pressure")
+            if reflection.get("api_b_judgement_blockage_pressure") is not None
+            else reflection.get("governance_backlog_blockage_pressure")
+            or 0.0
+        ) >= 0.18:
             return adjusted
         if str(reflection.get("learning_yield_state") or "").strip().lower() not in {"mixed", "strong"}:
             return adjusted
-        if max(0, int(perception.get("governance_backlog_count") or 0)) > 0:
+        if max(
+            0,
+            int(
+                perception.get("api_b_judgement_count")
+                if perception.get("api_b_judgement_count") is not None
+                else perception.get("governance_backlog_count")
+                or 0
+            ),
+        ) > 0:
             return adjusted
         if max(0, int(perception.get("stale_backlog_count") or 0)) > 0:
             return adjusted
@@ -1196,7 +1209,7 @@ class PlanningRuntimeMixin:
             or readiness_score < self._clamp_endogenous_ratio(
                 policy.get("readiness_min_score") or 0.52
             )
-            or dominant_constraint in {"governance_backlog_blockage", "historical_underdelivery"}
+            or dominant_constraint in {"api_b_judgement_blockage", "governance_backlog_blockage", "historical_underdelivery"}
         ):
             return "observe_first", "drift_or_readiness_requires_observation"
         return "balanced", "balanced_posture_is_sufficient"
@@ -1267,7 +1280,11 @@ class PlanningRuntimeMixin:
             "system_posture": payload.get("system_posture"),
             "active_sessions": payload.get("active_sessions"),
             "correction_signals": payload.get("correction_signals"),
-            "governance_backlog_count": payload.get("governance_backlog_count"),
+            "api_b_judgement_count": (
+                payload.get("api_b_judgement_count")
+                if payload.get("api_b_judgement_count") is not None
+                else payload.get("governance_backlog_count")
+            ),
             "autonomous_chain_gate_active": bool(payload.get("autonomous_chain_gate_active")),
         }
 
@@ -3011,7 +3028,7 @@ class PlanningRuntimeMixin:
                 + observation_bias * 0.22
                 + uncertainty_risk * 0.2
                 + (0.1 if current_focus == "observation" else 0.0)
-                + (0.08 if dominant_constraint in {"weak_learning_yield", "historical_underdelivery", "governance_backlog_blockage"} else 0.0)
+                + (0.08 if dominant_constraint in {"weak_learning_yield", "historical_underdelivery", "api_b_judgement_blockage", "governance_backlog_blockage"} else 0.0)
                 + (0.06 if last_mode == "observe" else 0.0)
                 - (0.04 if last_mode == "expand" and uncertainty_risk < 0.3 else 0.0)
             ),
@@ -3353,16 +3370,21 @@ class PlanningRuntimeMixin:
                 }
             )
 
-        backlog_pressure = float(reflection.get("governance_backlog_blockage_pressure") or 0.0)
-        if backlog_pressure >= 0.28 or str(world_model.get("governance_load_state") or "").strip() in {"busy", "strained"}:
+        api_b_judgement_pressure = float(
+            reflection.get("api_b_judgement_blockage_pressure")
+            if reflection.get("api_b_judgement_blockage_pressure") is not None
+            else reflection.get("governance_backlog_blockage_pressure")
+            or 0.0
+        )
+        if api_b_judgement_pressure >= 0.28 or str(world_model.get("governance_load_state") or "").strip() in {"busy", "strained"}:
             risk = self._clamp_endogenous_ratio(
-                backlog_pressure * 0.7
+                api_b_judgement_pressure * 0.7
                 + (0.2 if str(world_model.get("governance_load_state") or "").strip() == "strained" else 0.08)
             )
             entries.append(
                 {
-                    "ledger_id": "uncertainty:governance_backlog_blockage",
-                    "domain": "governance_backlog",
+                    "ledger_id": "uncertainty:api_b_judgement_blockage",
+                    "domain": "api_b_judgement",
                     "risk": round(risk, 4),
                     "confidence": round(
                         self._clamp_endogenous_ratio(
@@ -3376,11 +3398,11 @@ class PlanningRuntimeMixin:
                     "why_uncertain": (
                         "Backlog pressure is visible, but the drive still needs to inspect whether the backlog is blocked by stale work, review debt, or repeated low-yield candidates."
                     ),
-                    "observation_target": "governance_backlog_blockage",
+                    "observation_target": "api_b_judgement_blockage",
                     "recommended_probe": "inspect stale, deferred, and pending-review endogenous tasks",
                     "evidence": [
-                        f"governance_backlog_blockage_state={reflection.get('governance_backlog_blockage_state')}",
-                        f"governance_backlog_count={int(perception.get('governance_backlog_count') or 0)}",
+                        f"api_b_judgement_blockage_state={reflection.get('api_b_judgement_blockage_state') or reflection.get('governance_backlog_blockage_state')}",
+                        f"api_b_judgement_count={int(perception.get('api_b_judgement_count') if perception.get('api_b_judgement_count') is not None else perception.get('governance_backlog_count') or 0)}",
                         f"pending_review_count={int(perception.get('pending_review_count') or 0)}",
                     ],
                 }
@@ -3424,7 +3446,7 @@ class PlanningRuntimeMixin:
         if (
             autonomy_alignment_requests > 0
             or autonomy_readiness <= 0.45
-            or dominant_constraint in {"weak_learning_yield", "historical_underdelivery", "governance_backlog_blockage"}
+            or dominant_constraint in {"weak_learning_yield", "historical_underdelivery", "api_b_judgement_blockage", "governance_backlog_blockage"}
         ):
             risk = self._clamp_endogenous_ratio(
                 max(0.0, 0.58 - autonomy_readiness) * 0.75
@@ -5272,10 +5294,6 @@ class PlanningRuntimeMixin:
         rows.sort(key=lambda item: item[0], reverse=True)
         return [payload for _, payload in rows[: max(0, limit)]]
 
-    def _governance_backlog_task_summaries(self, limit: int = 20) -> list[Dict[str, Any]]:
-        """Compatibility alias for older tests/callers; use API-B judgement naming."""
-        return self._api_b_judgement_task_summaries(limit=limit)
-
     def _api_a_execution_lane_task_summaries(self, limit: int = 20) -> list[Dict[str, Any]]:
         rows: list[tuple[str, Dict[str, Any]]] = []
         for task in self._autonomous_chain_store.list_api_a_execution_lane_tasks():
@@ -5756,7 +5774,6 @@ class PlanningRuntimeMixin:
         api_b_judgement_tasks = self._api_b_judgement_task_summaries(limit=24)
         api_a_execution_lane_tasks = self._api_a_execution_lane_task_summaries(limit=24)
         drive_input["api_b_judgement_tasks"] = api_b_judgement_tasks
-        drive_input["governance_backlog_tasks"] = api_b_judgement_tasks
         drive_input["api_a_execution_lane_tasks"] = api_a_execution_lane_tasks
         drive_input["autonomous_chain_live_tasks"] = [
             *api_b_judgement_tasks,
@@ -7228,6 +7245,68 @@ class PlanningRuntimeMixin:
             "tasks_remaining": 0,
         }
 
+    def _mem_governance_repository_path(self) -> Path:
+        governor = getattr(self, "_governor", None)
+        storage_root = getattr(governor, "storage_root", None)
+        if storage_root:
+            return Path(storage_root) / "mem_governance.jsonl"
+        runtime_root = Path(
+            getattr(self, "_runtime_root", None)
+            or self.config.soul_store_path
+            or (Path(self.config.execution.git_repo_path) / ".soul-runtime")
+        )
+        return runtime_root / "mem_governance.jsonl"
+
+    def _load_mem_governance_events(self) -> list[Any]:
+        repo_path = self._mem_governance_repository_path()
+        if not repo_path.exists():
+            return []
+        from memai.governance_repository import GovernanceEventRepository
+
+        return GovernanceEventRepository(repo_path).list_events()
+
+    def _recover_autonomous_chain_store_from_mem_governance(
+        self,
+        *,
+        only_if_empty: bool = False,
+        replace: bool = False,
+    ) -> Dict[str, Any]:
+        existing_count = len(self._autonomous_chain_store.list_tasks())
+        if only_if_empty and existing_count > 0:
+            return {
+                "status": "skipped",
+                "reason": "runtime_store_not_empty",
+                "existing_task_count": existing_count,
+                "mem_governance_path": str(self._mem_governance_repository_path()),
+            }
+        events = self._load_mem_governance_events()
+        result = self._autonomous_chain_store.recover_from_governance_events(
+            events,
+            replace=replace,
+        )
+        return {
+            **result,
+            "existing_task_count": existing_count,
+            "mem_governance_path": str(self._mem_governance_repository_path()),
+        }
+
+    async def recover_autonomous_chain_from_mem(self, request: dict | None = None):
+        request = request or {}
+        result = self._recover_autonomous_chain_store_from_mem_governance(
+            only_if_empty=bool(request.get("only_if_empty", False)),
+            replace=bool(request.get("replace", False)),
+        )
+        if result.get("added_task_count") or result.get("updated_task_count"):
+            await self._touch_gateway_activity(
+                "autonomous_chain_plan",
+                metadata={
+                    "action": "recover_from_mem_governance",
+                    "added_task_count": result.get("added_task_count", 0),
+                    "updated_task_count": result.get("updated_task_count", 0),
+                },
+            )
+        return result
+
     async def plan_autonomous_chain_task(self, request: dict | None = None):
         request = request or {}
         items = request.get("items")
@@ -7819,7 +7898,7 @@ class PlanningRuntimeMixin:
                 "complete",
                 "compressed",
                 "already_compressed",
-                "upgrade_executed",
+                "upgrade_awaiting_user_consent",
                 "learn_only_completed",
                 "autonomous_chain_execution_executed",
                 "autonomous_chain_execution_recorded",

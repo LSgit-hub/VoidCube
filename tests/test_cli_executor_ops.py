@@ -15,17 +15,35 @@ from VoidCube_cli.ops.executor import ExecutorOpsClient
 @pytest.mark.unit
 def test_executor_ops_client_routes_body_upgrade_through_gateway_executor():
     response = Mock()
-    response.json.return_value = {"status": "upgrade_executed"}
+    response.json.return_value = {"status": "upgrade_awaiting_user_consent"}
     response.raise_for_status.return_value = None
 
     with patch("VoidCube_cli.ops.executor.requests.post", return_value=response) as post:
         client = ExecutorOpsClient(gateway_url="http://gateway.local/")
         result = client.execute_body_upgrade({"slot_id": "slot-B"})
 
-    assert result["status"] == "upgrade_executed"
+    assert result["status"] == "upgrade_awaiting_user_consent"
     post.assert_called_once_with(
         "http://gateway.local/api/executor/body/upgrade/execute",
         json={"slot_id": "slot-B"},
+        timeout=30.0,
+    )
+
+
+@pytest.mark.unit
+def test_executor_ops_client_routes_body_switch_consent_through_gateway_executor():
+    response = Mock()
+    response.json.return_value = {"status": "body_switch_activated"}
+    response.raise_for_status.return_value = None
+
+    with patch("VoidCube_cli.ops.executor.requests.post", return_value=response) as post:
+        client = ExecutorOpsClient(gateway_url="http://gateway.local/")
+        result = client.confirm_body_switch({"slot_id": "slot-B", "approved": True})
+
+    assert result["status"] == "body_switch_activated"
+    post.assert_called_once_with(
+        "http://gateway.local/api/executor/body/switch/consent",
+        json={"slot_id": "slot-B", "approved": True},
         timeout=30.0,
     )
 

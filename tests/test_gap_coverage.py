@@ -212,9 +212,9 @@ class TestServiceRuntimeLifecycle:
             await sv._start_periodic_tasks()
             assert sv._service_runtime_started is True
             assert sv._health_check_task is not None
-            assert sv._autonomous_chain_review_task is None, (
-                "Review loop should not start before the supervisor autonomous-chain gate is enabled"
-            )
+            assert sv._service_runtime.autonomous_chain_gate_active is True
+            assert sv._autonomous_chain_review_task is not None
+            assert sv._endogenous_drive_task is not None
             await sv._stop_periodic_tasks()
             assert sv._service_runtime_started is False
         asyncio.run(_run())
@@ -313,6 +313,7 @@ class TestConfigurationValidation:
         assert cfg.host == "127.0.0.1"
         assert cfg.port == 6002
         assert cfg.service_runtime.endogenous_drive_enabled is True
+        assert cfg.service_runtime.autonomous_chain_start_on_boot is True
         assert cfg.service_runtime.autonomous_chain_review_interval == 300
 
     def test_supervisor_config_segmented(self):
@@ -572,7 +573,6 @@ class TestEndogenousDriveErrorBridge:
         report = engine.build_deliberation_report(drive_input=idle).to_dict()
 
         assert report["reflection"]["api_b_judgement_blockage_state"] in {"dragging", "blocked"}
-        assert report["reflection"]["governance_backlog_blockage_state"] in {"dragging", "blocked"}
         assert report["reflection"]["dominant_constraint"] in {
             "api_b_judgement_blockage",
             "weak_learning_yield",

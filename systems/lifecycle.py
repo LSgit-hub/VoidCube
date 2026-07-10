@@ -111,6 +111,34 @@ class BodyLifecycleExecutor:
                 ),
             )
 
+        if action.action_type == "await_user_consent":
+            if not slot_id:
+                return self._failed(action, "User-consent gate requires a slot_id.")
+            registry = self.registry.await_user_consent(
+                slot_id,
+                reason=str(payload.get("reason", "governor_approved_pending_user_consent")),
+                request_payload=payload,
+                runtime_task_profile=payload.get("runtime_task_profile"),
+            )
+            slot_meta = self.registry.load_slot_meta(slot_id)
+            return self._applied(
+                action,
+                slot_id=slot_id,
+                details=self._details_with_runtime_task_profile(
+                    {
+                    "active_slot": registry.active_slot,
+                    "body_state": slot_meta.body_state,
+                    "requires_user_consent": True,
+                    "switch_consent_requested_at": (
+                        slot_meta.switch_consent_requested_at.isoformat()
+                        if slot_meta.switch_consent_requested_at
+                        else None
+                    ),
+                    },
+                    payload,
+                ),
+            )
+
         if action.action_type == "restore_retired_slot":
             if not slot_id:
                 return self._failed(action, "Rollback restore requires a slot_id.")

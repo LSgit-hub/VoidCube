@@ -39,7 +39,9 @@ def test_probe_to_active_health_review_requires_passing_probe(tmp_path):
     manager = BodyRegistryManager(tmp_path)
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
-    slot = manager.start_probe("slot-B")
+    manager.start_probe("slot-B")
+    manager.await_user_consent("slot-B")
+    slot = manager.load_slot_meta("slot-B")
 
     engine = GovernorDecisionEngine()
     request = GovernorRequest(
@@ -48,7 +50,10 @@ def test_probe_to_active_health_review_requires_passing_probe(tmp_path):
         body_id="slot-B",
         source_actor="probe_runner",
         summary="Probe completed",
-        evidence={"probe_report": {"overall_passed": True}},
+        evidence={
+            "probe_report": {"overall_passed": True},
+            "user_consent_approved": True,
+        },
         constraints={"target_transition": "probe_to_active", "watch_window_seconds": 180},
     )
 
@@ -56,6 +61,31 @@ def test_probe_to_active_health_review_requires_passing_probe(tmp_path):
     assert response.decision == "approve_with_watch"
     assert response.watch_window_hint == 180
     assert response.required_actions[0].action_type == "activate_slot"
+
+
+@pytest.mark.unit
+def test_probe_to_active_health_review_requires_user_consent(tmp_path):
+    manager = BodyRegistryManager(tmp_path)
+    manager.initialize_layout()
+    manager.mark_candidate("slot-B")
+    manager.start_probe("slot-B")
+    manager.await_user_consent("slot-B")
+    slot = manager.load_slot_meta("slot-B")
+
+    engine = GovernorDecisionEngine()
+    request = GovernorRequest(
+        request_id="req-2-no-consent",
+        event_type="health_review_request",
+        body_id="slot-B",
+        source_actor="probe_runner",
+        summary="Probe completed",
+        evidence={"probe_report": {"overall_passed": True}},
+        constraints={"target_transition": "probe_to_active"},
+    )
+
+    response = engine.evaluate(request, slot_meta=slot)
+    assert response.decision == "request_more_evidence"
+    assert not response.required_actions
 
 
 @pytest.mark.unit
@@ -77,6 +107,28 @@ def test_switch_request_rejects_failed_probe(tmp_path):
 
     response = engine.evaluate(request, slot_meta=slot)
     assert response.decision == "reject"
+
+
+@pytest.mark.unit
+def test_switch_request_stops_at_user_consent_gate(tmp_path):
+    manager = BodyRegistryManager(tmp_path)
+    manager.initialize_layout()
+    manager.mark_candidate("slot-B")
+    slot = manager.start_probe("slot-B")
+
+    engine = GovernorDecisionEngine()
+    request = GovernorRequest(
+        request_id="req-3-consent-gate",
+        event_type="switch_request",
+        body_id="slot-B",
+        source_actor="gateway",
+        summary="Switch candidate into service",
+        evidence={"probe_report": {"overall_passed": True}},
+    )
+
+    response = engine.evaluate(request, slot_meta=slot)
+    assert response.decision == "awaiting_user_consent"
+    assert response.required_actions[0].action_type == "await_user_consent"
 
 
 @pytest.mark.unit
@@ -104,6 +156,7 @@ def test_post_switch_review_recycles_retired_slot(tmp_path):
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
     manager.start_probe("slot-B")
+    manager.await_user_consent("slot-B")
     manager.activate_slot("slot-B")
     retired = manager.load_slot_meta("slot-A")
 

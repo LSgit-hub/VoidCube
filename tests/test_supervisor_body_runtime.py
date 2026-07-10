@@ -54,6 +54,10 @@ async def _execute_body_upgrade(supervisor: Supervisor, request: dict | None = N
     return await supervisor._execution_facade.execute_body_upgrade(request)
 
 
+async def _confirm_body_switch(supervisor: Supervisor, request: dict | None = None):
+    return await supervisor.confirm_body_switch(request)
+
+
 async def _execute_governor_review_request(supervisor: Supervisor, request: dict):
     return supervisor._governor_review_executor.execute_governor_request(
         GovernorRequest.model_validate(request)
@@ -291,8 +295,18 @@ async def test_supervisor_can_activate_candidate_after_probe_report(tmp_path):
         }
     )
 
-    assert review["governor_response"]["decision"] == "approve_with_watch"
-    assert review["registry"]["active_slot"] == "slot-B"
+    assert review["governor_response"]["decision"] == "awaiting_user_consent"
+    assert review["registry"]["active_slot"] == "slot-A"
+    slot_b = await supervisor.get_body_slot("slot-B")
+    assert slot_b["body_state"] == "awaiting_user_consent"
+
+    confirmation = await _confirm_body_switch(
+        supervisor,
+        {"slot_id": "slot-B", "approved": True, "watch_window_seconds": 120},
+    )
+
+    assert confirmation["status"] == "body_switch_activated"
+    assert confirmation["registry"]["active_slot"] == "slot-B"
     slot_a = await supervisor.get_body_slot("slot-A")
     slot_b = await supervisor.get_body_slot("slot-B")
     assert slot_a["body_state"] == "retired"
@@ -368,6 +382,7 @@ async def test_supervisor_watch_window_pass_recycles_retired_slot(tmp_path):
             "constraints": {"watch_window_seconds": 120},
         }
     )
+    await _confirm_body_switch(supervisor, {"slot_id": "slot-B", "approved": True})
 
     result = await _evaluate_watch_window(supervisor, {"healthy_override": True})
 
@@ -418,6 +433,7 @@ async def test_supervisor_watch_window_path_uses_governor_review_executor_direct
             "constraints": {"watch_window_seconds": 120},
         }
     )
+    await _confirm_body_switch(supervisor, {"slot_id": "slot-B", "approved": True})
 
     with patch.object(
         supervisor._governor_review_executor,
@@ -469,6 +485,7 @@ async def test_supervisor_watch_window_failure_triggers_rollback(tmp_path):
             "constraints": {"watch_window_seconds": 120},
         }
     )
+    await _confirm_body_switch(supervisor, {"slot_id": "slot-B", "approved": True})
 
     result = await _evaluate_watch_window(
         supervisor,
@@ -527,6 +544,7 @@ async def test_supervisor_starts_watch_window_task_after_switch(tmp_path):
             "constraints": {"watch_window_seconds": 120},
         }
     )
+    await _confirm_body_switch(supervisor, {"slot_id": "slot-B", "approved": True})
 
     assert supervisor._watch_window_task is not None
     assert supervisor._watch_window_task.done() is False
@@ -574,7 +592,14 @@ async def test_supervisor_delegates_watch_window_runtime_followup_to_execution_f
 
     def record_runtime_followup(governor_response):
         recorded_responses.append(governor_response)
-        return {"status": "watch_window_runtime_ensured", "decision": governor_response.decision}
+        return {
+            "status": (
+                "watch_window_runtime_ensured"
+                if governor_response.decision == "approve_with_watch"
+                else "no_watch_window_runtime_change"
+            ),
+            "decision": governor_response.decision,
+        }
 
     with patch.object(
         supervisor._watch_window_executor,
@@ -595,8 +620,25 @@ async def test_supervisor_delegates_watch_window_runtime_followup_to_execution_f
         )
 
     assert len(recorded_responses) == 1
-    assert recorded_responses[0].decision == "approve_with_watch"
+    assert recorded_responses[0].decision == "awaiting_user_consent"
     assert review["runtime_followup"] == {
+        "status": "no_watch_window_runtime_change",
+        "decision": "awaiting_user_consent",
+    }
+
+    with patch.object(
+        supervisor._watch_window_executor,
+        "sync_runtime_after_governor_response",
+        side_effect=record_runtime_followup,
+    ):
+        confirmation = await _confirm_body_switch(
+            supervisor,
+            {"slot_id": "slot-B", "approved": True},
+        )
+
+    assert len(recorded_responses) == 2
+    assert recorded_responses[1].decision == "approve_with_watch"
+    assert confirmation["switch_activation"]["runtime_followup"] == {
         "status": "watch_window_runtime_ensured",
         "decision": "approve_with_watch",
     }
@@ -641,6 +683,7 @@ async def test_watch_window_loop_auto_recycles_when_window_expires_cleanly(tmp_p
             "constraints": {"watch_window_seconds": 120},
         }
     )
+    await _confirm_body_switch(supervisor, {"slot_id": "slot-B", "approved": True})
 
     registry = supervisor._body_registry.load_registry()
     registry.watch_window.expires_at = datetime.utcnow() - timedelta(seconds=1)
@@ -705,6 +748,7 @@ async def test_watch_window_success_syncs_retired_slot_back_to_shell_from_active
             "constraints": {"watch_window_seconds": 120},
         }
     )
+    await _confirm_body_switch(supervisor, {"slot_id": "slot-B", "approved": True})
 
     slot_b = await supervisor.get_body_slot("slot-B")
     (Path(slot_b["worktree_path"]) / "stable.marker").write_text("stable\n", encoding="utf-8")
@@ -739,13 +783,25 @@ async def test_supervisor_execute_body_upgrade_runs_pipeline_to_switch(tmp_path)
         }
     )
 
-    assert result["status"] == "upgrade_executed"
+    assert result["status"] == "upgrade_awaiting_user_consent"
     assert result["slot_id"] == "slot-B"
     assert result["probe_review"]["governor_response"]["decision"] == "approve"
     assert result["probe_execution"]["report"]["overall_passed"] is True
-    assert result["switch_review"]["governor_response"]["decision"] == "approve_with_watch"
-    assert result["active_target"]["slot_id"] == "slot-B"
+    assert result["switch_review"]["governor_response"]["decision"] == "awaiting_user_consent"
+    assert result["requires_user_consent"] is True
+    assert result["active_target"]["slot_id"] == "slot-A"
 
+    registry = await supervisor.get_body_registry()
+    assert registry["registry"]["active_slot"] == "slot-A"
+    assert registry["registry"]["retired_slot"] is None
+    assert registry["slots"]["slot-B"]["body_state"] == "awaiting_user_consent"
+    assert registry["slots"]["slot-A"]["body_state"] == "active"
+
+    confirmation = await _confirm_body_switch(
+        supervisor,
+        {"slot_id": "slot-B", "approved": True, "watch_window_seconds": 90},
+    )
+    assert confirmation["status"] == "body_switch_activated"
     registry = await supervisor.get_body_registry()
     assert registry["registry"]["active_slot"] == "slot-B"
     assert registry["registry"]["retired_slot"] == "slot-A"
@@ -777,11 +833,10 @@ async def test_supervisor_execute_body_upgrade_delegates_to_execution_facade(tmp
         },
     }
     expected = {
-        "status": "upgrade_executed",
+        "status": "upgrade_awaiting_user_consent",
+        "requires_user_consent": True,
         "active_target": {
-            "slot_id": "slot-B",
-            "active_ref": "stable/v2",
-            "active_commit": "bbb222",
+            "slot_id": "slot-A",
         },
         "probe_execution": {
             "report": {
@@ -790,7 +845,7 @@ async def test_supervisor_execute_body_upgrade_delegates_to_execution_facade(tmp
             }
         },
         "execution_request": request["execution_request"],
-        "switch_review": {"governor_response": {"decision": "approve_with_watch"}},
+        "switch_review": {"governor_response": {"decision": "awaiting_user_consent"}},
     }
 
     execute_body_upgrade = AsyncMock(return_value=expected)

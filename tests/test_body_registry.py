@@ -12,6 +12,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from systems.body_registry import BodyRegistryManager
 
 
+def _await_user_consent(manager: BodyRegistryManager, slot_id: str = "slot-B"):
+    return manager.await_user_consent(slot_id, request_payload={"watch_window_seconds": 120})
+
+
 @pytest.mark.unit
 def test_initialize_layout_bootstraps_dual_slots(tmp_path):
     manager = BodyRegistryManager(tmp_path)
@@ -39,6 +43,7 @@ def test_probe_to_active_switch_retires_previous_active(tmp_path):
 
     manager.mark_candidate("slot-B", body_version="v2")
     manager.start_probe("slot-B")
+    _await_user_consent(manager)
     registry = manager.activate_slot("slot-B", watch_window_seconds=120)
 
     slot_a = manager.load_slot_meta("slot-A")
@@ -69,6 +74,7 @@ def test_activate_slot_records_active_ref_and_commit(tmp_path):
         rollback_commit="aaa111",
     )
     manager.start_probe("slot-B")
+    _await_user_consent(manager)
     registry = manager.activate_slot("slot-B")
     slot_b = manager.load_slot_meta("slot-B")
     pointer = manager.load_active_body_pointer()
@@ -204,6 +210,7 @@ def test_recycle_retired_slot_returns_it_to_shell(tmp_path):
     (tmp_path / "run_agent.py").write_text("print('stable shell')\n", encoding="utf-8")
     manager.mark_candidate("slot-B")
     manager.start_probe("slot-B")
+    _await_user_consent(manager)
     manager.activate_slot("slot-B")
 
     registry = manager.recycle_retired_slot("slot-A", source_path=tmp_path)
@@ -224,6 +231,7 @@ def test_recycle_retired_slot_can_sync_from_stable_slot(tmp_path):
     manager.prepare_slot_workspace("slot-B", source_slot_id="slot-A")
     manager.mark_candidate("slot-B")
     manager.start_probe("slot-B")
+    _await_user_consent(manager)
     manager.activate_slot("slot-B")
 
     (Path(manager.load_slot_meta("slot-B").worktree_path) / "stable.marker").write_text(
@@ -309,6 +317,7 @@ def test_active_body_pointer_tracks_current_active_slot(tmp_path):
     manager.prepare_slot_workspace("slot-B", source_slot_id="slot-A")
     manager.mark_candidate("slot-B", body_version="v2")
     manager.start_probe("slot-B")
+    _await_user_consent(manager)
     manager.activate_slot("slot-B")
     pointer = manager.load_active_body_pointer()
 
@@ -322,6 +331,7 @@ def test_activate_slot_records_stable_window_settings(tmp_path):
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
     manager.start_probe("slot-B")
+    _await_user_consent(manager)
 
     registry = manager.activate_slot(
         "slot-B",
@@ -342,6 +352,7 @@ def test_activate_slot_can_record_runtime_task_profile(tmp_path):
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
     manager.start_probe("slot-B")
+    _await_user_consent(manager)
 
     registry = manager.activate_slot(
         "slot-B",

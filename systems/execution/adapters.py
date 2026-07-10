@@ -4,7 +4,6 @@ import asyncio
 from dataclasses import dataclass
 import logging
 from pathlib import Path
-from pathlib import Path
 import uuid
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, MutableMapping, Optional, Protocol
@@ -692,12 +691,14 @@ class BodyUpgradeExecutionAdapter:
                 )
             )
 
+            active_target = self.body_registry.load_active_body_pointer().model_dump(mode="json")
             outcome = {
-                "status": "upgrade_executed",
+                "status": "upgrade_awaiting_user_consent",
                 "slot_id": slot_id,
                 "task_id": str(request.get("execution_request", {}).get("task_id", "")),
                 "previous_active_slot": pre_switch_registry.active_slot,
                 "retired_slot": switch_review["registry"]["retired_slot"],
+                "requires_user_consent": True,
                 "prepared_slot": (
                     prepared_slot.model_dump(mode="json")
                     if prepared_slot is not None
@@ -708,12 +709,100 @@ class BodyUpgradeExecutionAdapter:
                 "probe_execution": probe_execution,
                 "switch_review": switch_review,
                 "running_agents": self._serialize_running_agents(),
-                "active_target": self.body_registry.load_active_body_pointer().model_dump(mode="json"),
+                "active_target": active_target,
             }
             result = self.attach_execution_route_hint(outcome, "body.upgrade.execute")
             # E-04: writeback execution outcome to Mem governance
             await self._writeback_execution_outcome(outcome)
             return result
+        except HTTPException:
+            raise
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    async def confirm_body_switch(self, request: dict | None = None) -> Dict[str, Any]:
+        request = request or {}
+        slot_id = request.get("slot_id")
+        if not slot_id:
+            awaiting_slots = [
+                slot.slot_id
+                for slot in self.body_registry.list_slots().values()
+                if getattr(slot, "body_state", None) == "awaiting_user_consent"
+            ]
+            if len(awaiting_slots) == 1:
+                slot_id = awaiting_slots[0]
+        if not slot_id:
+            raise HTTPException(
+                status_code=400,
+                detail="slot_id is required when no single slot is awaiting user consent.",
+            )
+        if request.get("approved") is not True:
+            raise HTTPException(status_code=400, detail="approved=true is required to activate a body slot.")
+
+        try:
+            slot_meta = self.body_registry.load_slot_meta(slot_id)
+            if slot_meta.body_state != "awaiting_user_consent":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Slot {slot_id} must be awaiting user consent before activation.",
+                )
+
+            consent_request = dict(slot_meta.switch_consent_request or {})
+            watch_window_seconds = int(
+                request.get("watch_window_seconds")
+                or consent_request.get("watch_window_seconds")
+                or self.config.probe_watch_window_seconds
+            )
+            stable_window_days = int(
+                request.get("stable_window_days")
+                or consent_request.get("stable_window_days")
+                or 3
+            )
+            stable_health_checks = int(
+                request.get("stable_health_checks")
+                or consent_request.get("stable_health_checks")
+                or 3
+            )
+            runtime_task_profile = dict(consent_request.get("runtime_task_profile") or {})
+            decision_id = request.get("decision_id")
+            trace_id = request.get("trace_id")
+
+            switch_activation = self._execute_governor_request(
+                GovernorRequest(
+                    request_id=request.get("request_id", f"user-consent-switch-{uuid.uuid4()}"),
+                    trace_id=trace_id,
+                    task_type=str(request.get("task_type") or runtime_task_profile.get("task_type") or "self_evolution"),
+                    decision_id=decision_id,
+                    event_type="health_review_request",
+                    body_id=slot_id,
+                    source_actor=str(request.get("source_actor") or "user_consent"),
+                    summary=str(request.get("summary") or "User approved activating the probe-passed body slot."),
+                    evidence={
+                        "user_consent_approved": True,
+                        "user_consent_actor": request.get("source_actor") or "user",
+                        "user_consent_at": datetime.utcnow().isoformat(),
+                        **dict(request.get("evidence") or {}),
+                    },
+                    constraints={
+                        "target_transition": "probe_to_active",
+                        "watch_window_seconds": watch_window_seconds,
+                        "stable_window_days": stable_window_days,
+                        "stable_health_checks": stable_health_checks,
+                        **dict(request.get("constraints") or {}),
+                    },
+                )
+            )
+            registry = self.body_registry.load_registry()
+            return self.attach_execution_route_hint(
+                {
+                    "status": "body_switch_activated",
+                    "slot_id": slot_id,
+                    "switch_activation": switch_activation,
+                    "registry": registry.model_dump(mode="json"),
+                    "active_target": self.body_registry.load_active_body_pointer().model_dump(mode="json"),
+                },
+                "body.switch.consent",
+            )
         except HTTPException:
             raise
         except (FileNotFoundError, ValueError) as exc:
@@ -729,16 +818,44 @@ class BodyUpgradeExecutionAdapter:
             repo = GovernanceEventRepository(
                 str(Path(self._governor_storage_root or ".") / "mem_governance.jsonl")
             )
+            execution_request = dict(outcome.get("execution_request") or {})
+            runtime_task_profile = dict(
+                execution_request.get("runtime_task_profile")
+                or outcome.get("runtime_task_profile")
+                or {}
+            )
+            if not runtime_task_profile:
+                runtime_task_profile = {
+                    "governance_task_type": "self_evolution",
+                    "task_family": "body_upgrade",
+                    "execution_kind": "body_improvement",
+                }
+            execution_result = {
+                **dict(outcome),
+                "title": (
+                    execution_request.get("title")
+                    or outcome.get("title")
+                    or "Body upgrade execution outcome"
+                ),
+                "summary": (
+                    execution_request.get("summary")
+                    or outcome.get("summary")
+                    or f"Body upgrade: {outcome.get('status', 'unknown')}"
+                ),
+                "runtime_task_profile": runtime_task_profile,
+                "constraints": dict(execution_request.get("constraints") or {}),
+            }
             repo.append(GovernanceEvent.create(
                 event_type=GovernanceEventType.EXECUTION_OUTCOME,
                 source_actor="executor",
                 decision=(
                     GovernanceDecision.COMPLETED
-                    if outcome.get("status") == "upgrade_executed"
+                    if outcome.get("status") == "upgrade_awaiting_user_consent"
                     else GovernanceDecision.FAILED
                 ),
                 reason=f"Body upgrade: {outcome.get('status', 'unknown')}",
                 task_id=outcome.get("task_id", ""),
+                execution_result=execution_result,
             ))
         except Exception:
             pass  # best-effort; never block the upgrade path
