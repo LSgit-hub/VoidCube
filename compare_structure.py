@@ -3,6 +3,7 @@
 对比英文和中文翻译的结构，找出中文中缺失的翻译键
 """
 
+import argparse
 import json
 from pathlib import Path
 
@@ -36,7 +37,40 @@ def compare_dicts(en_dict, zh_dict, path=""):
     return missing, empty
 
 
+def build_report(missing, empty):
+    lines = [
+        "英文翻译文件中存在但中文缺失的翻译:",
+        "=" * 80,
+        "",
+    ]
+    for path, value in sorted(missing):
+        lines.append(f"{path}")
+        lines.append(f"  英文: {value}")
+        lines.append("")
+
+    lines.extend([
+        "",
+        "中文翻译为空的键:",
+        "=" * 80,
+        "",
+    ])
+    for path, value in sorted(empty):
+        lines.append(f"{path}")
+        lines.append(f"  英文: {value}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def main():
+    parser = argparse.ArgumentParser(description="对比英文和中文翻译结构")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="可选：把报告写入指定文件；默认只输出到控制台",
+    )
+    args = parser.parse_args()
+
     locales_dir = Path(__file__).parent / 'VoidCube_cli' / 'locales'
     en_file = locales_dir / 'en_US.json'
     zh_file = locales_dir / 'zh_CN.json'
@@ -48,37 +82,13 @@ def main():
     zh_trans = zh_data.get('translations', {})
     
     missing, empty = compare_dicts(en_trans, zh_trans)
-    
-    print("=" * 80)
-    print("英文翻译文件中存在但中文缺失的翻译:")
-    print("=" * 80)
-    for path, value in sorted(missing):
-        print(f"{path}")
-        print(f"  英文: {value}")
-    print()
-    
-    print("=" * 80)
-    print("中文翻译为空的键:")
-    print("=" * 80)
-    for path, value in sorted(empty):
-        print(f"{path}")
-        print(f"  英文: {value}")
-    print()
-    
-    # 保存结果
-    with open('missing_structural.txt', 'w', encoding='utf-8') as f:
-        f.write("英文翻译文件中存在但中文缺失的翻译:\n")
-        f.write("="*80 + "\n\n")
-        for path, value in sorted(missing):
-            f.write(f"{path}\n")
-            f.write(f"  英文: {value}\n\n")
-        
-        if empty:
-            f.write("\n\n中文翻译为空的键:\n")
-            f.write("="*80 + "\n\n")
-            for path, value in sorted(empty):
-                f.write(f"{path}\n")
-                f.write(f"  英文: {value}\n\n")
+    report = build_report(missing, empty)
+
+    print(report)
+
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(report + "\n", encoding="utf-8")
 
 
 if __name__ == '__main__':
