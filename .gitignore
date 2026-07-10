@@ -174,6 +174,12 @@ tmp_*/
 .tmp_voidcube*/
 .tmp-supervisor-debug/
 .trae/
+used_translation_keys.txt
+missing_structural.txt
+missing_zh_keys.txt
+needs_translation.txt
+i18n_analysis_report.md
+podman_workspace_probe.txt
 *.tmp
 *.temp
 *.backup
