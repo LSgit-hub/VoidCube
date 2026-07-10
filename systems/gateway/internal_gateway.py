@@ -1645,7 +1645,7 @@ class InternalGateway:
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"Failed to fetch approved tasks: {e}")
+            logger.error(f"Failed to fetch handoff-ready tasks: {e}")
             raise HTTPException(status_code=502, detail=f"Failed to fetch tasks: {e}")
 
     @staticmethod

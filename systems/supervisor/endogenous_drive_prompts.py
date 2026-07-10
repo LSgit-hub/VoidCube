@@ -3,15 +3,6 @@ from __future__ import annotations
 import json
 from typing import Any, Dict
 
-
-# Legacy input-only aliases accepted for old evidence packets and historical
-# prompt-cache data. New prompt-facing packets emit api_b_judgement_* keys.
-_LEGACY_GOVERNANCE_BACKLOG_SNAPSHOT_KEY = "governance_backlog_snapshot"
-_LEGACY_GOVERNANCE_BACKLOG_TASKS_KEY = "governance_backlog_tasks"
-_LEGACY_GOVERNANCE_BACKLOG_SUMMARY_KEY = "governance_backlog_summary"
-_LEGACY_GOVERNANCE_BACKLOG_TASK_COUNT_KEY = "governance_backlog_task_count"
-
-
 def build_endogenous_core_mission_prompt(
     *,
     cognition_charter: Dict[str, Any],
@@ -274,7 +265,6 @@ def _render_cognitive_briefing(packet: Dict[str, Any]) -> str:
     supporting_detail = dict(packet.get("supporting_detail") or {})
     api_b_judgement_snapshot = dict(
         packet.get("api_b_judgement_snapshot")
-        or packet.get(_LEGACY_GOVERNANCE_BACKLOG_SNAPSHOT_KEY)
         or {}
     )
     grounding_focus = dict(packet.get("grounding_focus") or {})
@@ -400,7 +390,6 @@ def _render_cognitive_briefing(packet: Dict[str, Any]) -> str:
     ]
     api_b_judgement_summary = str(
         decision_core.get("api_b_judgement_summary")
-        or decision_core.get(_LEGACY_GOVERNANCE_BACKLOG_SUMMARY_KEY)
         or api_b_judgement_snapshot.get("summary")
         or ""
     ).strip()
@@ -542,7 +531,6 @@ def _prompt_facing_evidence_packet(
             ],
             "api_b_judgement_summary": str(
                 decision_core.get("api_b_judgement_summary")
-                or decision_core.get(_LEGACY_GOVERNANCE_BACKLOG_SUMMARY_KEY)
                 or ""
             ).strip(),
             "summary": str(decision_core.get("summary") or "").strip()[:220],
@@ -857,7 +845,7 @@ def _prompt_facing_evidence_packet(
     raw_api_b_judgement_tasks = (
         packet.get("api_b_judgement_tasks")
         if isinstance(packet.get("api_b_judgement_tasks"), list)
-        else packet.get(_LEGACY_GOVERNANCE_BACKLOG_TASKS_KEY)
+        else None
     )
     if isinstance(raw_api_b_judgement_tasks, list):
         compact_tasks = [
@@ -1109,7 +1097,6 @@ def _compact_deliberation_state_item(item: Dict[str, Any]) -> Dict[str, Any]:
             "learning_yield_state": reflection.get("learning_yield_state"),
             "api_b_judgement_blockage_state": (
                 reflection.get("api_b_judgement_blockage_state")
-                or reflection.get("governance_backlog_blockage_state")
             ),
             "dominant_constraint": reflection.get("dominant_constraint"),
             "autonomy_readiness": reflection.get("autonomy_readiness"),
@@ -1135,8 +1122,6 @@ def _compact_perception_summary(item: Dict[str, Any]) -> Dict[str, Any]:
         "shell_slot_present": item.get("shell_slot_present"),
         "api_b_judgement_count": (
             item.get("api_b_judgement_count")
-            if item.get("api_b_judgement_count") is not None
-            else item.get("governance_backlog_count")
         ),
         "stale_backlog_count": item.get("stale_backlog_count"),
         "pending_review_count": item.get("pending_review_count"),
@@ -1164,12 +1149,9 @@ def _compact_reflection_summary(item: Dict[str, Any]) -> Dict[str, Any]:
         "learning_yield_state": item.get("learning_yield_state"),
         "api_b_judgement_blockage_pressure": (
             item.get("api_b_judgement_blockage_pressure")
-            if item.get("api_b_judgement_blockage_pressure") is not None
-            else item.get("governance_backlog_blockage_pressure")
         ),
         "api_b_judgement_blockage_state": (
             item.get("api_b_judgement_blockage_state")
-            or item.get("governance_backlog_blockage_state")
         ),
         "body_growth_blocked": item.get("body_growth_blocked"),
         "repeated_drive_pressure": item.get("repeated_drive_pressure"),
@@ -1342,7 +1324,7 @@ def _derive_api_b_judgement_snapshot(packet: Dict[str, Any]) -> Dict[str, Any]:
     raw_tasks = (
         packet.get("api_b_judgement_tasks")
         if isinstance(packet.get("api_b_judgement_tasks"), list)
-        else packet.get(_LEGACY_GOVERNANCE_BACKLOG_TASKS_KEY)
+        else None
     )
     api_b_judgement_tasks = [
         dict(item)
@@ -1860,7 +1842,6 @@ def _apply_prompt_trim_stage(packet: Dict[str, Any], *, stage_name: str) -> Dict
                 "primary_agenda_nodes": list(decision_core.get("primary_agenda_nodes") or [])[:3],
                 "api_b_judgement_summary": str(
                     decision_core.get("api_b_judgement_summary")
-                    or decision_core.get(_LEGACY_GOVERNANCE_BACKLOG_SUMMARY_KEY)
                     or ""
                 )[:180],
                 "summary": str(decision_core.get("summary") or "")[:220],
@@ -1888,7 +1869,6 @@ def _apply_prompt_trim_stage(packet: Dict[str, Any], *, stage_name: str) -> Dict
         api_b_judgement_snapshot = _trim_api_b_judgement_snapshot(
             dict(
                 trimmed.get("api_b_judgement_snapshot")
-                or trimmed.get(_LEGACY_GOVERNANCE_BACKLOG_SNAPSHOT_KEY)
                 or {}
             )
         )
@@ -1958,7 +1938,7 @@ def _apply_prompt_trim_stage(packet: Dict[str, Any], *, stage_name: str) -> Dict
         raw_api_b_tasks = (
             trimmed.get("api_b_judgement_tasks")
             if isinstance(trimmed.get("api_b_judgement_tasks"), list)
-            else trimmed.get(_LEGACY_GOVERNANCE_BACKLOG_TASKS_KEY)
+            else None
         )
         if isinstance(raw_api_b_tasks, list):
             trimmed["api_b_judgement_tasks"] = list(raw_api_b_tasks)[:2]
@@ -1969,10 +1949,7 @@ def _apply_prompt_trim_stage(packet: Dict[str, Any], *, stage_name: str) -> Dict
 def _trim_api_b_judgement_snapshot(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     if not snapshot:
         return {}
-    task_count = snapshot.get(
-        "api_b_judgement_task_count",
-        snapshot.get(_LEGACY_GOVERNANCE_BACKLOG_TASK_COUNT_KEY),
-    )
+    task_count = snapshot.get("api_b_judgement_task_count")
     return {
         "api_b_judgement_task_count": task_count,
         "learning_backlog_count": snapshot.get("learning_backlog_count"),

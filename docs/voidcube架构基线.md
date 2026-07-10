@@ -754,7 +754,7 @@ Mem 记录“为什么演化”和“是否允许演化”；Git 记录“具体
 自主任务状态：
 
 - `planned` — 监督者内生驱动产出，尚未由 API-B 转交
-- `approved` — 内部状态枚举，表示 API-B 已转交，API-A 自主执行面可拉取执行
+- `approved` — 历史内部状态枚举，当前语义只表示 API-B 已转交、API-A 自主执行面可拉取；它不表示已经开始执行、执行完成，也不表示 Web 小屋可人工控制执行
 - `running` — API-A 自主执行面已拉取，正在执行
 - `completed` — API-A 自主执行面执行成功，学习成果或改进进展已写入 Mem
 - `failed` — API-A 自主执行面执行失败
@@ -974,12 +974,12 @@ Governor (API-B)
 - `governance_task_type`、`task_family`、`execution_kind`
   - 用于 runtime policy、activity guards、治理裁决、execution handoff 与写回语义
 
-这些 canonical runtime 字段的归一化入口应统一落在 [`systems/runtime_task_profile.py`](../systems/runtime_task_profile.py)；后续 governance backlog / execution lane 投影、gateway activity、governor request、execution adapter、lifecycle writeback、Mem lineage 不应各自复制一套近似推导逻辑。
+这些 canonical runtime 字段的归一化入口应统一落在 [`systems/runtime_task_profile.py`](../systems/runtime_task_profile.py)；后续 API-B judgement / API-A handoff / execution lane 投影、gateway activity、governor request、execution adapter、lifecycle writeback、Mem lineage 不应各自复制一套近似推导逻辑。
 
 补充约束：
 
 - 一旦某条 canonical runtime surface 已稳定，需在同一轮删除旧残留与重复镜像字段，避免 supervisor / executor / gateway 长期并存两套近义表达。
-- formal execution handoff 中，broad `task_type` 可以保留在 formal contract、backlog snapshot、trace lineage 里，但不应再作为 executor outward summary metadata 的重复主字段。
+- formal execution handoff 中，broad `task_type` 可以保留在 formal contract、API-B judgement snapshot、trace lineage 里，但不应再作为 executor outward summary metadata 的重复主字段。
 
 这些任务语义属于 activity / trace / execution 事实层，而不是长期服务注册身份层；服务注册 metadata 应优先表达稳定服务身份与路由信息。
 

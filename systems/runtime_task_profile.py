@@ -89,9 +89,9 @@ def derive_runtime_task_profile(
             )
 
     if normalized_governance_task_type is None:
-        governance_hint = normalized_task_family or normalized_task_type
-        if governance_hint is not None:
-            normalized_governance_task_type = normalize_runtime_task_type(governance_hint)
+        task_type_hint = normalized_task_family or normalized_task_type
+        if task_type_hint is not None:
+            normalized_governance_task_type = normalize_runtime_task_type(task_type_hint)
 
     if normalized_governance_task_type in {"self_evolution", "memory_maintenance"}:
         if normalized_execution_kind is None and normalized_task_family is not None:

@@ -421,20 +421,20 @@ class TestEndogenousDriveErrorBridge:
         candidates = engine.generate_candidates(drive_input=idle, existing_drive_keys=set(), max_candidates=3)
         memory_candidate = next(c for c in candidates if c.stable_key == "continuity:memory_maintenance_sweep")
         breakdown = memory_candidate.metadata.get("score_breakdown") or {}
-        backlog_item = memory_candidate.to_backlog_item()
-        endogenous_evidence = backlog_item["evidence"]["endogenous_drive"]
+        judgement_item = memory_candidate.to_api_b_judgement_item()
+        endogenous_evidence = judgement_item["evidence"]["endogenous_drive"]
 
         assert breakdown["score_model"] == "endogenous_drive_v2"
         assert breakdown["candidate_kind"] == "memory_maintenance"
         assert "dimensions" in breakdown
         assert "penalties" in breakdown
-        assert "stable_key" not in backlog_item
-        assert "value_tags" not in backlog_item
-        assert "utility" not in backlog_item
-        assert backlog_item["rationale"]
-        assert backlog_item["metadata"]["endogenous_drive_key"] == memory_candidate.stable_key
-        assert backlog_item["metadata"]["core_values"] == memory_candidate.value_tags
-        assert backlog_item["metadata"]["utility"] == memory_candidate.utility
+        assert "stable_key" not in judgement_item
+        assert "value_tags" not in judgement_item
+        assert "utility" not in judgement_item
+        assert judgement_item["rationale"]
+        assert judgement_item["metadata"]["endogenous_drive_key"] == memory_candidate.stable_key
+        assert judgement_item["metadata"]["core_values"] == memory_candidate.value_tags
+        assert judgement_item["metadata"]["utility"] == memory_candidate.utility
         assert endogenous_evidence["score_breakdown"]["utility"] == memory_candidate.utility
 
     def test_candidates_include_drive_judgement_layers(self):

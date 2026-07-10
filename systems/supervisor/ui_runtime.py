@@ -3595,7 +3595,6 @@ function cognitionTypeLabel(kind, value) {
     },
     need_type: {
       review_api_b_judgement: '观察 API-B 判断在途',
-      clear_governance_backlog: '观察 API-B 判断在途',
       truthfulness_repair: '修补真实性风险',
       exploratory_learning: '发起自主学习',
       shell_baseline_learning: '替身基线学习',
@@ -3619,7 +3618,7 @@ function cognitionTypeLabel(kind, value) {
       correction_signal: '修正信号',
       user_activity: '用户活动',
       memory_pressure: '记忆压力',
-      governance_backlog: 'API-B 判断在途',
+      api_b_judgement: 'API-B 判断在途',
       truthfulness_alert: '真实性告警',
       learning_followthrough: '学习跟进',
       '未命名信号': '未命名信号',
@@ -5343,7 +5342,6 @@ class SupervisorUIMixin:
             },
             "need_type": {
                 "review_api_b_judgement": "观察 API-B 判断在途",
-                "clear_governance_backlog": "观察 API-B 判断在途",
                 "truthfulness_repair": "修补真实性风险",
                 "exploratory_learning": "发起自主学习",
                 "shell_baseline_learning": "替身基线学习",
@@ -5394,7 +5392,6 @@ class SupervisorUIMixin:
                 "user_service_priority": "用户链路优先",
                 "historical_underdelivery": "历史兑现偏弱",
                 "api_b_judgement_blockage": "API-B 判断阻塞",
-                "governance_backlog_blockage": "API-B 判断阻塞",
                 "weak_learning_yield": "学习收益偏弱",
                 "weak self structure grounding": "替身结构地基偏弱",
                 "weak_self_structure_grounding": "替身结构地基偏弱",
@@ -5402,7 +5399,7 @@ class SupervisorUIMixin:
             },
             "uncertainty_domain": {
                 "truthfulness": "真实性侧",
-                "governance_backlog": "API-B 判断侧",
+                "api_b_judgement": "API-B 判断侧",
                 "learning_yield": "学习收益侧",
                 "autonomy_alignment": "自主对齐侧",
                 "self_regulation": "自调节侧",
@@ -5410,7 +5407,6 @@ class SupervisorUIMixin:
             "observation_target": {
                 "truthfulness": "真实性侧",
                 "api_b_judgement_blockage": "API-B 判断阻塞侧",
-                "governance_backlog_blockage": "API-B 判断阻塞侧",
                 "learning_yield": "学习收益侧",
                 "autonomy_alignment": "自主对齐侧",
                 "self_regulation": "自调节侧",
@@ -5418,7 +5414,7 @@ class SupervisorUIMixin:
                 "learning_frontier": "学习前沿侧",
                 "memory_continuity": "记忆连续性侧",
                 "body_growth": "替身成长侧",
-                "governance_backlog": "API-B 判断侧",
+                "api_b_judgement": "API-B 判断侧",
             },
             "observation_next_step": {
                 "collect_observation": "补观察证据",
@@ -5570,7 +5566,7 @@ class SupervisorUIMixin:
             )
             if derived not in reasons:
                 reasons.append(derived)
-        if constraint in {"api_b_judgement_blockage", "governance_backlog_blockage"}:
+        if constraint == "api_b_judgement_blockage":
             reasons.append("API-B 判断在途仍未消化完")
         if constraint == "weak_learning_yield":
             reasons.append("近期学习收益偏弱，先补证据")
@@ -6085,7 +6081,7 @@ class SupervisorUIMixin:
         return ""
 
     def _ui_observation_judgement_hint(self, task: Dict[str, Any]) -> str:
-        preview = dict(task.get("judgement_preview") or task.get("governance_preview") or {})
+        preview = dict(task.get("judgement_preview") or {})
         summary = str(preview.get("summary") or "").strip()
         if summary:
             return summary[:120]
@@ -6315,11 +6311,9 @@ class SupervisorUIMixin:
             card["summary"] = str(card.get("summary") or "").strip()[:160]
         metadata = dict(card.get("metadata") or {})
         card["metadata"] = metadata
-        judgement_preview = dict(card.get("judgement_preview") or card.get("governance_preview") or {})
+        judgement_preview = dict(card.get("judgement_preview") or {})
         if judgement_preview:
             card["judgement_preview"] = judgement_preview
-            # Legacy mirror for older cached consumers; new UI reads judgement_preview.
-            card["governance_preview"] = judgement_preview
         if observation_role is not None:
             card["observation_role"] = observation_role
         if status is not None:
@@ -6332,8 +6326,6 @@ class SupervisorUIMixin:
             card["display_status"] = self._observation_display_status(card)
         card["identity_hint"] = self._ui_observation_identity_hint(card)
         card["judgement_hint"] = self._ui_observation_judgement_hint(card)
-        # Legacy mirror for older cached consumers; new UI reads judgement_hint.
-        card["governance_hint"] = card["judgement_hint"]
         card["candidate_hint"] = self._ui_observation_candidate_hint(card)
         card["observation_type_label"] = self._ui_observation_task_type_label(card)
         card["observation_card_subtitle"] = self._ui_observation_card_subtitle(card)
@@ -7533,7 +7525,7 @@ class SupervisorUIMixin:
         judgement_record_count = 0
         priority_change_signal_count = 0
         for task in chain_history_projection:
-            preview = dict(task.get("judgement_preview") or task.get("governance_preview") or {})
+            preview = dict(task.get("judgement_preview") or {})
             followup = preview.get("followup_suggestion")
             if isinstance(followup, dict):
                 followup_signal_count += 1

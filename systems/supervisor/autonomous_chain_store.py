@@ -14,11 +14,15 @@ from systems.runtime_task_profile import (
     normalize_runtime_task_type,
 )
 
+# `approved` is a persisted historical enum name. In current chain semantics it
+# means "API-B has handed this item off; API-A may claim it", not "executed".
 AutonomousChainTaskStatus = Literal["planned", "deferred", "approved", "running", "paused", "cancelled", "completed", "failed", "awaiting_review", "retry"]
 AutonomousChainExecutionRequestKind = Literal[
     "memory_maintenance",
     "general_self_evolution",
 ]
+# Persisted contract value for formal executor requests. Treat it as
+# handoff-ready, not as proof that execution has already started or completed.
 AutonomousChainExecutionRequestStatus = Literal["approved_for_execution"]
 
 
@@ -38,7 +42,9 @@ class AutonomousChainExecutionRequest(BaseModel):
     """Formal Mem/supervisor handoff contract consumed by executors.
 
     CLI and HTTP operations may test the executor surface, but a formal
-    autonomous-chain execution needs this governance snapshot.
+    autonomous-chain execution needs this governance snapshot. Its
+    `approved_for_execution` status means the request may be consumed by the
+    executor; completion is only represented by a later task writeback.
     """
 
     request_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -246,7 +252,12 @@ class AutonomousChainStore:
         *,
         status: Optional[AutonomousChainTaskStatus] = None,
     ) -> List[AutonomousChainTask]:
-        """Return items API-B has transferred and API-A may pick up."""
+        """Return items API-B has transferred and API-A may pick up.
+
+        The backing status is the persisted `approved` enum, but this read path
+        exposes the current API-A handoff meaning rather than an execution
+        result.
+        """
         allowed = self._status_filter(
             status=status,
             default_statuses=frozenset({"approved", "retry"}),
@@ -262,7 +273,7 @@ class AutonomousChainStore:
         *,
         status: Optional[AutonomousChainTaskStatus] = None,
     ) -> List[AutonomousChainTask]:
-        """Return tasks that are in or approaching the API-A execution lane."""
+        """Return tasks in the API-A lane: handoff-ready, running, or retry."""
         allowed = self._status_filter(
             status=status,
             default_statuses=self._API_A_EXECUTION_LANE_STATUSES,

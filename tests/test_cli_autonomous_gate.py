@@ -1097,7 +1097,7 @@ def test_autonomous_panel_fragments_include_focus_task_and_recent_events(monkeyp
         "timeline": [
             {
                 "event_type": "task_decided",
-                "summary": "Supervisor approved task for execution.",
+                "summary": "API-B handed task off for API-A claim.",
             }
         ],
         "tasks": [],
@@ -1119,7 +1119,7 @@ def test_autonomous_panel_fragments_include_focus_task_and_recent_events(monkeyp
     assert "Panel task title" in rendered
     assert "已接管任务 learn-panel-1" in rendered
     assert "工具启动: web_search" in rendered
-    assert "Supervisor approved task for execution." in rendered
+    assert "API-B handed task off for API-A claim." in rendered
 
 
 def test_autonomous_panel_shows_stale_foreign_executor(monkeypatch):
@@ -1238,7 +1238,7 @@ def test_autonomous_panel_prefers_loop_focus_when_present(monkeypatch):
                         "items": [
                             {
                                 "task_id": "learn-board-1",
-                                "title": "Board approved task",
+                                "title": "Board handoff task",
                                 "status": "approved",
                                 "task_family": "self_learning",
                                 "lane": "agent",
@@ -1251,7 +1251,7 @@ def test_autonomous_panel_prefers_loop_focus_when_present(monkeypatch):
                 "stage_cards": [
                     {
                         "stage_key": "api_a_execution",
-                        "title": "Board approved task",
+                        "title": "Board handoff task",
                         "source_label": "API-A",
                         "status": "ready",
                         "display_status": "API-B 已转交",
@@ -1260,7 +1260,7 @@ def test_autonomous_panel_prefers_loop_focus_when_present(monkeypatch):
                         "activity_text": "执行流: API-A 认领后执行，结果写回 Mem",
                         "focus_task": {
                             "task_id": "learn-board-1",
-                            "title": "Board approved task",
+                            "title": "Board handoff task",
                             "status": "approved",
                             "task_family": "self_learning",
                             "lane": "agent",
@@ -1284,7 +1284,7 @@ def test_autonomous_panel_prefers_loop_focus_when_present(monkeypatch):
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
     assert "状态: API-B 已转交" in rendered
-    assert "Board approved task" in rendered
+    assert "Board handoff task" in rendered
     assert "可由 API-A 自主执行面接手" in rendered
 
 
@@ -1310,7 +1310,7 @@ def test_autonomous_panel_shows_approved_task_waiting_for_claim(monkeypatch):
                         "items": [
                             {
                                 "task_id": "learn-approved-1",
-                                "title": "Approved waiting task",
+                                "title": "Handoff waiting task",
                                 "task_type": "self_learning",
                                 "status": "approved",
                                 "lane": "agent",
@@ -1330,7 +1330,7 @@ def test_autonomous_panel_shows_approved_task_waiting_for_claim(monkeypatch):
                         "activity_text": "执行流: API-A 认领后执行，结果写回 Mem",
                         "focus_task": {
                             "task_id": "learn-approved-1",
-                            "title": "Approved waiting task",
+                            "title": "Handoff waiting task",
                             "task_type": "self_learning",
                             "status": "approved",
                             "lane": "agent",
@@ -1353,7 +1353,7 @@ def test_autonomous_panel_shows_approved_task_waiting_for_claim(monkeypatch):
     rendered = "\n".join(text for _, text in autonomous_panel_module.build_autonomous_execution_panel_rows(cli))
 
     assert "状态: API-B 已转交" in rendered
-    assert "Approved waiting task" in rendered
+    assert "Handoff waiting task" in rendered
     assert "链路: API-B 已转交该链路项，可由 API-A 自主执行面接手" in rendered
     assert "执行流: API-A 认领后执行，结果写回 Mem" in rendered
 

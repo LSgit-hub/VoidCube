@@ -416,7 +416,7 @@ async def _plan_and_write_back_endogenous_cycle(
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_planning_self_evolution_task_creates_planned_backlog_entry(tmp_path):
+async def test_planning_self_evolution_task_creates_planned_judgement_entry(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
     result = await supervisor.plan_autonomous_chain_task(
@@ -438,16 +438,20 @@ async def test_planning_self_evolution_task_creates_planned_backlog_entry(tmp_pa
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_duplicate_backlog_spam(tmp_path):
+async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_duplicate_judgement_spam(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     supervisor.config = supervisor.config.model_copy(
         update={
             "service_runtime": supervisor.config.service_runtime.model_copy(
-                update={"endogenous_drive_max_candidates": 10}
+                update={
+                    "endogenous_drive_max_candidates": 10,
+                    "endogenous_drive_lm_task_generation_enabled": False,
+                }
             )
         }
     )
+    supervisor._endogenous_drive_engine.config = supervisor.config
 
     async def fake_drive_input(_request=None):
         return _formal_endogenous_drive_input_payload(
@@ -459,15 +463,15 @@ async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_dupli
 
     first = await supervisor._run_endogenous_drive_cycle()
     second = await supervisor._run_endogenous_drive_cycle()
-    backlog_snapshot = await supervisor.list_autonomous_chain_tasks()
+    chain_projection = await supervisor.list_autonomous_chain_tasks()
     timeline = supervisor._recent_supervisor_ui_activity(limit=10)
 
     assert first["status"] == "planned"
     assert first["planned"] == 2
     assert second["status"] == "idle"
-    assert backlog_snapshot["count"] == 2
+    assert chain_projection["count"] == 2
     tasks_by_key = {
-        task["metadata"]["endogenous_drive_key"]: task for task in backlog_snapshot["tasks"]
+        task["metadata"]["endogenous_drive_key"]: task for task in chain_projection["tasks"]
     }
     assert "continuity:memory_maintenance_sweep" in tasks_by_key
     assert "truthfulness:review_correction_signals" in tasks_by_key
@@ -476,8 +480,8 @@ async def test_endogenous_drive_cycle_generates_value_backed_tasks_without_dupli
         str(key).startswith("creativity:idle_learning:")
         for key in tasks_by_key
     )
-    assert any(task["governance_task_type"] == "self_learning" for task in backlog_snapshot["tasks"])
-    scheduled_tokens = [task.get("scheduled_for") for task in backlog_snapshot["tasks"]]
+    assert any(task["governance_task_type"] == "self_learning" for task in chain_projection["tasks"])
+    scheduled_tokens = [task.get("scheduled_for") for task in chain_projection["tasks"]]
     assert all(isinstance(token, str) and token for token in scheduled_tokens)
     assert len(set(scheduled_tokens)) == len(scheduled_tokens)
     memory_task = tasks_by_key["continuity:memory_maintenance_sweep"]
@@ -4095,7 +4099,7 @@ async def test_cognition_state_uncertainty_ledger_tracks_truthfulness_backlog_an
 
     assert ledger["active_count"] >= 3
     assert "truthfulness" in domains
-    assert "governance_backlog" in domains or ledger["highest_risk_domain"] == "truthfulness"
+    assert "api_b_judgement" in domains or ledger["highest_risk_domain"] == "truthfulness"
     assert "learning_yield" in domains
 
 
@@ -6955,7 +6959,7 @@ async def test_prompt_packet_budget_preserves_api_b_judgement_snapshot_under_lar
 
 
 @pytest.mark.unit
-def test_prompt_packet_reads_legacy_governance_backlog_snapshot_without_reemitting_it():
+def test_prompt_packet_ignores_legacy_governance_backlog_snapshot():
     from systems.supervisor.endogenous_drive_prompts import _prompt_facing_evidence_packet
 
     compact = _prompt_facing_evidence_packet(
@@ -6975,7 +6979,7 @@ def test_prompt_packet_reads_legacy_governance_backlog_snapshot_without_reemitti
         }
     )
 
-    assert compact["api_b_judgement_snapshot"]["api_b_judgement_task_count"] == 1
+    assert "api_b_judgement_snapshot" not in compact
     assert "governance_backlog_snapshot" not in compact
     assert "governance_backlog_tasks" not in compact
 
@@ -16420,14 +16424,14 @@ async def test_endogenous_drive_still_plans_learning_candidates_with_active_sess
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
 
     result = await supervisor._run_endogenous_drive_cycle()
-    backlog_snapshot = await supervisor.list_autonomous_chain_tasks()
+    chain_projection = await supervisor.list_autonomous_chain_tasks()
     keys = {
-            task["metadata"]["endogenous_drive_key"]: task for task in backlog_snapshot["tasks"]
+            task["metadata"]["endogenous_drive_key"]: task for task in chain_projection["tasks"]
     }
 
     assert result["status"] == "planned"
     assert "activity_guards" not in result
-    assert any(task["governance_task_type"] == "self_learning" for task in backlog_snapshot["tasks"])
+    assert any(task["governance_task_type"] == "self_learning" for task in chain_projection["tasks"])
 
 
 @pytest.mark.unit
@@ -17841,7 +17845,7 @@ async def test_list_autonomous_chain_tasks_can_filter_body_improvement_agent_tas
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_list_autonomous_chain_tasks_reads_chain_projection_views_instead_of_raw_total_backlog(tmp_path):
+async def test_list_autonomous_chain_tasks_reads_chain_projection_views_instead_of_raw_total_store(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
     planned = await supervisor.plan_autonomous_chain_task({"title": "Projected backlog task"})
@@ -17853,7 +17857,7 @@ async def test_list_autonomous_chain_tasks_reads_chain_projection_views_instead_
         completed_id,
         status="approved",
         actor="test",
-        reason="approved for execution handoff",
+        reason="API-B handed off for execution claim",
     )
     supervisor._autonomous_chain_store.update_status(
         completed_id,
@@ -18274,11 +18278,11 @@ def test_autonomous_chain_store_has_explicit_review_and_retry_transitions(tmp_pa
         )
 
 
-def test_autonomous_chain_store_exposes_backlog_api_a_execution_lane_and_writeback_projections(tmp_path):
+def test_autonomous_chain_store_exposes_api_b_judgement_api_a_execution_lane_and_writeback_projections(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     store = supervisor._autonomous_chain_store
 
-    planned = store.create_task(title="治理在途链路项", summary="backlog")
+    planned = store.create_task(title="治理在途链路项", summary="api-b-judgement")
     running = store.create_task(title="API-A 执行段链路项", summary="api-a-lane")
     completed = store.create_task(title="已完成写回链路项", summary="writeback")
     failed = store.create_task(title="写回失败链路项", summary="writeback")
@@ -18288,7 +18292,7 @@ def test_autonomous_chain_store_exposes_backlog_api_a_execution_lane_and_writeba
         running.task_id,
         status="approved",
         actor="test",
-        reason="approved for API-A execution lane",
+        reason="API-B handed off to API-A execution lane",
     )
     store.update_status(
         running.task_id,
@@ -18301,7 +18305,7 @@ def test_autonomous_chain_store_exposes_backlog_api_a_execution_lane_and_writeba
         completed.task_id,
         status="approved",
         actor="test",
-        reason="approved for execution",
+        reason="API-B handed off for execution claim",
     )
     store.update_status(
         completed.task_id,
@@ -18320,7 +18324,7 @@ def test_autonomous_chain_store_exposes_backlog_api_a_execution_lane_and_writeba
         failed.task_id,
         status="approved",
         actor="test",
-        reason="approved for execution",
+        reason="API-B handed off for execution claim",
     )
     store.update_status(
         failed.task_id,
@@ -18362,11 +18366,11 @@ def test_autonomous_chain_store_exposes_backlog_api_a_execution_lane_and_writeba
     assert writeback_titles == ["已完成写回链路项", "写回失败链路项"]
 
 
-def test_autonomous_chain_store_exposes_chain_projection_without_raw_total_backlog_semantics(tmp_path):
+def test_autonomous_chain_store_exposes_chain_projection_without_raw_total_store_semantics(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     store = supervisor._autonomous_chain_store
 
-    planned = store.create_task(title="治理在途链路项", summary="backlog")
+    planned = store.create_task(title="治理在途链路项", summary="api-b-judgement")
     completed = store.create_task(title="已完成写回链路项", summary="writeback")
     cancelled = store.create_task(title="已取消链路项", summary="terminal without writeback")
 
@@ -18374,7 +18378,7 @@ def test_autonomous_chain_store_exposes_chain_projection_without_raw_total_backl
         completed.task_id,
         status="approved",
         actor="test",
-        reason="approved for execution",
+        reason="API-B handed off for execution claim",
     )
     store.update_status(
         completed.task_id,

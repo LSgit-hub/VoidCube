@@ -1078,7 +1078,7 @@ async def test_supervisor_room_state_exposes_judgement_preview_for_shadow_review
     assert preview["merge_into_title"] == "Canonical learning branch"
     assert "监督者保留建议" in preview["summary"]
     assert "Canonical learning branch" in duplicate["judgement_preview"]["summary"]
-    assert duplicate["governance_preview"] == duplicate["judgement_preview"]
+    assert "governance_preview" not in duplicate
     assert state["autonomous_observation"]["metrics"]["observation"]["followup_signals"] >= 1
 
 
@@ -1142,7 +1142,7 @@ async def test_supervisor_room_state_exposes_applied_priority_updates(tmp_path, 
     assert task["judgement_preview"]["priority_adjustment"]["priority"] == "high"
     assert task["judgement_preview"]["priority_adjustment"]["priority_label"] == "高"
     assert "监督者已重排优先级" in task["judgement_preview"]["summary"]
-    assert task["governance_preview"] == task["judgement_preview"]
+    assert "governance_preview" not in task
     assert state["autonomous_observation"]["metrics"]["observation"]["priority_change_signals"] >= 1
 
 
@@ -1407,7 +1407,7 @@ async def test_supervisor_room_state_uses_autonomous_observation_model(tmp_path)
     assert api_b_judgement["items"][0]["observation_card_subtitle"]
     assert api_b_judgement["items"][0]["identity_hint"]
     assert "judgement_hint" in api_b_judgement["items"][0]
-    assert api_b_judgement["items"][0]["governance_hint"] == api_b_judgement["items"][0]["judgement_hint"]
+    assert "governance_hint" not in api_b_judgement["items"][0]
     assert api_a_handoff["items"][0]["observation_card_subtitle"]
     assert [item["title"] for item in api_a_handoff["items"]] == ["第一个自主学习链路项"]
     assert [item["display_status"] for item in api_a_handoff["items"]] == ["已转交"]
@@ -1439,7 +1439,7 @@ async def test_supervisor_room_state_keeps_running_api_a_task_out_of_ready_segme
     supervisor._autonomous_chain_store.update_status(
         task_id,
         status="approved",
-        reason="approved for pull",
+        reason="API-B handed off for API-A claim",
     )
     supervisor._autonomous_chain_store.update_status(
         task_id,
@@ -1486,7 +1486,7 @@ async def test_supervisor_room_state_maps_running_api_a_task_to_handoff_scene(tm
     supervisor._autonomous_chain_store.update_status(
         task_id,
         status="approved",
-        reason="approved for pull",
+        reason="API-B handed off for API-A claim",
     )
     supervisor._autonomous_chain_store.update_status(
         task_id,
@@ -1619,7 +1619,7 @@ async def test_supervisor_room_state_does_not_show_completed_drive_candidate_res
     supervisor._autonomous_chain_store.update_status(
         task_id,
         status="approved",
-        reason="approved for API-A",
+        reason="API-B handed off to API-A",
     )
     supervisor._autonomous_chain_store.update_status(
         task_id,

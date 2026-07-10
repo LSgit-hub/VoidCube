@@ -36,16 +36,16 @@ logger = logging.getLogger("supervisor")
 # Supervisor scene taxonomy (baseline §3.4 / §3.6 / §13.2)
 # ──────────────────────────────────────────────────────────────────────
 # The supervisor (API-B) is the governance identity of Mem.  It only
-# MANAGES the governance backlog and runs endogenous drive — it never executes
+# manages API-B judgement state and runs endogenous drive; it never executes
 # learning or body-upgrade code.  Therefore the supervisor's `scene`
 # field is restricted to the values below.  The Agent (API-A) is the
 # only component that may surface "learning" / "execution" scenes.
 #
 #   idle         - at rest
-#   planning     - deciding / approving / denying a governance-backlog item
+#   planning     - judging / handing off / denying an API-B judgement item
 #   memory       - actively touching long-term memory (Mem internal)
 #   drive        - endogenous drive: cognitive evaluation / governance output
-#   handoff      - handing an approved execution request to API-A / executor
+#   handoff      - handing a ready execution request to API-A / executor
 #   maintenance  - memory-maintenance sweep (long-term memory hygiene)
 #   body_switch  - judging a body switch request
 #
@@ -940,10 +940,7 @@ class PlanningRuntimeMixin:
         if str(reflection.get("dominant_constraint") or "").strip().lower() != "none":
             return adjusted
         if float(
-            reflection.get("api_b_judgement_blockage_pressure")
-            if reflection.get("api_b_judgement_blockage_pressure") is not None
-            else reflection.get("governance_backlog_blockage_pressure")
-            or 0.0
+            reflection.get("api_b_judgement_blockage_pressure") or 0.0
         ) >= 0.18:
             return adjusted
         if str(reflection.get("learning_yield_state") or "").strip().lower() not in {"mixed", "strong"}:
@@ -952,8 +949,6 @@ class PlanningRuntimeMixin:
             0,
             int(
                 perception.get("api_b_judgement_count")
-                if perception.get("api_b_judgement_count") is not None
-                else perception.get("governance_backlog_count")
                 or 0
             ),
         ) > 0:
@@ -1209,7 +1204,7 @@ class PlanningRuntimeMixin:
             or readiness_score < self._clamp_endogenous_ratio(
                 policy.get("readiness_min_score") or 0.52
             )
-            or dominant_constraint in {"api_b_judgement_blockage", "governance_backlog_blockage", "historical_underdelivery"}
+            or dominant_constraint in {"api_b_judgement_blockage", "historical_underdelivery"}
         ):
             return "observe_first", "drift_or_readiness_requires_observation"
         return "balanced", "balanced_posture_is_sufficient"
@@ -1282,8 +1277,6 @@ class PlanningRuntimeMixin:
             "correction_signals": payload.get("correction_signals"),
             "api_b_judgement_count": (
                 payload.get("api_b_judgement_count")
-                if payload.get("api_b_judgement_count") is not None
-                else payload.get("governance_backlog_count")
             ),
             "autonomous_chain_gate_active": bool(payload.get("autonomous_chain_gate_active")),
         }
@@ -3028,7 +3021,7 @@ class PlanningRuntimeMixin:
                 + observation_bias * 0.22
                 + uncertainty_risk * 0.2
                 + (0.1 if current_focus == "observation" else 0.0)
-                + (0.08 if dominant_constraint in {"weak_learning_yield", "historical_underdelivery", "api_b_judgement_blockage", "governance_backlog_blockage"} else 0.0)
+                + (0.08 if dominant_constraint in {"weak_learning_yield", "historical_underdelivery", "api_b_judgement_blockage"} else 0.0)
                 + (0.06 if last_mode == "observe" else 0.0)
                 - (0.04 if last_mode == "expand" and uncertainty_risk < 0.3 else 0.0)
             ),
@@ -3213,7 +3206,6 @@ class PlanningRuntimeMixin:
             "repair_truthfulness": "user_alignment",
             "expand_learning_frontier": "self_growth",
             "prepare_body_growth": "self_growth",
-            "clear_governance_backlog": "governance_hygiene",
             "observe_before_acting": "self_regulation",
         }
         channel_counts = {
@@ -3263,7 +3255,7 @@ class PlanningRuntimeMixin:
                 or str((matching_intent or {}).get("output_channel") or "").strip() == "drive_signal"
             )
             blocked_by = None
-            if need_type in {"observe_before_acting", "clear_governance_backlog"}:
+            if need_type == "observe_before_acting":
                 blocked_by = reflection.get("dominant_constraint")
             elif need_type == "prepare_body_growth" and reflection.get("body_growth_blocked"):
                 blocked_by = "body_growth_cooldown"
@@ -3371,10 +3363,7 @@ class PlanningRuntimeMixin:
             )
 
         api_b_judgement_pressure = float(
-            reflection.get("api_b_judgement_blockage_pressure")
-            if reflection.get("api_b_judgement_blockage_pressure") is not None
-            else reflection.get("governance_backlog_blockage_pressure")
-            or 0.0
+            reflection.get("api_b_judgement_blockage_pressure") or 0.0
         )
         if api_b_judgement_pressure >= 0.28 or str(world_model.get("governance_load_state") or "").strip() in {"busy", "strained"}:
             risk = self._clamp_endogenous_ratio(
@@ -3401,8 +3390,8 @@ class PlanningRuntimeMixin:
                     "observation_target": "api_b_judgement_blockage",
                     "recommended_probe": "inspect stale, deferred, and pending-review endogenous tasks",
                     "evidence": [
-                        f"api_b_judgement_blockage_state={reflection.get('api_b_judgement_blockage_state') or reflection.get('governance_backlog_blockage_state')}",
-                        f"api_b_judgement_count={int(perception.get('api_b_judgement_count') if perception.get('api_b_judgement_count') is not None else perception.get('governance_backlog_count') or 0)}",
+                        f"api_b_judgement_blockage_state={reflection.get('api_b_judgement_blockage_state')}",
+                        f"api_b_judgement_count={int(perception.get('api_b_judgement_count') or 0)}",
                         f"pending_review_count={int(perception.get('pending_review_count') or 0)}",
                     ],
                 }
@@ -3446,7 +3435,7 @@ class PlanningRuntimeMixin:
         if (
             autonomy_alignment_requests > 0
             or autonomy_readiness <= 0.45
-            or dominant_constraint in {"weak_learning_yield", "historical_underdelivery", "api_b_judgement_blockage", "governance_backlog_blockage"}
+            or dominant_constraint in {"weak_learning_yield", "historical_underdelivery", "api_b_judgement_blockage"}
         ):
             risk = self._clamp_endogenous_ratio(
                 max(0.0, 0.58 - autonomy_readiness) * 0.75
@@ -4705,7 +4694,7 @@ class PlanningRuntimeMixin:
             "truthfulness": "truthfulness",
             "learning_expansion": "learning_frontier",
             "memory_continuity": "memory_continuity",
-            "governance_hygiene": "governance_backlog",
+            "governance_hygiene": "api_b_judgement",
             "body_growth": "body_growth",
             "observation": "grounding",
         }
@@ -5277,6 +5266,9 @@ class PlanningRuntimeMixin:
                 "learning_branch": dict(task.metadata or {}).get("learning_branch"),
                 "self_learning_mode": dict(task.metadata or {}).get("self_learning_mode"),
                 "quality_score": dict(task.metadata or {}).get("quality_score"),
+                "candidate_kind": dict(
+                    dict(task.metadata or {}).get("score_breakdown") or {}
+                ).get("candidate_kind"),
             },
         }
 
@@ -5761,7 +5753,7 @@ class PlanningRuntimeMixin:
         return keys
 
     async def evaluate_endogenous_drive(self, request: dict | None = None):
-        """Evaluate the endogenous cognition state and governance-backlog projections."""
+        """Evaluate endogenous cognition state and API-B judgement projections."""
 
         request = request or {}
         record_activity = bool(request.get("record_activity", True))
@@ -5850,9 +5842,9 @@ class PlanningRuntimeMixin:
             )
         )
 
-        def _candidate_backlog_items(candidates: list[Any]) -> list[Dict[str, Any]]:
+        def _candidate_api_b_judgement_items(candidates: list[Any]) -> list[Dict[str, Any]]:
             return self._apply_scheduled_for_to_candidate_items(
-                [candidate.to_backlog_item() for candidate in candidates],
+                [candidate.to_api_b_judgement_item() for candidate in candidates],
             )
 
         def _lm_proposals_for_second_candidate_pass() -> Optional[list[Dict[str, Any]]]:
@@ -5889,7 +5881,7 @@ class PlanningRuntimeMixin:
             max_candidates=max_candidates,
             deliberation_report=deliberation,
         )
-        candidate_items = _candidate_backlog_items(candidates)
+        candidate_items = _candidate_api_b_judgement_items(candidates)
         lm_reasoning_state = self._lm_reasoning_state_for_current_cycle()
         cognitive_self_regulation = self._derive_cognitive_self_regulation(
             drive_history=drive_input["drive_history"],
@@ -5952,7 +5944,7 @@ class PlanningRuntimeMixin:
                 deliberation_report=deliberation,
                 lm_proposals_override=_lm_proposals_for_second_candidate_pass(),
             )
-            candidate_items = _candidate_backlog_items(candidates)
+            candidate_items = _candidate_api_b_judgement_items(candidates)
 
         governance_channels = self._governance_channels_from_deliberation(
             deliberation_dict
@@ -6258,7 +6250,7 @@ class PlanningRuntimeMixin:
                     "stable_key": row.get("stable_key"),
                     "candidate_kind": candidate_kind,
                     "reason": (
-                        "Deferred before governance-backlog insertion because the endogenous drive "
+                        "Deferred before API-B judgement insertion because the endogenous drive "
                         "selected observation posture and this candidate is not a "
                         "stability-oriented governance action."
                     ),
@@ -6277,7 +6269,7 @@ class PlanningRuntimeMixin:
                         "stable_key": row.get("stable_key"),
                         "candidate_kind": str(score_breakdown.get("candidate_kind") or "").strip().lower(),
                         "reason": (
-                            "Deferred before governance-backlog insertion because observation posture "
+                            "Deferred before API-B judgement insertion because observation posture "
                             f"limits endogenous backlog growth to budget {candidate_budget}."
                         ),
                     }
@@ -6853,8 +6845,6 @@ class PlanningRuntimeMixin:
         )
         if judgement_preview:
             payload["judgement_preview"] = judgement_preview
-            # Legacy mirror for older cached consumers; new read models use judgement_preview.
-            payload["governance_preview"] = judgement_preview
         display_kind = (
             requested_kind
             or payload.get("execution_kind")
@@ -6986,18 +6976,6 @@ class PlanningRuntimeMixin:
             judgement_preview["task_title"] = str(current_task.title or "").strip()
         return judgement_preview
 
-    def _governance_preview_projection(
-        self,
-        *,
-        latest_context: Dict[str, Any],
-        current_task: AutonomousChainTask,
-    ) -> Dict[str, Any]:
-        """Compatibility alias. New callers should use _judgement_preview_projection."""
-        return self._judgement_preview_projection(
-            latest_context=latest_context,
-            current_task=current_task,
-        )
-
     def _build_supervisor_review_snapshot(
         self,
         tasks: list[AutonomousChainTask],
@@ -7105,7 +7083,7 @@ class PlanningRuntimeMixin:
         except Exception:
             return {}
 
-        backlog_snapshot = self._build_supervisor_review_snapshot(tasks)
+        api_b_judgement_snapshot = self._build_supervisor_review_snapshot(tasks)
         prompt = (
             "你是 VoidCube 的 API-B 判断层。你的职责不是产出新任务，"
             "而是观察并裁定当前 API-B 判断在途链路项。\n\n"
@@ -7134,7 +7112,7 @@ class PlanningRuntimeMixin:
             "  ]\n"
             "}\n\n"
             f"【drive_input】\n{json.dumps(drive_input, ensure_ascii=False, default=str)[:3000]}\n\n"
-            f"【api_b_judgement】\n{json.dumps(backlog_snapshot, ensure_ascii=False, default=str)[:5000]}"
+            f"【api_b_judgement】\n{json.dumps(api_b_judgement_snapshot, ensure_ascii=False, default=str)[:5000]}"
         )
 
         try:
@@ -8144,7 +8122,8 @@ class PlanningRuntimeMixin:
         def _handoff_budget_available() -> bool:
             return handoff_limit <= 0 or len(handed_off) < handoff_limit
 
-        # Pass 1: hand off tasks that were *just* approved in this review.
+        # Pass 1: hand off tasks that were just transferred out of API-B
+        # judgement in this review.
         handoff_considered_ids: set[str] = set()
         for task_payload in review_result.get("tasks", []):
             if task_payload.get("status") != "approved":
@@ -8178,9 +8157,9 @@ class PlanningRuntimeMixin:
                     }
                 )
 
-        # Pass 2: hand off any previously-approved tasks that were never
-        # handed off, PLUS tasks whose previous handoff failed and were
-        # reset to approved for retry (execution_failed=True,
+        # Pass 2: hand off any previously transferred tasks that were never
+        # consumed, PLUS tasks whose previous handoff failed and were reset to
+        # the handoff-ready `approved` enum for retry (execution_failed=True,
         # failure_count < max_retries).  Tasks in running state or
         # permanently failed are skipped here.
         handed_off_ids = {d["task_id"] for d in handed_off}
@@ -8236,7 +8215,7 @@ class PlanningRuntimeMixin:
         focus = str(request.get("focus") or "").strip()
         phases: Dict[str, Any] = {}
 
-        # ── Phase 1: Endogenous drive → form governance backlog projections ──
+        # ── Phase 1: Endogenous drive → form API-B judgement projections ──
         try:
             drive_result = await self._run_endogenous_drive_cycle()
             phases["drive"] = {

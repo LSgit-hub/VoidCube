@@ -42,9 +42,7 @@ _SCORE_WEIGHTS: Dict[str, float] = {
 _TERMINAL_QUEUE_STATUSES = {"completed", "failed", "cancelled"}
 _REVIEW_BACKLOG_STATUSES = {"deferred", "paused", "awaiting_review", "retry"}
 _API_B_JUDGEMENT_BLOCKAGE = "api_b_judgement_blockage"
-_LEGACY_GOVERNANCE_BACKLOG_BLOCKAGE = "governance_backlog_blockage"
 _REVIEW_API_B_JUDGEMENT_NEED = "review_api_b_judgement"
-_LEGACY_CLEAR_GOVERNANCE_BACKLOG_NEED = "clear_governance_backlog"
 _LM_TASK_TYPES = {"observation", "review", "learning", "maintenance", "improvement"}
 _LM_RISK_LEVELS = {"low", "medium", "high"}
 _LM_EVIDENCE_LEVELS = {"weak", "moderate", "strong"}
@@ -91,7 +89,7 @@ class EndogenousTaskCandidate:
                 return text
         return self.summary
 
-    def to_backlog_item(self) -> Dict[str, Any]:
+    def to_api_b_judgement_item(self) -> Dict[str, Any]:
         rationale = self.rationale()
         metadata: Dict[str, Any] = {
             "source": "endogenous_drive",
@@ -360,7 +358,7 @@ class EndogenousDriveEngine:
 
     The drive engine does not execute work. It turns system facts, core values,
     and (when available) LLM-analyzed memory context into auditable
-    governance-backlog projections that still pass through supervisor review.
+    API-B judgement projections that still pass through supervisor review.
 
     Without LLM: uses deterministic text extraction (first 80 chars).
     With LLM: reads compressed memory context to generate intelligent,
@@ -1146,7 +1144,7 @@ class EndogenousDriveEngine:
                         + max(0, int(stats.get("stalled") or 0)) * 0.03
                     )
                     for target, stats in observation_target_stats.items()
-                    if target in {_API_B_JUDGEMENT_BLOCKAGE, _LEGACY_GOVERNANCE_BACKLOG_BLOCKAGE}
+                    if target == _API_B_JUDGEMENT_BLOCKAGE
                     and isinstance(stats, dict)
                 ),
             )
@@ -1820,7 +1818,7 @@ class EndogenousDriveEngine:
                     + adaptive_policy.body_growth_bias * 0.08
                     - adaptive_policy.candidate_throttle * 0.06
                 )
-            elif need.need_type in {_REVIEW_API_B_JUDGEMENT_NEED, _LEGACY_CLEAR_GOVERNANCE_BACKLOG_NEED}:
+            elif need.need_type == _REVIEW_API_B_JUDGEMENT_NEED:
                 priority = self._clamp01(priority + adaptive_policy.governance_hygiene_bias * 0.08)
             elif need.need_type == "observe_before_acting":
                 priority = self._clamp01(priority + adaptive_policy.observation_bias * 0.12)
@@ -1880,7 +1878,7 @@ class EndogenousDriveEngine:
                         candidate_kind="body_improvement",
                     )
                 )
-            elif need.need_type in {_REVIEW_API_B_JUDGEMENT_NEED, _LEGACY_CLEAR_GOVERNANCE_BACKLOG_NEED}:
+            elif need.need_type == _REVIEW_API_B_JUDGEMENT_NEED:
                 intents.append(
                     DriveIntent(
                         intent_type="review_governance_hygiene",
@@ -1926,7 +1924,7 @@ class EndogenousDriveEngine:
         intent_lookup = {intent.intent_type: intent for intent in intents}
 
         if world_model.governance_load_state in {"busy", "strained"}:
-            backlog_need = need_lookup.get(_REVIEW_API_B_JUDGEMENT_NEED) or need_lookup.get(_LEGACY_CLEAR_GOVERNANCE_BACKLOG_NEED)
+            backlog_need = need_lookup.get(_REVIEW_API_B_JUDGEMENT_NEED)
             backlog_intent = intent_lookup.get("review_governance_hygiene")
             signals.append(
                 DriveSignal(
@@ -1956,7 +1954,7 @@ class EndogenousDriveEngine:
                 )
             )
         else:
-            backlog_need = need_lookup.get(_REVIEW_API_B_JUDGEMENT_NEED) or need_lookup.get(_LEGACY_CLEAR_GOVERNANCE_BACKLOG_NEED)
+            backlog_need = need_lookup.get(_REVIEW_API_B_JUDGEMENT_NEED)
             backlog_intent = intent_lookup.get("review_governance_hygiene")
             if (
                 backlog_need is not None
@@ -2360,6 +2358,34 @@ class EndogenousDriveEngine:
         score_breakdown = dict(metadata.get("score_breakdown") or {})
         return str(score_breakdown.get("candidate_kind") or "").strip()
 
+    def _active_api_b_judgement_candidate_kinds(
+        self,
+        drive_context: Dict[str, Any],
+    ) -> set[str]:
+        kinds: set[str] = set()
+        for task in list(drive_context.get("api_b_judgement_tasks") or []):
+            if not isinstance(task, dict):
+                continue
+            status = str(task.get("status") or "").strip().lower()
+            if status in _TERMINAL_QUEUE_STATUSES:
+                continue
+            metadata = dict(task.get("metadata") or {})
+            evidence = dict(task.get("evidence") or {})
+            score_breakdown = dict(
+                metadata.get("score_breakdown")
+                or evidence.get("score_breakdown")
+                or {}
+            )
+            candidate_kind = str(
+                metadata.get("candidate_kind")
+                or evidence.get("candidate_kind")
+                or score_breakdown.get("candidate_kind")
+                or ""
+            ).strip()
+            if candidate_kind:
+                kinds.add(candidate_kind)
+        return kinds
+
     def _adaptive_group_for_candidate(self, candidate: EndogenousTaskCandidate) -> Optional[str]:
         candidate_kind = self._candidate_kind_of(candidate)
         if candidate_kind in {
@@ -2519,6 +2545,7 @@ class EndogenousDriveEngine:
         adaptive_policy = deliberation.adaptive_policy
         needs = list(deliberation.needs)
         intents = list(deliberation.intents)
+        active_candidate_kinds = self._active_api_b_judgement_candidate_kinds(drive_context)
         intents_by_kind = {
             str(intent.candidate_kind or ""): intent
             for intent in intents
@@ -2538,6 +2565,7 @@ class EndogenousDriveEngine:
         candidates: List[EndogenousTaskCandidate] = []
         if (
             memory_plan.get("eligible_for_planning")
+            and "memory_maintenance" not in active_candidate_kinds
             and "continuity:memory_maintenance_sweep" not in existing_keys
             and not self._has_recent_static_governance_completion(
                 drive_context,
@@ -2600,6 +2628,7 @@ class EndogenousDriveEngine:
         if (
             self._has_truthfulness_review_signal(perception)
             and self_learning_plan.get("eligible_for_planning")
+            and "truthfulness_review" not in active_candidate_kinds
             and "truthfulness:review_correction_signals" not in existing_keys
         ):
             truth_intent = intents_by_kind.get("truthfulness_review")
@@ -2695,6 +2724,7 @@ class EndogenousDriveEngine:
             if (
                 shell_worktree
                 and not has_learning_history
+                and "shell_baseline_learning" not in active_candidate_kinds
                 and baseline_key not in existing_keys
             ):
                 candidates.append(
@@ -2726,6 +2756,8 @@ class EndogenousDriveEngine:
                 topic_key = _stable_key_for_topic(topic["title"])
                 if topic_key in existing_keys:
                     continue  # Skip duplicate topic
+                if "exploratory_learning" in active_candidate_kinds:
+                    continue
                 title = f"Research: {topic['title']}"
                 summary = topic.get("summary") or topic["title"]
                 candidates.append(
@@ -2811,7 +2843,7 @@ class EndogenousDriveEngine:
                     or "recent endogenous judgement"
                 ).strip()
                 review_key = f"creativity:self_learning:cognitive_review:{_stable_key_for_topic(target or judgement)}"
-                if review_key not in existing_keys:
+                if review_key not in existing_keys and "exploratory_learning" not in active_candidate_kinds:
                     review_summary = (
                         "Review the latest endogenous cognitive-assessment memory, "
                         "extract what changed, and record evidence-backed learning notes "
@@ -2889,6 +2921,7 @@ class EndogenousDriveEngine:
 
         if (
             autonomous_improvement_plan.get("eligible_for_planning")
+            and "governance_hygiene_review" not in active_candidate_kinds
             and "continuity:governance_hygiene_review" not in existing_keys
             and not self._has_recent_static_governance_completion(
                 drive_context,
@@ -4151,7 +4184,6 @@ class EndogenousDriveEngine:
                 or dominant_constraint
                 in {
                     _API_B_JUDGEMENT_BLOCKAGE,
-                    _LEGACY_GOVERNANCE_BACKLOG_BLOCKAGE,
                     "historical_underdelivery",
                 }
             ):
@@ -4945,11 +4977,20 @@ class EndogenousDriveEngine:
                 "value_tags": ["creativity", "continuity"],
             },
         }
+        active_candidate_kinds = self._active_api_b_judgement_candidate_kinds(drive_context)
 
         for item in proposals:
             candidate_kind = str(item.get("candidate_kind") or "").strip()
             mapping = kind_map.get(candidate_kind)
             if mapping is None:
+                continue
+            if candidate_kind in active_candidate_kinds:
+                continue
+            if (
+                candidate_kind == "governance_hygiene_review"
+                and not self._has_governance_hygiene_review_signal(perception)
+                and not self._has_historical_governance_hygiene_review_signal(drive_context)
+            ):
                 continue
             title = str(item.get("title") or "").strip()
             summary = str(item.get("summary") or "").strip()
@@ -7406,10 +7447,7 @@ class EndogenousDriveEngine:
         if dominant_constraint in {"weak_learning_yield", "historical_underdelivery"}:
             observation_score += 0.12
             review_score += 0.1
-        if dominant_constraint in {
-            _API_B_JUDGEMENT_BLOCKAGE,
-            _LEGACY_GOVERNANCE_BACKLOG_BLOCKAGE,
-        }:
+        if dominant_constraint == _API_B_JUDGEMENT_BLOCKAGE:
             review_score += 0.14
             maintenance_score += 0.08
 
@@ -7555,7 +7593,6 @@ class EndogenousDriveEngine:
         elif task_type == "review":
             if dominant_constraint in {
                 _API_B_JUDGEMENT_BLOCKAGE,
-                _LEGACY_GOVERNANCE_BACKLOG_BLOCKAGE,
                 "historical_underdelivery",
             }:
                 reasons.append("dominant_constraint_calls_for_review")
@@ -7577,10 +7614,7 @@ class EndogenousDriveEngine:
         elif task_type == "maintenance":
             if preferred_focus == "memory_continuity":
                 reasons.append("preferred_focus_is_memory_continuity")
-            if dominant_constraint in {
-                _API_B_JUDGEMENT_BLOCKAGE,
-                _LEGACY_GOVERNANCE_BACKLOG_BLOCKAGE,
-            }:
+            if dominant_constraint == _API_B_JUDGEMENT_BLOCKAGE:
                 reasons.append("maintenance_can_reduce_api_b_judgement_pressure")
         elif task_type == "improvement":
             if "prepare_body_growth" in unresolved_gaps:
@@ -7840,7 +7874,6 @@ class EndogenousDriveEngine:
             "expand_learning_frontier": "external_research",
             "prepare_body_growth": "body_state",
             _REVIEW_API_B_JUDGEMENT_NEED: "learning_trace",
-            _LEGACY_CLEAR_GOVERNANCE_BACKLOG_NEED: "learning_trace",
             "observe_before_acting": "body_state",
         }
         for gap in unresolved_gaps:
@@ -7939,13 +7972,7 @@ class EndogenousDriveEngine:
     def _build_drive_context(self, drive_input: Dict[str, Any]) -> Dict[str, Any]:
         policy = dict(drive_input.get("endogenous_drive_policy") or {})
         drive_history = dict(drive_input.get("drive_history") or {})
-        # Legacy input-only fallback for historical callers that still send
-        # governance_backlog_tasks. New runtime inputs use api_b_judgement_tasks.
-        api_b_judgement_tasks = list(
-            drive_input.get("api_b_judgement_tasks")
-            or drive_input.get("governance_backlog_tasks")
-            or []
-        )
+        api_b_judgement_tasks = list(drive_input.get("api_b_judgement_tasks") or [])
         api_a_execution_lane_tasks = list(drive_input.get("api_a_execution_lane_tasks") or [])
         autonomous_chain_live_tasks = list(
             drive_input.get("autonomous_chain_live_tasks")
@@ -8760,7 +8787,7 @@ def _stable_key_for_topic(topic: str) -> str:
     """Generate a stable dedup key from a learning topic string.
 
     Uses a short hash so that genuinely different topics get different keys,
-    allowing multiple creativity candidates to coexist in the governance backlog.
+    allowing multiple creativity candidates to coexist in API-B judgement.
     """
     import hashlib
     normalized = topic.strip().lower()
