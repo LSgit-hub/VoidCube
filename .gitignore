@@ -169,6 +169,8 @@ compile_commands.json
 .tmp-pytest*/
 tmp-pytest-*/
 .pytest_cache/
+.tmp*/
+tmp_*/
 .tmp_voidcube*/
 .tmp-supervisor-debug/
 .trae/
