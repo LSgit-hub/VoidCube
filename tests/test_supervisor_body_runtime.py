@@ -287,7 +287,9 @@ def test_body_improvement_commit_inspection_uses_verified_baseline_to_head_diff(
     git("commit", "-m", "improvement")
     improvement_commit = git("rev-parse", "HEAD")
 
-    supervisor = Supervisor(_make_supervisor_config(repo))
+    supervisor_root = tmp_path / "supervisor-runtime"
+    supervisor_root.mkdir()
+    supervisor = Supervisor(_make_supervisor_config(supervisor_root))
     inspection = supervisor._inspect_body_improvement_commit(
         worktree_path=str(repo),
         baseline_commit=baseline_commit,
@@ -297,6 +299,16 @@ def test_body_improvement_commit_inspection_uses_verified_baseline_to_head_diff(
     assert inspection["ok"] is True
     assert inspection["changed_files"] == ["agent/stream_handler.py"]
     assert "agent/stream_handler.py" in inspection["diff_text"]
+
+    uncommitted = agent_dir / "uncommitted.py"
+    uncommitted.write_text("VALUE = 3\n", encoding="utf-8")
+    dirty = supervisor._inspect_body_improvement_commit(
+        worktree_path=str(repo),
+        baseline_commit=baseline_commit,
+        commit_hash=improvement_commit,
+    )
+    assert dirty == {"ok": False, "reject_reason": "worktree_not_clean"}
+    uncommitted.unlink()
 
     stale = supervisor._inspect_body_improvement_commit(
         worktree_path=str(repo),

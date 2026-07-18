@@ -8481,6 +8481,21 @@ class PlanningRuntimeMixin:
             if head.returncode != 0 or head.stdout.strip().lower() != resolved_commit:
                 return {"ok": False, "reject_reason": "commit_is_not_worktree_head"}
 
+            worktree_status = subprocess.run(
+                ["git", "status", "--porcelain", "--untracked-files=all"],
+                cwd=worktree_path,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if worktree_status.returncode != 0:
+                return {"ok": False, "reject_reason": "worktree_status_unavailable"}
+            if worktree_status.stdout.strip():
+                return {
+                    "ok": False,
+                    "reject_reason": "worktree_not_clean",
+                }
+
             ancestry = subprocess.run(
                 ["git", "merge-base", "--is-ancestor", resolved_baseline, resolved_commit],
                 cwd=worktree_path,

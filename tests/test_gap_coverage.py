@@ -1282,7 +1282,10 @@ class TestEndogenousDriveErrorBridge:
                 "body_improvement_min_quality": 60.0,
                 "body_improvement_cooldown_hours": 24,
                 "body_improvement_editable_dirs": ["agent/", "tools/", "systems/"],
-                "body_improvement_forbidden_patterns": ["systems/**"],
+                "body_improvement_forbidden_patterns": [
+                    "systems/**",
+                    "**/credential*",
+                ],
                 "body_improvement_max_files": 3,
             },
             "task_family_decisions": {
@@ -1302,7 +1305,8 @@ class TestEndogenousDriveErrorBridge:
         drive_input = self._body_improvement_drive_input(
             conclusion=(
                 "Update agent/stream_handler.py after validating the stream display fix. "
-                "Do not modify systems/supervisor/planning_runtime.py."
+                "Do not modify systems/supervisor/planning_runtime.py or "
+                "agent/credential_pool.py."
             )
         )
         projection = engine._build_body_improvement_projection(
@@ -1313,6 +1317,7 @@ class TestEndogenousDriveErrorBridge:
         assert projection["available"] is True
         assert "agent/stream_handler.py" in projection["target_paths"]
         assert all(not path.startswith("systems/") for path in projection["target_paths"])
+        assert "agent/credential_pool.py" not in projection["target_paths"]
         assert projection["editable_dirs"] == ["agent/", "tools/"]
         assert projection["learning_refs"][0]["mem_id"] == "learning-stream-1"
 
@@ -1343,7 +1348,9 @@ class TestEndogenousDriveErrorBridge:
     def test_unmapped_learning_evidence_does_not_generate_body_improvement(self):
         engine = EndogenousDriveEngine()
         drive_input = self._body_improvement_drive_input(
-            conclusion="The abstract research result has no concrete code or subsystem target."
+            conclusion=(
+                "The runtime profile observation is theoretical and has no concrete subsystem target."
+            )
         )
         drive_input["completed_learning_tasks"][0]["title"] = "抽象研究结论"
         drive_input["completed_learning_tasks"][0]["summary"] = "仅记录理论观察。"

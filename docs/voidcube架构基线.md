@@ -890,13 +890,14 @@ API-A 自主执行面
 监督者 (API-B)
   → 接收改进报告 → 多重验证:
       1. baseline_commit..HEAD 归属与祖先关系验证（属于 shell slot worktree）
-      2. 治理任务 target_paths 子集与最大文件数检查
-      3. canonical evolution boundary 白名单检查
-      4. evolution_boundary 细粒度评分 (0-20)
-      5. LLM 审查 diff 质量 (0-20)
-      6. probe 通过率 (0-20，新替身用父 slot 历史平均)
-      7. 学习成果新鲜度 (0-20)
-      8. 同文件重复改进惩罚
+      2. worktree 必须无未提交或未跟踪改动
+      3. 治理任务 target_paths 子集与最大文件数检查
+      4. canonical evolution boundary 白名单检查
+      5. evolution_boundary 细粒度评分 (0-20)
+      6. LLM 审查 diff 质量 (0-20)
+      7. probe 通过率 (0-20，新替身用父 slot 历史平均)
+      8. 学习成果新鲜度 (0-20)
+      9. 同文件重复改进惩罚
   → 计算 score_delta = Σ(子分 × 权重) - penalty（范围 [-20, 30]）
   → 应用时间衰减（30天内不衰减，30-90天逐渐衰减）
   → 累加至 BodySlotMeta.health_score (0-100)

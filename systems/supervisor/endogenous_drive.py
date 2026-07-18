@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import fnmatch
 import json
 import re
 from typing import Any, Dict, Iterable, List, Optional
@@ -2460,10 +2461,7 @@ class EndogenousDriveEngine:
 
     def _adaptive_group_for_candidate(self, candidate: EndogenousTaskCandidate) -> Optional[str]:
         candidate_kind = self._candidate_kind_of(candidate)
-        if candidate_kind in {
-            "exploratory_learning",
-            "shell_baseline_learning",
-        }:
+        if candidate_kind == "exploratory_learning":
             return "exploratory_learning"
         if candidate_kind == "body_improvement":
             return "body_growth"
@@ -2559,6 +2557,7 @@ class EndogenousDriveEngine:
             if observation_mode and candidate_kind not in {
                 "truthfulness_review",
                 "governance_hygiene_review",
+                "shell_baseline_learning",
             }:
                 continue
             group = self._adaptive_group_for_candidate(candidate)
@@ -3176,15 +3175,29 @@ class EndogenousDriveEngine:
         heuristic_candidates: List[EndogenousTaskCandidate],
         adaptive_policy: DriveAdaptivePolicy,
     ) -> List[EndogenousTaskCandidate]:
+        canonical_shell_baselines = [
+            candidate
+            for candidate in heuristic_candidates
+            if self._candidate_kind_of(candidate) == "shell_baseline_learning"
+        ]
+        if canonical_shell_baselines:
+            lm_candidates = [
+                candidate
+                for candidate in lm_candidates
+                if self._candidate_kind_of(candidate) != "shell_baseline_learning"
+            ]
         if not lm_candidates:
             return list(heuristic_candidates or [])
         if not heuristic_candidates:
             return list(lm_candidates or [])
 
-        merged: List[EndogenousTaskCandidate] = list(lm_candidates)
+        merged: List[EndogenousTaskCandidate] = [
+            *canonical_shell_baselines,
+            *lm_candidates,
+        ]
         seen_signatures = {
             self._candidate_semantic_signature(candidate)
-            for candidate in lm_candidates
+            for candidate in merged
         }
         lm_kinds = {
             self._candidate_kind_of(candidate)
@@ -3207,6 +3220,8 @@ class EndogenousDriveEngine:
             if signature in seen_signatures:
                 continue
             candidate_kind = self._candidate_kind_of(candidate)
+            if candidate_kind == "shell_baseline_learning":
+                continue
             if candidate_kind and candidate_kind in lm_kinds:
                 continue
             merged.append(candidate)
@@ -8819,9 +8834,19 @@ class EndogenousDriveEngine:
         return roots
 
     @staticmethod
-    def _path_within_body_editable_roots(path: str, editable_roots: List[str]) -> bool:
+    def _path_within_body_editable_roots(
+        path: str,
+        editable_roots: List[str],
+        forbidden_patterns: List[str],
+    ) -> bool:
         normalized = normalize_repo_path(path)
         if not normalized or not classify_agent_evolution_changes([normalized]).ok:
+            return False
+        if any(
+            fnmatch.fnmatch(normalized, str(pattern).replace("\\", "/"))
+            for pattern in forbidden_patterns
+            if str(pattern).strip()
+        ):
             return False
         return any(
             normalized == root.rstrip("/")
@@ -8829,6 +8854,17 @@ class EndogenousDriveEngine:
             else normalized.startswith(root)
             for root in editable_roots
         )
+
+    @staticmethod
+    def _body_structure_keyword_matches(text: str, keyword: str) -> bool:
+        if keyword.isascii():
+            return bool(
+                re.search(
+                    rf"(?<![a-z0-9_]){re.escape(keyword)}(?![a-z0-9_])",
+                    text,
+                )
+            )
+        return keyword in text
 
     def _build_body_improvement_projection(
         self,
@@ -8871,6 +8907,11 @@ class EndogenousDriveEngine:
         if not editable_roots:
             return {"available": False, "reason": "no_canonical_editable_roots"}
         max_files = max(1, min(5, int(policy.get("body_improvement_max_files") or 5)))
+        forbidden_patterns = [
+            str(pattern).strip()
+            for pattern in list(policy.get("body_improvement_forbidden_patterns") or [])
+            if str(pattern).strip()
+        ]
 
         ranked_learning: List[tuple[float, Dict[str, Any]]] = []
         for task in completed_learning_tasks:
@@ -8911,7 +8952,11 @@ class EndogenousDriveEngine:
             task_targets: List[str] = []
             for match in _BODY_STRUCTURE_PATH_RE.findall(normalized_text):
                 path = normalize_repo_path(match).rstrip(".,:;)]}")
-                if self._path_within_body_editable_roots(path, editable_roots):
+                if self._path_within_body_editable_roots(
+                    path,
+                    editable_roots,
+                    forbidden_patterns,
+                ):
                     task_targets.append(path)
                     if "explicit_code_reference" not in structure_domains:
                         structure_domains.append("explicit_code_reference")
@@ -8919,11 +8964,18 @@ class EndogenousDriveEngine:
             if not task_targets:
                 lowered = learning_text.lower()
                 for domain, keywords, domain_targets in _BODY_STRUCTURE_DOMAIN_TARGETS:
-                    if not any(keyword in lowered for keyword in keywords):
+                    if not any(
+                        self._body_structure_keyword_matches(lowered, keyword)
+                        for keyword in keywords
+                    ):
                         continue
                     added_for_domain = False
                     for path in domain_targets:
-                        if self._path_within_body_editable_roots(path, editable_roots):
+                        if self._path_within_body_editable_roots(
+                            path,
+                            editable_roots,
+                            forbidden_patterns,
+                        ):
                             task_targets.append(path)
                             added_for_domain = True
                     if added_for_domain and domain not in structure_domains:
@@ -8972,9 +9024,7 @@ class EndogenousDriveEngine:
             "target_paths": target_paths,
             "structure_domains": structure_domains[:6],
             "editable_dirs": editable_roots,
-            "forbidden_patterns": list(
-                policy.get("body_improvement_forbidden_patterns") or []
-            ),
+            "forbidden_patterns": forbidden_patterns,
             "max_files_changed": max_files,
             "learning_quality_score": round(learning_quality_score, 4),
             "learning_refs": learning_refs,

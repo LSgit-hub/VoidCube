@@ -6572,7 +6572,7 @@ async def test_endogenous_drive_can_materialize_llm_task_proposals_from_evidence
                 {
                     "title": "Research current shell body weak points",
                     "summary": "Review the shell body structure and collect evidence-backed weaknesses for later improvement.",
-                    "candidate_kind": "shell_baseline_learning",
+                    "candidate_kind": "exploratory_learning",
                     "task_type": "learning",
                     "rationale": "当前缺少近期自我理解证据。",
                     "evidence_summary": ["no recent learning history", "shell understanding gap"],
@@ -16053,6 +16053,14 @@ async def test_proposal_drift_memory_biases_program_task_type_priors_toward_obse
 async def test_endogenous_drive_fallback_learning_targets_shell_codebase_without_history(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor.config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={"endogenous_drive_lm_task_generation_enabled": False}
+            )
+        }
+    )
+    supervisor._endogenous_drive_engine.config = supervisor.config
 
     async def fake_drive_input(_request=None):
         return {
@@ -16127,6 +16135,81 @@ async def test_endogenous_drive_fallback_learning_targets_shell_codebase_without
         learning_task["metadata"]["endogenous_judgement_id"]
     )
     assert "slot-B" in learning_task["summary"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_completed_learning_structure_mapping_reaches_planned_body_task(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor.config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={"endogenous_drive_lm_task_generation_enabled": False}
+            )
+        }
+    )
+    supervisor._endogenous_drive_engine.config = supervisor.config
+    shell_worktree = str(
+        (tmp_path / ".body-slots" / "slot-B" / "worktree").resolve()
+    )
+
+    async def fake_drive_input(_request=None):
+        return {
+            "checks": {
+                "has_api_a_execution_idle": True,
+                "has_memory_idle": True,
+            },
+            "idle_seconds": {"user": 900, "api_a_execution": 900, "memory": 900},
+            "activity": {"active_sessions": 0, "counts": {}, "recent_metadata": {}},
+            "shell_slot": {"slot_id": "slot-B", "worktree_path": shell_worktree},
+            "completed_learning_tasks": [
+                {
+                    "task_id": "learning-stream-planned",
+                    "title": "Learn stream reliability",
+                    "summary": "The stream path has a verified bounded improvement.",
+                    "conclusion": "Update agent/stream_handler.py only.",
+                    "completed_at": "2099-01-01T00:00:00+00:00",
+                    "quality_score": 1.0,
+                }
+            ],
+            "api_b_judgement_tasks": [],
+            "endogenous_drive_policy": {
+                "body_improvement_min_quality": 60.0,
+                "body_improvement_cooldown_hours": 12,
+                "body_improvement_editable_dirs": ["agent/", "tools/"],
+                "body_improvement_max_files": 5,
+            },
+            "task_family_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False},
+                "self_learning": {"eligible_for_planning": False},
+                "general_self_evolution": {"eligible_for_planning": True},
+            },
+            "governance_task_type_decisions": {
+                "memory_maintenance": {"eligible_for_planning": False},
+                "self_learning": {"eligible_for_planning": False},
+                "self_evolution": {"eligible_for_planning": True},
+            },
+        }
+
+    supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
+
+    result = await supervisor._run_endogenous_drive_cycle()
+    body_task = next(
+        task for task in result["tasks"]
+        if task["execution_kind"] == "body_improvement"
+    )
+
+    assert result["status"] == "planned"
+    assert body_task["constraints"]["worktree_path"] == shell_worktree
+    assert body_task["constraints"]["target_paths"] == ["agent/stream_handler.py"]
+    assert body_task["evidence"]["learning_refs"][0]["mem_id"] == (
+        "learning-stream-planned"
+    )
+    assert body_task["evidence"]["learning_quality_score"] == 100.0
+    assert body_task["metadata"]["improvement_direction_source"] == (
+        "learning_evidence_structure_projection_v1"
+    )
 
 
 @pytest.mark.asyncio
@@ -16381,6 +16464,14 @@ async def test_batch_review_can_reapprove_deferred_tasks_on_later_cycle(tmp_path
 @pytest.mark.unit
 async def test_endogenous_drive_still_plans_learning_candidates_with_active_sessions(tmp_path):
     supervisor = _make_supervisor(tmp_path)
+    supervisor.config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={"endogenous_drive_lm_task_generation_enabled": False}
+            )
+        }
+    )
+    supervisor._endogenous_drive_engine.config = supervisor.config
 
     async def fake_drive_input(request: dict | None = None):
         del request
