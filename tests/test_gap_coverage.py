@@ -1252,6 +1252,155 @@ class TestEndogenousDriveErrorBridge:
         )
         assert not any(c.execution_kind == "body_improvement" for c in candidates)
 
+    @staticmethod
+    def _body_improvement_drive_input(*, conclusion: str) -> dict:
+        return {
+            "checks": {},
+            "idle_seconds": {
+                "user": 1000,
+                "api_a_execution": 1000,
+                "memory": 1000,
+            },
+            "activity": {"counts": {}, "active_sessions": 0, "recent_metadata": {}},
+            "shell_slot": {
+                "slot_id": "slot-B",
+                "worktree_path": "F:/tmp/slot-B/worktree",
+            },
+            "completed_learning_tasks": [
+                {
+                    "task_id": "learning-stream-1",
+                    "title": "研究 Agent 流式展示链路",
+                    "summary": "定位流式输出中的稳定性问题。",
+                    "conclusion": conclusion,
+                    "completed_at": "2099-01-01T00:00:00+00:00",
+                    "quality_score": 1.0,
+                    "evidence_summary": ["stream rendering has a concrete fix"],
+                }
+            ],
+            "api_b_judgement_tasks": [],
+            "endogenous_drive_policy": {
+                "body_improvement_min_quality": 60.0,
+                "body_improvement_cooldown_hours": 24,
+                "body_improvement_editable_dirs": ["agent/", "tools/", "systems/"],
+                "body_improvement_forbidden_patterns": ["systems/**"],
+                "body_improvement_max_files": 3,
+            },
+            "task_family_decisions": {
+                "self_learning": {"eligible_for_planning": False},
+                "memory_maintenance": {"eligible_for_planning": False},
+                "general_self_evolution": {"eligible_for_planning": True},
+            },
+            "governance_task_type_decisions": {
+                "self_learning": {"eligible_for_planning": False},
+                "memory_maintenance": {"eligible_for_planning": False},
+                "self_evolution": {"eligible_for_planning": True},
+            },
+        }
+
+    def test_learning_evidence_maps_only_to_canonical_body_nodes(self):
+        engine = EndogenousDriveEngine()
+        drive_input = self._body_improvement_drive_input(
+            conclusion=(
+                "Update agent/stream_handler.py after validating the stream display fix. "
+                "Do not modify systems/supervisor/planning_runtime.py."
+            )
+        )
+        projection = engine._build_body_improvement_projection(
+            drive_context=engine._build_drive_context(drive_input),
+            shell_slot_meta=drive_input["shell_slot"],
+        )
+
+        assert projection["available"] is True
+        assert "agent/stream_handler.py" in projection["target_paths"]
+        assert all(not path.startswith("systems/") for path in projection["target_paths"])
+        assert projection["editable_dirs"] == ["agent/", "tools/"]
+        assert projection["learning_refs"][0]["mem_id"] == "learning-stream-1"
+
+    def test_completed_learning_generates_governed_body_improvement_without_lm(self):
+        engine = EndogenousDriveEngine()
+        drive_input = self._body_improvement_drive_input(
+            conclusion="Improve agent/stream_handler.py based on the verified stream result."
+        )
+
+        candidates = engine.generate_candidates(
+            drive_input=drive_input,
+            existing_drive_keys=set(),
+            max_candidates=8,
+        )
+        candidate = next(
+            item for item in candidates if item.execution_kind == "body_improvement"
+        )
+
+        assert candidate.metadata["improvement_direction_source"] == (
+            "learning_evidence_structure_projection_v1"
+        )
+        assert candidate.constraints["target_slot_id"] == "slot-B"
+        assert candidate.constraints["worktree_path"] == "F:/tmp/slot-B/worktree"
+        assert "agent/stream_handler.py" in candidate.constraints["target_paths"]
+        assert candidate.evidence["learning_refs"][0]["mem_id"] == "learning-stream-1"
+        assert candidate.evidence["learning_quality_score"] >= 60.0
+
+    def test_unmapped_learning_evidence_does_not_generate_body_improvement(self):
+        engine = EndogenousDriveEngine()
+        drive_input = self._body_improvement_drive_input(
+            conclusion="The abstract research result has no concrete code or subsystem target."
+        )
+        drive_input["completed_learning_tasks"][0]["title"] = "抽象研究结论"
+        drive_input["completed_learning_tasks"][0]["summary"] = "仅记录理论观察。"
+        drive_input["completed_learning_tasks"][0]["evidence_summary"] = []
+
+        candidates = engine.generate_candidates(
+            drive_input=drive_input,
+            existing_drive_keys=set(),
+            max_candidates=8,
+        )
+
+        assert not any(
+            item.execution_kind == "body_improvement" for item in candidates
+        )
+
+    def test_lm_body_improvement_is_bound_to_program_structure_mapping(self):
+        engine = EndogenousDriveEngine()
+        drive_input = self._body_improvement_drive_input(
+            conclusion="Improve agent/stream_handler.py using the verified stream finding."
+        )
+        drive_context = engine._build_drive_context(drive_input)
+        deliberation = engine.build_deliberation_report(drive_input=drive_input)
+
+        candidates = engine._materialize_lm_task_proposals(
+            proposals=[
+                {
+                    "title": "Improve stream reliability",
+                    "summary": "Apply the grounded learning result to the shell stream path.",
+                    "candidate_kind": "body_improvement",
+                    "task_type": "improvement",
+                    "confidence": 0.9,
+                    "risk_level": "high",
+                    "evidence_level": "strong",
+                    "execution_mode": "guarded_execution",
+                }
+            ],
+            existing_keys=set(),
+            deliberation=deliberation,
+            drive_context=drive_context,
+            evidence_packet={
+                "plans": {"self_evolution": {"eligible_for_planning": True}},
+                "shell_slot": drive_input["shell_slot"],
+                "evidence_graph": {},
+                "agenda_graph": {},
+            },
+        )
+
+        assert len(candidates) == 1
+        candidate = candidates[0]
+        assert candidate.metadata["llm_task_generated"] is True
+        assert candidate.constraints["worktree_path"] == "F:/tmp/slot-B/worktree"
+        assert "agent/stream_handler.py" in candidate.constraints["target_paths"]
+        assert candidate.evidence["learning_refs"][0]["mem_id"] == "learning-stream-1"
+        assert candidate.evidence["structure_mapping"]["source"] == (
+            "learning_evidence_structure_projection_v1"
+        )
+
 
 # ── T-09: Self-learning conclusion compatibility layer ─────────────
 

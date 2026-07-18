@@ -33,9 +33,18 @@ def test_body_improvement_prompt_captures_body_context():
         "constraints": {
             "worktree_path": "F:/worktree/slot-B",
             "target_slot_id": "slot-B",
+            "target_paths": ["agent/memory_manager.py"],
             "editable_dirs": ["agent/", "tools/"],
             "forbidden_patterns": ["systems/**"],
             "max_files_changed": 3,
+        },
+        "evidence": {
+            "learning_refs": [
+                {
+                    "mem_id": "learning-memory-1",
+                    "title": "Verified memory display finding",
+                }
+            ]
         },
     }
 
@@ -48,6 +57,9 @@ def test_body_improvement_prompt_captures_body_context():
     assert prompt.startswith(f"{AUTONOMOUS_BODY_IMPROVEMENT_TASK_PREFIX} Improve shell memory display")
     assert "Worktree path: F:/worktree/slot-B" in prompt
     assert "Editable dirs: agent/, tools/" in prompt
+    assert "Approved target paths: agent/memory_manager.py" in prompt
+    assert "learning-memory-1: Verified memory display finding" in prompt
+    assert "Keep the change within the approved target paths" in prompt
     assert task["_baseline_head"] == "head-for-F:/worktree/slot-B"
     assert task["_improvement_worktree"] == "F:/worktree/slot-B"
     assert task["_improvement_slot_id"] == "slot-B"

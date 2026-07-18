@@ -695,9 +695,25 @@ class AutonomousChainStore:
         if status is None:
             return None
 
-        runtime_profile = cls._runtime_profile_from_governance_event(latest)
-        execution_result = cls._dict_value(latest.get("execution_result"))
-        git_lineage = cls._dict_value(latest.get("git_lineage"))
+        latest_execution_result = cls._dict_value(latest.get("execution_result"))
+        recovery_projection = cls._coalesce_governance_event_mapping(
+            concrete_rows,
+            "execution_result",
+        )
+        profile_event = {**latest, "execution_result": recovery_projection}
+        runtime_profile = cls._runtime_profile_from_governance_event(profile_event)
+        git_lineage = cls._coalesce_governance_event_mapping(
+            concrete_rows,
+            "git_lineage",
+        )
+        evidence_refs = list(
+            dict.fromkeys(
+                str(reference).strip()
+                for row in concrete_rows
+                for reference in list(row.get("evidence_refs") or [])
+                if str(reference).strip()
+            )
+        )
         event_ids = [
             str(row.get("id") or "").strip()
             for row in concrete_rows
@@ -709,27 +725,38 @@ class AutonomousChainStore:
             if cls._enum_value(row.get("event_type")).strip()
         ]
         title = (
-            str(execution_result.get("title") or execution_result.get("task_title") or "").strip()
+            str(
+                recovery_projection.get("title")
+                or recovery_projection.get("task_title")
+                or ""
+            ).strip()
             or cls._reason_title(latest)
             or f"Recovered autonomous task {task_id[:8]}"
         )
         summary = (
-            str(execution_result.get("summary") or execution_result.get("task_summary") or "").strip()
+            str(
+                recovery_projection.get("summary")
+                or recovery_projection.get("task_summary")
+                or ""
+            ).strip()
             or str(latest.get("reason") or "").strip()
             or "Recovered from Mem governance event history."
         )
 
         task = AutonomousChainTask(
             task_id=task_id,
-            trace_id=str(execution_result.get("trace_id") or uuid.uuid4()),
+            trace_id=str(recovery_projection.get("trace_id") or uuid.uuid4()),
             title=title,
             summary=summary,
-            task_type=str(execution_result.get("task_type") or runtime_profile["governance_task_type"]),
+            task_type=str(
+                recovery_projection.get("task_type")
+                or runtime_profile["governance_task_type"]
+            ),
             governance_task_type=runtime_profile["governance_task_type"],
             task_family=runtime_profile["task_family"],
             execution_kind=runtime_profile["execution_kind"],
             source="mem_governance_recovery",
-            priority=str(execution_result.get("priority") or "normal"),
+            priority=str(recovery_projection.get("priority") or "normal"),
             status=status,
             created_at=cls._governance_event_datetime(first),
             updated_at=cls._governance_event_datetime(latest),
@@ -740,8 +767,9 @@ class AutonomousChainStore:
                 "recovered_event_types": event_types,
                 "latest_governance_event_id": str(latest.get("id") or ""),
                 "latest_governance_decision": cls._enum_value(latest.get("decision")),
-                "body_id": str(latest.get("body_id") or ""),
-                "execution_result": execution_result,
+                "body_id": cls._latest_nonempty_event_value(concrete_rows, "body_id"),
+                "execution_result": latest_execution_result,
+                "recovery_projection": recovery_projection,
             },
             evidence={
                 "mem_governance": {
@@ -749,10 +777,10 @@ class AutonomousChainStore:
                     "latest_event_type": cls._enum_value(latest.get("event_type")),
                     "latest_reason": str(latest.get("reason") or ""),
                     "git_lineage": git_lineage,
-                    "evidence_refs": list(latest.get("evidence_refs") or []),
+                    "evidence_refs": evidence_refs,
                 }
             },
-            constraints=cls._dict_value(execution_result.get("constraints")),
+            constraints=cls._dict_value(recovery_projection.get("constraints")),
         )
         task.decision_reason = str(latest.get("reason") or "")
         task.decision_history = [
@@ -822,6 +850,51 @@ class AutonomousChainStore:
             except Exception:
                 pass
         return {}
+
+    @classmethod
+    def _coalesce_governance_event_mapping(
+        cls,
+        rows: Iterable[Dict[str, Any]],
+        field: str,
+    ) -> Dict[str, Any]:
+        merged: Dict[str, Any] = {}
+        for row in rows:
+            merged = cls._merge_nonempty_mapping(
+                merged,
+                cls._dict_value(row.get(field)),
+            )
+        return merged
+
+    @classmethod
+    def _merge_nonempty_mapping(
+        cls,
+        current: Dict[str, Any],
+        incoming: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        merged = dict(current)
+        for key, value in incoming.items():
+            if isinstance(value, dict):
+                nested = cls._merge_nonempty_mapping(
+                    cls._dict_value(merged.get(key)),
+                    value,
+                )
+                if nested:
+                    merged[key] = nested
+                continue
+            if value is None or (isinstance(value, str) and not value.strip()):
+                continue
+            if isinstance(value, (list, tuple, set)) and not value:
+                continue
+            merged[key] = value
+        return merged
+
+    @staticmethod
+    def _latest_nonempty_event_value(
+        rows: Iterable[Dict[str, Any]],
+        field: str,
+    ) -> str:
+        values = [str(row.get(field) or "").strip() for row in rows]
+        return next((value for value in reversed(values) if value), "")
 
     @staticmethod
     def _reason_title(event: Dict[str, Any]) -> str:

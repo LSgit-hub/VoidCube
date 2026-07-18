@@ -45,8 +45,15 @@ def build_autonomous_task_prompt(
             or ""
         ).strip()
         editable_dirs = constraints.get("editable_dirs") or []
+        target_paths = constraints.get("target_paths") or []
         forbidden_patterns = constraints.get("forbidden_patterns") or []
         max_files = constraints.get("max_files_changed")
+        evidence = dict(task.get("evidence") or {})
+        learning_refs = [
+            dict(ref)
+            for ref in list(evidence.get("learning_refs") or [])
+            if isinstance(ref, dict)
+        ]
         prompt_parts = [f"{AUTONOMOUS_BODY_IMPROVEMENT_TASK_PREFIX} {title}"]
         if summary:
             prompt_parts.append(summary)
@@ -55,10 +62,27 @@ def build_autonomous_task_prompt(
             prompt_parts.append(f"Worktree path: {worktree_path}")
         if editable_dirs:
             prompt_parts.append(f"Editable dirs: {', '.join(str(x) for x in editable_dirs)}")
+        if target_paths:
+            prompt_parts.append(
+                "Approved target paths: "
+                + ", ".join(str(path) for path in target_paths)
+            )
         if forbidden_patterns:
             prompt_parts.append(f"Forbidden patterns: {', '.join(str(x) for x in forbidden_patterns)}")
         if max_files:
             prompt_parts.append(f"Max files changed: {max_files}")
+        if learning_refs:
+            prompt_parts.append(
+                "Learning evidence: "
+                + "; ".join(
+                    f"{ref.get('mem_id')}: {ref.get('title') or 'learning conclusion'}"
+                    for ref in learning_refs[:5]
+                )
+            )
+        prompt_parts.append(
+            "Keep the change within the approved target paths; if the evidence does not support "
+            "a concrete change there, report that no safe improvement is available."
+        )
         prompt_parts.append("Commit the shell worktree changes before reporting completion.")
         prompt_parts.append("Produce a concise implementation summary with the concrete files changed and reasoning.")
         return "\n\n".join(prompt_parts)
@@ -611,6 +635,7 @@ class AutonomousExecutorRuntime:
         report = {
             "slot_id": slot_id,
             "task_id": task_id,
+            "baseline_commit": baseline_head,
             "commit_hash": diff["commit_hash"],
             "diff_summary": diff["diff_summary"],
             "changed_files": diff["changed_files"],

@@ -1332,6 +1332,9 @@ async def test_completed_autonomous_task_finding_flows_into_next_drive_context(t
         uncertainty_count=0,
     )
     drive_input["completed_learning_tasks"] = supervisor._completed_learning_task_summaries()
+    assert drive_input["completed_learning_tasks"][0]["conclusion"] == final_response
+    assert drive_input["completed_learning_tasks"][0]["task_id"] == task_id
+    assert drive_input["completed_learning_tasks"][0]["completed_at"]
     drive_input["drive_history"] = supervisor._history_for_endogenous_drive(history)
     drive_context = supervisor._endogenous_drive_engine._build_drive_context(drive_input)
 
@@ -18478,6 +18481,72 @@ def test_autonomous_chain_store_recovers_projection_from_mem_governance_events(t
     assert recovered["recover-task-2"].status == "completed"
     assert [task.task_id for task in store.list_api_a_handoff_tasks()] == ["recover-task-1"]
     assert [task.task_id for task in store.list_writeback_history()] == ["recover-task-2"]
+
+
+def test_mem_governance_recovery_inherits_context_across_partial_events(tmp_path):
+    from memai.governance import (
+        GovernanceDecision,
+        GovernanceEvent,
+        GovernanceEventType,
+        GovernanceGitLineage,
+    )
+
+    store = _make_supervisor(tmp_path)._autonomous_chain_store
+    approval = GovernanceEvent.create(
+        event_type=GovernanceEventType.SELF_EVOLUTION_APPROVAL,
+        source_actor="supervisor",
+        decision=GovernanceDecision.APPROVE,
+        reason="Approved historical task.",
+        task_id="partial-history-task",
+        body_id="slot-B",
+        git_lineage=GovernanceGitLineage(source_commit="source-commit"),
+        evidence_refs=["mem://learning/1"],
+        execution_result={
+            "title": "Historical task title",
+            "summary": "Historical task summary",
+            "trace_id": "historical-trace",
+            "priority": "high",
+            "constraints": {"allowed_paths": ["agent/"]},
+            "runtime_task_profile": {
+                "governance_task_type": "self_evolution",
+                "task_family": "body_upgrade",
+                "execution_kind": "body_upgrade",
+            },
+        },
+    )
+    approval.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    completed = GovernanceEvent.create(
+        event_type=GovernanceEventType.EXECUTION_OUTCOME,
+        source_actor="executor",
+        decision=GovernanceDecision.COMPLETED,
+        reason="Historical task completed.",
+        task_id="partial-history-task",
+        evidence_refs=["mem://outcome/1"],
+        execution_result={"status": "completed", "summary": ""},
+    )
+    completed.created_at = datetime(2026, 1, 2, tzinfo=timezone.utc)
+
+    result = store.recover_from_governance_events([completed, approval])
+    task = store.list_tasks()[0]
+
+    assert result["added_task_count"] == 1
+    assert task.status == "completed"
+    assert task.title == "Historical task title"
+    assert task.summary == "Historical task summary"
+    assert task.trace_id == "historical-trace"
+    assert task.priority == "high"
+    assert task.governance_task_type == "self_evolution"
+    assert task.task_family == "body_upgrade"
+    assert task.execution_kind == "body_upgrade"
+    assert task.constraints == {"allowed_paths": ["agent/"]}
+    assert task.metadata["body_id"] == "slot-B"
+    assert task.metadata["execution_result"] == {"status": "completed", "summary": ""}
+    assert task.metadata["recovery_projection"]["status"] == "completed"
+    assert task.evidence["mem_governance"]["git_lineage"]["source_commit"] == "source-commit"
+    assert task.evidence["mem_governance"]["evidence_refs"] == [
+        "mem://learning/1",
+        "mem://outcome/1",
+    ]
 
 
 def test_supervisor_boot_recovers_empty_autonomous_store_from_mem_governance(tmp_path):

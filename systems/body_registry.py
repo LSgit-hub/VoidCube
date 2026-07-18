@@ -122,6 +122,7 @@ class BodyImprovementReport(BaseModel):
     """Agent 提交的替身改进报告（API 契约）"""
     slot_id: str
     task_id: str
+    baseline_commit: str
     commit_hash: str
     branch_name: str = ""
     diff_summary: str

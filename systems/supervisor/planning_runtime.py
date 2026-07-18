@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import json
+import re
+import subprocess
 import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -5209,11 +5211,30 @@ class PlanningRuntimeMixin:
             if self._task_runtime_family(task) != "self_learning":
                 continue
             metadata = dict(task.metadata or {})
+            evidence = dict(task.evidence or {})
+            latest_decision = task.decision_history[-1] if task.decision_history else None
+            latest_context = dict(latest_decision.context or {}) if latest_decision else {}
             completed_at = (
                 metadata.get("completed_at")
                 or getattr(task, "updated_at", None)
                 or getattr(task, "created_at", None)
             )
+            if isinstance(completed_at, datetime):
+                completed_at = completed_at.isoformat()
+            conclusion = str(
+                latest_context.get("autonomous_executor_final_response")
+                or metadata.get("outcome_summary")
+                or dict(metadata.get("execution_result") or {}).get("summary")
+                or ""
+            ).strip()
+            raw_evidence_summary = evidence.get("evidence_summary") or []
+            if isinstance(raw_evidence_summary, str):
+                raw_evidence_summary = [raw_evidence_summary]
+            evidence_summary = [
+                str(item).strip()
+                for item in list(raw_evidence_summary)[:6]
+                if str(item).strip()
+            ]
             rows.append(
                 (
                     str(completed_at or ""),
@@ -5221,8 +5242,14 @@ class PlanningRuntimeMixin:
                         "task_id": task.task_id,
                         "title": task.title,
                         "summary": task.summary,
+                        "conclusion": conclusion[:1600],
+                        "evidence_summary": evidence_summary,
                         "completed_at": completed_at,
-                        "quality_score": metadata.get("quality_score"),
+                        "quality_score": (
+                            metadata.get("quality_score")
+                            if metadata.get("quality_score") is not None
+                            else evidence.get("learning_quality_score")
+                        ),
                         "endogenous_drive_key": metadata.get("endogenous_drive_key"),
                     },
                 )
@@ -8356,10 +8383,9 @@ class PlanningRuntimeMixin:
 
     def _calc_file_repeat_penalty(self, slot_id: str, changed_files: list[str]) -> float:
         penalty = 0.0
-        registry = self._execution_facade.body_registry.load_registry()
         try:
-            meta = registry.load_slot_meta(slot_id)
-        except Exception:
+            meta = self._body_registry.load_slot_meta(slot_id)
+        except (FileNotFoundError, ValueError):
             return penalty
 
         file_change_counts: dict[str, int] = {}
@@ -8377,7 +8403,7 @@ class PlanningRuntimeMixin:
 
         return penalty
 
-    def _calc_learning_freshness(self, learning_refs: list[str]) -> float:
+    def _calc_learning_freshness(self, learning_refs: list[dict[str, Any]]) -> float:
         if not learning_refs:
             return 0.0
 
@@ -8385,24 +8411,129 @@ class PlanningRuntimeMixin:
         total_freshness = 0.0
 
         for ref in learning_refs:
+            if not isinstance(ref, dict):
+                continue
             try:
-                age_days = int(ref.split("_")[-1]) if "_" in ref else 0
+                timestamp = str(
+                    ref.get("timestamp")
+                    or ref.get("created_at")
+                    or ref.get("completed_at")
+                    or ""
+                ).strip()
+                if not timestamp:
+                    continue
+                learned_at = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                if learned_at.tzinfo is None:
+                    learned_at = learned_at.replace(tzinfo=timezone.utc)
+                age_days = max(0.0, (now - learned_at).total_seconds() / 86400.0)
                 freshness = max(0.0, 1.0 - age_days / 90.0)
-                total_freshness += freshness
-            except Exception:
-                total_freshness += 0.5
+                relevance = max(0.0, min(1.0, float(ref.get("relevance", 1.0))))
+                total_freshness += freshness * relevance
+            except (TypeError, ValueError, OverflowError):
+                continue
 
         avg_freshness = total_freshness / len(learning_refs)
         return avg_freshness * 20.0
 
-    def _matches_forbidden_pattern(self, file_path: str, patterns: list[str]) -> bool:
-        import fnmatch
+    def _inspect_body_improvement_commit(
+        self,
+        *,
+        worktree_path: str,
+        baseline_commit: str,
+        commit_hash: str,
+    ) -> Dict[str, Any]:
+        if not re.fullmatch(r"[0-9a-fA-F]{7,64}", baseline_commit):
+            return {"ok": False, "reject_reason": "invalid_baseline_commit"}
+        if not re.fullmatch(r"[0-9a-fA-F]{7,64}", commit_hash):
+            return {"ok": False, "reject_reason": "invalid_commit_hash"}
+        if not worktree_path or not Path(worktree_path).is_dir():
+            return {"ok": False, "reject_reason": "worktree_not_found"}
 
-        path = str(file_path).strip().replace("\\", "/")
-        for pattern in patterns:
-            if fnmatch.fnmatch(path, pattern):
-                return True
-        return False
+        try:
+            resolved = subprocess.run(
+                ["git", "rev-parse", "--verify", f"{commit_hash}^{{commit}}"],
+                cwd=worktree_path,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            baseline = subprocess.run(
+                ["git", "rev-parse", "--verify", f"{baseline_commit}^{{commit}}"],
+                cwd=worktree_path,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if resolved.returncode != 0:
+                return {"ok": False, "reject_reason": "commit_not_found"}
+            if baseline.returncode != 0:
+                return {"ok": False, "reject_reason": "baseline_commit_not_found"}
+
+            head = subprocess.run(
+                ["git", "rev-parse", "--verify", "HEAD"],
+                cwd=worktree_path,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            resolved_commit = resolved.stdout.strip().lower()
+            resolved_baseline = baseline.stdout.strip().lower()
+            if head.returncode != 0 or head.stdout.strip().lower() != resolved_commit:
+                return {"ok": False, "reject_reason": "commit_is_not_worktree_head"}
+
+            ancestry = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", resolved_baseline, resolved_commit],
+                cwd=worktree_path,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if ancestry.returncode != 0:
+                return {"ok": False, "reject_reason": "baseline_not_ancestor"}
+
+            changed = subprocess.run(
+                [
+                    "git",
+                    "diff",
+                    "--name-only",
+                    f"{resolved_baseline}..{resolved_commit}",
+                    "--",
+                ],
+                cwd=worktree_path,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if changed.returncode != 0:
+                return {"ok": False, "reject_reason": "commit_diff_unavailable"}
+
+            from systems.evolution_boundary import normalize_repo_path
+
+            changed_files = [
+                normalized
+                for line in changed.stdout.splitlines()
+                if (normalized := normalize_repo_path(line))
+            ]
+            diff = subprocess.run(
+                ["git", "diff", "--stat", f"{resolved_baseline}..{resolved_commit}", "--"],
+                cwd=worktree_path,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return {
+                "ok": True,
+                "changed_files": list(dict.fromkeys(changed_files)),
+                "diff_text": diff.stdout if diff.returncode == 0 else "",
+            }
+        except (OSError, subprocess.SubprocessError):
+            logger.warning(
+                "Failed to inspect body improvement commit %s in %s",
+                commit_hash,
+                worktree_path,
+                exc_info=True,
+            )
+            return {"ok": False, "reject_reason": "commit_inspection_failed"}
 
     def _get_probe_score(self, slot_id: str, slot_meta) -> float:
         if slot_meta.last_probe_result:
@@ -8412,20 +8543,38 @@ class PlanningRuntimeMixin:
             if checks_total > 0:
                 return (checks_passed / checks_total) * 20.0
 
-        if slot_meta.materialized_from:
+        parent_slot_id = str(slot_meta.materialized_from or "").removeprefix("slot:")
+        if parent_slot_id in set(self._body_registry.slot_ids):
             try:
-                registry = self._execution_facade.body_registry.load_registry()
-                parent_meta = registry.load_slot_meta(slot_meta.materialized_from)
+                parent_meta = self._body_registry.load_slot_meta(parent_slot_id)
                 if parent_meta.last_probe_result:
                     probe = parent_meta.last_probe_result
                     checks_total = len(probe.get("checks", []))
                     checks_passed = sum(1 for c in probe.get("checks", []) if c.get("passed"))
                     if checks_total > 0:
                         return (checks_passed / checks_total) * 15.0
-            except Exception:
+            except (FileNotFoundError, ValueError):
                 pass
 
         return 10.0
+
+    @staticmethod
+    def _calc_stability_factor(slot_meta) -> float:
+        baseline_at = slot_meta.runtime_bootstrapped_at or slot_meta.last_materialized_at
+        if baseline_at is None:
+            return 0.0
+        try:
+            if not isinstance(baseline_at, datetime):
+                baseline_at = datetime.fromisoformat(str(baseline_at).replace("Z", "+00:00"))
+            if baseline_at.tzinfo is None:
+                baseline_at = baseline_at.replace(tzinfo=timezone.utc)
+            stable_days = max(
+                0.0,
+                (datetime.now(timezone.utc) - baseline_at).total_seconds() / 86400.0,
+            )
+            return min(20.0, stable_days / 30.0 * 20.0)
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
 
     def _apply_cumulative_decay(self, slot_meta) -> None:
         if slot_meta.decay_applied_at is None:
@@ -8434,7 +8583,9 @@ class PlanningRuntimeMixin:
 
         try:
             last_decay = datetime.fromisoformat(slot_meta.decay_applied_at)
-        except Exception:
+            if last_decay.tzinfo is None:
+                last_decay = last_decay.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError, OverflowError):
             slot_meta.decay_applied_at = datetime.now(timezone.utc).isoformat()
             return
 
@@ -8449,8 +8600,10 @@ class PlanningRuntimeMixin:
         else:
             try:
                 last_improvement = datetime.fromisoformat(slot_meta.last_improvement_at)
+                if last_improvement.tzinfo is None:
+                    last_improvement = last_improvement.replace(tzinfo=timezone.utc)
                 days_since_improvement = (now - last_improvement).days
-            except Exception:
+            except (TypeError, ValueError, OverflowError):
                 days_since_improvement = days_since_decay
 
         if days_since_improvement <= 30:
@@ -8475,14 +8628,9 @@ class PlanningRuntimeMixin:
         self,
         diff_text: str,
         description: str,
-        learning_refs: list[str],
+        learning_refs: list[dict[str, Any]],
     ) -> float:
-        learning_context = ""
-        if learning_refs:
-            try:
-                learning_context = "学习成果引用: " + ", ".join(learning_refs)
-            except Exception:
-                learning_context = ""
+        learning_context = json.dumps(learning_refs, ensure_ascii=False)
 
         prompt = (
             f"评估以下替身 Agent 的代码改进质量（0-20分）。\n\n"
@@ -8515,7 +8663,7 @@ class PlanningRuntimeMixin:
         return 10.0
 
     async def _review_body_improvement(self, report):
-        if hasattr(report, 'model_dump'):
+        if hasattr(report, "model_dump"):
             report_dict = report.model_dump()
         elif isinstance(report, dict):
             report_dict = report
@@ -8527,58 +8675,193 @@ class PlanningRuntimeMixin:
             return {"score_delta": 0, "reject_reason": "missing_slot_id"}
 
         changed_files = report_dict.get("changed_files", [])
+        baseline_commit = report_dict.get("baseline_commit")
         commit_hash = report_dict.get("commit_hash")
 
-        if not changed_files or not commit_hash:
+        if not changed_files or not baseline_commit or not commit_hash:
             return {"score_delta": 0, "reject_reason": "empty_improvement"}
 
-        registry = self._execution_facade.body_registry.load_registry()
+        task_id = str(report_dict.get("task_id") or "").strip()
+        governed_task = self._autonomous_chain_store.get_task(task_id)
+        if governed_task is None:
+            return {"score_delta": 0, "reject_reason": "governed_task_not_found"}
+        if self._task_execution_kind(governed_task) != "body_improvement":
+            return {"score_delta": 0, "reject_reason": "governed_task_kind_mismatch"}
+        governed_constraints = dict(governed_task.constraints or {})
+        governed_evidence = dict(governed_task.evidence or {})
+        governed_slot_id = str(
+            governed_constraints.get("target_slot_id") or ""
+        ).strip()
+        if governed_slot_id != str(slot_id).strip():
+            return {"score_delta": 0, "reject_reason": "governed_slot_mismatch"}
+
         try:
-            slot_meta = registry.load_slot_meta(slot_id)
-        except Exception:
+            slot_meta = self._body_registry.load_slot_meta(slot_id)
+        except (FileNotFoundError, ValueError):
             return {"score_delta": 0, "reject_reason": "slot_not_found"}
 
-        await self._apply_cumulative_decay(slot_meta)
+        governed_worktree = str(
+            governed_constraints.get("worktree_path") or ""
+        ).strip()
+        try:
+            worktree_matches = (
+                bool(governed_worktree)
+                and Path(governed_worktree).resolve()
+                == Path(slot_meta.worktree_path).resolve()
+            )
+        except (OSError, ValueError):
+            worktree_matches = False
+        if not worktree_matches:
+            return {"score_delta": 0, "reject_reason": "governed_worktree_mismatch"}
 
-        from systems.evolution_boundary import classify_agent_evolution_changes
-        boundary = classify_agent_evolution_changes(changed_files)
+        commit_hash = str(commit_hash).strip()
+        duplicate_report = next(
+            (
+                entry
+                for entry in slot_meta.health_history
+                if entry.get("reason") == "body_improvement"
+                and (
+                    (task_id and str(entry.get("task_id") or "") == task_id)
+                    or str(entry.get("commit_hash") or "") == commit_hash
+                )
+            ),
+            None,
+        )
+        if duplicate_report is not None:
+            return {
+                "score_delta": 0,
+                "health_score": slot_meta.health_score,
+                "improvement_count": slot_meta.improvement_count,
+                "duplicate": True,
+                "original_reviewed_at": duplicate_report.get("reviewed_at"),
+            }
+        if str(governed_task.status or "").strip().lower() != "running":
+            return {
+                "score_delta": 0,
+                "reject_reason": "governed_task_not_running",
+            }
+
+        self._apply_cumulative_decay(slot_meta)
+
+        commit_inspection = self._inspect_body_improvement_commit(
+            worktree_path=str(slot_meta.worktree_path or ""),
+            baseline_commit=str(baseline_commit),
+            commit_hash=commit_hash,
+        )
+        if not commit_inspection.get("ok"):
+            return {
+                "score_delta": 0,
+                "reject_reason": commit_inspection.get("reject_reason")
+                or "commit_inspection_failed",
+            }
+
+        from systems.evolution_boundary import (
+            classify_agent_evolution_changes,
+            normalize_repo_path,
+        )
+
+        actual_changed_files = list(commit_inspection.get("changed_files") or [])
+        declared_changed_files = [
+            normalized
+            for path in changed_files
+            if (normalized := normalize_repo_path(str(path)))
+        ]
+        if set(actual_changed_files) != set(declared_changed_files):
+            return {
+                "score_delta": 0,
+                "reject_reason": "changed_files_mismatch",
+                "actual_changed_files": actual_changed_files,
+            }
+
+        approved_target_paths = {
+            normalize_repo_path(str(path))
+            for path in list(governed_constraints.get("target_paths") or [])
+            if normalize_repo_path(str(path))
+        }
+        if not approved_target_paths:
+            return {
+                "score_delta": 0,
+                "reject_reason": "governed_target_paths_missing",
+            }
+        if not set(actual_changed_files).issubset(approved_target_paths):
+            return {
+                "score_delta": 0,
+                "reject_reason": "changed_files_outside_governed_targets",
+                "approved_target_paths": sorted(approved_target_paths),
+                "actual_changed_files": actual_changed_files,
+            }
+        max_files_changed = max(
+            1,
+            int(governed_constraints.get("max_files_changed") or 5),
+        )
+        if len(actual_changed_files) > max_files_changed:
+            return {
+                "score_delta": 0,
+                "reject_reason": "changed_files_limit_exceeded",
+                "max_files_changed": max_files_changed,
+            }
+
+        boundary = classify_agent_evolution_changes(actual_changed_files)
+        if not boundary.ok:
+            return {
+                "score_delta": 0,
+                "reject_reason": "evolution_boundary_violation",
+                "evolution_boundary": boundary.model_dump(),
+            }
         boundary_score = boundary.score
 
-        file_penalty = self._calc_file_repeat_penalty(slot_id, changed_files)
+        file_penalty = self._calc_file_repeat_penalty(slot_id, actual_changed_files)
 
-        learning_refs = report_dict.get("learning_refs", [])
+        learning_refs = [
+            dict(ref)
+            for ref in list(governed_evidence.get("learning_refs") or [])
+            if isinstance(ref, dict)
+        ]
+        if not learning_refs:
+            return {
+                "score_delta": 0,
+                "reject_reason": "governed_learning_refs_missing",
+            }
+        reported_learning_ids = {
+            str(ref.get("mem_id") or "").strip()
+            for ref in list(report_dict.get("learning_refs") or [])
+            if isinstance(ref, dict) and str(ref.get("mem_id") or "").strip()
+        }
+        governed_learning_ids = {
+            str(ref.get("mem_id") or "").strip()
+            for ref in learning_refs
+            if str(ref.get("mem_id") or "").strip()
+        }
+        if reported_learning_ids and reported_learning_ids != governed_learning_ids:
+            return {
+                "score_delta": 0,
+                "reject_reason": "learning_refs_mismatch",
+            }
         learning_freshness = self._calc_learning_freshness(learning_refs)
 
         probe_score = self._get_probe_score(slot_id, slot_meta)
-
-        diff_text = ""
-        try:
-            import subprocess
-            worktree_path = slot_meta.worktree_path
-            result = subprocess.run(
-                ["git", "show", commit_hash, "--stat"],
-                cwd=worktree_path,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            if result.returncode == 0:
-                diff_text = result.stdout
-        except Exception:
-            pass
+        stability_factor = self._calc_stability_factor(slot_meta)
 
         llm_score = await self._llm_review_diff(
-            diff_text,
+            str(commit_inspection.get("diff_text") or ""),
             report_dict.get("improvement_description", ""),
             learning_refs,
         )
 
+        score_components = {
+            "llm_diff_quality": round(llm_score, 4),
+            "evolution_boundary": round(boundary_score, 4),
+            "learning_freshness": round(learning_freshness, 4),
+            "probe_pass": round(probe_score, 4),
+            "stability": round(stability_factor, 4),
+            "file_repeat_penalty": round(file_penalty, 4),
+        }
         score_delta = (
             llm_score * 0.35
             + boundary_score * 0.20
             + learning_freshness * 0.15
-            + (20.0 if learning_refs else 0.0) * 0.15
             + probe_score * 0.25
+            + stability_factor * 0.05
             - file_penalty
         )
         score_delta = max(-20.0, min(30.0, score_delta))
@@ -8589,48 +8872,67 @@ class PlanningRuntimeMixin:
             slot_meta.health_score = max(0.0, slot_meta.health_score + score_delta)
 
         now = datetime.now(timezone.utc)
-        slot_meta.health_history.append({
-            "score_delta": score_delta,
-            "reason": "body_improvement",
-            "task_id": report_dict.get("task_id"),
-            "commit_hash": commit_hash,
-            "reviewed_at": now.isoformat(),
-            "changed_files": changed_files,
-        })
+        slot_meta.health_history.append(
+            {
+                "score_delta": score_delta,
+                "reason": "body_improvement",
+                "task_id": task_id,
+                "commit_hash": commit_hash,
+                "reviewed_at": now.isoformat(),
+                "changed_files": actual_changed_files,
+                "evolution_boundary": boundary.model_dump(),
+                "score_components": score_components,
+            }
+        )
         slot_meta.improvement_count += 1
         slot_meta.last_improvement_at = now.isoformat()
 
         if score_delta > 0:
             slot_meta.previous_healthy_commit = commit_hash
 
-        self._execution_facade.body_registry.save_slot_meta(slot_meta)
+        self._body_registry.save_slot_meta(slot_meta)
 
-        active_slot = self._execution_facade.body_registry.get_active_slot()
+        active_slot = self._body_registry.get_active_slot()
         active_health = active_slot.health_score if active_slot else 0.0
 
-        if slot_meta.health_score >= active_health + 15:
-            await self._emit_switch_suggestion_event(slot_id)
-        elif slot_meta.health_score > active_health:
-            await self._emit_switch_suggestion_event(slot_id)
+        switch_suggestion = None
+        if slot_meta.health_score > active_health:
+            switch_suggestion = self._emit_switch_suggestion_event(
+                slot_id,
+                active_health_score=active_health,
+            )
 
         return {
             "score_delta": score_delta,
             "health_score": slot_meta.health_score,
             "improvement_count": slot_meta.improvement_count,
+            "evolution_boundary": boundary.model_dump(),
+            "score_components": score_components,
+            "switch_suggestion": switch_suggestion,
         }
 
-    async def _emit_switch_suggestion_event(self, slot_id: str):
-        try:
-            await self._governor.evaluate({
-                "event_type": "switch_suggestion",
-                "slot_id": slot_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
-        except Exception:
-            logger.warning("Failed to emit switch_suggestion event for slot %s", slot_id)
+    def _emit_switch_suggestion_event(
+        self,
+        slot_id: str,
+        *,
+        active_health_score: float,
+    ) -> Dict[str, Any]:
+        from systems.governor import GovernorRequest
 
-
-
-
-
+        slot_meta = self._body_registry.load_slot_meta(slot_id)
+        request = GovernorRequest(
+            request_id=str(uuid.uuid4()),
+            trace_id=str(uuid.uuid4()),
+            event_type="switch_suggestion",
+            body_id=slot_id,
+            source_actor="supervisor_body_improvement_review",
+            summary="Body improvement health score surpassed the active slot.",
+            evidence={
+                "health_score": slot_meta.health_score,
+                "improvement_count": slot_meta.improvement_count,
+                "active_health_score": active_health_score,
+                "previous_healthy_commit": slot_meta.previous_healthy_commit,
+            },
+        )
+        return self._governor_review_executor.execute_governor_request(request)
 

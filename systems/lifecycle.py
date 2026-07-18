@@ -64,6 +64,9 @@ class BodyLifecycleExecutor:
         if action.action_type == "issue_probe_lease":
             if not slot_id:
                 return self._failed(action, "Probe lease requires a slot_id.")
+            slot_meta = self.registry.load_slot_meta(slot_id)
+            if slot_meta.body_state == "shell":
+                self.registry.mark_candidate(slot_id)
             meta = self.registry.start_probe(
                 slot_id,
                 lease=str(payload.get("lease", "probe")),

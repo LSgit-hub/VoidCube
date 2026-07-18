@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -23,6 +24,55 @@ from systems.supervisor.supervisor import (
 def _make_supervisor_config(tmp_path: Path) -> SupervisorConfig:
     return SupervisorConfig(
         execution=SupervisorExecutionConfig(git_repo_path=str(tmp_path))
+    )
+
+
+def _create_running_body_improvement_task(
+    supervisor: Supervisor,
+    *,
+    target_paths: list[str],
+    learning_refs: list[dict] | None = None,
+):
+    slot_meta = supervisor._body_registry.load_slot_meta("slot-B")
+    task = supervisor._autonomous_chain_store.create_task(
+        title="Governed body improvement",
+        summary="Apply mapped learning evidence to approved targets.",
+        task_type="self_evolution",
+        source="endogenous_drive",
+        metadata={
+            "governance_task_type": "self_evolution",
+            "task_family": "body_upgrade",
+            "execution_kind": "body_improvement",
+        },
+        evidence={
+            "learning_quality_score": 90.0,
+            "learning_refs": learning_refs
+            or [
+                {
+                    "mem_id": "learning-1",
+                    "timestamp": datetime.now().astimezone().isoformat(),
+                    "relevance": 1.0,
+                }
+            ],
+        },
+        constraints={
+            "target_slot_id": "slot-B",
+            "worktree_path": slot_meta.worktree_path,
+            "target_paths": target_paths,
+            "max_files_changed": 5,
+        },
+    )
+    supervisor._autonomous_chain_store.update_status(
+        task.task_id,
+        status="approved",
+        actor="test",
+        reason="approved for API-A",
+    )
+    return supervisor._autonomous_chain_store.update_status(
+        task.task_id,
+        status="running",
+        actor="cli_agent",
+        reason="claimed by API-A",
     )
 
 
@@ -78,6 +128,246 @@ async def test_supervisor_exposes_initialized_body_registry(tmp_path):
 
     active_target = await supervisor.get_active_body_target()
     assert active_target["slot_id"] == "slot-A"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_body_improvement_report_verifies_commit_and_executes_switch_suggestion(tmp_path):
+    supervisor = Supervisor(_make_supervisor_config(tmp_path))
+    governed_task = _create_running_body_improvement_task(
+        supervisor,
+        target_paths=["agent/stream_handler.py"],
+    )
+    slot_meta = supervisor._body_registry.load_slot_meta("slot-B")
+    slot_meta.health_score = 55.0
+    supervisor._body_registry.save_slot_meta(slot_meta)
+    supervisor._inspect_body_improvement_commit = Mock(  # type: ignore[method-assign]
+        return_value={
+            "ok": True,
+            "changed_files": ["agent/stream_handler.py"],
+            "diff_text": "agent/stream_handler.py | 2 +-",
+        }
+    )
+    supervisor._llm_review_diff = AsyncMock(return_value=20.0)  # type: ignore[method-assign]
+
+    result = await supervisor.receive_improvement_report(
+        {
+            "slot_id": "slot-B",
+            "task_id": governed_task.task_id,
+            "baseline_commit": "b" * 40,
+            "commit_hash": "a" * 40,
+            "diff_summary": "Improve stream handling",
+            "changed_files": ["agent/stream_handler.py"],
+            "learning_refs": [
+                {
+                    "mem_id": "learning-1",
+                    "timestamp": datetime.now().astimezone().isoformat(),
+                    "relevance": 1.0,
+                }
+            ],
+            "improvement_description": "Apply the verified learning result.",
+        }
+    )
+
+    assert result["status"] == "reviewed"
+    assert result["score_delta"] > 0
+    assert result["evolution_boundary"]["ok"] is True
+    assert result["switch_suggestion"]["governor_response"]["decision"] == "approve"
+    updated = supervisor._body_registry.load_slot_meta("slot-B")
+    assert updated.body_state == "probe"
+    assert updated.improvement_count == 1
+    assert updated.previous_healthy_commit == "a" * 40
+    assert updated.health_history[-1]["changed_files"] == ["agent/stream_handler.py"]
+
+    duplicate = await supervisor.receive_improvement_report(
+        {
+            "slot_id": "slot-B",
+            "task_id": governed_task.task_id,
+            "baseline_commit": "b" * 40,
+            "commit_hash": "a" * 40,
+            "diff_summary": "Retry after a lost response",
+            "changed_files": ["agent/stream_handler.py"],
+            "improvement_description": "Must not score twice.",
+        }
+    )
+    assert duplicate["duplicate"] is True
+    assert duplicate["score_delta"] == 0
+    after_duplicate = supervisor._body_registry.load_slot_meta("slot-B")
+    assert after_duplicate.health_score == updated.health_score
+    assert after_duplicate.improvement_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_body_improvement_report_rejects_unverifiable_commit_without_mutation(tmp_path):
+    supervisor = Supervisor(_make_supervisor_config(tmp_path))
+    governed_task = _create_running_body_improvement_task(
+        supervisor,
+        target_paths=["agent/stream_handler.py"],
+    )
+
+    result = await supervisor.receive_improvement_report(
+        {
+            "slot_id": "slot-B",
+            "task_id": governed_task.task_id,
+            "baseline_commit": "b" * 40,
+            "commit_hash": "not-a-commit",
+            "diff_summary": "Unverifiable change",
+            "changed_files": ["agent/stream_handler.py"],
+            "improvement_description": "Must be rejected.",
+        }
+    )
+
+    assert result == {
+        "status": "reviewed",
+        "score_delta": 0,
+        "reject_reason": "invalid_commit_hash",
+    }
+    slot_meta = supervisor._body_registry.load_slot_meta("slot-B")
+    assert slot_meta.health_score == 0
+    assert slot_meta.improvement_count == 0
+    assert slot_meta.health_history == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_body_improvement_report_rejects_unknown_governance_task(tmp_path):
+    supervisor = Supervisor(_make_supervisor_config(tmp_path))
+
+    result = await supervisor.receive_improvement_report(
+        {
+            "slot_id": "slot-B",
+            "task_id": "unknown-body-improvement",
+            "baseline_commit": "b" * 40,
+            "commit_hash": "a" * 40,
+            "diff_summary": "Ungoverned change",
+            "changed_files": ["agent/stream_handler.py"],
+            "improvement_description": "Must not affect health.",
+        }
+    )
+
+    assert result == {
+        "status": "reviewed",
+        "score_delta": 0,
+        "reject_reason": "governed_task_not_found",
+    }
+    slot_meta = supervisor._body_registry.load_slot_meta("slot-B")
+    assert slot_meta.health_score == 0
+    assert slot_meta.health_history == []
+
+
+@pytest.mark.unit
+def test_body_improvement_commit_inspection_uses_verified_baseline_to_head_diff(tmp_path):
+    repo = tmp_path / "body-worktree"
+    repo.mkdir()
+
+    def git(*args: str) -> str:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip()
+
+    git("init")
+    git("config", "user.email", "voidcube-test@example.invalid")
+    git("config", "user.name", "VoidCube Test")
+    agent_dir = repo / "agent"
+    agent_dir.mkdir()
+    stream_handler = agent_dir / "stream_handler.py"
+    stream_handler.write_text("VALUE = 1\n", encoding="utf-8")
+    git("add", "agent/stream_handler.py")
+    git("commit", "-m", "baseline")
+    baseline_commit = git("rev-parse", "HEAD")
+
+    stream_handler.write_text("VALUE = 2\n", encoding="utf-8")
+    git("add", "agent/stream_handler.py")
+    git("commit", "-m", "improvement")
+    improvement_commit = git("rev-parse", "HEAD")
+
+    supervisor = Supervisor(_make_supervisor_config(repo))
+    inspection = supervisor._inspect_body_improvement_commit(
+        worktree_path=str(repo),
+        baseline_commit=baseline_commit,
+        commit_hash=improvement_commit,
+    )
+
+    assert inspection["ok"] is True
+    assert inspection["changed_files"] == ["agent/stream_handler.py"]
+    assert "agent/stream_handler.py" in inspection["diff_text"]
+
+    stale = supervisor._inspect_body_improvement_commit(
+        worktree_path=str(repo),
+        baseline_commit=baseline_commit,
+        commit_hash=baseline_commit,
+    )
+    assert stale == {"ok": False, "reject_reason": "commit_is_not_worktree_head"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("actual_files", "declared_files", "approved_targets", "reject_reason"),
+    [
+        (
+            ["agent/stream_handler.py"],
+            ["agent/other.py"],
+            ["agent/other.py"],
+            "changed_files_mismatch",
+        ),
+        (
+            ["systems/supervisor/planning_runtime.py"],
+            ["systems/supervisor/planning_runtime.py"],
+            ["systems/supervisor/planning_runtime.py"],
+            "evolution_boundary_violation",
+        ),
+        (
+            ["agent/stream_handler.py"],
+            ["agent/stream_handler.py"],
+            ["agent/display.py"],
+            "changed_files_outside_governed_targets",
+        ),
+    ],
+)
+async def test_body_improvement_report_rejects_untrusted_file_scope(
+    tmp_path,
+    actual_files,
+    declared_files,
+    approved_targets,
+    reject_reason,
+):
+    supervisor = Supervisor(_make_supervisor_config(tmp_path))
+    governed_task = _create_running_body_improvement_task(
+        supervisor,
+        target_paths=approved_targets,
+    )
+    supervisor._inspect_body_improvement_commit = Mock(  # type: ignore[method-assign]
+        return_value={
+            "ok": True,
+            "changed_files": actual_files,
+            "diff_text": "verified diff",
+        }
+    )
+
+    result = await supervisor.receive_improvement_report(
+        {
+            "slot_id": "slot-B",
+            "task_id": governed_task.task_id,
+            "baseline_commit": "b" * 40,
+            "commit_hash": "a" * 40,
+            "diff_summary": "Untrusted scope",
+            "changed_files": declared_files,
+            "improvement_description": "Must be rejected before scoring.",
+        }
+    )
+
+    assert result["score_delta"] == 0
+    assert result["reject_reason"] == reject_reason
+    slot_meta = supervisor._body_registry.load_slot_meta("slot-B")
+    assert slot_meta.improvement_count == 0
+    assert slot_meta.health_history == []
 
 
 @pytest.mark.asyncio

@@ -2,11 +2,11 @@
 
 > **2026-07 语义对齐说明**：本文保留“内生驱动 → 学习 → 替身改进 → 健康评分”的 gap 分析价值，但需按最新基线理解执行门控：监督者目标语义为全天候运行，旧时间窗口和“等用户空闲”硬门已移除；`active_sessions` 只作为认知层软感知/降权信号，不再是生成或执行的硬条件；Supervisor 默认随服务启动自主链路，`/auto` 只接入主 CLI 内的本地观测/执行面，不限制主 CLI 输入，也不阻断用户与主 Agent 交互。替身改进和 probe 可全天候自主进行，但真正 `activate_slot` 必须停在用户同意门，不能写成 Governor 批准后自动切换。Web 小屋也只承担 API-B 动作、状态、反馈与任务的只读观测，不再应被理解成旧队列管理台或执行控制台。
 >
-> **2026-07-08 现状补记**：本文中的部分早期 gap 已被当前实现追上。`body_improvement` 现已进入正式 `execution_kind`、可被 API-A 自主执行面拉取执行，并已进入 Supervisor 的链路观测与 Web 小屋替身升级红点提示。当前更真实的缺口，已经从“有没有 `body_improvement` 这条链”转向“学习成果如何稳定驱动定向改进、如何自动形成建议切换、以及用户同意门如何落地”。
+> **2026-07-18 现状补记**：本文中的多数早期 P0/P1 已被当前实现追上。`body_improvement` 已进入正式执行链；完成的学习结论会先经过 `learning_evidence_structure_projection_v1`，按显式仓库路径或受控领域词映射到具体 Agent/Tools 节点，LM 提案也必须绑定同一程序映射；改进报告按 `baseline_commit..HEAD` 验证、统一经过 evolution boundary、治理任务目标子集校验、结构化学习引用与健康评分；达标结果会进入 Governor 建议切换并签发 probe lease，真正 activate 仍由用户同意门阻断。当前真实缺口集中在映射准确率的长期评估、破坏性改进回滚和健康值可视化，不再是链路是否存在。
 
 ## 1. 当前内生驱动产生的任务
 
-内生驱动器 `EndogenousDriveEngine._candidate_stream()` 当前围绕四类核心候选生成任务，并按 utility 降序参与后续治理：
+内生驱动器当前把认知判断投影为五类受限候选形态，并按 utility 参与后续治理；这些候选是兼容输出，不是认知核心本体：
 
 | # | stable_key | 标题 | utility | 类型 | 约束 |
 |---|-----------|------|---------|------|------|
@@ -14,6 +14,7 @@
 | 2 | `truthfulness:review_correction_signals` | Review recent uncertainty and correction signals | 0.65~0.95 | self_learning | learn_only |
 | 3 | `creativity:idle_learning:{hash}` | Research: {topic} | 0.58~0.72 | self_learning | **learn_only, must_not_modify_active_body** |
 | 4 | `continuity:governance_hygiene_review` | Review autonomous-chain governance hygiene | 0.52 | general_self_evolution | must_not_execute_without_review |
+| 5 | `lm:creativity:body_improvement:*` | 基于学习证据定向改进替身 | 动态评分 | body_improvement | Git 提交验证 + evolution boundary + API-B 审查 |
 
 **关键发现**：全部 4 种候选都与替身代码编辑无关。创造力候选（唯一可能导向代码改进的任务）明确禁止编辑身体：
 
@@ -128,26 +129,23 @@ POST /body/upgrade/execute
 | Governor 裁决切换 | ✅（程序前置门） | `GovernorDecisionEngine` 保有否决权；但目标语义下 activate 仍需用户同意 |
 | Mem 存储所有记忆 | ✅ | 双层记忆架构 |
 
-### 缺失的环节
+### 当前剩余缺口
 
-| # | 缺失环节 | 描述 |
+| # | 当前事项 | 描述 |
 |---|---------|------|
-| **1** | 学习证据→定向改进 | `body_improvement` 已存在，但“哪些学习结果足以推成具体改进、改哪个结构节点、为什么现在改”这层映射还不够稳定 |
-| **2** | 学习成果→替身改进的触发 | Agent 完成学习任务后，仍缺一条稳定、细粒度的“读 Mem 学习结论 → 锁定替身结构节点 → 生成定向改进任务”桥 |
-| **3** | 替身改进候选质量 | 监督者已具备 `body_improvement` 候选与转交能力；当前不足主要是证据累积、候选质量与触发条件还不够稳定，容易继续偏向“只读研究” |
-| **4** | 改进范围约束统一 | 白名单目录、禁止模式、文件数上限与 boundary 检查已存在；当前缺口在于让这组边界成为唯一正式入口，并和审查/回写链保持一致 |
-| **5** | 改进→建议切换的自动化 | 从“Agent 提交改进结果”到“Supervisor / Governor 形成建议切换”之间仍缺自动桥接；从建议切换到 activate 还缺用户同意门 |
-| **6** | 健康值时间衰减 | 健康值只增不减，无法反映代码腐化 |
-| **7** | 改进回滚机制 | 破坏性改进后无回滚路径 |
+| **1** | 结构映射长期评估 | v1 已完成显式路径优先、领域词降级、canonical boundary 过滤和任务目标绑定；仍需基于真实改进结果统计误映射、漏映射与节点收益 |
+| **2** | 改进回滚机制 | `previous_healthy_commit` 已记录，但破坏性改进后还没有正式回滚端点与执行闭环 |
+| **3** | 健康值可视化 | 查询契约已有健康分与历史，Web/CLI 还缺稳定的用户可见趋势和建议切换状态展示 |
 
-### 关键断裂点
+### 当前链路与剩余闭环
 
 ```
 当前实际链路:
   内生驱动 → self_learning / body_improvement 候选
     → API-B 治理在途 → API-A 拉取执行 → 写入 Mem
-    → Supervisor 继续观察与再读取
-    → 在“学习成果如何稳定推成定向改进 / 如何形成建议切换”这里仍断链 ✗
+    → Supervisor 验证 baseline..HEAD → evolution boundary → LLM/规则评分
+    → 健康分达标 → Governor 建议切换 → probe lease
+    → 当前在“结构映射如何用真实结果持续校准 / 破坏性改进如何自动回滚”仍未闭环 ✗
 
 架构基线要求:
   内生驱动 → 学习任务 → Agent 学习 → Mem
@@ -673,14 +671,12 @@ async def _emit_switch_suggestion_event(self, slot_id: str):
 | **破坏性改进** (probe 全部失败) | score_delta 保底 -20，健康值大幅扣减 |
 | **同文件反复改** | `_calc_file_repeat_penalty()` 检测：同一文件第 N 次改 → penalty = (N-1) × 5 |
 | **改进停滞** | 任务 status=running 超过 2 小时 → auto-failed（已有超时机制） |
-| **切换失败回滚** | 回滚到 `previous_healthy_commit`，健康值降为 active slot 的健康值 |
+| **切换失败回滚** | 尚未实现正式执行闭环；当前只记录 `previous_healthy_commit`，不得宣称已可自动回滚 |
 | **竞争条件** | `body_improvement` 候选生成前检查 slot.state != "improving" |
 | **用户未同意切换** | 停留在 `awaiting_user_consent`，继续展示替身健康与风险，不自动 activate |
 | **健康值上限** | max=100，超过不累加 |
 | **健康值下限** | min=0，不出现负数 |
 | **时间衰减** | 30 天内不衰减，30-90 天逐渐衰减，90 天后稳定衰减 |
-| **手动重置** | `POST /body/{slot_id}/health/reset` 管理员可重置 |
-| **手动回滚** | `POST /body/{slot_id}/rollback` 管理员可回滚到上次健康 commit |
 | **Governor 否决** | "建议切换"事件被否决后，健康值保留，但需等待下次改进周期 |
 
 ### 8.6 LLM 审查 diff 的实现（修正版）
@@ -819,26 +815,17 @@ async def _rollback_to_healthy_commit(self, slot_id: str):
     registry.save_slot_meta(slot_id, slot_meta)
 ```
 
-### 8.10 实现优先级（修正版）
+### 8.10 当前实现状态与后续优先级
 
-| 优先级 | 任务 | 依赖 |
-|--------|------|------|
-| **P0** | BodySlotMeta 新增 health_score + history + previous_healthy_commit | 无 |
-| **P0** | POST /body/improvement-report 端点（含 commit_hash 验证） | P0 |
-| **P0** | `_calculate_learning_quality_score()`（替代数量计数） | 无 |
-| **P0** | evolution_boundary 细粒度评分（0-20） | 无 |
-| **P0** | shell slot 白名单目录 + 禁止模式 | 无 |
-| **P1** | 内生驱动第 5 种候选 body_improvement（带降级路径） | P0 |
-| **P1** | `_review_body_improvement()` 完整逻辑 | P0 |
-| **P1** | `_llm_review_diff()` | P1 |
-| **P1** | 健康值时间衰减机制 | P0 |
-| **P2** | 相对阈值触发 + "建议切换"事件 | P1 |
-| **P2** | Governor 事件处理（接收建议切换事件） | P2 |
-| **P2** | `awaiting_user_consent` 用户同意门（阻断自动 activate，已落地） | P2 |
-| **P2** | 改进回滚机制 | P0 |
-| **P2** | 学习成果新鲜度衡量 | P0 |
-| **P3** | UI 健康值可视化 | P0 |
-| **P3** | CLI 进度条显示 | P2 |
+| 状态 | 原优先级 | 任务 | 当前说明 |
+|------|----------|------|----------|
+| **已完成** | P0 | BodySlotMeta 健康字段、改进报告端点、学习质量、边界评分 | 报告必须携带 baseline，Supervisor 从 Git 读取真实文件并拒绝越界 |
+| **已完成** | P1 | body_improvement 候选、完整审查、LLM diff 评分、时间衰减 | 学习引用按 `{mem_id, timestamp, relevance}` 结构消费 |
+| **已完成** | P2 | 相对阈值、Governor 建议切换、probe lease、用户同意门 | `shell → candidate → probe` 由唯一生命周期入口执行；activate 仍需用户同意 |
+| **已完成（v1）** | P1 | 学习结论到结构节点的稳定定向映射 | 显式路径优先、受控领域词降级；LM 与确定性候选共用映射，报告只能修改批准目标子集 |
+| **待评估** | P1 | 结构映射效果校准 | 按真实改进结果积累命中率、拒绝原因和节点收益，后续再调整领域词表 |
+| **待完成** | P2 | 改进回滚机制 | 复用 `previous_healthy_commit`，补齐裁决、Git 回滚、probe 和写回 |
+| **待完成** | P3 | UI 健康趋势与建议切换展示 | 只读展示，不增加 Web 人工控制入口 |
 
 ## 9. 关键修正点总结
 

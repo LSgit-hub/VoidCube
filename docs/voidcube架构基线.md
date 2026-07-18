@@ -871,14 +871,17 @@ API-A 自主执行面（最小迷你 CLI / 子代理通道；由主 CLI 内 `/au
 
 ```text
 监督者 (API-B, 内生驱动)
-  → 产出 body_improvement 任务（替身改进候选，三层方向降级）
-  → payload 携带: worktree_path, editable_dirs, forbidden_patterns
+  → 读取完成的学习结论、质量与完成时间
+  → 显式仓库路径优先；否则按受控领域词映射到 canonical Agent/Tools 节点
+  → 只有映射通过 evolution boundary、质量阈值与冷却门时才产出 body_improvement
+  → LM 提案必须绑定同一程序映射，不能自行发明 worktree 或改动范围
+  → payload 携带: worktree_path, target_paths, editable_dirs, learning_refs, max_files_changed
 
 API-A 自主执行面
   → 拉取 body_improvement 任务 → 解析约束
   → 读 Mem（学习成果）+ Git diff(active↔shell) + 读 shell worktree 代码
   → 在 shell worktree 中编辑代码（白名单目录内，≤5 文件）
-  → Git commit → 提交改进报告(commit_hash + diff + 学习引用) → POST /body/improvement-report
+  → Git commit → 提交改进报告(baseline_commit + commit_hash + diff + 学习引用) → POST /body/improvement-report
 ```
 
 **阶段 3：健康值评分**
@@ -886,13 +889,14 @@ API-A 自主执行面
 ```text
 监督者 (API-B)
   → 接收改进报告 → 多重验证:
-      1. commit_hash 归属验证（属于 shell slot worktree）
-      2. 白名单目录检查
-      3. evolution_boundary 细粒度评分 (0-20)
-      4. LLM 审查 diff 质量 (0-20)
-      5. probe 通过率 (0-20，新替身用父 slot 历史平均)
-      6. 学习成果新鲜度 (0-20)
-      7. 同文件重复改进惩罚
+      1. baseline_commit..HEAD 归属与祖先关系验证（属于 shell slot worktree）
+      2. 治理任务 target_paths 子集与最大文件数检查
+      3. canonical evolution boundary 白名单检查
+      4. evolution_boundary 细粒度评分 (0-20)
+      5. LLM 审查 diff 质量 (0-20)
+      6. probe 通过率 (0-20，新替身用父 slot 历史平均)
+      7. 学习成果新鲜度 (0-20)
+      8. 同文件重复改进惩罚
   → 计算 score_delta = Σ(子分 × 权重) - penalty（范围 [-20, 30]）
   → 应用时间衰减（30天内不衰减，30-90天逐渐衰减）
   → 累加至 BodySlotMeta.health_score (0-100)

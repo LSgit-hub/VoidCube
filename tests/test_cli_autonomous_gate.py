@@ -1934,6 +1934,55 @@ def test_body_improvement_completion_requires_improvement_report(monkeypatch):
     assert cli._current_autonomous_task is None
 
 
+def test_body_improvement_report_includes_verified_baseline_contract(monkeypatch):
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli.session_id = "cli-body-report-contract"
+    cli._autonomous_execution_events = []
+    runtime = _autonomous_runtime(cli)
+    runtime._git_improvement_diff = lambda worktree, baseline: {
+        "commit_hash": "a" * 40,
+        "changed_files": ["agent/stream_handler.py"],
+        "diff_summary": "agent/stream_handler.py | 2 +-",
+    }
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["url"] = request.full_url
+        captured["timeout"] = timeout
+        captured["payload"] = json.loads((request.data or b"{}").decode("utf-8"))
+        return _FakeUrlopenResponse({"status": "reviewed"})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    task = {
+        "_improvement_worktree": "F:/body/slot-B",
+        "_baseline_head": "b" * 40,
+        "_improvement_slot_id": "slot-B",
+        "evidence": {
+            "learning_refs": [
+                {
+                    "mem_id": "learning-1",
+                    "timestamp": "2026-07-18T00:00:00+00:00",
+                    "relevance": 0.9,
+                }
+            ]
+        },
+    }
+
+    submitted = runtime.submit_body_improvement_report(
+        task,
+        "body-report-contract",
+        "http://127.0.0.1:6000",
+        improvement_description="Verified improvement",
+    )
+
+    assert submitted is True
+    assert captured["url"].endswith("/v1/body/improvement-report")
+    assert captured["payload"]["baseline_commit"] == "b" * 40
+    assert captured["payload"]["commit_hash"] == "a" * 40
+    assert captured["payload"]["changed_files"] == ["agent/stream_handler.py"]
+    assert captured["payload"]["learning_refs"][0]["mem_id"] == "learning-1"
+
+
 def test_body_improvement_completion_posts_after_successful_report(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._agent_running = False
