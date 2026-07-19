@@ -122,15 +122,11 @@ from agent.display import (
     _detect_tool_failure,
     get_tool_emoji as _get_tool_emoji,
 )
-# Trajectory module removed - using stub functions
-def convert_scratchpad_to_think(*args, **kwargs):
-    return ""
-
-def has_incomplete_scratchpad(*args, **kwargs):
-    return False
-
-def _save_trajectory_to_file(*args, **kwargs):
-    pass
+from agent.message_sanitizer import (
+    sanitize_messages_non_ascii,
+    sanitize_messages_surrogates,
+    sanitize_surrogates,
+)
 from VoidCube_core.utils import atomic_json_write, env_var_enabled
 
 
@@ -149,132 +145,6 @@ def _install_safe_stdio() -> None:
 # IterationBudget imported from agent.iteration_control (was duplicated here)
 
 # Tool scheduling logic moved to agent/tool_scheduler.py
-
-
-
-_SURROGATE_RE = re.compile(r'[\ud800-\udfff]')
-
-
-
-
-def _sanitize_surrogates(text: str) -> str:
-    """Replace lone surrogate code points with U+FFFD (replacement character).
-
-    Surrogates are invalid in UTF-8 and will crash ``json.dumps()`` inside the
-    OpenAI SDK.  This is a fast no-op when the text contains no surrogates.
-    """
-    if _SURROGATE_RE.search(text):
-        return _SURROGATE_RE.sub('\ufffd', text)
-    return text
-
-
-def _sanitize_messages_surrogates(messages: list) -> bool:
-    """Sanitize surrogate characters from all string content in a messages list.
-
-    Walks message dicts in-place. Returns True if any surrogates were found
-    and replaced, False otherwise. Covers content/text, name, and tool call
-    metadata/arguments so retries don't fail on a non-content field.
-    """
-    found = False
-    for msg in messages:
-        if not isinstance(msg, dict):
-            continue
-        content = msg.get("content")
-        if isinstance(content, str) and _SURROGATE_RE.search(content):
-            msg["content"] = _SURROGATE_RE.sub('\ufffd', content)
-            found = True
-        elif isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict):
-                    text = part.get("text")
-                    if isinstance(text, str) and _SURROGATE_RE.search(text):
-                        part["text"] = _SURROGATE_RE.sub('\ufffd', text)
-                        found = True
-        name = msg.get("name")
-        if isinstance(name, str) and _SURROGATE_RE.search(name):
-            msg["name"] = _SURROGATE_RE.sub('\ufffd', name)
-            found = True
-        tool_calls = msg.get("tool_calls")
-        if isinstance(tool_calls, list):
-            for tc in tool_calls:
-                if not isinstance(tc, dict):
-                    continue
-                tc_id = tc.get("id")
-                if isinstance(tc_id, str) and _SURROGATE_RE.search(tc_id):
-                    tc["id"] = _SURROGATE_RE.sub('\ufffd', tc_id)
-                    found = True
-                fn = tc.get("function")
-                if isinstance(fn, dict):
-                    fn_name = fn.get("name")
-                    if isinstance(fn_name, str) and _SURROGATE_RE.search(fn_name):
-                        fn["name"] = _SURROGATE_RE.sub('\ufffd', fn_name)
-                        found = True
-                    fn_args = fn.get("arguments")
-                    if isinstance(fn_args, str) and _SURROGATE_RE.search(fn_args):
-                        fn["arguments"] = _SURROGATE_RE.sub('\ufffd', fn_args)
-                        found = True
-    return found
-
-
-def _strip_non_ascii(text: str) -> str:
-    """Remove non-ASCII characters, replacing with closest ASCII equivalent or removing.
-
-    Used as a last resort when the system encoding is ASCII and can't handle
-    any non-ASCII characters (e.g. LANG=C on Chromebooks).
-    """
-    return text.encode('ascii', errors='ignore').decode('ascii')
-
-
-def _sanitize_messages_non_ascii(messages: list) -> bool:
-    """Strip non-ASCII characters from all string content in a messages list.
-
-    This is a last-resort recovery for systems with ASCII-only encoding
-    (LANG=C, Chromebooks, minimal containers).  Returns True if any
-    non-ASCII content was found and sanitized.
-    """
-    found = False
-    for msg in messages:
-        if not isinstance(msg, dict):
-            continue
-        # Sanitize content (string)
-        content = msg.get("content")
-        if isinstance(content, str):
-            sanitized = _strip_non_ascii(content)
-            if sanitized != content:
-                msg["content"] = sanitized
-                found = True
-        elif isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict):
-                    text = part.get("text")
-                    if isinstance(text, str):
-                        sanitized = _strip_non_ascii(text)
-                        if sanitized != text:
-                            part["text"] = sanitized
-                            found = True
-        # Sanitize name field (can contain non-ASCII in tool results)
-        name = msg.get("name")
-        if isinstance(name, str):
-            sanitized = _strip_non_ascii(name)
-            if sanitized != name:
-                msg["name"] = sanitized
-                found = True
-        # Sanitize tool_calls
-        tool_calls = msg.get("tool_calls")
-        if isinstance(tool_calls, list):
-            for tc in tool_calls:
-                if isinstance(tc, dict):
-                    fn = tc.get("function", {})
-                    if isinstance(fn, dict):
-                        fn_args = fn.get("arguments")
-                        if isinstance(fn_args, str):
-                            sanitized = _strip_non_ascii(fn_args)
-                            if sanitized != fn_args:
-                                fn["arguments"] = sanitized
-                                found = True
-    return found
-
-
 
 
 
@@ -343,7 +213,6 @@ class AIAgent:
         tool_delay: float = 1.0,
         enabled_toolsets: List[str] = None,
         disabled_toolsets: List[str] = None,
-        save_trajectories: bool = False,
         verbose_logging: bool = False,
         quiet_mode: bool = False,
         ephemeral_system_prompt: str = None,
@@ -399,7 +268,6 @@ class AIAgent:
             tool_delay (float): Delay between tool calls in seconds (default: 1.0)
             enabled_toolsets (List[str]): Only enable tools from these toolsets (optional)
             disabled_toolsets (List[str]): Disable tools from these toolsets (optional)
-            save_trajectories (bool): Whether to save conversation trajectories to JSONL files (default: False)
             verbose_logging (bool): Enable verbose logging for debugging (default: False)
             quiet_mode (bool): Suppress progress output for clean CLI experience (default: False)
             ephemeral_system_prompt (str): System prompt used during agent execution but NOT saved to trajectories (optional)
@@ -433,7 +301,6 @@ class AIAgent:
         # Consumed by every LLM turn across parent + all subagents.
         self.iteration_budget = iteration_budget or IterationBudget(max_iterations)
         self.tool_delay = tool_delay
-        self.save_trajectories = save_trajectories
         self.verbose_logging = verbose_logging
         self.quiet_mode = quiet_mode
         self.ephemeral_system_prompt = ephemeral_system_prompt
@@ -791,10 +658,6 @@ class AIAgent:
             missing_reqs = [name for name, available in requirements.items() if not available]
             if missing_reqs:
                 print(f"⚠️  Some tools may not work due to missing requirements: {missing_reqs}")
-        
-        # Show trajectory saving status
-        if self.save_trajectories and not self.quiet_mode:
-            print("📝 Trajectory saving enabled")
         
         # Show ephemeral system prompt status
         if self.ephemeral_system_prompt and not self.quiet_mode:
@@ -2098,15 +1961,17 @@ class AIAgent:
         
         return json.dumps(formatted_tools, ensure_ascii=False)
     
-    def _convert_to_trajectory_format(self, messages: List[Dict[str, Any]], user_query: str, completed: bool) -> List[Dict[str, Any]]:
+    def _convert_to_trajectory_format(
+        self,
+        messages: List[Dict[str, Any]],
+        user_query: str,
+    ) -> List[Dict[str, Any]]:
         """
         Convert internal message format to trajectory format for saving.
         
         Args:
             messages (List[Dict]): Internal message history
             user_query (str): Original user query
-            completed (bool): Whether the conversation completed successfully
-            
         Returns:
             List[Dict]: Messages in trajectory format
         """
@@ -2158,9 +2023,7 @@ class AIAgent:
                         content = f"<think>\n{msg['reasoning']}\n</think>\n"
                     
                     if msg.get("content") and msg["content"].strip():
-                        # Convert any <REASONING_SCRATCHPAD> tags to <think> tags
-                        # (used when native thinking is disabled and model reasons via XML)
-                        content += convert_scratchpad_to_think(msg["content"]) + "\n"
+                        content += msg["content"] + "\n"
                     
                     # Add tool calls wrapped in XML tags
                     for tool_call in msg["tool_calls"]:
@@ -2239,10 +2102,8 @@ class AIAgent:
                     if msg.get("reasoning") and msg["reasoning"].strip():
                         content = f"<think>\n{msg['reasoning']}\n</think>\n"
                     
-                    # Convert any <REASONING_SCRATCHPAD> tags to <think> tags
-                    # (used when native thinking is disabled and model reasons via XML)
                     raw_content = msg["content"] or ""
-                    content += convert_scratchpad_to_think(raw_content)
+                    content += raw_content
                     
                     # Ensure every gpt turn has a <think> block (empty if no reasoning)
                     if "<think>" not in content:
@@ -2262,21 +2123,6 @@ class AIAgent:
             i += 1
         
         return trajectory
-    
-    def _save_trajectory(self, messages: List[Dict[str, Any]], user_query: str, completed: bool):
-        """
-        Save conversation trajectory to JSONL file.
-        
-        Args:
-            messages (List[Dict]): Complete message history
-            user_query (str): Original user query
-            completed (bool): Whether the conversation completed successfully
-        """
-        if not self.save_trajectories:
-            return
-        
-        trajectory = self._convert_to_trajectory_format(messages, user_query, completed)
-        _save_trajectory_to_file(trajectory, self.model, completed)
     
     @staticmethod
     def _summarize_api_error(error: Exception) -> str:
@@ -2517,10 +2363,9 @@ class AIAgent:
 
     @staticmethod
     def _clean_session_content(content: str) -> str:
-        """Convert REASONING_SCRATCHPAD to think tags and clean up whitespace."""
+        """Normalize whitespace around existing think blocks."""
         if not content:
             return content
-        content = convert_scratchpad_to_think(content)
         content = re.sub(r'\n+(<think>)', r'\n\1', content)
         content = re.sub(r'(</think>)\n+', r'\1\n', content)
         return content.strip()
@@ -7344,9 +7189,9 @@ class AIAgent:
         # rich-text editors (Google Docs, Word, etc.) can inject lone surrogates
         # that are invalid UTF-8 and crash JSON serialization in the OpenAI SDK.
         if isinstance(user_message, str):
-            user_message = _sanitize_surrogates(user_message)
+            user_message = sanitize_surrogates(user_message)
         if isinstance(persist_user_message, str):
-            persist_user_message = _sanitize_surrogates(persist_user_message)
+            persist_user_message = sanitize_surrogates(persist_user_message)
 
         # Store stream callback for _interruptible_api_call to pick up
         self._stream_callback = stream_callback
@@ -7360,7 +7205,6 @@ class AIAgent:
         self._invalid_tool_retries = 0
         self._invalid_json_retries = 0
         self._empty_content_retries = 0
-        self._incomplete_scratchpad_retries = 0
         self._codex_incomplete_retries = 0
         self._thinking_prefill_retries = 0
         self._last_content_with_tools = None
@@ -8458,7 +8302,7 @@ class AIAgent:
                     if isinstance(api_error, UnicodeEncodeError) and getattr(self, '_unicode_sanitization_passes', 0) < 2:
                         _err_str = str(api_error).lower()
                         _is_ascii_codec = "'ascii'" in _err_str or "ascii" in _err_str
-                        _surrogates_found = _sanitize_messages_surrogates(messages)
+                        _surrogates_found = sanitize_messages_surrogates(messages)
                         if _surrogates_found:
                             self._unicode_sanitization_passes += 1
                             self._vprint(
@@ -8470,7 +8314,7 @@ class AIAgent:
                             # ASCII codec: the system encoding can't handle
                             # non-ASCII characters at all. Sanitize all
                             # non-ASCII content from messages and retry.
-                            if _sanitize_messages_non_ascii(messages):
+                            if sanitize_messages_non_ascii(messages):
                                 self._unicode_sanitization_passes += 1
                                 self._vprint(
                                     f"{self.log_prefix}⚠️  System encoding is ASCII — stripped non-ASCII characters from messages. Retrying...",
@@ -9221,38 +9065,6 @@ class AIAgent:
                         except Exception:
                             pass
                 
-                # Check for incomplete <REASONING_SCRATCHPAD> (opened but never closed)
-                # This means the model ran out of output tokens mid-reasoning — retry up to 2 times
-                if has_incomplete_scratchpad(assistant_message.content or ""):
-                    self._incomplete_scratchpad_retries += 1
-                    
-                    self._vprint(f"{self.log_prefix}⚠️  Incomplete <REASONING_SCRATCHPAD> detected (opened but never closed)")
-                    
-                    if self._incomplete_scratchpad_retries <= 2:
-                        self._vprint(f"{self.log_prefix}🔄 Retrying API call ({self._incomplete_scratchpad_retries}/2)...")
-                        # Don't add the broken message, just retry
-                        continue
-                    else:
-                        # Max retries - discard this turn and save as partial
-                        self._vprint(f"{self.log_prefix}❌ Max retries (2) for incomplete scratchpad. Saving as partial.", force=True)
-                        self._incomplete_scratchpad_retries = 0
-                        
-                        rolled_back_messages = self._get_messages_up_to_last_assistant(messages)
-                        self._cleanup_task_resources(effective_task_id)
-                        self._persist_session(messages, conversation_history)
-                        
-                        return {
-                            "final_response": None,
-                            "messages": rolled_back_messages,
-                            "api_calls": api_call_count,
-                            "completed": False,
-                            "partial": True,
-                            "error": "Incomplete REASONING_SCRATCHPAD after 2 retries"
-                        }
-                
-                # Reset incomplete scratchpad counter on clean response
-                self._incomplete_scratchpad_retries = 0
-
                 if self.api_mode == "codex_responses" and finish_reason == "incomplete":
                     self._codex_incomplete_retries += 1
 
@@ -9929,9 +9741,6 @@ class AIAgent:
         # Determine if conversation completed successfully
         completed = final_response is not None and api_call_count < self.max_iterations
 
-        # Save trajectory if enabled
-        self._save_trajectory(messages, user_message, completed)
-
         # Clean up VM and browser for this task after conversation completes
         self._cleanup_task_resources(effective_task_id)
 
@@ -10125,7 +9934,6 @@ def main(
     enabled_toolsets: str = None,
     disabled_toolsets: str = None,
     list_tools: bool = False,
-    save_trajectories: bool = False,
     save_sample: bool = False,
     verbose: bool = False,
     log_prefix_chars: int = 20
@@ -10144,7 +9952,6 @@ def main(
                               Multiple toolsets can be combined: "web,vision"
         disabled_toolsets (str): Comma-separated list of toolsets to disable (e.g., "terminal")
         list_tools (bool): Just list available tools and exit
-        save_trajectories (bool): Save conversation trajectories to JSONL files (appends to trajectory_samples.jsonl). Defaults to False.
         save_sample (bool): Save a single trajectory sample to a UUID-named JSONL file for inspection. Defaults to False.
         verbose (bool): Enable verbose logging for debugging. Defaults to False.
         log_prefix_chars (int): Number of characters to show in log previews for tool calls/responses. Defaults to 20.
@@ -10234,8 +10041,6 @@ def main(
         print("  # Disable toolsets")
         print("  python run_agent.py --disabled_toolsets=terminal --query='no command execution'")
         print("  ")
-        print("  # Run with trajectory saving enabled")
-        print("  python run_agent.py --save_trajectories --query='your question here'")
         return
     
     # Parse toolset selection arguments
@@ -10250,11 +10055,6 @@ def main(
         disabled_toolsets_list = [t.strip() for t in disabled_toolsets.split(",")]
         print(f"🚫 Disabled toolsets: {disabled_toolsets_list}")
     
-    if save_trajectories:
-        print("💾 Trajectory saving: ENABLED")
-        print("   - Successful conversations → trajectory_samples.jsonl")
-        print("   - Failed conversations → failed_trajectories.jsonl")
-    
     # Initialize agent with provided parameters
     try:
         agent = AIAgent(
@@ -10264,7 +10064,6 @@ def main(
             max_iterations=max_turns,
             enabled_toolsets=enabled_toolsets_list,
             disabled_toolsets=disabled_toolsets_list,
-            save_trajectories=save_trajectories,
             verbose_logging=verbose,
             log_prefix_chars=log_prefix_chars
         )
@@ -10306,9 +10105,8 @@ def main(
         
         # Convert messages to trajectory format (same as batch_runner)
         trajectory = agent._convert_to_trajectory_format(
-            result['messages'], 
-            user_query, 
-            result['completed']
+            result['messages'],
+            user_query,
         )
         
         entry = {

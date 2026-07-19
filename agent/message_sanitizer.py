@@ -7,7 +7,6 @@ and cleaning non-ASCII text from API requests.
 """
 
 import re
-from typing import Any, List
 
 
 _SURROGATE_RE = re.compile(r'[\ud800-\udfff]')
