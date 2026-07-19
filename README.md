@@ -17,7 +17,7 @@
 
 ### 核心特性
 
-- **轻量安装** — 核心依赖仅 9 个包，`pip install` 即装即用
+- **标准 Python 安装** — 基础安装包含 CLI 与默认守护服务所需依赖，可选能力通过 extras 安装
 - **快速配置** — 一行命令启动，配置 API Key 即可使用，预设模板一键部署
 - **友好交互** — 基于 prompt_toolkit 的 REPL，支持历史补全、内置命令，自然语言操作
 - **云端智能** — 调用 100+ 云端 LLM（Claude / GPT-4o / DeepSeek / Qwen 等），能力强劲无需本地算力
@@ -41,36 +41,18 @@
 
 ***
 
-## 一键安装
+## 安装
 
-### Windows 系统
-
-```powershell
-# 方式一：使用一键安装脚本（推荐）
-powershell -c "Invoke-WebRequest https://gitee.com/LSgit-hub/voidcub-CLI/raw/main/install.bat -OutFile install.bat; .\install.bat"
-
-# 方式二：从 Gitee 直接安装
-pip install git+https://gitee.com/LSgit-hub/voidcub-CLI.git[all]
-
-# 方式三：从源码安装
-git clone https://gitee.com/LSgit-hub/voidcub-CLI
-cd voidcub-CLI
-.\install.bat
-```
-
-### Linux / macOS 系统
+### 从源码安装（Windows / Linux / macOS）
 
 ```bash
-# 方式一：使用一键安装脚本（推荐）
-curl -sSL https://gitee.com/LSgit-hub/voidcub-CLI/raw/main/install.sh | bash
-
-# 方式二：从 Gitee 直接安装
-pip install git+https://gitee.com/LSgit-hub/voidcub-CLI.git[all]
-
-# 方式三：从源码安装
-git clone https://gitee.com/LSgit-hub/voidcub-CLI
+git clone https://gitee.com/LSgit-hub/voidcub-CLI.git
 cd voidcub-CLI
-./install.sh
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# Linux/macOS: source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[all]"
 ```
 
 ### 安装选项
@@ -84,24 +66,16 @@ cd voidcub-CLI
 | `pip install voidcube-agent[voice]` | 核心 + 语音合成 |
 | `pip install voidcube-agent[web]` | 核心 + Web 工具 |
 
-### 离线安装（无网络环境）
+### 开发环境与验证
 
 ```bash
-# 1. 在有网络的机器上构建离线包
-git clone https://gitee.com/LSgit-hub/voidcub-CLI
-cd voidcub-CLI
-pip install build
-python build_offline_package.py
-
-# 2. 将 dist/voidcube-offline-package.tar.gz 复制到目标机器
-
-# 3. 在目标机器上离线安装
-tar -xzf voidcube-offline-package.tar.gz
-cd voidcube-offline-package
-./install_offline.sh    # Linux/macOS
-# 或
-install_offline.bat     # Windows
+python -m pip install -e ".[all,dev]"
+python -m pytest -q
+python -m build
 ```
+
+构建生成的 wheel 位于 `dist/`。离线部署时，应在联网环境预下载该 wheel
+及其依赖，再使用 `pip install --no-index --find-links <wheelhouse>` 安装。
 
 ---
 
@@ -486,8 +460,8 @@ VoidCube/
 ├── config.yaml             # 项目默认配置
 ├── docs/                   # 架构与改造文档
 │   ├── voidcube架构基线.md
-│   ├── 全链条报告.md
-│   ├── 内生驱动问题清单.md
+│   ├── 全链路问题清单.md
+│   ├── 全链条迁移日志.md
 │   ├── 内生驱动核心设计.md
 │   ├── CLI展示与gateway双槽设计.md
 │   └── 项目文件架构说明.md
@@ -517,4 +491,4 @@ MIT License
 
 欢迎提交 Issue 和 Pull Request！
 
-项目地址：https://gitee.com/LSgit-hub/VoidCub
+项目地址：https://gitee.com/LSgit-hub/voidcub-CLI

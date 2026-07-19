@@ -12,7 +12,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from systems.supervisor.supervisor import Supervisor, SupervisorConfig, SupervisorExecutionConfig
+from systems.supervisor.supervisor import (
+    Supervisor,
+    SupervisorConfig,
+    SupervisorExecutionConfig,
+    SupervisorServiceRuntimeConfig,
+)
 from systems.supervisor.endogenous_drive import (
     EndogenousTaskCandidate,
     EndogenousDriveEngine,
@@ -27,12 +32,20 @@ from systems.config import load_config_from_env
 
 def _make_supervisor_config(tmp_path: Path) -> SupervisorConfig:
     return SupervisorConfig(
-        execution=SupervisorExecutionConfig(git_repo_path=str(tmp_path))
+        execution=SupervisorExecutionConfig(git_repo_path=str(tmp_path)),
+        service_runtime=SupervisorServiceRuntimeConfig(
+            endogenous_drive_lm_task_generation_enabled=False,
+        ),
     )
 
 
 def _make_supervisor(tmp_path: Path) -> Supervisor:
-    return Supervisor(_make_supervisor_config(tmp_path))
+    supervisor = Supervisor(_make_supervisor_config(tmp_path))
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    supervisor._review_task_governance_with_supervisor = AsyncMock(  # type: ignore[method-assign]
+        return_value={}
+    )
+    return supervisor
 
 
 def _seed_current_lm_reasoning_state(
@@ -6512,7 +6525,7 @@ async def test_endogenous_drive_can_materialize_llm_task_proposals_from_evidence
                         "title": "Architecture evidence",
                         "summary": "External research supports structured self-understanding.",
                         "source": "test_research",
-                        "published_at": "2026-06-25T00:00:00+00:00",
+                        "published_at": datetime.now(timezone.utc).isoformat(),
                     }
                 ]
             }
@@ -6565,7 +6578,6 @@ async def test_endogenous_drive_can_materialize_llm_task_proposals_from_evidence
         }
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
-
     fake_client = _FakeLLMClient(
         {
             "proposals": [
@@ -8037,6 +8049,18 @@ async def test_endogenous_drive_constrains_high_risk_or_weak_evidence_lm_proposa
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
 
+    existing = await supervisor.plan_autonomous_chain_task(
+        {
+            "title": "Existing API-B judgement requiring review",
+            "task_family": "memory_maintenance",
+        }
+    )
+    supervisor._autonomous_chain_store.update_status(
+        existing["tasks"][0]["task_id"],
+        status="awaiting_review",
+        actor="test",
+        reason="requires governance review",
+    )
     fake_client = _FakeLLMClient(
         {
             "proposals": [
@@ -8234,6 +8258,18 @@ async def test_endogenous_drive_prefers_conservative_review_over_weak_improvemen
         }
 
     supervisor.evaluate_drive_input = fake_drive_input  # type: ignore[method-assign]
+    existing = await supervisor.plan_autonomous_chain_task(
+        {
+            "title": "Existing API-B judgement requiring review",
+            "task_family": "memory_maintenance",
+        }
+    )
+    supervisor._autonomous_chain_store.update_status(
+        existing["tasks"][0]["task_id"],
+        status="awaiting_review",
+        actor="test",
+        reason="requires governance review",
+    )
     fake_client = _FakeLLMClient(
         {
             "cognitive_assessment": {
@@ -8657,7 +8693,7 @@ async def test_endogenous_drive_passes_unified_evidence_channels_to_lm(tmp_path)
                         "title": "Meta-cognition update",
                         "summary": "Recent structured cognition work emphasizes explicit evidence channels.",
                         "source": "research_digest_file",
-                        "published_at": "2026-06-25T00:00:00+00:00",
+                        "published_at": datetime.now(timezone.utc).isoformat(),
                     }
                 ]
             }

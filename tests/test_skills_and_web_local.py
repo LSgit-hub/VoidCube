@@ -97,7 +97,7 @@ def test_local_web_search_falls_back_to_bing(monkeypatch):
 @pytest.mark.unit
 async def test_web_extract_local_backend_uses_local_crawler(monkeypatch):
     monkeypatch.setattr(web_tools, "_get_backend", lambda: "local")
-    monkeypatch.setattr(web_tools, "check_auxiliary_model", lambda: False)
+    monkeypatch.setattr(web_tools, "check_auxiliary_model", lambda **_: False)
 
     def fake_local_web_extract(url: str):
         assert url == "https://example.com"
@@ -128,7 +128,7 @@ async def test_web_extract_local_backend_uses_local_crawler(monkeypatch):
 async def test_web_extract_firecrawl_falls_back_to_local_when_unavailable(monkeypatch):
     monkeypatch.setattr(web_tools, "_get_backend", lambda: "firecrawl")
     monkeypatch.setattr(web_tools, "check_firecrawl_api_key", lambda: False)
-    monkeypatch.setattr(web_tools, "check_auxiliary_model", lambda: False)
+    monkeypatch.setattr(web_tools, "check_auxiliary_model", lambda **_: False)
 
     def fake_local_web_extract(url: str):
         assert url == "https://example.com/fallback"

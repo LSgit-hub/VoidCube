@@ -28,12 +28,17 @@ from systems.self_learning.conclusion_store import SelfLearningConclusionStore
 
 def _make_supervisor_config(tmp_path: Path) -> SupervisorConfig:
     return SupervisorConfig(
-        execution=SupervisorExecutionConfig(git_repo_path=str(tmp_path))
+        execution=SupervisorExecutionConfig(git_repo_path=str(tmp_path)),
+        service_runtime=SupervisorServiceRuntimeConfig(
+            endogenous_drive_lm_task_generation_enabled=False,
+        ),
     )
 
 
 def _make_supervisor(tmp_path: Path) -> Supervisor:
-    return Supervisor(_make_supervisor_config(tmp_path))
+    supervisor = Supervisor(_make_supervisor_config(tmp_path))
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    return supervisor
 
 
 def _runtime_drive_input_payload(*, active_sessions: int = 0, quiet_after_seconds: int = 600) -> dict:

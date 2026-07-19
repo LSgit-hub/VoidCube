@@ -152,7 +152,7 @@ def build_endogenous_task_generation_payload(
     for title, value, limit in (
         ("图谱简报", graph_brief, 3200),
         ("记忆简报", memory_brief, 2600),
-        ("证据简报", evidence_brief, 2600),
+        ("证据简报", evidence_brief, 4200),
     ):
         if _has_prompt_brief_content(value):
             brief_sections += (
@@ -451,12 +451,18 @@ def _build_prompt_memory_brief(packet: Dict[str, Any]) -> Dict[str, Any]:
 
 def _build_prompt_evidence_brief(packet: Dict[str, Any]) -> Dict[str, Any]:
     brief: Dict[str, Any] = {}
-    for key in (
-        "recent_learning_evidence",
-        "external_research_evidence",
-        "shell_body_profile",
-        "research_digest",
-    ):
+    channel_view = packet.get("evidence_channels")
+    keys = (
+        ("evidence_channels", "research_digest")
+        if channel_view
+        else (
+            "recent_learning_evidence",
+            "external_research_evidence",
+            "shell_body_profile",
+            "research_digest",
+        )
+    )
+    for key in keys:
         value = packet.get(key)
         if value:
             brief[key] = value
@@ -1715,6 +1721,9 @@ def _compact_generic_item(
         if key in item:
             compact[key] = item[key]
     for key in (
+        "freshness_hint",
+        "evidence_strength",
+        "conflict_flags",
         "confidence_score",
         "novelty_score",
         "source_reliability",

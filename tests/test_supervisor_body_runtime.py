@@ -18,12 +18,16 @@ from systems.supervisor.supervisor import (
     Supervisor,
     SupervisorConfig,
     SupervisorExecutionConfig,
+    SupervisorServiceRuntimeConfig,
 )
 
 
 def _make_supervisor_config(tmp_path: Path) -> SupervisorConfig:
     return SupervisorConfig(
-        execution=SupervisorExecutionConfig(git_repo_path=str(tmp_path))
+        execution=SupervisorExecutionConfig(git_repo_path=str(tmp_path)),
+        service_runtime=SupervisorServiceRuntimeConfig(
+            endogenous_drive_lm_task_generation_enabled=False,
+        ),
     )
 
 

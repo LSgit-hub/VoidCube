@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -35,6 +35,11 @@ dependencies = [
     "pydantic>=2.0.0,<3",
     "requests>=2.31.0,<3",
     "fire>=0.5.0,<1",
+    # The unified launcher starts these local services by default.
+    "aiohttp>=3.9.0,<4",
+    "fastapi>=0.115.0,<1",
+    "uvicorn>=0.32.0,<1",
+    "psutil>=6.1.0,<8",
 ]
 
 [project.optional-dependencies]
@@ -55,6 +60,10 @@ voice = [
 web = [
     "firecrawl-py>=0.1.0",
     "parallel-web>=0.4.2",
+]
+dev = [
+    "build>=1.2.0,<2",
+    "pytest>=8.0.0,<9",
 ]
 # 完整安装（兼容两种命名习惯）
 full = [
@@ -78,4 +87,7 @@ py-modules = ["voidcube", "cli", "run_agent"]
 
 [tool.setuptools.packages.find]
 where = [".", "Mem/src"]
-include = ["agent", "tools", "VoidCube_cli", "VoidCube_core", "systems", "plugins.*", "memai"]
+include = ["agent*", "tools*", "VoidCube_cli*", "VoidCube_core*", "systems*", "plugins*", "memai*"]
+
+[tool.setuptools.package-data]
+memai = ["prompts/*/*.txt"]
