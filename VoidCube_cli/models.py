@@ -1256,9 +1256,7 @@ def _copilot_catalog_item_is_text_model(item: dict[str, Any]) -> bool:
             for endpoint in supported_endpoints
             if str(endpoint).strip()
         }
-        if normalized_endpoints and not normalized_endpoints.intersection(
-            {"/chat/completions", "/responses", "/v1/messages"}
-        ):
+        if normalized_endpoints and "/chat/completions" not in normalized_endpoints:
             return False
 
     return True

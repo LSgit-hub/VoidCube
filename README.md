@@ -20,7 +20,7 @@
 - **标准 Python 安装** — 基础安装包含 CLI 与默认守护服务所需依赖，可选能力通过 extras 安装
 - **快速配置** — 一行命令启动，配置 API Key 即可使用，预设模板一键部署
 - **友好交互** — 基于 prompt_toolkit 的 REPL，支持历史补全、内置命令，自然语言操作
-- **云端智能** — 调用 100+ 云端 LLM（Claude / GPT-4o / DeepSeek / Qwen 等），能力强劲无需本地算力
+- **云端智能** — 调用 100+ 云端 LLM（GPT-4o / DeepSeek / Qwen / Gemini 等），能力强劲无需本地算力
 - **多环境执行** — Local / Docker / SSH / Modal / Singularity / Daytona
 - **运维工具集** — 50+ 运维原语：服务管理、包管理、Docker、防火墙、日志、端口扫描、用户管理
 - **安全优先** — 危险命令审批机制、敏感信息脱敏、路径安全校验、OSV 漏洞检查
@@ -29,6 +29,8 @@
 - **自进化能力** — 监督者全天候运行，Agent 通过自主任务通道拉取学习/改造任务
 - **双槽隔离** — 主 CLI 用户交互走 `user_chat` 泳道，监督者后台任务走 `supervisor_task` 泳道；`AUTO` 当前只是监督者临时启停门控，不接管主 CLI
 - **身体治理** — 双身体槽位、替身改进、probe、观察窗口与可回滚切换；真正 activate 新替身需用户同意（目标语义）
+
+模型请求统一走 OpenAI-compatible `POST /chat/completions`。Provider 配置只描述模型、Base URL 和凭据，不再自动切换其他消息协议。
 
 ### 适用场景
 
@@ -150,7 +152,7 @@ vc
 # OpenRouter（推荐）
 OPENROUTER_API_KEY=your-key
 LLM_BASE_URL=https://openrouter.ai/api/v1
-LLM_MODEL=anthropic/claude-3.5-sonnet
+LLM_MODEL=qwen/qwen3.6-plus
 
 # DeepSeek
 DEEPSEEK_API_KEY=sk-your-key-here
@@ -223,7 +225,7 @@ vc
 # OpenRouter（推荐）
 OPENROUTER_API_KEY=your-key
 LLM_BASE_URL=https://openrouter.ai/api/v1
-LLM_MODEL=anthropic/claude-3.5-sonnet
+LLM_MODEL=qwen/qwen3.6-plus
 
 # DeepSeek
 DEEPSEEK_API_KEY=sk-your-key-here
@@ -246,7 +248,7 @@ TERMINAL_DOCKER_IMAGE=nikolaik/python-nodejs:python3.11-nodejs20
 # Docker 环境配置
 export TERMINAL_ENV=docker
 export TERMINAL_DOCKER_IMAGE=nikolaik/python-nodejs:python3.11-nodejs20
-export TERMINAL_DOCKER_FORWARD_ENV='["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]'
+export TERMINAL_DOCKER_FORWARD_ENV='["OPENAI_API_KEY", "OPENROUTER_API_KEY"]'
 
 # SSH 密钥认证
 export TERMINAL_SSH_HOST=your-server.com
@@ -419,7 +421,7 @@ VoidCube 支持多种命令执行后端，通过 `TERMINAL_ENV` 环境变量切�
 
 | 场景   | 推荐模型                          | 提供商        |
 | ---- | ----------------------------- | ---------- |
-| 日常运维 | `anthropic/claude-3.5-sonnet` | OpenRouter |
+| 日常运维 | `qwen/qwen3.6-plus`           | OpenRouter |
 | 复杂推理 | `openai/o3-mini`              | OpenRouter |
 | 性价比  | `deepseek/deepseek-chat`      | DeepSeek   |
 | 中文优化 | `qwen/qwen-plus`              | DashScope  |

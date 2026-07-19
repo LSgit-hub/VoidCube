@@ -7,7 +7,7 @@ Two data sources, merged at runtime:
    names, and full model metadata (context, cost, capabilities).  This is
    the primary database.
 
-2. **Voidcube overlays** — transport type, auth patterns, aggregator flags,
+2. **Voidcube overlays** — auth patterns, aggregator flags,
    and additional env vars that models.dev doesn't track.  Small dict,
    maintained here.
 
@@ -38,7 +38,6 @@ class VoidcubeOverlay:
         VoidcubeOverlay is retained as a data source for ProviderRegistry.
     """
 
-    transport: str = "openai_chat"
     is_aggregator: bool = False
     auth_type: str = "api_key"            # api_key | oauth_device_code | oauth_external | external_process
     extra_env_vars: Tuple[str, ...] = ()  # env vars models.dev doesn't list
@@ -48,89 +47,71 @@ class VoidcubeOverlay:
 
 VOIDCUBE_OVERLAYS: Dict[str, VoidcubeOverlay] = {
     "openrouter": VoidcubeOverlay(
-        transport="openai_chat",
         is_aggregator=True,
         extra_env_vars=("OPENAI_API_KEY",),
         base_url_env_var="OPENROUTER_BASE_URL",
     ),
     "nous": VoidcubeOverlay(
-        transport="openai_chat",
         auth_type="oauth_device_code",
         base_url_override="https://inference-api.nousresearch.com/v1",
     ),
     "qwen-oauth": VoidcubeOverlay(
-        transport="openai_chat",
         auth_type="oauth_external",
         base_url_override="https://portal.qwen.ai/v1",
         base_url_env_var="VOIDCUBE_QWEN_BASE_URL",
     ),
     "copilot-acp": VoidcubeOverlay(
-        transport="openai_chat",
         auth_type="external_process",
         base_url_override="acp://copilot",
         base_url_env_var="COPILOT_ACP_BASE_URL",
     ),
     "github-copilot": VoidcubeOverlay(
-        transport="openai_chat",
         extra_env_vars=("COPILOT_GITHUB_TOKEN", "GH_TOKEN"),
     ),
 
     "zai": VoidcubeOverlay(
-        transport="openai_chat",
         extra_env_vars=("GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY"),
         base_url_env_var="GLM_BASE_URL",
     ),
     "kimi-for-coding": VoidcubeOverlay(
-        transport="openai_chat",
         base_url_env_var="KIMI_BASE_URL",
     ),
     "minimax": VoidcubeOverlay(
-        transport="openai_chat",
         base_url_env_var="MINIMAX_BASE_URL",
     ),
     "minimax-cn": VoidcubeOverlay(
-        transport="openai_chat",
         base_url_env_var="MINIMAX_CN_BASE_URL",
     ),
     "deepseek": VoidcubeOverlay(
-        transport="openai_chat",
         base_url_env_var="DEEPSEEK_BASE_URL",
     ),
     "alibaba": VoidcubeOverlay(
-        transport="openai_chat",
         base_url_env_var="DASHSCOPE_BASE_URL",
     ),
     "vercel": VoidcubeOverlay(
-        transport="openai_chat",
         is_aggregator=True,
     ),
     "opencode": VoidcubeOverlay(
-        transport="openai_chat",
         is_aggregator=True,
         base_url_env_var="OPENCODE_ZEN_BASE_URL",
     ),
     "opencode-go": VoidcubeOverlay(
-        transport="openai_chat",
         is_aggregator=True,
         base_url_env_var="OPENCODE_GO_BASE_URL",
     ),
     "kilo": VoidcubeOverlay(
-        transport="openai_chat",
         is_aggregator=True,
         base_url_env_var="KILOCODE_BASE_URL",
     ),
     "huggingface": VoidcubeOverlay(
-        transport="openai_chat",
         is_aggregator=True,
         base_url_env_var="HF_BASE_URL",
     ),
     "xai": VoidcubeOverlay(
-        transport="openai_chat",
         base_url_override="https://api.x.ai/v1",
         base_url_env_var="XAI_BASE_URL",
     ),
     "xiaomi": VoidcubeOverlay(
-        transport="openai_chat",
         base_url_env_var="XIAOMI_BASE_URL",
     ),
 }
@@ -145,7 +126,6 @@ class ProviderDef:
 
     id: str
     name: str
-    transport: str
     api_key_env_vars: Tuple[str, ...]     # all env vars to check for API key
     base_url: str = ""
     base_url_env_var: str = ""
@@ -249,13 +229,6 @@ _LABEL_OVERRIDES: Dict[str, str] = {
 }
 
 
-# -- Transport → API mode mapping ---------------------------------------------
-
-TRANSPORT_TO_API_MODE: Dict[str, str] = {
-    "openai_chat": "chat_completions",
-}
-
-
 # -- Helper functions ---------------------------------------------------------
 
 def normalize_provider(name: str) -> str:
@@ -291,7 +264,6 @@ def get_provider(name: str) -> Optional[ProviderDef]:
 
     if mdev_info is not None:
         # Merge models.dev + overlay
-        transport = overlay.transport if overlay else "openai_chat"
         is_agg = overlay.is_aggregator if overlay else False
         auth = overlay.auth_type if overlay else "api_key"
         base_url_env = overlay.base_url_env_var if overlay else ""
@@ -307,7 +279,6 @@ def get_provider(name: str) -> Optional[ProviderDef]:
         return ProviderDef(
             id=canonical,
             name=mdev_info.name,
-            transport=transport,
             api_key_env_vars=tuple(env_vars),
             base_url=base_url_override or mdev_info.api,
             base_url_env_var=base_url_env,
@@ -322,7 +293,6 @@ def get_provider(name: str) -> Optional[ProviderDef]:
         return ProviderDef(
             id=canonical,
             name=_LABEL_OVERRIDES.get(canonical, canonical),
-            transport=overlay.transport,
             api_key_env_vars=overlay.extra_env_vars,
             base_url=overlay.base_url_override,
             base_url_env_var=overlay.base_url_env_var,
@@ -381,8 +351,6 @@ def resolve_user_provider(name: str, user_config: Dict[str, Any]) -> Optional[Pr
     display_name = entry.get("label", "") or entry.get("name", "") or name
     api_url = entry.get("base_url", "") or entry.get("api", "") or entry.get("url", "") or ""
     key_env = entry.get("api_key_env", "") or entry.get("key_env", "") or ""
-    transport = "openai_chat"
-
     env_vars: List[str] = []
     if key_env:
         env_vars.append(key_env)
@@ -390,7 +358,6 @@ def resolve_user_provider(name: str, user_config: Dict[str, Any]) -> Optional[Pr
     return ProviderDef(
         id=name,
         name=display_name,
-        transport=transport,
         api_key_env_vars=tuple(env_vars),
         base_url=api_url,
         base_url_env_var="",
@@ -441,7 +408,6 @@ def resolve_provider_full(
             return ProviderDef(
                 id=canonical,
                 name=mdev_info.name,
-                transport="openai_chat",
                 api_key_env_vars=mdev_info.env,
                 base_url=mdev_info.api,
                 source="models.dev",

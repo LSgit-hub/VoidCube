@@ -6,7 +6,7 @@ This module provides tools for listing and viewing skill documents.
 Skills are organized as directories containing a SKILL.md file (the main instructions)
 and optional supporting files like references, templates, and examples.
 
-Inspired by Anthropic's Claude Skills system with progressive disclosure architecture:
+Uses a progressive-disclosure architecture:
 - Metadata (name ≤64 chars, description ≤1024 chars) - shown in skills_list
 - Full Instructions - loaded via skill_view when needed
 - Linked Files (references, templates) - loaded on demand
@@ -87,7 +87,7 @@ logger = logging.getLogger(__name__)
 VOIDCUBE_HOME = get_VoidCube_home()
 SKILLS_DIR = VOIDCUBE_HOME / "skills"
 
-# Anthropic-recommended limits for progressive disclosure efficiency
+# Limits for progressive disclosure efficiency
 MAX_NAME_LENGTH = 64
 MAX_DESCRIPTION_LENGTH = 1024
 

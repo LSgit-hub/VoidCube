@@ -276,8 +276,8 @@ def resolve_skill_command_key(command: str) -> Optional[str]:
     spaces and underscores to hyphens when building the key. Hyphens and
     underscores are treated interchangeably in user input: this matches
     ``_check_unavailable_skill`` and accommodates Telegram bot-command names
-    (which disallow hyphens, so ``/claude-code`` is registered as
-    ``/claude_code`` and comes back in the underscored form).
+    (which disallow hyphens, so ``/code-review`` is registered as
+    ``/code_review`` and comes back in the underscored form).
 
     Returns the matching ``/slug`` key from ``get_skill_commands()`` or
     ``None`` if no match.

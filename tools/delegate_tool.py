@@ -188,7 +188,7 @@ def _build_child_progress_callback(
     Returns None if no display mechanism is available, in which case the
     child agent runs with no progress callback (identical to current behavior).
     """
-    # Priority 1: Use SubagentDisplayManager if available (Claude Code-style UI)
+    # Priority 1: Use SubagentDisplayManager if available.
     if display_manager is not None:
         # Get goal from parent_agent if available
         goal = getattr(parent_agent, '_current_delegate_goal', "")
@@ -273,7 +273,7 @@ def _build_child_progress_callback(
 def _build_subagent_display_callback(task_id: str, task_index: int, display_manager, goal: str = ""):
     """Build a callback using SubagentDisplayManager for rich CLI visualization.
     
-    This provides Claude Code-style display with:
+    This provides a structured display with:
     - Real-time status panel
     - Tree-view tool call visualization
     - Thinking/reasoning display
@@ -752,7 +752,7 @@ def delegate_task(
     Returns JSON with results array, one entry per task.
     
     When enable_display=True (default), uses SubagentDisplayManager for
-    Claude Code-style rich CLI visualization including:
+    Rich CLI visualization including:
     - Real-time status panel with animated indicators
     - Tree-view tool call visualization
     - Thinking/reasoning process display

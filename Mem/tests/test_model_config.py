@@ -10,7 +10,7 @@ def test_mem_model_config_reads_new_voidcube_cli_memory_llm_block() -> None:
             "provider": "mem",
             "llm": {
                 "provider": "openrouter",
-                "model": "anthropic/claude-3.5-haiku",
+                "model": "qwen/qwen3.6-plus",
                 "api_key_env": "OPENROUTER_API_KEY",
                 "base_url": "https://openrouter.ai/api/v1",
                 "provider_profile": "openai",
@@ -22,7 +22,7 @@ def test_mem_model_config_reads_new_voidcube_cli_memory_llm_block() -> None:
     model_config = MemModelConfig.from_voidcube_config(config)
 
     assert model_config.provider == "openrouter"
-    assert model_config.model == "anthropic/claude-3.5-haiku"
+    assert model_config.model == "qwen/qwen3.6-plus"
     assert model_config.api_key_env == "OPENROUTER_API_KEY"
     assert model_config.base_url == "https://openrouter.ai/api/v1"
     assert model_config.response_content_style == "openai_message"

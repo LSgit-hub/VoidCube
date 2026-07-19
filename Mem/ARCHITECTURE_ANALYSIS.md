@@ -105,7 +105,7 @@ The `Mem` module (`memai`) is a **chronicle-based memory pipeline** for an AI ag
 - Thread-safe JSON completion (`safe_complete_json`)
 - Provider capabilities resolution (JSON-only vs chat models)
 - Model configuration via `model_config.py` with VoidCube integration
-- Built-in provider profiles: openai, anthropic, custom
+- Built-in provider profiles: openai, deepseek, openrouter, ollama
 
 ### Protocol (`llm_protocol.py`)
 - Version: `memai.llm.v1`

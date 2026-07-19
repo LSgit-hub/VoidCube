@@ -96,7 +96,7 @@ auxiliary:
     api_key: ""
     timeout: 360
   compression:
-    provider: auto          # 自动检测 (OpenRouter / Nous / Codex / API-key)
+    provider: auto          # 自动检测 (OpenRouter / Nous / OpenAI-compatible API key)
     model: ""               # 留空 = 使用默认辅助模型
     base_url: ""            # 留空 = 跟随主提供者
     api_key: ""             # 留空 = 复用主 API key

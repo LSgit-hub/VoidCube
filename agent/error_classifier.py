@@ -59,10 +59,6 @@ class FailoverReason(enum.Enum):
     # Request format
     format_error = "format_error"        # 400 bad request — abort or strip + retry
 
-    # Provider-specific
-    thinking_signature = "thinking_signature"  # Anthropic thinking block sig invalid
-    long_context_tier = "long_context_tier"    # Anthropic "extra usage" tier gate
-
     # Catch-all
     unknown = "unknown"                  # Unclassifiable — retry with backoff
 
@@ -196,11 +192,6 @@ _AUTH_PATTERNS = [
     "access denied",
 ]
 
-# Anthropic thinking block signature patterns
-_THINKING_SIG_PATTERNS = [
-    "signature",  # Combined with "thinking" check
-]
-
 # Transport error type names
 _TRANSPORT_ERROR_TYPES = frozenset({
     "ReadTimeout", "ConnectTimeout", "PoolTimeout",
@@ -250,7 +241,7 @@ def classify_api_error(
 
     Args:
         error: The exception from the API call.
-        provider: Current provider name (e.g. "openrouter", "anthropic").
+        provider: Current provider name (for provider-aware recovery decisions).
         model: Current model slug.
         approx_tokens: Approximate token count of the current context.
         context_length: Maximum context length for the current model.
@@ -317,36 +308,7 @@ def classify_api_error(
         defaults.update(overrides)
         return ClassifiedError(**defaults)
 
-    # ── 1. Provider-specific patterns (highest priority) ────────────
-
-    # Anthropic thinking block signature invalid (400).
-    # Don't gate on provider — OpenRouter proxies Anthropic errors, so the
-    # provider may be "openrouter" even though the error is Anthropic-specific.
-    # The message pattern ("signature" + "thinking") is unique enough.
-    if (
-        status_code == 400
-        and "signature" in error_msg
-        and "thinking" in error_msg
-    ):
-        return _result(
-            FailoverReason.thinking_signature,
-            retryable=True,
-            should_compress=False,
-        )
-
-    # Anthropic long-context tier gate (429 "extra usage" + "long context")
-    if (
-        status_code == 429
-        and "extra usage" in error_msg
-        and "long context" in error_msg
-    ):
-        return _result(
-            FailoverReason.long_context_tier,
-            retryable=True,
-            should_compress=True,
-        )
-
-    # ── 2. HTTP status code classification ──────────────────────────
+    # ── 1. HTTP status code classification ──────────────────────────
 
     if status_code is not None:
         classified = _classify_by_status(
@@ -423,7 +385,7 @@ def _classify_by_status(
 
     if status_code == 401:
         # Not retryable on its own — credential pool rotation and
-        # provider-specific refresh (Codex, Anthropic, Nous) run before
+        # provider-specific refresh and credential rotation run before
         # the retryability check in run_agent.py.  If those succeed, the
         # loop `continue`s.  If they fail, retryable=False ensures we
         # hit the client-error abort path (which tries fallback first).
@@ -474,7 +436,6 @@ def _classify_by_status(
         )
 
     if status_code == 429:
-        # Already checked long_context_tier above; this is a normal rate limit
         return result_fn(
             FailoverReason.rate_limit,
             retryable=True,
@@ -590,7 +551,7 @@ def _classify_400(
         )
 
     # Generic 400 + large session → probable context overflow
-    # Anthropic sometimes returns a bare "Error" message when context is too large
+    # Some gateways return a bare "Error" message when context is too large.
     err_body_msg = ""
     if isinstance(body, dict):
         err_obj = body.get("error", {})

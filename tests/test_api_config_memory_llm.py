@@ -248,9 +248,7 @@ def test_api_config_summary_redacts_secret_values(monkeypatch):
 def test_memory_llm_provider_options_only_lists_supported_mem_providers():
     provider_ids = [provider for provider, _ in memory_llm_provider_options()]
 
-    assert "deepseek" in provider_ids
-    assert "openrouter" in provider_ids
-    assert "anthropic" not in provider_ids
+    assert provider_ids == ["openrouter", "deepseek", "openai", "ollama"]
 
 
 def test_normalized_runtime_config_drops_old_model_mirror_without_migration():

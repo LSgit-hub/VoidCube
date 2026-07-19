@@ -182,14 +182,14 @@ def test_validate_config_accepts_valid_api_b_env_key(monkeypatch):
 @pytest.mark.unit
 def test_validate_config_rejects_unsupported_api_b_provider(monkeypatch):
     cfg = _valid_api_a_api_b_config()
-    cfg["memory"]["llm"]["provider"] = "anthropic"
+    cfg["memory"]["llm"]["provider"] = "retired-provider"
     monkeypatch.setattr(config_validator, "load_config", lambda: cfg)
-    _stub_api_b_key_sources(monkeypatch, env_value="sk-real-anthropic-token-123456789")
+    _stub_api_b_key_sources(monkeypatch, env_value="sk-real-retired-token-123456789")
 
     issues = config_validator.validate_config()
 
     assert any(
-        issue.key_path == "memory.llm.provider" and "anthropic" in issue.message
+        issue.key_path == "memory.llm.provider" and "retired-provider" in issue.message
         for issue in issues
     )
 

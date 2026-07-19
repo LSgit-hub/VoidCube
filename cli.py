@@ -2,7 +2,7 @@
 """
 Voidcube Agent CLI - Interactive Terminal Interface
 
-A beautiful command-line interface for the Voidcube Agent, inspired by Claude Code.
+A focused command-line interface for the Voidcube Agent.
 Features ASCII art branding, interactive REPL, toolset selection, and rich formatting.
 
 Usage:
@@ -543,8 +543,8 @@ def load_cli_config() -> Dict[str, Any]:
                     # promote model.model to model.default so the user's explicit
                     # choice isn't shadowed by the hardcoded default.  Without this,
                     # profile configs that only set "model:" (not "default:") silently
-                    # fall back to claude-opus because the merge preserves the
-                    # hardcoded default and VoidcubeCLI.__init__ checks "default" first.
+                    # fall back to the hardcoded default because the merge preserves it
+                    # and VoidcubeCLI.__init__ checks "default" first.
                     if "model" in file_config["model"] and "default" not in file_config["model"]:
                         defaults["model"]["default"] = file_config["model"]["model"]
 
@@ -1292,9 +1292,9 @@ class VoidcubeCLI:
         Initialize the Voidcube CLI.
 
         Args:
-            model: Model to use (default: from env or claude-sonnet)
+            model: Model to use (default: from the active provider config)
             toolsets: List of toolsets to enable (default: all)
-            provider: Inference provider ("auto", "openrouter", "nous", "openai-codex", "zai", "kimi-coding", "minimax", "minimax-cn")
+            provider: Inference provider ("auto", "openrouter", "nous", "zai", "kimi-coding", "minimax", "minimax-cn")
             api_key: API key (default: from environment)
             base_url: API base URL (default: OpenRouter)
             max_turns: Maximum tool-calling iterations shared with subagents (default: 90)
@@ -3467,7 +3467,7 @@ class VoidcubeCLI:
             return False
     
     def show_banner(self):
-        """Display the welcome banner in Claude Code style."""
+        """Display the welcome banner."""
         self.console.clear()
 
         # Get context length for display before branching so it remains
@@ -3540,7 +3540,7 @@ class VoidcubeCLI:
             )
             self.console.print(
                 "[dim]   They lack tool-calling capabilities required for agent workflows. "
-                "Consider using an agentic model (Claude, GPT, Gemini, DeepSeek, etc.).[/]"
+                "Consider using an agentic model (GPT, Gemini, DeepSeek, Qwen, etc.).[/]"
             )
             self.console.print(
                 "[dim]   Switch with: /model sonnet  or  /model gpt5[/]"
@@ -3943,8 +3943,7 @@ class VoidcubeCLI:
     def _handle_stop_command(self):
         """Handle /stop — kill all running background processes.
 
-        Inspired by OpenAI Codex's separation of interrupt (stop current turn)
-        from /stop (clean up background processes). See openai/codex#14602.
+        Interrupt stops the current turn, while /stop cleans up background processes.
         """
         from tools.process_registry import process_registry
 
@@ -4772,7 +4771,7 @@ class VoidcubeCLI:
 
         Copies the full conversation history to a new session so the user can
         explore a different approach without losing the original session state.
-        Inspired by Claude Code's /branch command.
+        Creates a new session branch from the current conversation.
         """
         if not self.conversation_history:
             _cprint(t('  No conversation to branch — send a message first.'))
@@ -7247,7 +7246,7 @@ class VoidcubeCLI:
         Accepts an optional focus topic: ``/compress <focus>`` guides the
         summariser to preserve information related to *focus* while being
         more aggressive about discarding everything else.  Inspired by
-        Claude Code's ``/compact <focus>`` feature.
+        The ``/compact <focus>`` workflow.
         """
         if not self.conversation_history or len(self.conversation_history) < 4:
             print("(._.) Not enough conversation to compress (need at least 4 messages).")
@@ -9079,7 +9078,7 @@ class VoidcubeCLI:
                 tts_thread.join(timeout=5)
     
     def _print_exit_summary(self):
-        """Print session resume info on exit, similar to Claude Code."""
+        """Print session resume info on exit."""
         print()
         msg_count = len(self.conversation_history)
         if msg_count > 0:
@@ -9707,8 +9706,8 @@ class VoidcubeCLI:
             2. Ghost text suggestion available → accept auto-suggestion
             3. Otherwise → start completion menu
 
-            After accepting a provider like 'anthropic:', the completion menu
-            closes and complete_while_typing doesn't fire (no keystroke).
+            After accepting a provider prefix, the completion menu closes and
+            complete_while_typing doesn't fire (no keystroke).
             This binding re-triggers completions so stage-2 models appear
             immediately.
             """
@@ -11165,8 +11164,8 @@ def main(
         image: Optional local image path to attach to a single query
         toolsets: Comma-separated list of toolsets to enable (e.g., "web,terminal")
         skills: Comma-separated or repeated list of skills to preload for the session
-        model: Model to use (default: anthropic/claude-opus-4-20250514)
-        provider: Inference provider ("auto", "openrouter", "nous", "openai-codex", "zai", "kimi-coding", "minimax", "minimax-cn")
+        model: Model to use (default: from the active provider config)
+        provider: Inference provider ("auto", "openrouter", "nous", "zai", "kimi-coding", "minimax", "minimax-cn")
         api_key: API key for authentication
         base_url: Base URL for the API
         max_turns: Maximum tool-calling iterations (default: 60)

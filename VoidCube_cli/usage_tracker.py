@@ -34,11 +34,6 @@ MODEL_PRICING: Dict[str, Tuple[float, float]] = {
     "o1": (15.00, 60.00),
     "o1-mini": (3.00, 12.00),
     "o3-mini": (1.10, 4.40),
-    # Anthropic
-    "claude-3-opus": (15.00, 75.00),
-    "claude-3.5-sonnet": (3.00, 15.00),
-    "claude-3.5-haiku": (0.80, 4.00),
-    "claude-3-haiku": (0.25, 1.25),
     # DeepSeek
     "deepseek-chat": (0.27, 1.10),
     "deepseek-reasoner": (0.55, 2.19),

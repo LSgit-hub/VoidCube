@@ -10,7 +10,7 @@ based on both the scan verdict and the source's trust level.
 
 Trust levels:
   - builtin:   Ships with Voidcube. Never scanned, always trusted.
-  - trusted:   openai/skills and anthropics/skills only. Caution verdicts allowed.
+  - trusted:   openai/skills only. Caution verdicts allowed.
   - community: Everything else. Any findings = blocked unless --force.
 
 Usage:
@@ -36,7 +36,7 @@ from typing import List, Tuple
 # Hardcoded trust configuration
 # ---------------------------------------------------------------------------
 
-TRUSTED_REPOS = {"openai/skills", "anthropics/skills"}
+TRUSTED_REPOS = {"openai/skills"}
 
 INSTALL_POLICY = {
     #                  safe      caution    dangerous
@@ -421,16 +421,12 @@ THREAT_PATTERNS = [
      "sets SUID/SGID bit on a file"),
 
     # ── Agent config persistence ──
-    (r'AGENTS\.md|CLAUDE\.md|\.cursorrules|\.clinerules',
+    (r'AGENTS\.md|\.cursorrules|\.clinerules',
      "agent_config_mod", "critical", "persistence",
      "references agent config files (could persist malicious instructions across sessions)"),
     (r'\.VoidCube/config\.yaml|\.VoidCube/SOUL\.md',
      "VoidCube_config_mod", "critical", "persistence",
      "references Voidcube configuration files directly"),
-    (r'\.claude/settings|\.codex/config',
-     "other_agent_config", "high", "persistence",
-     "references other agent configuration files"),
-
     # ── Hardcoded secrets (credentials embedded in the skill itself) ──
     (r'(?:api[_-]?key|token|secret|password)\s*[=:]\s*["\'][A-Za-z0-9+/=_-]{20,}',
      "hardcoded_secret", "critical", "credential_exposure",
@@ -444,9 +440,6 @@ THREAT_PATTERNS = [
     (r'sk-[A-Za-z0-9]{20,}',
      "openai_key_leaked", "critical", "credential_exposure",
      "possible OpenAI API key in skill content"),
-    (r'sk-ant-[A-Za-z0-9_-]{90,}',
-     "anthropic_key_leaked", "critical", "credential_exposure",
-     "possible Anthropic API key in skill content"),
     (r'AKIA[0-9A-Z]{16}',
      "aws_access_key_leaked", "critical", "credential_exposure",
      "AWS access key ID in skill content"),

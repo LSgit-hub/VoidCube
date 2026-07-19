@@ -144,7 +144,7 @@ def safe_json_loads(text: str, default: Any = None) -> Any:
     """Parse JSON, returning *default* on any parse error.
 
     Replaces the ``try: json.loads(x) except (JSONDecodeError, TypeError)``
-    pattern duplicated across display.py, anthropic_adapter.py,
+    pattern duplicated across display.py,
     auxiliary_client.py, and others.
     """
     try:
@@ -157,7 +157,7 @@ def read_json_file(path: Path, default: Any = None) -> Any:
     """Read and parse a JSON file, returning *default* on any error.
 
     Replaces the repeated ``try: json.loads(path.read_text()) except ...``
-    pattern in anthropic_adapter.py, auxiliary_client.py, credential_pool.py,
+    pattern in auxiliary_client.py and credential_pool.py,
     and skill_utils.py.
     """
     try:
@@ -196,7 +196,7 @@ def env_str(key: str, default: str = "") -> str:
     """Read an environment variable, stripped of whitespace.
 
     Replaces the ``os.getenv("X", "").strip()`` pattern repeated 50+ times
-    across runtime_provider.py, anthropic_adapter.py, models.py, etc.
+    across runtime_provider.py, models.py, and related modules.
     """
     return os.getenv(key, default).strip()
 

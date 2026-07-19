@@ -93,7 +93,6 @@ _PROVIDER_MODELS: Dict[str, List[str]] = {
         "openai/gpt-5.4",
         "openai/gpt-5.4-mini",
         "xiaomi/mimo-v2-pro",
-        "openai/gpt-5.3-codex",
         "google/gemini-3-pro-image-preview",
         "google/gemini-3-flash-preview",
         "google/gemini-3.1-pro-preview",
@@ -138,13 +137,6 @@ _PROVIDER_MODELS: Dict[str, List[str]] = {
         "gpt-4o",
         "gpt-4",
         "gpt-3.5-turbo",
-    ],
-    "anthropic": [
-        "claude-sonnet-4-6",
-        "claude-opus-4-6",
-        "claude-3.5-sonnet",
-        "claude-3-opus",
-        "claude-3-haiku",
     ],
     "x-ai": [
         "grok-4",
@@ -218,13 +210,6 @@ def lookup_models_dev_context(provider: str, model: str) -> Optional[int]:
     """Lookup context length from models.dev."""
     # Fallback context lengths for common models
     context_lengths = {
-        "claude-sonnet-4-6": 1000000,
-        "claude-opus-4-6": 1000000,
-        "claude-haiku-4-6": 200000,
-        "claude-3-5-sonnet": 200000,
-        "claude-3-opus": 200000,
-        "claude-3-sonnet": 200000,
-        "claude-3-haiku": 200000,
         "gpt-5": 128000,
         "gpt-4o": 128000,
         "gpt-4": 128000,

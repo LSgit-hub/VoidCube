@@ -71,7 +71,7 @@ if provider != "deepseek" or api_key_env != "DEEPSEEK_API_KEY":
 @dataclass
 class LLMProviderConfig:
     """Mem 的 LLM 引擎配置 — 第一公民，非可选插件。"""
-    provider: str = "deepseek"          # deepseek | openai | anthropic | openrouter
+    provider: str = "deepseek"          # deepseek | openai | openrouter | ollama
     model: str = "deepseek-chat"
     api_key: str = ""
     base_url: str = "https://api.deepseek.com/v1"

@@ -2,7 +2,7 @@
 """
 V4A Patch Format Parser
 
-Parses the V4A patch format used by codex, cline, and other coding agents.
+Parses the V4A patch format used by several coding agents.
 
 V4A Format:
     *** Begin Patch

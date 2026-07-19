@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Subagent Display System - Claude Code-style subagent visualization
+Subagent Display System - structured subagent visualization
 
 Provides rich CLI display for subagent execution including:
 - Real-time status panel with animated indicators
@@ -9,7 +9,7 @@ Provides rich CLI display for subagent execution including:
 - Background task management (/tasks command)
 - Color-coded output with depth indicators
 
-Inspired by Claude Code's subagent UX patterns.
+Provides compact progress and result rendering for child agents.
 """
 
 import asyncio

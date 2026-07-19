@@ -65,7 +65,7 @@ class SkillMeta:
     """Minimal metadata returned by search results."""
     name: str
     description: str
-    source: str           # "official", "github", "clawhub", "claude-marketplace", "lobehub"
+    source: str           # "official", "github", "clawhub", "lobehub"
     identifier: str       # source-specific ID (e.g. "openai/skills/skill-creator")
     trust_level: str      # "builtin" | "trusted" | "community"
     repo: Optional[str] = None
@@ -286,7 +286,6 @@ class GitHubSource(SkillSource):
 
     DEFAULT_TAPS = [
         {"repo": "openai/skills", "path": "skills/"},
-        {"repo": "anthropics/skills", "path": "skills/"},
         {"repo": "VoltAgent/awesome-agent-skills", "path": "skills/"},
         {"repo": "garrytan/gstack", "path": ""},
     ]
@@ -1178,7 +1177,7 @@ class SkillsShSource(SkillSource):
             ])
 
         # Standard skill paths
-        base_paths = ["skills/", ".agents/skills/", ".claude/skills/"]
+        base_paths = ["skills/", ".agents/skills/"]
 
         for base_path in base_paths:
             try:
@@ -1192,7 +1191,7 @@ class SkillsShSource(SkillSource):
 
         # Prefer a single recursive tree lookup before brute-forcing every
         # top-level directory. This avoids large request bursts on categorized
-        # repos like borghei/claude-skills.
+        # repositories with categorized skill directories.
         tree_result = self.github._find_skill_in_repo_tree(repo, skill_token)
         if tree_result:
             return tree_result
@@ -1211,7 +1210,7 @@ class SkillsShSource(SkillSource):
                         dir_name = entry["name"]
                         if dir_name.startswith((".", "_")):
                             continue
-                        if dir_name in ("skills", ".agents", ".claude"):
+                        if dir_name in ("skills", ".agents"):
                             continue  # already tried
                         # Try direct: repo/dir/skill_token
                         direct_id = f"{repo}/{dir_name}/{skill_token}"
@@ -1390,7 +1389,6 @@ class SkillsShSource(SkillSource):
             f"{repo}/{skill_path}",
             f"{repo}/skills/{skill_path}",
             f"{repo}/.agents/skills/{skill_path}",
-            f"{repo}/.claude/skills/{skill_path}",
         ]
 
         seen = set()
@@ -1891,104 +1889,6 @@ class ClawHubSource(SkillSource):
         except httpx.HTTPError:
             return None
         return None
-
-
-# ---------------------------------------------------------------------------
-# Claude Code marketplace source adapter
-# ---------------------------------------------------------------------------
-
-class ClaudeMarketplaceSource(SkillSource):
-    """
-    Discover skills from Claude Code marketplace repos.
-    Marketplace repos contain .claude-plugin/marketplace.json with plugin listings.
-    """
-
-    KNOWN_MARKETPLACES = [
-        "anthropics/skills",
-        "aiskillstore/marketplace",
-    ]
-
-    def __init__(self, auth: GitHubAuth):
-        self.auth = auth
-
-    def source_id(self) -> str:
-        return "claude-marketplace"
-
-    def trust_level_for(self, identifier: str) -> str:
-        parts = identifier.split("/", 2)
-        if len(parts) >= 2:
-            repo = f"{parts[0]}/{parts[1]}"
-            if repo in TRUSTED_REPOS:
-                return "trusted"
-        return "community"
-
-    def search(self, query: str, limit: int = 10) -> List[SkillMeta]:
-        results: List[SkillMeta] = []
-        query_lower = query.lower()
-
-        for marketplace_repo in self.KNOWN_MARKETPLACES:
-            plugins = self._fetch_marketplace_index(marketplace_repo)
-            for plugin in plugins:
-                searchable = f"{plugin.get('name', '')} {plugin.get('description', '')}".lower()
-                if query_lower in searchable:
-                    source_path = plugin.get("source", "")
-                    if source_path.startswith("./"):
-                        identifier = f"{marketplace_repo}/{source_path[2:]}"
-                    elif "/" in source_path:
-                        identifier = source_path
-                    else:
-                        identifier = f"{marketplace_repo}/{source_path}"
-
-                    results.append(SkillMeta(
-                        name=plugin.get("name", ""),
-                        description=plugin.get("description", ""),
-                        source="claude-marketplace",
-                        identifier=identifier,
-                        trust_level=self.trust_level_for(identifier),
-                        repo=marketplace_repo,
-                    ))
-
-        return results[:limit]
-
-    def fetch(self, identifier: str) -> Optional[SkillBundle]:
-        # Delegate to GitHub Contents API since marketplace skills live in GitHub repos
-        gh = GitHubSource(auth=self.auth)
-        bundle = gh.fetch(identifier)
-        if bundle:
-            bundle.source = "claude-marketplace"
-        return bundle
-
-    def inspect(self, identifier: str) -> Optional[SkillMeta]:
-        gh = GitHubSource(auth=self.auth)
-        meta = gh.inspect(identifier)
-        if meta:
-            meta.source = "claude-marketplace"
-            meta.trust_level = self.trust_level_for(identifier)
-        return meta
-
-    def _fetch_marketplace_index(self, repo: str) -> List[dict]:
-        """Fetch and parse .claude-plugin/marketplace.json from a repo."""
-        cache_key = f"claude_marketplace_{repo.replace('/', '_')}"
-        cached = _read_index_cache(cache_key)
-        if cached is not None:
-            return cached
-
-        url = f"https://api.github.com/repos/{repo}/contents/.claude-plugin/marketplace.json"
-        try:
-            resp = httpx.get(
-                url,
-                headers={**self.auth.get_headers(), "Accept": "application/vnd.github.v3.raw"},
-                timeout=15,
-            )
-            if resp.status_code != 200:
-                return []
-            data = json.loads(resp.text)
-        except (httpx.HTTPError, json.JSONDecodeError):
-            return []
-
-        plugins = data.get("plugins", [])
-        _write_index_cache(cache_key, plugins)
-        return plugins
 
 
 # ---------------------------------------------------------------------------
@@ -2936,7 +2836,6 @@ def create_source_router(auth: Optional[GitHubAuth] = None) -> List[SkillSource]
         WellKnownSkillSource(),
         GitHubSource(auth=auth, extra_taps=extra_taps),
         ClawHubSource(),
-        ClaudeMarketplaceSource(auth=auth),
         LobeHubSource(),
     ]
 
@@ -2980,7 +2879,7 @@ def parallel_search_sources(
     # ~70 GitHub API calls per search for unauthenticated users.
     _index_available = False
     _api_source_ids = frozenset({"github", "skills-sh", "clawhub",
-                                  "claude-marketplace", "lobehub", "well-known"})
+                                  "lobehub", "well-known"})
     if source_filter == "all":
         for src in sources:
             if (src.source_id() == "VoidCube-index"

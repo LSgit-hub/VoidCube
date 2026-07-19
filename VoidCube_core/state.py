@@ -80,8 +80,7 @@ CREATE TABLE IF NOT EXISTS messages (
     token_count INTEGER,
     finish_reason TEXT,
     reasoning TEXT,
-    reasoning_details TEXT,
-    codex_reasoning_items TEXT
+    reasoning_details TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source);
@@ -319,7 +318,6 @@ class SessionDB:
                 for col_name, col_type in [
                     ("reasoning", "TEXT"),
                     ("reasoning_details", "TEXT"),
-                    ("codex_reasoning_items", "TEXT"),
                 ]:
                     try:
                         safe = col_name.replace('"', '""')
@@ -800,7 +798,6 @@ class SessionDB:
         finish_reason: str = None,
         reasoning: str = None,
         reasoning_details: Any = None,
-        codex_reasoning_items: Any = None,
     ) -> int:
         """
         Append a message to a session. Returns the message row ID.
@@ -813,10 +810,6 @@ class SessionDB:
             json.dumps(reasoning_details, ensure_ascii=False)
             if reasoning_details else None
         )
-        codex_items_json = (
-            json.dumps(codex_reasoning_items, ensure_ascii=False)
-            if codex_reasoning_items else None
-        )
         tool_calls_json = json.dumps(tool_calls, ensure_ascii=False) if tool_calls else None
 
         # Pre-compute tool call count
@@ -828,8 +821,8 @@ class SessionDB:
             cursor = conn.execute(
                 """INSERT INTO messages (session_id, role, content, tool_call_id,
                    tool_calls, tool_name, timestamp, token_count, finish_reason,
-                   reasoning, reasoning_details, codex_reasoning_items)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   reasoning, reasoning_details)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -842,7 +835,6 @@ class SessionDB:
                     finish_reason,
                     reasoning,
                     reasoning_details_json,
-                    codex_items_json,
                 ),
             )
             msg_id = cursor.lastrowid
@@ -867,7 +859,9 @@ class SessionDB:
         """Load all messages for a session, ordered by timestamp."""
         with self._lock:
             cursor = self._conn.execute(
-                "SELECT * FROM messages WHERE session_id = ? ORDER BY timestamp, id",
+                "SELECT id, session_id, role, content, tool_call_id, tool_calls, "
+                "tool_name, timestamp, token_count, finish_reason, reasoning, reasoning_details "
+                "FROM messages WHERE session_id = ? ORDER BY timestamp, id",
                 (session_id,),
             )
             rows = cursor.fetchall()
@@ -891,7 +885,7 @@ class SessionDB:
         with self._lock:
             cursor = self._conn.execute(
                 "SELECT role, content, tool_call_id, tool_calls, tool_name, "
-                "reasoning, reasoning_details, codex_reasoning_items, timestamp "
+                "reasoning, reasoning_details, timestamp "
                 "FROM messages WHERE session_id = ? ORDER BY timestamp, id",
                 (session_id,),
             )
@@ -923,12 +917,6 @@ class SessionDB:
                     except (json.JSONDecodeError, TypeError):
                         logger.warning("Failed to deserialize reasoning_details, falling back to None")
                         msg["reasoning_details"] = None
-                if row["codex_reasoning_items"]:
-                    try:
-                        msg["codex_reasoning_items"] = json.loads(row["codex_reasoning_items"])
-                    except (json.JSONDecodeError, TypeError):
-                        logger.warning("Failed to deserialize codex_reasoning_items, falling back to None")
-                        msg["codex_reasoning_items"] = None
             messages.append(msg)
         return messages
 

@@ -142,7 +142,6 @@ def test_delegate_task_validates_and_binds_declared_worktree(monkeypatch, tmp_pa
             "provider": None,
             "base_url": None,
             "api_key": None,
-            "api_mode": None,
         },
     )
 

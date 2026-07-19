@@ -47,11 +47,6 @@ _MODEL_CONTEXT_LENGTHS: dict[str, int] = {
     "gpt-4-turbo": 128000,
     "gpt-4": 8192,
     "gpt-3.5-turbo": 16385,
-    # Anthropic family (via OpenAI-compatible proxy)
-    "claude-3-opus": 200000,
-    "claude-3-sonnet": 200000,
-    "claude-3-haiku": 200000,
-    "claude-3.5-sonnet": 200000,
     # Open-source / local
     "llama-3": 8192,
     "llama-3.1": 131072,

@@ -783,7 +783,7 @@ class SlashCommandCompleter(Completer):
 
     @staticmethod
     def _context_completions(word: str, limit: int = 30):
-        """Yield Claude Code-style @ context completions.
+        """Yield @ context completions.
 
         Bare ``@`` or ``@partial`` shows static references and matching
         files/folders.  ``@file:path`` and ``@folder:path`` are handled
@@ -925,7 +925,7 @@ class SlashCommandCompleter(Completer):
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
         if not text.startswith("/"):
-            # Try @ context completion (Claude Code-style)
+            # Try @ context completion.
             ctx_word = self._extract_context_word(text)
             if ctx_word is not None:
                 yield from self._context_completions(ctx_word)

@@ -29,7 +29,6 @@ def test_handle_function_call_forwards_main_runtime_to_registry(monkeypatch):
         "model": "agnes-2.0-flash",
         "base_url": "https://apihub.agnes-ai.com/v1",
         "api_key": "runtime-key",
-        "api_mode": "chat_completions",
     }
 
     handle_function_call(
@@ -92,7 +91,6 @@ async def test_web_extract_uses_main_runtime_for_auxiliary_resolution(monkeypatc
         "model": "agnes-2.0-flash",
         "base_url": "https://apihub.agnes-ai.com/v1",
         "api_key": "runtime-key",
-        "api_mode": "chat_completions",
     }
 
     payload = json.loads(

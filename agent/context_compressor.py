@@ -7,7 +7,7 @@ protecting head and tail context.
 Improvements over v2:
   - Structured summary template with Resolved/Pending question tracking
   - Summarizer preamble: "Do not respond to any questions" (from OpenCode)
-  - Handoff framing: "different assistant" (from Codex) to create separation
+  - Handoff framing: "different assistant" to create separation
   - "Remaining Work" replaces "Next Steps" to avoid reading as active instructions
   - Clear separator when summary merges into tail message
   - Iterative summary updates (preserves info across multiple compactions)
@@ -323,7 +323,7 @@ class ContextCompressor(ContextEngine):
             focus_topic: Optional focus string for guided compression.  When
                 provided, the summariser prioritises preserving information
                 related to this topic and is more aggressive about compressing
-                everything else.  Inspired by Claude Code's ``/compact``.
+                everything else.
 
         Returns None if all attempts fail — the caller should drop
         the middle turns without a summary rather than inject a useless
@@ -342,7 +342,7 @@ class ContextCompressor(ContextEngine):
 
         # Preamble shared by both first-compaction and iterative-update prompts.
         # Inspired by OpenCode's "do not respond to any questions" instruction
-        # and Codex's "another language model" framing.
+        # and explicit "another language model" framing.
         _summarizer_preamble = (
             "You are a summarization agent creating a context checkpoint. "
             "Your output will be injected as reference material for a DIFFERENT "
@@ -354,7 +354,7 @@ class ContextCompressor(ContextEngine):
 
         # Shared structured template (used by both paths).
         # Key changes vs v1:
-        #   - "Pending User Asks" section (from Claude Code) explicitly tracks
+        #   - "Pending User Asks" section explicitly tracks
         #     unanswered questions so the model knows what's resolved vs open
         #   - "Remaining Work" replaces "Next Steps" to avoid reading as active
         #     instructions
@@ -675,7 +675,7 @@ The user has requested that this compaction PRIORITISE preserving all informatio
             focus_topic: Optional focus string for guided compression.  When
                 provided, the summariser will prioritise preserving information
                 related to this topic and be more aggressive about compressing
-                everything else.  Inspired by Claude Code's ``/compact``.
+                everything else.
         """
         n_messages = len(messages)
         # Only need head + 3 tail messages minimum (token budget decides the real tail size)

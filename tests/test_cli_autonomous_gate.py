@@ -49,7 +49,6 @@ def test_cli_does_not_rewrite_live_agent_base_url_to_gateway(monkeypatch):
     cli.api_key = "runtime-key"
     cli.base_url = "https://runtime-base.example/v1"
     cli.provider = "agnesai"
-    cli.api_mode = "chat_completions"
     cli.acp_command = None
     cli.acp_args = []
     cli.max_turns = 8

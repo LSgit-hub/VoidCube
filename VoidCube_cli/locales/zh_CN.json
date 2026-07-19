@@ -2936,7 +2936,6 @@
       "prompts.model_<model-name>_______—_switch_model": "    /model <model-name>              — switch model",
       "prompts.model_<provider>_<model>_____—_switch_provider_and_model": "    /model <provider>:<model>         — switch provider and model",
       "prompts.model_<provider>_<model>_—_switch_provider_and_model": "    /model <provider>:<model>  — switch provider and model",
-      "prompts.prompt_caching_enabled": "    提示缓存: 已启用",
       "prompts.saved_to_config.yaml": "    Saved to config.yaml",
       "prompts.browser_connect___—_connect_to_your_live_chrome": "   /browser connect      — connect to your live Chrome",
       "prompts.browser_disconnect__—_revert_to_default": "   /browser disconnect   — revert to default",
