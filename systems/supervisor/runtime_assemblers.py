@@ -15,6 +15,7 @@ from systems.execution import (
     attach_execution_route_hint,
 )
 from systems.lifecycle import BodyLifecycleExecutor
+from systems.governor import GovernorDecisionEngine
 from systems.probe import ProbeExecutor, ProbeRunner
 from systems.supervisor.endogenous_drive import EndogenousDriveEngine
 from systems.supervisor.autonomous_chain_store import AutonomousChainStore
@@ -36,7 +37,13 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         or (Path(execution_config.git_repo_path) / ".soul-runtime")
     )
     supervisor._runtime_root = runtime_root
-    supervisor._governor = MemGovernorBridge(storage_root=runtime_root)
+    governor_engine = None
+    if not supervisor.config.service_runtime.governor_llm_advisory_enabled:
+        governor_engine = GovernorDecisionEngine()
+    supervisor._governor = MemGovernorBridge(
+        storage_root=runtime_root,
+        engine=governor_engine,
+    )
     supervisor._autonomous_chain_store = AutonomousChainStore(
         supervisor.config.autonomous_chain_store_path
         or (runtime_root / "autonomous_chain_store.json")
@@ -78,7 +85,7 @@ def assemble_supervisor_execution_runtime(supervisor: Any) -> None:
         agents=supervisor._agents,
         governor_storage_root=(
             getattr(getattr(supervisor, "_governor", None), "storage_root", None)
-            or str(runtime_root)
+            or str(supervisor._runtime_root)
         ),
     )
     supervisor._memory_maintenance_executor = MemoryMaintenanceExecutionAdapter(

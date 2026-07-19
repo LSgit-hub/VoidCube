@@ -30,6 +30,7 @@ def _make_supervisor_config(tmp_path: Path) -> SupervisorConfig:
     return SupervisorConfig(
         execution=SupervisorExecutionConfig(git_repo_path=str(tmp_path)),
         service_runtime=SupervisorServiceRuntimeConfig(
+            governor_llm_advisory_enabled=False,
             endogenous_drive_lm_task_generation_enabled=False,
         ),
     )
@@ -39,6 +40,14 @@ def _make_supervisor(tmp_path: Path) -> Supervisor:
     supervisor = Supervisor(_make_supervisor_config(tmp_path))
     supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
     return supervisor
+
+
+@pytest.mark.unit
+def test_supervisor_can_disable_governor_llm_advisory(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    assert supervisor.config.service_runtime.governor_llm_advisory_enabled is False
+    assert supervisor._governor._engine._llm_reasoner is None
 
 
 def _runtime_drive_input_payload(*, active_sessions: int = 0, quiet_after_seconds: int = 600) -> dict:
@@ -234,6 +243,7 @@ def test_supervisor_exposes_segmented_runtime_config_views_and_uses_them_for_exe
     assert config.execution.agent_base_port == 9100
     assert config.execution.probe_watch_window_seconds == 180
     assert config.service_runtime.health_check_interval == 45
+    assert config.service_runtime.governor_llm_advisory_enabled is True
     assert config.service_runtime.memory_compression_interval == 7200
     assert config.service_runtime.autonomous_chain_review_interval == 900
     assert config.service_runtime.endogenous_drive_enabled is True
