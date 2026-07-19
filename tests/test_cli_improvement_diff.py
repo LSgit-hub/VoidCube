@@ -4,9 +4,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from cli import _git_head_commit, _git_improvement_diff
+from VoidCube_cli.cli_handlers import _git_head_commit, _git_improvement_diff
+
+
+pytestmark = pytest.mark.smoke
 
 
 def _run(args, cwd):

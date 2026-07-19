@@ -5,6 +5,7 @@ import time
 from typing import Any, Optional
 
 from VoidCube_cli.autonomous_panel import has_visible_autonomous_work
+from VoidCube_cli.cli_handlers import _git_head_commit, _git_improvement_diff
 
 
 def _plain_cprint(message: str) -> None:
@@ -54,8 +55,8 @@ def run_autonomous_component_debug(
     runtime = autonomous_executor_runtime(
         host,
         push_cli_agent_scene=cli_module._push_cli_agent_scene,
-        git_head_commit=cli_module._git_head_commit,
-        git_improvement_diff=cli_module._git_improvement_diff,
+        git_head_commit=_git_head_commit,
+        git_improvement_diff=_git_improvement_diff,
         cprint=_plain_cprint,
     )
 

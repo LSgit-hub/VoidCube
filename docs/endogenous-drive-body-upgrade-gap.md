@@ -929,7 +929,7 @@ if normalized == "body_switch":
 
 ### 11.7 `BodySlotMeta` 字段补充
 
-当前 `BodySlotMeta`（[body_registry.py:47-79](file:///f:/My_code/Traecode/VoidCube/systems/body_registry.py#L47-L79)）缺少方案中定义的健康值相关字段：
+当前 `BodySlotMeta`（[body_registry.py:47-79](../systems/body_registry.py#L47-L79)）缺少方案中定义的健康值相关字段：
 
 ```python
 class BodySlotMeta(BaseModel):
@@ -946,7 +946,7 @@ class BodySlotMeta(BaseModel):
 
 ### 11.8 `AutonomousChainTaskStatus` 扩展
 
-当前任务状态（[autonomous_chain_store.py:17](file:///f:/My_code/Traecode/VoidCube/systems/supervisor/autonomous_chain_store.py#L17)）缺少方案中需要的状态：
+当前任务状态（[autonomous_chain_store.py:17](../systems/supervisor/autonomous_chain_store.py#L17)）缺少方案中需要的状态：
 
 ```python
 AutonomousChainTaskStatus = Literal[
@@ -1039,7 +1039,7 @@ def _apply_cumulative_decay(self, slot_meta: BodySlotMeta):
 
 ### 11.11 `BodyRegistryManager` 方法补充
 
-当前 `BodyRegistryManager`（[body_registry.py:112](file:///f:/My_code/Traecode/VoidCube/systems/body_registry.py#L112)）缺少方案中依赖的方法：
+当前 `BodyRegistryManager`（[body_registry.py:112](../systems/body_registry.py#L112)）缺少方案中依赖的方法：
 
 ```python
 def get_shell_slot(self) -> Optional[BodySlotMeta]:
@@ -1059,7 +1059,7 @@ def get_active_slot(self) -> Optional[BodySlotMeta]:
 
 ### 11.12 API 端点注册
 
-新增的 API 端点需要在 [systems/execution/service.py](file:///f:/My_code/Traecode/VoidCube/systems/execution/service.py) 中注册，参考现有 `/body/upgrade/execute` 的注册方式：
+新增的 API 端点需要在 [systems/execution/service.py](../systems/execution/service.py) 中注册，参考现有 `/body/upgrade/execute` 的注册方式：
 
 | 方法 | 路径 | 处理函数 |
 |------|------|---------|

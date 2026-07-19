@@ -5,6 +5,9 @@ import pytest
 from tools.registry import ToolRegistry
 
 
+pytestmark = pytest.mark.smoke
+
+
 @pytest.mark.unit
 def test_dispatch_filters_unexpected_context_kwargs_for_args_handler():
     registry = ToolRegistry()

@@ -23,6 +23,7 @@ from VoidCube_cli.autonomous_status_host import (
     autonomous_observation_summary_sections,
     format_gateway_autonomous_execute_snapshot,
 )
+from VoidCube_cli.cli_handlers import _git_head_commit, _git_improvement_diff
 
 
 class _FakeUrlopenResponse:
@@ -37,8 +38,8 @@ def _autonomous_runtime(cli: VoidcubeCLI):
     return autonomous_runtime_host_module.autonomous_executor_runtime(
         cli,
         push_cli_agent_scene=cli_module._push_cli_agent_scene,
-        git_head_commit=cli_module._git_head_commit,
-        git_improvement_diff=cli_module._git_improvement_diff,
+        git_head_commit=_git_head_commit,
+        git_improvement_diff=_git_improvement_diff,
         cprint=cli_module._cprint,
     )
 

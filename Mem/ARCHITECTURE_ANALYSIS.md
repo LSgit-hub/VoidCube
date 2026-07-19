@@ -4,7 +4,7 @@
 
 The `Mem` module (`memai`) is a **chronicle-based memory pipeline** for an AI agent. It transforms raw conversation transcripts into structured, queryable, and maintainable long-term memory. The system follows a layered architecture inspired by narrative chronicle theory: turns → events → scenes → arcs → epochs.
 
-**Scale**: 19 source files, ~9,809 lines of production code, 18 test files (~2,891 lines), 101 passing tests.
+**Scale (2026-07-19)**: 27 source files (~9,086 lines), 18 test files (~2,571 lines), 108 passing tests.
 
 ---
 
@@ -219,7 +219,7 @@ Returns `TemporalSpan` with computed start/end and precision/confidence.
 5. **Protocol-based LLM integration**: Standardized JSON protocol with flexible response parsing
 6. **Benchmark-driven development**: Multiple benchmark types ensure quality
 7. **Compression-aware**: Built-in policies for memory lifecycle management
-8. **101 passing tests**: Good test coverage across all modules
+8. **108 passing tests**: Good test coverage across all modules
 
 ---
 

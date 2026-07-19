@@ -24,6 +24,9 @@ from systems.supervisor.supervisor import (
 from systems.supervisor.autonomous_chain_store import AutonomousChainStore
 
 
+pytestmark = pytest.mark.smoke
+
+
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------

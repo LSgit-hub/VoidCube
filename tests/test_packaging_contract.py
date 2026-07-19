@@ -8,6 +8,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+pytestmark = pytest.mark.smoke
 
 
 def _project_config() -> dict:
@@ -45,3 +46,14 @@ def test_default_launcher_service_dependencies_are_core_dependencies():
     }
 
     assert {"aiohttp", "fastapi", "uvicorn", "psutil"} <= dependency_names
+
+
+@pytest.mark.unit
+def test_project_uses_spdx_license_metadata():
+    project = _project_config()["project"]
+
+    assert project["license"] == "MIT"
+    assert not any(
+        classifier.startswith("License ::")
+        for classifier in project.get("classifiers", [])
+    )

@@ -1,3 +1,4 @@
+import builtins
 import json
 
 import pytest
@@ -6,6 +7,24 @@ import agent.skill_utils as skill_utils
 import tools.skills_tool as skills_tool
 import tools.web_tools as web_tools
 import tools.web_tools_local as web_tools_local
+
+
+@pytest.mark.unit
+def test_firecrawl_sdk_is_only_required_when_backend_client_is_created(monkeypatch):
+    real_import = builtins.__import__
+
+    def import_without_firecrawl(name, *args, **kwargs):
+        if name == "firecrawl":
+            raise ImportError("firecrawl intentionally unavailable")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-key")
+    monkeypatch.setattr(web_tools, "_firecrawl_client", None)
+    monkeypatch.setattr(web_tools, "_firecrawl_client_config", None)
+    monkeypatch.setattr(builtins, "__import__", import_without_firecrawl)
+
+    with pytest.raises(ValueError, match="optional web dependencies"):
+        web_tools._get_firecrawl_client()
 
 
 @pytest.mark.unit

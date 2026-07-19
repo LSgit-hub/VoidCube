@@ -3,19 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sys
-import types
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-if "firecrawl" not in sys.modules:
-    sys.modules["firecrawl"] = types.SimpleNamespace(Firecrawl=object)
-if "tools.web_tools_local" not in sys.modules:
-    sys.modules["tools.web_tools_local"] = types.SimpleNamespace(local_web_extract=lambda url: {})
-
 from tools.model_tools import handle_function_call
 import tools.web_tools as web_tools
+import tools.web_tools_local as web_tools_local
 
 
 def test_handle_function_call_forwards_main_runtime_to_registry(monkeypatch):
@@ -88,7 +83,7 @@ async def test_web_extract_uses_main_runtime_for_auxiliary_resolution(monkeypatc
 
         return _Resp()
 
-    monkeypatch.setattr(sys.modules["tools.web_tools_local"], "local_web_extract", fake_local_web_extract)
+    monkeypatch.setattr(web_tools_local, "local_web_extract", fake_local_web_extract)
     monkeypatch.setattr(web_tools, "_resolve_web_extract_auxiliary", fake_resolve)
     monkeypatch.setattr(web_tools, "async_call_llm", fake_async_call_llm)
 

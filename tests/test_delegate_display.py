@@ -2,18 +2,12 @@ from __future__ import annotations
 
 import json
 import sys
-import types
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-if "firecrawl" not in sys.modules:
-    sys.modules["firecrawl"] = types.SimpleNamespace(Firecrawl=object)
-if "psutil" not in sys.modules:
-    sys.modules["psutil"] = types.SimpleNamespace()
 
 import run_agent
 from tools import delegate_tool

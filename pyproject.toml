@@ -8,13 +8,12 @@ version = "1.0.0"
 description = "轻量安装·快速配置·友好交互 — 服务器运维与部署智能体"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
 keywords = ["ai", "agent", "ops", "devops", "deploy", "cli", "assistant", "local", "shell"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",

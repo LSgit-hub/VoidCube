@@ -654,10 +654,10 @@ Agent 可以持有短期工作态，但长期身份、长期记忆、治理历�
 
 任何候选子 Agent 切换为 active 前，都必须经过受控验证。
 
-正式状态机、切换协议、观察窗口和回滚条件由组件文档定义：
-
-- [body-lifecycle.md](./body-lifecycle.md)
-- [switch-protocol.md](./switch-protocol.md)
+正式状态机、切换协议、观察窗口和回滚条件统一由本文 §7.4、§7.5 定义；
+当前实现位于 `systems/body_registry.py`、`systems/governor.py` 与
+`systems/execution/`，回归契约位于 `tests/test_lifecycle.py`、
+`tests/test_governor.py` 和 `tests/test_execution_service.py`。
 
 本文只规定总原则：
 
@@ -1115,16 +1115,14 @@ Governor (API-B)
 
 其他文档定位如下：
 
-- [architecture-integration.md](./architecture-integration.md)：组件接线、请求链路、部署说明
-- [body-lifecycle.md](./body-lifecycle.md)：身体状态机
-- [switch-protocol.md](./switch-protocol.md)：切换、审批、观察窗口、回滚协议
-- [state-boundary.md](./state-boundary.md)：长期状态、运行状态、缓存状态的归属
-- [phase-1-experiment-roadmap.md](./phase-1-experiment-roadmap.md)：第一阶段实验路线与验收
-- [phase-2-implementation-plan.md](./phase-2-implementation-plan.md)：Phase 2 实现计划（架构基线对齐）
-- [body-runtime-runbook.md](./body-runtime-runbook.md)：当前实现的操作与排障手册
-- [architecture-conflicts-audit.md](./architecture-conflicts-audit.md)：当前实现与基线的偏差审计
-- [voidcube架构可行性论证论文.md](./voidcube架构可行性论证论文.md)：架构可行性论证
-- [phase1-core-loop-and-endogenous-drive.md](./phase1-core-loop-and-endogenous-drive.md)：Phase 1 核心闭环与内生驱动器运行机理，定义母体心跳、四重保障与完整运行循环
+- [文档导航](./README.md)：文档优先级、阅读路径、分阶段路线与维护规则
+- [全链路问题清单](./全链路问题清单.md)：当前偏差、已收口事项与必须守住的边界
+- [项目文件架构说明](./项目文件架构说明.md)：真实入口、组件接线和目录职责
+- [开发与验证](./开发与验证.md)：测试分层、构建和安装验收
+- [内生驱动核心设计](./内生驱动核心设计.md)：API-B 内生驱动组件级设计
+- [CLI 展示与 gateway 双槽设计](./CLI展示与gateway双槽设计.md)：双泳道展示和观测协议
+- [API 配置双槽与模型调用点](./API配置双槽与模型调用点.md)：API-A / API-B 模型配置归属
+- [全链条迁移日志](./全链条迁移日志.md)：已退场术语的历史来源，不定义当前主协议
 
 ## 12. 一句话结论
 

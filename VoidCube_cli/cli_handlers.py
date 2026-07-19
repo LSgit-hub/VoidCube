@@ -2,8 +2,7 @@
 """
 VoidCube CLI Command Handlers
 
-Contains command processing logic including file drop detection,
-process notifications, and git worktree management.
+Contains process notification formatting and CLI git worktree management.
 """
 
 import os
@@ -13,138 +12,9 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
-from typing import Dict, Optional, Tuple, Any
+from typing import Dict, Optional, Any
 
 logger = logging.getLogger(__name__)
-
-_IMAGE_EXTENSIONS = frozenset({
-    '.png', '.jpg', '.jpeg', '.gif', '.webp',
-    '.bmp', '.tiff', '.tif', '.svg', '.ico',
-})
-
-
-def _split_path_input(raw: str) -> Tuple[str, str]:
-    r"""Split a leading file path token from trailing free-form text.
-
-    Supports quoted paths and backslash-escaped spaces so callers can accept
-    inputs like:
-      /tmp/pic.png describe this
-      ~/storage/shared/My\ Photos/cat.png what is this?
-      "/storage/emulated/0/DCIM/Camera/cat 1.png" summarize
-    """
-    raw = str(raw or "").strip()
-    if not raw:
-        return "", ""
-
-    if raw[0] in {'"', "'"}:
-        quote = raw[0]
-        pos = 1
-        while pos < len(raw):
-            ch = raw[pos]
-            if ch == '\\' and pos + 1 < len(raw):
-                pos += 2
-                continue
-            if ch == quote:
-                token = raw[1:pos]
-                remainder = raw[pos + 1:].strip()
-                return token, remainder
-            pos += 1
-        return raw[1:], ""
-
-    pos = 0
-    while pos < len(raw):
-        ch = raw[pos]
-        if ch == '\\' and pos + 1 < len(raw) and raw[pos + 1] == ' ':
-            pos += 2
-        elif ch == ' ':
-            break
-        else:
-            pos += 1
-
-    token = raw[:pos].replace('\\ ', ' ')
-    remainder = raw[pos:].strip()
-    return token, remainder
-
-
-def _resolve_attachment_path(raw_path: str) -> Optional[Path]:
-    """Resolve a user-supplied local attachment path.
-
-    Accepts quoted or unquoted paths, expands ``~`` and env vars, and resolves
-    relative paths from ``TERMINAL_CWD`` when set (matching terminal tool cwd).
-    Returns ``None`` when the path does not resolve to an existing file.
-    """
-    token = str(raw_path or "").strip()
-    if not token:
-        return None
-
-    if (token.startswith('"') and token.endswith('"')) or (token.startswith("'") and token.endswith("'")):
-        token = token[1:-1].strip()
-    if not token:
-        return None
-
-    expanded = os.path.expandvars(os.path.expanduser(token))
-    path = Path(expanded)
-    if not path.is_absolute():
-        base_dir = Path(os.getenv("TERMINAL_CWD", os.getcwd()))
-        path = base_dir / path
-
-    try:
-        resolved = path.resolve()
-    except Exception:
-        resolved = path
-
-    if not resolved.exists() or not resolved.is_file():
-        return None
-    return resolved
-
-
-def _detect_file_drop(user_input: str) -> Optional[Dict[str, Any]]:
-    """Detect if *user_input* starts with a real local file path.
-
-    This catches dragged/pasted paths before they are mistaken for slash
-    commands, and also supports Termux-friendly paths like ``~/storage/...``.
-
-    Returns a dict on match::
-
-        {
-            "path": Path,          # resolved file path
-            "is_image": bool,      # True when suffix is a known image type
-            "remainder": str,      # any text after the path
-        }
-
-    Returns ``None`` when the input is not a real file path.
-    """
-    if not isinstance(user_input, str):
-        return None
-
-    stripped = user_input.strip()
-    if not stripped:
-        return None
-
-    starts_like_path = (
-        stripped.startswith("/")
-        or stripped.startswith("~")
-        or stripped.startswith("./")
-        or stripped.startswith("../")
-        or stripped.startswith('"/')
-        or stripped.startswith("'~")
-        or stripped.startswith("'/")
-        or stripped.startswith("'~")
-    )
-    if not starts_like_path:
-        return None
-
-    first_token, remainder = _split_path_input(stripped)
-    drop_path = _resolve_attachment_path(first_token)
-    if drop_path is None:
-        return None
-
-    return {
-        "path": drop_path,
-        "is_image": drop_path.suffix.lower() in _IMAGE_EXTENSIONS,
-        "remainder": remainder,
-    }
-
 
 def _format_process_notification(evt: dict) -> Optional[str]:
     """Format a process notification event into a [SYSTEM: ...] message.
@@ -203,6 +73,61 @@ def _git_repo_root() -> Optional[str]:
     return None
 
 
+def _git_head_commit(worktree_path: str) -> str:
+    """Return the current HEAD commit hash of a worktree, or an empty string."""
+    if not worktree_path:
+        return ""
+    try:
+        result = subprocess.run(
+            ["git", "-C", worktree_path, "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _git_improvement_diff(
+    worktree_path: str,
+    baseline_head: str,
+) -> Optional[Dict[str, Any]]:
+    """Return the committed changes since a captured worktree baseline."""
+    if not worktree_path or not baseline_head:
+        return None
+    try:
+        head_now = _git_head_commit(worktree_path)
+        if not head_now or head_now == baseline_head:
+            return None
+        names = subprocess.run(
+            ["git", "-C", worktree_path, "diff", "--name-only", f"{baseline_head}..{head_now}"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        changed_files = [
+            line.strip()
+            for line in (names.stdout or "").splitlines()
+            if line.strip()
+        ]
+        stat = subprocess.run(
+            ["git", "-C", worktree_path, "diff", "--stat", f"{baseline_head}..{head_now}"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return {
+            "commit_hash": head_now,
+            "changed_files": changed_files,
+            "diff_summary": (stat.stdout or "").strip()[:4000],
+        }
+    except Exception:
+        return None
+
+
 def _path_is_within_root(path: Path, root: Path) -> bool:
     """Return True when a resolved path stays within the expected root."""
     try:
@@ -218,10 +143,12 @@ def _setup_worktree(repo_root: str = None) -> Optional[Dict[str, str]]:
     Returns a dict with worktree metadata on success, None on failure.
     The dict contains: path, branch, repo_root.
     """
+    from VoidCube_cli.i18n import t
+
     repo_root = repo_root or _git_repo_root()
     if not repo_root:
-        print("\033[31m✗ --worktree requires being inside a git repository.\033[0m")
-        print("  cd into your project repo first, then run VoidCube -w")
+        print(f"\033[31m✗ {t('prompts.worktree_requires_git')}\033[0m")
+        print(f"  {t('prompts.worktree_cd_first')}")
         return None
 
     short_id = uuid.uuid4().hex[:8]
@@ -251,10 +178,10 @@ def _setup_worktree(repo_root: str = None) -> Optional[Dict[str, str]]:
             capture_output=True, text=True, timeout=30, cwd=repo_root,
         )
         if result.returncode != 0:
-            print(f"\033[31m✗ Failed to create worktree: {result.stderr.strip()}\033[0m")
+            print(f"\033[31m✗ {t('prompts.worktree_failed_to_create', error=result.stderr.strip())}\033[0m")
             return None
     except Exception as e:
-        print(f"\033[31m✗ Failed to create worktree: {e}\033[0m")
+        print(f"\033[31m✗ {t('prompts.worktree_failed_to_create', error=str(e))}\033[0m")
         return None
 
     include_file = Path(repo_root) / ".worktreeinclude"
@@ -296,8 +223,8 @@ def _setup_worktree(repo_root: str = None) -> Optional[Dict[str, str]]:
         "repo_root": repo_root,
     }
 
-    print(f"\033[32m✓ Worktree created:\033[0m {wt_path}")
-    print(f"  Branch: {branch_name}")
+    print(f"\033[32m✓ {t('prompts.worktree_created')}\033[0m {wt_path}")
+    print(f"  {t('prompts.worktree_branch', branch=branch_name)}")
 
     return info
 
@@ -311,6 +238,8 @@ def _cleanup_worktree(info: Dict[str, str] = None) -> None:
     """
     if not info:
         return
+
+    from VoidCube_cli.i18n import t
 
     wt_path = info["path"]
     branch = info["branch"]
@@ -330,8 +259,8 @@ def _cleanup_worktree(info: Dict[str, str] = None) -> None:
         has_unpushed = True
 
     if has_unpushed:
-        print(f"\n\033[33m⚠ Worktree has unpushed commits, keeping: {wt_path}\033[0m")
-        print(f"  To clean up manually: git worktree remove --force {wt_path}")
+        print(f"\n\033[33m⚠ {t('prompts.worktree_has_unpushed', path=wt_path)}\033[0m")
+        print(f"  {t('prompts.worktree_cleanup_manual', path=wt_path)}")
         return
 
     try:
@@ -350,7 +279,7 @@ def _cleanup_worktree(info: Dict[str, str] = None) -> None:
     except Exception as e:
         logger.debug("Failed to delete branch %s: %s", branch, e)
 
-    print(f"\033[32m✓ Worktree cleaned up: {wt_path}\033[0m")
+    print(f"\033[32m✓ {t('prompts.worktree_cleaned_up', path=wt_path)}\033[0m")
 
 
 def _prune_stale_worktrees(repo_root: str, max_age_hours: int = 24) -> None:
@@ -476,8 +405,3 @@ def _prune_orphaned_branches(repo_root: str) -> None:
             logger.debug("Failed to prune orphaned branches: %s", e)
 
     logger.debug("Pruned %d orphaned branches", len(orphaned))
-
-
-def _termux_example_image_path(filename: str = "cat.png") -> str:
-    """Return an example image path for Termux environment."""
-    return os.path.join("~/storage/shared", "Pictures", filename)

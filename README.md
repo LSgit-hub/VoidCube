@@ -70,12 +70,14 @@ python -m pip install -e ".[all]"
 
 ```bash
 python -m pip install -e ".[all,dev]"
+python -m pytest -m smoke -q
 python -m pytest -q
 python -m build
 ```
 
 构建生成的 wheel 位于 `dist/`。离线部署时，应在联网环境预下载该 wheel
 及其依赖，再使用 `pip install --no-index --find-links <wheelhouse>` 安装。
+测试分层、模块回归和安装验收见 [`docs/开发与验证.md`](docs/开发与验证.md)。
 
 ---
 
@@ -449,7 +451,8 @@ VoidCube 支持多种命令执行后端，通过 `TERMINAL_ENV` 环境变量切�
 
 ## 项目结构
 
-详细版请查看 [`docs/项目文件架构说明.md`](docs/项目文件架构说明.md)。
+文档总入口见 [`docs/README.md`](docs/README.md)，文件结构详见
+[`docs/项目文件架构说明.md`](docs/项目文件架构说明.md)。
 
 ```
 VoidCube/
@@ -459,6 +462,7 @@ VoidCube/
 ├── pyproject.toml          # 打包配置，暴露 voidcube / vc 命令
 ├── config.yaml             # 项目默认配置
 ├── docs/                   # 架构与改造文档
+│   ├── README.md           # 文档优先级、阅读路径与分阶段路线
 │   ├── voidcube架构基线.md
 │   ├── 全链路问题清单.md
 │   ├── 全链条迁移日志.md
@@ -479,7 +483,7 @@ VoidCube/
 └── cache/logs/sessions/... # 运行态目录
 ```
 
-当前架构的关键路径是：`CLI -> Agent -> Tools` 服务用户任务；`Supervisor -> 任务列表 -> Agent 自主任务通道 -> Mem` 服务学习与替身改进；`Gateway` 负责服务注册、活动事实与 `user_chat/supervisor_task` 双泳道观测。
+当前架构的关键路径是：`CLI -> Agent -> Tools` 服务用户任务；`Supervisor -> API-B 判断与转交 -> Agent 自主执行面 -> Mem -> Supervisor 再读取` 服务学习与替身改进；`Gateway` 负责服务注册、活动事实与 `user_chat/supervisor_task` 双泳道观测。
 
 ***
 

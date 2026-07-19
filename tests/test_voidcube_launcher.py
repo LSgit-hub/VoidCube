@@ -10,6 +10,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import voidcube
 
 
+pytestmark = pytest.mark.smoke
+
+
 @pytest.mark.unit
 def test_auto_start_daemons_reports_actual_startup_order(monkeypatch, capsys):
     calls = []
@@ -30,4 +33,3 @@ def test_auto_start_daemons_reports_actual_startup_order(monkeypatch, capsys):
     assert "Gateway \u2192 Memory \u2192 Supervisor" in output
     assert "Memory \u2192 Gateway \u2192 Supervisor" not in output
     assert calls == [{"silent": False}]
-

@@ -47,7 +47,6 @@ import re
 import asyncio
 from typing import List, Dict, Any, Optional
 import httpx
-from firecrawl import Firecrawl
 from agent.auxiliary_client import (
     async_call_llm,
     extract_content_or_reasoning,
@@ -243,6 +242,14 @@ def _get_firecrawl_client():
 
     if _firecrawl_client is not None and _firecrawl_client_config == client_config:
         return _firecrawl_client
+
+    try:
+        from firecrawl import Firecrawl
+    except ImportError as exc:
+        raise ValueError(
+            "The Firecrawl backend requires the optional web dependencies. "
+            "Install them with: pip install 'voidcube-agent[web]'"
+        ) from exc
 
     _firecrawl_client = Firecrawl(**kwargs)
     _firecrawl_client_config = client_config
