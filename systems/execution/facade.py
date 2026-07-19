@@ -103,6 +103,13 @@ class VoidCubeExecutionFacade:
     async def run_body_probe(self, request: dict) -> Dict[str, Any]:
         return await self.body_lifecycle.run_body_probe(request)
 
+    async def rollback_body_improvement(
+        self,
+        slot_id: str,
+        request: dict | None = None,
+    ) -> Dict[str, Any]:
+        return await self.body_lifecycle.rollback_body_improvement(slot_id, request)
+
     async def trigger_memory_compression(self, request: dict | None = None) -> Dict[str, Any]:
         return await self.memory_maintenance.trigger_memory_compression(request)
 
@@ -114,7 +121,10 @@ class VoidCubeExecutionFacade:
                 "health_score": slot_meta.health_score,
                 "improvement_count": slot_meta.improvement_count,
                 "last_improvement_at": slot_meta.last_improvement_at,
+                "current_healthy_commit": slot_meta.current_healthy_commit,
                 "previous_healthy_commit": slot_meta.previous_healthy_commit,
+                "rollback_in_progress": slot_meta.rollback_in_progress,
+                "last_improvement_rollback": slot_meta.last_improvement_rollback,
             }
         except Exception as e:
             return {"error": str(e)}
@@ -136,8 +146,11 @@ class VoidCubeExecutionFacade:
             slot_meta.health_history = []
             slot_meta.improvement_count = 0
             slot_meta.last_improvement_at = None
+            slot_meta.current_healthy_commit = None
             slot_meta.previous_healthy_commit = None
             slot_meta.decay_applied_at = None
+            slot_meta.rollback_in_progress = None
+            slot_meta.last_improvement_rollback = None
             self.body_lifecycle._body_registry.save_slot_meta(slot_meta)
             return {"status": "ok", "slot_id": slot_id}
         except Exception as e:

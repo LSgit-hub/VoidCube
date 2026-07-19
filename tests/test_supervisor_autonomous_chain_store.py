@@ -8428,7 +8428,7 @@ async def test_endogenous_drive_passes_learning_and_shell_body_evidence_to_lm(tm
     (shell_worktree / "run_agent.py").write_text("print('ok')\n", encoding="utf-8")
     (shell_worktree / "config.yaml").write_text("name: shell\n", encoding="utf-8")
     (shell_worktree / "agent").mkdir(exist_ok=True)
-    (shell_worktree / ".body-origin.json").write_text(
+    (shell_worktree.parent / "worktree-origin.json").write_text(
         json.dumps(
             {
                 "source": "slot:slot-A",

@@ -62,6 +62,7 @@ def assemble_supervisor_execution_runtime(supervisor: Any) -> None:
             else str(Path(supervisor.config.execution.git_repo_path) / ".soul-runtime")
         ),
         attach_execution_route_hint=attach_execution_route_hint,
+        governor=supervisor._governor,
     )
     supervisor._watch_window_executor = WatchWindowExecutionAdapter(
         body_registry=supervisor._body_registry,

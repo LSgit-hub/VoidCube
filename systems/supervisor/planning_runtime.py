@@ -8892,6 +8892,7 @@ class PlanningRuntimeMixin:
                 "score_delta": score_delta,
                 "reason": "body_improvement",
                 "task_id": task_id,
+                "baseline_commit": str(baseline_commit),
                 "commit_hash": commit_hash,
                 "reviewed_at": now.isoformat(),
                 "changed_files": actual_changed_files,
@@ -8903,7 +8904,17 @@ class PlanningRuntimeMixin:
         slot_meta.last_improvement_at = now.isoformat()
 
         if score_delta > 0:
-            slot_meta.previous_healthy_commit = commit_hash
+            prior_healthy_commit = str(
+                slot_meta.current_healthy_commit
+                or slot_meta.previous_healthy_commit
+                or baseline_commit
+            ).strip()
+            if prior_healthy_commit == commit_hash:
+                prior_healthy_commit = str(baseline_commit).strip()
+            slot_meta.previous_healthy_commit = prior_healthy_commit or None
+            slot_meta.current_healthy_commit = commit_hash
+            slot_meta.candidate_commit = commit_hash
+            slot_meta.build_from_commit = commit_hash
 
         self._body_registry.save_slot_meta(slot_meta)
 

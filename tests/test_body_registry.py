@@ -153,8 +153,17 @@ def test_candidate_slot_auto_records_git_head_when_lineage_is_not_provided(tmp_p
     assert meta.rollback_ref == branch
     assert manifest["source_branch"] == branch
     assert manifest["source_commit"] == head
-    assert manifest["candidate_branch"] == branch
+    assert manifest["candidate_branch"] is None
     assert manifest["candidate_commit"] == head
+    assert manifest["materialization_mode"] == "git_worktree"
+    assert subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=prepared.worktree_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip() == str(Path(prepared.worktree_path).resolve()).replace("\\", "/")
+    assert not (Path(prepared.worktree_path) / ".body-origin.json").exists()
 
 
 @pytest.mark.unit
@@ -284,6 +293,7 @@ def test_prepare_slot_workspace_copies_repo_template_and_bootstraps_runtime(tmp_
     assert worktree_manifest.exists()
     manifest = json.loads(worktree_manifest.read_text(encoding="utf-8"))
     assert manifest["slot_id"] == "slot-B"
+    assert manifest["materialization_mode"] == "directory_copy"
 
 
 @pytest.mark.unit
@@ -323,6 +333,86 @@ def test_active_body_pointer_tracks_current_active_slot(tmp_path):
 
     assert pointer.slot_id == "slot-B"
     assert pointer.body_version == "v2"
+
+
+@pytest.mark.unit
+def test_restore_previous_healthy_commit_requires_clean_isolated_worktree(tmp_path):
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "voidcube@example.test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "VoidCube Test"], cwd=tmp_path, check=True)
+    (tmp_path / "agent.py").write_text("VERSION = 'stable'\n", encoding="utf-8")
+    subprocess.run(["git", "add", "agent.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "stable"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    stable_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    manager = BodyRegistryManager(tmp_path)
+    manager.initialize_layout()
+    meta = manager.prepare_slot_workspace("slot-B")
+    worktree = Path(meta.worktree_path)
+    (worktree / "agent.py").write_text("VERSION = 'broken'\n", encoding="utf-8")
+    subprocess.run(["git", "add", "agent.py"], cwd=worktree, check=True)
+    subprocess.run(["git", "commit", "-m", "breaking improvement"], cwd=worktree, check=True, capture_output=True, text=True)
+    broken_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=worktree,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    meta = manager.load_slot_meta("slot-B")
+    meta.current_healthy_commit = broken_commit
+    meta.previous_healthy_commit = stable_commit
+    meta.candidate_commit = broken_commit
+    meta.health_score = 80.0
+    manager.save_slot_meta(meta)
+
+    (worktree / "untracked.txt").write_text("must not be discarded\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="must be clean"):
+        manager.restore_previous_healthy_commit(
+            "slot-B",
+            expected_current_commit=broken_commit,
+        )
+    assert subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=worktree,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip() == broken_commit
+
+    (worktree / "untracked.txt").unlink()
+    restored = manager.restore_previous_healthy_commit(
+        "slot-B",
+        expected_current_commit=broken_commit,
+        request_id="rollback-1",
+    )
+    assert restored.body_state == "probe"
+    assert restored.lease == "rollback_probe"
+    assert restored.rollback_in_progress["source_commit"] == broken_commit
+    assert restored.rollback_in_progress["target_commit"] == stable_commit
+    assert subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=worktree,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip() == stable_commit
+
+    finalized = manager.finalize_previous_healthy_commit_restore(
+        "slot-B",
+        probe_report={"overall_passed": True},
+    )
+    assert finalized.body_state == "shell"
+    assert finalized.current_healthy_commit == stable_commit
+    assert finalized.previous_healthy_commit is None
+    assert finalized.health_score == pytest.approx(56.0)
+    assert finalized.last_improvement_rollback["probe_passed"] is True
 
 
 @pytest.mark.unit

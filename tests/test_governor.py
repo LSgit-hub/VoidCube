@@ -151,6 +151,48 @@ def test_rollback_request_emits_restore_action():
 
 
 @pytest.mark.unit
+def test_improvement_rollback_requires_failure_signal_and_healthy_ancestor(tmp_path):
+    manager = BodyRegistryManager(tmp_path)
+    manager.initialize_layout()
+    slot = manager.load_slot_meta("slot-B")
+    slot.current_healthy_commit = "b" * 40
+    slot.previous_healthy_commit = "a" * 40
+    manager.save_slot_meta(slot)
+    engine = GovernorDecisionEngine()
+
+    missing_signal = engine.evaluate(
+        GovernorRequest(
+            request_id="improvement-rollback-missing-signal",
+            event_type="improvement_rollback_request",
+            body_id="slot-B",
+            source_actor="supervisor",
+            summary="Rollback without evidence",
+            evidence={"current_commit": "b" * 40},
+        ),
+        slot_meta=slot,
+    )
+    assert missing_signal.decision == "request_more_evidence"
+
+    approved = engine.evaluate(
+        GovernorRequest(
+            request_id="improvement-rollback-approved",
+            event_type="improvement_rollback_request",
+            body_id="slot-B",
+            source_actor="supervisor",
+            summary="Rollback destructive improvement",
+            evidence={
+                "regression_detected": True,
+                "current_commit": "b" * 40,
+            },
+        ),
+        slot_meta=slot,
+    )
+    assert approved.decision == "rollback_required"
+    assert approved.required_actions[0].action_type == "restore_healthy_commit"
+    assert approved.required_actions[0].payload["previous_healthy_commit"] == "a" * 40
+
+
+@pytest.mark.unit
 def test_post_switch_review_recycles_retired_slot(tmp_path):
     manager = BodyRegistryManager(tmp_path)
     manager.initialize_layout()

@@ -27,6 +27,31 @@ def _make_supervisor_config(tmp_path: Path) -> SupervisorConfig:
     )
 
 
+def _seed_probe_ready_git_repo(tmp_path: Path) -> str:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "voidcube@example.test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "VoidCube Test"], cwd=tmp_path, check=True)
+    (tmp_path / "run_agent.py").write_text("print('agent')\n", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text("model: test\n", encoding="utf-8")
+    (tmp_path / "model_tools.py").write_text("# probe smoke\n", encoding="utf-8")
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "agent").mkdir()
+    (tmp_path / "agent" / "stream_handler.py").write_text(
+        "VERSION = 'stable'\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "stable body"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
 def _create_running_body_improvement_task(
     supervisor: Supervisor,
     *,
@@ -176,7 +201,10 @@ async def test_body_improvement_report_verifies_commit_and_executes_switch_sugge
     updated = supervisor._body_registry.load_slot_meta("slot-B")
     assert updated.body_state == "probe"
     assert updated.improvement_count == 1
-    assert updated.previous_healthy_commit == "a" * 40
+    assert updated.current_healthy_commit == "a" * 40
+    assert updated.previous_healthy_commit == "b" * 40
+    assert updated.candidate_commit == "a" * 40
+    assert updated.health_history[-1]["baseline_commit"] == "b" * 40
     assert updated.health_history[-1]["changed_files"] == ["agent/stream_handler.py"]
 
     duplicate = await supervisor.receive_improvement_report(
@@ -195,6 +223,80 @@ async def test_body_improvement_report_verifies_commit_and_executes_switch_sugge
     after_duplicate = supervisor._body_registry.load_slot_meta("slot-B")
     assert after_duplicate.health_score == updated.health_score
     assert after_duplicate.improvement_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_body_improvement_rollback_restores_commit_probes_and_writes_governance(tmp_path):
+    stable_commit = _seed_probe_ready_git_repo(tmp_path)
+    supervisor = Supervisor(_make_supervisor_config(tmp_path))
+    prepared = await _prepare_body_slot(supervisor, "slot-B")
+    worktree = Path(prepared["slot"]["worktree_path"])
+    (worktree / "agent" / "stream_handler.py").write_text(
+        "VERSION = 'broken'\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "agent/stream_handler.py"], cwd=worktree, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "breaking body improvement"],
+        cwd=worktree,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    broken_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=worktree,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    slot_meta = supervisor._body_registry.load_slot_meta("slot-B")
+    slot_meta.health_score = 80.0
+    slot_meta.current_healthy_commit = broken_commit
+    slot_meta.previous_healthy_commit = stable_commit
+    slot_meta.candidate_commit = broken_commit
+    slot_meta.build_from_commit = broken_commit
+    slot_meta.changed_files = ["agent/stream_handler.py"]
+    supervisor._body_registry.save_slot_meta(slot_meta)
+
+    result = await supervisor.rollback_body_improvement(
+        "slot-B",
+        {
+            "regression_detected": True,
+            "failure_reason": "stream handler regression",
+            "request_id": "rollback-body-improvement-1",
+            "trace_id": "trace-body-improvement-rollback-1",
+        },
+    )
+
+    assert result["status"] == "body_improvement_rollback_verified"
+    assert result["governor_response"]["decision"] == "rollback_required"
+    assert result["probe"]["report"]["overall_passed"] is True
+    assert result["execution_report"]["action_results"][-1]["action_type"] == (
+        "verify_healthy_commit_rollback"
+    )
+    assert subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=worktree,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip() == stable_commit
+    restored = supervisor._body_registry.load_slot_meta("slot-B")
+    assert restored.body_state == "shell"
+    assert restored.current_healthy_commit == stable_commit
+    assert restored.previous_healthy_commit is None
+    assert restored.health_score == pytest.approx(56.0)
+    assert restored.last_improvement_rollback["source_commit"] == broken_commit
+    assert restored.last_improvement_rollback["target_commit"] == stable_commit
+
+    latest_governance = supervisor._governor.get_latest()
+    assert latest_governance["kind"] == "execution_outcome"
+    assert latest_governance["request"]["event_type"] == "improvement_rollback_request"
+    assert latest_governance["execution_report"]["action_results"][-1]["details"][
+        "probe_passed"
+    ] is True
 
 
 @pytest.mark.asyncio

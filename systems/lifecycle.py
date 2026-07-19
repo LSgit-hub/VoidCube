@@ -171,6 +171,31 @@ class BodyLifecycleExecutor:
                 ),
             )
 
+        if action.action_type == "restore_healthy_commit":
+            if not slot_id:
+                return self._failed(action, "Healthy-commit restore requires a slot_id.")
+            try:
+                slot_meta = self.registry.restore_previous_healthy_commit(
+                    slot_id,
+                    expected_current_commit=payload.get("expected_current_commit"),
+                    request_id=payload.get("request_id"),
+                    reason=str(payload.get("reason") or "destructive_body_improvement"),
+                )
+            except (FileNotFoundError, ValueError) as exc:
+                return self._failed(action, str(exc))
+            return self._applied(
+                action,
+                slot_id=slot_id,
+                details=self._details_with_runtime_task_profile(
+                    {
+                        "body_state": slot_meta.body_state,
+                        "lease": slot_meta.lease,
+                        "rollback": dict(slot_meta.rollback_in_progress or {}),
+                    },
+                    payload,
+                ),
+            )
+
         if action.action_type == "recycle_retired_slot":
             if not slot_id:
                 return self._failed(action, "Recycle action requires a slot_id.")

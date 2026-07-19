@@ -11,6 +11,7 @@ from typing import Any, Awaitable, Callable, Dict, MutableMapping, Optional, Pro
 from fastapi import HTTPException
 
 from systems.governor import GovernorRequest
+from systems.lifecycle import LifecycleActionResult
 from systems.probe import ProbeReport
 from systems.runtime_task_profile import derive_runtime_task_profile
 logger = logging.getLogger(__name__)
@@ -47,6 +48,11 @@ class GovernorReviewExecutionAdapter:
         self.watch_window_runtime_sync = watch_window_runtime_sync
 
     def execute_governor_request(self, governor_request: GovernorRequest) -> Dict[str, Any]:
+        if governor_request.event_type == "improvement_rollback_request":
+            raise ValueError(
+                "Body improvement rollback must use the dedicated rollback executor so probe "
+                "verification and Mem writeback remain atomic."
+            )
         slot_meta = None
         try:
             slot_meta = self.body_registry.load_slot_meta(governor_request.body_id)
@@ -881,6 +887,7 @@ class BodyLifecycleExecutionAdapter:
         probe_executor: Any,
         governor_storage_root: str,
         attach_execution_route_hint: Callable[[Dict[str, Any], str], Dict[str, Any]],
+        governor: Any = None,
     ) -> None:
         self.config = config
         self.body_registry = body_registry
@@ -889,6 +896,7 @@ class BodyLifecycleExecutionAdapter:
         self.probe_executor = probe_executor
         self.governor_storage_root = governor_storage_root
         self.attach_execution_route_hint = attach_execution_route_hint
+        self.governor = governor
 
     def get_body_registry(self) -> Dict[str, Any]:
         registry = self.body_registry.load_registry()
@@ -1075,6 +1083,157 @@ class BodyLifecycleExecutionAdapter:
             raise
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+
+    async def rollback_body_improvement(
+        self,
+        slot_id: str,
+        request: dict | None = None,
+    ) -> Dict[str, Any]:
+        request = request or {}
+        if self.governor is None:
+            raise HTTPException(status_code=503, detail="Governor is unavailable.")
+
+        try:
+            slot_meta = self.body_registry.load_slot_meta(slot_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail=f"Slot not found: {slot_id}")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        current_commit = (
+            self.body_registry._git_head_for_isolated_worktree(
+                Path(slot_meta.worktree_path).resolve()
+            )
+            or slot_meta.current_healthy_commit
+            or slot_meta.candidate_commit
+            or ""
+        )
+        request_id = str(request.get("request_id") or uuid.uuid4())
+        trace_id = str(request.get("trace_id") or uuid.uuid4())
+        failure_reason = str(
+            request.get("failure_reason")
+            or request.get("reason")
+            or "destructive_body_improvement"
+        ).strip()
+        runtime_task_profile = {
+            "task_type": "self_evolution",
+            "governance_task_type": "self_evolution",
+            "task_family": "body_upgrade",
+            "execution_kind": "body_improvement_rollback",
+        }
+        governor_request = GovernorRequest(
+            request_id=request_id,
+            trace_id=trace_id,
+            task_type="self_evolution",
+            event_type="improvement_rollback_request",
+            body_id=slot_id,
+            source_actor=str(request.get("source_actor") or "supervisor_body_health_review"),
+            summary=f"Restore slot {slot_id} to its previous healthy improvement commit.",
+            evidence={
+                "destructive_change_detected": bool(
+                    request.get("destructive_change_detected")
+                ),
+                "probe_failed": bool(request.get("probe_failed")),
+                "regression_detected": bool(request.get("regression_detected")),
+                "failure_reason": failure_reason,
+                "current_commit": current_commit,
+                "runtime_task_profile": runtime_task_profile,
+                "git_lineage": {
+                    "source_branch": slot_meta.source_branch,
+                    "source_commit": slot_meta.source_commit,
+                    "candidate_branch": slot_meta.candidate_branch,
+                    "candidate_commit": current_commit,
+                    "rollback_ref": slot_meta.rollback_ref,
+                    "rollback_commit": slot_meta.previous_healthy_commit,
+                    "changed_files": list(slot_meta.changed_files),
+                },
+            },
+            constraints={
+                "previous_healthy_commit": slot_meta.previous_healthy_commit,
+                "isolated_worktree_required": True,
+                "fresh_probe_required": True,
+            },
+        )
+
+        response = self.governor.review(governor_request, slot_meta=slot_meta)
+        execution_report = self.lifecycle.apply_governor_response(response)
+        restore_applied = any(
+            result.action_type == "restore_healthy_commit" and result.status == "applied"
+            for result in execution_report.action_results
+        )
+        probe_result: Dict[str, Any] | None = None
+        if restore_applied:
+            try:
+                probe_result = await self.run_body_probe(
+                    {
+                        "slot_id": slot_id,
+                        "options": request.get("probe_options"),
+                    }
+                )
+                probe_report = dict(probe_result.get("report") or {})
+            except Exception as exc:
+                detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+                probe_report = {
+                    "slot_id": slot_id,
+                    "overall_passed": False,
+                    "overall_status": "failed",
+                    "summary": str(detail),
+                    "checks": [],
+                }
+                self.body_registry.write_probe_report(slot_id, probe_report)
+                probe_result = {
+                    "status": "probe_execution_failed",
+                    "report": probe_report,
+                }
+
+            finalized = self.body_registry.finalize_previous_healthy_commit_restore(
+                slot_id,
+                probe_report=probe_report,
+            )
+            probe_passed = bool(probe_report.get("overall_passed"))
+            execution_report.action_results.append(
+                LifecycleActionResult(
+                    action_type="verify_healthy_commit_rollback",
+                    status="applied" if probe_passed else "failed",
+                    slot_id=slot_id,
+                    details={
+                        "probe_passed": probe_passed,
+                        "probe_report": probe_report,
+                        "body_state": finalized.body_state,
+                        "health_score": finalized.health_score,
+                        "rollback": finalized.last_improvement_rollback,
+                    },
+                )
+            )
+
+        registry = self.body_registry.load_registry()
+        self.governor.record_execution_outcome(
+            request=governor_request,
+            response=response,
+            execution_report=execution_report,
+            registry=registry,
+        )
+        final_meta = self.body_registry.load_slot_meta(slot_id)
+        return self.attach_execution_route_hint(
+            {
+                "status": (
+                    "body_improvement_rollback_verified"
+                    if restore_applied
+                    and final_meta.last_improvement_rollback
+                    and final_meta.last_improvement_rollback.get("probe_passed")
+                    else "body_improvement_rollback_not_verified"
+                    if restore_applied
+                    else "body_improvement_rollback_not_executed"
+                ),
+                "request": governor_request.model_dump(mode="json"),
+                "governor_response": response.model_dump(mode="json"),
+                "execution_report": execution_report.model_dump(mode="json"),
+                "probe": probe_result,
+                "slot": final_meta.model_dump(mode="json"),
+                "registry": registry.model_dump(mode="json"),
+            },
+            "body.improvement.rollback",
+        )
 
 
 

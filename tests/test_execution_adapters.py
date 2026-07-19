@@ -150,6 +150,9 @@ async def test_execution_facade_delegates_to_current_adapters():
         mark_body_candidate=AsyncMock(return_value={"status": "candidate_marked"}),
         record_body_probe_report=AsyncMock(return_value={"status": "probe_report_recorded"}),
         run_body_probe=AsyncMock(return_value={"status": "probe_executed"}),
+        rollback_body_improvement=AsyncMock(
+            return_value={"status": "body_improvement_rollback_verified"}
+        ),
     )
     watch_window = SimpleNamespace(
         reconcile_watch_window_outcome=AsyncMock(return_value={"action": "retired_slot_recycled"}),
@@ -200,6 +203,10 @@ async def test_execution_facade_delegates_to_current_adapters():
     )
     assert await facade.record_body_probe_report({"slot_id": "slot-B"}) == {"status": "probe_report_recorded"}
     assert await facade.run_body_probe({"slot_id": "slot-B"}) == {"status": "probe_executed"}
+    assert await facade.rollback_body_improvement(
+        "slot-B",
+        {"regression_detected": True},
+    ) == {"status": "body_improvement_rollback_verified"}
     assert await facade.trigger_memory_compression({}) == {"status": "compressed"}
 
     watch_window.get_watch_window_status.assert_called_once_with()
@@ -217,6 +224,10 @@ async def test_execution_facade_delegates_to_current_adapters():
     body_upgrade.confirm_body_switch.assert_awaited_once_with({"approved": True})
     assert formal_result["status"] == "autonomous_chain_execution_executed"
     memory_maintenance.trigger_memory_compression.assert_awaited_once_with({})
+    body_lifecycle.rollback_body_improvement.assert_awaited_once_with(
+        "slot-B",
+        {"regression_detected": True},
+    )
 
 
 @pytest.mark.asyncio

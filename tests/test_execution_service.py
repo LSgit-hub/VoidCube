@@ -36,6 +36,9 @@ def _make_service() -> tuple[VoidCubeExecutionService, SimpleNamespace]:
             mark_body_candidate=AsyncMock(return_value={"status": "candidate_marked"}),
             record_body_probe_report=AsyncMock(return_value={"status": "probe_report_recorded"}),
             run_body_probe=AsyncMock(return_value={"status": "probe_executed"}),
+            rollback_body_improvement=AsyncMock(
+                return_value={"status": "body_improvement_rollback_verified"}
+            ),
         ),
         body_upgrade=SimpleNamespace(
             execute_body_upgrade=AsyncMock(return_value={"status": "upgrade_awaiting_user_consent"}),
@@ -128,6 +131,10 @@ def test_execution_service_delegates_body_lifecycle_and_upgrade_routes():
     probe_run = client.post("/executor/body/probe/run", json={"slot_id": "slot-B"})
     upgrade = client.post("/executor/body/upgrade/execute", json={"slot_id": "slot-B"})
     consent = client.post("/executor/body/switch/consent", json={"slot_id": "slot-B", "approved": True})
+    rollback = client.post(
+        "/executor/body/slots/slot-B/improvement/rollback",
+        json={"regression_detected": True},
+    )
 
     assert prepare.json()["status"] == "slot_prepared"
     assert candidate.json()["status"] == "candidate_marked"
@@ -135,10 +142,15 @@ def test_execution_service_delegates_body_lifecycle_and_upgrade_routes():
     assert probe_run.json()["status"] == "probe_executed"
     assert upgrade.json()["status"] == "upgrade_awaiting_user_consent"
     assert consent.json()["status"] == "body_switch_activated"
+    assert rollback.json()["status"] == "body_improvement_rollback_verified"
     adapters.body_lifecycle.prepare_body_slot.assert_awaited_once_with("slot-B", {"clear_existing": False})
     adapters.body_lifecycle.mark_body_candidate.assert_awaited_once_with("slot-B", {"body_version": "v2"})
     adapters.body_upgrade.execute_body_upgrade.assert_awaited_once_with({"slot_id": "slot-B"})
     adapters.body_upgrade.confirm_body_switch.assert_awaited_once_with({"slot_id": "slot-B", "approved": True})
+    adapters.body_lifecycle.rollback_body_improvement.assert_awaited_once_with(
+        "slot-B",
+        {"regression_detected": True},
+    )
 
 
 @pytest.mark.unit

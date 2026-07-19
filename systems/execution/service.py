@@ -49,6 +49,11 @@ class VoidCubeExecutionService:
         self.app.add_api_route(f"{prefix}/body/switch/consent", self.confirm_body_switch, methods=["POST"])
         self.app.add_api_route(f"{prefix}/body/probe/report", self.record_body_probe_report, methods=["POST"])
         self.app.add_api_route(f"{prefix}/body/probe/run", self.run_body_probe, methods=["POST"])
+        self.app.add_api_route(
+            f"{prefix}/body/slots/{{slot_id}}/improvement/rollback",
+            self.rollback_body_improvement,
+            methods=["POST"],
+        )
         self.app.add_api_route(f"{prefix}/autonomous-chain/execute", self.execute_autonomous_chain_request, methods=["POST"])
         self.app.add_api_route(f"{prefix}/memory/compress", self.trigger_memory_compression, methods=["POST"])
         self.app.add_api_route(f"{prefix}/body/improvement-report", self.submit_body_improvement_report, methods=["POST"])
@@ -80,6 +85,7 @@ class VoidCubeExecutionService:
                     "/body/slots/{slot_id}/candidate",
                     "/body/probe/report",
                     "/body/probe/run",
+                    "/body/slots/{slot_id}/improvement/rollback",
                     "/body/watch-window/status",
                     "/body/watch-window/evaluate",
                 ],
@@ -188,6 +194,13 @@ class VoidCubeExecutionService:
 
     async def run_body_probe(self, request: dict = Body(default_factory=dict)) -> Dict[str, Any]:
         return await self.facade.run_body_probe(request)
+
+    async def rollback_body_improvement(
+        self,
+        slot_id: str,
+        request: Optional[dict] = Body(default=None),
+    ) -> Dict[str, Any]:
+        return await self.facade.rollback_body_improvement(slot_id, request)
 
     async def trigger_memory_compression(self, request: Optional[dict] = Body(default=None)) -> Dict[str, Any]:
         return await self.facade.trigger_memory_compression(request)

@@ -173,6 +173,11 @@ class Supervisor(
         self.app.add_api_route("/body/switch/consent", self.confirm_body_switch, methods=["POST"])
         self.app.add_api_route("/body/governor/history", self.get_governor_history, methods=["GET"])
         self.app.add_api_route("/body/improvement-report", self.receive_improvement_report, methods=["POST"])
+        self.app.add_api_route(
+            "/body/{slot_id}/improvement/rollback",
+            self.rollback_body_improvement,
+            methods=["POST"],
+        )
         self.app.add_api_route("/body/{slot_id}/health", self.get_slot_health, methods=["GET"])
         self.app.add_api_route(
             AUTONOMOUS_CHAIN_CYCLE_ROUTE,
@@ -236,19 +241,20 @@ class Supervisor(
         result = await self._review_body_improvement(parsed)
         return {"status": "reviewed", **result}
 
+    async def rollback_body_improvement(
+        self,
+        slot_id: str,
+        request: dict | None = None,
+    ) -> Dict[str, Any]:
+        return await self._execution_facade.rollback_body_improvement(slot_id, request)
+
     async def get_slot_health(self, slot_id: str) -> Dict[str, Any]:
         """查询指定槽位的健康值"""
-        registry = self._execution_facade.body_registry.load_registry()
-        meta = registry.load_slot_meta(slot_id)
-        if meta is None:
+        result = self._execution_facade.get_slot_health(slot_id)
+        if "error" in result:
             raise HTTPException(status_code=404, detail=f"Slot {slot_id} not found")
-        return {
-            "slot_id": slot_id,
-            "health_score": getattr(meta, "health_score", 0.0),
-            "improvement_count": getattr(meta, "improvement_count", 0),
-            "last_improvement_at": getattr(meta, "last_improvement_at", None),
-            "health_history": getattr(meta, "health_history", []),
-        }
+        history = self._execution_facade.get_slot_health_history(slot_id)
+        return {**result, "health_history": history.get("health_history", [])}
 
     def _ensure_watch_window_task(self) -> None:
         self._watch_window_executor.ensure_watch_window_task()

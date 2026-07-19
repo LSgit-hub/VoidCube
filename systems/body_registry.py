@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Literal, Optional
 
@@ -86,8 +86,11 @@ class BodySlotMeta(BaseModel):
     health_history: list[dict] = Field(default_factory=list)
     improvement_count: int = 0
     last_improvement_at: Optional[str] = None
+    current_healthy_commit: Optional[str] = None
     previous_healthy_commit: Optional[str] = None
     decay_applied_at: Optional[str] = None
+    rollback_in_progress: Optional[Dict[str, Any]] = None
+    last_improvement_rollback: Optional[Dict[str, Any]] = None
 
 
 class BodyRegistry(BaseModel):
@@ -536,6 +539,175 @@ class BodyRegistryManager:
         self.save_slot_meta(meta)
         return meta
 
+    def restore_previous_healthy_commit(
+        self,
+        slot_id: str,
+        *,
+        expected_current_commit: Optional[str] = None,
+        request_id: Optional[str] = None,
+        reason: str = "destructive_body_improvement",
+    ) -> BodySlotMeta:
+        """Restore an isolated non-active slot to its recorded healthy ancestor."""
+        self._validate_slot_id(slot_id)
+        registry = self.load_registry()
+        meta = self.load_slot_meta(slot_id)
+        if registry.active_slot == slot_id or meta.body_state in {"active", "retired"}:
+            raise ValueError(
+                "Active or retired bodies must use the switch watch-window rollback protocol."
+            )
+        target_commit = str(meta.previous_healthy_commit or "").strip()
+        if not target_commit:
+            raise ValueError("No previous healthy commit is recorded for this slot.")
+
+        worktree = Path(meta.worktree_path).resolve()
+        if self._git_top_level_for_path(worktree) != worktree:
+            raise ValueError(
+                "Body improvement rollback requires an isolated linked Git worktree."
+            )
+
+        status = self._run_git(
+            worktree,
+            ["status", "--porcelain", "--untracked-files=all"],
+            timeout=15,
+        )
+        if status.returncode != 0:
+            raise ValueError("Unable to inspect the body worktree before rollback.")
+        if status.stdout.strip():
+            raise ValueError("Body worktree must be clean before rollback.")
+
+        current_head = self._git_head_for_isolated_worktree(worktree)
+        if not current_head:
+            raise ValueError("Unable to resolve the body worktree HEAD before rollback.")
+        if expected_current_commit:
+            expected = self._run_git(
+                worktree,
+                ["rev-parse", "--verify", f"{expected_current_commit}^{{commit}}"],
+                timeout=15,
+            )
+            if expected.returncode != 0 or expected.stdout.strip().lower() != current_head.lower():
+                raise ValueError("Body worktree HEAD does not match the governed rollback source.")
+
+        resolved_target = self._run_git(
+            worktree,
+            ["rev-parse", "--verify", f"{target_commit}^{{commit}}"],
+            timeout=15,
+        )
+        if resolved_target.returncode != 0:
+            raise ValueError("The recorded previous healthy commit is not available.")
+        target_commit = resolved_target.stdout.strip()
+        if target_commit.lower() == current_head.lower():
+            raise ValueError("The worktree is already at the previous healthy commit.")
+
+        ancestry = self._run_git(
+            worktree,
+            ["merge-base", "--is-ancestor", target_commit, current_head],
+            timeout=15,
+        )
+        if ancestry.returncode != 0:
+            raise ValueError("The previous healthy commit is not an ancestor of the current HEAD.")
+
+        reset = self._run_git(
+            worktree,
+            ["reset", "--hard", target_commit],
+            timeout=30,
+        )
+        if reset.returncode != 0:
+            raise ValueError("Git failed to restore the previous healthy commit: " + reset.stderr.strip())
+        restored_head = self._git_head_for_isolated_worktree(worktree)
+        if not restored_head or restored_head.lower() != target_commit.lower():
+            raise ValueError("Git rollback completed without restoring the expected commit.")
+
+        now = datetime.now(timezone.utc).isoformat()
+        meta.body_state = "probe"
+        meta.lease = "rollback_probe"
+        meta.pid = None
+        meta.candidate_commit = target_commit
+        meta.build_from_commit = target_commit
+        meta.last_probe_result = None
+        meta.switch_consent_request = None
+        meta.switch_consent_requested_at = None
+        meta.switch_consent_approved_at = None
+        meta.rollback_in_progress = {
+            "request_id": request_id,
+            "failure_reason": reason,
+            "source_commit": current_head,
+            "target_commit": target_commit,
+            "started_at": now,
+        }
+        self.save_slot_meta(meta)
+
+        if registry.shell_slot == slot_id:
+            registry.shell_slot = None
+            self.save_registry(registry)
+        return meta
+
+    def finalize_previous_healthy_commit_restore(
+        self,
+        slot_id: str,
+        *,
+        probe_report: Dict[str, Any],
+    ) -> BodySlotMeta:
+        meta = self.load_slot_meta(slot_id)
+        rollback = dict(meta.rollback_in_progress or {})
+        if not rollback:
+            raise ValueError("No body improvement rollback is in progress for this slot.")
+
+        probe_passed = bool(probe_report.get("overall_passed"))
+        health_before = float(meta.health_score or 0.0)
+        score_delta = -(health_before * 0.3)
+        meta.health_score = max(0.0, health_before + score_delta)
+        completed_at = datetime.now(timezone.utc).isoformat()
+        rollback_result = {
+            **rollback,
+            "completed_at": completed_at,
+            "probe_passed": probe_passed,
+            "score_delta": score_delta,
+            "health_score_before": health_before,
+            "health_score_after": meta.health_score,
+        }
+        meta.health_history.append(
+            {
+                **rollback_result,
+                "reason": "body_improvement_rollback",
+                "reviewed_at": completed_at,
+            }
+        )
+        meta.last_improvement_rollback = rollback_result
+        meta.rollback_in_progress = None
+
+        target_commit = str(rollback.get("target_commit") or "").strip()
+        if probe_passed:
+            prior_target = next(
+                (
+                    str(entry.get("baseline_commit") or "").strip()
+                    for entry in reversed(meta.health_history[:-1])
+                    if str(entry.get("commit_hash") or "").strip() == target_commit
+                    and str(entry.get("baseline_commit") or "").strip()
+                    != target_commit
+                ),
+                "",
+            )
+            meta.current_healthy_commit = target_commit
+            meta.previous_healthy_commit = prior_target or None
+            meta.body_state = "shell"
+            meta.lease = None
+            meta.changed_files = []
+            meta.diff_summary = (
+                f"Restored previous healthy commit {target_commit[:12]} after probe verification."
+            )
+        else:
+            meta.body_state = "probe"
+            meta.lease = "rollback_probe_failed"
+        self.save_slot_meta(meta)
+
+        registry = self.load_registry()
+        if probe_passed:
+            registry.shell_slot = slot_id
+        elif registry.shell_slot == slot_id:
+            registry.shell_slot = None
+        self.save_registry(registry)
+        return meta
+
     def prepare_slot_workspace(
         self,
         slot_id: str,
@@ -561,11 +733,23 @@ class BodyRegistryManager:
                 f"Refusing to materialize slot {slot_id} from its own worktree source."
             )
 
-        self._sync_directory(
-            source_root,
-            worktree_root,
-            clear_existing=clear_existing,
-        )
+        source_commit = self._git_head_for_path(source_root)
+        source_branch = self._git_branch_for_path(source_root)
+        if source_commit:
+            self._materialize_git_worktree(
+                source_root=source_root,
+                target_root=worktree_root,
+                source_commit=source_commit,
+                clear_existing=clear_existing,
+            )
+            materialization_mode = "git_worktree"
+        else:
+            self._sync_directory(
+                source_root,
+                worktree_root,
+                clear_existing=clear_existing,
+            )
+            materialization_mode = "directory_copy"
         self._bootstrap_runtime_directory(
             slot_id,
             runtime_root,
@@ -574,8 +758,6 @@ class BodyRegistryManager:
         )
 
         now = datetime.utcnow()
-        source_commit = self._git_head_for_path(source_root)
-        source_branch = self._git_branch_for_path(source_root)
         candidate_commit = self._git_head_for_path(worktree_root) or source_commit
         candidate_branch = self._git_branch_for_path(worktree_root) or source_branch
         meta.materialized_from = source_label
@@ -609,6 +791,7 @@ class BodyRegistryManager:
             source_label=source_label,
             source_root=source_root,
             materialized_at=now,
+            materialization_mode=materialization_mode,
         )
         return meta
 
@@ -623,7 +806,7 @@ class BodyRegistryManager:
         return self.slot_root(slot_id) / "runtime" / "slot-runtime.json"
 
     def slot_worktree_manifest_path(self, slot_id: str) -> Path:
-        return self.slot_root(slot_id) / "worktree" / ".body-origin.json"
+        return self.slot_root(slot_id) / "worktree-origin.json"
 
     def active_body_pointer_path(self) -> Path:
         return self.repo_root / ".body-active.json"
@@ -740,6 +923,88 @@ class BodyRegistryManager:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(child, destination)
 
+    def _materialize_git_worktree(
+        self,
+        *,
+        source_root: Path,
+        target_root: Path,
+        source_commit: str,
+        clear_existing: bool,
+    ) -> None:
+        source_root = source_root.resolve()
+        target_root = target_root.resolve()
+        target_root.parent.mkdir(parents=True, exist_ok=True)
+
+        registered_worktrees = self._git_registered_worktrees(source_root)
+        target_registered = target_root in registered_worktrees
+        target_has_content = target_root.exists() and any(target_root.iterdir())
+        if (target_registered or target_has_content) and not clear_existing:
+            current_head = self._git_head_for_isolated_worktree(target_root)
+            if current_head == source_commit:
+                return
+            raise ValueError(
+                "Git worktree rematerialization requires clear_existing=True "
+                "when the target is already populated."
+            )
+
+        if target_registered:
+            removed = self._run_git(
+                source_root,
+                ["worktree", "remove", "--force", str(target_root)],
+                timeout=30,
+            )
+            if removed.returncode != 0:
+                raise ValueError(
+                    "Failed to remove the existing linked worktree before rematerialization: "
+                    + removed.stderr.strip()
+                )
+        elif target_root.exists():
+            self._clear_directory(target_root)
+
+        self._run_git(source_root, ["worktree", "prune"], timeout=15)
+        added = self._run_git(
+            source_root,
+            ["worktree", "add", "--detach", "--force", str(target_root), source_commit],
+            timeout=60,
+        )
+        if added.returncode != 0:
+            raise ValueError(
+                "Failed to materialize isolated Git worktree: " + added.stderr.strip()
+            )
+
+        isolated_top = self._git_top_level_for_path(target_root)
+        if isolated_top != target_root:
+            raise ValueError(
+                f"Materialized slot is not an isolated Git worktree: {target_root}"
+            )
+
+    def _git_registered_worktrees(self, path: Path) -> set[Path]:
+        result = self._run_git(path, ["worktree", "list", "--porcelain"], timeout=15)
+        if result.returncode != 0:
+            return set()
+        worktrees: set[Path] = set()
+        for line in result.stdout.splitlines():
+            if not line.startswith("worktree "):
+                continue
+            raw_path = line.removeprefix("worktree ").strip()
+            if raw_path:
+                worktrees.add(Path(raw_path).resolve())
+        return worktrees
+
+    @staticmethod
+    def _run_git(path: Path, args: list[str], *, timeout: int) -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                ["git", *args],
+                cwd=str(path.resolve()),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ValueError(f"Git command failed in {path}: {exc}") from exc
+
     def _bootstrap_runtime_directory(
         self,
         slot_id: str,
@@ -775,6 +1040,7 @@ class BodyRegistryManager:
         source_label: str,
         source_root: Path,
         materialized_at: datetime,
+        materialization_mode: str,
     ) -> None:
         atomic_json_write(
             self.slot_worktree_manifest_path(slot_id),
@@ -788,8 +1054,32 @@ class BodyRegistryManager:
                 "candidate_branch": self._git_branch_for_path(worktree_root),
                 "candidate_commit": self._git_head_for_path(worktree_root),
                 "materialized_at": materialized_at.isoformat(),
+                "materialization_mode": materialization_mode,
             },
         )
+
+    def _git_top_level_for_path(self, path: Path) -> Optional[Path]:
+        if not path.exists():
+            return None
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=str(path.resolve()),
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+        return Path(result.stdout.strip()).resolve()
+
+    def _git_head_for_isolated_worktree(self, path: Path) -> Optional[str]:
+        if self._git_top_level_for_path(path) != path.resolve():
+            return None
+        return self._git_head_for_path(path)
 
     def _git_branch_for_path(self, path: Path) -> Optional[str]:
         try:

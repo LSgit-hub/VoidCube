@@ -6181,7 +6181,7 @@ class EndogenousDriveEngine:
             profile["profile_status"] = "worktree_missing_on_disk"
             return profile
 
-        manifest_path = worktree / ".body-origin.json"
+        manifest_path = worktree.parent / "worktree-origin.json"
         if manifest_path.exists():
             try:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

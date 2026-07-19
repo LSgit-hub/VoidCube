@@ -15,6 +15,7 @@ GovernorEventType = Literal[
     "health_review_request",
     "switch_request",
     "rollback_request",
+    "improvement_rollback_request",
     "post_switch_review",
     "switch_suggestion",
 ]
@@ -32,6 +33,7 @@ GovernorActionType = Literal[
     "await_user_consent",
     "activate_slot",
     "restore_retired_slot",
+    "restore_healthy_commit",
     "recycle_retired_slot",
     "abandon_candidate",
     "record_evolution_event",
@@ -104,6 +106,11 @@ class GovernorDecisionEngine:
             response = self._evaluate_switch_request(request, slot_meta=slot_meta)
         elif request.event_type == "rollback_request":
             response = self._evaluate_rollback_request(request)
+        elif request.event_type == "improvement_rollback_request":
+            response = self._evaluate_improvement_rollback_request(
+                request,
+                slot_meta=slot_meta,
+            )
         elif request.event_type == "post_switch_review":
             response = self._evaluate_post_switch_review(request, slot_meta=slot_meta)
         elif request.event_type == "switch_suggestion":
@@ -365,6 +372,91 @@ class GovernorDecisionEngine:
                         {
                             "failed_body_id": request.body_id,
                             "retired_slot": retired_slot,
+                            "decision": "rollback_required",
+                        },
+                    ),
+                )
+            ],
+        )
+
+    def _evaluate_improvement_rollback_request(
+        self,
+        request: GovernorRequest,
+        *,
+        slot_meta: Optional[BodySlotMeta],
+    ) -> GovernorResponse:
+        failure_signal = bool(
+            request.evidence.get("destructive_change_detected")
+            or request.evidence.get("probe_failed")
+            or request.evidence.get("regression_detected")
+        )
+        if not failure_signal:
+            return self._request_more_evidence(
+                "Body improvement rollback requires a concrete regression, destructive-change, "
+                "or failed-probe signal."
+            )
+        if slot_meta is None:
+            return self._request_more_evidence(
+                "Body improvement rollback requires current slot metadata."
+            )
+        if slot_meta.body_state in {"active", "retired"}:
+            return self._reject(
+                "Active and retired bodies must use the switch watch-window rollback protocol."
+            )
+
+        previous_healthy_commit = str(
+            request.constraints.get("previous_healthy_commit")
+            or slot_meta.previous_healthy_commit
+            or ""
+        ).strip()
+        current_commit = str(
+            request.evidence.get("current_commit")
+            or slot_meta.current_healthy_commit
+            or slot_meta.candidate_commit
+            or ""
+        ).strip()
+        if not previous_healthy_commit or not current_commit:
+            return self._request_more_evidence(
+                "Body improvement rollback requires both current and previous healthy commits."
+            )
+        if previous_healthy_commit == current_commit:
+            return self._reject(
+                "The previous healthy commit must differ from the current body commit."
+            )
+
+        return GovernorResponse(
+            decision="rollback_required",
+            confidence=0.95,
+            risk_level="high",
+            reasoning_summary=(
+                "A concrete body-improvement failure signal is present. Restore the recorded "
+                "healthy ancestor in the isolated slot and require a fresh probe before reuse."
+            ),
+            required_actions=[
+                GovernorAction(
+                    action_type="restore_healthy_commit",
+                    slot_id=request.body_id,
+                    payload={
+                        "expected_current_commit": current_commit,
+                        "previous_healthy_commit": previous_healthy_commit,
+                        "request_id": request.request_id,
+                        "reason": str(
+                            request.evidence.get("failure_reason")
+                            or "destructive_body_improvement"
+                        ),
+                        "runtime_task_profile": self._runtime_task_profile(request),
+                    },
+                )
+            ],
+            writeback_events=[
+                GovernorWritebackEvent(
+                    event_type="body_improvement_rollback_approved",
+                    payload=self._with_runtime_task_profile(
+                        request,
+                        {
+                            "body_id": request.body_id,
+                            "source_commit": current_commit,
+                            "target_commit": previous_healthy_commit,
                             "decision": "rollback_required",
                         },
                     ),
