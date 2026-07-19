@@ -1,8 +1,8 @@
 """Agent internals -- extracted modules from run_agent.py.
 
-These modules contain pure utility functions and self-contained classes
-that were previously embedded in the 3,600-line run_agent.py. Extracting
-them makes run_agent.py focused on the AIAgent orchestrator class.
+These modules contain utilities and self-contained runtime components
+extracted from run_agent.py so the root module can converge on Agent
+orchestration instead of owning provider and subsystem implementations.
 """
 
 from .agent_initializer import (
@@ -10,7 +10,6 @@ from .agent_initializer import (
     initialize_memory_manager,
     initialize_context_compressor,
     initialize_tool_definitions,
-    initialize_llm_client,
     resolve_provider_credentials,
     initialize_session_logging,
     initialize_checkpoint_manager,
@@ -27,7 +26,6 @@ __all__ = [
     "initialize_memory_manager",
     "initialize_context_compressor",
     "initialize_tool_definitions",
-    "initialize_llm_client",
     "resolve_provider_credentials",
     "initialize_session_logging",
     "initialize_checkpoint_manager",

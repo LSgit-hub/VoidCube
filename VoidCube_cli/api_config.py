@@ -10,14 +10,12 @@ from typing import Any
 
 
 API_A_ENV_VAR_MAP = {
-    "anthropic": "ANTHROPIC_API_KEY",
     "openai": "OPENAI_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
     "gemini": "GEMINI_API_KEY",
 }
 
 API_A_PROVIDER_LABELS = {
-    "anthropic": "Anthropic",
     "openai": "OpenAI",
     "deepseek": "DeepSeek",
     "gemini": "Gemini",
@@ -1344,7 +1342,6 @@ def run_api_config_wizard(console=None):
                 
                 p("\n支持的 Provider：")
                 providers = [
-                    ("anthropic", "Anthropic (Claude)"),
                     ("openai", "OpenAI (GPT)"),
                     ("deepseek", "DeepSeek"),
                     ("gemini", "Google Gemini"),

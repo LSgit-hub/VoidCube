@@ -344,7 +344,6 @@ def _build_child_agent(
     override_provider: Optional[str] = None,
     override_base_url: Optional[str] = None,
     override_api_key: Optional[str] = None,
-    override_api_mode: Optional[str] = None,
     # ACP transport overrides — lets a non-ACP parent spawn ACP child agents
     override_acp_command: Optional[str] = None,
     override_acp_args: Optional[List[str]] = None,
@@ -425,7 +424,6 @@ def _build_child_agent(
     effective_provider = override_provider or getattr(parent_agent, "provider", None)
     effective_base_url = override_base_url or (parent_agent.base_url if parent_agent else None)
     effective_api_key = override_api_key or parent_api_key
-    effective_api_mode = override_api_mode or getattr(parent_agent, "api_mode", None)
     effective_acp_command = override_acp_command or getattr(parent_agent, "acp_command", None)
     effective_acp_args = list(override_acp_args if override_acp_args is not None else (getattr(parent_agent, "acp_args", []) or []))
 
@@ -453,7 +451,6 @@ def _build_child_agent(
         api_key=effective_api_key,
         model=effective_model,
         provider=effective_provider,
-        api_mode=effective_api_mode,
         acp_command=effective_acp_command,
         acp_args=effective_acp_args,
         max_iterations=max_iterations,
@@ -781,7 +778,7 @@ def delegate_task(
 
     # Resolve delegation credentials (provider:model pair).
     # When delegation.provider is configured, this resolves the full credential
-    # bundle (base_url, api_key, api_mode) via the same runtime provider system
+    # bundle (base_url and api_key) via the same runtime provider system
     # used by CLI/gateway startup.  When unconfigured, returns None values so
     # children inherit from the parent.
     try:
@@ -888,7 +885,6 @@ def delegate_task(
                     max_iterations=effective_max_iter, parent_agent=parent_agent,
                     override_provider=creds["provider"], override_base_url=creds["base_url"],
                     override_api_key=creds["api_key"],
-                    override_api_mode=creds["api_mode"],
                     override_acp_command=t.get("acp_command") or acp_command,
                     override_acp_args=t.get("acp_args") or acp_args,
                     display_manager=display_manager,
@@ -1122,7 +1118,7 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
 
     If ``delegation.base_url`` is configured, subagents use that direct
     OpenAI-compatible endpoint. Otherwise, if ``delegation.provider`` is
-    configured, the full credential bundle (base_url, api_key, api_mode,
+    configured, the full credential bundle (base_url, api_key,
     provider) is resolved via the runtime provider system — the same path used
     by CLI/gateway startup. This lets subagents run on a completely different
     provider:model pair.
@@ -1148,22 +1144,11 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
                 "Set delegation.api_key or OPENAI_API_KEY."
             )
 
-        base_lower = configured_base_url.lower()
-        provider = "custom"
-        api_mode = "chat_completions"
-        if "chatgpt.com/backend-api/codex" in base_lower:
-            provider = "openai-codex"
-            api_mode = "codex_responses"
-        elif "api.anthropic.com" in base_lower:
-            provider = "anthropic"
-            api_mode = "anthropic_messages"
-
         return {
             "model": configured_model,
-            "provider": provider,
+            "provider": "custom",
             "base_url": configured_base_url,
             "api_key": api_key,
-            "api_mode": api_mode,
         }
 
     if not configured_provider:
@@ -1173,7 +1158,6 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
             "provider": None,
             "base_url": None,
             "api_key": None,
-            "api_mode": None,
         }
 
     # Provider is configured — resolve full credentials
@@ -1200,7 +1184,6 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
         "provider": runtime.get("provider"),
         "base_url": runtime.get("base_url"),
         "api_key": api_key,
-        "api_mode": runtime.get("api_mode"),
         "command": runtime.get("command"),
         "args": list(runtime.get("args") or []),
     }
@@ -1317,7 +1300,7 @@ DELEGATE_TASK_SCHEMA = {
                         },
                         "acp_command": {
                             "type": "string",
-                            "description": "Per-task ACP command override (e.g. 'claude'). Overrides the top-level acp_command for this task only.",
+                            "description": "Per-task ACP command override. Overrides the top-level acp_command for this task only.",
                         },
                         "acp_args": {
                             "type": "array",
@@ -1346,10 +1329,10 @@ DELEGATE_TASK_SCHEMA = {
             "acp_command": {
                 "type": "string",
                 "description": (
-                    "Override ACP command for child agents (e.g. 'claude', 'copilot'). "
+                    "Override the ACP command for child agents. "
                     "When set, children use ACP subprocess transport instead of inheriting "
-                    "the parent's transport. Enables spawning Claude Code (claude --acp --stdio) "
-                    "or other ACP-capable agents from any parent, including Discord/Telegram/CLI."
+                    "the parent's transport. This supports ACP-capable agents from any parent, "
+                    "including Discord/Telegram/CLI."
                 ),
             },
             "acp_args": {
@@ -1357,7 +1340,7 @@ DELEGATE_TASK_SCHEMA = {
                 "items": {"type": "string"},
                 "description": (
                     "Arguments for the ACP command (default: ['--acp', '--stdio']). "
-                    "Only used when acp_command is set. Example: ['--acp', '--stdio', '--model', 'claude-opus-4-6']"
+                    "Only used when acp_command is set."
                 ),
             },
         },

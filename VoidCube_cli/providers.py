@@ -38,7 +38,7 @@ class VoidcubeOverlay:
         VoidcubeOverlay is retained as a data source for ProviderRegistry.
     """
 
-    transport: str = "openai_chat"        # openai_chat | codex_responses
+    transport: str = "openai_chat"
     is_aggregator: bool = False
     auth_type: str = "api_key"            # api_key | oauth_device_code | oauth_external | external_process
     extra_env_vars: Tuple[str, ...] = ()  # env vars models.dev doesn't list
@@ -58,11 +58,6 @@ VOIDCUBE_OVERLAYS: Dict[str, VoidcubeOverlay] = {
         auth_type="oauth_device_code",
         base_url_override="https://inference-api.nousresearch.com/v1",
     ),
-    "openai-codex": VoidcubeOverlay(
-        transport="codex_responses",
-        auth_type="oauth_external",
-        base_url_override="https://chatgpt.com/backend-api/codex",
-    ),
     "qwen-oauth": VoidcubeOverlay(
         transport="openai_chat",
         auth_type="oauth_external",
@@ -70,7 +65,7 @@ VOIDCUBE_OVERLAYS: Dict[str, VoidcubeOverlay] = {
         base_url_env_var="VOIDCUBE_QWEN_BASE_URL",
     ),
     "copilot-acp": VoidcubeOverlay(
-        transport="codex_responses",
+        transport="openai_chat",
         auth_type="external_process",
         base_url_override="acp://copilot",
         base_url_env_var="COPILOT_ACP_BASE_URL",
@@ -90,11 +85,11 @@ VOIDCUBE_OVERLAYS: Dict[str, VoidcubeOverlay] = {
         base_url_env_var="KIMI_BASE_URL",
     ),
     "minimax": VoidcubeOverlay(
-        transport="anthropic_messages",
+        transport="openai_chat",
         base_url_env_var="MINIMAX_BASE_URL",
     ),
     "minimax-cn": VoidcubeOverlay(
-        transport="anthropic_messages",
+        transport="openai_chat",
         base_url_env_var="MINIMAX_CN_BASE_URL",
     ),
     "deepseek": VoidcubeOverlay(
@@ -150,7 +145,7 @@ class ProviderDef:
 
     id: str
     name: str
-    transport: str                        # openai_chat | anthropic_messages | codex_responses
+    transport: str
     api_key_env_vars: Tuple[str, ...]     # all env vars to check for API key
     base_url: str = ""
     base_url_env_var: str = ""
@@ -248,7 +243,6 @@ ALIASES: Dict[str, str] = {
 
 _LABEL_OVERRIDES: Dict[str, str] = {
     "nous": "Nous Portal",
-    "openai-codex": "OpenAI Codex",
     "copilot-acp": "GitHub Copilot ACP",
     "xiaomi": "Xiaomi MiMo",
     "local": "Local endpoint",
@@ -259,8 +253,6 @@ _LABEL_OVERRIDES: Dict[str, str] = {
 
 TRANSPORT_TO_API_MODE: Dict[str, str] = {
     "openai_chat": "chat_completions",
-    "anthropic_messages": "anthropic_messages",
-    "codex_responses": "codex_responses",
 }
 
 
@@ -280,7 +272,7 @@ def get_provider(name: str) -> Optional[ProviderDef]:
     """Look up a provider by id or alias, merging all data sources.
 
     Resolution order:
-      1. Voidcube overlays (for providers not in models.dev: nous, openai-codex, etc.)
+      1. Voidcube overlays for project-specific providers such as Nous.
       2. models.dev catalog + Voidcube overlay
       3. User-defined providers from config (TODO: Phase 4)
 
@@ -366,27 +358,6 @@ def is_aggregator(provider: str) -> bool:
     return pdef.is_aggregator if pdef else False
 
 
-def determine_api_mode(provider: str, base_url: str = "") -> str:
-    """Determine the API mode (wire protocol) for a provider/endpoint.
-
-    Resolution order:
-      1. Known provider → transport → TRANSPORT_TO_API_MODE.
-      2. URL heuristics for unknown / custom providers.
-      3. Default: 'chat_completions'.
-    """
-    pdef = get_provider(provider)
-    if pdef is not None:
-        return TRANSPORT_TO_API_MODE.get(pdef.transport, "chat_completions")
-
-    # URL-based heuristics for custom / unknown providers
-    if base_url:
-        url_lower = base_url.rstrip("/").lower()
-        if "api.openai.com" in url_lower:
-            return "codex_responses"
-
-    return "chat_completions"
-
-
 # -- Provider from user config ------------------------------------------------
 
 def resolve_user_provider(name: str, user_config: Dict[str, Any]) -> Optional[ProviderDef]:
@@ -410,15 +381,7 @@ def resolve_user_provider(name: str, user_config: Dict[str, Any]) -> Optional[Pr
     display_name = entry.get("label", "") or entry.get("name", "") or name
     api_url = entry.get("base_url", "") or entry.get("api", "") or entry.get("url", "") or ""
     key_env = entry.get("api_key_env", "") or entry.get("key_env", "") or ""
-    transport = entry.get("transport", "") or ""
-    if not transport:
-        api_mode = str(entry.get("api_mode") or "").strip().lower()
-        if api_mode == "codex_responses":
-            transport = "codex_responses"
-        elif api_mode == "anthropic_messages":
-            transport = "anthropic_messages"
-        else:
-            transport = "openai_chat"
+    transport = "openai_chat"
 
     env_vars: List[str] = []
     if key_env:

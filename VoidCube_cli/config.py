@@ -304,9 +304,9 @@ DEFAULT_CONFIG = {
         "service_tier": "",
         # Tool-use enforcement: injects system prompt guidance that tells the
         # model to actually call tools instead of describing intended actions.
-        # Values: "auto" (default — applies to gpt/codex models), true/false
+        # Values: "auto" (default — applies to GPT-family models), true/false
         # (force on/off for all models), or a list of model-name substrings
-        # to match (e.g. ["gpt", "codex", "gemini", "qwen"]).
+        # to match (e.g. ["gpt", "gemini", "qwen"]).
         "tool_use_enforcement": "auto",
         # Staged inactivity warning: send a warning to the user at this
         # threshold before escalating to a full timeout.  The warning fires
@@ -410,7 +410,7 @@ DEFAULT_CONFIG = {
     # the configured provider is unavailable.
     "auxiliary": {
         "vision": {
-            "provider": "auto",    # auto | openrouter | nous | codex | custom
+            "provider": "auto",    # auto | openrouter | nous | custom
             "model": "",           # e.g. "google/gemini-2.5-flash", "gpt-4o"
             "base_url": "",        # direct OpenAI-compatible endpoint (takes precedence over provider)
             "api_key": "",         # API key for base_url (falls back to OPENAI_API_KEY)
@@ -1561,7 +1561,7 @@ _KNOWN_ROOT_KEYS = {
 }
 
 # Fields that look like they should be inside a provider entry, not at root
-_PROVIDER_ENTRY_LIKE_FIELDS = {"base_url", "api_key", "rate_limit_delay", "api_mode"}
+_PROVIDER_ENTRY_LIKE_FIELDS = {"base_url", "api_key", "rate_limit_delay"}
 
 
 @dataclass
@@ -2067,7 +2067,6 @@ def _provider_env_var_for_key(provider_key: str) -> str:
         "openai": "OPENAI_API_KEY",
         "deepseek": "DEEPSEEK_API_KEY",
         "gemini": "GEMINI_API_KEY",
-        "anthropic": "ANTHROPIC_API_KEY",
         "ollama": "",
         "lm-studio": "",
     }
@@ -2099,8 +2098,6 @@ def _normalize_provider_entry(
     normalized["type"] = str(entry.get("type") or _provider_type_from_key(key, entry)).strip() or "openai_compatible"
     normalized["base_url"] = api_url
     normalized["selected_model"] = selected_model
-    normalized["api_mode"] = str(entry.get("api_mode") or entry.get("transport") or "").strip()
-
     if not auth_mode:
         if api_key:
             auth_mode = "stored"
@@ -2192,7 +2189,6 @@ def get_active_model_config(config: Optional[Dict[str, Any]] = None) -> Dict[str
             "default": str(provider_cfg.get("selected_model") or "").strip(),
             "model": str(provider_cfg.get("selected_model") or "").strip(),
             "base_url": str(provider_cfg.get("base_url") or "").strip(),
-            "api_mode": str(provider_cfg.get("api_mode") or "").strip(),
             "api_key": str(provider_cfg.get("api_key") or "").strip(),
         }
     return {}
@@ -2327,7 +2323,6 @@ _FALLBACK_COMMENT = """
 #
 # Supported providers:
 #   openrouter   (OPENROUTER_API_KEY)  — routes to any model
-#   openai-codex (OAuth — VoidCube auth) — OpenAI Codex
 #   nous         (OAuth — VoidCube auth) — Nous Portal
 #   zai          (ZAI_API_KEY)         — Z.AI / GLM
 #   kimi-coding  (KIMI_API_KEY)        — Kimi / Moonshot
@@ -2370,7 +2365,6 @@ _COMMENTED_SECTIONS = """
 #
 # Supported providers:
 #   openrouter   (OPENROUTER_API_KEY)  — routes to any model
-#   openai-codex (OAuth — VoidCube auth) — OpenAI Codex
 #   nous         (OAuth — VoidCube auth) — Nous Portal
 #   zai          (ZAI_API_KEY)         — Z.AI / GLM
 #   kimi-coding  (KIMI_API_KEY)        — Kimi / Moonshot

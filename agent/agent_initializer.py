@@ -177,79 +177,6 @@ def initialize_tool_definitions(
     }
 
 
-def initialize_llm_client(
-    base_url: str,
-    api_key: str,
-    provider: str,
-    api_mode: str,
-    model: str,
-    quiet_mode: bool = False,
-) -> Dict[str, Any]:
-    from VoidCube_core.constants import OPENROUTER_BASE_URL
-    
-    if api_mode == "anthropic_messages":
-        from agent.anthropic_adapter import build_anthropic_client
-        effective_key = api_key or ""
-        anthropic_client = build_anthropic_client(effective_key, base_url)
-        
-        if not quiet_mode:
-            print(f"🤖 AI Agent initialized with model: {model} (Anthropic-compatible)")
-            if effective_key and len(effective_key) > 12:
-                print(f"🔑 Using token: {effective_key[:8]}...{effective_key[-4:]}")
-        
-        return {
-            "client": None,
-            "anthropic_client": anthropic_client,
-            "api_key": effective_key,
-            "anthropic_api_key": effective_key,
-            "anthropic_base_url": base_url,
-            "is_anthropic_oauth": False,
-            "client_kwargs": {},
-        }
-    
-    client_kwargs = {"api_key": api_key, "base_url": base_url}
-    
-    if "openrouter" in base_url.lower():
-        client_kwargs["default_headers"] = {
-            "HTTP-Referer": "https://VoidCube-agent.nousresearch.com",
-            "X-OpenRouter-Title": "Voidcube Agent",
-            "X-OpenRouter-Categories": "productivity,cli-agent",
-        }
-    elif "api.githubcopilot.com" in base_url.lower():
-        from VoidCube_cli.models import copilot_default_headers
-        client_kwargs["default_headers"] = copilot_default_headers()
-    elif "api.kimi.com" in base_url.lower():
-        client_kwargs["default_headers"] = {
-            "User-Agent": "KimiCLI/1.30.0",
-        }
-    elif "portal.qwen.ai" in base_url.lower():
-        from run_agent import _qwen_portal_headers
-        client_kwargs["default_headers"] = _qwen_portal_headers()
-    
-    from openai import OpenAI
-    client = OpenAI(**client_kwargs)
-    
-    if not quiet_mode:
-        print(f"🤖 AI Agent initialized with model: {model}")
-        if base_url:
-            print(f"🔗 Using custom base URL: {base_url}")
-        key_used = client_kwargs.get("api_key", "none")
-        if key_used and key_used != "dummy-key" and len(key_used) > 12:
-            print(f"🔑 Using API key: {key_used[:8]}...{key_used[-4:]}")
-        else:
-            print(f"⚠️  Warning: API key appears invalid or missing (got: '{key_used[:20] if key_used else 'none'}...')")
-    
-    return {
-        "client": client,
-        "anthropic_client": None,
-        "api_key": api_key,
-        "anthropic_api_key": None,
-        "anthropic_base_url": None,
-        "is_anthropic_oauth": False,
-        "client_kwargs": client_kwargs,
-    }
-
-
 def resolve_provider_credentials(
     provider: Optional[str],
     model: str,
@@ -265,9 +192,7 @@ def resolve_provider_credentials(
     
     try:
         from agent.auxiliary_client import resolve_provider_client
-        _routed_client, _ = resolve_provider_client(
-            provider or "auto", model=model, raw_codex=True
-        )
+        _routed_client, _ = resolve_provider_client(provider or "auto", model=model)
         if _routed_client is not None:
             result = {
                 "api_key": _routed_client.api_key,

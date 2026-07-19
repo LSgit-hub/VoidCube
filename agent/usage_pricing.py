@@ -12,7 +12,7 @@ DEFAULT_PRICING = {"input": 0.0, "output": 0.0}
 _ZERO = Decimal("0")
 _ONE_MILLION = Decimal("1000000")
 
-CostStatus = Literal["actual", "estimated", "included", "unknown"]
+CostStatus = Literal["actual", "estimated", "unknown"]
 CostSource = Literal[
     "provider_cost_api",
     "provider_generation_api",
@@ -81,30 +81,6 @@ _UTC_NOW = lambda: datetime.now(timezone.utc)
 # Official docs snapshot entries. Models whose published pricing and cache
 # semantics are stable enough to encode exactly.
 _OFFICIAL_DOCS_PRICING: Dict[tuple[str, str], PricingEntry] = {
-    (
-        "anthropic",
-        "claude-opus-4-20250514",
-    ): PricingEntry(
-        input_cost_per_million=Decimal("15.00"),
-        output_cost_per_million=Decimal("75.00"),
-        cache_read_cost_per_million=Decimal("1.50"),
-        cache_write_cost_per_million=Decimal("18.75"),
-        source="official_docs_snapshot",
-        source_url="https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching",
-        pricing_version="anthropic-prompt-caching-2026-03-16",
-    ),
-    (
-        "anthropic",
-        "claude-sonnet-4-20250514",
-    ): PricingEntry(
-        input_cost_per_million=Decimal("3.00"),
-        output_cost_per_million=Decimal("15.00"),
-        cache_read_cost_per_million=Decimal("0.30"),
-        cache_write_cost_per_million=Decimal("3.75"),
-        source="official_docs_snapshot",
-        source_url="https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching",
-        pricing_version="anthropic-prompt-caching-2026-03-16",
-    ),
     # OpenAI
     (
         "openai",
@@ -182,55 +158,6 @@ _OFFICIAL_DOCS_PRICING: Dict[tuple[str, str], PricingEntry] = {
         source="official_docs_snapshot",
         source_url="https://openai.com/api/pricing/",
         pricing_version="openai-pricing-2026-03-16",
-    ),
-    # Anthropic older models (pre-4.6 generation)
-    (
-        "anthropic",
-        "claude-3-5-sonnet-20241022",
-    ): PricingEntry(
-        input_cost_per_million=Decimal("3.00"),
-        output_cost_per_million=Decimal("15.00"),
-        cache_read_cost_per_million=Decimal("0.30"),
-        cache_write_cost_per_million=Decimal("3.75"),
-        source="official_docs_snapshot",
-        source_url="https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching",
-        pricing_version="anthropic-pricing-2026-03-16",
-    ),
-    (
-        "anthropic",
-        "claude-3-5-haiku-20241022",
-    ): PricingEntry(
-        input_cost_per_million=Decimal("0.80"),
-        output_cost_per_million=Decimal("4.00"),
-        cache_read_cost_per_million=Decimal("0.08"),
-        cache_write_cost_per_million=Decimal("1.00"),
-        source="official_docs_snapshot",
-        source_url="https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching",
-        pricing_version="anthropic-pricing-2026-03-16",
-    ),
-    (
-        "anthropic",
-        "claude-3-opus-20240229",
-    ): PricingEntry(
-        input_cost_per_million=Decimal("15.00"),
-        output_cost_per_million=Decimal("75.00"),
-        cache_read_cost_per_million=Decimal("1.50"),
-        cache_write_cost_per_million=Decimal("18.75"),
-        source="official_docs_snapshot",
-        source_url="https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching",
-        pricing_version="anthropic-pricing-2026-03-16",
-    ),
-    (
-        "anthropic",
-        "claude-3-haiku-20240307",
-    ): PricingEntry(
-        input_cost_per_million=Decimal("0.25"),
-        output_cost_per_million=Decimal("1.25"),
-        cache_read_cost_per_million=Decimal("0.03"),
-        cache_write_cost_per_million=Decimal("0.30"),
-        source="official_docs_snapshot",
-        source_url="https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching",
-        pricing_version="anthropic-pricing-2026-03-16",
     ),
     # DeepSeek
     (
@@ -313,16 +240,12 @@ def resolve_billing_route(
     model = (model_name or "").strip()
     if not provider_name and "/" in model:
         inferred_provider, bare_model = model.split("/", 1)
-        if inferred_provider in {"anthropic", "openai", "google"}:
+        if inferred_provider in {"openai", "google"}:
             provider_name = inferred_provider
             model = bare_model
 
-    if provider_name == "openai-codex":
-        return BillingRoute(provider="openai-codex", model=model, base_url=base_url or "", billing_mode="subscription_included")
     if provider_name == "openrouter" or "openrouter.ai" in base:
         return BillingRoute(provider="openrouter", model=model, base_url=base_url or "", billing_mode="official_models_api")
-    if provider_name == "anthropic":
-        return BillingRoute(provider="anthropic", model=model.split("/")[-1], base_url=base_url or "", billing_mode="official_docs_snapshot")
     if provider_name == "openai":
         return BillingRoute(provider="openai", model=model.split("/")[-1], base_url=base_url or "", billing_mode="official_docs_snapshot")
     if provider_name in {"custom", "local"} or (base and "localhost" in base):
@@ -394,15 +317,6 @@ def get_pricing_entry(
     api_key: Optional[str] = None,
 ) -> Optional[PricingEntry]:
     route = resolve_billing_route(model_name, provider=provider, base_url=base_url)
-    if route.billing_mode == "subscription_included":
-        return PricingEntry(
-            input_cost_per_million=_ZERO,
-            output_cost_per_million=_ZERO,
-            cache_read_cost_per_million=_ZERO,
-            cache_write_cost_per_million=_ZERO,
-            source="none",
-            pricing_version="included-route",
-        )
     if route.provider == "openrouter":
         return _openrouter_pricing_entry(route)
     if route.base_url:
@@ -419,50 +333,24 @@ def get_pricing_entry(
 
 def normalize_usage(
     response_usage: Any,
-    *,
-    provider: Optional[str] = None,
-    api_mode: Optional[str] = None,
 ) -> CanonicalUsage:
     """Normalize raw API response usage into canonical token buckets.
 
-    Handles three API shapes:
-    - Anthropic: input_tokens/output_tokens/cache_read_input_tokens/cache_creation_input_tokens
-    - Codex Responses: input_tokens includes cache tokens; input_tokens_details.cached_tokens separates them
-    - OpenAI Chat Completions: prompt_tokens includes cache tokens; prompt_tokens_details.cached_tokens separates them
-
-    In both Codex and OpenAI modes, input_tokens is derived by subtracting cache
-    tokens from the total — the API contract is that input/prompt totals include
-    cached tokens and the details object breaks them out.
+    Chat Completions reports cached tokens inside ``prompt_tokens`` and exposes
+    the cached subset through ``prompt_tokens_details``. The canonical input
+    bucket therefore subtracts cached tokens from the prompt total.
     """
     if not response_usage:
         return CanonicalUsage()
 
-    provider_name = (provider or "").strip().lower()
-    mode = (api_mode or "").strip().lower()
-
-    if mode == "anthropic_messages" or provider_name == "anthropic":
-        input_tokens = _to_int(getattr(response_usage, "input_tokens", 0))
-        output_tokens = _to_int(getattr(response_usage, "output_tokens", 0))
-        cache_read_tokens = _to_int(getattr(response_usage, "cache_read_input_tokens", 0))
-        cache_write_tokens = _to_int(getattr(response_usage, "cache_creation_input_tokens", 0))
-    elif mode == "codex_responses":
-        input_total = _to_int(getattr(response_usage, "input_tokens", 0))
-        output_tokens = _to_int(getattr(response_usage, "output_tokens", 0))
-        details = getattr(response_usage, "input_tokens_details", None)
-        cache_read_tokens = _to_int(getattr(details, "cached_tokens", 0) if details else 0)
-        cache_write_tokens = _to_int(
-            getattr(details, "cache_creation_tokens", 0) if details else 0
-        )
-        input_tokens = max(0, input_total - cache_read_tokens - cache_write_tokens)
-    else:
-        prompt_total = _to_int(getattr(response_usage, "prompt_tokens", 0))
-        output_tokens = _to_int(getattr(response_usage, "completion_tokens", 0))
-        details = getattr(response_usage, "prompt_tokens_details", None)
-        cache_read_tokens = _to_int(getattr(details, "cached_tokens", 0) if details else 0)
-        cache_write_tokens = _to_int(
-            getattr(details, "cache_write_tokens", 0) if details else 0
-        )
-        input_tokens = max(0, prompt_total - cache_read_tokens - cache_write_tokens)
+    prompt_total = _to_int(getattr(response_usage, "prompt_tokens", 0))
+    output_tokens = _to_int(getattr(response_usage, "completion_tokens", 0))
+    details = getattr(response_usage, "prompt_tokens_details", None)
+    cache_read_tokens = _to_int(getattr(details, "cached_tokens", 0) if details else 0)
+    cache_write_tokens = _to_int(
+        getattr(details, "cache_write_tokens", 0) if details else 0
+    )
+    input_tokens = max(0, prompt_total - cache_read_tokens - cache_write_tokens)
 
     reasoning_tokens = 0
     output_details = getattr(response_usage, "output_tokens_details", None)
@@ -487,15 +375,6 @@ def estimate_usage_cost(
     api_key: Optional[str] = None,
 ) -> CostResult:
     route = resolve_billing_route(model_name, provider=provider, base_url=base_url)
-    if route.billing_mode == "subscription_included":
-        return CostResult(
-            amount_usd=_ZERO,
-            status="included",
-            source="none",
-            label="included",
-            pricing_version="included-route",
-        )
-
     entry = get_pricing_entry(model_name, provider=provider, base_url=base_url, api_key=api_key)
     if not entry:
         return CostResult(amount_usd=None, status="unknown", source="none", label="n/a")
@@ -539,9 +418,6 @@ def estimate_usage_cost(
 
     status: CostStatus = "estimated"
     label = f"~${amount:.2f}"
-    if entry.source == "none" and amount == _ZERO:
-        status = "included"
-        label = "included"
 
     if route.provider == "openrouter":
         notes.append("OpenRouter cost is estimated from the models API until reconciled.")
@@ -568,9 +444,6 @@ def has_known_pricing(
     Uses direct lookup instead of routing through the full estimation
     pipeline — avoids creating dummy usage objects just to check status.
     """
-    route = resolve_billing_route(model_name, provider=provider, base_url=base_url)
-    if route.billing_mode == "subscription_included":
-        return True
     entry = get_pricing_entry(model_name, provider=provider, base_url=base_url, api_key=api_key)
     return entry is not None
 

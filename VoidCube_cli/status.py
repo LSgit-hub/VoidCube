@@ -248,15 +248,6 @@ def show_status(args):
         display = redact_key(value) if not show_all else value
         print(f"  {name:<12}  {check_mark(has_key)} {display}")
 
-    try:
-        from agent.credential_pool import get_credential_pool
-        pool = get_credential_pool()
-        anthropic_value = pool.get_anthropic_api_key() if hasattr(pool, 'get_anthropic_api_key') else ""
-    except Exception:
-        anthropic_value = ""
-    anthropic_display = redact_key(anthropic_value) if not show_all else anthropic_value
-    print(f"  {'Anthropic':<12}  {check_mark(bool(anthropic_value))} {anthropic_display}")
-
     # =========================================================================
     # Auth Providers (OAuth)
     # =========================================================================
@@ -264,13 +255,11 @@ def show_status(args):
     print(color("◆ Auth Providers", Colors.CYAN, Colors.BOLD))
 
     try:
-        from VoidCube_cli.auth import get_nous_auth_status, get_codex_auth_status, get_qwen_auth_status
+        from VoidCube_cli.auth import get_nous_auth_status, get_qwen_auth_status
         nous_status = get_nous_auth_status()
-        codex_status = get_codex_auth_status()
         qwen_status = get_qwen_auth_status()
     except Exception:
         nous_status = {}
-        codex_status = {}
         qwen_status = {}
 
     nous_logged_in = bool(nous_status.get("logged_in"))
@@ -287,20 +276,6 @@ def show_status(args):
         print(f"    Access exp: {access_exp}")
         print(f"    Key exp:    {key_exp}")
         print(f"    Refresh:    {refresh_label}")
-
-    codex_logged_in = bool(codex_status.get("logged_in"))
-    print(
-        f"  {'OpenAI Codex':<12}  {check_mark(codex_logged_in)} "
-        f"{'logged in' if codex_logged_in else 'not logged in (run: VoidCube model)'}"
-    )
-    codex_auth_file = codex_status.get("auth_store")
-    if codex_auth_file:
-        print(f"    Auth file:  {codex_auth_file}")
-    codex_last_refresh = _format_iso_timestamp(codex_status.get("last_refresh"))
-    if codex_status.get("last_refresh"):
-        print(f"    Refreshed:  {codex_last_refresh}")
-    if codex_status.get("error") and not codex_logged_in:
-        print(f"    Error:      {codex_status.get('error')}")
 
     qwen_logged_in = bool(qwen_status.get("logged_in"))
     print(

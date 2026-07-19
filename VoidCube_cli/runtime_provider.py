@@ -13,14 +13,12 @@ from VoidCube_cli import auth as auth_mod
 from agent.credential_pool import CredentialPool, PooledCredential, get_custom_provider_pool_key, load_pool
 from VoidCube_cli.auth import (
     AuthError,
-    DEFAULT_CODEX_BASE_URL,
     DEFAULT_QWEN_BASE_URL,
     PROVIDER_REGISTRY,
     _agent_key_is_usable,
     format_auth_error,
     resolve_provider,
     resolve_nous_runtime_credentials,
-    resolve_codex_runtime_credentials,
     resolve_qwen_runtime_credentials,
     resolve_api_key_provider_credentials,
     resolve_external_process_provider_credentials,
@@ -34,18 +32,6 @@ from VoidCube_core.utils import env_str, env_int
 
 def _normalize_custom_provider_name(value: str) -> str:
     return value.strip().lower().replace(" ", "-")
-
-
-def _detect_api_mode_for_url(base_url: str) -> Optional[str]:
-    """Auto-detect api_mode from the resolved base URL.
-
-    Direct api.openai.com endpoints need the Responses API for GPT-5.x
-    tool calls with reasoning (chat/completions returns 400).
-    """
-    normalized = (base_url or "").strip().lower().rstrip("/")
-    if "api.openai.com" in normalized and "openrouter" not in normalized:
-        return "codex_responses"
-    return None
 
 
 def _auto_detect_local_model(base_url: str) -> str:
@@ -83,53 +69,6 @@ def _get_model_config() -> Dict[str, Any]:
     return cfg
 
 
-def _provider_supports_explicit_api_mode(provider: Optional[str], configured_provider: Optional[str] = None) -> bool:
-    """Check whether a persisted api_mode should be honored for a given provider.
-
-    Prevents stale api_mode from a previous provider leaking into a
-    different one after a model/provider switch.  Only applies the
-    persisted mode when the config's provider matches the runtime
-    provider (or when no configured provider is recorded).
-    """
-    normalized_provider = (provider or "").strip().lower()
-    normalized_configured = (configured_provider or "").strip().lower()
-    if not normalized_configured:
-        return True
-    if normalized_provider == "custom":
-        return normalized_configured == "custom" or normalized_configured.startswith("custom:")
-    return normalized_configured == normalized_provider
-
-
-def _copilot_runtime_api_mode(model_cfg: Dict[str, Any], api_key: str) -> str:
-    configured_provider = str(model_cfg.get("provider") or "").strip().lower()
-    configured_mode = _parse_api_mode(model_cfg.get("api_mode"))
-    if configured_mode and _provider_supports_explicit_api_mode("copilot", configured_provider):
-        return configured_mode
-
-    model_name = str(model_cfg.get("default") or "").strip()
-    if not model_name:
-        return "chat_completions"
-
-    try:
-        from VoidCube_cli.models import copilot_model_api_mode
-
-        return copilot_model_api_mode(model_name, api_key=api_key)
-    except Exception:
-        return "chat_completions"
-
-
-_VALID_API_MODES = {"chat_completions", "codex_responses"}
-
-
-def _parse_api_mode(raw: Any) -> Optional[str]:
-    """Validate an api_mode value from config. Returns None if invalid."""
-    if isinstance(raw, str):
-        normalized = raw.strip().lower()
-        if normalized in _VALID_API_MODES:
-            return normalized
-    return None
-
-
 def _resolve_runtime_from_pool_entry(
     *,
     provider: str,
@@ -141,24 +80,14 @@ def _resolve_runtime_from_pool_entry(
     model_cfg = model_cfg or _get_model_config()
     base_url = (getattr(entry, "runtime_base_url", None) or getattr(entry, "base_url", None) or "").rstrip("/")
     api_key = getattr(entry, "runtime_api_key", None) or getattr(entry, "access_token", "")
-    api_mode = "chat_completions"
-    if provider == "openai-codex":
-        api_mode = "codex_responses"
-        base_url = base_url or DEFAULT_CODEX_BASE_URL
-    elif provider == "qwen-oauth":
-        api_mode = "chat_completions"
+    if provider == "qwen-oauth":
         base_url = base_url or DEFAULT_QWEN_BASE_URL
     elif provider == "openrouter":
         base_url = base_url or OPENROUTER_BASE_URL
-    elif provider == "nous":
-        api_mode = "chat_completions"
-    elif provider == "copilot":
-        api_mode = _copilot_runtime_api_mode(model_cfg, getattr(entry, "runtime_api_key", ""))
-    else:
+    elif provider not in {"nous", "copilot"}:
         configured_provider = str(model_cfg.get("provider") or "").strip().lower()
         # Honour the active provider's saved base_url when the configured
-        # provider matches this provider — same pattern as the Anthropic branch
-        # above. Only override when the pool entry has no explicit base_url
+        # provider matches this provider. Only override when the pool entry has no explicit base_url
         # (i.e. it fell back to the hardcoded default). Env var overrides win
         # (#6039).
         pconfig = PROVIDER_REGISTRY.get(provider)
@@ -167,16 +96,8 @@ def _resolve_runtime_from_pool_entry(
             cfg_base_url = str(model_cfg.get("base_url") or "").strip().rstrip("/")
             if cfg_base_url:
                 base_url = cfg_base_url
-        configured_mode = _parse_api_mode(model_cfg.get("api_mode"))
-        if configured_mode and _provider_supports_explicit_api_mode(provider, configured_provider):
-            api_mode = configured_mode
-        elif provider in ("opencode-zen", "opencode-go"):
-            from VoidCube_cli.models import opencode_model_api_mode
-            api_mode = opencode_model_api_mode(provider, model_cfg.get("default", ""))
-
     return {
         "provider": provider,
-        "api_mode": api_mode,
         "base_url": base_url,
         "api_key": api_key,
         "source": getattr(entry, "source", "pool"),
@@ -207,7 +128,6 @@ def resolve_requested_provider(requested: Optional[str] = None) -> str:
 def _try_resolve_from_custom_pool(
     base_url: str,
     provider_label: str,
-    api_mode_override: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Check if a credential pool exists for a custom endpoint and return a runtime dict if so."""
     pool_key = get_custom_provider_pool_key(base_url)
@@ -225,7 +145,6 @@ def _try_resolve_from_custom_pool(
             return None
         return {
             "provider": provider_label,
-            "api_mode": api_mode_override or _detect_api_mode_for_url(base_url) or "chat_completions",
             "base_url": base_url,
             "api_key": pool_api_key,
             "source": f"pool:{pool_key}",
@@ -270,9 +189,6 @@ def _get_named_custom_provider(requested_provider: str) -> Optional[Dict[str, An
             "base_url": base_url.strip(),
             "api_key": str(entry.get("api_key", "") or "").strip(),
         }
-        api_mode = _parse_api_mode(entry.get("api_mode"))
-        if api_mode:
-            result["api_mode"] = api_mode
         model_name = str(entry.get("selected_model") or entry.get("default_model") or entry.get("model", "") or "").strip()
         if model_name:
             result["model"] = model_name
@@ -299,7 +215,7 @@ def _resolve_named_custom_runtime(
         return None
 
     # Check if a credential pool exists for this custom endpoint
-    pool_result = _try_resolve_from_custom_pool(base_url, "custom", custom_provider.get("api_mode"))
+    pool_result = _try_resolve_from_custom_pool(base_url, "custom")
     if pool_result:
         # Propagate the model name even when using pooled credentials.
         model_name = custom_provider.get("model")
@@ -317,9 +233,6 @@ def _resolve_named_custom_runtime(
 
     result = {
         "provider": "custom",
-        "api_mode": custom_provider.get("api_mode")
-        or _detect_api_mode_for_url(base_url)
-        or "chat_completions",
         "base_url": base_url,
         "api_key": api_key or "no-key-required",
         "source": f"custom_provider:{custom_provider.get('name', requested_provider)}",
@@ -408,9 +321,7 @@ def _resolve_openrouter_runtime(
 
     # For custom endpoints, check if a credential pool exists
     if effective_provider == "custom" and base_url:
-        pool_result = _try_resolve_from_custom_pool(
-            base_url, effective_provider, _parse_api_mode(model_cfg.get("api_mode")),
-        )
+        pool_result = _try_resolve_from_custom_pool(base_url, effective_provider)
         if pool_result:
             return pool_result
 
@@ -419,9 +330,6 @@ def _resolve_openrouter_runtime(
 
     return {
         "provider": effective_provider,
-        "api_mode": _parse_api_mode(model_cfg.get("api_mode"))
-        or _detect_api_mode_for_url(base_url)
-        or "chat_completions",
         "base_url": base_url,
         "api_key": api_key,
         "source": source,
@@ -440,26 +348,6 @@ def _resolve_explicit_runtime(
     explicit_base_url = str(explicit_base_url or "").strip().rstrip("/")
     if not explicit_api_key and not explicit_base_url:
         return None
-
-    if provider == "openai-codex":
-        base_url = explicit_base_url or DEFAULT_CODEX_BASE_URL
-        api_key = explicit_api_key
-        last_refresh = None
-        if not api_key:
-            creds = resolve_codex_runtime_credentials()
-            api_key = creds.get("api_key", "")
-            last_refresh = creds.get("last_refresh")
-            if not explicit_base_url:
-                base_url = creds.get("base_url", "").rstrip("/") or base_url
-        return {
-            "provider": "openai-codex",
-            "api_mode": "codex_responses",
-            "base_url": base_url,
-            "api_key": api_key,
-            "source": "explicit",
-            "last_refresh": last_refresh,
-            "requested_provider": requested_provider,
-        }
 
     if provider == "nous":
         state = auth_mod.get_provider_auth_state("nous") or {}
@@ -484,7 +372,6 @@ def _resolve_explicit_runtime(
                 base_url = creds.get("base_url", "").rstrip("/") or base_url
         return {
             "provider": "nous",
-            "api_mode": "chat_completions",
             "base_url": base_url,
             "api_key": api_key,
             "source": "explicit",
@@ -513,17 +400,8 @@ def _resolve_explicit_runtime(
             if not base_url:
                 base_url = creds.get("base_url", "").rstrip("/")
 
-        api_mode = "chat_completions"
-        if provider == "copilot":
-            api_mode = _copilot_runtime_api_mode(model_cfg, api_key)
-        else:
-            configured_mode = _parse_api_mode(model_cfg.get("api_mode"))
-            if configured_mode:
-                api_mode = configured_mode
-
         return {
             "provider": provider,
-            "api_mode": api_mode,
             "base_url": base_url.rstrip("/"),
             "api_key": api_key,
             "source": "explicit",
@@ -569,7 +447,7 @@ def resolve_runtime_provider(
     if explicit_runtime:
         return explicit_runtime
 
-    should_use_pool = provider != "openrouter"
+    should_use_pool = provider in PROVIDER_REGISTRY and provider != "openrouter"
     if provider == "openrouter":
         cfg_provider = str(model_cfg.get("provider") or "").strip().lower()
         cfg_base_url = str(model_cfg.get("base_url") or "").strip()
@@ -633,7 +511,6 @@ def resolve_runtime_provider(
             )
             return {
                 "provider": "nous",
-                "api_mode": "chat_completions",
                 "base_url": creds.get("base_url", "").rstrip("/"),
                 "api_key": creds.get("api_key", ""),
                 "source": creds.get("source", "portal"),
@@ -648,32 +525,11 @@ def resolve_runtime_provider(
             logger.info("Auto-detected Nous provider but credentials failed; "
                         "falling through to next provider.")
 
-    if provider == "openai-codex":
-        try:
-            creds = resolve_codex_runtime_credentials()
-            return {
-                "provider": "openai-codex",
-                "api_mode": "codex_responses",
-                "base_url": creds.get("base_url", "").rstrip("/"),
-                "api_key": creds.get("api_key", ""),
-                "source": creds.get("source", "VoidCube-auth-store"),
-                "last_refresh": creds.get("last_refresh"),
-                "requested_provider": requested_provider,
-            }
-        except AuthError:
-            if requested_provider != "auto":
-                raise
-            # Auto-detected Codex but credentials are stale/revoked —
-            # fall through to env-var providers (e.g. OpenRouter).
-            logger.info("Auto-detected Codex provider but credentials failed; "
-                        "falling through to next provider.")
-
     if provider == "qwen-oauth":
         try:
             creds = resolve_qwen_runtime_credentials()
             return {
                 "provider": "qwen-oauth",
-                "api_mode": "chat_completions",
                 "base_url": creds.get("base_url", "").rstrip("/"),
                 "api_key": creds.get("api_key", ""),
                 "source": creds.get("source", "qwen-cli"),
@@ -690,7 +546,6 @@ def resolve_runtime_provider(
         creds = resolve_external_process_provider_credentials(provider)
         return {
             "provider": "copilot-acp",
-            "api_mode": "chat_completions",
             "base_url": creds.get("base_url", "").rstrip("/"),
             "api_key": creds.get("api_key", ""),
             "command": creds.get("command", ""),
@@ -703,30 +558,14 @@ def resolve_runtime_provider(
     pconfig = PROVIDER_REGISTRY.get(provider)
     if pconfig and pconfig.auth_type == "api_key":
         creds = resolve_api_key_provider_credentials(provider)
-        # Honour the active provider's saved base_url when the configured
-        # provider matches this provider — mirrors the Anthropic path above.
-        # Without this, users who save e.g. api.minimaxi.com/anthropic (China
-        # endpoint) still get the hardcoded api.minimax.io default (#6039).
+        # Honour the active provider's saved base_url when it matches this provider.
         cfg_provider = str(model_cfg.get("provider") or "").strip().lower()
         cfg_base_url = ""
         if cfg_provider == provider:
             cfg_base_url = (model_cfg.get("base_url") or "").strip().rstrip("/")
         base_url = cfg_base_url or creds.get("base_url", "").rstrip("/")
-        api_mode = "chat_completions"
-        if provider == "copilot":
-            api_mode = _copilot_runtime_api_mode(model_cfg, creds.get("api_key", ""))
-        else:
-            configured_provider = str(model_cfg.get("provider") or "").strip().lower()
-            # Only honor persisted api_mode when it belongs to the same provider family.
-            configured_mode = _parse_api_mode(model_cfg.get("api_mode"))
-            if configured_mode and _provider_supports_explicit_api_mode(provider, configured_provider):
-                api_mode = configured_mode
-            elif provider in ("opencode-zen", "opencode-go"):
-                from VoidCube_cli.models import opencode_model_api_mode
-                api_mode = opencode_model_api_mode(provider, model_cfg.get("default", ""))
         return {
             "provider": provider,
-            "api_mode": api_mode,
             "base_url": base_url,
             "api_key": creds.get("api_key", ""),
             "source": creds.get("source", "env"),

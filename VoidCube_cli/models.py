@@ -28,7 +28,6 @@ OPENROUTER_MODELS: list[tuple[str, str]] = [
     ("openai/gpt-5.4",                  ""),
     ("openai/gpt-5.4-mini",             ""),
     ("xiaomi/mimo-v2-pro",               ""),
-    ("openai/gpt-5.3-codex",            ""),
     ("google/gemini-3-pro-image-preview", ""),
     ("google/gemini-3-flash-preview",   ""),
     ("google/gemini-3.1-pro-preview",     ""),
@@ -53,23 +52,11 @@ OPENROUTER_MODELS: list[tuple[str, str]] = [
 _openrouter_catalog_cache: list[tuple[str, str]] | None = None
 
 
-def _codex_curated_models() -> list[str]:
-    """Derive the openai-codex curated list from codex_models.py.
-
-    Single source of truth: DEFAULT_CODEX_MODELS + forward-compat synthesis.
-    This keeps the gateway /model picker in sync with the CLI `VoidCube model`
-    flow without maintaining a separate static list.
-    """
-    from VoidCube_cli.codex_models import DEFAULT_CODEX_MODELS, _add_forward_compat_models
-    return _add_forward_compat_models(list(DEFAULT_CODEX_MODELS))
-
-
 _PROVIDER_MODELS: dict[str, list[str]] = {
     "nous": [
         "xiaomi/mimo-v2-pro",
         "openai/gpt-5.4",
         "openai/gpt-5.4-mini",
-        "openai/gpt-5.3-codex",
         "google/gemini-3-pro-preview",
         "google/gemini-3-flash-preview",
         "google/gemini-3.1-pro-preview",
@@ -90,7 +77,6 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "openai/gpt-5.4-pro",
         "openai/gpt-5.4-nano",
     ],
-    "openai-codex": _codex_curated_models(),
     "copilot-acp": [
         "copilot-acp",
     ],
@@ -98,8 +84,6 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "gpt-5.4",
         "gpt-5.4-mini",
         "gpt-5-mini",
-        "gpt-5.3-codex",
-        "gpt-5.2-codex",
         "gpt-4.1",
         "gpt-4o",
         "gpt-4o-mini",
@@ -172,12 +156,6 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "deepseek-v4-flash",
         "deepseek-v4-pro",
     ],
-    "anthropic": [
-        "claude-sonnet-4-20250514",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-haiku-20240307",
-        "claude-3-opus-20240229",
-    ],
     "openai": [
         "gpt-4.1",
         "gpt-4o",
@@ -195,16 +173,9 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
     "opencode-zen": [
         "gpt-5.4-pro",
         "gpt-5.4",
-        "gpt-5.3-codex",
-        "gpt-5.3-codex-spark",
         "gpt-5.2",
-        "gpt-5.2-codex",
         "gpt-5.1",
-        "gpt-5.1-codex",
-        "gpt-5.1-codex-max",
-        "gpt-5.1-codex-mini",
         "gpt-5",
-        "gpt-5-codex",
         "gpt-5-nano",
         "gemini-3.1-pro",
         "gemini-3-pro",
@@ -249,7 +220,6 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
     # Supports Qwen models + third-party providers (GLM, Kimi, MiniMax).
     # Users with classic DashScope keys should override DASHSCOPE_BASE_URL
     # to https://dashscope-intl.aliyuncs.com/compatible-mode/v1 (OpenAI-compat)
-    # or https://dashscope-intl.aliyuncs.com/apps/anthropic (Anthropic-compat).
     "alibaba": [
         "qwen3.5-plus",
         "qwen3-coder-plus",
@@ -465,7 +435,6 @@ def check_nous_free_tier() -> bool:
 
 _PROVIDER_LABELS = {
     "openrouter": "OpenRouter",
-    "openai-codex": "OpenAI Codex",
     "copilot-acp": "GitHub Copilot ACP",
     "nous": "Nous Portal",
     "copilot": "GitHub Copilot",
@@ -535,8 +504,7 @@ def get_default_model_for_provider(provider: str) -> str:
     model a user would be offered first in the ``VoidCube model`` picker.
 
     Used as a fallback when the user has configured a provider but never
-    selected a model (e.g. ``VoidCube auth add openai-codex`` without
-    ``VoidCube model``).
+    selected a model before opening ``VoidCube model``.
     """
     models = _PROVIDER_MODELS.get(provider, [])
     return models[0] if models else ""
@@ -879,7 +847,7 @@ def list_available_providers() -> list[dict[str, str]]:
     """
     # Canonical providers in display order
     _PROVIDER_ORDER = [
-        "openrouter", "nous", "openai-codex", "copilot", "copilot-acp",
+        "openrouter", "nous", "copilot", "copilot-acp",
         "gemini", "huggingface",
         "zai", "kimi-coding", "minimax", "minimax-cn", "kilocode", "alibaba",
         "qwen-oauth", "xiaomi",
@@ -988,7 +956,7 @@ def curated_models_for_provider(
     if normalized == "openrouter":
         return fetch_openrouter_models(force_refresh=force_refresh)
 
-    # Try live API first (Codex, Nous, etc. all support /models)
+    # Try the live API first for providers that expose /models.
     live = provider_model_ids(normalized)
     if live:
         return [(m, "") for m in live]
@@ -1194,16 +1162,12 @@ def _resolve_copilot_catalog_api_key() -> str:
 def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) -> list[str]:
     """Return the best known model catalog for a provider.
 
-    Tries live API endpoints for providers that support them (Codex, Nous),
+    Tries live API endpoints for providers that support them,
     falling back to static lists.
     """
     normalized = normalize_provider(provider)
     if normalized == "openrouter":
         return model_ids(force_refresh=force_refresh)
-    if normalized == "openai-codex":
-        from VoidCube_cli.codex_models import get_codex_model_ids
-
-        return get_codex_model_ids()
     if normalized in {"copilot", "copilot-acp"}:
         try:
             live = _fetch_github_models(_resolve_copilot_catalog_api_key())
@@ -1363,7 +1327,7 @@ _COPILOT_MODEL_ALIASES = {
     "openai/o1": "gpt-5.2",
     "openai/o1-mini": "gpt-5-mini",
     "openai/o1-preview": "gpt-5.2",
-    "openai/o3": "gpt-5.3-codex",
+    "openai/o3": "gpt-5.2",
     "openai/o3-mini": "gpt-5-mini",
     "openai/o4-mini": "gpt-5-mini",
 }
@@ -1435,62 +1399,6 @@ def _github_reasoning_efforts_for_model_id(model_id: str) -> list[str]:
     return []
 
 
-def _should_use_copilot_responses_api(model_id: str) -> bool:
-    """Decide whether a Copilot model should use the Responses API.
-
-    Replicates opencode's ``shouldUseCopilotResponsesApi`` logic:
-    GPT-5+ models use Responses API, except ``gpt-5-mini`` which uses
-    Chat Completions.  All non-GPT models (Claude, Gemini, etc.) use
-    Chat Completions.
-    """
-    import re
-
-    match = re.match(r"^gpt-(\d+)", model_id)
-    if not match:
-        return False
-    major = int(match.group(1))
-    return major >= 5 and not model_id.startswith("gpt-5-mini")
-
-
-def copilot_model_api_mode(
-    model_id: Optional[str],
-    *,
-    catalog: Optional[list[dict[str, Any]]] = None,
-    api_key: Optional[str] = None,
-) -> str:
-    """Determine the API mode for a Copilot model.
-
-    Uses the model ID pattern (matching opencode's approach) as the
-    primary signal.  Falls back to the catalog's ``supported_endpoints``
-    only for models not covered by the pattern check.
-    """
-    normalized = normalize_copilot_model_id(model_id, catalog=catalog, api_key=api_key)
-    if not normalized:
-        return "chat_completions"
-
-    # Primary: model ID pattern (matches opencode's shouldUseCopilotResponsesApi)
-    if _should_use_copilot_responses_api(normalized):
-        return "codex_responses"
-
-    # Secondary: check catalog for non-GPT-5 models (Claude via /v1/messages, etc.)
-    if catalog is None and api_key:
-        catalog = fetch_github_model_catalog(api_key=api_key)
-
-    if catalog:
-        catalog_entry = next((item for item in catalog if item.get("id") == normalized), None)
-        if isinstance(catalog_entry, dict):
-            supported_endpoints = {
-                str(endpoint).strip()
-                for endpoint in (catalog_entry.get("supported_endpoints") or [])
-                if str(endpoint).strip()
-            }
-            # For non-GPT-5 models, check if they only support messages API
-            if "/v1/messages" in supported_endpoints and "/chat/completions" not in supported_endpoints:
-                return "anthropic_messages"
-
-    return "chat_completions"
-
-
 def normalize_opencode_model_id(provider_id: Optional[str], model_id: Optional[str]) -> str:
     """Normalize OpenCode config IDs to the bare model slug used in API requests."""
     provider = normalize_provider(provider_id)
@@ -1502,40 +1410,6 @@ def normalize_opencode_model_id(provider_id: Optional[str], model_id: Optional[s
     if current.lower().startswith(prefix):
         return current[len(prefix):]
     return current
-
-
-def opencode_model_api_mode(provider_id: Optional[str], model_id: Optional[str]) -> str:
-    """Determine the API mode for an OpenCode Zen / Go model.
-
-    OpenCode routes different models behind different API surfaces:
-
-    - GPT-5 / Codex models on Zen use ``/v1/responses``
-    - Claude models on Zen use ``/v1/messages``
-    - MiniMax models on Go use ``/v1/messages``
-    - GLM / Kimi on Go use ``/v1/chat/completions``
-    - Other Zen models (Gemini, GLM, Kimi, MiniMax, Qwen, etc.) use
-      ``/v1/chat/completions``
-
-    This follows the published OpenCode docs for Zen and Go endpoints.
-    """
-    provider = normalize_provider(provider_id)
-    normalized = normalize_opencode_model_id(provider_id, model_id).lower()
-    if not normalized:
-        return "chat_completions"
-
-    if provider == "opencode-go":
-        if normalized.startswith("minimax-"):
-            return "anthropic_messages"
-        return "chat_completions"
-
-    if provider == "opencode-zen":
-        if normalized.startswith("claude-"):
-            return "anthropic_messages"
-        if normalized.startswith("gpt-"):
-            return "codex_responses"
-        return "chat_completions"
-
-    return "chat_completions"
 
 
 def github_model_reasoning_efforts(
@@ -1784,35 +1658,6 @@ def validate_requested_model(
             "recognized": False,
             "message": message,
         }
-
-    # OpenAI Codex has its own catalog path; /v1/models probing is not the right validation path.
-    if normalized == "openai-codex":
-        try:
-            codex_models = provider_model_ids("openai-codex")
-        except Exception:
-            codex_models = []
-        if codex_models:
-            if requested_for_lookup in set(codex_models):
-                return {
-                    "accepted": True,
-                    "persist": True,
-                    "recognized": True,
-                    "message": None,
-                }
-            suggestions = get_close_matches(requested_for_lookup, codex_models, n=3, cutoff=0.5)
-            suggestion_text = ""
-            if suggestions:
-                suggestion_text = "\n  Similar models: " + ", ".join(f"`{s}`" for s in suggestions)
-            return {
-                "accepted": True,
-                "persist": True,
-                "recognized": False,
-                "message": (
-                    f"Note: `{requested}` was not found in the OpenAI Codex model listing. "
-                    f"It may still work if your account has access to it."
-                    f"{suggestion_text}"
-                ),
-            }
 
     # Probe the live API to check if the model actually exists
     api_models = fetch_api_models(api_key, base_url)

@@ -66,10 +66,8 @@ PROVIDER_REGISTRY = {
 }
 
 # 认证相关常量
-CODEX_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 300
 DEFAULT_AGENT_KEY_MIN_TTL_SECONDS = 3600
 KIMI_CODE_BASE_URL = "https://api.kimi.moonshot.cn/v1"
-DEFAULT_CODEX_BASE_URL = "https://api.codex.com/v1"
 DEFAULT_NOUS_BASE_URL = "https://api.nous.com/v1"
 DEFAULT_ZAI_BASE_URL = "https://api.zai.com/v1"
 DEFAULT_QWEN_BASE_URL = "https://dashscope.aliyuncs.com/api/v1"
@@ -251,10 +249,6 @@ def resolve_nous_runtime_credentials() -> Optional[Dict[str, Any]]:
     """解析 Nous 运行时凭证"""
     return None
 
-def resolve_codex_runtime_credentials() -> Optional[Dict[str, Any]]:
-    """解析 Codex 运行时凭证"""
-    return None
-
 def get_provider_auth_state(provider: str) -> Dict[str, Any]:
     """获取提供者认证状态"""
     return {"authenticated": False, "provider": provider}
@@ -312,41 +306,17 @@ def fetch_nous_models() -> List[Dict[str, Any]]:
 # 默认值
 DEFAULT_NOUS_PORTAL_URL = "https://portal.nousresearch.com"
 
-def _read_codex_tokens() -> Dict[str, Any]:
-    """读取 Codex 令牌"""
-    return {}
-
-def _import_codex_cli_tokens() -> Dict[str, Any]:
-    """导入 Codex CLI 令牌"""
-    return {}
-
-def _save_codex_tokens(tokens: Dict[str, Any]) -> None:
-    """保存 Codex 令牌"""
-    pass
-
 def get_nous_auth_status() -> Dict[str, Any]:
     """获取 Nous 认证状态"""
-    return {"authenticated": False}
-
-def get_codex_auth_status() -> Dict[str, Any]:
-    """获取 Codex 认证状态"""
     return {"authenticated": False}
 
 def get_qwen_auth_status() -> Dict[str, Any]:
     """获取 Qwen 认证状态"""
     return {"authenticated": False}
 
-def _codex_access_token_is_expiring(token: str = None) -> bool:
-    """检查 Codex 访问令牌是否即将过期"""
-    return False
-
 def _decode_jwt_claims(token: str) -> Dict[str, Any]:
     """解码 JWT 声明"""
     return {}
-
-def _write_codex_cli_tokens(tokens: Dict[str, Any]) -> None:
-    """写入 Codex CLI 令牌"""
-    pass
 
 def _load_provider_state(provider: str) -> Dict[str, Any]:
     """加载提供者状态"""
@@ -412,8 +382,7 @@ def login_command(args) -> None:
     """Interactive provider login.
 
     Handles ``VoidCube login`` and ``VoidCube login --provider <name>``.
-    Walks the user through OAuth device flow (nous, openai-codex) or
-    API key entry for other providers.
+    Walks the user through the Nous OAuth device flow or API key entry.
 
     Args:
         args: argparse namespace with optional ``provider``, ``portal_url``,
@@ -437,7 +406,6 @@ def login_command(args) -> None:
         print()
         print("Usage:")
         print("  VoidCube login --provider nous        Login with Nous Research")
-        print("  VoidCube login --provider openai-codex Login with OpenAI Codex")
         print()
         print("First configure a provider:  VoidCube api")
         print("Or set an API key directly:  VoidCube config set providers.<name>.api_key <key>")
@@ -447,8 +415,6 @@ def login_command(args) -> None:
 
     if provider in ("nous",):
         _login_nous(args)
-    elif provider in ("openai-codex", "codex"):
-        _login_codex(args)
     else:
         # Generic API-key provider
         _login_api_key(provider, args)
@@ -580,19 +546,6 @@ def _login_nous(args) -> None:
     print("  ✗ Timed out waiting for authorization.")
 
 
-def _login_codex(args) -> None:
-    """OAuth login for OpenAI Codex."""
-    print()
-    print("> Login with OpenAI Codex")
-    print()
-    print("  OpenAI Codex uses the Copilot ACP protocol.")
-    print("  Run 'VoidCube api' to configure the copilot-acp provider,")
-    print("  then authenticate via your editor's Copilot integration.")
-    print()
-    print("  Or set an API key directly:")
-    print("    VoidCube config set providers.openai-codex.api_key sk-...")
-
-
 def _login_api_key(provider: str, args) -> None:
     """Interactive API key entry for generic providers."""
     import getpass
@@ -688,7 +641,6 @@ def logout_command(args) -> None:
         print()
         print("Usage:")
         print("  VoidCube logout --provider nous")
-        print("  VoidCube logout --provider openai-codex")
         return
 
     provider = provider.lower().strip()

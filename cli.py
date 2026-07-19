@@ -367,7 +367,6 @@ def _normalize_minimal_cli_config(config: Dict[str, Any]) -> Dict[str, Any]:
         "model": str(active_model_cfg.get("default") or active_model_cfg.get("model") or ""),
         "base_url": str(active_model_cfg.get("base_url") or active_provider_cfg.get("base_url") or ""),
         "provider": active_provider or str(active_model_cfg.get("provider") or ""),
-        "api_mode": str(active_model_cfg.get("api_mode") or active_provider_cfg.get("api_mode") or ""),
         "api_key": str(active_model_cfg.get("api_key") or active_provider_cfg.get("api_key") or ""),
     }
 
@@ -1370,7 +1369,7 @@ class VoidcubeCLI:
         # the default silently but should warn when overriding an explicit choice.
         # A config model that matches the global fallback is NOT considered an
         # explicit choice — the user just never changed it.  But a config model
-        # like "gpt-5.3-codex" IS explicit and must be preserved.
+        # an explicitly configured model must be preserved.
         self._model_is_default = not model and (
             not _config_model or _config_model == _DEFAULT_CONFIG_MODEL
         )
@@ -1382,7 +1381,6 @@ class VoidcubeCLI:
         self.requested_provider = _active_provider
         self._provider_source: Optional[str] = None
         self.provider = self.requested_provider or ""
-        self.api_mode = "chat_completions"
         self.acp_command: Optional[str] = None
         self.acp_args: list[str] = []
         self.base_url = (
@@ -2690,7 +2688,7 @@ class VoidcubeCLI:
 
         if resolved_provider == "copilot":
             try:
-                from VoidCube_cli.models import copilot_model_api_mode, normalize_copilot_model_id
+                from VoidCube_cli.models import normalize_copilot_model_id
 
                 canonical = normalize_copilot_model_id(current_model, api_key=self.api_key)
                 if canonical and canonical != current_model:
@@ -2702,17 +2700,13 @@ class VoidcubeCLI:
                     current_model = canonical
                     changed = True
 
-                resolved_mode = copilot_model_api_mode(current_model, api_key=self.api_key)
-                if resolved_mode != self.api_mode:
-                    self.api_mode = resolved_mode
-                    changed = True
             except Exception:
                 pass
             return changed
 
         if resolved_provider in {"opencode-zen", "opencode-go"}:
             try:
-                from VoidCube_cli.models import normalize_opencode_model_id, opencode_model_api_mode
+                from VoidCube_cli.models import normalize_opencode_model_id
 
                 canonical = normalize_opencode_model_id(resolved_provider, current_model)
                 if canonical and canonical != current_model:
@@ -2724,37 +2718,9 @@ class VoidcubeCLI:
                     current_model = canonical
                     changed = True
 
-                resolved_mode = opencode_model_api_mode(resolved_provider, current_model)
-                if resolved_mode != self.api_mode:
-                    self.api_mode = resolved_mode
-                    changed = True
             except Exception:
                 pass
             return changed
-
-        if resolved_provider != "openai-codex":
-            return changed
-
-        # 1. Strip provider prefix ("openai/gpt-5.4" → "gpt-5.4")
-        if "/" in current_model:
-            slug = current_model.split("/", 1)[1]
-            if not self._model_is_default:
-                self.console.print(
-                    f"[yellow]⚠️  Stripped provider prefix from '{current_model}'; "
-                    f"using '{slug}' for OpenAI Codex.[/]"
-                )
-            self.model = slug
-            current_model = slug
-            changed = True
-
-        # 2. Replace untouched default with a Codex model
-        if self._model_is_default:
-            fallback_model = "gpt-5.3-codex"
-            # Codex models removed - using default fallback
-
-            if current_model != fallback_model:
-                self.model = fallback_model
-                changed = True
 
         return changed
 
@@ -3246,7 +3212,6 @@ class VoidcubeCLI:
         api_key = runtime.get("api_key")
         base_url = runtime.get("base_url")
         resolved_provider = runtime.get("provider", "openrouter")
-        resolved_api_mode = runtime.get("api_mode", self.api_mode)
         resolved_acp_command = runtime.get("command")
         resolved_acp_args = list(runtime.get("args") or [])
         resolved_credential_pool = runtime.get("credential_pool")
@@ -3276,12 +3241,10 @@ class VoidcubeCLI:
         credentials_changed = api_key != self.api_key or base_url != self.base_url
         routing_changed = (
             resolved_provider != self.provider
-            or resolved_api_mode != self.api_mode
             or resolved_acp_command != self.acp_command
             or resolved_acp_args != self.acp_args
         )
         self.provider = resolved_provider
-        self.api_mode = resolved_api_mode
         self.acp_command = resolved_acp_command
         self.acp_args = resolved_acp_args
         self._credential_pool = resolved_credential_pool
@@ -3302,8 +3265,7 @@ class VoidcubeCLI:
             print("\n⚠️  No model selected for the active provider. Run: /model")
             return False
 
-        # Normalize model for the resolved provider (e.g. swap non-Codex
-        # models when provider is openai-codex).  Fixes #651.
+        # Normalize model IDs to the selected provider's request format.
         model_changed = self._normalize_model_for_provider(resolved_provider)
 
         # AIAgent/OpenAI client holds auth at init time, so rebuild if key,
@@ -3327,7 +3289,6 @@ class VoidcubeCLI:
                 "api_key": self.api_key,
                 "base_url": self.base_url,
                 "provider": self.provider,
-                "api_mode": self.api_mode,
                 "command": self.acp_command,
                 "args": list(self.acp_args or []),
                 "credential_pool": getattr(self, "_credential_pool", None),
@@ -3411,7 +3372,6 @@ class VoidcubeCLI:
                 "api_key": self.api_key,
                 "base_url": self.base_url,
                 "provider": self.provider,
-                "api_mode": self.api_mode,
                 "command": self.acp_command,
                 "args": list(self.acp_args or []),
                 "credential_pool": getattr(self, "_credential_pool", None),
@@ -3422,7 +3382,6 @@ class VoidcubeCLI:
                 api_key=runtime.get("api_key"),
                 base_url=runtime.get("base_url"),
                 provider=runtime.get("provider"),
-                api_mode=runtime.get("api_mode"),
                 acp_command=runtime.get("command"),
                 acp_args=runtime.get("args"),
                 credential_pool=runtime.get("credential_pool"),
@@ -3472,7 +3431,6 @@ class VoidcubeCLI:
                 effective_model,
                 runtime.get("provider"),
                 runtime.get("base_url"),
-                runtime.get("api_mode"),
                 runtime.get("command"),
                 tuple(runtime.get("args") or ()),
             )
@@ -5089,9 +5047,6 @@ class VoidcubeCLI:
         if result.base_url:
             self.base_url = result.base_url
             self._explicit_base_url = result.base_url
-        if result.api_mode:
-            self.api_mode = result.api_mode
-
         if self.agent is not None:
             try:
                 self.agent.switch_model(
@@ -5099,7 +5054,6 @@ class VoidcubeCLI:
                     new_provider=result.target_provider,
                     api_key=result.api_key,
                     base_url=result.base_url,
-                    api_mode=result.api_mode,
                 )
             except Exception as exc:
                 _cprint(f"  ⚠ Agent swap failed ({exc}); change applied to next session.")
@@ -5139,12 +5093,6 @@ class VoidcubeCLI:
             except Exception:
                 pass
 
-        cache_enabled = (
-            ("openrouter" in (result.base_url or "").lower() and "claude" in result.new_model.lower())
-            or result.api_mode == "anthropic_messages"
-        )
-        if cache_enabled:
-            _cprint(t('    Prompt caching: enabled'))
         if result.warning_message:
             _cprint(f"    ⚠ {result.warning_message}")
         if persist_global:
@@ -5303,9 +5251,6 @@ class VoidcubeCLI:
         if result.base_url:
             self.base_url = result.base_url
             self._explicit_base_url = result.base_url
-        if result.api_mode:
-            self.api_mode = result.api_mode
-
         # Apply to running agent (in-place swap)
         if self.agent is not None:
             try:
@@ -5314,7 +5259,6 @@ class VoidcubeCLI:
                     new_provider=result.target_provider,
                     api_key=result.api_key,
                     base_url=result.base_url,
-                    api_mode=result.api_mode,
                 )
             except Exception as exc:
                 _cprint(f"  ⚠ Agent swap failed ({exc}); change applied to next session.")
@@ -5359,14 +5303,6 @@ class VoidcubeCLI:
                 _cprint(f"    Context: {ctx:,} tokens")
             except Exception:
                 pass
-
-        # Cache notice
-        cache_enabled = (
-            ("openrouter" in (result.base_url or "").lower() and "claude" in result.new_model.lower())
-            or result.api_mode == "anthropic_messages"
-        )
-        if cache_enabled:
-            _cprint(t('    Prompt caching: enabled'))
 
         # Warning from validation
         if result.warning_message:
@@ -6585,7 +6521,6 @@ class VoidcubeCLI:
                     api_key=turn_route["runtime"].get("api_key"),
                     base_url=turn_route["runtime"].get("base_url"),
                     provider=turn_route["runtime"].get("provider"),
-                    api_mode=turn_route["runtime"].get("api_mode"),
                     acp_command=turn_route["runtime"].get("command"),
                     acp_args=turn_route["runtime"].get("args"),
                     max_iterations=self.max_turns,
@@ -6822,7 +6757,6 @@ class VoidcubeCLI:
                     api_key=turn_route["runtime"].get("api_key"),
                     base_url=turn_route["runtime"].get("base_url"),
                     provider=turn_route["runtime"].get("provider"),
-                    api_mode=turn_route["runtime"].get("api_mode"),
                     acp_command=turn_route["runtime"].get("command"),
                     acp_args=turn_route["runtime"].get("args"),
                     max_iterations=8,
@@ -7265,19 +7199,12 @@ class VoidcubeCLI:
             _cprint(f"  {_ACCENT}✓ Reasoning effort set to '{arg}' (session only){_RST}")
 
     def _handle_fast_command(self, cmd: str):
-        """Handle /fast — toggle fast mode (OpenAI Priority Processing / Anthropic Fast Mode)."""
+        """Handle /fast — toggle OpenAI-compatible priority processing."""
         if not self._fast_command_available():
-            _cprint("  (._.) /fast is only available for models that support fast mode (OpenAI Priority Processing or Anthropic Fast Mode).")
+            _cprint("  (._.) /fast is only available for models that support priority processing.")
             return
 
-        # Determine the branding for the current model
-        try:
-            from VoidCube_cli.models import _is_anthropic_fast_model
-            agent = getattr(self, "agent", None)
-            model = getattr(agent, "model", None) or getattr(self, "model", None)
-            feature_name = "Anthropic Fast Mode" if _is_anthropic_fast_model(model) else "Priority Processing"
-        except Exception:
-            feature_name = "Fast mode"
+        feature_name = "Priority Processing"
 
         parts = cmd.strip().split(maxsplit=1)
         if len(parts) < 2 or parts[1].strip().lower() == "status":

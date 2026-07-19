@@ -48,13 +48,8 @@ class ModelAliasEntry:
 
 
 _BUILTIN_ALIASES: Dict[str, ModelIdentity] = {
-    "sonnet": ModelIdentity("anthropic", "claude-sonnet"),
-    "opus": ModelIdentity("anthropic", "claude-opus"),
-    "haiku": ModelIdentity("anthropic", "claude-haiku"),
-    "claude": ModelIdentity("anthropic", "claude"),
     "gpt5": ModelIdentity("openai", "gpt-5"),
     "gpt": ModelIdentity("openai", "gpt"),
-    "codex": ModelIdentity("openai", "codex"),
     "o3": ModelIdentity("openai", "o3"),
     "o4": ModelIdentity("openai", "o4"),
     "gemini": ModelIdentity("google", "gemini"),
@@ -72,7 +67,6 @@ _BUILTIN_ALIASES: Dict[str, ModelIdentity] = {
 }
 
 _VENDOR_TO_PROVIDER: Dict[str, str] = {
-    "anthropic": "anthropic",
     "openai": "openai",
     "google": "gemini",
     "deepseek": "deepseek",
@@ -157,8 +151,6 @@ class ModelAliasResolver:
                 if isinstance(m, dict) and m.get("id") == model_id:
                     return provider_id
         lower = model_id.lower()
-        if "claude" in lower:
-            return "anthropic"
         if "gpt" in lower or "o3" in lower or "o4" in lower:
             return "openai"
         if "gemini" in lower:

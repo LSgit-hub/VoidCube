@@ -29,8 +29,9 @@
 - CLI worktree 生命周期与自主改进 Git diff 已收口到 `VoidCube_cli/cli_handlers.py`；`cli.py` 不再保留同名遮蔽实现或无用的全局 worktree 缓存。
 - 本地附件路径解析、文件拖放、图像参数收集与徽标格式化已收口到 `VoidCube_cli/attachments.py`；Windows 盘符路径和 Termux POSIX 示例均有独立回归测试。
 - Agent 消息 surrogate / 非 ASCII 恢复统一由 `agent/message_sanitizer.py` 提供，`run_agent.py` 不再维护重复实现。
+- 跨模块的内部 function-tool 标准化由 `agent/tool_schema.py` 唯一提供，主执行器只负责装配和调用。
 - 从未实际写文件的 `save_trajectories` 空实现已连同参数、帮助和死分支删除；仍可使用独立入口的 `save_sample` 导出单次样本。
-- 主仓当前收集 760 项测试。日常修改先跑 smoke 和受影响模块，合并或发布前跑全量测试与构建。
+- 主仓当前收集 785 项测试。日常修改先跑 smoke 和受影响模块，合并或发布前跑全量测试与构建。
 - Mem 子系统当前有 108 项测试，需通过 `python -m pytest Mem/tests -q` 单独运行。
 
 ## 推荐阅读路径

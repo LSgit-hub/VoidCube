@@ -25,7 +25,6 @@ from dataclasses import dataclass
 from typing import List, NamedTuple
 
 from VoidCube_cli.providers import (
-    determine_api_mode,
     get_label,
     is_aggregator,
     resolve_provider_full,
@@ -104,7 +103,6 @@ class ModelSwitchResult:
     provider_changed: bool = False
     api_key: str = ""
     base_url: str = ""
-    api_mode: str = ""
     error_message: str = ""
     warning_message: str = ""
     provider_label: str = ""
@@ -224,7 +222,6 @@ def switch_model(
     from VoidCube_cli.models import (
         detect_provider_for_model,
         validate_requested_model,
-        opencode_model_api_mode,
     )
     from VoidCube_cli.runtime_provider import resolve_runtime_provider
 
@@ -377,14 +374,11 @@ def switch_model(
     # --- Resolve credentials ---
     api_key = current_api_key
     base_url = current_base_url
-    api_mode = ""
-
     if provider_changed or explicit_provider:
         try:
             runtime = resolve_runtime_provider(requested=target_provider)
             api_key = runtime.get("api_key", "")
             base_url = runtime.get("base_url", "")
-            api_mode = runtime.get("api_mode", "")
         except Exception as e:
             return ModelSwitchResult(
                 success=False,
@@ -401,7 +395,6 @@ def switch_model(
             runtime = resolve_runtime_provider(requested=current_provider)
             api_key = runtime.get("api_key", "")
             base_url = runtime.get("base_url", "")
-            api_mode = runtime.get("api_mode", "")
         except Exception:
             pass
 
@@ -435,14 +428,6 @@ def switch_model(
             error_message=msg,
         )
 
-    # --- OpenCode api_mode override ---
-    if target_provider in {"opencode-zen", "opencode-go", "opencode", "opencode-go"}:
-        api_mode = opencode_model_api_mode(target_provider, new_model)
-
-    # --- Determine api_mode if not already set ---
-    if not api_mode:
-        api_mode = determine_api_mode(target_provider, base_url)
-
     # --- Get capabilities (legacy) ---
     capabilities = get_model_capabilities(target_provider, new_model)
 
@@ -465,7 +450,6 @@ def switch_model(
         provider_changed=provider_changed,
         api_key=api_key,
         base_url=base_url,
-        api_mode=api_mode,
         warning_message=" | ".join(warnings) if warnings else "",
         provider_label=provider_label,
         capabilities=capabilities,
@@ -529,5 +513,4 @@ def list_configured_providers(
 
     results.sort(key=lambda r: (not r["is_current"], r["name"].lower()))
     return results
-
 
