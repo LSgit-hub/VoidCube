@@ -7370,7 +7370,7 @@ class VoidcubeCLI:
             return
         self._last_config_check = now
 
-        from VoidCube_cli.config import get_config_path as _get_config_path
+        from VoidCube_core.constants import get_config_path as _get_config_path
         cfg_path = _get_config_path()
         if not cfg_path.exists():
             return
@@ -9391,7 +9391,7 @@ class VoidcubeCLI:
         get_plugin_manager()._cli_ref = self
 
         # Config file watcher — detect mcp_servers changes and auto-reload
-        from VoidCube_cli.config import get_config_path as _get_config_path
+        from VoidCube_core.constants import get_config_path as _get_config_path
         _cfg_path = _get_config_path()
         self._config_mtime: float = _cfg_path.stat().st_mtime if _cfg_path.exists() else 0.0
         self._config_mcp_servers: dict = self.config.get("mcp_servers") or {}

@@ -1,6 +1,6 @@
 # VoidCube 文档导航
 
-更新日期：2026-07-19
+更新日期：2026-07-20
 
 本目录只维护三类资料：当前架构、当前工程说明、历史迁移记录。讨论或修改现役实现时，必须先使用当前架构文档；历史文档只用于解释旧术语为何存在，不能反向定义主逻辑。
 
@@ -38,11 +38,14 @@
 - 记忆刷新回退、MoA 参考模型和聚合模型请求已统一通过 `agent/api_request.py` 构建；MoA 的自定义聚合模型会实际参与请求，输出上限、reasoning 和退役集成策略不再由工具私自拼装。
 - API-A 主调用、辅助模型、模型切换和子 Agent 委派统一使用 OpenAI-compatible `chat.completions`；配置层不再保留协议探测、协议切换或专用响应适配字段。
 - 辅助任务路由只读取显式调用参数与 `auxiliary.<task>`；配置版本 19 会把旧压缩摘要字段和辅助环境变量迁入该结构后删除旧来源，浏览器、Web、压缩器与启动器不再维护环境变量桥接或第二套摘要模型配置。
+- 配置版本 20 会一次性把四类旧缓存目录合并到 `cache/documents`、`cache/images`、`cache/audio`、`cache/screenshots`；同名冲突保留为确定性的 `.legacy-N` 文件，迁移后浏览器与远程环境挂载只读取规范目录，不再保留运行时旧路径选择分支。
+- `VOIDCUBE_HOME`、`config.yaml` 与 `.env` 路径只由 `VoidCube_core.constants` 定义；仓库调用方不再经 `VoidCube_cli.config` 间接导入。配置模块中零调用的托管升级命令、伪安全保存包装和重复 Provider key helper 已删除。
+- 配置数据层与命令层已分离：`VoidCube_cli/config.py` 只保留加载、保存、校验、Provider 规范化和版本迁移，`VoidCube_cli/config_commands.py` 负责 `show/edit/set/check/migrate` 的终端展示与分发；旧模块不保留转发函数。
 - 发行版本只在 `VoidCube_cli.__version__` 定义，setuptools、CLI、横幅和调试信息均读取该值；Python 3.11 最低版本由 `pyproject.toml`、开发文档与默认运行镜像共同约束。
 - 国际化只由 `VoidCube_cli/i18n.py` 和 `VoidCube_cli/locales/*.json` 提供；旧的核心静态消息表及星号导出已删除，浏览器工具与其余 CLI 使用同一 locale、fallback 和格式化规则。
-- `VoidCube_core` 根包只作为无副作用命名空间；常量、异常、日志、状态、时间与工具函数必须从所属子模块显式导入，不再维护失效 `__all__` 或星号重导出兼容面。
+- `VoidCube_core` 根包只作为无副作用命名空间；常量、日志、状态、时间与工具函数必须从所属子模块显式导入，不再维护失效 `__all__`、星号重导出或零调用异常层。
 - 从未实际写文件的 `save_trajectories` 空实现已连同参数、帮助和死分支删除；仍可使用独立入口的 `save_sample` 导出单次样本。
-- 主仓当前收集 848 项测试。日常修改先跑 smoke 和受影响模块，合并或发布前跑全量测试与构建。
+- 主仓当前收集 857 项测试。日常修改先跑 smoke 和受影响模块，合并或发布前跑全量测试与构建。
 - Mem 子系统当前有 108 项测试，需通过 `python -m pytest Mem/tests -q` 单独运行。
 
 ## 推荐阅读路径

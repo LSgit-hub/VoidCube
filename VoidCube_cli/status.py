@@ -15,15 +15,13 @@ from VoidCube_cli.colors import Colors, color
 from VoidCube_cli.config import (
     get_active_provider_key,
     get_configured_providers,
-    get_env_path,
     get_env_value,
-    get_VoidCube_home,
     load_config,
     redact_key,
 )
 from VoidCube_cli.models import provider_label
 from VoidCube_cli.auth import has_usable_secret
-from VoidCube_core.constants import OPENROUTER_MODELS_URL
+from VoidCube_core.constants import OPENROUTER_MODELS_URL, get_env_path, get_VoidCube_home
 from tools.tool_backend_helpers import managed_nous_tools_enabled
 
 try:

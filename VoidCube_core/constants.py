@@ -70,25 +70,11 @@ def get_optional_skills_dir(default: Path | None = None) -> Path:
     return get_VoidCube_home() / "optional-skills"
 
 
-def get_VoidCube_dir(new_subpath: str, old_name: str) -> Path:
-    """Resolve a Voidcube subdirectory with backward compatibility.
-
-    New installs get the consolidated layout (e.g. ``cache/images``).
-    Existing installs that already have the old path (e.g. ``image_cache``)
-    keep using it — no migration required.
-
-    Args:
-        new_subpath: Preferred path relative to VOIDCUBE_HOME (e.g. ``"cache/images"``).
-        old_name: Legacy path relative to VOIDCUBE_HOME (e.g. ``"image_cache"``).
-
-    Returns:
-        Absolute ``Path`` — old location if it exists on disk, otherwise the new one.
-    """
-    home = get_VoidCube_home()
-    old_path = home / old_name
-    if old_path.exists():
-        return old_path
-    return home / new_subpath
+def get_cache_dir(name: str) -> Path:
+    """Return a named directory under the canonical ``cache`` tree."""
+    if not name or Path(name).name != name or name in {".", ".."}:
+        raise ValueError(f"Cache directory name must be one path component: {name!r}")
+    return get_VoidCube_home() / "cache" / name
 
 
 def display_VoidCube_home() -> str:

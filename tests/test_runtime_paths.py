@@ -66,3 +66,30 @@ def test_resolve_runtime_path_expands_relative_path_under_backend_cwd():
     assert runtime_path.host_path.replace("\\", "/").endswith(
         "F:/repo/project/subdir/nested/file.txt"
     )
+
+
+@pytest.mark.unit
+def test_remote_cache_sync_only_reads_canonical_cache_tree(tmp_path, monkeypatch):
+    home = tmp_path / ".VoidCube"
+    canonical = home / "cache" / "images"
+    legacy = home / "image_cache"
+    canonical.mkdir(parents=True)
+    legacy.mkdir(parents=True)
+    (canonical / "current.png").write_text("current", encoding="utf-8")
+    (legacy / "retired.png").write_text("retired", encoding="utf-8")
+    monkeypatch.setenv("VOIDCUBE_HOME", str(home))
+
+    from tools.credential_files import get_cache_directory_mounts, iter_cache_files
+
+    assert get_cache_directory_mounts() == [
+        {
+            "host_path": str(canonical),
+            "container_path": "/root/.VoidCube/cache/images",
+        }
+    ]
+    assert iter_cache_files() == [
+        {
+            "host_path": str(canonical / "current.png"),
+            "container_path": "/root/.VoidCube/cache/images/current.png",
+        }
+    ]

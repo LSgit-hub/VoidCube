@@ -1,7 +1,7 @@
 # VoidCube CLI Configuration
 # 配置文件路径: ~/.VoidCube/config.yaml
 
-_config_version: 19
+_config_version: 20
 
 # 主要模型配置
 model: ""

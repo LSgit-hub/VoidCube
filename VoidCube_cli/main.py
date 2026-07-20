@@ -140,7 +140,7 @@ _apply_profile_override()
 
 # Load .env from ~/.VoidCube/.env first, then project root as dev fallback.
 # User-managed env files should override stale shell exports on restart.
-from VoidCube_cli.config import get_VoidCube_home
+from VoidCube_core.constants import get_VoidCube_home
 from VoidCube_cli.env_loader import load_VoidCube_dotenv
 load_VoidCube_dotenv(project_env=PROJECT_ROOT / '.env')
 
@@ -1184,7 +1184,7 @@ def cmd_debug(args):
 
 def cmd_config(args):
     """Configuration management."""
-    from VoidCube_cli.config import config_command
+    from VoidCube_cli.config_commands import config_command
     config_command(args)
 
 

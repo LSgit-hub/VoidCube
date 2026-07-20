@@ -20,10 +20,9 @@ from VoidCube_cli.config import (
     save_config,
     get_env_value,
     save_env_value,
-    get_VoidCube_home,  # noqa: F401 — used by test mocks
 )
 from VoidCube_cli.colors import Colors, color
-from VoidCube_core.constants import display_VoidCube_home
+from VoidCube_core.constants import display_VoidCube_home, get_VoidCube_home  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

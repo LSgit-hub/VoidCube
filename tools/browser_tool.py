@@ -67,7 +67,7 @@ from typing import Dict, Any, Optional, List
 from pathlib import Path
 from agent.auxiliary_client import call_llm
 from VoidCube_cli.i18n import t
-from VoidCube_core.constants import get_VoidCube_home
+from VoidCube_core.constants import get_cache_dir, get_VoidCube_home
 
 try:
     from tools.website_policy import check_website_access
@@ -1916,8 +1916,7 @@ def browser_vision(
     effective_task_id = task_id or "default"
     
     # Save screenshot to persistent location so it can be shared with users
-    from VoidCube_core.constants import get_VoidCube_dir
-    screenshots_dir = get_VoidCube_dir("cache/screenshots", "browser_screenshots")
+    screenshots_dir = get_cache_dir("screenshots")
     screenshot_path = screenshots_dir / f"browser_screenshot_{uuid_mod.uuid4().hex}.png"
     
     try:

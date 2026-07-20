@@ -257,7 +257,7 @@ def _get_auth_store_path() -> Path:
     """Return the path to the auth store JSON file."""
     from pathlib import Path as _Path
     try:
-        from VoidCube_cli.config import get_VoidCube_home
+        from VoidCube_core.constants import get_VoidCube_home
         home = get_VoidCube_home()
     except Exception:
         home = _Path.home() / ".VoidCube"
@@ -580,7 +580,8 @@ def _login_api_key(provider: str, args) -> None:
     if not env_key:
         env_key = f"{provider.upper().replace('-', '_')}_API_KEY"
     try:
-        from VoidCube_cli.config import get_env_path, save_env_value
+        from VoidCube_cli.config import save_env_value
+        from VoidCube_core.constants import get_env_path
         env_file = get_env_path()
         save_env_value(env_key, api_key)
         print(f"  ✓ API key saved to {env_file}")

@@ -106,7 +106,7 @@ auxiliary:
     migrate_config(interactive=False, quiet=True)
 
     config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
-    assert config["_config_version"] == 19
+    assert config["_config_version"] == 20
     assert config["compression"]["enabled"] is True
     assert not {
         "summary_provider",
@@ -125,6 +125,65 @@ auxiliary:
     assert "AUXILIARY_" not in env_text
     assert "old-env-secret" not in env_text
     assert "DEEPSEEK_API_KEY=sk-real-deepseek-token-123456789" in env_text
+
+
+def test_migrate_config_moves_legacy_cache_directories_to_v20_layout(
+    tmp_path,
+    monkeypatch,
+):
+    home = tmp_path / ".VoidCube"
+    home.mkdir()
+    (home / "config.yaml").write_text("_config_version: 19\n", encoding="utf-8")
+    legacy_dirs = {
+        "document_cache": "documents",
+        "image_cache": "images",
+        "audio_cache": "audio",
+        "browser_screenshots": "screenshots",
+    }
+    for legacy_name in legacy_dirs:
+        legacy_dir = home / legacy_name
+        legacy_dir.mkdir()
+        (legacy_dir / "cached.bin").write_text(legacy_name, encoding="utf-8")
+    monkeypatch.setenv("VOIDCUBE_HOME", str(home))
+
+    from VoidCube_cli.config import migrate_config
+
+    migrate_config(interactive=False, quiet=True)
+
+    config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+    assert config["_config_version"] == 20
+    for legacy_name, canonical_name in legacy_dirs.items():
+        assert not (home / legacy_name).exists()
+        assert (home / "cache" / canonical_name / "cached.bin").read_text(
+            encoding="utf-8"
+        ) == legacy_name
+
+
+def test_migrate_config_preserves_canonical_and_conflicting_legacy_cache_files(
+    tmp_path,
+    monkeypatch,
+):
+    home = tmp_path / ".VoidCube"
+    canonical = home / "cache" / "images"
+    legacy = home / "image_cache"
+    canonical.mkdir(parents=True)
+    legacy.mkdir(parents=True)
+    (home / "config.yaml").write_text("_config_version: 19\n", encoding="utf-8")
+    (canonical / "same.png").write_text("canonical", encoding="utf-8")
+    (canonical / "same.png.legacy-1").write_text("reserved", encoding="utf-8")
+    (legacy / "same.png").write_text("legacy", encoding="utf-8")
+    (legacy / "only-old.png").write_text("only-old", encoding="utf-8")
+    monkeypatch.setenv("VOIDCUBE_HOME", str(home))
+
+    from VoidCube_cli.config import migrate_config
+
+    migrate_config(interactive=False, quiet=True)
+
+    assert not legacy.exists()
+    assert (canonical / "same.png").read_text(encoding="utf-8") == "canonical"
+    assert (canonical / "same.png.legacy-1").read_text(encoding="utf-8") == "reserved"
+    assert (canonical / "same.png.legacy-2").read_text(encoding="utf-8") == "legacy"
+    assert (canonical / "only-old.png").read_text(encoding="utf-8") == "only-old"
 
 
 def test_credential_pool_round_trips_by_provider(tmp_path, monkeypatch):

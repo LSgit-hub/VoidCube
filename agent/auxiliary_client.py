@@ -45,8 +45,7 @@ from agent.credential_pool import load_pool
 from agent.api_request import ChatRequestConfig, build_chat_completion_kwargs
 from agent.api_response import visible_or_reasoning_text
 from agent.integration_policy import require_active_integration
-from VoidCube_cli.config import get_VoidCube_home
-from VoidCube_core.constants import OPENROUTER_BASE_URL
+from VoidCube_core.constants import OPENROUTER_BASE_URL, get_VoidCube_home
 
 logger = logging.getLogger(__name__)
 

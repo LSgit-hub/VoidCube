@@ -262,7 +262,8 @@ def provider_credential_sources(provider: str, api_key_env: str = "") -> list[di
             )
 
         try:
-            from VoidCube_cli.config import get_env_path, load_env
+            from VoidCube_cli.config import load_env
+            from VoidCube_core.constants import get_env_path
 
             env_vars = load_env()
             sources.append(

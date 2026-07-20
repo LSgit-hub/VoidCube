@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -64,3 +65,74 @@ def test_core_package_root_has_no_implicit_reexport_surface():
         "to_utc",
     ):
         assert not hasattr(VoidCube_core, retired_name)
+
+
+def test_core_runtime_has_no_legacy_cache_or_unused_exception_surface():
+    from VoidCube_core import constants
+
+    assert not (ROOT / "VoidCube_core" / "exceptions.py").exists()
+    assert not hasattr(constants, "get_VoidCube_dir")
+    assert constants.get_cache_dir("images").parts[-2:] == ("cache", "images")
+
+    active_sources = (
+        ROOT / "VoidCube_core" / "constants.py",
+        ROOT / "tools" / "browser_tool.py",
+        ROOT / "tools" / "browser_camofox.py",
+        ROOT / "tools" / "credential_files.py",
+    )
+    retired_runtime_markers = (
+        "get_VoidCube_dir",
+        "document_cache",
+        "image_cache",
+        "audio_cache",
+        "browser_screenshots",
+    )
+    violations = {
+        path.relative_to(ROOT).as_posix(): [
+            marker
+            for marker in retired_runtime_markers
+            if marker in path.read_text(encoding="utf-8")
+        ]
+        for path in active_sources
+    }
+    assert {path: markers for path, markers in violations.items() if markers} == {}
+
+
+def test_config_module_has_no_path_reexport_consumers_or_dead_public_wrappers():
+    config_path = ROOT / "VoidCube_cli" / "config.py"
+    config_tree = ast.parse(config_path.read_text(encoding="utf-8"))
+    top_level_names = {
+        node.name
+        for node in config_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
+    assert not {
+        "get_managed_update_command",
+        "save_env_value_secure",
+        "_provider_key_from_name",
+    } & top_level_names
+
+    path_helpers = {"get_VoidCube_home", "get_config_path", "get_env_path"}
+    active_sources = [ROOT / "cli.py", ROOT / "run_agent.py", ROOT / "voidcube.py"]
+    for directory in (
+        "agent",
+        "tools",
+        "VoidCube_cli",
+        "VoidCube_core",
+        "systems",
+        "plugins",
+        "Mem/src",
+    ):
+        active_sources.extend((ROOT / directory).rglob("*.py"))
+
+    violations = []
+    for path in active_sources:
+        if path == config_path:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "VoidCube_cli.config":
+                imported = {alias.name for alias in node.names}
+                if imported & path_helpers:
+                    violations.append(path.relative_to(ROOT).as_posix())
+    assert violations == []

@@ -327,14 +327,8 @@ def iter_skills_files(
 # Cache directory mounts (documents, images, audio, screenshots)
 # ---------------------------------------------------------------------------
 
-# The four cache subdirectories that should be mirrored into remote backends.
-# Each tuple is (new_subpath, old_name) matching VoidCube_constants.get_VoidCube_dir().
-_CACHE_DIRS: list[tuple[str, str]] = [
-    ("cache/documents", "document_cache"),
-    ("cache/images", "image_cache"),
-    ("cache/audio", "audio_cache"),
-    ("cache/screenshots", "browser_screenshots"),
-]
+# The four canonical cache subdirectories mirrored into remote backends.
+_CACHE_DIR_NAMES = ("documents", "images", "audio", "screenshots")
 
 def get_cache_directory_mounts(
     container_base: str = "/root/.VoidCube",
@@ -342,17 +336,16 @@ def get_cache_directory_mounts(
     """Return mount entries for each cache directory that exists on disk.
 
     Used by Docker to create bind mounts.  Each entry has ``host_path`` and
-    ``container_path`` keys.  The host path is resolved via
-    ``get_VoidCube_dir()`` for backward compatibility with old directory layouts.
+    ``container_path`` keys. Paths always use the canonical
+    ``cache/<name>`` layout.
     """
-    from VoidCube_core.constants import get_VoidCube_dir
+    from VoidCube_core.constants import get_cache_dir
 
     mounts: List[Dict[str, str]] = []
-    for new_subpath, old_name in _CACHE_DIRS:
-        host_dir = get_VoidCube_dir(new_subpath, old_name)
+    for name in _CACHE_DIR_NAMES:
+        host_dir = get_cache_dir(name)
         if host_dir.is_dir():
-            # Always map to the *new* container layout regardless of host layout.
-            container_path = f"{container_base.rstrip('/')}/{new_subpath}"
+            container_path = f"{container_base.rstrip('/')}/cache/{name}"
             mounts.append({
                 "host_path": str(host_dir),
                 "container_path": container_path,
@@ -365,16 +358,16 @@ def iter_cache_files(
     """Return individual (host_path, container_path) entries for cache files.
 
     Used by Modal to upload files individually and resync before each command.
-    Skips symlinks.  The container paths use the new ``cache/<subdir>`` layout.
+    Skips symlinks. The container paths use the canonical cache layout.
     """
-    from VoidCube_core.constants import get_VoidCube_dir
+    from VoidCube_core.constants import get_cache_dir
 
     result: List[Dict[str, str]] = []
-    for new_subpath, old_name in _CACHE_DIRS:
-        host_dir = get_VoidCube_dir(new_subpath, old_name)
+    for name in _CACHE_DIR_NAMES:
+        host_dir = get_cache_dir(name)
         if not host_dir.is_dir():
             continue
-        container_root = f"{container_base.rstrip('/')}/{new_subpath}"
+        container_root = f"{container_base.rstrip('/')}/cache/{name}"
         for item in host_dir.rglob("*"):
             if item.is_symlink() or not item.is_file():
                 continue
@@ -388,4 +381,3 @@ def iter_cache_files(
 def clear_credential_files() -> None:
     """Reset the skill-scoped registry (e.g. on session reset)."""
     _get_registered().clear()
-
