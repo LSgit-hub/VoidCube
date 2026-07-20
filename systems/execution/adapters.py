@@ -651,20 +651,44 @@ class BodyUpgradeExecutionAdapter:
                 }
             )
             if not probe_execution["report"]["overall_passed"]:
-                return self.attach_execution_route_hint(
-                    {
-                        "status": "upgrade_halted",
-                        "stage": "probe_execution",
-                        "slot_id": slot_id,
-                        "prepared_slot": (
-                            prepared_slot.model_dump(mode="json")
-                            if prepared_slot is not None
-                            else None
+                abandonment = self._execute_governor_request(
+                    GovernorRequest(
+                        request_id=request.get(
+                            "abandon_request_id",
+                            f"abandon-{uuid.uuid4()}",
                         ),
-                        "candidate_slot": candidate_slot.model_dump(mode="json"),
-                        "probe_review": probe_approval,
-                        "probe_execution": probe_execution,
-                    },
+                        trace_id=trace_id,
+                        task_type=str(task_type),
+                        decision_id=decision_id,
+                        event_type="health_review_request",
+                        body_id=slot_id,
+                        source_actor=str(source_actor or "body_upgrade_pipeline"),
+                        summary="Discard candidate after required probe checks failed.",
+                        evidence={
+                            "probe_passed": False,
+                            "probe_report": probe_execution["report"],
+                            "runtime_task_profile": runtime_task_profile,
+                        },
+                        constraints={"target_transition": "probe_to_shell"},
+                    )
+                )
+                outcome = {
+                    "status": "upgrade_halted",
+                    "stage": "probe_execution",
+                    "slot_id": slot_id,
+                    "prepared_slot": (
+                        prepared_slot.model_dump(mode="json")
+                        if prepared_slot is not None
+                        else None
+                    ),
+                    "candidate_slot": candidate_slot.model_dump(mode="json"),
+                    "probe_review": probe_approval,
+                    "probe_execution": probe_execution,
+                    "abandonment": abandonment,
+                }
+                await self._writeback_execution_outcome(outcome)
+                return self.attach_execution_route_hint(
+                    outcome,
                     "body.upgrade.execute",
                 )
 
@@ -899,14 +923,19 @@ class BodyLifecycleExecutionAdapter:
         self.governor = governor
 
     def get_body_registry(self) -> Dict[str, Any]:
-        registry = self.body_registry.load_registry()
-        slots = self.body_registry.list_slots()
+        integrity = self.body_registry.inspect_layout()
+        slots: Dict[str, Any] = {}
+        for slot_id in self.body_registry.slot_ids:
+            try:
+                slots[slot_id] = self.body_registry.load_slot_meta(slot_id).model_dump(
+                    mode="json"
+                )
+            except (OSError, ValueError, FileNotFoundError):
+                continue
         return {
-            "registry": registry.model_dump(mode="json"),
-            "slots": {
-                slot_id: meta.model_dump(mode="json")
-                for slot_id, meta in slots.items()
-            },
+            "registry": integrity.get("registry"),
+            "slots": slots,
+            "integrity": integrity,
         }
 
     def get_active_body_target(self) -> Dict[str, Any]:

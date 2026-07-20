@@ -199,15 +199,10 @@ class BodyLifecycleExecutor:
         if action.action_type == "recycle_retired_slot":
             if not slot_id:
                 return self._failed(action, "Recycle action requires a slot_id.")
-            registry = self.registry.load_registry()
-            source_slot_id = payload.get("source_slot_id")
-            if source_slot_id is None and registry.active_slot and registry.active_slot != slot_id:
-                source_slot_id = registry.active_slot
             registry = self.registry.recycle_retired_slot(
                 slot_id,
-                source_slot_id=source_slot_id,
+                source_slot_id=payload.get("source_slot_id"),
                 source_path=payload.get("source_path"),
-                clear_existing=bool(payload.get("clear_existing", True)),
             )
             slot_meta = self.registry.load_slot_meta(slot_id)
             return self._applied(
@@ -227,7 +222,11 @@ class BodyLifecycleExecutor:
             if not slot_id:
                 return self._failed(action, "Abandon candidate requires a slot_id.")
             reason = str(payload.get("reason", "probe_failed"))
-            slot_meta = self.registry.transition_slot(slot_id, "shell", reason=reason)
+            slot_meta = self.registry.abandon_candidate(
+                slot_id,
+                source_slot_id=payload.get("source_slot_id"),
+                source_path=payload.get("source_path"),
+            )
             registry = self.registry.load_registry()
             return self._applied(
                 action,

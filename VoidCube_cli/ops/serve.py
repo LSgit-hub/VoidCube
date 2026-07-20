@@ -472,7 +472,8 @@ def start_all(foreground: bool = False) -> None:
 
     1. Gateway (nerve centre) — routes all traffic, accepts registrations
     2. Mem (soul layer, API-B) — registers with Gateway during startup
-    3. Supervisor (Mem's governance identity, API-B) — registers with Gateway
+    3. Supervisor (Mem's governance identity, API-B) — registers both the
+       supervisor and embedded executor surfaces with Gateway
 
     Body/agent subprocesses are not part of the default startup path.
     They should only be started by an explicit body-runtime operation.
@@ -499,6 +500,14 @@ def start_all(foreground: bool = False) -> None:
     start_service("supervisor", foreground=foreground)
     if not foreground:
         _wait_for_health("supervisor", SUPERVISOR_PORT)
+        supervisor_registered = _wait_for_gateway_service_type("supervisor")
+        executor_registered = _wait_for_gateway_service_type("executor")
+        if not (supervisor_registered and executor_registered):
+            stop_service("supervisor", silent=True)
+            start_service("supervisor", foreground=foreground)
+            _wait_for_health("supervisor", SUPERVISOR_PORT)
+            _wait_for_gateway_service_type("supervisor")
+            _wait_for_gateway_service_type("executor")
 
     if foreground:
         # Foreground: default stable services are running in daemon threads.
@@ -569,6 +578,13 @@ def _gateway_has_service_type(service_type: str) -> bool:
     return False
 
 
+def _required_gateway_service_types(service_name: str) -> tuple[str, ...]:
+    return {
+        "memory": ("memory",),
+        "supervisor": ("supervisor", "executor"),
+    }.get(service_name, ())
+
+
 def _wait_for_gateway_service_type(service_type: str, timeout: float = 20.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -604,13 +620,23 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
         if existing_pid and _pid_alive(existing_pid):
             healthy = _health_check(svc.port)
             if healthy:
-                if name == "memory" and not _gateway_has_service_type("memory"):
+                required_gateway_types = _required_gateway_service_types(name)
+                missing_gateway_types = [
+                    service_type
+                    for service_type in required_gateway_types
+                    if not _gateway_has_service_type(service_type)
+                ]
+                if missing_gateway_types:
                     if not silent:
-                        _safe_print(f"  ⚠ {svc.name:12s} healthy but not registered with gateway — restarting...")
+                        missing = ", ".join(missing_gateway_types)
+                        _safe_print(
+                            f"  ⚠ {svc.name:12s} healthy but gateway lacks "
+                            f"{missing} registration — restarting..."
+                        )
                     stop_service(name, silent=True)
                 else:
                     result[name] = {"running": True, "healthy": True, "pid": existing_pid, "started": False}
-                    if name == "memory":
+                    if required_gateway_types:
                         result[name]["registered"] = True
                     if not silent:
                         _safe_print(f"  ✓ {svc.name:12s} already running (pid {existing_pid}, port {svc.port})")
@@ -644,11 +670,20 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
         if not silent:
             tag = "✓" if healthy else "⚠"
             _safe_print(f"     {tag} ready" if healthy else f"     {tag} not responding (may still be starting)")
-        if name == "memory" and healthy:
-            registered = _wait_for_gateway_service_type("memory", timeout=20.0)
+        required_gateway_types = _required_gateway_service_types(name)
+        if required_gateway_types and healthy:
+            registration_results = [
+                _wait_for_gateway_service_type(service_type, timeout=20.0)
+                for service_type in required_gateway_types
+            ]
+            registered = all(registration_results)
             result[name]["registered"] = registered
             if not silent:
                 tag = "✓" if registered else "⚠"
-                _safe_print(f"     {tag} registered with gateway" if registered else "     ⚠ not registered with gateway")
+                _safe_print(
+                    f"     {tag} registered with gateway"
+                    if registered
+                    else "     ⚠ not fully registered with gateway"
+                )
 
     return result

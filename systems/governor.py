@@ -231,6 +231,53 @@ class GovernorDecisionEngine:
                 ],
             )
 
+        if target_transition == "probe_to_shell":
+            report = request.evidence.get("probe_report")
+            probe_failed = request.evidence.get("probe_passed") is False or (
+                isinstance(report, dict) and report.get("overall_passed") is False
+            )
+            if slot_meta and slot_meta.body_state != "probe":
+                return self._reject(
+                    f"Slot {slot_meta.slot_id} must be in probe state before abandonment."
+                )
+            if not probe_failed:
+                return self._request_more_evidence(
+                    "Candidate abandonment requires an explicit failed probe report."
+                )
+            return GovernorResponse(
+                decision="approve",
+                confidence=0.94,
+                risk_level="low",
+                reasoning_summary=(
+                    "The candidate failed controlled probe verification and must be "
+                    "discarded before the shell slot can accept more work."
+                ),
+                required_actions=[
+                    GovernorAction(
+                        action_type="abandon_candidate",
+                        slot_id=request.body_id,
+                        payload={
+                            "reason": "required_probe_failed",
+                            "runtime_task_profile": self._runtime_task_profile(request),
+                        },
+                    )
+                ],
+                writeback_events=[
+                    GovernorWritebackEvent(
+                        event_type="governor_decision",
+                        payload=self._with_runtime_task_profile(
+                            request,
+                            {
+                                "decision": "approve",
+                                "target_transition": target_transition,
+                                "body_id": request.body_id,
+                                "reason": "required_probe_failed",
+                            },
+                        ),
+                    )
+                ],
+            )
+
         if target_transition == "probe_to_active":
             probe_passed = self._probe_passed(request.evidence)
             user_consent_approved = bool(request.evidence.get("user_consent_approved"))

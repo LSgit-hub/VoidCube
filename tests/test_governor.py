@@ -89,6 +89,32 @@ def test_probe_to_active_health_review_requires_user_consent(tmp_path):
 
 
 @pytest.mark.unit
+def test_failed_probe_health_review_approves_candidate_abandonment(tmp_path):
+    manager = BodyRegistryManager(tmp_path)
+    manager.initialize_layout()
+    manager.mark_candidate("slot-B")
+    slot = manager.start_probe("slot-B")
+
+    engine = GovernorDecisionEngine()
+    request = GovernorRequest(
+        request_id="req-failed-probe",
+        event_type="health_review_request",
+        body_id="slot-B",
+        source_actor="probe_runner",
+        summary="Required probe failed",
+        evidence={"probe_report": {"overall_passed": False}},
+        constraints={"target_transition": "probe_to_shell"},
+    )
+
+    response = engine.evaluate(request, slot_meta=slot)
+
+    assert response.decision == "approve"
+    assert response.required_actions[0].action_type == "abandon_candidate"
+    assert response.required_actions[0].slot_id == "slot-B"
+    assert response.required_actions[0].payload["reason"] == "required_probe_failed"
+
+
+@pytest.mark.unit
 def test_switch_request_rejects_failed_probe(tmp_path):
     manager = BodyRegistryManager(tmp_path)
     manager.initialize_layout()

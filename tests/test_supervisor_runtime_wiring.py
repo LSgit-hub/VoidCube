@@ -42,6 +42,16 @@ def _make_supervisor(tmp_path: Path) -> Supervisor:
     return supervisor
 
 
+def _make_probe_ready_supervisor(tmp_path: Path) -> Supervisor:
+    (tmp_path / "run_agent.py").write_text("print('agent entrypoint')\n", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text("model: test\n", encoding="utf-8")
+    tools_dir = tmp_path / "tools"
+    tools_dir.mkdir(exist_ok=True)
+    (tools_dir / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "model_tools.py").write_text("# probe smoke\n", encoding="utf-8")
+    return _make_supervisor(tmp_path)
+
+
 @pytest.mark.unit
 def test_supervisor_can_disable_governor_llm_advisory(tmp_path):
     supervisor = _make_supervisor(tmp_path)
@@ -174,7 +184,133 @@ async def test_supervisor_health_exposes_runtime_state_without_deprecated_runtim
     assert health["status"] == "healthy"
     assert health["service"] == "supervisor"
     assert health["body_runtime"]["active_slot"] == "slot-A"
+    assert health["body_runtime"]["healthy"] is True
+    assert health["body_runtime"]["violations"] == []
     assert "transitional_interfaces" not in health
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_health_degrades_when_body_manifest_is_missing(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._body_registry.slot_worktree_manifest_path("slot-A").unlink()
+
+    health = await supervisor.health_check()
+    periodic = await supervisor.run_health_checks()
+    violation_codes = {
+        item["code"] for item in health["body_runtime"]["violations"]
+    }
+
+    assert health["status"] == "degraded"
+    assert health["body_runtime"]["healthy"] is False
+    assert "slot_not_materialized" in violation_codes
+    assert periodic["healthy"] is False
+    assert periodic["body_runtime"]["healthy"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_exposes_healthy_body_integrity(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    state = await supervisor.get_supervisor_ui_state()
+
+    body_status = state["body_status"]
+    assert body_status["integrity"]["healthy"] is True
+    assert body_status["integrity"]["violations"] == []
+    assert body_status["active_slot"] == "slot-A"
+    assert body_status["shell_slot"] == "slot-B"
+    assert body_status["slot_cards"]
+    assert all(card["integrity_healthy"] is True for card in body_status["slot_cards"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_projects_body_manifest_violation_to_slot_card(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    manifest_path = supervisor._body_registry.slot_worktree_manifest_path("slot-A")
+    manifest_path.unlink()
+
+    state = await supervisor.get_supervisor_ui_state()
+
+    body_status = state["body_status"]
+    violations = body_status["integrity"]["violations"]
+    active_card = next(
+        card for card in body_status["slot_cards"] if card["slot_id"] == "slot-A"
+    )
+    assert body_status["integrity"]["healthy"] is False
+    assert any(item["code"] == "slot_not_materialized" for item in violations)
+    assert active_card["integrity_healthy"] is False
+    assert active_card["integrity_materialized"] is False
+    assert active_card["integrity_violations"][0]["code"] == "slot_not_materialized"
+    assert manifest_path.exists() is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_room_state_keeps_unreadable_registry_diagnostic_read_only(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._body_registry.registry_path.write_text("{", encoding="utf-8")
+
+    state = await supervisor.get_supervisor_ui_state()
+    health = await supervisor.health_check()
+
+    body_status = state["body_status"]
+    assert state["status"] == "ok"
+    assert health["status"] == "degraded"
+    assert health["body_runtime"]["active_slot"] is None
+    assert health["body_runtime"]["violations"][0]["code"] == "registry_unreadable"
+    assert body_status["integrity"]["healthy"] is False
+    assert body_status["integrity"]["registry"] is None
+    assert body_status["integrity"]["violations"][0]["code"] == "registry_unreadable"
+    assert body_status["slot_cards"] == []
+    assert supervisor._body_registry.registry_path.read_text(encoding="utf-8") == "{"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_registers_embedded_executor_with_gateway(tmp_path, monkeypatch):
+    supervisor = _make_supervisor(tmp_path)
+    registrations = []
+
+    class _Response:
+        def __init__(self, service_type):
+            self.status = 201
+            self._service_type = service_type
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {"service_id": f"{self._service_type}-service"}
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, *, json, timeout):
+            registrations.append((url, json, timeout))
+            return _Response(json["service_type"])
+
+    monkeypatch.setitem(sys.modules, "aiohttp", SimpleNamespace(ClientSession=_Session))
+
+    service_id = await supervisor.register_with_gateway()
+
+    assert service_id == "supervisor-service"
+    assert [payload["service_type"] for _, payload, _ in registrations] == [
+        "supervisor",
+        "executor",
+    ]
+    assert registrations[1][1]["health_endpoint"] == "/executor/health"
+    assert registrations[1][1]["metadata"]["embedded_in"] == "supervisor"
+    assert supervisor._gateway_service_id == "supervisor-service"
+    assert supervisor._gateway_executor_service_id == "executor-service"
 
 
 @pytest.mark.unit
@@ -184,6 +320,24 @@ def test_supervisor_wires_execution_facade_to_canonical_executors(tmp_path):
     assert supervisor._execution_facade.body_lifecycle is supervisor._body_lifecycle_executor
     assert supervisor._execution_facade.body_upgrade is supervisor._body_upgrade_executor
     assert supervisor._execution_facade.memory_maintenance is supervisor._memory_maintenance_executor
+    assert supervisor._execution_service.app is supervisor.app
+
+
+@pytest.mark.unit
+def test_supervisor_mounts_embedded_executor_surface(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+
+    health = client.get("/executor/health")
+    registry = client.get("/executor/body/registry")
+
+    assert health.status_code == 200
+    assert health.json()["service"] == "executor"
+    assert health.json()["status"] == "healthy"
+    assert health.json()["body_runtime"]["healthy"] is True
+    assert registry.status_code == 200
+    assert registry.json()["registry"]["active_slot"] == "slot-A"
+    assert registry.json()["integrity"]["violations"] == []
 
 
 @pytest.mark.unit
@@ -198,6 +352,9 @@ def test_supervisor_room_frontend_uses_chain_panel_contract():
     assert '替身与统计' in UI_HTML
     assert 'data-chain-group="' in UI_HTML
     assert 'data-chain-trace="' in UI_HTML
+    assert 'body-integrity-row' in UI_HTML
+    assert 'body-integrity-violation' in UI_HTML
+    assert "slot.integrity_healthy === false" in UI_HTML
     assert 'data-chain-trace-expanded="' in UI_HTML
     assert 'data-chain-trace-source="' in UI_HTML
     assert "body_tree" in UI_HTML
@@ -262,6 +419,9 @@ def test_supervisor_exposes_segmented_runtime_config_views_and_uses_them_for_exe
     registry = supervisor._body_registry.load_registry()
     assert registry.active_slot == "slot-blue"
     assert registry.shell_slot == "slot-green"
+    active_worktree = Path(supervisor._body_registry.load_slot_meta("slot-blue").worktree_path)
+    assert not (active_worktree / ".slots-segmented").exists()
+    assert not (active_worktree / ".registry-segmented.json").exists()
 
 
 @pytest.mark.unit
@@ -2378,13 +2538,7 @@ async def test_supervisor_autonomous_chain_review_loop_survives_iteration_except
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_internal_body_upgrade_pipeline_does_not_route_through_facade_execution_helpers(tmp_path):
-    supervisor = _make_supervisor(tmp_path)
-    (tmp_path / "run_agent.py").write_text("print('agent entrypoint')\n", encoding="utf-8")
-    (tmp_path / "config.yaml").write_text("model: test\n", encoding="utf-8")
-    tools_dir = tmp_path / "tools"
-    tools_dir.mkdir(exist_ok=True)
-    (tools_dir / "__init__.py").write_text("", encoding="utf-8")
-    (tmp_path / "model_tools.py").write_text("# probe smoke\n", encoding="utf-8")
+    supervisor = _make_probe_ready_supervisor(tmp_path)
 
     original_facade = supervisor._execution_facade
     supervisor._execution_facade = SimpleNamespace(

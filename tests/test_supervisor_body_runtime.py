@@ -32,15 +32,25 @@ def _make_supervisor_config(tmp_path: Path) -> SupervisorConfig:
     )
 
 
+def _seed_probe_ready_files(tmp_path: Path) -> None:
+    (tmp_path / "run_agent.py").write_text("print('agent entrypoint')\n", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text("model: test\n", encoding="utf-8")
+    tools_dir = tmp_path / "tools"
+    tools_dir.mkdir(exist_ok=True)
+    (tools_dir / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "model_tools.py").write_text("# probe smoke\n", encoding="utf-8")
+
+
+def _make_probe_ready_supervisor(tmp_path: Path) -> Supervisor:
+    _seed_probe_ready_files(tmp_path)
+    return Supervisor(_make_supervisor_config(tmp_path))
+
+
 def _seed_probe_ready_git_repo(tmp_path: Path) -> str:
     subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
     subprocess.run(["git", "config", "user.email", "voidcube@example.test"], cwd=tmp_path, check=True)
     subprocess.run(["git", "config", "user.name", "VoidCube Test"], cwd=tmp_path, check=True)
-    (tmp_path / "run_agent.py").write_text("print('agent')\n", encoding="utf-8")
-    (tmp_path / "config.yaml").write_text("model: test\n", encoding="utf-8")
-    (tmp_path / "model_tools.py").write_text("# probe smoke\n", encoding="utf-8")
-    (tmp_path / "tools").mkdir()
-    (tmp_path / "tools" / "__init__.py").write_text("", encoding="utf-8")
+    _seed_probe_ready_files(tmp_path)
     (tmp_path / "agent").mkdir()
     (tmp_path / "agent" / "stream_handler.py").write_text(
         "VERSION = 'stable'\n",
@@ -155,9 +165,27 @@ async def test_supervisor_exposes_initialized_body_registry(tmp_path):
     assert result["registry"]["shell_slot"] == "slot-B"
     assert "slot-A" in result["slots"]
     assert result["slots"]["slot-A"]["body_state"] == "active"
+    assert result["integrity"]["healthy"] is True
+    assert result["integrity"]["violations"] == []
 
     active_target = await supervisor.get_active_body_target()
     assert active_target["slot_id"] == "slot-A"
+
+
+@pytest.mark.unit
+def test_failed_probe_report_contributes_no_shell_health_score(tmp_path):
+    supervisor = Supervisor(_make_supervisor_config(tmp_path))
+    slot_meta = supervisor._body_registry.load_slot_meta("slot-B")
+    slot_meta.last_probe_result = {
+        "overall_passed": False,
+        "checks": [
+            {"name": "startup_ok", "passed": True},
+            {"name": "config_load_ok", "passed": True},
+            {"name": "tool_smoke_ok", "passed": False},
+        ],
+    }
+
+    assert supervisor._get_probe_score("slot-B", slot_meta) == 0.0
 
 
 @pytest.mark.asyncio
@@ -661,15 +689,7 @@ async def test_supervisor_can_record_probe_report_and_review_probe_transition(tm
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_can_activate_candidate_after_probe_report(tmp_path):
-    supervisor = Supervisor(
-        _make_supervisor_config(tmp_path)
-    )
-    (tmp_path / "run_agent.py").write_text("print('agent entrypoint')\n", encoding="utf-8")
-    (tmp_path / "config.yaml").write_text("model: test\n", encoding="utf-8")
-    tools_dir = tmp_path / "tools"
-    tools_dir.mkdir(exist_ok=True)
-    (tools_dir / "__init__.py").write_text("", encoding="utf-8")
-    (tmp_path / "model_tools.py").write_text("# probe smoke\n", encoding="utf-8")
+    supervisor = _make_probe_ready_supervisor(tmp_path)
     await _mark_body_candidate(supervisor, "slot-B", {"body_version": "v2"})
     await _execute_governor_review_request(
         supervisor,
@@ -755,15 +775,7 @@ async def test_supervisor_records_governor_history_via_mem_bridge(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_watch_window_pass_recycles_retired_slot(tmp_path):
-    supervisor = Supervisor(
-        _make_supervisor_config(tmp_path)
-    )
-    (tmp_path / "run_agent.py").write_text("print('agent entrypoint')\n", encoding="utf-8")
-    (tmp_path / "config.yaml").write_text("model: test\n", encoding="utf-8")
-    tools_dir = tmp_path / "tools"
-    tools_dir.mkdir(exist_ok=True)
-    (tools_dir / "__init__.py").write_text("", encoding="utf-8")
-    (tmp_path / "model_tools.py").write_text("# probe smoke\n", encoding="utf-8")
+    supervisor = _make_probe_ready_supervisor(tmp_path)
 
     await _mark_body_candidate(supervisor, "slot-B", {"body_version": "v2"})
     await _execute_governor_review_request(
@@ -806,15 +818,7 @@ async def test_supervisor_watch_window_pass_recycles_retired_slot(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_watch_window_path_uses_governor_review_executor_directly(tmp_path):
-    supervisor = Supervisor(
-        _make_supervisor_config(tmp_path)
-    )
-    (tmp_path / "run_agent.py").write_text("print('agent entrypoint')\n", encoding="utf-8")
-    (tmp_path / "config.yaml").write_text("model: test\n", encoding="utf-8")
-    tools_dir = tmp_path / "tools"
-    tools_dir.mkdir(exist_ok=True)
-    (tools_dir / "__init__.py").write_text("", encoding="utf-8")
-    (tmp_path / "model_tools.py").write_text("# probe smoke\n", encoding="utf-8")
+    supervisor = _make_probe_ready_supervisor(tmp_path)
 
     await _mark_body_candidate(supervisor, "slot-B", {"body_version": "v2"})
     await _execute_governor_review_request(
@@ -858,15 +862,7 @@ async def test_supervisor_watch_window_path_uses_governor_review_executor_direct
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_watch_window_failure_triggers_rollback(tmp_path):
-    supervisor = Supervisor(
-        _make_supervisor_config(tmp_path)
-    )
-    (tmp_path / "run_agent.py").write_text("print('agent entrypoint')\n", encoding="utf-8")
-    (tmp_path / "config.yaml").write_text("model: test\n", encoding="utf-8")
-    tools_dir = tmp_path / "tools"
-    tools_dir.mkdir(exist_ok=True)
-    (tools_dir / "__init__.py").write_text("", encoding="utf-8")
-    (tmp_path / "model_tools.py").write_text("# probe smoke\n", encoding="utf-8")
+    supervisor = _make_probe_ready_supervisor(tmp_path)
 
     await _mark_body_candidate(supervisor, "slot-B", {"body_version": "v2"})
     await _execute_governor_review_request(
@@ -917,15 +913,7 @@ async def test_supervisor_watch_window_failure_triggers_rollback(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_starts_watch_window_task_after_switch(tmp_path):
-    supervisor = Supervisor(
-        _make_supervisor_config(tmp_path)
-    )
-    (tmp_path / "run_agent.py").write_text("print('agent entrypoint')\n", encoding="utf-8")
-    (tmp_path / "config.yaml").write_text("model: test\n", encoding="utf-8")
-    tools_dir = tmp_path / "tools"
-    tools_dir.mkdir(exist_ok=True)
-    (tools_dir / "__init__.py").write_text("", encoding="utf-8")
-    (tmp_path / "model_tools.py").write_text("# probe smoke\n", encoding="utf-8")
+    supervisor = _make_probe_ready_supervisor(tmp_path)
 
     await _mark_body_candidate(supervisor, "slot-B", {"body_version": "v2"})
     await _execute_governor_review_request(
@@ -972,15 +960,7 @@ async def test_supervisor_starts_watch_window_task_after_switch(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_delegates_watch_window_runtime_followup_to_execution_facade(tmp_path):
-    supervisor = Supervisor(
-        _make_supervisor_config(tmp_path)
-    )
-    (tmp_path / "run_agent.py").write_text("print('agent entrypoint')\n", encoding="utf-8")
-    (tmp_path / "config.yaml").write_text("model: test\n", encoding="utf-8")
-    tools_dir = tmp_path / "tools"
-    tools_dir.mkdir(exist_ok=True)
-    (tools_dir / "__init__.py").write_text("", encoding="utf-8")
-    (tmp_path / "model_tools.py").write_text("# probe smoke\n", encoding="utf-8")
+    supervisor = _make_probe_ready_supervisor(tmp_path)
 
     await _mark_body_candidate(supervisor, "slot-B", {"body_version": "v2"})
     await _execute_governor_review_request(
@@ -1056,15 +1036,7 @@ async def test_supervisor_delegates_watch_window_runtime_followup_to_execution_f
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_watch_window_loop_auto_recycles_when_window_expires_cleanly(tmp_path):
-    supervisor = Supervisor(
-        _make_supervisor_config(tmp_path)
-    )
-    (tmp_path / "run_agent.py").write_text("print('agent entrypoint')\n", encoding="utf-8")
-    (tmp_path / "config.yaml").write_text("model: test\n", encoding="utf-8")
-    tools_dir = tmp_path / "tools"
-    tools_dir.mkdir(exist_ok=True)
-    (tools_dir / "__init__.py").write_text("", encoding="utf-8")
-    (tmp_path / "model_tools.py").write_text("# probe smoke\n", encoding="utf-8")
+    supervisor = _make_probe_ready_supervisor(tmp_path)
 
     await _mark_body_candidate(supervisor, "slot-B", {"body_version": "v2"})
     await _execute_governor_review_request(
@@ -1121,15 +1093,7 @@ async def test_watch_window_loop_auto_recycles_when_window_expires_cleanly(tmp_p
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_watch_window_success_syncs_retired_slot_back_to_shell_from_active_slot(tmp_path):
-    supervisor = Supervisor(
-        _make_supervisor_config(tmp_path)
-    )
-    (tmp_path / "run_agent.py").write_text("print('agent entrypoint')\n", encoding="utf-8")
-    (tmp_path / "config.yaml").write_text("model: test\n", encoding="utf-8")
-    tools_dir = tmp_path / "tools"
-    tools_dir.mkdir(exist_ok=True)
-    (tools_dir / "__init__.py").write_text("", encoding="utf-8")
-    (tmp_path / "model_tools.py").write_text("# probe smoke\n", encoding="utf-8")
+    supervisor = _make_probe_ready_supervisor(tmp_path)
 
     await _mark_body_candidate(supervisor, "slot-B", {"body_version": "v2"})
     await _execute_governor_review_request(
@@ -1174,15 +1138,7 @@ async def test_watch_window_success_syncs_retired_slot_back_to_shell_from_active
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_supervisor_execute_body_upgrade_runs_pipeline_to_switch(tmp_path):
-    supervisor = Supervisor(
-        _make_supervisor_config(tmp_path)
-    )
-    (tmp_path / "run_agent.py").write_text("print('agent entrypoint')\n", encoding="utf-8")
-    (tmp_path / "config.yaml").write_text("model: test\n", encoding="utf-8")
-    tools_dir = tmp_path / "tools"
-    tools_dir.mkdir(exist_ok=True)
-    (tools_dir / "__init__.py").write_text("", encoding="utf-8")
-    (tmp_path / "model_tools.py").write_text("# probe smoke\n", encoding="utf-8")
+    supervisor = _make_probe_ready_supervisor(tmp_path)
 
     result = await _execute_body_upgrade(
         supervisor,

@@ -72,6 +72,7 @@ python -m pip install -e ".[all]"
 
 ```bash
 python -m pip install -e ".[all,dev]"
+python scripts/verify_clean_install.py
 python -m pytest -m smoke -q
 python -m pytest -q
 python scripts/build_wheel.py

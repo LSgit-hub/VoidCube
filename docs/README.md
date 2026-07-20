@@ -23,7 +23,7 @@
 ## 当前事实
 
 - 唯一安装入口是 `voidcube.py`；交互式聊天继续进入 `VoidCube_cli/main.py -> cli.py -> run_agent.py`。
-- 默认服务启动顺序是 `Gateway -> Memory -> Supervisor`。
+- 默认服务启动顺序是 `Gateway -> Memory -> Supervisor`；Supervisor 同进程挂载并向 Gateway 注册标准 `executor` 路由面，不额外启动 Executor daemon。
 - 用户链路和自主链路共享 API-A 能力与 Mem，但不共享交互语义；Web 小屋只观察自主链路。
 - `cli.py` 和 `run_agent.py` 仍是主路径上的巨型模块，不能按历史兼容文件直接删除。后续拆分必须先迁移调用方和测试，再删除旧入口中的对应实现。
 - CLI worktree 生命周期与自主改进 Git diff 已收口到 `VoidCube_cli/cli_handlers.py`；`cli.py` 不再保留同名遮蔽实现或无用的全局 worktree 缓存。
@@ -41,11 +41,14 @@
 - 配置版本 20 会一次性把四类旧缓存目录合并到 `cache/documents`、`cache/images`、`cache/audio`、`cache/screenshots`；同名冲突保留为确定性的 `.legacy-N` 文件，迁移后浏览器与远程环境挂载只读取规范目录，不再保留运行时旧路径选择分支。
 - `VOIDCUBE_HOME`、`config.yaml` 与 `.env` 路径只由 `VoidCube_core.constants` 定义；仓库调用方不再经 `VoidCube_cli.config` 间接导入。配置模块中零调用的托管升级命令、伪安全保存包装和重复 Provider key helper 已删除。
 - 配置数据层与命令层已分离：`VoidCube_cli/config.py` 只保留加载、保存、校验、Provider 规范化和版本迁移，`VoidCube_cli/config_commands.py` 负责 `show/edit/set/check/migrate` 的终端展示与分发；旧模块不保留转发函数。
+- 开发依赖约束与实际测试环境已对齐：`pyproject.toml` 的 dev extra 支持 pytest 8.x/9.x 并显式安装 `pytest-asyncio`，打包契约会检查 runner 与异步插件版本均落在声明范围内。
+- 全新环境验收统一由 `scripts/verify_clean_install.py` 执行：临时安装 `.[all,dev]`、隔离用户 site/配置并运行 `pip check + smoke`，避免本机已有依赖掩盖安装问题。
+- 退役集成契约同时检查源码内容与仓库根目录名；项目内空配置目录、市场索引缓存、供应商 wheel 临时目录和历史构建产物均已删除，不允许以空目录或忽略文件形式继续保留隐藏入口。
 - 发行版本只在 `VoidCube_cli.__version__` 定义，setuptools、CLI、横幅和调试信息均读取该值；Python 3.11 最低版本由 `pyproject.toml`、开发文档与默认运行镜像共同约束。
 - 国际化只由 `VoidCube_cli/i18n.py` 和 `VoidCube_cli/locales/*.json` 提供；旧的核心静态消息表及星号导出已删除，浏览器工具与其余 CLI 使用同一 locale、fallback 和格式化规则。
 - `VoidCube_core` 根包只作为无副作用命名空间；常量、日志、状态、时间与工具函数必须从所属子模块显式导入，不再维护失效 `__all__`、星号重导出或零调用异常层。
 - 从未实际写文件的 `save_trajectories` 空实现已连同参数、帮助和死分支删除；仍可使用独立入口的 `save_sample` 导出单次样本。
-- 主仓当前收集 857 项测试。日常修改先跑 smoke 和受影响模块，合并或发布前跑全量测试与构建。
+- 主仓当前收集 880 项测试。日常修改先跑 smoke 和受影响模块，合并或发布前跑全量测试与构建。
 - Mem 子系统当前有 108 项测试，需通过 `python -m pytest Mem/tests -q` 单独运行。
 
 ## 推荐阅读路径

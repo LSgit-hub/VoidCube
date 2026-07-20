@@ -51,7 +51,7 @@ def test_start_all_starts_gateway_before_memory_and_waits_for_registration(monke
 
     serve.start_all(foreground=False)
 
-    assert calls[:7] == [
+    assert calls[:9] == [
         ("start", "gateway"),
         ("wait", "gateway"),
         ("start", "memory"),
@@ -59,6 +59,8 @@ def test_start_all_starts_gateway_before_memory_and_waits_for_registration(monke
         ("registered", "memory"),
         ("start", "supervisor"),
         ("wait", "supervisor"),
+        ("registered", "supervisor"),
+        ("registered", "executor"),
     ]
 
 
@@ -84,3 +86,51 @@ def test_ensure_running_restarts_healthy_unregistered_memory(monkeypatch, tmp_pa
     assert ("start", "memory") in calls
     assert ("registered", "memory") in calls
     assert result["memory"]["registered"] is True
+
+
+def test_ensure_running_restarts_supervisor_when_executor_registration_is_missing(
+    monkeypatch,
+    tmp_path,
+):
+    from VoidCube_cli.ops import serve
+
+    calls = []
+
+    monkeypatch.setattr(serve, "PID_DIR", tmp_path)
+    monkeypatch.setattr(serve, "_read_pid", lambda path: 123)
+    monkeypatch.setattr(serve, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(serve, "_health_check", lambda port: True)
+    monkeypatch.setattr(
+        serve,
+        "_gateway_has_service_type",
+        lambda service_type: service_type != "executor",
+    )
+    monkeypatch.setattr(
+        serve,
+        "stop_service",
+        lambda name, silent=False: calls.append(("stop", name)) or True,
+    )
+    monkeypatch.setattr(
+        serve,
+        "start_service",
+        lambda name, foreground=False: calls.append(("start", name)) or object(),
+    )
+    monkeypatch.setattr(
+        serve,
+        "_wait_for_health",
+        lambda name, port, timeout=30.0: calls.append(("wait", name)) or True,
+    )
+    monkeypatch.setattr(
+        serve,
+        "_wait_for_gateway_service_type",
+        lambda service_type, timeout=20.0: calls.append(("registered", service_type)) or True,
+    )
+    monkeypatch.setattr(serve, "_safe_print", lambda *args, **kwargs: None)
+
+    result = serve.ensure_running(silent=True)
+
+    assert ("stop", "supervisor") in calls
+    assert ("start", "supervisor") in calls
+    assert ("registered", "supervisor") in calls
+    assert ("registered", "executor") in calls
+    assert result["supervisor"]["registered"] is True

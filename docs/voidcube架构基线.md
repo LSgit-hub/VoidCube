@@ -951,10 +951,14 @@ Governor (API-B)
   → 用户同意后消费裁决
   → 执行身体切换机械流程：
       shell → candidate → probe → awaiting_user_consent → active → retired
+  → probe 失败时消费清退裁决：
+      probe → discard failed worktree → rematerialize baseline → shell
   → 执行结果写回 Mem
 ```
 
 身体切换不由自主链路治理在途存储驱动。替身代码改进与 probe 验证由监督者/Agent 全天候自主进行；Governor 在收到健康值达标的建议切换事件后独立裁决（否决权为程序前置门）。**真正激活新替身（activate_slot）只能由用户同意后执行**——这是用户对"换身体"这一不可逆动作保有的最终控制权。执行器只做切换的机械流程，不做升级、不做学习、不做判断。
+
+probe 失败属于确定性的候选清退事实：升级管线必须再次请求 Governor 裁决 `probe → shell`，执行器随后丢弃失败候选 worktree，并从经过物化清单验证的 active 身体重新物化 shell。registry 初始化负责建立并修正 active meta/pointer，再从 active 准备空闲 shell；默认物化不得静默回退仓库根，基线损坏必须显式失败。重新物化和 retired 回收都代表新的身体基线，因此旧候选的 lineage、probe 报告、健康分、健康历史和回滚中间态必须一并清空。失败 probe 对健康评分贡献固定为 0，不能按部分检查通过率获得正分。
 
 > 当前实现：body upgrade 流水线 probe 通过后停在 `upgrade_awaiting_user_consent` / `awaiting_user_consent`，不会自动切换；`/body/switch/consent` 收到 `approved=true` 后才触发 `activate_slot`，随后进入 watch window。
 
@@ -985,6 +989,11 @@ Governor (API-B)
 
 - 一旦某条 canonical runtime surface 已稳定，需在同一轮删除旧残留与重复镜像字段，避免 supervisor / executor / gateway 长期并存两套近义表达。
 - formal execution handoff 中，broad `task_type` 可以保留在 formal contract、API-B judgement snapshot、trace lineage 里，但不应再作为 executor outward summary metadata 的重复主字段。
+- 身体槽位完整性只由 `BodyRegistryManager.inspect_layout()` 判断，检查 registry role、slot meta、worktree materialization manifest 与 active pointer 的一致性；该方法必须保持只读，诊断过程不得补写或修复运行态。
+- Supervisor 与 Execution Service 根 health 在槽位完整时返回 `healthy`，在槽位结构损坏时返回 `degraded` 并携带完整 `body_runtime` 报告；`degraded` 仍使用 HTTP 200 表示进程可达，供启动探针与结构健康分层判断。周期 health 与 `/body/registry` 必须复用同一报告，不得复制另一套判断标准。
+- `/body/registry` 必须以 integrity 报告为主，即使 registry 或某个 slot meta 不可读也要返回 canonical violation 与仍可读取的 slot 快照，不得在生成诊断前因强制加载完整状态而直接失败。
+- 默认启动不新增 Executor daemon：Supervisor 将 `VoidCubeExecutionService` 挂载到同一 FastAPI 应用的 `/executor/*`，并向 Gateway 注册独立的 `executor` service type；Gateway 的 `/api/executor/*` 只路由到这一内嵌标准面。启动验收必须同时确认 `supervisor` 和 `executor` 两类注册存在。
+- Web room 必须通过 `body_status.integrity` 原样承载该报告：健康抽屉负责展示完整 violations，槽位卡片只能投影报告中的槽位级健康状态。registry 不可读时仍需返回明确诊断和空卡片列表，不得把异常吞成无状态，也不得在读取 UI 状态时触发自动修复。
 
 这些任务语义属于 activity / trace / execution 事实层，而不是长期服务注册身份层；服务注册 metadata 应优先表达稳定服务身份与路由信息。
 
@@ -1371,5 +1380,7 @@ API-A 自主执行面（最小迷你 CLI / 子代理通道；由主 CLI 内 `/au
 | 13 | **健康值达标是建议；切换激活需用户同意** | shell 健康值超过 active 后产生"建议切换"事件，Governor 独立审查（否决权为程序前置门）。真正激活新替身（activate_slot）只能由用户同意后执行——健康值/Governor 都不是自动切换触发器（见 §7.5） |
 | 14 | **LM 治理不能绕过程序护栏**        | 即使未来由 LM 参与治理在途存储治理，最终状态迁移、防自撞并发护栏、边界检查和审计落盘仍必须由确定性程序负责 |
 | 15 | **Web 监控只观测 API-B**        | Web 监控展示 API-B 的动作、状态、反馈、判断事项和自主任务回报，不成为用户聊天入口，不监控或接管用户链路 |
+| 16 | **失败候选必须立即退出 probe**    | probe 失败后由 Governor 签发清退动作，执行器丢弃失败 worktree 并恢复干净 shell；旧 lineage、探测结果和健康分不得继承到新基线 |
+| 17 | **active 与空闲 shell 必须有显式基线** | 启动时以物化清单校验 active/shell worktree；active meta/pointer 必须一致，默认物化不得用仓库根 fallback 掩盖损坏状态 |
 
 

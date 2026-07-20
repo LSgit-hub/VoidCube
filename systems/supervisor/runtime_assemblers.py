@@ -14,6 +14,7 @@ from systems.execution import (
     WatchWindowExecutionAdapter,
     attach_execution_route_hint,
 )
+from systems.execution.service import VoidCubeExecutionService
 from systems.lifecycle import BodyLifecycleExecutor
 from systems.governor import GovernorDecisionEngine
 from systems.probe import ProbeExecutor, ProbeRunner
@@ -107,6 +108,11 @@ def assemble_supervisor_execution_runtime(supervisor: Any) -> None:
         body_upgrade=supervisor._body_upgrade_executor,
         memory_maintenance=supervisor._memory_maintenance_executor,
         supervisor=supervisor,
+    )
+    supervisor._execution_service = VoidCubeExecutionService(
+        supervisor._execution_facade,
+        app=supervisor.app,
+        standalone=False,
     )
 
 

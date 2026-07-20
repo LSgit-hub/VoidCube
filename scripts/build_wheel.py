@@ -11,11 +11,15 @@ import tomllib
 from pathlib import Path
 from zipfile import ZipFile
 
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from agent.integration_policy import matching_retired_integrations
 from VoidCube_cli import __version__
 
 
-ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_DIRS = (
     "agent",
     "tools",

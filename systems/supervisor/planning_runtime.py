@@ -8553,6 +8553,8 @@ class PlanningRuntimeMixin:
     def _get_probe_score(self, slot_id: str, slot_meta) -> float:
         if slot_meta.last_probe_result:
             probe = slot_meta.last_probe_result
+            if probe.get("overall_passed") is False:
+                return 0.0
             checks_total = len(probe.get("checks", []))
             checks_passed = sum(1 for c in probe.get("checks", []) if c.get("passed"))
             if checks_total > 0:
@@ -8564,6 +8566,8 @@ class PlanningRuntimeMixin:
                 parent_meta = self._body_registry.load_slot_meta(parent_slot_id)
                 if parent_meta.last_probe_result:
                     probe = parent_meta.last_probe_result
+                    if probe.get("overall_passed") is False:
+                        return 0.0
                     checks_total = len(probe.get("checks", []))
                     checks_passed = sum(1 for c in probe.get("checks", []) if c.get("passed"))
                     if checks_total > 0:

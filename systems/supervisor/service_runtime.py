@@ -30,6 +30,8 @@ class ServiceRuntimeMixin:
 
     def _initialize_service_runtime(self) -> None:
         self._service_runtime = ServiceRuntimeState()
+        self._gateway_service_id: Optional[str] = None
+        self._gateway_executor_service_id: Optional[str] = None
 
     @property
     def _service_runtime_started(self) -> bool:
@@ -72,15 +74,18 @@ class ServiceRuntimeMixin:
         self._service_runtime.structured_maintenance_task = task
 
     async def health_check(self) -> Dict[str, Any]:
-        registry = self._body_registry.load_registry()
+        body_integrity = self._body_registry.inspect_layout()
+        registry = dict(body_integrity.get("registry") or {})
         return {
-            "status": "healthy",
+            "status": "healthy" if body_integrity["healthy"] else "degraded",
             "service": "supervisor",
             "agents": len(self._agents),
             "body_runtime": {
-                "active_slot": registry.active_slot,
-                "shell_slot": registry.shell_slot,
-                "retired_slot": registry.retired_slot,
+                "active_slot": registry.get("active_slot"),
+                "shell_slot": registry.get("shell_slot"),
+                "retired_slot": registry.get("retired_slot"),
+                "healthy": body_integrity["healthy"],
+                "violations": body_integrity["violations"],
             },
         }
 
@@ -101,7 +106,13 @@ class ServiceRuntimeMixin:
                 }
             )
 
-        return {"results": results}
+        body_integrity = self._body_registry.inspect_layout()
+        return {
+            "healthy": body_integrity["healthy"]
+            and all(result["healthy"] for result in results),
+            "results": results,
+            "body_runtime": body_integrity,
+        }
 
     async def _wait_for_health(self, instance_id: str, timeout: int = 30) -> None:
         start = datetime.now()
@@ -125,20 +136,52 @@ class ServiceRuntimeMixin:
             return False
 
     async def register_with_gateway(self) -> Optional[str]:
-        import asyncio as _asyncio
-
         execution_config = self.config.execution
-        payload = {
-            "service_name": "supervisor",
-            "service_type": "supervisor",
-            "address": f"http://{self.config.host}:{self.config.port}",
-            "health_endpoint": "/",
-            "metadata": {"version": "1.0"},
-        }
+        address = f"http://{self.config.host}:{self.config.port}"
         url = f"{execution_config.gateway_address}/register"
+        supervisor_id = await self._register_gateway_service(
+            url,
+            {
+                "service_name": "supervisor",
+                "service_type": "supervisor",
+                "address": address,
+                "health_endpoint": "/",
+                "metadata": {"version": "1.0"},
+            },
+        )
+        if not supervisor_id:
+            return None
+        self._gateway_service_id = supervisor_id
+
+        executor_id = await self._register_gateway_service(
+            url,
+            {
+                "service_name": "executor",
+                "service_type": "executor",
+                "address": address,
+                "health_endpoint": "/executor/health",
+                "metadata": {"version": "1.0", "embedded_in": "supervisor"},
+            },
+        )
+        if executor_id:
+            self._gateway_executor_service_id = executor_id
+        else:
+            logger.warning(
+                "Supervisor registered without its embedded executor route; "
+                "gateway /api/executor will remain unavailable until re-registration."
+            )
+        return supervisor_id
+
+    async def _register_gateway_service(
+        self,
+        url: str,
+        payload: Dict[str, Any],
+    ) -> Optional[str]:
+        import asyncio as _asyncio
 
         max_retries = 5
         base_delay = 1.0  # seconds
+        service_type = str(payload.get("service_type") or "service")
 
         for attempt in range(1, max_retries + 1):
             try:
@@ -148,7 +191,12 @@ class ServiceRuntimeMixin:
                     async with session.post(url, json=payload, timeout=10) as response:
                         if response.status == 201:
                             result = await response.json()
-                            logger.info(f"Registered with gateway (attempt %d): %s", attempt, result)
+                            logger.info(
+                                "Registered %s with gateway (attempt %d): %s",
+                                service_type,
+                                attempt,
+                                result,
+                            )
                             return result["service_id"]
                         else:
                             logger.debug(
@@ -170,7 +218,8 @@ class ServiceRuntimeMixin:
                 await _asyncio.sleep(delay)
 
         logger.warning(
-            "Failed to register with gateway after %d attempts at %s",
+            "Failed to register %s with gateway after %d attempts at %s",
+            service_type,
             max_retries,
             url,
         )
@@ -194,16 +243,25 @@ class ServiceRuntimeMixin:
                     # Re-register with gateway if the connection was lost
                     # (e.g., gateway restarted).  Verify registration is still
                     # valid by checking if our service_id is still known.
-                    gid = getattr(self, '_gateway_service_id', None)
-                    needs_reregister = not gid
-                    if gid:
-                        # Verify: Gateway may have restarted and lost our registration
+                    registration_ids = [
+                        self._gateway_service_id,
+                        self._gateway_executor_service_id,
+                    ]
+                    needs_reregister = not all(registration_ids)
+                    if not needs_reregister:
+                        # Verify: Gateway may have restarted and lost either registration.
                         try:
                             import aiohttp
                             gw = self.config.execution.gateway_address
                             async with aiohttp.ClientSession() as s:
-                                async with s.get(f"{gw}/admin/services/{gid}", timeout=5) as r:
-                                    needs_reregister = r.status != 200
+                                for service_id in registration_ids:
+                                    async with s.get(
+                                        f"{gw}/admin/services/{service_id}",
+                                        timeout=5,
+                                    ) as r:
+                                        if r.status != 200:
+                                            needs_reregister = True
+                                            break
                         except Exception:
                             needs_reregister = True
                     if needs_reregister:

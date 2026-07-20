@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -85,6 +86,52 @@ def test_cli_doctor_command_invokes_print_diagnosis(monkeypatch):
     cli_main()
 
     printer.assert_called_once_with()
+
+
+def _stub_body_system_config(monkeypatch, tmp_path: Path) -> None:
+    supervisor = SimpleNamespace(
+        execution=SimpleNamespace(git_repo_path=str(tmp_path)),
+        body_runtime=SimpleNamespace(
+            slot_a_name="slot-A",
+            slot_b_name="slot-B",
+            slots_dir_name=".body-slots",
+            registry_file_name=".body-registry.json",
+        ),
+    )
+    monkeypatch.setattr(
+        "systems.config.get_config",
+        lambda: SimpleNamespace(supervisor=supervisor),
+    )
+
+
+@pytest.mark.unit
+def test_doctor_reports_healthy_body_registry(monkeypatch, tmp_path):
+    from systems.body_registry import BodyRegistryManager
+
+    BodyRegistryManager(tmp_path).initialize_layout()
+    _stub_body_system_config(monkeypatch, tmp_path)
+
+    check = config_validator._diagnose_body_registry()
+
+    assert check.severity == Severity.INFO
+    assert check.name == "body_registry"
+    assert check.data["healthy"] is True
+
+
+@pytest.mark.unit
+def test_doctor_reports_broken_body_registry(monkeypatch, tmp_path):
+    from systems.body_registry import BodyRegistryManager
+
+    manager = BodyRegistryManager(tmp_path)
+    manager.initialize_layout()
+    manager.slot_worktree_manifest_path("slot-A").unlink()
+    _stub_body_system_config(monkeypatch, tmp_path)
+
+    check = config_validator._diagnose_body_registry()
+
+    assert check.severity == Severity.ERROR
+    assert check.name == "body_registry"
+    assert "slot_not_materialized" in check.details
 
 
 def _valid_api_a_api_b_config() -> dict:

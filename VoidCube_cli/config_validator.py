@@ -562,6 +562,61 @@ def _diagnose_tool_registration() -> AgentCheck:
     )
 
 
+def _diagnose_body_registry() -> AgentCheck:
+    from systems.body_registry import BodyRegistryManager
+    from systems.config import get_config
+
+    try:
+        supervisor_config = get_config().supervisor
+        body_config = supervisor_config.body_runtime
+        manager = BodyRegistryManager(
+            supervisor_config.execution.git_repo_path,
+            slot_ids=(body_config.slot_a_name, body_config.slot_b_name),
+            slots_dir_name=body_config.slots_dir_name,
+            registry_file_name=body_config.registry_file_name,
+        )
+        if not manager.registry_path.is_file():
+            return AgentCheck(
+                severity=Severity.INFO,
+                name="body_registry",
+                message="身体槽位尚未初始化",
+                suggestion="启动 Supervisor 后再次运行 doctor 检查 active/shell 基线。",
+                details=str(manager.registry_path),
+            )
+        report = manager.inspect_layout()
+    except Exception as exc:
+        return AgentCheck(
+            severity=Severity.ERROR,
+            name="body_registry",
+            message="身体槽位诊断无法执行",
+            suggestion="检查 SUPERVISOR_GIT_REPO 与身体槽位路径配置。",
+            details=str(exc),
+        )
+
+    if report["healthy"]:
+        registry = report["registry"] or {}
+        return AgentCheck(
+            severity=Severity.INFO,
+            name="body_registry",
+            message="active/shell 身体基线与指针一致",
+            details=(
+                f"active={registry.get('active_slot')}, "
+                f"shell={registry.get('shell_slot')}"
+            ),
+            data=report,
+        )
+
+    violation_codes = [item["code"] for item in report["violations"]]
+    return AgentCheck(
+        severity=Severity.ERROR,
+        name="body_registry",
+        message="身体槽位基线或 active 指针损坏",
+        suggestion="停止 Supervisor，修复报告中的槽位状态后重新启动进行确定性初始化。",
+        details=", ".join(violation_codes),
+        data=report,
+    )
+
+
 def _diagnose_terminal_cwd(cfg: dict) -> AgentCheck:
     configured = _configured_terminal_config(cfg)
     effective = _effective_terminal_config()
@@ -810,6 +865,7 @@ def collect_agent_diagnostics(cfg: Optional[dict] = None) -> List[AgentCheck]:
         _diagnose_docker(cfg),
         _diagnose_podman(),
         _diagnose_tool_registration(),
+        _diagnose_body_registry(),
         _diagnose_terminal_cwd(cfg),
         _diagnose_path_runtime(),
         _diagnose_terminal_probe(),

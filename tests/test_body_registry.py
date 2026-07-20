@@ -31,9 +31,106 @@ def test_initialize_layout_bootstraps_dual_slots(tmp_path):
     slot_b = manager.load_slot_meta("slot-B")
     assert slot_a.body_state == "active"
     assert slot_a.lease == "active"
+    assert slot_a.last_materialized_at is not None
+    assert manager.slot_worktree_manifest_path("slot-A").exists()
     assert slot_b.body_state == "shell"
     assert (manager.slot_root("slot-A") / "runtime").exists()
     assert (manager.slot_root("slot-B") / "worktree").exists()
+    assert manager.load_active_body_pointer().body_state == "active"
+
+
+@pytest.mark.unit
+def test_initialize_layout_repairs_unmaterialized_active_slot(tmp_path):
+    (tmp_path / "run_agent.py").write_text("print('active')\n", encoding="utf-8")
+    manager = BodyRegistryManager(tmp_path)
+    manager.initialize_layout()
+    active_meta = manager.load_slot_meta("slot-A")
+    active_worktree = Path(active_meta.worktree_path)
+    (active_worktree / "run_agent.py").unlink()
+    manager.slot_worktree_manifest_path("slot-A").unlink()
+    active_meta.body_state = "shell"
+    active_meta.lease = None
+    active_meta.last_materialized_at = None
+    manager.save_slot_meta(active_meta)
+
+    manager.initialize_layout()
+
+    repaired = manager.load_slot_meta("slot-A")
+    pointer = manager.load_active_body_pointer()
+    assert repaired.body_state == "active"
+    assert repaired.lease == "active"
+    assert repaired.last_materialized_at is not None
+    assert (Path(repaired.worktree_path) / "run_agent.py").exists()
+    assert manager.slot_worktree_manifest_path("slot-A").exists()
+    assert pointer.body_state == "active"
+    assert pointer.worktree_path == repaired.worktree_path
+
+
+@pytest.mark.unit
+def test_default_materialization_rejects_missing_active_baseline(tmp_path):
+    manager = BodyRegistryManager(tmp_path)
+    manager.initialize_layout()
+    active_meta = manager.load_slot_meta("slot-A")
+    manager.slot_worktree_manifest_path("slot-A").unlink()
+    active_meta.last_materialized_at = None
+    manager.save_slot_meta(active_meta)
+
+    with pytest.raises(ValueError, match="Active body slot slot-A has no materialized baseline"):
+        manager.prepare_slot_workspace("slot-B")
+
+
+@pytest.mark.unit
+def test_initialize_layout_preserves_in_progress_probe_state(tmp_path):
+    manager = BodyRegistryManager(tmp_path)
+    manager.initialize_layout()
+    manager.mark_candidate("slot-B")
+    probe = manager.start_probe("slot-B")
+    materialized_at = probe.last_materialized_at
+
+    registry = manager.initialize_layout()
+    preserved = manager.load_slot_meta("slot-B")
+
+    assert registry.shell_slot is None
+    assert preserved.body_state == "probe"
+    assert preserved.lease == "probe"
+    assert preserved.last_materialized_at == materialized_at
+
+
+@pytest.mark.unit
+def test_inspect_layout_reports_healthy_initialized_registry(tmp_path):
+    manager = BodyRegistryManager(tmp_path)
+    manager.initialize_layout()
+
+    report = manager.inspect_layout()
+
+    assert report["healthy"] is True
+    assert report["violations"] == []
+    assert report["slots"]["slot-A"]["role"] == "active"
+    assert report["slots"]["slot-A"]["materialized"] is True
+    assert report["slots"]["slot-B"]["role"] == "shell"
+    assert report["active_pointer"]["healthy"] is True
+
+
+@pytest.mark.unit
+def test_inspect_layout_reports_manifest_and_pointer_corruption(tmp_path):
+    manager = BodyRegistryManager(tmp_path)
+    manager.initialize_layout()
+    manager.slot_worktree_manifest_path("slot-A").unlink()
+    pointer = json.loads(manager.active_body_pointer_path().read_text(encoding="utf-8"))
+    pointer["body_state"] = "shell"
+    manager.active_body_pointer_path().write_text(
+        json.dumps(pointer, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    report = manager.inspect_layout()
+    codes = {item["code"] for item in report["violations"]}
+
+    assert report["healthy"] is False
+    assert report["slots"]["slot-A"]["healthy"] is False
+    assert report["active_pointer"]["healthy"] is False
+    assert "slot_not_materialized" in codes
+    assert "active_pointer_mismatch" in codes
 
 
 @pytest.mark.unit
@@ -153,7 +250,7 @@ def test_candidate_slot_auto_records_git_head_when_lineage_is_not_provided(tmp_p
     assert meta.rollback_ref == branch
     assert manifest["source_branch"] == branch
     assert manifest["source_commit"] == head
-    assert manifest["candidate_branch"] is None
+    assert manifest["candidate_branch"] == branch
     assert manifest["candidate_commit"] == head
     assert manifest["materialization_mode"] == "git_worktree"
     assert subprocess.run(
@@ -247,6 +344,13 @@ def test_recycle_retired_slot_can_sync_from_stable_slot(tmp_path):
         "new stable version\n",
         encoding="utf-8",
     )
+    slot_a = manager.load_slot_meta("slot-A")
+    slot_a.health_score = 88.0
+    slot_a.health_history = [{"reason": "retired_body"}]
+    slot_a.improvement_count = 4
+    slot_a.last_probe_result = {"overall_passed": True}
+    slot_a.changed_files = ["stale.py"]
+    manager.save_slot_meta(slot_a)
 
     registry = manager.recycle_retired_slot("slot-A", source_slot_id="slot-B")
     slot_a = manager.load_slot_meta("slot-A")
@@ -254,6 +358,11 @@ def test_recycle_retired_slot_can_sync_from_stable_slot(tmp_path):
     assert slot_a.body_state == "shell"
     assert slot_a.materialized_from == "slot:slot-B"
     assert (Path(slot_a.worktree_path) / "stable.marker").exists()
+    assert slot_a.health_score == 0.0
+    assert slot_a.health_history == []
+    assert slot_a.improvement_count == 0
+    assert slot_a.last_probe_result is None
+    assert slot_a.changed_files == []
     assert registry.shell_slot == "slot-A"
 
 
@@ -273,6 +382,10 @@ def test_prepare_slot_workspace_copies_repo_template_and_bootstraps_runtime(tmp_
     tools_dir = tmp_path / "tools"
     tools_dir.mkdir()
     (tools_dir / "__init__.py").write_text("", encoding="utf-8")
+    for runtime_dir_name in ("cache", "logs", "sessions", "state"):
+        runtime_dir = tmp_path / runtime_dir_name
+        runtime_dir.mkdir()
+        (runtime_dir / "stale.json").write_text("{}\n", encoding="utf-8")
 
     manager = BodyRegistryManager(tmp_path)
     manager.initialize_layout()
@@ -282,18 +395,113 @@ def test_prepare_slot_workspace_copies_repo_template_and_bootstraps_runtime(tmp_
     runtime_manifest = manager.slot_runtime_manifest_path("slot-B")
     worktree_manifest = manager.slot_worktree_manifest_path("slot-B")
 
-    assert meta.materialized_from == "repo_root"
+    assert meta.materialized_from == "slot:slot-A"
     assert meta.last_materialized_at is not None
     assert meta.runtime_bootstrapped_at is not None
     assert (worktree_root / "run_agent.py").exists()
     assert (worktree_root / "config.yaml").exists()
     assert (worktree_root / "tools" / "__init__.py").exists()
+    assert not (worktree_root / ".body-active.json").exists()
     assert not (worktree_root / ".body-slots").exists()
+    for runtime_dir_name in ("cache", "logs", "sessions", "state"):
+        assert not (worktree_root / runtime_dir_name).exists()
     assert runtime_manifest.exists()
     assert worktree_manifest.exists()
     manifest = json.loads(worktree_manifest.read_text(encoding="utf-8"))
     assert manifest["slot_id"] == "slot-B"
     assert manifest["materialization_mode"] == "directory_copy"
+
+
+@pytest.mark.unit
+def test_prepare_slot_workspace_resets_stale_non_active_baseline_metadata(tmp_path):
+    (tmp_path / "run_agent.py").write_text("print('stable')\n", encoding="utf-8")
+    manager = BodyRegistryManager(tmp_path)
+    manager.initialize_layout()
+    meta = manager.load_slot_meta("slot-B")
+    meta.body_version = "stale-version"
+    meta.build_from_commit = "stale-build"
+    meta.source_branch = "stale-source"
+    meta.source_commit = "stale-source-commit"
+    meta.candidate_branch = "stale-candidate"
+    meta.candidate_commit = "stale-candidate-commit"
+    meta.active_ref = "stale-active-ref"
+    meta.active_commit = "stale-active-commit"
+    meta.rollback_ref = "stale-rollback-ref"
+    meta.rollback_commit = "stale-rollback-commit"
+    meta.diff_summary = "stale diff"
+    meta.changed_files = ["stale.py"]
+    meta.last_probe_result = {"overall_passed": False}
+    meta.health_score = 75.0
+    meta.health_history = [{"reason": "stale"}]
+    meta.improvement_count = 3
+    meta.last_improvement_at = "2026-01-01T00:00:00+00:00"
+    meta.current_healthy_commit = "stale-healthy"
+    meta.previous_healthy_commit = "stale-previous"
+    meta.decay_applied_at = "2026-01-02T00:00:00+00:00"
+    meta.rollback_in_progress = {"source_commit": "stale"}
+    meta.last_improvement_rollback = {"target_commit": "stale"}
+    manager.save_slot_meta(meta)
+
+    prepared = manager.prepare_slot_workspace("slot-B", source_path=tmp_path)
+
+    assert prepared.body_version == "unknown"
+    assert prepared.build_from_commit is None
+    assert prepared.source_branch is None
+    assert prepared.source_commit is None
+    assert prepared.candidate_branch is None
+    assert prepared.candidate_commit is None
+    assert prepared.active_ref is None
+    assert prepared.active_commit is None
+    assert prepared.rollback_ref is None
+    assert prepared.rollback_commit is None
+    assert prepared.diff_summary == ""
+    assert prepared.changed_files == []
+    assert prepared.last_probe_result is None
+    assert prepared.health_score == 0.0
+    assert prepared.health_history == []
+    assert prepared.improvement_count == 0
+    assert prepared.last_improvement_at is None
+    assert prepared.current_healthy_commit is None
+    assert prepared.previous_healthy_commit is None
+    assert prepared.decay_applied_at is None
+    assert prepared.rollback_in_progress is None
+    assert prepared.last_improvement_rollback is None
+
+
+@pytest.mark.unit
+def test_abandon_candidate_restores_clean_shell_baseline(tmp_path):
+    (tmp_path / "run_agent.py").write_text("print('stable')\n", encoding="utf-8")
+    manager = BodyRegistryManager(tmp_path)
+    manager.initialize_layout()
+    manager.prepare_slot_workspace("slot-B", source_path=tmp_path)
+    worktree = Path(manager.load_slot_meta("slot-B").worktree_path)
+    (worktree / "run_agent.py").write_text("raise RuntimeError('broken')\n", encoding="utf-8")
+    (worktree / "failed-candidate.txt").write_text("discard me\n", encoding="utf-8")
+    manager.mark_candidate(
+        "slot-B",
+        body_version="broken-version",
+        diff_summary="failed candidate",
+        changed_files=["run_agent.py"],
+    )
+    manager.start_probe("slot-B")
+    manager.write_probe_report("slot-B", {"overall_passed": False, "checks": []})
+    meta = manager.load_slot_meta("slot-B")
+    meta.health_score = 42.0
+    meta.improvement_count = 2
+    manager.save_slot_meta(meta)
+
+    restored = manager.abandon_candidate("slot-B")
+
+    assert restored.body_state == "shell"
+    assert restored.body_version == manager.load_slot_meta("slot-A").body_version
+    assert restored.diff_summary == ""
+    assert restored.changed_files == []
+    assert restored.last_probe_result is None
+    assert restored.health_score == 0.0
+    assert restored.improvement_count == 0
+    assert (worktree / "run_agent.py").read_text(encoding="utf-8") == "print('stable')\n"
+    assert not (worktree / "failed-candidate.txt").exists()
+    assert manager.load_registry().shell_slot == "slot-B"
 
 
 @pytest.mark.unit

@@ -42,7 +42,14 @@ _SURFACE_ROOTS = (
     "VoidCube_cli",
     "VoidCube_core",
 )
+_RUNTIME_SURFACE_ROOTS = (
+    ".body-slots",
+    ".soul-runtime",
+    "state",
+)
 _ROOT_FILES = (
+    ".body-active.json",
+    ".body-registry.json",
     ".env.example",
     "cli.py",
     "config.yaml",
@@ -54,15 +61,19 @@ _ROOT_FILES = (
 
 
 def _runtime_text_files() -> list[Path]:
-    files = [ROOT / name for name in _ROOT_FILES]
-    for relative_root in _SURFACE_ROOTS:
+    files = [ROOT / name for name in _ROOT_FILES if (ROOT / name).is_file()]
+    for relative_root in (*_SURFACE_ROOTS, *_RUNTIME_SURFACE_ROOTS):
         directory = ROOT / relative_root
+        if not directory.is_dir():
+            continue
         files.extend(
             path
             for path in directory.rglob("*")
-            if path.is_file() and path.suffix.casefold() in _TEXT_SUFFIXES
+            if path.is_file()
+            and path.name != "AGENTS.md"
+            and path.suffix.casefold() in _TEXT_SUFFIXES
         )
-    return files
+    return sorted(set(files))
 
 
 @pytest.mark.unit
@@ -82,17 +93,25 @@ def test_runtime_and_loadable_skills_have_no_retired_integration_markers():
 
 
 @pytest.mark.unit
-def test_workspace_specific_retired_provider_config_is_absent():
+def test_workspace_specific_retired_paths_are_absent():
     retired_config_dir = ROOT / ("." + "".join(("clau", "de")))
-    assert not any(path.is_file() for path in retired_config_dir.rglob("*"))
-    assert not any(
-        path.is_file()
-        for path in (ROOT / "skills" / "index-cache").rglob("*")
+    assert not retired_config_dir.exists()
+    assert not (ROOT / "skills" / "index-cache").exists()
+
+    root_name_violations = sorted(
+        path.name
+        for path in ROOT.iterdir()
+        if any(marker in path.name.casefold() for marker in RETIRED_INTEGRATION_MARKERS)
     )
+    assert root_name_violations == []
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("marker", RETIRED_INTEGRATION_MARKERS)
+@pytest.mark.parametrize(
+    "marker",
+    RETIRED_INTEGRATION_MARKERS,
+    ids=[f"retired-{index}" for index, _ in enumerate(RETIRED_INTEGRATION_MARKERS)],
+)
 def test_skill_guard_never_allows_retired_integration_even_with_force(
     tmp_path: Path,
     marker: str,

@@ -2602,6 +2602,27 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,.04);
 }
 .health-row .hr-val { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+.body-integrity-violation {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  border: 1px solid rgba(232,130,110,.22);
+  border-radius: 8px;
+  background: rgba(232,130,110,.07);
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+.body-integrity-violation b { color: var(--coral); overflow-wrap: anywhere; }
+.body-integrity-violation span { color: var(--text-muted); }
+.body-integrity-violation div { grid-column: 1 / -1; overflow-wrap: anywhere; }
+.body-integrity-row.failed {
+  border-color: rgba(232,130,110,.25);
+  background: rgba(232,130,110,.07);
+}
+.body-integrity-row.failed .lm-stat-value { color: var(--coral); }
 .body-slot-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -2612,6 +2633,8 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   cursor: pointer;
   min-height: 128px;
 }
+.body-slot-card.integrity-failed { border-color: rgba(232,130,110,.28); }
+.body-slot-integrity-alert { color: var(--coral); }
 .body-slot-role {
   font-size: 10px;
   color: var(--text-secondary);
@@ -4149,6 +4172,12 @@ function renderHealthDrawer(state) {
   const bs = state.body_status || {};
   const ts = state.tier1_stats || {};
   const last = bs.last_switch_result || {};
+  const integrity = (bs.integrity && typeof bs.integrity === 'object') ? bs.integrity : {};
+  const violations = Array.isArray(integrity.violations) ? integrity.violations : [];
+  const integrityKnown = typeof integrity.healthy === 'boolean';
+  const integrityLabel = !integrityKnown
+    ? '—'
+    : (integrity.healthy ? '✅ 正常' : '⚠️ ' + violations.length + ' 项异常');
 
   function rows(title, arr) {
     return '<div class="drawer-section"><div class="drawer-section-label">' + title + '</div>' +
@@ -4157,6 +4186,7 @@ function renderHealthDrawer(state) {
   }
 
   const bodyRows = [
+    ['槽位完整性', integrityLabel],
     ['活跃槽 (当前替身)', esc(bs.active_slot || '—')],
     ['Shell 槽', esc(bs.shell_slot || '—')],
     ['退役槽', esc(bs.retired_slot || '—')],
@@ -4170,9 +4200,19 @@ function renderHealthDrawer(state) {
     ['记忆活跃', ts.memory_active ? '✅ 是' : '💤 否'],
   ];
 
+  const violationHtml = violations.length
+    ? '<div class="drawer-section"><div class="drawer-section-label">结构异常</div>' +
+      violations.map(item =>
+        '<div class="body-integrity-violation"><b>' + esc(item.code || 'unknown') + '</b>' +
+        (item.slot_id ? '<span>' + esc(item.slot_id) + '</span>' : '') +
+        '<div>' + esc(item.message || '未提供异常详情') + '</div></div>'
+      ).join('') + '</div>'
+    : '';
+
   els.drawerBody.innerHTML =
     '<div class="drawer-sub">只看槽位和记忆。</div>' +
     rows('🔄 替身 / 身体', bodyRows) +
+    violationHtml +
     rows('💾 记忆 (API-B 侧)', memRows);
 }
 
@@ -4205,6 +4245,11 @@ function renderBodyTreeDrawer(state) {
   html += '<div class="drawer-sub" style="margin:0;">状态 ' + esc(slot.body_state_label || '未知') +
     ' · 版本 ' + esc(slot.body_version || 'bootstrap') +
     ' · 代次 ' + esc(slot.generation != null ? slot.generation : 0) + '</div>';
+  const slotViolations = Array.isArray(slot.integrity_violations) ? slot.integrity_violations : [];
+  if (slotViolations.length) {
+    html += '<div class="drawer-sub body-slot-integrity-alert">结构异常：' +
+      slotViolations.map(item => esc(item.code || 'unknown')).join('、') + '</div>';
+  }
   if (!signals.length) {
     html += '<div class="drawer-sub" style="margin-top:6px;">' + esc(slot.focus_summary || '现在没有升级动作') + '</div>';
   }
@@ -4604,6 +4649,8 @@ function renderStatsPanel(state) {
   const slotCards = bodySlotCards(state);
   const ts = state.tier1_stats || {};
   const mem = state.mem_usage || {};
+  const integrity = (bs.integrity && typeof bs.integrity === 'object') ? bs.integrity : {};
+  const violations = Array.isArray(integrity.violations) ? integrity.violations : [];
 
   const drill = document.createElement('div');
   drill.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:6px;';
@@ -4614,6 +4661,17 @@ function renderStatsPanel(state) {
   const bodySec = document.createElement('div');
   bodySec.className = 'lm-section';
   bodySec.innerHTML = '<div class="lm-section-label">🔄 替身状态</div>';
+  const integrityRow = document.createElement('div');
+  const integrityKnown = typeof integrity.healthy === 'boolean';
+  const integrityHealthy = integrityKnown && integrity.healthy;
+  integrityRow.className = 'lm-stat-row body-integrity-row' +
+    (integrityKnown && !integrityHealthy ? ' failed' : '');
+  integrityRow.innerHTML =
+    '<span class="lm-stat-icon">🛡️</span><span class="lm-stat-label">槽位完整性</span>' +
+    '<span class="lm-stat-value">' +
+    (!integrityKnown ? '—' : (integrityHealthy ? '正常' : violations.length + ' 项异常')) +
+    '</span>';
+  bodySec.append(integrityRow);
   const switchRow = document.createElement('div');
   switchRow.className = 'lm-stat-row';
   switchRow.innerHTML =
@@ -4624,14 +4682,17 @@ function renderStatsPanel(state) {
   slotGrid.className = 'body-slot-grid';
   slotCards.slice(0, 3).forEach(slot => {
     const card = document.createElement('div');
-    card.className = 'game-card rarity-common body-slot-card';
+    const slotIntegrityFailed = slot.integrity_healthy === false;
+    card.className = 'game-card rarity-common body-slot-card' +
+      (slotIntegrityFailed ? ' integrity-failed' : '');
     card.setAttribute('data-drill', 'body_tree');
     card.setAttribute('data-body-slot', String(slot.slot_id || ''));
     card.innerHTML =
       '<div class="game-card-head"><div class="game-card-title">' +
       esc(slot.role_label || '替身槽位') + ' · ' + esc(slot.slot_id || '—') +
-      '</div><span class="game-card-badge ' + (slot.upgrade_active ? 'running' : 'planned') + '">' +
-      esc(slot.body_state_label || '未知') + '</span></div>' +
+      '</div><span class="game-card-badge ' +
+      (slotIntegrityFailed ? 'failed' : (slot.upgrade_active ? 'running' : 'planned')) + '">' +
+      esc(slotIntegrityFailed ? '结构异常' : (slot.body_state_label || '未知')) + '</span></div>' +
       '<div class="body-slot-role">版本 ' + esc(slot.body_version || 'bootstrap') +
       ' · 代次 ' + esc(slot.generation != null ? slot.generation : 0) + '</div>' +
       '<div class="body-slot-summary">' + esc(slot.summary || '结构待观察') + '</div>' +
@@ -5746,29 +5807,32 @@ class SupervisorUIMixin:
         counts = dict(activity.get("counts") or {})
         error_count = int(counts.get("error_count") or 0)
 
-        # ── Body status (direct from registry snapshot, not governance-task projection) ──
-        body_status: Dict[str, Any] = {}
-        try:
-            registry = self._body_registry.load_registry()
+        # ── Body status (direct from the canonical read-only integrity report) ──
+        body_integrity = self._body_registry.inspect_layout()
+        registry_snapshot = dict(body_integrity.get("registry") or {})
+        body_status: Dict[str, Any] = {
+            "active_slot": registry_snapshot.get("active_slot"),
+            "retired_slot": registry_snapshot.get("retired_slot"),
+            "shell_slot": registry_snapshot.get("shell_slot"),
+            "last_switch_result": dict(
+                registry_snapshot.get("last_switch_result") or {}
+            ),
+            "integrity": body_integrity,
+            "slot_cards": [],
+        }
+        if registry_snapshot:
             slot_metas: Dict[str, Dict[str, Any]] = {}
-            for slot_id in list(getattr(registry, "slot_ids", []) or []):
+            for slot_id in list(registry_snapshot.get("slot_ids") or []):
                 try:
                     slot_metas[slot_id] = self._body_registry.load_slot_meta(slot_id).model_dump(mode="json")
                 except Exception:
                     continue
-            body_status = {
-                "active_slot": getattr(registry, "active_slot", None),
-                "retired_slot": getattr(registry, "retired_slot", None),
-                "shell_slot": getattr(registry, "shell_slot", None),
-                "last_switch_result": dict(getattr(registry, "last_switch_result", {}) or {}),
-                "slot_cards": self._build_ui_body_slot_cards(
-                    registry=registry,
-                    slot_metas=slot_metas,
-                    chain_history_projection=chain_projection,
-                ),
-            }
-        except Exception:
-            pass
+            body_status["slot_cards"] = self._build_ui_body_slot_cards(
+                registry=registry_snapshot,
+                slot_metas=slot_metas,
+                chain_history_projection=chain_projection,
+                integrity_report=body_integrity,
+            )
 
         # ── LLM token usage ──
         mem_usage: Dict[str, Any] = {}
@@ -7848,16 +7912,37 @@ class SupervisorUIMixin:
         registry: Any,
         slot_metas: Dict[str, Dict[str, Any]],
         chain_history_projection: List[Dict[str, Any]],
+        integrity_report: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         signal_map = self._build_ui_body_upgrade_signal_map(chain_history_projection)
-        active_slot = str(getattr(registry, "active_slot", None) or "").strip()
-        shell_slot = str(getattr(registry, "shell_slot", None) or "").strip()
-        retired_slot = str(getattr(registry, "retired_slot", None) or "").strip()
+        registry_data = registry if isinstance(registry, dict) else {}
+
+        def registry_value(name: str) -> Any:
+            if registry_data:
+                return registry_data.get(name)
+            return getattr(registry, name, None)
+
+        active_slot = str(registry_value("active_slot") or "").strip()
+        shell_slot = str(registry_value("shell_slot") or "").strip()
+        retired_slot = str(registry_value("retired_slot") or "").strip()
         ordered_slot_ids: List[str] = []
-        for slot_id in [active_slot, shell_slot, retired_slot, *list(getattr(registry, "slot_ids", []) or [])]:
+        for slot_id in [
+            active_slot,
+            shell_slot,
+            retired_slot,
+            *list(registry_value("slot_ids") or []),
+        ]:
             normalized = str(slot_id or "").strip()
             if normalized and normalized not in ordered_slot_ids:
                 ordered_slot_ids.append(normalized)
+
+        integrity = dict(integrity_report or {})
+        integrity_slots = dict(integrity.get("slots") or {})
+        integrity_violations = [
+            dict(item)
+            for item in list(integrity.get("violations") or [])
+            if isinstance(item, dict)
+        ]
 
         cards: List[Dict[str, Any]] = []
         known_node_order = [
@@ -7875,6 +7960,12 @@ class SupervisorUIMixin:
             meta = dict(slot_metas.get(slot_id) or {})
             if not meta:
                 continue
+            slot_integrity = dict(integrity_slots.get(slot_id) or {})
+            slot_violations = [
+                item
+                for item in integrity_violations
+                if str(item.get("slot_id") or "").strip() == slot_id
+            ]
             worktree_path = str(meta.get("worktree_path") or "").strip()
             worktree = Path(worktree_path) if worktree_path else None
             top_level_entries: List[str] = []
@@ -7964,6 +8055,13 @@ class SupervisorUIMixin:
                     "tree_nodes": tree_nodes,
                     "upgrade_signals": signals[:3],
                     "upgrade_active": bool(signals),
+                    "integrity_healthy": (
+                        bool(slot_integrity.get("healthy"))
+                        if slot_integrity
+                        else None
+                    ),
+                    "integrity_materialized": slot_integrity.get("materialized"),
+                    "integrity_violations": slot_violations,
                 }
             )
         return cards

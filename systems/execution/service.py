@@ -21,9 +21,13 @@ class VoidCubeExecutionService:
     def __init__(
         self,
         facade: VoidCubeExecutionFacade,
+        *,
+        app: FastAPI | None = None,
+        standalone: bool = True,
     ) -> None:
         self.facade = facade
-        self.app = FastAPI(title="VoidCube Executor", version="1.0")
+        self.app = app or FastAPI(title="VoidCube Executor", version="1.0")
+        self._standalone = standalone
         # ── Scene state (baseline §3.5 / §8.1) ──
         # The executor (body lifecycle mechanical surface) is the only
         # component that may report `body_switch`.  The supervisor and
@@ -35,7 +39,9 @@ class VoidCubeExecutionService:
         self._setup_routes()
 
     def _setup_routes(self) -> None:
-        self.app.add_api_route("/", self.health_check, methods=["GET"])
+        if self._standalone:
+            self.app.add_api_route("/", self.health_check, methods=["GET"])
+        self.app.add_api_route("/executor/health", self.health_check, methods=["GET"])
         prefix = "/executor"
         self.app.add_api_route(f"{prefix}/body/registry", self.get_body_registry, methods=["GET"])
         self.app.add_api_route(f"{prefix}/body/active-target", self.get_active_body_target, methods=["GET"])
@@ -66,8 +72,10 @@ class VoidCubeExecutionService:
 
     async def health_check(self) -> Dict[str, Any]:
         await self._maybe_revert_stale_scene()
+        body_registry = self.facade.get_body_registry()
+        body_integrity = dict(body_registry.get("integrity") or {})
         return {
-            "status": "healthy",
+            "status": "healthy" if body_integrity.get("healthy") is True else "degraded",
             "service": "executor",
             "boundary": "execution_only",
             "decision_policy": "external_governor_required",
@@ -76,6 +84,7 @@ class VoidCubeExecutionService:
             "direct_executor_prefix": "/executor",
             "scene": self._scene,
             "scene_changed_at": self._scene_changed_at.isoformat(),
+            "body_runtime": body_integrity,
             "executor_access_policy": {
                 "failure_mode": "executor_required",
             },

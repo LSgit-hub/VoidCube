@@ -412,6 +412,25 @@ def test_body_lifecycle_adapter_exposes_body_registry_snapshot(tmp_path: Path):
     assert result["registry"]["shell_slot"] == "slot-B"
     assert result["slots"]["slot-A"]["body_state"] == "active"
     assert result["slots"]["slot-B"]["body_state"] == "shell"
+    assert result["integrity"]["healthy"] is True
+    assert result["integrity"]["violations"] == []
+
+
+@pytest.mark.unit
+def test_body_lifecycle_adapter_keeps_registry_diagnostic_available_when_unreadable(
+    tmp_path: Path,
+):
+    runtime = _make_body_lifecycle_runtime(tmp_path)
+    runtime.manager.registry_path.write_text("{", encoding="utf-8")
+
+    result = runtime.adapter.get_body_registry()
+
+    assert result["registry"] is None
+    assert result["integrity"]["healthy"] is False
+    assert result["integrity"]["violations"][0]["code"] == "registry_unreadable"
+    assert result["slots"]["slot-A"]["body_state"] == "active"
+    assert result["slots"]["slot-B"]["body_state"] == "shell"
+    assert runtime.manager.registry_path.read_text(encoding="utf-8") == "{"
 
 
 @pytest.mark.unit
@@ -454,7 +473,7 @@ async def test_body_lifecycle_adapter_prepares_slot_workspace_and_bootstraps_run
     assert result["status"] == "slot_prepared"
     assert result["slot"]["slot_id"] == "slot-B"
     assert result["execution_route_hint"]["interface_id"] == "body.prepare"
-    assert slot.materialized_from == "repo_root"
+    assert slot.materialized_from == "slot:slot-A"
     assert (worktree_root / "run_agent.py").exists()
     assert (worktree_root / "config.yaml").exists()
     assert (runtime_root / "slot-runtime.json").exists()
@@ -537,10 +556,20 @@ async def test_body_upgrade_execution_adapter_halts_when_probe_fails(tmp_path: P
     assert result["stage"] == "probe_execution"
     assert result["probe_review"]["governor_response"]["decision"] == "approve"
     assert result["probe_execution"]["report"]["overall_passed"] is False
+    assert result["abandonment"]["governor_response"]["decision"] == "approve"
+    assert result["abandonment"]["execution_report"]["action_results"][0][
+        "action_type"
+    ] == "abandon_candidate"
+    assert result["abandonment"]["execution_report"]["action_results"][0][
+        "status"
+    ] == "applied"
     assert result["execution_route_hint"]["interface_id"] == "body.upgrade.execute"
     assert registry.active_slot == "slot-A"
-    assert slot_b.body_state == "probe"
-    assert len(runtime.recorded_requests) == 1
+    assert registry.shell_slot == "slot-B"
+    assert slot_b.body_state == "shell"
+    assert slot_b.last_probe_result is None
+    assert slot_b.changed_files == []
+    assert len(runtime.recorded_requests) == 2
 
 
 @pytest.mark.asyncio

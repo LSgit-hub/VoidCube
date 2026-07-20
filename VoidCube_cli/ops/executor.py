@@ -19,18 +19,6 @@ class ExecutorOpsClient:
     def __post_init__(self) -> None:
         self.gateway_url = self.gateway_url.rstrip("/")
 
-    def check_executor_health(self) -> Dict[str, Any]:
-        """Verify the canonical executor path is reachable (C-04: fail-closed).
-
-        Returns health status or raises on unreachable — the CLI must not
-        silently bypass the executor when it is unavailable.
-        """
-        try:
-            resp = requests.get(f"{self.gateway_url}/", timeout=5.0)
-            return {"reachable": resp.status_code == 200, "status_code": resp.status_code}
-        except Exception as exc:
-            return {"reachable": False, "error": str(exc)}
-
     def execute_body_upgrade(self, payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
         return self.post_executor("/body/upgrade/execute", payload or {})
 

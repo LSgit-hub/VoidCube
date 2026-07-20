@@ -16,6 +16,7 @@ BodyState = Literal["shell", "candidate", "probe", "awaiting_user_consent", "act
 DEFAULT_SLOT_IDS: tuple[str, str] = ("slot-A", "slot-B")
 DEFAULT_SLOT_COPY_IGNORE_NAMES: tuple[str, ...] = (
     ".git",
+    ".body-active.json",
     ".body-slots",
     ".body-registry.json",
     ".pytest_cache",
@@ -24,11 +25,15 @@ DEFAULT_SLOT_COPY_IGNORE_NAMES: tuple[str, ...] = (
     ".venv",
     "__pycache__",
     ".soul-runtime",
+    "cache",
+    "logs",
+    "sessions",
+    "state",
 )
 
 ALLOWED_STATE_TRANSITIONS: dict[str, set[str]] = {
     "shell": {"candidate"},
-    "candidate": {"probe"},
+    "candidate": {"probe", "shell"},
     "probe": {"awaiting_user_consent", "shell"},
     "awaiting_user_consent": {"shell"},
     "active": {"retired"},
@@ -186,15 +191,203 @@ class BodyRegistryManager:
 
         if registry.active_slot is None:
             registry.active_slot = self.slot_ids[0]
-        if registry.shell_slot is None and len(self.slot_ids) > 1:
-            registry.shell_slot = self.slot_ids[1]
+        if registry.shell_slot is None:
+            registry.shell_slot = next(
+                (
+                    slot_id
+                    for slot_id in self.slot_ids
+                    if slot_id != registry.active_slot
+                    and self.load_slot_meta(slot_id).body_state == "shell"
+                ),
+                None,
+            )
         self.save_registry(registry)
+        if registry.active_slot:
+            active_meta = self.load_slot_meta(registry.active_slot)
+            if not self._slot_workspace_is_materialized(active_meta):
+                active_meta = self.prepare_slot_workspace(
+                    registry.active_slot,
+                    source_path=self.repo_root,
+                    clear_existing=True,
+                )
+            active_meta.body_state = "active"
+            active_meta.lease = "active"
+            active_commit = self._git_head_for_path(Path(active_meta.worktree_path))
+            active_meta.active_ref = active_meta.active_ref or f"body/{registry.active_slot}"
+            active_meta.active_commit = active_meta.active_commit or active_commit
+            active_meta.current_healthy_commit = (
+                active_meta.current_healthy_commit or active_commit
+            )
+            self.save_slot_meta(active_meta)
+        if registry.shell_slot:
+            shell_meta = self.load_slot_meta(registry.shell_slot)
+            if shell_meta.body_state != "shell":
+                raise ValueError(
+                    f"Registry shell slot {registry.shell_slot} is in "
+                    f"{shell_meta.body_state!r} state."
+                )
+            if not self._slot_workspace_is_materialized(shell_meta):
+                self.prepare_slot_workspace(
+                    registry.shell_slot,
+                    clear_existing=True,
+                )
         if registry.active_slot:
             self.write_active_body_pointer(registry.active_slot)
         return registry
 
     def list_slots(self) -> dict[str, BodySlotMeta]:
         return {slot_id: self.load_slot_meta(slot_id) for slot_id in self.slot_ids}
+
+    def inspect_layout(self) -> dict[str, Any]:
+        """Return a read-only integrity report for registry, slots, and pointer."""
+        violations: list[dict[str, Any]] = []
+
+        def add_violation(code: str, message: str, *, slot_id: Optional[str] = None) -> None:
+            item: dict[str, Any] = {"code": code, "message": message}
+            if slot_id:
+                item["slot_id"] = slot_id
+            violations.append(item)
+
+        try:
+            registry = self.load_registry()
+        except (OSError, ValueError, FileNotFoundError) as exc:
+            add_violation("registry_unreadable", str(exc))
+            return {
+                "healthy": False,
+                "registry": None,
+                "slots": {},
+                "active_pointer": {"healthy": False, "present": False},
+                "violations": violations,
+            }
+
+        configured_slots = list(self.slot_ids)
+        if registry.slot_ids != configured_slots:
+            add_violation(
+                "registry_slot_ids_mismatch",
+                f"Registry slots {registry.slot_ids!r} do not match {configured_slots!r}.",
+            )
+        if not registry.active_slot:
+            add_violation("active_slot_missing", "Registry has no active slot.")
+
+        role_slots = {
+            "active": registry.active_slot,
+            "shell": registry.shell_slot,
+            "retired": registry.retired_slot,
+        }
+        assigned = [slot_id for slot_id in role_slots.values() if slot_id]
+        if len(assigned) != len(set(assigned)):
+            add_violation(
+                "duplicate_role_assignment",
+                "A body slot is assigned to more than one registry role.",
+            )
+        for role, slot_id in role_slots.items():
+            if slot_id and slot_id not in self.slot_ids:
+                add_violation(
+                    "unknown_role_slot",
+                    f"Registry {role} slot {slot_id!r} is not configured.",
+                    slot_id=slot_id,
+                )
+
+        slot_reports: dict[str, dict[str, Any]] = {}
+        expected_states = {"active": "active", "shell": "shell", "retired": "retired"}
+        for slot_id in self.slot_ids:
+            role = next(
+                (name for name, assigned_slot in role_slots.items() if assigned_slot == slot_id),
+                None,
+            )
+            try:
+                meta = self.load_slot_meta(slot_id)
+            except (OSError, ValueError, FileNotFoundError) as exc:
+                add_violation("slot_meta_unreadable", str(exc), slot_id=slot_id)
+                slot_reports[slot_id] = {
+                    "role": role,
+                    "healthy": False,
+                    "materialized": False,
+                }
+                continue
+
+            materialized = self._slot_workspace_is_materialized(meta)
+            slot_healthy = materialized
+            if not materialized:
+                add_violation(
+                    "slot_not_materialized",
+                    f"Slot {slot_id} has no valid worktree materialization.",
+                    slot_id=slot_id,
+                )
+            if role and meta.body_state != expected_states[role]:
+                slot_healthy = False
+                add_violation(
+                    "slot_role_mismatch",
+                    f"Slot {slot_id} is {meta.body_state!r}, expected {expected_states[role]!r}.",
+                    slot_id=slot_id,
+                )
+            if role is None and meta.body_state in expected_states.values():
+                slot_healthy = False
+                add_violation(
+                    "unassigned_role_state",
+                    f"Slot {slot_id} has role state {meta.body_state!r} but no registry role.",
+                    slot_id=slot_id,
+                )
+            slot_reports[slot_id] = {
+                "role": role,
+                "body_state": meta.body_state,
+                "healthy": slot_healthy,
+                "materialized": materialized,
+                "worktree_path": meta.worktree_path,
+                "manifest_path": str(self.slot_worktree_manifest_path(slot_id).resolve()),
+                "source_commit": meta.source_commit,
+                "active_commit": meta.active_commit,
+                "candidate_commit": meta.candidate_commit,
+            }
+
+        pointer_report: dict[str, Any] = {
+            "healthy": False,
+            "present": self.active_body_pointer_path().is_file(),
+        }
+        active_slot = registry.active_slot
+        if active_slot in self.slot_ids:
+            try:
+                pointer_data = json.loads(
+                    self.active_body_pointer_path().read_text(encoding="utf-8")
+                )
+                pointer = BodyLaunchTarget.model_validate(pointer_data)
+                active_meta = self.load_slot_meta(active_slot)
+                pointer_report = {
+                    "healthy": True,
+                    "present": True,
+                    "slot_id": pointer.slot_id,
+                    "body_state": pointer.body_state,
+                    "worktree_path": pointer.worktree_path,
+                    "active_commit": pointer.active_commit,
+                }
+                pointer_mismatches = []
+                if pointer.slot_id != active_slot:
+                    pointer_mismatches.append("slot_id")
+                if pointer.body_state != "active":
+                    pointer_mismatches.append("body_state")
+                if Path(pointer.worktree_path).resolve() != Path(active_meta.worktree_path).resolve():
+                    pointer_mismatches.append("worktree_path")
+                if pointer.active_commit != active_meta.active_commit:
+                    pointer_mismatches.append("active_commit")
+                if pointer_mismatches:
+                    pointer_report["healthy"] = False
+                    pointer_report["mismatches"] = pointer_mismatches
+                    add_violation(
+                        "active_pointer_mismatch",
+                        "Active body pointer differs from active slot metadata: "
+                        + ", ".join(pointer_mismatches),
+                        slot_id=active_slot,
+                    )
+            except (OSError, ValueError, FileNotFoundError) as exc:
+                add_violation("active_pointer_unreadable", str(exc), slot_id=active_slot)
+
+        return {
+            "healthy": not violations,
+            "registry": registry.model_dump(mode="json"),
+            "slots": slot_reports,
+            "active_pointer": pointer_report,
+            "violations": violations,
+        }
 
     def get_shell_slot(self) -> Optional[BodySlotMeta]:
         """获取 shell 槽位的元数据"""
@@ -253,7 +446,7 @@ class BodyRegistryManager:
         diff_summary: Optional[str] = None,
         changed_files: Optional[Iterable[str]] = None,
     ) -> BodySlotMeta:
-        meta = self.transition_slot(slot_id, "candidate", save_meta=False)
+        meta = self.transition_slot(slot_id, "candidate")
         auto_commit = self._git_head_for_path(Path(meta.worktree_path)) or self._git_head_for_path(self.repo_root)
         auto_branch = self._git_branch_for_path(Path(meta.worktree_path)) or self._git_branch_for_path(self.repo_root)
         if body_version:
@@ -442,34 +635,25 @@ class BodyRegistryManager:
         *,
         source_slot_id: Optional[str] = None,
         source_path: Optional[str | Path] = None,
-        clear_existing: bool = True,
     ) -> BodyRegistry:
         """Return a retired slot to shell state after sync and watch window completion."""
         self._validate_slot_id(slot_id)
-        registry = self.load_registry()
         meta = self.load_slot_meta(slot_id)
         if meta.body_state != "retired":
             raise ValueError(
                 f"Slot {slot_id} must be retired before recycling; got {meta.body_state!r}"
             )
-        if source_slot_id is not None or source_path is not None:
-            synced_meta = self.prepare_slot_workspace(
-                slot_id,
-                source_slot_id=source_slot_id,
-                source_path=source_path,
-                clear_existing=clear_existing,
-            )
-            meta = self.load_slot_meta(slot_id)
-            meta.materialized_from = synced_meta.materialized_from
-            meta.last_materialized_at = synced_meta.last_materialized_at
-            meta.runtime_bootstrapped_at = synced_meta.runtime_bootstrapped_at
-        meta.body_state = "shell"
-        meta.pid = None
-        meta.lease = None
-        meta.last_probe_result = None
+        self.prepare_slot_workspace(
+            slot_id,
+            source_slot_id=source_slot_id,
+            source_path=source_path,
+            clear_existing=True,
+        )
+        meta = self.transition_slot(slot_id, "shell")
         meta.last_retired_at = datetime.utcnow()
         self.save_slot_meta(meta)
 
+        registry = self.load_registry()
         registry.shell_slot = slot_id
         if registry.retired_slot == slot_id:
             registry.retired_slot = None
@@ -478,12 +662,34 @@ class BodyRegistryManager:
         self.save_registry(registry)
         return registry
 
+    def abandon_candidate(
+        self,
+        slot_id: str,
+        *,
+        source_slot_id: Optional[str] = None,
+        source_path: Optional[str | Path] = None,
+    ) -> BodySlotMeta:
+        """Discard a non-active candidate and restore a clean shell baseline."""
+        self._validate_slot_id(slot_id)
+        meta = self.load_slot_meta(slot_id)
+        if meta.body_state not in {"candidate", "probe", "awaiting_user_consent"}:
+            raise ValueError(
+                f"Slot {slot_id} must be candidate, probe, or awaiting user consent "
+                "before abandonment; "
+                f"got {meta.body_state!r}"
+            )
+        self.prepare_slot_workspace(
+            slot_id,
+            source_slot_id=source_slot_id,
+            source_path=source_path,
+            clear_existing=True,
+        )
+        return self.transition_slot(slot_id, "shell")
+
     def transition_slot(
         self,
         slot_id: str,
         new_state: BodyState,
-        *,
-        save_meta: bool = True,
     ) -> BodySlotMeta:
         """Apply a single validated state transition to a slot."""
         self._validate_slot_id(slot_id)
@@ -760,21 +966,55 @@ class BodyRegistryManager:
         now = datetime.utcnow()
         candidate_commit = self._git_head_for_path(worktree_root) or source_commit
         candidate_branch = self._git_branch_for_path(worktree_root) or source_branch
+        registry = self.load_registry()
+        effective_source_slot_id = source_slot_id
+        if effective_source_slot_id is None and source_label.startswith("slot:"):
+            effective_source_slot_id = source_label.removeprefix("slot:")
+        source_meta = (
+            self.load_slot_meta(effective_source_slot_id)
+            if effective_source_slot_id
+            else None
+        )
+        baseline_source_branch = source_branch or (
+            source_meta.candidate_branch or source_meta.source_branch
+            if source_meta
+            else None
+        )
+        baseline_source_commit = source_commit or (
+            source_meta.active_commit
+            or source_meta.candidate_commit
+            or source_meta.source_commit
+            if source_meta
+            else None
+        )
+        baseline_candidate_branch = candidate_branch or baseline_source_branch
+        baseline_candidate_commit = candidate_commit or baseline_source_commit
         meta.materialized_from = source_label
         meta.last_materialized_at = now
         meta.runtime_bootstrapped_at = now
-        if source_branch:
-            meta.source_branch = source_branch
-            meta.rollback_ref = meta.rollback_ref or source_branch
-        if source_commit:
-            meta.source_commit = source_commit
-            meta.rollback_commit = meta.rollback_commit or source_commit
-        if candidate_branch:
-            meta.candidate_branch = candidate_branch
-        if candidate_commit:
-            meta.candidate_commit = candidate_commit
-            meta.build_from_commit = meta.build_from_commit or candidate_commit
-        if not meta.changed_files:
+        if clear_existing and registry.active_slot != slot_id:
+            self._reset_materialized_baseline(
+                meta,
+                source_meta=source_meta,
+                source_branch=baseline_source_branch,
+                source_commit=baseline_source_commit,
+                candidate_branch=baseline_candidate_branch,
+                candidate_commit=baseline_candidate_commit,
+                generation=registry.current_generation,
+            )
+        else:
+            if source_branch:
+                meta.source_branch = source_branch
+                meta.rollback_ref = meta.rollback_ref or source_branch
+            if source_commit:
+                meta.source_commit = source_commit
+                meta.rollback_commit = meta.rollback_commit or source_commit
+            if candidate_branch:
+                meta.candidate_branch = candidate_branch
+            if candidate_commit:
+                meta.candidate_commit = candidate_commit
+                meta.build_from_commit = meta.build_from_commit or candidate_commit
+        if not meta.changed_files and not clear_existing:
             meta.changed_files = self._git_changed_files_for_path(
                 worktree_root,
                 meta.rollback_commit or meta.source_commit,
@@ -790,10 +1030,57 @@ class BodyRegistryManager:
             worktree_root,
             source_label=source_label,
             source_root=source_root,
+            source_branch=baseline_source_branch,
+            source_commit=baseline_source_commit,
+            candidate_branch=baseline_candidate_branch,
+            candidate_commit=baseline_candidate_commit,
             materialized_at=now,
             materialization_mode=materialization_mode,
         )
+        if registry.active_slot == slot_id:
+            self.write_active_body_pointer(slot_id)
         return meta
+
+    @staticmethod
+    def _reset_materialized_baseline(
+        meta: BodySlotMeta,
+        *,
+        source_meta: Optional[BodySlotMeta],
+        source_branch: Optional[str],
+        source_commit: Optional[str],
+        candidate_branch: Optional[str],
+        candidate_commit: Optional[str],
+        generation: int,
+    ) -> None:
+        baseline_commit = candidate_commit or source_commit
+        meta.body_version = source_meta.body_version if source_meta else "unknown"
+        meta.generation = source_meta.generation if source_meta else generation
+        meta.pid = None
+        meta.lease = None
+        meta.build_from_commit = baseline_commit
+        meta.source_branch = source_branch
+        meta.source_commit = source_commit
+        meta.candidate_branch = candidate_branch
+        meta.candidate_commit = candidate_commit
+        meta.active_ref = None
+        meta.active_commit = None
+        meta.rollback_ref = source_branch
+        meta.rollback_commit = source_commit
+        meta.diff_summary = ""
+        meta.changed_files = []
+        meta.last_probe_result = None
+        meta.switch_consent_request = None
+        meta.switch_consent_requested_at = None
+        meta.switch_consent_approved_at = None
+        meta.health_score = 0.0
+        meta.health_history = []
+        meta.improvement_count = 0
+        meta.last_improvement_at = None
+        meta.current_healthy_commit = baseline_commit
+        meta.previous_healthy_commit = None
+        meta.decay_applied_at = None
+        meta.rollback_in_progress = None
+        meta.last_improvement_rollback = None
 
     def slot_root(self, slot_id: str) -> Path:
         self._validate_slot_id(slot_id)
@@ -879,6 +1166,10 @@ class BodyRegistryManager:
             if source_slot_id == slot_id:
                 raise ValueError("A slot cannot materialize from itself.")
             source_meta = self.load_slot_meta(source_slot_id)
+            if not self._slot_workspace_is_materialized(source_meta):
+                raise ValueError(
+                    f"Source body slot {source_slot_id} has no materialized baseline."
+                )
             return Path(source_meta.worktree_path), f"slot:{source_slot_id}"
 
         if source_path is not None:
@@ -891,11 +1182,35 @@ class BodyRegistryManager:
         active_slot = registry.active_slot
         if active_slot and active_slot != slot_id:
             active_meta = self.load_slot_meta(active_slot)
-            active_worktree = Path(active_meta.worktree_path)
-            if any(active_worktree.iterdir()):
-                return active_worktree, f"slot:{active_slot}"
+            if not self._slot_workspace_is_materialized(active_meta):
+                raise ValueError(
+                    f"Active body slot {active_slot} has no materialized baseline."
+                )
+            return Path(active_meta.worktree_path), f"slot:{active_slot}"
 
-        return self.repo_root, "repo_root"
+        raise ValueError(
+            "A non-active source_slot_id or source_path is required for materialization."
+        )
+
+    def _slot_workspace_is_materialized(self, meta: BodySlotMeta) -> bool:
+        if meta.last_materialized_at is None:
+            return False
+        worktree_root = Path(meta.worktree_path).resolve()
+        manifest_path = self.slot_worktree_manifest_path(meta.slot_id)
+        if not worktree_root.is_dir() or not manifest_path.is_file():
+            return False
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        if manifest.get("slot_id") != meta.slot_id:
+            return False
+        if Path(str(manifest.get("worktree_path") or "")).resolve() != worktree_root:
+            return False
+        mode = manifest.get("materialization_mode")
+        if mode == "git_worktree":
+            return self._git_top_level_for_path(worktree_root) == worktree_root
+        return mode == "directory_copy"
 
     def _sync_directory(
         self,
@@ -913,7 +1228,7 @@ class BodyRegistryManager:
             self._clear_directory(target_root)
 
         for child in source_root.iterdir():
-            if self._should_ignore_materialized_name(child.name):
+            if self._should_ignore_materialized_path(child, target_root=target_root):
                 continue
 
             destination = target_root / child.name
@@ -999,6 +1314,8 @@ class BodyRegistryManager:
                 cwd=str(path.resolve()),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=timeout,
                 check=False,
             )
@@ -1039,6 +1356,10 @@ class BodyRegistryManager:
         *,
         source_label: str,
         source_root: Path,
+        source_branch: Optional[str],
+        source_commit: Optional[str],
+        candidate_branch: Optional[str],
+        candidate_commit: Optional[str],
         materialized_at: datetime,
         materialization_mode: str,
     ) -> None:
@@ -1049,10 +1370,10 @@ class BodyRegistryManager:
                 "worktree_path": str(worktree_root.resolve()),
                 "source": source_label,
                 "source_root": str(source_root.resolve()),
-                "source_branch": self._git_branch_for_path(source_root),
-                "source_commit": self._git_head_for_path(source_root),
-                "candidate_branch": self._git_branch_for_path(worktree_root),
-                "candidate_commit": self._git_head_for_path(worktree_root),
+                "source_branch": source_branch,
+                "source_commit": source_commit,
+                "candidate_branch": candidate_branch,
+                "candidate_commit": candidate_commit,
                 "materialized_at": materialized_at.isoformat(),
                 "materialization_mode": materialization_mode,
             },
@@ -1067,6 +1388,8 @@ class BodyRegistryManager:
                 cwd=str(path.resolve()),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=5,
                 check=False,
             )
@@ -1088,6 +1411,8 @@ class BodyRegistryManager:
                 cwd=str(path.resolve()),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=5,
                 check=False,
             )
@@ -1105,6 +1430,8 @@ class BodyRegistryManager:
                 cwd=str(path.resolve()),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=5,
                 check=False,
             )
@@ -1129,6 +1456,8 @@ class BodyRegistryManager:
                 cwd=str(path.resolve()),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
                 check=False,
             )
@@ -1155,5 +1484,15 @@ class BodyRegistryManager:
             else:
                 child.unlink()
 
-    def _should_ignore_materialized_name(self, name: str) -> bool:
-        return name in DEFAULT_SLOT_COPY_IGNORE_NAMES
+    def _should_ignore_materialized_path(self, path: Path, *, target_root: Path) -> bool:
+        resolved = path.resolve()
+        target_root = target_root.resolve()
+        if path.name in DEFAULT_SLOT_COPY_IGNORE_NAMES:
+            return True
+        if resolved in {
+            self.slots_root.resolve(),
+            self.registry_path.resolve(),
+            self.active_body_pointer_path().resolve(),
+        }:
+            return True
+        return target_root == resolved or target_root.is_relative_to(resolved)

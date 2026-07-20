@@ -28,7 +28,12 @@ def _make_service() -> tuple[VoidCubeExecutionService, SimpleNamespace]:
             evaluate_watch_window=AsyncMock(return_value={"status": "watch_window_evaluated"}),
         ),
         body_lifecycle=SimpleNamespace(
-            get_body_registry=Mock(return_value={"registry": {"active_slot": "slot-A"}}),
+            get_body_registry=Mock(
+                return_value={
+                    "registry": {"active_slot": "slot-A"},
+                    "integrity": {"healthy": True, "violations": []},
+                }
+            ),
             get_active_body_target=Mock(return_value={"slot_id": "slot-A"}),
             list_body_slots=Mock(return_value={"slots": {"slot-A": {}}}),
             get_body_slot=Mock(return_value={"slot_id": "slot-A"}),
@@ -67,18 +72,50 @@ def test_execution_service_health_describes_execution_only_boundary():
 
     assert response.status_code == 200
     payload = response.json()
+    assert payload["status"] == "healthy"
     assert payload["service"] == "executor"
     assert payload["boundary"] == "execution_only"
     assert payload["decision_policy"] == "external_governor_required"
     assert payload["preferred_gateway_prefix"] == "/api/executor"
     assert payload["direct_executor_prefix"] == "/executor"
     assert payload["executor_access_policy"]["failure_mode"] == "executor_required"
+    assert payload["body_runtime"]["healthy"] is True
+    assert payload["body_runtime"]["violations"] == []
     assert "/body/upgrade/execute" in payload["routes"]["body_upgrade"]
     assert "/body/switch/consent" in payload["routes"]["body_upgrade"]
     assert "/autonomous-chain/execute" in payload["routes"]["autonomous_chain_execution"]
     assert "/body/watch-window/status" in payload["routes"]["body_lifecycle"]
     assert "self_learning" not in payload["routes"]
     assert "compatibility_notes" not in payload
+
+
+@pytest.mark.unit
+def test_execution_service_health_degrades_with_body_integrity_report():
+    service, adapters = _make_service()
+    violation = {
+        "code": "slot_not_materialized",
+        "message": "Slot slot-A has no valid worktree materialization.",
+        "slot_id": "slot-A",
+    }
+    adapters.body_lifecycle.get_body_registry.return_value = {
+        "registry": {"active_slot": "slot-A"},
+        "slots": {"slot-A": {}},
+        "integrity": {
+            "healthy": False,
+            "violations": [violation],
+        },
+    }
+    client = TestClient(service.app)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "degraded"
+    assert response.json()["body_runtime"] == {
+        "healthy": False,
+        "violations": [violation],
+    }
+    adapters.body_lifecycle.get_body_registry.assert_called_once_with()
 
 
 @pytest.mark.unit

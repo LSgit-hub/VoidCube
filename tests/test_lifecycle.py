@@ -8,7 +8,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from systems.body_registry import BodyRegistryManager
-from systems.governor import GovernorDecisionEngine, GovernorRequest
+from systems.governor import GovernorAction, GovernorDecisionEngine, GovernorRequest
 from systems.lifecycle import BodyLifecycleExecutor
 
 
@@ -181,6 +181,28 @@ def test_lifecycle_applies_recycle_action_after_post_switch_review(tmp_path):
 
     assert report.action_results[0].status == "applied"
     assert slot_meta.body_state == "shell"
+
+
+@pytest.mark.unit
+def test_lifecycle_abandons_failed_probe_to_shell(tmp_path):
+    manager = BodyRegistryManager(tmp_path)
+    manager.initialize_layout()
+    manager.mark_candidate("slot-B")
+    manager.start_probe("slot-B")
+
+    executor = BodyLifecycleExecutor(manager)
+    result = executor.execute_action(
+        GovernorAction(
+            action_type="abandon_candidate",
+            slot_id="slot-B",
+            payload={"reason": "required_probe_failed"},
+        )
+    )
+
+    assert result.status == "applied"
+    assert result.details["abandon_reason"] == "required_probe_failed"
+    assert manager.load_slot_meta("slot-B").body_state == "shell"
+    assert manager.load_registry().shell_slot == "slot-B"
 
 
 @pytest.mark.unit

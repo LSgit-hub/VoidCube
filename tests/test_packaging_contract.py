@@ -5,8 +5,10 @@ from pathlib import Path
 import tomllib
 from zipfile import ZipFile
 
+from packaging.requirements import Requirement
 from packaging.version import Version
 import pytest
+import pytest_asyncio
 
 from VoidCube_cli import __version__
 from VoidCube_cli.banner import format_banner_version_label
@@ -16,6 +18,7 @@ from scripts.build_wheel import (
     expected_wheel_files,
     wheel_contract_errors,
 )
+from scripts.verify_clean_install import isolated_environment, verification_commands
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -112,6 +115,50 @@ def test_python_baseline_matches_metadata_docs_and_runtime_images():
         "daytona_image",
     ):
         assert "python3.11" in terminal[field]
+
+
+@pytest.mark.unit
+def test_dev_test_dependencies_accept_the_supported_runner_and_async_plugin():
+    dev_requirements = _project_config()["project"]["optional-dependencies"]["dev"]
+    requirements = {Requirement(value).name: Requirement(value) for value in dev_requirements}
+
+    assert Version(pytest.__version__) in requirements["pytest"].specifier
+    assert Version(pytest_asyncio.__version__) in requirements["pytest-asyncio"].specifier
+
+
+@pytest.mark.unit
+def test_clean_install_verifier_uses_declared_extras_and_isolated_smoke(tmp_path):
+    python = tmp_path / "venv" / "python"
+    commands = verification_commands(
+        python,
+        ROOT,
+        extras="all,dev",
+        run_smoke=True,
+    )
+
+    assert commands == [
+        [
+            str(python),
+            "-m",
+            "pip",
+            "install",
+            "-e",
+            f"{ROOT.resolve()}[all,dev]",
+        ],
+        [str(python), "-m", "pip", "check"],
+        [str(python), "-m", "pytest", "-m", "smoke", "-q"],
+    ]
+
+    home = tmp_path / "home"
+    env = isolated_environment(
+        {"PYTHONPATH": "unsafe", "KEEP_ME": "yes"},
+        home,
+    )
+    assert "PYTHONPATH" not in env
+    assert env["PYTHONNOUSERSITE"] == "1"
+    assert env["PIP_NO_INPUT"] == "1"
+    assert env["VOIDCUBE_HOME"] == str(home)
+    assert env["KEEP_ME"] == "yes"
 
 
 @pytest.mark.unit
