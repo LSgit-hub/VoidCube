@@ -1014,10 +1014,11 @@ def _configure_simple_requirements(ts_key: str):
                 from VoidCube_cli.config import load_config, save_config
                 _cfg = load_config()
                 _aux = _cfg.setdefault("auxiliary", {}).setdefault("vision", {})
+                _aux["provider"] = "custom"
                 _aux["base_url"] = base_url
-                save_config(_cfg)
                 if "api.openai.com" in base_url.lower():
-                    save_env_value("AUXILIARY_VISION_MODEL", "gpt-4o-mini")
+                    _aux["model"] = "gpt-4o-mini"
+                save_config(_cfg)
                 _print_success("    Saved")
             else:
                 _print_warning("    Skipped")

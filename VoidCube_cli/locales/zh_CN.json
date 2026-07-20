@@ -3030,7 +3030,6 @@
       "prompts.skin_engine_not_available.": "Skin engine not available.",
       "prompts.usage__browser_connect|disconnect|status": "Usage: /browser connect|disconnect|status",
       "prompts.usage__voice_[on|off|tts|status]": "Usage: /voice [on|off|tts|status]",
-      "prompts.voidcube_cli_v1.0.0": "VoidCube CLI v1.0.0",
       "prompts.\\n_usage__skin_<name>": "\\n  Usage: /skin <name>",
       "prompts.\\n_[tools]": "\\n  [Tools]",
       "prompts.\\n🔧_force_exiting...": "\\n🔧 Force exiting...",

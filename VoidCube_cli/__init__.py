@@ -11,5 +11,4 @@ Provides subcommands for:
 - VoidCube cron          - Manage cron jobs
 """
 
-__version__ = "0.8.0"
-__release_date__ = "2026.4.8"
+__version__ = "1.0.0"

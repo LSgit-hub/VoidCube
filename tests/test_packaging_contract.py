@@ -5,8 +5,12 @@ from pathlib import Path
 import tomllib
 from zipfile import ZipFile
 
+from packaging.version import Version
 import pytest
 
+from VoidCube_cli import __version__
+from VoidCube_cli.banner import format_banner_version_label
+from VoidCube_cli.config import DEFAULT_CONFIG
 from scripts.build_wheel import (
     clean_build_state,
     expected_wheel_files,
@@ -21,6 +25,16 @@ pytestmark = pytest.mark.smoke
 def _project_config() -> dict:
     with (ROOT / "pyproject.toml").open("rb") as handle:
         return tomllib.load(handle)
+
+
+def _wheel_metadata(*, version: str = __version__) -> str:
+    project = _project_config()["project"]
+    return (
+        "Metadata-Version: 2.4\n"
+        f"Name: {project['name']}\n"
+        f"Version: {version}\n"
+        f"Requires-Python: {project['requires-python']}\n\n"
+    )
 
 
 @pytest.mark.unit
@@ -68,6 +82,39 @@ def test_project_uses_spdx_license_metadata():
 
 
 @pytest.mark.unit
+def test_distribution_version_comes_from_the_cli_package():
+    config = _project_config()
+    project = config["project"]
+    dynamic = config["tool"]["setuptools"]["dynamic"]
+
+    assert "version" not in project
+    assert project["dynamic"] == ["version"]
+    assert dynamic["version"] == {"attr": "VoidCube_cli.__version__"}
+    assert str(Version(__version__)) == __version__
+    assert format_banner_version_label() == f"v{__version__}"
+
+
+@pytest.mark.unit
+def test_python_baseline_matches_metadata_docs_and_runtime_images():
+    project = _project_config()["project"]
+    classifiers = set(project["classifiers"])
+    development_guide = (ROOT / "docs" / "开发与验证.md").read_text(encoding="utf-8")
+    terminal = DEFAULT_CONFIG["terminal"]
+
+    assert project["requires-python"] == ">=3.11"
+    assert "Programming Language :: Python :: 3.11" in classifiers
+    assert "Python 3.11 或更高版本" in development_guide
+    for field in (
+        "docker_image",
+        "podman_image",
+        "singularity_image",
+        "modal_image",
+        "daytona_image",
+    ):
+        assert "python3.11" in terminal[field]
+
+
+@pytest.mark.unit
 def test_clean_build_state_removes_only_root_build_outputs(tmp_path):
     root = tmp_path / "repo"
     build_dir = root / "build"
@@ -91,6 +138,10 @@ def test_wheel_contract_rejects_source_less_cached_module(tmp_path):
     with ZipFile(wheel, "w") as archive:
         for name in expected:
             archive.writestr(name, "")
+        archive.writestr(
+            f"voidcube_agent-{__version__}.dist-info/METADATA",
+            _wheel_metadata(),
+        )
         archive.writestr("agent/stale_deleted_module.py", "")
 
     errors = wheel_contract_errors(wheel, ROOT)
@@ -109,6 +160,10 @@ def test_wheel_contract_rejects_missing_current_source(tmp_path):
     with ZipFile(wheel, "w") as archive:
         for name in expected - {omitted}:
             archive.writestr(name, "")
+        archive.writestr(
+            f"voidcube_agent-{__version__}.dist-info/METADATA",
+            _wheel_metadata(),
+        )
 
     errors = wheel_contract_errors(wheel, ROOT)
 
@@ -127,11 +182,36 @@ def test_wheel_contract_rejects_retired_integration_content(tmp_path):
                 name,
                 f"provider = {marker!r}\n" if name == contaminated else "",
             )
+        archive.writestr(
+            f"voidcube_agent-{__version__}.dist-info/METADATA",
+            _wheel_metadata(),
+        )
 
     errors = wheel_contract_errors(wheel, ROOT)
 
     assert errors == [
         "wheel contains project-retired integration markers: run_agent.py"
+    ]
+
+
+@pytest.mark.unit
+def test_wheel_contract_rejects_distribution_metadata_drift(tmp_path):
+    wheel = tmp_path / "metadata-drift.whl"
+    expected = expected_wheel_files(ROOT)
+    drifted_metadata = _wheel_metadata(version="9.9.9")
+    with ZipFile(wheel, "w") as archive:
+        for name in expected:
+            archive.writestr(name, "")
+        archive.writestr(
+            "voidcube_agent-9.9.9.dist-info/METADATA",
+            drifted_metadata,
+        )
+
+    errors = wheel_contract_errors(wheel, ROOT)
+
+    assert errors == [
+        "wheel version does not match VoidCube_cli.__version__: "
+        f"'9.9.9' != {__version__!r}"
     ]
 
 

@@ -478,8 +478,7 @@ def _resolve_web_extract_auxiliary(
         "web_extract",
         main_runtime=main_runtime,
     )
-    configured_model = os.getenv("AUXILIARY_WEB_EXTRACT_MODEL", "").strip()
-    effective_model = model or configured_model or default_model
+    effective_model = model or default_model
 
     extra_body: Dict[str, Any] = {}
     if client is not None and _is_nous_auxiliary_client(client):

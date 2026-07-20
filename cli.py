@@ -446,7 +446,6 @@ def load_cli_config() -> Dict[str, Any]:
         "compression": {
             "enabled": True,      # Auto-compress when approaching context limit
             "threshold": 0.50,    # Compress at 50% of model's context limit
-            "summary_model": "",  # Model for summaries (empty = use main model)
         },
         "smart_model_routing": {
             "enabled": False,
@@ -674,52 +673,6 @@ def load_cli_config() -> Dict[str, Any]:
     for config_key, env_var in browser_env_mappings.items():
         if config_key in browser_config:
             os.environ[env_var] = str(browser_config[config_key])
-    
-    # Apply auxiliary model/direct-endpoint overrides to environment variables.
-    # Vision and web_extract each have their own provider/model/base_url/api_key tuple.
-    # Compression config is read directly from config.yaml by run_agent.py and
-    # auxiliary_client.py — no env var bridging needed.
-    # Only set env vars for non-empty / non-default values so auto-detection
-    # still works.
-    auxiliary_config = defaults.get("auxiliary", {})
-    auxiliary_task_env = {
-        # config key → env var mapping
-        "vision": {
-            "provider": "AUXILIARY_VISION_PROVIDER",
-            "model": "AUXILIARY_VISION_MODEL",
-            "base_url": "AUXILIARY_VISION_BASE_URL",
-            "api_key": "AUXILIARY_VISION_API_KEY",
-        },
-        "web_extract": {
-            "provider": "AUXILIARY_WEB_EXTRACT_PROVIDER",
-            "model": "AUXILIARY_WEB_EXTRACT_MODEL",
-            "base_url": "AUXILIARY_WEB_EXTRACT_BASE_URL",
-            "api_key": "AUXILIARY_WEB_EXTRACT_API_KEY",
-        },
-        "approval": {
-            "provider": "AUXILIARY_APPROVAL_PROVIDER",
-            "model": "AUXILIARY_APPROVAL_MODEL",
-            "base_url": "AUXILIARY_APPROVAL_BASE_URL",
-            "api_key": "AUXILIARY_APPROVAL_API_KEY",
-        },
-    }
-    
-    for task_key, env_map in auxiliary_task_env.items():
-        task_cfg = auxiliary_config.get(task_key, {})
-        if not isinstance(task_cfg, dict):
-            continue
-        prov = str(task_cfg.get("provider", "")).strip()
-        model = str(task_cfg.get("model", "")).strip()
-        base_url = str(task_cfg.get("base_url", "")).strip()
-        api_key = str(task_cfg.get("api_key", "")).strip()
-        if prov and prov != "auto":
-            os.environ[env_map["provider"]] = prov
-        if model:
-            os.environ[env_map["model"]] = model
-        if base_url:
-            os.environ[env_map["base_url"]] = base_url
-        if api_key:
-            os.environ[env_map["api_key"]] = api_key
     
     # Security settings
     security_config = defaults.get("security", {})
@@ -11193,7 +11146,9 @@ def main(
         python cli.py --version                  # Show version and exit
     """
     if version:
-        print("VoidCube CLI v1.0.0")
+        from VoidCube_cli import __version__
+
+        print(f"VoidCube CLI v{__version__}")
         print("轻量安装·快速配置·友好交互 — 服务器运维与部署智能体")
         print("项目地址: https://gitee.com/LSgit-hub/voidcub-CLI")
         return

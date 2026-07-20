@@ -338,3 +338,67 @@ def test_target_rejects_an_empty_resolved_model(monkeypatch):
             main_runtime=None,
             async_mode=False,
         )
+
+
+def test_task_routes_only_use_explicit_arguments_or_auxiliary_config(monkeypatch):
+    monkeypatch.setenv("AUXILIARY_WEB_EXTRACT_PROVIDER", "openrouter")
+    monkeypatch.setenv("AUXILIARY_WEB_EXTRACT_MODEL", "retired-env-model")
+    monkeypatch.setenv("CONTEXT_COMPRESSION_PROVIDER", "openrouter")
+    monkeypatch.setenv("CONTEXT_COMPRESSION_MODEL", "retired-summary-model")
+    monkeypatch.setattr(
+        "VoidCube_cli.config.load_config",
+        lambda: {
+            "auxiliary": {
+                "vision": {
+                    "provider": "deepseek",
+                    "model": "vision-model",
+                    "base_url": "",
+                },
+                "web_extract": {
+                    "provider": "auto",
+                    "model": "",
+                    "base_url": "",
+                },
+                "compression": {
+                    "provider": "auto",
+                    "model": "",
+                    "base_url": "",
+                },
+                "mcp": {
+                    "provider": "auto",
+                    "model": "mcp-model",
+                    "base_url": "https://mcp.example/v1",
+                    "api_key": "mcp-key",
+                },
+            },
+            "compression": {
+                "summary_provider": "openrouter",
+                "summary_model": "retired-config-model",
+            },
+        },
+    )
+
+    assert auxiliary._resolve_task_provider_model("vision") == (
+        "deepseek",
+        "vision-model",
+        None,
+        None,
+    )
+    assert auxiliary._resolve_task_provider_model("web_extract") == (
+        "auto",
+        None,
+        None,
+        None,
+    )
+    assert auxiliary._resolve_task_provider_model("compression") == (
+        "auto",
+        None,
+        None,
+        None,
+    )
+    assert auxiliary._resolve_task_provider_model("mcp") == (
+        "custom",
+        "mcp-model",
+        "https://mcp.example/v1",
+        "mcp-key",
+    )

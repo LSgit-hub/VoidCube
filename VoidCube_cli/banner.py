@@ -61,7 +61,7 @@ def _skin_branding(key: str, fallback: str) -> str:
 # ASCII Art & Branding
 # =========================================================================
 
-from VoidCube_cli import __version__ as VERSION, __release_date__ as RELEASE_DATE
+from VoidCube_cli import __version__ as VERSION
 
 VOIDCUBE_LOGO = r"""
  ██╗   ██╗  █████╗  ██╗ ██████╗   ██████╗ ██╗   ██╗ ██████╗  ███████╗
@@ -105,7 +105,7 @@ def get_available_skills() -> Dict[str, List[str]]:
 
 def format_banner_version_label() -> str:
     """Return the version label for display in the banner."""
-    return f"v{VERSION} ({RELEASE_DATE})"
+    return f"v{VERSION}"
 
 
 def _format_context_length(tokens: int) -> str:

@@ -472,7 +472,7 @@ VoidCube/
 │   ├── 内生驱动核心设计.md
 │   ├── CLI展示与gateway双槽设计.md
 │   └── 项目文件架构说明.md
-├── VoidCube_core/          # 底层共享能力：常量、日志、状态、i18n
+├── VoidCube_core/          # 底层共享能力：常量、日志、状态、时间与通用工具
 ├── VoidCube_cli/           # CLI 子系统：命令分发、配置、Provider、UI、ops
 ├── agent/                  # Agent 内部能力：prompt、压缩、记忆、调度、展示
 ├── tools/                  # 工具层：注册、终端、文件、Web、浏览器、MCP、delegate

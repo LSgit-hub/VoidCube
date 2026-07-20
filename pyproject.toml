@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "voidcube-agent"
-version = "1.0.0"
+dynamic = ["version"]
 description = "轻量安装·快速配置·友好交互 — 服务器运维与部署智能体"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -83,6 +83,9 @@ Repository = "https://gitee.com/LSgit-hub/voidcub-CLI"
 
 [tool.setuptools]
 py-modules = ["voidcube", "cli", "run_agent"]
+
+[tool.setuptools.dynamic]
+version = {attr = "VoidCube_cli.__version__"}
 
 [tool.setuptools.packages.find]
 where = [".", "Mem/src"]

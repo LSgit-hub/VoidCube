@@ -1,7 +1,7 @@
 # VoidCube CLI Configuration
 # 配置文件路径: ~/.VoidCube/config.yaml
 
-_config_version: 17
+_config_version: 19
 
 # 主要模型配置
 model: ""
@@ -68,9 +68,6 @@ compression:
   threshold: 0.50
   target_ratio: 0.20
   protect_last_n: 20
-  summary_model: ""
-  summary_provider: auto
-  summary_base_url: null
 
 # 智能模型路由
 smart_model_routing:
@@ -99,7 +96,7 @@ auxiliary:
     provider: auto          # 自动检测 (OpenRouter / Nous / OpenAI-compatible API key)
     model: ""               # 留空 = 使用默认辅助模型
     base_url: ""            # 留空 = 跟随主提供者
-    api_key: ""             # 留空 = 复用主 API key
+    api_key: ""             # 可选：仅用于该任务的直连端点密钥
     timeout: 120
   session_search:
     provider: auto

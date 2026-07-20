@@ -66,6 +66,7 @@ import requests
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 from agent.auxiliary_client import call_llm
+from VoidCube_cli.i18n import t
 from VoidCube_core.constants import get_VoidCube_home
 
 try:
@@ -82,11 +83,6 @@ from tools.browser_providers.browserbase import BrowserbaseProvider
 from tools.browser_providers.browser_use import BrowserUseProvider
 from tools.browser_providers.firecrawl import FirecrawlProvider
 from tools.tool_backend_helpers import normalize_browser_cloud_provider
-
-try:
-    from VoidCube_core.i18n import t
-except Exception:
-    t = lambda key, **kwargs: kwargs.get('default', key)  # type: ignore[assignment]
 
 # Camofox local anti-detection browser backend (optional).
 # When CAMOFOX_URL is set, all browser operations route through the
@@ -171,16 +167,6 @@ def _get_command_timeout() -> int:
         logger.debug("Could not read command_timeout from config: %s", e)
     _cached_command_timeout = result
     return result
-
-
-def _get_vision_model() -> Optional[str]:
-    """Model for browser_vision (screenshot analysis — multimodal)."""
-    return os.getenv("AUXILIARY_VISION_MODEL", "").strip() or None
-
-
-def _get_extraction_model() -> Optional[str]:
-    """Model for page snapshot text summarization — same as web_extract."""
-    return os.getenv("AUXILIARY_WEB_EXTRACT_MODEL", "").strip() or None
 
 
 def _resolve_cdp_override(cdp_url: str) -> str:
@@ -1228,9 +1214,6 @@ def _extract_relevant_content(
             "max_tokens": 4000,
             "temperature": 0.1,
         }
-        model = _get_extraction_model()
-        if model:
-            call_kwargs["model"] = model
         if main_runtime:
             call_kwargs["main_runtime"] = main_runtime
         response = call_llm(**call_kwargs)
@@ -1997,7 +1980,6 @@ def browser_vision(
         )
 
         # Use the centralized LLM router
-        vision_model = _get_vision_model()
         logger.debug("browser_vision: analysing screenshot (%d bytes)",
                      len(_screenshot_bytes))
 
@@ -2029,8 +2011,6 @@ def browser_vision(
             "temperature": 0.1,
             "timeout": vision_timeout,
         }
-        if vision_model:
-            call_kwargs["model"] = vision_model
         if main_runtime:
             call_kwargs["main_runtime"] = main_runtime
         # Try full-size screenshot; on size-related rejection, downscale and retry.

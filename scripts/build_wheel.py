@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from email.parser import Parser
 import shutil
 import subprocess
 import sys
@@ -11,6 +12,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from agent.integration_policy import matching_retired_integrations
+from VoidCube_cli import __version__
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -103,9 +105,10 @@ def wheel_contract_errors(wheel_path: Path, root: Path = ROOT) -> list[str]:
     """Return source-to-wheel parity errors for packaged code and resources."""
     expected = expected_wheel_files(root)
     with ZipFile(wheel_path) as archive:
+        archive_names = archive.namelist()
         packaged = {
             name
-            for name in archive.namelist()
+            for name in archive_names
             if name.endswith(".py") or (
                 name.startswith("memai/prompts/") and name.endswith(".txt")
             ) or (
@@ -120,6 +123,14 @@ def wheel_contract_errors(wheel_path: Path, root: Path = ROOT) -> list[str]:
                 archive.read(name).decode("utf-8", errors="ignore")
             )
         )
+        metadata_files = [
+            name for name in archive_names if name.endswith(".dist-info/METADATA")
+        ]
+        wheel_metadata = None
+        if len(metadata_files) == 1:
+            wheel_metadata = Parser().parsestr(
+                archive.read(metadata_files[0]).decode("utf-8", errors="replace")
+            )
 
     errors: list[str] = []
     unexpected = sorted(packaged - expected)
@@ -133,6 +144,23 @@ def wheel_contract_errors(wheel_path: Path, root: Path = ROOT) -> list[str]:
             "wheel contains project-retired integration markers: "
             + ", ".join(retired_files)
         )
+    if len(metadata_files) != 1:
+        errors.append(
+            f"wheel must contain exactly one dist-info/METADATA file; found {len(metadata_files)}"
+        )
+    elif wheel_metadata is not None:
+        with (root / "pyproject.toml").open("rb") as handle:
+            requires_python = str(tomllib.load(handle)["project"]["requires-python"])
+        if wheel_metadata.get("Version") != __version__:
+            errors.append(
+                "wheel version does not match VoidCube_cli.__version__: "
+                f"{wheel_metadata.get('Version')!r} != {__version__!r}"
+            )
+        if wheel_metadata.get("Requires-Python") != requires_python:
+            errors.append(
+                "wheel Requires-Python does not match pyproject.toml: "
+                f"{wheel_metadata.get('Requires-Python')!r} != {requires_python!r}"
+            )
     return errors
 
 

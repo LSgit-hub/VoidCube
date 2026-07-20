@@ -37,7 +37,29 @@ _EXTRA_ENV_KEYS = frozenset({
     "TERMINAL_ENV", "TERMINAL_SSH_KEY", "TERMINAL_SSH_PORT",
     "LLM_MODEL", "LLM_BASE_URL", "OPENAI_MODEL",
 })
-_RETIRED_MODEL_ENV_VARS = ("LLM_MODEL", "LLM_BASE_URL", "OPENAI_MODEL")
+_AUXILIARY_TASK_KEYS = (
+    "vision",
+    "web_extract",
+    "compression",
+    "session_search",
+    "skills_hub",
+    "approval",
+    "mcp",
+    "flush_memories",
+)
+_AUXILIARY_ROUTE_FIELDS = ("provider", "model", "base_url", "api_key")
+_RETIRED_AUXILIARY_ENV_VARS = tuple(
+    f"{prefix}{task.upper()}_{field.upper()}"
+    for task in _AUXILIARY_TASK_KEYS
+    for field in _AUXILIARY_ROUTE_FIELDS
+    for prefix in ("AUXILIARY_", "CONTEXT_")
+)
+_RETIRED_MODEL_ENV_VARS = (
+    "LLM_MODEL",
+    "LLM_BASE_URL",
+    "OPENAI_MODEL",
+    *_RETIRED_AUXILIARY_ENV_VARS,
+)
 import yaml
 
 from VoidCube_cli.colors import Colors, color
@@ -391,9 +413,6 @@ DEFAULT_CONFIG = {
         "threshold": 0.50,            # compress when context usage exceeds this ratio
         "target_ratio": 0.20,         # fraction of threshold to preserve as recent tail
         "protect_last_n": 20,         # minimum recent messages to keep uncompressed
-        "summary_model": "",          # empty = use main configured model
-        "summary_provider": "auto",
-        "summary_base_url": None,
     },
     "smart_model_routing": {
         "enabled": False,
@@ -406,14 +425,14 @@ DEFAULT_CONFIG = {
     # Format: provider is the provider name, model is the model slug.
     # "auto" for provider = auto-detect best available provider.
     # Empty model = use provider's default auxiliary model.
-    # All tasks fall back to openrouter:google/gemini-3-flash-preview if
-    # the configured provider is unavailable.
+    # Auto-routed tasks can try another configured provider after a transport
+    # or payment failure. Explicit provider choices remain hard constraints.
     "auxiliary": {
         "vision": {
             "provider": "auto",    # auto | openrouter | nous | custom
             "model": "",           # e.g. "google/gemini-2.5-flash", "gpt-4o"
             "base_url": "",        # direct OpenAI-compatible endpoint (takes precedence over provider)
-            "api_key": "",         # API key for base_url (falls back to OPENAI_API_KEY)
+            "api_key": "",         # optional task-specific key for the direct endpoint
             "timeout": 120,        # seconds — LLM API call timeout; vision payloads need generous timeout
             "download_timeout": 30,  # seconds — image HTTP download timeout; increase for slow connections
         },
@@ -447,7 +466,7 @@ DEFAULT_CONFIG = {
         },
         "approval": {
             "provider": "auto",
-            "model": "",           # fast/cheap model recommended (e.g. gemini-flash, haiku)
+            "model": "",           # fast/cheap model recommended
             "base_url": "",
             "api_key": "",
             "timeout": 30,
@@ -707,7 +726,7 @@ DEFAULT_CONFIG = {
     },
 
     # Config schema version - bump this when adding new required fields
-    "_config_version": 18,
+    "_config_version": 19,
 }
 
 # =============================================================================
@@ -1715,7 +1734,63 @@ def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, A
                 tz_display = config["timezone"] or "(server-local)"
                 print(f"  ✓ Added timezone to config.yaml: {tz_display}")
 
-    # ── Always: remove retired model env vars from .env ──
+    # ── Version 18 → 19: make auxiliary.<task> the only side-model route ──
+    if current_ver < 19:
+        config = read_raw_config()
+        auxiliary = config.get("auxiliary", {})
+        if not isinstance(auxiliary, dict):
+            auxiliary = {}
+        compression = config.get("compression", {})
+        if not isinstance(compression, dict):
+            compression = {}
+
+        old_compression_fields = {
+            "provider": compression.pop("summary_provider", None),
+            "model": compression.pop("summary_model", None),
+            "base_url": compression.pop("summary_base_url", None),
+        }
+        changed = any(value is not None for value in old_compression_fields.values())
+
+        for task in _AUXILIARY_TASK_KEYS:
+            task_config = auxiliary.get(task, {})
+            if not isinstance(task_config, dict):
+                task_config = {}
+            for field in _AUXILIARY_ROUTE_FIELDS:
+                current_value = str(task_config.get(field) or "").strip()
+                has_current_value = bool(current_value) and not (
+                    field == "provider" and current_value.casefold() == "auto"
+                )
+                if has_current_value:
+                    continue
+
+                migrated_value = ""
+                if task == "compression":
+                    migrated_value = str(old_compression_fields.get(field) or "").strip()
+                    if field == "provider" and migrated_value.casefold() == "auto":
+                        migrated_value = ""
+                if not migrated_value:
+                    for prefix in ("AUXILIARY_", "CONTEXT_"):
+                        env_name = f"{prefix}{task.upper()}_{field.upper()}"
+                        migrated_value = str(get_env_value(env_name) or "").strip()
+                        if migrated_value:
+                            break
+                if migrated_value:
+                    task_config[field] = migrated_value
+                    changed = True
+                    results["config_added"].append(
+                        f"auxiliary.{task}.{field} (migrated from retired config)"
+                    )
+
+            auxiliary[task] = task_config
+
+        if changed:
+            config["auxiliary"] = auxiliary
+            config["compression"] = compression
+            save_config(config)
+            if not quiet:
+                print("  ✓ Consolidated auxiliary model routes under auxiliary.<task>")
+
+    # ── Always: remove retired model and auxiliary-route env vars from .env ──
     # These env vars were written by the old setup wizard but nothing reads
     # them anymore.  Delete them rather than preserving empty compatibility
     # placeholders, so they cannot be mistaken for API-A/API-B config later.
@@ -1724,7 +1799,10 @@ def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, A
             old_val = get_env_value(dead_var)
             if old_val is not None and remove_env_value(dead_var):
                 if not quiet:
-                    print(f"  ✓ Removed {dead_var} from .env (retired; config.yaml and memory.llm.* are source of truth)")
+                    print(
+                        f"  ✓ Removed {dead_var} from .env "
+                        "(retired; config.yaml and provider credentials are source of truth)"
+                    )
         except Exception:
             pass
 
@@ -2796,20 +2874,25 @@ def show_config():
     print()
     print(color("◆ Context Compression", Colors.CYAN, Colors.BOLD))
     compression = config.get('compression', {})
+    auxiliary = config.get('auxiliary', {})
+    if not isinstance(auxiliary, dict):
+        auxiliary = {}
+    compression_route = auxiliary.get('compression', {})
+    if not isinstance(compression_route, dict):
+        compression_route = {}
     enabled = compression.get('enabled', True)
     print(f"  Enabled:      {'yes' if enabled else 'no'}")
     if enabled:
         print(f"  Threshold:    {compression.get('threshold', 0.50) * 100:.0f}%")
         print(f"  Target ratio: {compression.get('target_ratio', 0.20) * 100:.0f}% of threshold preserved")
         print(f"  Protect last: {compression.get('protect_last_n', 20)} messages")
-        _sm = compression.get('summary_model', '') or '(main model)'
+        _sm = compression_route.get('model', '') or '(auto auxiliary model)'
         print(f"  Model:        {_sm}")
-        comp_provider = compression.get('summary_provider', 'auto')
+        comp_provider = compression_route.get('provider', 'auto')
         if comp_provider != 'auto':
             print(f"  Provider:     {comp_provider}")
     
     # Auxiliary models
-    auxiliary = config.get('auxiliary', {})
     aux_tasks = {
         "Vision":      auxiliary.get('vision', {}),
         "Web extract": auxiliary.get('web_extract', {}),

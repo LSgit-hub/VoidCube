@@ -81,8 +81,6 @@ def initialize_context_compressor(agent_cfg: Dict[str, Any]) -> "ContextCompress
         _compression_cfg = {}
     
     compression_threshold = float(_compression_cfg.get("threshold", 0.50))
-    compression_enabled = str(_compression_cfg.get("enabled", True)).lower() in ("true", "1", "yes")
-    compression_summary_model = _compression_cfg.get("summary_model") or None
     compression_target_ratio = float(_compression_cfg.get("target_ratio", 0.20))
     compression_protect_last = int(_compression_cfg.get("protect_last_n", 20))
     
@@ -124,13 +122,18 @@ def initialize_context_compressor(agent_cfg: Dict[str, Any]) -> "ContextCompress
     
     if _selected_engine is None:
         from agent.context_compressor import ContextCompressor
+        model_name = str(
+            _model_cfg.get("default") or _model_cfg.get("model") or ""
+        )
         _selected_engine = ContextCompressor(
-            enabled=compression_enabled,
-            threshold=compression_threshold,
-            summary_model=compression_summary_model,
-            target_ratio=compression_target_ratio,
+            model=model_name,
+            threshold_percent=compression_threshold,
+            summary_target_ratio=compression_target_ratio,
             protect_last_n=compression_protect_last,
             config_context_length=_config_context_length,
+            provider=str(_model_cfg.get("provider") or ""),
+            base_url=str(_model_cfg.get("base_url") or ""),
+            api_key=str(_model_cfg.get("api_key") or ""),
         )
     
     return _selected_engine

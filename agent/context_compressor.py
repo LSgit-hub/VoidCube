@@ -217,7 +217,6 @@ class ContextCompressor(ContextEngine):
         protect_last_n: int = 20,
         summary_target_ratio: float = 0.20,
         quiet_mode: bool = False,
-        summary_model_override: str = None,
         base_url: str = "",
         api_key: str = "",
         config_context_length: int | None = None,
@@ -269,8 +268,6 @@ class ContextCompressor(ContextEngine):
 
         self.last_prompt_tokens = 0
         self.last_completion_tokens = 0
-
-        self.summary_model = summary_model_override or ""
 
         # Stores the previous compaction summary for iterative updates
         self._previous_summary: Optional[str] = None
@@ -559,8 +556,6 @@ The user has requested that this compaction PRIORITISE preserving all informatio
                 "max_tokens": summary_budget * 2,
                 # timeout resolved from auxiliary.compression.timeout config by call_llm
             }
-            if self.summary_model:
-                call_kwargs["model"] = self.summary_model
             response = call_llm(**call_kwargs)
             content = response.choices[0].message.content
             # Handle cases where content is not a string (e.g., dict from llama.cpp)

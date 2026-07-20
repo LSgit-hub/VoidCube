@@ -4,6 +4,8 @@ import json
 import os
 from types import SimpleNamespace
 
+import yaml
+
 from VoidCube_cli.env_loader import load_VoidCube_dotenv
 from VoidCube_cli.auth import get_auth_status, read_credential_pool, write_credential_pool
 
@@ -59,6 +61,69 @@ def test_migrate_config_removes_retired_model_env_vars(tmp_path, monkeypatch):
     assert "LLM_MODEL=" not in env_text
     assert "LLM_BASE_URL=" not in env_text
     assert "OPENAI_MODEL=" not in env_text
+    assert "DEEPSEEK_API_KEY=sk-real-deepseek-token-123456789" in env_text
+
+
+def test_migrate_config_consolidates_auxiliary_routes_and_removes_old_sources(
+    tmp_path,
+    monkeypatch,
+):
+    home = tmp_path / ".VoidCube"
+    home.mkdir()
+    (home / "config.yaml").write_text(
+        """_config_version: 18
+compression:
+  enabled: true
+  summary_provider: deepseek
+  summary_model: summary-model
+  summary_base_url: https://summary.example/v1
+auxiliary:
+  vision:
+    provider: auto
+    model: ''
+    base_url: ''
+    api_key: old-config-secret
+""",
+        encoding="utf-8",
+    )
+    (home / ".env").write_text(
+        "AUXILIARY_WEB_EXTRACT_PROVIDER=openrouter\n"
+        "AUXILIARY_WEB_EXTRACT_MODEL=web-model\n"
+        "AUXILIARY_VISION_API_KEY=old-env-secret\n"
+        "DEEPSEEK_API_KEY=sk-real-deepseek-token-123456789\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VOIDCUBE_HOME", str(home))
+    for name in (
+        "AUXILIARY_WEB_EXTRACT_PROVIDER",
+        "AUXILIARY_WEB_EXTRACT_MODEL",
+        "AUXILIARY_VISION_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    from VoidCube_cli.config import migrate_config
+
+    migrate_config(interactive=False, quiet=True)
+
+    config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+    assert config["_config_version"] == 19
+    assert config["compression"]["enabled"] is True
+    assert not {
+        "summary_provider",
+        "summary_model",
+        "summary_base_url",
+    } & config["compression"].keys()
+    compression_route = config["auxiliary"]["compression"]
+    assert compression_route["provider"] == "deepseek"
+    assert compression_route["model"] == "summary-model"
+    assert compression_route["base_url"] == "https://summary.example/v1"
+    assert config["auxiliary"]["web_extract"]["provider"] == "openrouter"
+    assert config["auxiliary"]["web_extract"]["model"] == "web-model"
+    assert config["auxiliary"]["vision"]["api_key"] == "old-config-secret"
+
+    env_text = (home / ".env").read_text(encoding="utf-8")
+    assert "AUXILIARY_" not in env_text
+    assert "old-env-secret" not in env_text
     assert "DEEPSEEK_API_KEY=sk-real-deepseek-token-123456789" in env_text
 
 

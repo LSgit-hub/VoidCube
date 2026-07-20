@@ -37,8 +37,12 @@
 - context overflow 恢复计划已并入 `agent/context_compressor.py`：输出上限修正、真实窗口解析、probe tier 降级、压缩次数和探测持久化标志由不可变计划统一决定；命名压缩结果统一判断消息缩减或窗口降级是否取得进展，主循环只执行压缩、session 切换和状态输出。
 - 记忆刷新回退、MoA 参考模型和聚合模型请求已统一通过 `agent/api_request.py` 构建；MoA 的自定义聚合模型会实际参与请求，输出上限、reasoning 和退役集成策略不再由工具私自拼装。
 - API-A 主调用、辅助模型、模型切换和子 Agent 委派统一使用 OpenAI-compatible `chat.completions`；配置层不再保留协议探测、协议切换或专用响应适配字段。
+- 辅助任务路由只读取显式调用参数与 `auxiliary.<task>`；配置版本 19 会把旧压缩摘要字段和辅助环境变量迁入该结构后删除旧来源，浏览器、Web、压缩器与启动器不再维护环境变量桥接或第二套摘要模型配置。
+- 发行版本只在 `VoidCube_cli.__version__` 定义，setuptools、CLI、横幅和调试信息均读取该值；Python 3.11 最低版本由 `pyproject.toml`、开发文档与默认运行镜像共同约束。
+- 国际化只由 `VoidCube_cli/i18n.py` 和 `VoidCube_cli/locales/*.json` 提供；旧的核心静态消息表及星号导出已删除，浏览器工具与其余 CLI 使用同一 locale、fallback 和格式化规则。
+- `VoidCube_core` 根包只作为无副作用命名空间；常量、异常、日志、状态、时间与工具函数必须从所属子模块显式导入，不再维护失效 `__all__` 或星号重导出兼容面。
 - 从未实际写文件的 `save_trajectories` 空实现已连同参数、帮助和死分支删除；仍可使用独立入口的 `save_sample` 导出单次样本。
-- 主仓当前收集 839 项测试。日常修改先跑 smoke 和受影响模块，合并或发布前跑全量测试与构建。
+- 主仓当前收集 848 项测试。日常修改先跑 smoke 和受影响模块，合并或发布前跑全量测试与构建。
 - Mem 子系统当前有 108 项测试，需通过 `python -m pytest Mem/tests -q` 单独运行。
 
 ## 推荐阅读路径

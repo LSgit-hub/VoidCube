@@ -168,7 +168,7 @@ import logging
 import time as _time
 from datetime import datetime
 
-from VoidCube_cli import __version__, __release_date__
+from VoidCube_cli import __version__
 from VoidCube_core.constants import OPENROUTER_BASE_URL
 
 logger = logging.getLogger(__name__)
@@ -1194,7 +1194,7 @@ def cmd_config(args):
 
 def cmd_version(args):
     """Show version."""
-    print(f"Voidcube Agent v{__version__} ({__release_date__})")
+    print(f"Voidcube Agent v{__version__}")
     print(f"Project: {PROJECT_ROOT}")
     
     # Show Python version

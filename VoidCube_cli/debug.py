@@ -56,8 +56,8 @@ def _collect_debug_report(lines: int = 200) -> str:
     parts.append(f"Platform: {sys.platform}")
     parts.append(f"Python:   {sys.version}")
     try:
-        from VoidCube_cli import __version__, __release_date__
-        parts.append(f"VoidCube: v{__version__} ({__release_date__})")
+        from VoidCube_cli import __version__
+        parts.append(f"VoidCube: v{__version__}")
     except Exception:
         parts.append("VoidCube: (version unavailable)")
     parts.append(f"Home:     {get_VoidCube_home()}")
