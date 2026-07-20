@@ -110,7 +110,7 @@ def _auto_start_daemons() -> None:
     except ImportError:
         return
 
-    print("\n  ⚡ Auto-starting VoidCube daemons (Gateway → Memory → Supervisor)...\n")
+    print("\n  Auto-starting VoidCube daemons (Gateway -> Memory -> Supervisor)...\n")
     ensure_running(silent=False)
     print()
     os.environ["VOIDCUBE_DAEMONS_STARTED"] = "1"

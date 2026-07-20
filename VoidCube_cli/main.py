@@ -1091,10 +1091,10 @@ def _print_ops_json(payload) -> None:
 
 
 def _executor_ops_client(args):
-    from VoidCube_cli.ops.executor import ExecutorOpsClient
+    from VoidCube_cli.ops.executor import ExecutorOpsClient, default_gateway_url
 
     return ExecutorOpsClient(
-        gateway_url=getattr(args, "gateway_url", None) or "http://127.0.0.1:8000",
+        gateway_url=getattr(args, "gateway_url", None) or default_gateway_url(),
         timeout=float(getattr(args, "timeout", 30.0) or 30.0),
     )
 
@@ -1647,8 +1647,8 @@ For more help on a command:
     )
     body_parser.add_argument(
         "--gateway-url",
-        default="http://127.0.0.1:8000",
-        help="Gateway base URL (default: http://127.0.0.1:8000)",
+        default=None,
+        help="Gateway base URL (default: configured Gateway address)",
     )
     body_parser.add_argument(
         "--timeout",

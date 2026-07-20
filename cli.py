@@ -11052,7 +11052,7 @@ def _auto_start_daemons() -> None:
     except ImportError:
         return  # serve module not available — silently skip
 
-    print("\n  ⚡ Auto-starting VoidCube daemons (Mem → Gateway → Supervisor)...\n")
+    print("\n  Auto-starting VoidCube daemons (Gateway -> Memory -> Supervisor)...\n")
     result = ensure_running(silent=False)
     print()
 

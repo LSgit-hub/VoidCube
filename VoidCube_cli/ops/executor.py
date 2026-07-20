@@ -7,17 +7,29 @@ import requests
 
 
 EXECUTOR_ROUTE_PREFIX = "/api/executor"
+DEFAULT_GATEWAY_URL = "http://127.0.0.1:6000"
+
+
+def default_gateway_url() -> str:
+    """Resolve the canonical Gateway address used by the service launcher."""
+    try:
+        from systems.config import get_config
+
+        gateway = get_config().gateway
+        return f"http://{gateway.host}:{gateway.port}"
+    except Exception:
+        return DEFAULT_GATEWAY_URL
 
 
 @dataclass(slots=True)
 class ExecutorOpsClient:
     """CLI-side helper for routing execution actions through the gateway."""
 
-    gateway_url: str = "http://127.0.0.1:8000"
+    gateway_url: str = ""
     timeout: float = 30.0
 
     def __post_init__(self) -> None:
-        self.gateway_url = self.gateway_url.rstrip("/")
+        self.gateway_url = (self.gateway_url.strip() or default_gateway_url()).rstrip("/")
 
     def execute_body_upgrade(self, payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
         return self.post_executor("/body/upgrade/execute", payload or {})

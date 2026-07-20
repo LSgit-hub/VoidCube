@@ -30,6 +30,6 @@ def test_auto_start_daemons_reports_actual_startup_order(monkeypatch, capsys):
     voidcube._auto_start_daemons()
 
     output = capsys.readouterr().out
-    assert "Gateway \u2192 Memory \u2192 Supervisor" in output
-    assert "Memory \u2192 Gateway \u2192 Supervisor" not in output
+    assert "Gateway -> Memory -> Supervisor" in output
+    assert "Memory -> Gateway -> Supervisor" not in output
     assert calls == [{"silent": False}]

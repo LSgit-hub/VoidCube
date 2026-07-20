@@ -9,7 +9,15 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from VoidCube_cli.ops.executor import ExecutorOpsClient
+from VoidCube_cli.ops.executor import ExecutorOpsClient, default_gateway_url
+
+
+def test_executor_ops_default_gateway_matches_service_config(monkeypatch):
+    monkeypatch.setenv("GATEWAY_HOST", "127.0.0.9")
+    monkeypatch.setenv("GATEWAY_PORT", "6123")
+
+    assert default_gateway_url() == "http://127.0.0.9:6123"
+    assert ExecutorOpsClient().gateway_url == "http://127.0.0.9:6123"
 
 
 @pytest.mark.unit
