@@ -32,6 +32,7 @@ import re
 import sys
 import time
 import threading
+from dataclasses import replace
 from types import SimpleNamespace
 import uuid
 from typing import List, Dict, Any, Optional
@@ -87,8 +88,19 @@ from VoidCube_core.constants import OPENROUTER_BASE_URL
 
 # Agent internals extracted to agent/ package for modularity
 from agent.memory_manager import build_memory_context_block
-from agent.retry_utils import jittered_backoff
-from agent.error_classifier import classify_api_error, FailoverReason
+from agent.retry_utils import (
+    RetryKind,
+    decide_retry_directive,
+    jittered_backoff,
+)
+from agent.error_classifier import (
+    FailoverReason,
+    classify_api_error,
+    clean_error_message,
+    is_stream_drop_error,
+    retry_after_seconds,
+    summarize_api_error,
+)
 from agent.prompt_builder import (
     DEFAULT_AGENT_IDENTITY, PLATFORM_HINTS,
     MEMORY_GUIDANCE, SESSION_SEARCH_GUIDANCE, SKILLS_GUIDANCE,
@@ -97,15 +109,32 @@ from agent.prompt_builder import (
 from agent.model_metadata import (
     fetch_model_metadata,
     estimate_tokens_rough, estimate_messages_tokens_rough, estimate_request_tokens_rough,
-    get_next_probe_tier, parse_context_limit_from_error,
-    parse_available_output_tokens_from_error,
     save_context_length, is_local_endpoint,
     query_ollama_num_ctx,
 )
-from agent.context_compressor import ContextCompressor
+from agent.context_compressor import (
+    CompressionRecoveryResult,
+    ContextCompressor,
+    apply_context_recovery_plan,
+    build_context_recovery_plan,
+    next_compression_attempt,
+)
 from agent.iteration_control import IterationBudget
 from agent.subdirectory_hints import SubdirectoryHintTracker
-from agent.prompt_builder import build_skills_system_prompt, build_context_files_prompt, build_environment_hints, load_soul_md, TOOL_USE_ENFORCEMENT_GUIDANCE, TOOL_USE_ENFORCEMENT_MODELS, DEVELOPER_ROLE_MODELS, GOOGLE_MODEL_OPERATIONAL_GUIDANCE, OPENAI_MODEL_EXECUTION_GUIDANCE
+from agent.prompt_builder import build_skills_system_prompt, build_context_files_prompt, build_environment_hints, load_soul_md, TOOL_USE_ENFORCEMENT_GUIDANCE, TOOL_USE_ENFORCEMENT_MODELS, GOOGLE_MODEL_OPERATIONAL_GUIDANCE, OPENAI_MODEL_EXECUTION_GUIDANCE
+from agent.api_request import (
+    ChatRequestConfig,
+    build_chat_completion_kwargs,
+)
+from agent.integration_policy import require_active_integration
+from agent.api_response import (
+    extract_reasoning,
+    has_thinking_tags,
+    has_visible_content,
+    normalize_assistant_message,
+    strip_thinking_blocks,
+    strip_thinking_tags,
+)
 from agent.usage_pricing import estimate_usage_cost, normalize_usage
 from agent.tool_scheduler import (
     NEVER_PARALLEL_TOOLS, PARALLEL_SAFE_TOOLS, PATH_SCOPED_TOOLS,
@@ -1329,128 +1358,9 @@ class AIAgent:
             except Exception:
                 pass
 
-    def _is_direct_openai_url(self, base_url: str = None) -> bool:
-        """Return True when a base URL targets OpenAI's native API."""
-        url = (base_url or self._base_url_lower).lower()
-        return "api.openai.com" in url and "openrouter" not in url
-
     def _is_openrouter_url(self) -> bool:
         """Return True when the base URL targets OpenRouter."""
         return "openrouter" in self._base_url_lower
-
-    def _max_tokens_param(self, value: int) -> dict:
-        """Return the correct max tokens kwarg for the current provider.
-        
-        OpenAI's newer models (gpt-4o, o-series, gpt-5+) require
-        'max_completion_tokens'. OpenRouter, local models, and older
-        OpenAI models use 'max_tokens'.
-        """
-        if self._is_direct_openai_url():
-            return {"max_completion_tokens": value}
-        return {"max_tokens": value}
-
-    def _has_content_after_think_block(self, content: str) -> bool:
-        """
-        Check if content has actual text after any reasoning/thinking blocks.
-
-        This detects cases where the model only outputs reasoning but no actual
-        response, which indicates an incomplete generation that should be retried.
-        Must stay in sync with _strip_think_blocks() tag variants.
-
-        Args:
-            content: The assistant message content to check
-
-        Returns:
-            True if there's meaningful content after think blocks, False otherwise
-        """
-        if not content:
-            return False
-
-        # Remove all reasoning tag variants (must match _strip_think_blocks)
-        cleaned = self._strip_think_blocks(content)
-
-        # Check if there's any non-whitespace content remaining
-        return bool(cleaned.strip())
-    
-    def _strip_think_blocks(self, content: str) -> str:
-        """Remove reasoning/thinking blocks from content, returning only visible text."""
-        if not content:
-            return ""
-        # Strip all reasoning tag variants: <think>, <thinking>, <THINKING>,
-        # <reasoning>, <REASONING_SCRATCHPAD>, <thought> (Gemma 4)
-        content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
-        content = re.sub(r'<thinking>.*?</thinking>', '', content, flags=re.DOTALL | re.IGNORECASE)
-        content = re.sub(r'<reasoning>.*?</reasoning>', '', content, flags=re.DOTALL)
-        content = re.sub(r'<REASONING_SCRATCHPAD>.*?</REASONING_SCRATCHPAD>', '', content, flags=re.DOTALL)
-        content = re.sub(r'<thought>.*?</thought>', '', content, flags=re.DOTALL | re.IGNORECASE)
-        content = re.sub(r'</?(?:think|thinking|reasoning|thought|REASONING_SCRATCHPAD)>\s*', '', content, flags=re.IGNORECASE)
-        return content
-
-    def _extract_reasoning(self, assistant_message) -> Optional[str]:
-        """
-        Extract reasoning/thinking content from an assistant message.
-        
-        OpenRouter and various providers can return reasoning in multiple formats:
-        1. message.reasoning - Direct reasoning field (DeepSeek, Qwen, etc.)
-        2. message.reasoning_content - Alternative field (Moonshot AI, Novita, etc.)
-        3. message.reasoning_details - Array of {type, summary, ...} objects (OpenRouter unified)
-        
-        Args:
-            assistant_message: The assistant message object from the API response
-            
-        Returns:
-            Combined reasoning text, or None if no reasoning found
-        """
-        reasoning_parts = []
-        
-        # Check direct reasoning field
-        if hasattr(assistant_message, 'reasoning') and assistant_message.reasoning:
-            reasoning_parts.append(assistant_message.reasoning)
-        
-        # Check reasoning_content field (alternative name used by some providers)
-        if hasattr(assistant_message, 'reasoning_content') and assistant_message.reasoning_content:
-            # Don't duplicate if same as reasoning
-            if assistant_message.reasoning_content not in reasoning_parts:
-                reasoning_parts.append(assistant_message.reasoning_content)
-        
-        # Check reasoning_details array (OpenRouter unified format)
-        # Format: [{"type": "reasoning.summary", "summary": "...", ...}, ...]
-        if hasattr(assistant_message, 'reasoning_details') and assistant_message.reasoning_details:
-            for detail in assistant_message.reasoning_details:
-                if isinstance(detail, dict):
-                    # Extract summary from reasoning detail object
-                    summary = (
-                        detail.get('summary')
-                        or detail.get('thinking')
-                        or detail.get('content')
-                        or detail.get('text')
-                    )
-                    if summary and summary not in reasoning_parts:
-                        reasoning_parts.append(summary)
-
-        # Some providers embed reasoning directly inside assistant content
-        # instead of returning structured reasoning fields.  Only fall back
-        # to inline extraction when no structured reasoning was found.
-        content = getattr(assistant_message, "content", None)
-        if not reasoning_parts and isinstance(content, str) and content:
-            inline_patterns = (
-                r"<think>(.*?)</think>",
-                r"<thinking>(.*?)</thinking>",
-                r"<reasoning>(.*?)</reasoning>",
-                r"<REASONING_SCRATCHPAD>(.*?)</REASONING_SCRATCHPAD>",
-            )
-            for pattern in inline_patterns:
-                flags = re.DOTALL | re.IGNORECASE
-                for block in re.findall(pattern, content, flags=flags):
-                    cleaned = block.strip()
-                    if cleaned and cleaned not in reasoning_parts:
-                        reasoning_parts.append(cleaned)
-        
-        # Combine all reasoning parts
-        if reasoning_parts:
-            return "\n\n".join(reasoning_parts)
-        
-        return None
 
     def _cleanup_task_resources(self, task_id: str) -> None:
         """Clean up VM and browser resources for a given task.
@@ -1917,144 +1827,12 @@ class AIAgent:
         
         return trajectory
     
-    @staticmethod
-    def _summarize_api_error(error: Exception) -> str:
-        """Extract a human-readable one-liner from an API error.
-
-        Handles Cloudflare HTML error pages (502, 503, etc.) by pulling the
-        <title> tag instead of dumping raw HTML.  Falls back to a truncated
-        str(error) for everything else.
-        """
-        import re as _re
-        raw = str(error)
-
-        # Cloudflare / proxy HTML pages: grab the <title> for a clean summary
-        if "<!DOCTYPE" in raw or "<html" in raw:
-            m = _re.search(r"<title[^>]*>([^<]+)</title>", raw, _re.IGNORECASE)
-            title = m.group(1).strip() if m else "HTML error page (title not found)"
-            # Also grab Cloudflare Ray ID if present
-            ray = _re.search(r"Cloudflare Ray ID:\s*<strong[^>]*>([^<]+)</strong>", raw)
-            ray_id = ray.group(1).strip() if ray else None
-            status_code = getattr(error, "status_code", None)
-            parts = []
-            if status_code:
-                parts.append(f"HTTP {status_code}")
-            parts.append(title)
-            if ray_id:
-                parts.append(f"Ray {ray_id}")
-            return " — ".join(parts)
-
-        # JSON body errors from OpenAI-compatible SDKs
-        body = getattr(error, "body", None)
-        if isinstance(body, dict):
-            msg = body.get("error", {}).get("message") if isinstance(body.get("error"), dict) else body.get("message")
-            if msg:
-                status_code = getattr(error, "status_code", None)
-                prefix = f"HTTP {status_code}: " if status_code else ""
-                return f"{prefix}{msg[:300]}"
-
-        # Fallback: truncate the raw string but give more room than 200 chars
-        status_code = getattr(error, "status_code", None)
-        prefix = f"HTTP {status_code}: " if status_code else ""
-        return f"{prefix}{raw[:500]}"
-
     def _mask_api_key_for_logs(self, key: Optional[str]) -> Optional[str]:
         if not key:
             return None
         if len(key) <= 12:
             return "***"
         return f"{key[:8]}...{key[-4:]}"
-
-    def _clean_error_message(self, error_msg: str) -> str:
-        """
-        Clean up error messages for user display, removing HTML content and truncating.
-        
-        Args:
-            error_msg: Raw error message from API or exception
-            
-        Returns:
-            Clean, user-friendly error message
-        """
-        if not error_msg:
-            return "Unknown error"
-            
-        # Remove HTML content (common with CloudFlare and gateway error pages)
-        if error_msg.strip().startswith('<!DOCTYPE html') or '<html' in error_msg:
-            return "Service temporarily unavailable (HTML error page returned)"
-            
-        # Remove newlines and excessive whitespace
-        cleaned = ' '.join(error_msg.split())
-        
-        # Truncate if too long
-        if len(cleaned) > 150:
-            cleaned = cleaned[:150] + "..."
-            
-        return cleaned
-
-    @staticmethod
-    def _extract_api_error_context(error: Exception) -> Dict[str, Any]:
-        """Extract structured rate-limit details from provider errors."""
-        context: Dict[str, Any] = {}
-
-        body = getattr(error, "body", None)
-        payload = None
-        if isinstance(body, dict):
-            payload = body.get("error") if isinstance(body.get("error"), dict) else body
-        if isinstance(payload, dict):
-            reason = payload.get("code") or payload.get("error")
-            if isinstance(reason, str) and reason.strip():
-                context["reason"] = reason.strip()
-            message = payload.get("message") or payload.get("error_description")
-            if isinstance(message, str) and message.strip():
-                context["message"] = message.strip()
-            for key in ("resets_at", "reset_at"):
-                value = payload.get(key)
-                if value not in (None, ""):
-                    context["reset_at"] = value
-                    break
-            retry_after = payload.get("retry_after")
-            if retry_after not in (None, "") and "reset_at" not in context:
-                try:
-                    context["reset_at"] = time.time() + float(retry_after)
-                except (TypeError, ValueError):
-                    pass
-
-        response = getattr(error, "response", None)
-        headers = getattr(response, "headers", None)
-        if headers:
-            retry_after = headers.get("retry-after") or headers.get("Retry-After")
-            if retry_after and "reset_at" not in context:
-                try:
-                    context["reset_at"] = time.time() + float(retry_after)
-                except (TypeError, ValueError):
-                    pass
-            ratelimit_reset = headers.get("x-ratelimit-reset")
-            if ratelimit_reset and "reset_at" not in context:
-                context["reset_at"] = ratelimit_reset
-
-        if "message" not in context:
-            raw_message = str(error).strip()
-            if raw_message:
-                context["message"] = raw_message[:500]
-
-        if "reset_at" not in context:
-            message = context.get("message") or ""
-            if isinstance(message, str):
-                delay_match = re.search(r"quotaResetDelay[:\s\"]+(\\d+(?:\\.\\d+)?)(ms|s)", message, re.IGNORECASE)
-                if delay_match:
-                    value = float(delay_match.group(1))
-                    seconds = value / 1000.0 if delay_match.group(2).lower() == "ms" else value
-                    context["reset_at"] = time.time() + seconds
-                else:
-                    sec_match = re.search(
-                        r"retry\s+(?:after\s+)?(\d+(?:\.\d+)?)\s*(?:sec|secs|seconds|s\b)",
-                        message,
-                        re.IGNORECASE,
-                    )
-                    if sec_match:
-                        context["reset_at"] = time.time() + float(sec_match.group(1))
-
-        return context
 
     def _usage_summary_for_api_request_hook(self, response: Any) -> Optional[Dict[str, Any]]:
         """Token buckets for ``post_api_request`` plugins (no raw ``response`` object)."""
@@ -2963,6 +2741,7 @@ class AIAgent:
         return True
 
     def _ensure_primary_openai_client(self, *, reason: str) -> Any:
+        require_active_integration(self.provider, self.model, self.base_url)
         with self._openai_client_lock():
             client = getattr(self, "client", None)
             if client is not None and not self._is_openai_client_closed(client):
@@ -3269,12 +3048,12 @@ class AIAgent:
 
     def _interim_content_was_streamed(self, content: str) -> bool:
         visible_content = self._normalize_interim_visible_text(
-            self._strip_think_blocks(content or "")
+            strip_thinking_blocks(content or "")
         )
         if not visible_content:
             return False
         streamed = self._normalize_interim_visible_text(
-            self._strip_think_blocks(getattr(self, "_current_streamed_assistant_text", "") or "")
+            strip_thinking_blocks(getattr(self, "_current_streamed_assistant_text", "") or "")
         )
         return bool(streamed) and streamed == visible_content
 
@@ -3284,7 +3063,7 @@ class AIAgent:
         if cb is None or not isinstance(assistant_msg, dict):
             return
         content = assistant_msg.get("content")
-        visible = self._strip_think_blocks(content or "").strip()
+        visible = strip_thinking_blocks(content or "").strip()
         if not visible or visible == "(empty)":
             return
         already_streamed = self._interim_content_was_streamed(visible)
@@ -4053,252 +3832,34 @@ class AIAgent:
 
     # ── End provider fallback ──────────────────────────────────────────────
 
-    def _is_qwen_portal(self) -> bool:
-        """Return True when the base URL targets Qwen Portal."""
-        return "portal.qwen.ai" in self._base_url_lower
-
-    def _qwen_prepare_chat_messages(self, api_messages: list) -> list:
-        prepared = copy.deepcopy(api_messages)
-        if not prepared:
-            return prepared
-
-        for msg in prepared:
-            if not isinstance(msg, dict):
-                continue
-            content = msg.get("content")
-            if isinstance(content, str):
-                msg["content"] = [{"type": "text", "text": content}]
-            elif isinstance(content, list):
-                # Normalize: convert bare strings to text dicts, keep dicts as-is.
-                # deepcopy already created independent copies, no need for dict().
-                normalized_parts = []
-                for part in content:
-                    if isinstance(part, str):
-                        normalized_parts.append({"type": "text", "text": part})
-                    elif isinstance(part, dict):
-                        normalized_parts.append(part)
-                if normalized_parts:
-                    msg["content"] = normalized_parts
-
-        # Inject cache_control on the last part of the system message.
-        for msg in prepared:
-            if isinstance(msg, dict) and msg.get("role") == "system":
-                content = msg.get("content")
-                if isinstance(content, list) and content and isinstance(content[-1], dict):
-                    content[-1]["cache_control"] = {"type": "ephemeral"}
-                break
-
-        return prepared
-
-    def _qwen_prepare_chat_messages_inplace(self, messages: list) -> None:
-        """In-place variant — mutates an already-copied message list."""
-        if not messages:
-            return
-
-        for msg in messages:
-            if not isinstance(msg, dict):
-                continue
-            content = msg.get("content")
-            if isinstance(content, str):
-                msg["content"] = [{"type": "text", "text": content}]
-            elif isinstance(content, list):
-                normalized_parts = []
-                for part in content:
-                    if isinstance(part, str):
-                        normalized_parts.append({"type": "text", "text": part})
-                    elif isinstance(part, dict):
-                        normalized_parts.append(part)
-                if normalized_parts:
-                    msg["content"] = normalized_parts
-
-        for msg in messages:
-            if isinstance(msg, dict) and msg.get("role") == "system":
-                content = msg.get("content")
-                if isinstance(content, list) and content and isinstance(content[-1], dict):
-                    content[-1]["cache_control"] = {"type": "ephemeral"}
-                break
-
-    def _build_api_kwargs(self, api_messages: list) -> dict:
-        """Build OpenAI-compatible chat-completions request arguments."""
-        prepared_messages = api_messages
-        if self._is_qwen_portal():
-            prepared_messages = self._qwen_prepare_chat_messages(api_messages)
-
-        model_lower = (self.model or "").lower()
-        if (
-            prepared_messages
-            and prepared_messages[0].get("role") == "system"
-            and any(pattern in model_lower for pattern in DEVELOPER_ROLE_MODELS)
-        ):
-            prepared_messages = list(prepared_messages)
-            prepared_messages[0] = {
-                **prepared_messages[0],
-                "role": "developer",
-            }
-
-        provider_preferences = {}
-        if self.providers_allowed:
-            provider_preferences["only"] = self.providers_allowed
-        if self.providers_ignored:
-            provider_preferences["ignore"] = self.providers_ignored
-        if self.providers_order:
-            provider_preferences["order"] = self.providers_order
-        if self.provider_sort:
-            provider_preferences["sort"] = self.provider_sort
-        if self.provider_require_parameters:
-            provider_preferences["require_parameters"] = True
-        if self.provider_data_collection:
-            provider_preferences["data_collection"] = self.provider_data_collection
-
-        api_kwargs = {
-            "model": self.model,
-            "messages": prepared_messages,
-            "timeout": float(os.getenv("VOIDCUBE_API_TIMEOUT", 1800.0)),
-        }
-        if self._is_qwen_portal():
-            api_kwargs["metadata"] = {
-                "sessionId": self.session_id or "VoidCube",
-                "promptId": str(uuid.uuid4()),
-            }
-        if self.tools:
-            api_kwargs["tools"] = normalize_tool_definitions(self.tools)
-
-        if self.max_tokens is not None:
-            api_kwargs.update(self._max_tokens_param(self.max_tokens))
-        elif self._is_qwen_portal():
-            api_kwargs.update(self._max_tokens_param(65536))
-
-        extra_body = {}
-        is_openrouter = self._is_openrouter_url()
-        is_github_models = (
-            "models.github.ai" in self._base_url_lower
-            or "api.githubcopilot.com" in self._base_url_lower
+    def _chat_request_config(self) -> ChatRequestConfig:
+        """Snapshot mutable Agent state for pure request preparation."""
+        return ChatRequestConfig(
+            model=self.model,
+            base_url=self.base_url,
+            session_id=self.session_id or "",
+            tools=tuple(self.tools or ()),
+            max_tokens=self.max_tokens,
+            providers_allowed=tuple(self.providers_allowed or ()),
+            providers_ignored=tuple(self.providers_ignored or ()),
+            providers_order=tuple(self.providers_order or ()),
+            provider_sort=self.provider_sort or "",
+            provider_require_parameters=bool(self.provider_require_parameters),
+            provider_data_collection=self.provider_data_collection or "",
+            reasoning_config=(
+                dict(self.reasoning_config)
+                if isinstance(self.reasoning_config, dict)
+                else None
+            ),
+            ollama_num_ctx=self._ollama_num_ctx,
+            request_overrides=dict(self.request_overrides or {}),
+            timeout=float(os.getenv("VOIDCUBE_API_TIMEOUT", 1800.0)),
         )
-        if provider_preferences and is_openrouter:
-            extra_body["provider"] = provider_preferences
-
-        is_nous = "nousresearch" in self._base_url_lower
-        if self._supports_reasoning_extra_body():
-            if is_github_models:
-                github_reasoning = self._github_models_reasoning_extra_body()
-                if github_reasoning is not None:
-                    extra_body["reasoning"] = github_reasoning
-            elif self.reasoning_config is not None:
-                reasoning = dict(self.reasoning_config)
-                if not (is_nous and reasoning.get("enabled") is False):
-                    extra_body["reasoning"] = reasoning
-            else:
-                extra_body["reasoning"] = {
-                    "enabled": True,
-                    "effort": "medium",
-                }
-
-        if is_nous:
-            extra_body["tags"] = ["product=VoidCube-agent"]
-
-        if self._ollama_num_ctx:
-            options = extra_body.get("options", {})
-            options["num_ctx"] = self._ollama_num_ctx
-            extra_body["options"] = options
-
-        if self._is_qwen_portal():
-            extra_body["vl_high_resolution_images"] = True
-
-        if extra_body:
-            api_kwargs["extra_body"] = extra_body
-
-        if "x.ai" in self._base_url_lower and self.session_id:
-            api_kwargs["extra_headers"] = {
-                "x-grok-conv-id": self.session_id,
-            }
-
-        if self.request_overrides:
-            api_kwargs.update(self.request_overrides)
-
-        return api_kwargs
-    def _supports_reasoning_extra_body(self) -> bool:
-        """Return True when reasoning extra_body is safe to send for this route/model.
-
-        OpenRouter forwards unknown extra_body fields to upstream providers.
-        Some providers/routes reject `reasoning` with 400s, so gate it to
-        known reasoning-capable model families and direct Nous Portal.
-        """
-        if "nousresearch" in self._base_url_lower:
-            return True
-        if "ai-gateway.vercel.sh" in self._base_url_lower:
-            return True
-        if "models.github.ai" in self._base_url_lower or "api.githubcopilot.com" in self._base_url_lower:
-            try:
-                from VoidCube_cli.models import github_model_reasoning_efforts
-
-                return bool(github_model_reasoning_efforts(self.model))
-            except Exception:
-                return False
-        if "openrouter" not in self._base_url_lower:
-            return False
-        if "api.mistral.ai" in self._base_url_lower:
-            return False
-
-        model = (self.model or "").lower()
-        reasoning_model_prefixes = (
-            "deepseek/",
-            "openai/",
-            "x-ai/",
-            "google/gemini-2",
-            "qwen/qwen3",
-        )
-        return any(model.startswith(prefix) for prefix in reasoning_model_prefixes)
-
-    def _github_models_reasoning_extra_body(self) -> dict | None:
-        """Format reasoning payload for GitHub Models/OpenAI-compatible routes."""
-        try:
-            from VoidCube_cli.models import github_model_reasoning_efforts
-        except Exception:
-            return None
-
-        supported_efforts = github_model_reasoning_efforts(self.model)
-        if not supported_efforts:
-            return None
-
-        if self.reasoning_config and isinstance(self.reasoning_config, dict):
-            if self.reasoning_config.get("enabled") is False:
-                return None
-            requested_effort = str(
-                self.reasoning_config.get("effort", "medium")
-            ).strip().lower()
-        else:
-            requested_effort = "medium"
-
-        if requested_effort == "xhigh" and "high" in supported_efforts:
-            requested_effort = "high"
-        elif requested_effort not in supported_efforts:
-            if requested_effort == "minimal" and "low" in supported_efforts:
-                requested_effort = "low"
-            elif "medium" in supported_efforts:
-                requested_effort = "medium"
-            else:
-                requested_effort = supported_efforts[0]
-
-        return {"effort": requested_effort}
 
     def _build_assistant_message(self, assistant_message, finish_reason: str) -> dict:
-        """Build a normalized assistant message dict from an API response message.
-
-        Handles reasoning extraction, reasoning_details, and optional tool_calls
-        so both the tool-call path and the final-response path share one builder.
-        """
-        reasoning_text = self._extract_reasoning(assistant_message)
-        _from_structured = bool(reasoning_text)
-
-        # Fallback: extract inline <think> blocks from content when no structured
-        # reasoning fields are present (some models/providers embed thinking
-        # directly in the content rather than returning separate API fields).
-        if not reasoning_text:
-            content = assistant_message.content or ""
-            think_blocks = re.findall(r'<think>(.*?)</think>', content, flags=re.DOTALL)
-            if think_blocks:
-                combined = "\n\n".join(b.strip() for b in think_blocks if b.strip())
-                reasoning_text = combined or None
+        """Normalize a response message and emit non-streaming reasoning."""
+        msg = normalize_assistant_message(assistant_message, finish_reason)
+        reasoning_text = msg["reasoning"]
 
         if reasoning_text and self.verbose_logging:
             logging.debug(f"Captured reasoning ({len(reasoning_text)} chars): {reasoning_text}")
@@ -4317,56 +3878,6 @@ class AIAgent:
                     self.reasoning_callback(reasoning_text)
                 except Exception:
                     pass
-
-        msg = {
-            "role": "assistant",
-            "content": assistant_message.content or "",
-            "reasoning": reasoning_text,
-            "finish_reason": finish_reason,
-        }
-
-        if hasattr(assistant_message, 'reasoning_details') and assistant_message.reasoning_details:
-            # Pass reasoning_details back unmodified so compatible providers
-            # can maintain reasoning continuity across turns.
-            # Each provider may include opaque fields (signature, encrypted_content)
-            # that must be preserved exactly.
-            raw_details = assistant_message.reasoning_details
-            preserved = []
-            for d in raw_details:
-                if isinstance(d, dict):
-                    preserved.append(d)
-                elif hasattr(d, "__dict__"):
-                    preserved.append(d.__dict__)
-                elif hasattr(d, "model_dump"):
-                    preserved.append(d.model_dump())
-            if preserved:
-                msg["reasoning_details"] = preserved
-
-        if assistant_message.tool_calls:
-            tool_calls: list = []
-            for tool_call in assistant_message.tool_calls:
-                raw_id = getattr(tool_call, "id", None)
-                call_id = raw_id.strip() if isinstance(raw_id, str) and raw_id.strip() else f"call_{uuid.uuid4().hex}"
-
-                tc_dict = {
-                    "id": call_id,
-                    "type": tool_call.type,
-                    "function": {
-                        "name": tool_call.function.name,
-                        "arguments": tool_call.function.arguments
-                    },
-                }
-                # Preserve extra_content (e.g. Gemini thought_signature) so it
-                # is sent back on subsequent API calls.  Without this, Gemini 3
-                # thinking models reject the request with a 400 error.
-                extra = getattr(tool_call, "extra_content", None)
-                if extra is not None:
-                    if hasattr(extra, "model_dump"):
-                        extra = extra.model_dump()
-                    tc_dict["extra_content"] = extra
-                tool_calls.append(tc_dict)
-            msg["tool_calls"] = tool_calls
-
         return msg
 
     def flush_memories(self, messages: list = None, min_turns: int = None):
@@ -4451,16 +3962,20 @@ class AIAgent:
                 response = None
 
             if not _aux_available:
-                api_kwargs = {
-                    "model": self.model,
-                    "messages": api_messages,
-                    "tools": [memory_tool_def],
-                    "temperature": 0.3,
-                    **self._max_tokens_param(5120),
-                }
                 from agent.auxiliary_client import _get_task_timeout
+                flush_config = replace(
+                    self._chat_request_config(),
+                    tools=(memory_tool_def,),
+                    max_tokens=5120,
+                    request_overrides={"temperature": 0.3},
+                    timeout=_get_task_timeout("flush_memories"),
+                )
+                api_kwargs = build_chat_completion_kwargs(
+                    flush_config,
+                    api_messages,
+                )
                 response = self._ensure_primary_openai_client(reason="flush_memories").chat.completions.create(
-                    **api_kwargs, timeout=_get_task_timeout("flush_memories")
+                    **api_kwargs
                 )
 
             # Extract tool calls from the chat-completions response.
@@ -4612,6 +4127,48 @@ class AIAgent:
             f"{_compressed_est:,}",
         )
         return compressed, new_system_prompt
+
+    def _compress_for_api_recovery(
+        self,
+        messages: list,
+        system_message: str,
+        *,
+        approx_tokens: int,
+        task_id: str,
+        context_length_changed: bool = False,
+    ) -> CompressionRecoveryResult:
+        """Execute one recovery compression and assess whether it made progress."""
+        original_count = len(messages)
+        compressed, system_prompt = self._compress_context(
+            messages,
+            system_message,
+            approx_tokens=approx_tokens,
+            task_id=task_id,
+        )
+        return CompressionRecoveryResult(
+            messages=compressed,
+            system_prompt=system_prompt,
+            original_message_count=original_count,
+            context_length_changed=context_length_changed,
+        )
+
+    def _context_recovery_failure_result(
+        self,
+        *,
+        messages: list,
+        conversation_history: list | None,
+        api_call_count: int,
+        error: str,
+    ) -> dict:
+        """Persist once and build the canonical partial context failure result."""
+        self._persist_session(messages, conversation_history)
+        return {
+            "messages": messages,
+            "completed": False,
+            "api_calls": api_call_count,
+            "error": error,
+            "partial": True,
+        }
 
     def _execute_tool_calls(self, assistant_message, messages: list, effective_task_id: str, api_call_count: int = 0) -> None:
         """Execute tool calls from the assistant message and append results to messages.
@@ -5345,39 +4902,12 @@ class AIAgent:
                 for idx, pfm in enumerate(self.prefill_messages):
                     api_messages.insert(sys_offset + idx, pfm.copy())
 
-            summary_extra_body = {}
-            _is_nous = "nousresearch" in self._base_url_lower
-            if self._supports_reasoning_extra_body():
-                if self.reasoning_config is not None:
-                    summary_extra_body["reasoning"] = self.reasoning_config
-                else:
-                    summary_extra_body["reasoning"] = {
-                        "enabled": True,
-                        "effort": "medium"
-                    }
-            if _is_nous:
-                summary_extra_body["tags"] = ["product=VoidCube-agent"]
-
-            summary_kwargs = {
-                "model": self.model,
-                "messages": api_messages,
-            }
-            if self.max_tokens is not None:
-                summary_kwargs.update(self._max_tokens_param(self.max_tokens))
-
-            provider_preferences = {}
-            if self.providers_allowed:
-                provider_preferences["only"] = self.providers_allowed
-            if self.providers_ignored:
-                provider_preferences["ignore"] = self.providers_ignored
-            if self.providers_order:
-                provider_preferences["order"] = self.providers_order
-            if self.provider_sort:
-                provider_preferences["sort"] = self.provider_sort
-            if provider_preferences:
-                summary_extra_body["provider"] = provider_preferences
-            if summary_extra_body:
-                summary_kwargs["extra_body"] = summary_extra_body
+            summary_kwargs = build_chat_completion_kwargs(
+                self._chat_request_config(),
+                api_messages,
+                include_tools=False,
+                include_request_overrides=False,
+            )
 
             summary_response = self._ensure_primary_openai_client(reason="iteration_limit_summary").chat.completions.create(**summary_kwargs)
             if summary_response.choices and summary_response.choices[0].message.content:
@@ -5386,8 +4916,7 @@ class AIAgent:
                 final_response = ""
 
             if final_response:
-                if "<think>" in final_response:
-                    final_response = re.sub(r'<think>.*?</think>\s*', '', final_response, flags=re.DOTALL).strip()
+                final_response = strip_thinking_blocks(final_response).strip()
                 if final_response:
                     messages.append({"role": "assistant", "content": final_response})
                 else:
@@ -5401,8 +4930,7 @@ class AIAgent:
                     final_response = ""
 
                 if final_response:
-                    if "<think>" in final_response:
-                        final_response = re.sub(r'<think>.*?</think>\s*', '', final_response, flags=re.DOTALL).strip()
+                    final_response = strip_thinking_blocks(final_response).strip()
                     if final_response:
                         messages.append({"role": "assistant", "content": final_response})
                     else:
@@ -5951,7 +5479,10 @@ class AIAgent:
             while retry_count < max_retries:
                 try:
                     self._reset_stream_delivery_tracking()
-                    api_kwargs = self._build_api_kwargs(api_messages)
+                    api_kwargs = build_chat_completion_kwargs(
+                        self._chat_request_config(),
+                        api_messages,
+                    )
                     try:
                         from VoidCube_cli.plugins import invoke_hook as _invoke_hook
                         _invoke_hook(
@@ -6122,7 +5653,7 @@ class AIAgent:
 
                         self._vprint(f"{self.log_prefix}⚠️  Invalid API response (attempt {retry_count}/{max_retries}): {', '.join(error_details)}", force=True)
                         self._vprint(f"{self.log_prefix}   🏢 Provider: {provider_name}", force=True)
-                        cleaned_provider_error = self._clean_error_message(error_msg)
+                        cleaned_provider_error = clean_error_message(error_msg)
                         self._vprint(f"{self.log_prefix}   📝 Provider message: {cleaned_provider_error}", force=True)
                         self._vprint(f"{self.log_prefix}   ⏱️  {_failure_hint}", force=True)
                         
@@ -6191,18 +5722,12 @@ class AIAgent:
                         # string for unrelated reasons — treat those as normal
                         # truncations that deserve continuation retries, not as
                         # thinking-budget exhaustion.
-                        _has_think_tags = bool(
-                            _trunc_content and re.search(
-                                r'<(?:think|thinking|reasoning|REASONING_SCRATCHPAD)[^>]*>',
-                                _trunc_content,
-                                re.IGNORECASE,
-                            )
-                        )
+                        _has_think_tags = has_thinking_tags(_trunc_content or "")
                         _thinking_exhausted = (
                             not _trunc_has_tool_calls
                             and _has_think_tags
                             and (
-                                (_trunc_content is not None and not self._has_content_after_think_block(_trunc_content))
+                                (_trunc_content is not None and not has_visible_content(_trunc_content))
                                 or _trunc_content is None
                             )
                         )
@@ -6268,7 +5793,7 @@ class AIAgent:
                                 restart_with_length_continuation = True
                                 break
 
-                            partial_response = self._strip_think_blocks(truncated_response_prefix).strip()
+                            partial_response = strip_thinking_blocks(truncated_response_prefix).strip()
                             self._cleanup_task_resources(effective_task_id)
                             self._persist_session(messages, conversation_history)
                             return {
@@ -6485,9 +6010,6 @@ class AIAgent:
                         # Nothing to sanitize in messages — might be in system
                         # prompt or prefill. Fall through to normal error path.
 
-                    status_code = getattr(api_error, "status_code", None)
-                    error_context = self._extract_api_error_context(api_error)
-
                     # ── Classify the error for structured recovery decisions ──
                     _compressor = getattr(self, "context_compressor", None)
                     _ctx_len = getattr(_compressor, "context_length", 200000) if _compressor else 200000
@@ -6499,6 +6021,8 @@ class AIAgent:
                         context_length=_ctx_len,
                         num_messages=len(api_messages) if api_messages else 0,
                     )
+                    status_code = classified.status_code
+                    error_context = classified.error_context
                     logger.debug(
                         "Error classified: reason=%s status=%s retryable=%s compress=%s rotate=%s fallback=%s",
                         classified.reason.value, classified.status_code,
@@ -6528,7 +6052,7 @@ class AIAgent:
                     
                     error_type = type(api_error).__name__
                     error_msg = str(api_error).lower()
-                    _error_summary = self._summarize_api_error(api_error)
+                    _error_summary = summarize_api_error(api_error)
                     logger.warning(
                         "API call failed (attempt %s/%s) error_type=%s %s summary=%s",
                         retry_count,
@@ -6585,73 +6109,77 @@ class AIAgent:
                         self._persist_session(messages, conversation_history)
                         self.clear_interrupt()
                         return {
-                            "final_response": f"Operation interrupted: handling API error ({error_type}: {self._clean_error_message(str(api_error))}).",
+                            "final_response": f"Operation interrupted: handling API error ({error_type}: {clean_error_message(str(api_error))}).",
                             "messages": messages,
                             "api_calls": api_call_count,
                             "completed": False,
                             "interrupted": True,
                         }
                     
-                    # Check for 413 payload-too-large BEFORE generic 4xx handler.
-                    # A 413 is a payload-size error — the correct response is to
-                    # compress history and retry, not abort immediately.
-                    status_code = getattr(api_error, "status_code", None)
-
-                    # Eager fallback for rate-limit errors (429 or quota exhaustion).
-                    # When a fallback model is configured, switch immediately instead
-                    # of burning through retries with exponential backoff -- the
-                    # primary provider won't recover within the retry window.
-                    is_rate_limited = classified.reason in (
-                        FailoverReason.rate_limit,
-                        FailoverReason.billing,
+                    fallback_available = self._fallback_index < len(self._fallback_chain)
+                    pool = self._credential_pool
+                    pool_may_recover = (
+                        fallback_available
+                        and classified.reason in (
+                            FailoverReason.rate_limit,
+                            FailoverReason.billing,
+                        )
+                        and pool is not None
+                        and pool.has_available()
                     )
-                    if is_rate_limited and self._fallback_index < len(self._fallback_chain):
-                        # Don't eagerly fallback if credential pool rotation may
-                        # still recover.  The pool's retry-then-rotate cycle needs
-                        # at least one more attempt to fire — jumping to a fallback
-                        # provider here short-circuits it.
-                        pool = self._credential_pool
-                        pool_may_recover = pool is not None and pool.has_available()
-                        if not pool_may_recover:
-                            self._emit_status("⚠️ Rate limited — switching to fallback provider...")
-                            if self._try_activate_fallback():
-                                retry_count = 0
-                                compression_attempts = 0
-                                primary_recovery_attempted = False
-                                continue
-
-                    is_payload_too_large = (
-                        classified.reason == FailoverReason.payload_too_large
+                    retry_directive = decide_retry_directive(
+                        classified,
+                        api_error,
+                        retry_count=retry_count,
+                        max_retries=max_retries,
+                        fallback_available=fallback_available,
+                        credential_pool_may_recover=pool_may_recover,
+                        primary_recovery_attempted=primary_recovery_attempted,
                     )
+                    is_rate_limited = retry_directive.is_rate_limited
 
-                    if is_payload_too_large:
-                        compression_attempts += 1
-                        if compression_attempts > max_compression_attempts:
+                    if retry_directive.try_eager_fallback:
+                        self._emit_status("⚠️ Rate limited — switching to fallback provider...")
+                        if self._try_activate_fallback():
+                            retry_count = 0
+                            compression_attempts = 0
+                            primary_recovery_attempted = False
+                            continue
+
+                    if retry_directive.kind is RetryKind.compress_payload:
+                        compression_attempt = next_compression_attempt(
+                            compression_attempts,
+                            max_compression_attempts,
+                        )
+                        compression_attempts = compression_attempt.number
+                        if compression_attempt.exhausted:
                             self._vprint(f"{self.log_prefix}❌ Max compression attempts ({max_compression_attempts}) reached for payload-too-large error.", force=True)
                             self._vprint(f"{self.log_prefix}   💡 Try /new to start a fresh conversation, or /compress to retry compression.", force=True)
                             logging.error(f"{self.log_prefix}413 compression failed after {max_compression_attempts} attempts.")
-                            self._persist_session(messages, conversation_history)
-                            return {
-                                "messages": messages,
-                                "completed": False,
-                                "api_calls": api_call_count,
-                                "error": f"Request payload too large: max compression attempts ({max_compression_attempts}) reached.",
-                                "partial": True
-                            }
+                            return self._context_recovery_failure_result(
+                                messages=messages,
+                                conversation_history=conversation_history,
+                                api_call_count=api_call_count,
+                                error=f"Request payload too large: max compression attempts ({max_compression_attempts}) reached.",
+                            )
                         self._emit_status(f"⚠️  Request payload too large (413) — compression attempt {compression_attempts}/{max_compression_attempts}...")
 
-                        original_len = len(messages)
-                        messages, active_system_prompt = self._compress_context(
+                        compression_result = self._compress_for_api_recovery(
                             messages, system_message, approx_tokens=approx_tokens,
                             task_id=effective_task_id,
                         )
+                        messages = compression_result.messages
+                        active_system_prompt = compression_result.system_prompt
                         # Compression created a new session — clear history
                         # so _flush_messages_to_session_db writes compressed
                         # messages to the new session, not skipping them.
                         conversation_history = None
 
-                        if len(messages) < original_len:
-                            self._emit_status(f"🗜️ Compressed {original_len} → {len(messages)} messages, retrying...")
+                        if compression_result.made_progress:
+                            self._emit_status(
+                                f"🗜️ Compressed {compression_result.original_message_count} "
+                                f"→ {len(messages)} messages, retrying..."
+                            )
                             time.sleep(2)  # Brief pause between compression retries
                             restart_with_compressed_messages = True
                             break
@@ -6659,130 +6187,101 @@ class AIAgent:
                             self._vprint(f"{self.log_prefix}❌ Payload too large and cannot compress further.", force=True)
                             self._vprint(f"{self.log_prefix}   💡 Try /new to start a fresh conversation, or /compress to retry compression.", force=True)
                             logging.error(f"{self.log_prefix}413 payload too large. Cannot compress further.")
-                            self._persist_session(messages, conversation_history)
-                            return {
-                                "messages": messages,
-                                "completed": False,
-                                "api_calls": api_call_count,
-                                "error": "Request payload too large (413). Cannot compress further.",
-                                "partial": True
-                            }
+                            return self._context_recovery_failure_result(
+                                messages=messages,
+                                conversation_history=conversation_history,
+                                api_call_count=api_call_count,
+                                error="Request payload too large (413). Cannot compress further.",
+                            )
 
                     # Check for context-length errors BEFORE generic 4xx handler.
                     # The classifier detects context overflow from: explicit error
                     # messages, generic 400 + large session heuristic (#1630), and
                     # server disconnect + large session pattern (#2153).
                     is_context_length_error = (
-                        classified.reason == FailoverReason.context_overflow
+                        retry_directive.kind is RetryKind.recover_context
                     )
 
                     if is_context_length_error:
                         compressor = self.context_compressor
                         old_ctx = compressor.context_length
-
-                        # ── Distinguish two very different errors ───────────
-                        # 1. "Prompt too long": the INPUT exceeds the context window.
-                        #    Fix: reduce context_length + compress history.
-                        # 2. "max_tokens too large": input is fine, but
-                        #    input_tokens + requested max_tokens > context_window.
-                        #    Fix: reduce max_tokens (the OUTPUT cap) for this call.
-                        #    Do NOT shrink context_length — the window is unchanged.
-                        #
-                        # Note: max_tokens = output token cap (one response).
-                        #       context_length = total window (input + output combined).
-                        available_out = parse_available_output_tokens_from_error(error_msg)
-                        if available_out is not None:
-                            # Error is purely about the output cap being too large.
-                            # Cap output to the available space and retry without
-                            # touching context_length or triggering compression.
-                            safe_out = max(1, available_out - 64)  # small safety margin
-                            self._ephemeral_max_output_tokens = safe_out
-                            self._vprint(
-                                f"{self.log_prefix}⚠️  Output cap too large for current prompt — "
-                                f"retrying with max_tokens={safe_out:,} "
-                                f"(available_tokens={available_out:,}; context_length unchanged at {old_ctx:,})",
-                                force=True,
-                            )
-                            # Still count against compression_attempts so we don't
-                            # loop forever if the error keeps recurring.
-                            compression_attempts += 1
-                            if compression_attempts > max_compression_attempts:
-                                self._vprint(f"{self.log_prefix}❌ Max compression attempts ({max_compression_attempts}) reached.", force=True)
-                                self._vprint(f"{self.log_prefix}   💡 Try /new to start a fresh conversation, or /compress to retry compression.", force=True)
-                                logging.error(f"{self.log_prefix}Context compression failed after {max_compression_attempts} attempts.")
-                                self._persist_session(messages, conversation_history)
-                                return {
-                                    "messages": messages,
-                                    "completed": False,
-                                    "api_calls": api_call_count,
-                                    "error": f"Context length exceeded: max compression attempts ({max_compression_attempts}) reached.",
-                                    "partial": True
-                                }
-                            restart_with_compressed_messages = True
-                            break
-
-                        # Error is about the INPUT being too large — reduce context_length.
-                        # Try to parse the actual limit from the error message
-                        parsed_limit = parse_context_limit_from_error(error_msg)
-                        if parsed_limit and parsed_limit < old_ctx:
-                            new_ctx = parsed_limit
-                            self._vprint(f"{self.log_prefix}⚠️  Context limit detected from API: {new_ctx:,} tokens (was {old_ctx:,})", force=True)
-                        else:
-                            # Step down to the next probe tier
-                            new_ctx = get_next_probe_tier(old_ctx)
-
-                        if new_ctx and new_ctx < old_ctx:
-                            compressor.update_model(
-                                model=self.model,
-                                context_length=new_ctx,
-                                base_url=self.base_url,
-                                api_key=getattr(self, "api_key", ""),
-                                provider=self.provider,
-                            )
-                            # Context probing flags — only set on built-in
-                            # compressor (plugin engines manage their own).
-                            if hasattr(compressor, "_context_probed"):
-                                compressor._context_probed = True
-                                # Only persist limits parsed from the provider's
-                                # error message (a real number).  Guessed fallback
-                                # tiers from get_next_probe_tier() should stay
-                                # in-memory only — persisting them pollutes the
-                                # cache with wrong values.
-                                compressor._context_probe_persistable = bool(
-                                    parsed_limit and parsed_limit == new_ctx
-                                )
-                            self._vprint(f"{self.log_prefix}⚠️  Context length exceeded — stepping down: {old_ctx:,} → {new_ctx:,} tokens", force=True)
-                        else:
-                            self._vprint(f"{self.log_prefix}⚠️  Context length exceeded at minimum tier — attempting compression...", force=True)
-
-                        compression_attempts += 1
-                        if compression_attempts > max_compression_attempts:
+                        recovery_plan = build_context_recovery_plan(
+                            error_msg,
+                            current_context_length=old_ctx,
+                            previous_attempts=compression_attempts,
+                            max_attempts=max_compression_attempts,
+                        )
+                        compression_attempts = recovery_plan.attempt.number
+                        if recovery_plan.attempt.exhausted:
                             self._vprint(f"{self.log_prefix}❌ Max compression attempts ({max_compression_attempts}) reached.", force=True)
                             self._vprint(f"{self.log_prefix}   💡 Try /new to start a fresh conversation, or /compress to retry compression.", force=True)
                             logging.error(f"{self.log_prefix}Context compression failed after {max_compression_attempts} attempts.")
-                            self._persist_session(messages, conversation_history)
-                            return {
-                                "messages": messages,
-                                "completed": False,
-                                "api_calls": api_call_count,
-                                "error": f"Context length exceeded: max compression attempts ({max_compression_attempts}) reached.",
-                                "partial": True
-                            }
+                            return self._context_recovery_failure_result(
+                                messages=messages,
+                                conversation_history=conversation_history,
+                                api_call_count=api_call_count,
+                                error=f"Context length exceeded: max compression attempts ({max_compression_attempts}) reached.",
+                            )
+
+                        if recovery_plan.output_token_limit is not None:
+                            self._ephemeral_max_output_tokens = recovery_plan.output_token_limit
+                            self._vprint(
+                                f"{self.log_prefix}⚠️  Output cap too large for current prompt — "
+                                f"retrying with max_tokens={recovery_plan.output_token_limit:,} "
+                                f"(available_tokens={recovery_plan.available_output_tokens:,}; "
+                                f"context_length unchanged at {old_ctx:,})",
+                                force=True,
+                            )
+                            restart_with_compressed_messages = True
+                            break
+
+                        context_length_changed = apply_context_recovery_plan(
+                            compressor,
+                            recovery_plan,
+                            model=self.model,
+                            base_url=self.base_url,
+                            api_key=getattr(self, "api_key", ""),
+                            provider=self.provider,
+                        )
+                        new_ctx = recovery_plan.next_context_length
+                        if context_length_changed:
+                            if recovery_plan.parsed_context_limit:
+                                self._vprint(
+                                    f"{self.log_prefix}⚠️  Context limit detected from API: "
+                                    f"{new_ctx:,} tokens (was {old_ctx:,})",
+                                    force=True,
+                                )
+                            self._vprint(
+                                f"{self.log_prefix}⚠️  Context length exceeded — "
+                                f"stepping down: {old_ctx:,} → {new_ctx:,} tokens",
+                                force=True,
+                            )
+                        else:
+                            self._vprint(
+                                f"{self.log_prefix}⚠️  Context length exceeded at minimum tier — "
+                                f"attempting compression...",
+                                force=True,
+                            )
                         self._emit_status(f"🗜️ Context too large (~{approx_tokens:,} tokens) — compressing ({compression_attempts}/{max_compression_attempts})...")
 
-                        original_len = len(messages)
-                        messages, active_system_prompt = self._compress_context(
+                        compression_result = self._compress_for_api_recovery(
                             messages, system_message, approx_tokens=approx_tokens,
                             task_id=effective_task_id,
+                            context_length_changed=context_length_changed,
                         )
+                        messages = compression_result.messages
+                        active_system_prompt = compression_result.system_prompt
                         # Compression created a new session — clear history
                         # so _flush_messages_to_session_db writes compressed
                         # messages to the new session, not skipping them.
                         conversation_history = None
 
-                        if len(messages) < original_len or new_ctx and new_ctx < old_ctx:
-                            if len(messages) < original_len:
-                                self._emit_status(f"🗜️ Compressed {original_len} → {len(messages)} messages, retrying...")
+                        if compression_result.made_progress:
+                            if compression_result.message_count_reduced:
+                                self._emit_status(
+                                    f"🗜️ Compressed {compression_result.original_message_count} "
+                                    f"→ {len(messages)} messages, retrying..."
+                                )
                             time.sleep(2)  # Brief pause between compression retries
                             restart_with_compressed_messages = True
                             break
@@ -6791,45 +6290,18 @@ class AIAgent:
                             self._vprint(f"{self.log_prefix}❌ Context length exceeded and cannot compress further.", force=True)
                             self._vprint(f"{self.log_prefix}   💡 The conversation has accumulated too much content. Try /new to start fresh, or /compress to manually trigger compression.", force=True)
                             logging.error(f"{self.log_prefix}Context length exceeded: {approx_tokens:,} tokens. Cannot compress further.")
-                            self._persist_session(messages, conversation_history)
-                            return {
-                                "messages": messages,
-                                "completed": False,
-                                "api_calls": api_call_count,
-                                "error": f"Context length exceeded ({approx_tokens:,} tokens). Cannot compress further.",
-                                "partial": True
-                            }
-
-                    # Check for non-retryable client errors.  The classifier
-                    # already accounts for 413, 429, 529 (transient), context
-                    # overflow, and generic-400 heuristics.  Local validation
-                    # errors (ValueError, TypeError) are programming bugs.
-                    is_local_validation_error = (
-                        isinstance(api_error, (ValueError, TypeError))
-                        and not isinstance(api_error, UnicodeEncodeError)
-                    )
-                    is_client_error = (
-                        is_local_validation_error
-                        or (
-                            not classified.retryable
-                            and not classified.should_compress
-                            and classified.reason not in (
-                                FailoverReason.rate_limit,
-                                FailoverReason.billing,
-                                FailoverReason.overloaded,
-                                FailoverReason.context_overflow,
-                                FailoverReason.payload_too_large,
-                                FailoverReason.long_context_tier,
-                                FailoverReason.thinking_signature,
+                            return self._context_recovery_failure_result(
+                                messages=messages,
+                                conversation_history=conversation_history,
+                                api_call_count=api_call_count,
+                                error=f"Context length exceeded ({approx_tokens:,} tokens). Cannot compress further.",
                             )
-                        )
-                    ) and not is_context_length_error
 
-                    if is_client_error:
+                    if retry_directive.kind is RetryKind.abort_client_error:
                         # Try fallback before aborting — a different provider
                         # may not have the same issue (rate limit, auth, etc.)
                         self._emit_status(f"⚠️ Non-retryable error (HTTP {status_code}) — trying fallback...")
-                        if self._try_activate_fallback():
+                        if retry_directive.try_fallback and self._try_activate_fallback():
                             retry_count = 0
                             compression_attempts = 0
                             primary_recovery_attempted = False
@@ -6840,7 +6312,7 @@ class AIAgent:
                             )
                         self._emit_status(
                             f"❌ Non-retryable error (HTTP {status_code}): "
-                            f"{self._summarize_api_error(api_error)}"
+                            f"{summarize_api_error(api_error)}"
                         )
                         self._vprint(f"{self.log_prefix}❌ Non-retryable client error (HTTP {status_code}). Aborting.", force=True)
                         self._vprint(f"{self.log_prefix}   🔌 Provider: {_provider}  Model: {_model}", force=True)
@@ -6877,12 +6349,12 @@ class AIAgent:
                             "error": str(api_error),
                         }
 
-                    if retry_count >= max_retries:
+                    if retry_directive.kind is RetryKind.exhausted:
                         # Before falling back, try rebuilding the primary
                         # client once for transient transport errors (stale
                         # connection pool, TCP reset).  Only attempted once
                         # per API call block.
-                        if not primary_recovery_attempted and self._try_recover_primary_transport(
+                        if retry_directive.try_transport_recovery and self._try_recover_primary_transport(
                             api_error, retry_count=retry_count, max_retries=max_retries,
                         ):
                             primary_recovery_attempted = True
@@ -6890,12 +6362,12 @@ class AIAgent:
                             continue
                         # Try fallback before giving up entirely
                         self._emit_status(f"⚠️ Max retries ({max_retries}) exhausted — trying fallback...")
-                        if self._try_activate_fallback():
+                        if retry_directive.try_fallback and self._try_activate_fallback():
                             retry_count = 0
                             compression_attempts = 0
                             primary_recovery_attempted = False
                             continue
-                        _final_summary = self._summarize_api_error(api_error)
+                        _final_summary = summarize_api_error(api_error)
                         if is_rate_limited:
                             self._emit_status(f"❌ Rate limited after {max_retries} retries — {_final_summary}")
                         else:
@@ -6907,14 +6379,7 @@ class AIAgent:
                         # This typically happens when the model generates a
                         # very large tool call (write_file with huge content)
                         # and the proxy/CDN drops the stream mid-response.
-                        _is_stream_drop = (
-                            not getattr(api_error, "status_code", None)
-                            and any(p in error_msg for p in (
-                                "connection lost", "connection reset",
-                                "connection closed", "network connection",
-                                "network error", "terminated",
-                            ))
-                        )
+                        _is_stream_drop = is_stream_drop_error(api_error)
                         if _is_stream_drop:
                             self._vprint(
                                 f"{self.log_prefix}   💡 The provider's stream "
@@ -6961,16 +6426,7 @@ class AIAgent:
                         }
 
                     # For rate limits, respect the Retry-After header if present
-                    _retry_after = None
-                    if is_rate_limited:
-                        _resp_headers = getattr(getattr(api_error, "response", None), "headers", None)
-                        if _resp_headers and hasattr(_resp_headers, "get"):
-                            _ra_raw = _resp_headers.get("retry-after") or _resp_headers.get("Retry-After")
-                            if _ra_raw:
-                                try:
-                                    _retry_after = min(int(_ra_raw), 120)  # Cap at 2 minutes
-                                except (TypeError, ValueError):
-                                    pass
+                    _retry_after = retry_after_seconds(api_error) if is_rate_limited else None
                     wait_time = _retry_after if _retry_after else jittered_backoff(retry_count, base_delay=2.0, max_delay=60.0)
                     if is_rate_limited:
                         self._emit_status(f"⏱️ Rate limit reached. Waiting {wait_time}s before retry (attempt {retry_count + 1}/{max_retries})...")
@@ -7088,9 +6544,7 @@ class AIAgent:
                 if (assistant_message.content and self.tool_progress_callback):
                     _think_text = assistant_message.content.strip()
                     # Strip reasoning XML tags that shouldn't leak to parent display
-                    _think_text = re.sub(
-                        r'</?(?:REASONING_SCRATCHPAD|think|reasoning)>', '', _think_text
-                    ).strip()
+                    _think_text = strip_thinking_tags(_think_text).strip()
                     # For subagents: relay first line to parent display (existing behaviour).
                     # For all agents with a structured callback: emit reasoning.available event.
                     first_line = _think_text.split('\n')[0][:80] if _think_text else ""
@@ -7272,7 +6726,7 @@ class AIAgent:
                     # answer and calls memory/skill tools as a side-effect in the same
                     # turn. If the follow-up turn after tools is empty, we use this.
                     turn_content = assistant_message.content or ""
-                    if turn_content and self._has_content_after_think_block(turn_content):
+                    if turn_content and has_visible_content(turn_content):
                         self._last_content_with_tools = turn_content
                         # Only mute subsequent output when EVERY tool call in
                         # this turn is post-response housekeeping (memory, todo,
@@ -7289,7 +6743,7 @@ class AIAgent:
                         if _all_housekeeping and self._has_stream_consumers():
                             self._mute_post_response = True
                         elif self.quiet_mode:
-                            clean = self._strip_think_blocks(turn_content).strip()
+                            clean = strip_thinking_blocks(turn_content).strip()
                             if clean:
                                 self._vprint(f"  ┊ 💬 {clean}")
                     
@@ -7431,7 +6885,7 @@ class AIAgent:
                     final_response = assistant_message.content or ""
                     
                     # Check if response only has think block with no actual content after it
-                    if not self._has_content_after_think_block(final_response):
+                    if not has_visible_content(final_response):
                         # If the previous turn already delivered real content alongside
                         # tool calls (e.g. "You're welcome!" + memory save), the model
                         # has nothing more to say. Use the earlier content immediately
@@ -7453,7 +6907,7 @@ class AIAgent:
                                         tool_names.append(fn.get("name", "unknown"))
                                     msg["content"] = f"Calling the {', '.join(tool_names)} tool{'s' if len(tool_names) > 1 else ''}..."
                                     break
-                            final_response = self._strip_think_blocks(fallback).strip()
+                            final_response = strip_thinking_blocks(fallback).strip()
                             self._response_was_previewed = True
                             break
 
@@ -7498,7 +6952,7 @@ class AIAgent:
                         # always populate reasoning fields via OpenRouter,
                         # so the old `not _has_structured` guard blocked
                         # retries for every reasoning model after prefill.
-                        _truly_empty = not self._strip_think_blocks(
+                        _truly_empty = not strip_thinking_blocks(
                             final_response
                         ).strip()
                         _prefill_exhausted = (
@@ -7552,7 +7006,7 @@ class AIAgent:
                         # fallback configured).  Fall through to the
                         # "(empty)" terminal.
                         _turn_exit_reason = "empty_response_exhausted"
-                        reasoning_text = self._extract_reasoning(assistant_message)
+                        reasoning_text = extract_reasoning(assistant_message)
                         assistant_msg = self._build_assistant_message(assistant_message, finish_reason)
                         assistant_msg["content"] = "(empty)"
                         messages.append(assistant_msg)
@@ -7595,7 +7049,7 @@ class AIAgent:
                         length_continue_retries = 0
                     
                     # Strip <think> blocks from user-facing response (keep raw in messages for trajectory)
-                    final_response = self._strip_think_blocks(final_response).strip()
+                    final_response = strip_thinking_blocks(final_response).strip()
                     
                     final_msg = self._build_assistant_message(assistant_message, finish_reason)
 

@@ -5,28 +5,19 @@ classification pipeline that determines the correct recovery action
 (retry, rotate credential, fallback to another provider, compress
 context, or abort).
 
-Replaces scattered inline string-matching with a centralized classifier
-that the main retry loop in run_agent.py consults for every API failure.
-
-Also provides unified error handling utilities for consistent error handling
-across all modules.
+Replaces scattered inline string-matching with a centralized classifier and
+shared presentation/context helpers used by the main retry loop and CLI.
 """
 
 from __future__ import annotations
 
 import enum
-import functools
-import logging
 import re
+import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional, TypeVar
+from typing import Any, Dict, Optional
 
 from VoidCube_core.utils import normalize_str
-
-logger = logging.getLogger(__name__)
-
-# Type variable for generic decorator
-T = TypeVar('T')
 
 
 # ── Error taxonomy ──────────────────────────────────────────────────────
@@ -304,6 +295,7 @@ def classify_api_error(
             "provider": provider,
             "model": model,
             "message": _extract_message(error, body),
+            "error_context": extract_api_error_context(error),
         }
         defaults.update(overrides)
         return ClassifiedError(**defaults)
@@ -779,119 +771,142 @@ def _extract_message(error: Exception, body: dict) -> str:
     return str(error)[:500]
 
 
-# ── Unified Error Handling Utilities ───────────────────────────────────────
+def summarize_api_error(error: Exception) -> str:
+    """Return a concise user-facing summary without dumping HTML bodies."""
+    raw = str(error)
+    status_code = _extract_status_code(error)
+    if "<!doctype" in raw.lower() or "<html" in raw.lower():
+        title_match = re.search(r"<title[^>]*>([^<]+)</title>", raw, re.IGNORECASE)
+        title = title_match.group(1).strip() if title_match else "HTML error page"
+        ray_match = re.search(
+            r"Cloudflare Ray ID:\s*<strong[^>]*>([^<]+)</strong>",
+            raw,
+            re.IGNORECASE,
+        )
+        parts = [f"HTTP {status_code}"] if status_code else []
+        parts.append(title)
+        if ray_match:
+            parts.append(f"Ray {ray_match.group(1).strip()}")
+        return " - ".join(parts)
 
-def handle_api_error(
+    body = _extract_error_body(error)
+    message = _extract_message(error, body)
+    prefix = f"HTTP {status_code}: " if status_code else ""
+    return f"{prefix}{message[:300 if body else 500]}"
+
+
+def clean_error_message(error_message: str, *, max_length: int = 150) -> str:
+    """Normalize an error string for compact status display."""
+    if not error_message:
+        return "Unknown error"
+    lowered = error_message.lower()
+    if "<!doctype html" in lowered or "<html" in lowered:
+        return "Service temporarily unavailable (HTML error page returned)"
+    cleaned = " ".join(error_message.split())
+    return cleaned[:max_length] + "..." if len(cleaned) > max_length else cleaned
+
+
+def retry_after_seconds(
     error: Exception,
-    provider: Optional[str] = None,
-    model: Optional[str] = None,
-    context: Optional[Dict[str, Any]] = None,
-) -> ClassifiedError:
-    """Unified API error handling wrapper.
-    
-    This is a convenience function that classifies an error and logs it
-    appropriately. Use this instead of inline error classification.
-    
-    Args:
-        error: The exception that occurred
-        provider: Optional provider name for context
-        model: Optional model name for context
-        context: Optional additional context dict
-        
-    Returns:
-        ClassifiedError with recovery hints
-        
-    Example:
+    *,
+    cap_seconds: float = 120.0,
+) -> float | None:
+    """Extract a numeric Retry-After delay from headers or error payload."""
+    candidates: list[Any] = []
+    response = getattr(error, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers and hasattr(headers, "get"):
+        candidates.append(headers.get("retry-after") or headers.get("Retry-After"))
+
+    body = _extract_error_body(error)
+    payload = body.get("error") if isinstance(body.get("error"), dict) else body
+    if isinstance(payload, dict):
+        candidates.append(payload.get("retry_after"))
+
+    for candidate in candidates:
+        if candidate in (None, ""):
+            continue
         try:
-            response = api_client.call()
-        except Exception as e:
-            classified = handle_api_error(e, provider="openai", model="gpt-4")
-            if classified.should_rotate_credential:
-                rotate_credential()
-    """
-    classified = classify_error(error, provider=provider, model=model)
-    
-    # Log based on severity
-    if classified.is_auth or classified.reason == FailoverReason.billing:
-        logger.error(
-            f"API error [{classified.reason.value}]: {classified.message}",
-            extra={"provider": provider, "model": model, "context": context}
-        )
-    elif classified.retryable:
-        logger.warning(
-            f"API error [{classified.reason.value}] (retryable): {classified.message}",
-            extra={"provider": provider, "model": model}
-        )
-    else:
-        logger.error(
-            f"API error [{classified.reason.value}] (non-retryable): {classified.message}",
-            extra={"provider": provider, "model": model}
-        )
-    
-    return classified
+            return min(max(float(candidate), 0.0), cap_seconds)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
-def safe_call(
-    func: Callable[..., T],
-    *args,
-    default: Optional[T] = None,
-    log_errors: bool = True,
-    **kwargs
-) -> Optional[T]:
-    """Safely call a function with unified error handling.
-    
-    Catches all exceptions and returns a default value instead of raising.
-    Useful for non-critical operations that shouldn't crash the agent.
-    
-    Args:
-        func: The function to call
-        *args: Positional arguments for func
-        default: Value to return on error (default: None)
-        log_errors: Whether to log errors (default: True)
-        **kwargs: Keyword arguments for func
-        
-    Returns:
-        Function result or default value on error
-        
-    Example:
-        result = safe_call(json.loads, response_text, default={})
-    """
-    try:
-        return func(*args, **kwargs)
-    except Exception as e:
-        if log_errors:
-            logger.debug(f"safe_call error in {func.__name__}: {e}")
-        return default
+def extract_api_error_context(
+    error: Exception,
+    *,
+    now: float | None = None,
+) -> Dict[str, Any]:
+    """Extract credential-rotation and rate-limit metadata from an API error."""
+    context: Dict[str, Any] = {}
+    body = _extract_error_body(error)
+    payload = body.get("error") if isinstance(body.get("error"), dict) else body
+    if isinstance(payload, dict):
+        reason = payload.get("code") or payload.get("error")
+        if isinstance(reason, str) and reason.strip():
+            context["reason"] = reason.strip()
+        message = payload.get("message") or payload.get("error_description")
+        if isinstance(message, str) and message.strip():
+            context["message"] = message.strip()
+        for key in ("resets_at", "reset_at"):
+            value = payload.get(key)
+            if value not in (None, ""):
+                context["reset_at"] = value
+                break
+
+    if "message" not in context:
+        raw_message = str(error).strip()
+        if raw_message:
+            context["message"] = raw_message[:500]
+
+    current_time = time.time() if now is None else now
+    delay = retry_after_seconds(error)
+    if delay is not None and "reset_at" not in context:
+        context["reset_at"] = current_time + delay
+
+    response = getattr(error, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers and hasattr(headers, "get") and "reset_at" not in context:
+        reset = headers.get("x-ratelimit-reset")
+        if reset not in (None, ""):
+            context["reset_at"] = reset
+
+    if "reset_at" not in context:
+        message = context.get("message") or ""
+        if isinstance(message, str):
+            delay_match = re.search(
+                r"quotaResetDelay[:\s\"]+(\d+(?:\.\d+)?)(ms|s)",
+                message,
+                re.IGNORECASE,
+            )
+            if delay_match:
+                value = float(delay_match.group(1))
+                seconds = value / 1000.0 if delay_match.group(2).lower() == "ms" else value
+                context["reset_at"] = current_time + seconds
+            else:
+                retry_match = re.search(
+                    r"retry\s+(?:after\s+)?(\d+(?:\.\d+)?)\s*(?:sec|secs|seconds|s\b)",
+                    message,
+                    re.IGNORECASE,
+                )
+                if retry_match:
+                    context["reset_at"] = current_time + float(retry_match.group(1))
+    return context
 
 
-def error_context(message: str, log_level: str = "error"):
-    """Decorator to add error context to function calls.
-    
-    Wraps a function to catch exceptions and re-raise them with
-    additional context. Useful for adding operation context to errors.
-    
-    Args:
-        message: Context message to add to errors
-        log_level: Log level for errors ('error', 'warning', 'debug')
-        
-    Example:
-        @error_context("Failed to load config")
-        def load_config(path):
-            return json.loads(read_file(path))
-    """
-    def decorator(func: Callable[..., T]) -> Callable[..., T]:
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs) -> T:
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                error_msg = f"{message}: {e}"
-                if log_level == "error":
-                    logger.error(error_msg)
-                elif log_level == "warning":
-                    logger.warning(error_msg)
-                else:
-                    logger.debug(error_msg)
-                raise type(e)(error_msg) from e
-        return wrapper
-    return decorator
+_STREAM_DROP_PATTERNS = (
+    "connection lost",
+    "connection reset",
+    "connection closed",
+    "network connection",
+    "network error",
+    "terminated",
+)
+
+
+def is_stream_drop_error(error: Exception) -> bool:
+    """Return whether a transport error resembles a dropped response stream."""
+    return _extract_status_code(error) is None and any(
+        pattern in str(error).lower() for pattern in _STREAM_DROP_PATTERNS
+    )

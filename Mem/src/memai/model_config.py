@@ -228,6 +228,17 @@ def resolve_mem_llm_client(role: str = "default"):
     model = mem_cfg.model or "deepseek-chat"
     base_url = (mem_cfg.base_url or "https://api.deepseek.com/v1").rstrip("/")
     config_source = f"memory.llm.{role or 'default'} (provider={mem_cfg.provider})"
+
+    try:
+        from agent.integration_policy import require_active_integration
+
+        require_active_integration(mem_cfg.provider, model, base_url)
+    except ImportError:
+        pass
+    except ValueError:
+        logger.warning("Mem LLM configuration is blocked by project integration policy")
+        return None, model
+
     api_key = _resolve_mem_api_key(mem_cfg)
 
     if not api_key and mem_cfg.provider == "ollama":

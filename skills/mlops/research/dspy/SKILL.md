@@ -4,7 +4,7 @@ description: 使用声明式编程构建复杂AI系统，自动优化提示，�
 version: 1.0.0
 author: Orchestra Research
 license: MIT
-dependencies: [dspy, openai, anthropic]
+dependencies: [dspy, openai]
 metadata:
   VoidCube:
     tags: [提示工程, DSPy, 声明式编程, RAG, 代理, 提示优化, LM编程, Stanford NLP, 自动优化, 模块化AI]
@@ -34,10 +34,8 @@ pip install dspy
 # 最新开发版本
 pip install git+https://github.com/stanfordnlp/dspy.git
 
-# 带特定LM提供商
-pip install dspy[openai]        # OpenAI
-pip install dspy[anthropic]     # Anthropic Claude
-pip install dspy[all]           # 所有提供商
+# 带 OpenAI 后端
+pip install dspy[openai]
 ```
 
 ## 快速入门
@@ -47,8 +45,11 @@ pip install dspy[all]           # 所有提供商
 ```python
 import dspy
 
-# 配置语言模型
-lm = dspy.Claude(model="claude-sonnet-4-5-20250929")
+# 配置本地 Ollama 模型
+lm = dspy.LM(
+    "ollama_chat/llama3.1",
+    api_base="http://localhost:11434",
+)
 dspy.settings.configure(lm=lm)
 
 # 定义签名（输入 → 输出）
@@ -70,7 +71,10 @@ print(response.answer)  # "Paris"
 ```python
 import dspy
 
-lm = dspy.Claude(model="claude-sonnet-4-5-20250929")
+lm = dspy.LM(
+    "ollama_chat/llama3.1",
+    api_base="http://localhost:11434",
+)
 dspy.settings.configure(lm=lm)
 
 # 使用ChainOfThought获得更好的推理
@@ -285,20 +289,6 @@ optimized_rag = optimizer.compile(rag, trainset=trainset)
 
 ## LM提供商配置
 
-### Anthropic Claude
-
-```python
-import dspy
-
-lm = dspy.Claude(
-    model="claude-sonnet-4-5-20250929",
-    api_key="your-api-key",  # 或设置ANTHROPIC_API_KEY环境变量
-    max_tokens=1000,
-    temperature=0.7
-)
-dspy.settings.configure(lm=lm)
-```
-
 ### OpenAI
 
 ```python
@@ -325,7 +315,10 @@ dspy.settings.configure(lm=lm)
 ```python
 # 不同任务使用不同模型
 cheap_lm = dspy.OpenAI(model="gpt-3.5-turbo")
-strong_lm = dspy.Claude(model="claude-sonnet-4-5-20250929")
+strong_lm = dspy.LM(
+    "ollama_chat/llama3.1",
+    api_base="http://localhost:11434",
+)
 
 # 检索使用便宜模型，推理使用强模型
 with dspy.settings.context(lm=cheap_lm):

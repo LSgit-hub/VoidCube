@@ -59,6 +59,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
 
+from agent.error_classifier import summarize_api_error
+
 if TYPE_CHECKING:
     from run_agent import AIAgent  # noqa: F401 — only for static type-checkers
 
@@ -8721,7 +8723,7 @@ class VoidcubeCLI:
                     )
                 except Exception as exc:
                     logging.error("run_conversation raised: %s", exc, exc_info=True)
-                    _summary = getattr(self.agent, '_summarize_api_error', lambda e: str(e)[:300])(exc)
+                    _summary = summarize_api_error(exc)
                     result = {
                         "final_response": f"Error: {_summary}",
                         "messages": [],

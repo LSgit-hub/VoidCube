@@ -90,3 +90,4 @@ include = ["agent*", "tools*", "VoidCube_cli*", "VoidCube_core*", "systems*", "p
 
 [tool.setuptools.package-data]
 memai = ["prompts/*/*.txt"]
+VoidCube_cli = ["locales/*.json"]

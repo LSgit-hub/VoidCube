@@ -19,7 +19,7 @@ Guidance 中的正则约束、基于语法的生成和 token 修复指南。
 ```python
 from guidance import models, gen
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 
 # 整数（正数）
 lm += "Age: " + gen("age", regex=r"[0-9]+")
@@ -128,7 +128,7 @@ lm += "URL: " + gen(
 ```python
 from guidance import models, gen
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 
 # 带引号的字符串字段
 lm += '"name": ' + gen("name", regex=r'"[A-Za-z ]+"')
@@ -242,7 +242,7 @@ def json_object(lm):
     lm += "}"
     return lm
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 lm = json_object(lm)
 print(lm)  # 保证有效的 JSON
 ```
@@ -364,7 +364,7 @@ prompt = "The capital of France is "
 ```python
 from guidance import models, gen
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 
 # 默认启用 token 修复
 lm += "The capital of France is " + gen("capital", max_tokens=5)
@@ -427,7 +427,7 @@ lm += gen("text", token_healing=False)
 ```python
 from guidance import models, select
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 
 # 简单选择
 lm += "Status: " + select(["active", "inactive", "pending"], name="status")

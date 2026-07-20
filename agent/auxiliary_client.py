@@ -27,11 +27,10 @@ Legacy env var overrides (AUXILIARY_{TASK}_PROVIDER, AUXILIARY_{TASK}_MODEL,
 AUXILIARY_{TASK}_BASE_URL, etc.) are still read as a backward-compat fallback
 but config.yaml takes priority.  New configuration should always use config.yaml.
 
-Payment / credit exhaustion fallback:
-  When a resolved provider returns HTTP 402 or a credit-related error,
-  call_llm() automatically retries with the next available provider in the
-  auto-detection chain.  This handles the common case where a user depletes
-  their OpenRouter balance but has another configured provider available.
+Provider fallback:
+  When an automatically resolved provider exhausts credit or cannot be
+  reached, the call retries with the next available provider in the shared
+  detection chain. Explicit provider choices remain hard constraints.
 """
 
 import json
@@ -39,12 +38,17 @@ import logging
 import os
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path  # noqa: F401 — used by test mocks
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from openai import OpenAI
 
 from agent.credential_pool import load_pool
+from agent.api_request import ChatRequestConfig, build_chat_completion_kwargs
+from agent.api_response import visible_or_reasoning_text
+from agent.integration_policy import require_active_integration
 from VoidCube_cli.config import get_VoidCube_home
 from VoidCube_core.constants import OPENROUTER_BASE_URL
 
@@ -111,14 +115,6 @@ _OR_HEADERS = {
     "X-OpenRouter-Title": "Voidcube Agent",
     "X-OpenRouter-Categories": "productivity,cli-agent",
 }
-
-# Nous Portal extra_body for product attribution.
-# Callers should pass this as extra_body in chat.completions.create()
-# when the auxiliary client is backed by Nous Portal.
-NOUS_EXTRA_BODY = {"tags": ["product=VoidCube-agent"]}
-
-# Set at resolve time — True if the auxiliary client points to Nous Portal
-auxiliary_is_nous: bool = False
 
 # Default auxiliary models per provider
 _OPENROUTER_MODEL = "google/gemini-3-flash-preview"
@@ -333,9 +329,6 @@ def _try_nous(vision: bool = False) -> Tuple[Optional[OpenAI], Optional[str]]:
     nous = _read_nous_auth()
     if not nous:
         return None, None
-    global auxiliary_is_nous
-
-    auxiliary_is_nous = True
     logger.debug("Auxiliary client: Nous Portal")
     if nous.get("source") == "pool":
         model = "gemini-3-flash"
@@ -547,7 +540,24 @@ def _is_connection_error(exc: Exception) -> bool:
     return False
 
 
-def _try_payment_fallback(
+def _fallback_chain_label(provider: str) -> str:
+    """Map a resolved provider to its one auto-detection chain entry."""
+    normalized = _normalize_aux_provider(provider)
+    if normalized in ("openrouter", "nous", "api-key"):
+        return normalized
+    if normalized in ("custom", "local/custom"):
+        return "local/custom"
+    try:
+        from VoidCube_cli.runtime_provider import _get_named_custom_provider
+
+        if _get_named_custom_provider(normalized):
+            return "local/custom"
+    except ImportError:
+        pass
+    return "api-key"
+
+
+def _try_provider_fallback(
     failed_provider: str,
     task: str = None,
     reason: str = "payment error",
@@ -560,22 +570,11 @@ def _try_payment_fallback(
     Returns:
         (client, model, provider_label) or (None, None, "") if no fallback.
     """
-    # Normalise the failed provider label for matching.
-    skip = failed_provider.lower().strip()
-    # Also skip Step-1 main-provider path if it maps to the same backend.
-    # (e.g. main_provider="openrouter" → skip "openrouter" in chain)
-    main_provider = _read_main_provider()
-    skip_labels = {skip}
-    if main_provider and main_provider.lower() in skip:
-        skip_labels.add(main_provider.lower())
-    # Map common resolved_provider values back to chain labels.
-    _alias_to_label = {"openrouter": "openrouter", "nous": "nous",
-                       "custom": "local/custom", "local/custom": "local/custom"}
-    skip_chain_labels = {_alias_to_label.get(s, s) for s in skip_labels}
+    skip_chain_label = _fallback_chain_label(failed_provider)
 
     tried = []
     for label, try_fn in _get_provider_chain():
-        if label in skip_chain_labels:
+        if label == skip_chain_label:
             continue
         client, model = try_fn()
         if client is not None:
@@ -603,8 +602,7 @@ def _resolve_auto(main_runtime: Optional[Dict[str, Any]] = None) -> Tuple[Option
          provider they already have credentials for — no OpenRouter key needed.
       2. OpenRouter → Nous → custom → API-key providers.
     """
-    global auxiliary_is_nous, _stale_base_url_warned
-    auxiliary_is_nous = False  # Reset — _try_nous() will set True if it wins
+    global _stale_base_url_warned
     runtime = _normalize_main_runtime(main_runtime)
     runtime_provider = runtime.get("provider", "")
     runtime_model = runtime.get("model", "")
@@ -740,6 +738,8 @@ def resolve_provider_client(
     Returns:
         (client, resolved_model) or (None, None) if auth is unavailable.
     """
+    require_active_integration(provider, model, explicit_base_url)
+
     # Normalise aliases
     provider = _normalize_aux_provider(provider)
 
@@ -1089,33 +1089,6 @@ def resolve_vision_provider_client(
     return requested, client, final_model
 
 
-def get_auxiliary_extra_body() -> dict:
-    """Return extra_body kwargs for auxiliary API calls.
-    
-    Includes Nous Portal product tags when the auxiliary client is backed
-    by Nous Portal. Returns empty dict otherwise.
-    """
-    return dict(NOUS_EXTRA_BODY) if auxiliary_is_nous else {}
-
-
-def auxiliary_max_tokens_param(value: int) -> dict:
-    """Return the correct max tokens kwarg for the auxiliary client's provider.
-    
-    OpenRouter and local models use 'max_tokens'. Direct OpenAI with newer
-    models (gpt-4o, o-series, gpt-5+) requires 'max_completion_tokens'.
-    OpenAI-compatible clients use the standard chat-completions token fields.
-    for it as well.
-    """
-    custom_base = _current_custom_base_url()
-    or_key = os.getenv("OPENROUTER_API_KEY")
-    # Only use max_completion_tokens for direct OpenAI custom endpoints
-    if (not or_key
-            and _read_nous_auth() is None
-            and "api.openai.com" in custom_base.lower()):
-        return {"max_completion_tokens": value}
-    return {"max_tokens": value}
-
-
 # ── Centralized LLM Call API ────────────────────────────────────────────────
 #
 # call_llm() and async_call_llm() own the full request lifecycle:
@@ -1438,38 +1411,257 @@ def _build_call_kwargs(
     base_url: Optional[str] = None,
 ) -> dict:
     """Build kwargs for .chat.completions.create() with model/provider adjustments."""
-    kwargs: Dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "timeout": timeout,
-    }
-
-    if temperature is not None:
-        kwargs["temperature"] = temperature
-
-    if max_tokens is not None:
-        # Direct OpenAI endpoints may require max_completion_tokens.
-        # Direct OpenAI api.openai.com with newer models needs max_completion_tokens.
-        if provider == "custom":
-            custom_base = base_url or _current_custom_base_url()
-            if "api.openai.com" in custom_base.lower():
-                kwargs["max_completion_tokens"] = max_tokens
-            else:
-                kwargs["max_tokens"] = max_tokens
-        else:
-            kwargs["max_tokens"] = max_tokens
-
-    if tools:
-        kwargs["tools"] = tools
-
-    # Provider-specific extra_body
+    require_active_integration(provider)
+    effective_base_url = base_url or (
+        _current_custom_base_url() if provider == "custom" else ""
+    )
     merged_extra = dict(extra_body or {})
-    if provider == "nous" or auxiliary_is_nous:
-        merged_extra.setdefault("tags", []).extend(["product=VoidCube-agent"])
-    if merged_extra:
-        kwargs["extra_body"] = merged_extra
+    if provider == "nous":
+        tags = merged_extra.setdefault("tags", [])
+        if "product=VoidCube-agent" not in tags:
+            tags.append("product=VoidCube-agent")
 
-    return kwargs
+    overrides: Dict[str, Any] = {}
+    if temperature is not None:
+        overrides["temperature"] = temperature
+    if merged_extra:
+        overrides["extra_body"] = merged_extra
+
+    return build_chat_completion_kwargs(
+        ChatRequestConfig(
+            model=model,
+            base_url=effective_base_url,
+            tools=tuple(tools or ()),
+            max_tokens=max_tokens,
+            include_reasoning=False,
+            request_overrides=overrides,
+            timeout=timeout,
+        ),
+        messages,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class AuxiliaryCallTarget:
+    """Resolved client and route for one auxiliary request."""
+
+    requested_provider: str
+    active_provider: str
+    model: str
+    base_url: str
+    client: Any
+
+
+@dataclass(frozen=True, slots=True)
+class AuxiliaryFallbackCall:
+    """Prepared fallback client and request payload."""
+
+    provider: str
+    model: str
+    client: Any
+    kwargs: Dict[str, Any]
+
+
+def _infer_active_provider(
+    requested_provider: str,
+    client: Any,
+    main_runtime: Optional[Dict[str, Any]],
+) -> str:
+    if requested_provider != "auto":
+        return requested_provider
+    base_url = str(getattr(client, "base_url", "") or "")
+    host = (urlparse(base_url).hostname or "").casefold()
+    if host == "openrouter.ai" or host.endswith(".openrouter.ai"):
+        return "openrouter"
+    if host == "nousresearch.com" or host.endswith(".nousresearch.com"):
+        return "nous"
+    try:
+        from VoidCube_cli.auth import PROVIDER_REGISTRY
+
+        for provider_id, config in PROVIDER_REGISTRY.items():
+            candidate_urls = (
+                config.get("base_url", ""),
+                config.get("inference_base_url", ""),
+            )
+            if any(
+                host
+                and host == (urlparse(str(candidate)).hostname or "").casefold()
+                for candidate in candidate_urls
+            ):
+                return provider_id
+    except ImportError:
+        pass
+    runtime_provider = _normalize_main_runtime(main_runtime).get("provider", "")
+    configured_provider = _read_main_provider()
+    if runtime_provider and runtime_provider not in ("auto", ""):
+        return runtime_provider
+    if configured_provider and configured_provider not in ("auto", ""):
+        return configured_provider
+    return "api-key"
+
+
+def _missing_provider_error(task: Optional[str], provider: str) -> RuntimeError:
+    return RuntimeError(
+        f"No LLM provider configured for task={task} provider={provider}. Run: /api"
+    )
+
+
+def _resolve_auxiliary_call_target(
+    *,
+    task: Optional[str],
+    provider: Optional[str],
+    model: Optional[str],
+    base_url: Optional[str],
+    api_key: Optional[str],
+    main_runtime: Optional[Dict[str, Any]],
+    async_mode: bool,
+) -> AuxiliaryCallTarget:
+    requested_provider, resolved_model, resolved_base_url, resolved_api_key = (
+        _resolve_task_provider_model(task, provider, model, base_url, api_key)
+    )
+    require_active_integration(
+        requested_provider,
+        resolved_model,
+        resolved_base_url,
+    )
+
+    if task == "vision":
+        active_provider, client, final_model = resolve_vision_provider_client(
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            api_key=api_key,
+            async_mode=async_mode,
+        )
+        if client is None:
+            raise _missing_provider_error(task, requested_provider)
+        active_provider = active_provider or requested_provider
+    else:
+        client, final_model = _get_cached_client(
+            requested_provider,
+            resolved_model,
+            async_mode=async_mode,
+            base_url=resolved_base_url,
+            api_key=resolved_api_key,
+            main_runtime=main_runtime,
+        )
+        if client is None:
+            explicit = (requested_provider or "").strip().lower()
+            if explicit and explicit not in ("auto", "openrouter", "custom"):
+                raise RuntimeError(
+                    f"Provider '{explicit}' is set in config.yaml but no API key "
+                    f"was found. Set the {explicit.upper()}_API_KEY environment "
+                    "variable, or switch to a different provider with `/model`."
+                )
+            if requested_provider == "auto":
+                logger.info(
+                    "Auxiliary %s: provider %s unavailable, trying auto-detection chain",
+                    task or "call",
+                    requested_provider,
+                )
+                client, final_model = _get_cached_client(
+                    "auto",
+                    resolved_model,
+                    async_mode=async_mode,
+                    main_runtime=main_runtime,
+                )
+        if client is None:
+            raise _missing_provider_error(task, requested_provider)
+        active_provider = _infer_active_provider(
+            requested_provider,
+            client,
+            main_runtime,
+        )
+
+    final_model = str(final_model or resolved_model or "").strip()
+    if not final_model:
+        raise RuntimeError(
+            f"No LLM model resolved for task={task} provider={active_provider}"
+        )
+    effective_base_url = str(
+        getattr(client, "base_url", "") or resolved_base_url or ""
+    )
+    return AuxiliaryCallTarget(
+        requested_provider=requested_provider,
+        active_provider=active_provider,
+        model=final_model,
+        base_url=effective_base_url,
+        client=client,
+    )
+
+
+def _completion_token_retry_kwargs(
+    kwargs: Dict[str, Any],
+    error: Exception,
+    max_tokens: Optional[int],
+) -> Optional[Dict[str, Any]]:
+    """Return a max-completion-token retry payload when the error names max_tokens."""
+    if max_tokens is None or "max_tokens" not in kwargs:
+        return None
+    error_text = " ".join(
+        str(value or "")
+        for value in (
+            error,
+            getattr(error, "body", None),
+            getattr(error, "param", None),
+        )
+    ).lower()
+    if "max_tokens" not in error_text and "max tokens" not in error_text:
+        return None
+    retry_kwargs = dict(kwargs)
+    retry_kwargs.pop("max_tokens", None)
+    retry_kwargs["max_completion_tokens"] = max_tokens
+    return retry_kwargs
+
+
+def _fallback_reason(error: Exception, requested_provider: str) -> Optional[str]:
+    """Return the permitted fallback reason for auto-routed calls."""
+    if requested_provider not in ("auto", "", None):
+        return None
+    if _is_payment_error(error):
+        return "payment error"
+    if _is_connection_error(error):
+        return "connection error"
+    return None
+
+
+def _prepare_fallback_call(
+    *,
+    target: AuxiliaryCallTarget,
+    task: Optional[str],
+    reason: str,
+    messages: list,
+    temperature: Optional[float],
+    max_tokens: Optional[int],
+    tools: Optional[list],
+    timeout: float,
+    extra_body: Optional[dict],
+) -> Optional[AuxiliaryFallbackCall]:
+    client, model, provider = _try_provider_fallback(
+        target.active_provider,
+        task,
+        reason=reason,
+    )
+    if client is None or not model:
+        return None
+    base_url = str(getattr(client, "base_url", "") or "")
+    kwargs = _build_call_kwargs(
+        provider,
+        model,
+        messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        tools=tools,
+        timeout=timeout,
+        extra_body=extra_body,
+        base_url=base_url,
+    )
+    return AuxiliaryFallbackCall(
+        provider=provider,
+        model=model,
+        client=client,
+        kwargs=kwargs,
+    )
 
 
 def _validate_llm_response(response: Any, task: str = None) -> Any:
@@ -1499,6 +1691,133 @@ def _validate_llm_response(response: Any, task: str = None) -> Any:
             f"adapter or custom endpoint compatibility."
         ) from exc
     return response
+
+
+def _execute_sync_auxiliary_call(
+    *,
+    target: AuxiliaryCallTarget,
+    task: Optional[str],
+    kwargs: Dict[str, Any],
+    messages: list,
+    temperature: Optional[float],
+    max_tokens: Optional[int],
+    tools: Optional[list],
+    timeout: float,
+    extra_body: Optional[dict],
+) -> Any:
+    try:
+        return _validate_llm_response(
+            target.client.chat.completions.create(**kwargs),
+            task,
+        )
+    except Exception as first_error:
+        retry_kwargs = _completion_token_retry_kwargs(
+            kwargs,
+            first_error,
+            max_tokens,
+        )
+        if retry_kwargs is not None:
+            try:
+                return _validate_llm_response(
+                    target.client.chat.completions.create(**retry_kwargs),
+                    task,
+                )
+            except Exception as retry_error:
+                first_error = retry_error
+
+        reason = _fallback_reason(first_error, target.requested_provider)
+        if reason is not None:
+            logger.info(
+                "Auxiliary %s: %s on %s (%s), trying fallback",
+                task or "call",
+                reason,
+                target.active_provider,
+                first_error,
+            )
+            fallback = _prepare_fallback_call(
+                target=target,
+                task=task,
+                reason=reason,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                tools=tools,
+                timeout=timeout,
+                extra_body=extra_body,
+            )
+            if fallback is not None:
+                return _validate_llm_response(
+                    fallback.client.chat.completions.create(**fallback.kwargs),
+                    task,
+                )
+        raise first_error
+
+
+async def _execute_async_auxiliary_call(
+    *,
+    target: AuxiliaryCallTarget,
+    task: Optional[str],
+    kwargs: Dict[str, Any],
+    messages: list,
+    temperature: Optional[float],
+    max_tokens: Optional[int],
+    tools: Optional[list],
+    timeout: float,
+    extra_body: Optional[dict],
+) -> Any:
+    try:
+        return _validate_llm_response(
+            await target.client.chat.completions.create(**kwargs),
+            task,
+        )
+    except Exception as first_error:
+        retry_kwargs = _completion_token_retry_kwargs(
+            kwargs,
+            first_error,
+            max_tokens,
+        )
+        if retry_kwargs is not None:
+            try:
+                return _validate_llm_response(
+                    await target.client.chat.completions.create(**retry_kwargs),
+                    task,
+                )
+            except Exception as retry_error:
+                first_error = retry_error
+
+        reason = _fallback_reason(first_error, target.requested_provider)
+        if reason is not None:
+            logger.info(
+                "Auxiliary %s (async): %s on %s (%s), trying fallback",
+                task or "call",
+                reason,
+                target.active_provider,
+                first_error,
+            )
+            fallback = _prepare_fallback_call(
+                target=target,
+                task=task,
+                reason=reason,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                tools=tools,
+                timeout=timeout,
+                extra_body=extra_body,
+            )
+            if fallback is not None:
+                async_client, async_model = _to_async_client(
+                    fallback.client,
+                    fallback.model,
+                )
+                fallback_kwargs = dict(fallback.kwargs)
+                if async_model and async_model != fallback_kwargs.get("model"):
+                    fallback_kwargs["model"] = async_model
+                return _validate_llm_response(
+                    await async_client.chat.completions.create(**fallback_kwargs),
+                    task,
+                )
+        raise first_error
 
 
 def call_llm(
@@ -1540,189 +1859,56 @@ def call_llm(
     Raises:
         RuntimeError: If no provider is configured.
     """
-    resolved_provider, resolved_model, resolved_base_url, resolved_api_key = _resolve_task_provider_model(
-        task, provider, model, base_url, api_key)
-
-    if task == "vision":
-        effective_provider, client, final_model = resolve_vision_provider_client(
-            provider=provider,
-            model=model,
-            base_url=base_url,
-            api_key=api_key,
-            async_mode=False,
-        )
-        if client is None and resolved_provider != "auto" and not resolved_base_url:
-            logger.warning(
-                "Vision provider %s unavailable, falling back to auto vision backends",
-                resolved_provider,
-            )
-            effective_provider, client, final_model = resolve_vision_provider_client(
-                provider="auto",
-                model=resolved_model,
-                async_mode=False,
-            )
-        if client is None:
-            raise RuntimeError(
-                f"No LLM provider configured for task={task} provider={resolved_provider}. "
-                f"Run: /api"
-            )
-            resolved_provider = effective_provider or resolved_provider
-        else:
-            client, final_model = _get_cached_client(
-                resolved_provider,
-                resolved_model,
-                base_url=resolved_base_url,
-                api_key=resolved_api_key,
-                main_runtime=main_runtime,
-            )
-            if client is None:
-                # When the user explicitly chose a non-OpenRouter provider but no
-                # credentials were found, fail fast instead of silently routing
-                # through OpenRouter (which causes confusing 404s).
-                _explicit = (resolved_provider or "").strip().lower()
-                if _explicit and _explicit not in ("auto", "openrouter", "custom"):
-                    raise RuntimeError(
-                        f"Provider '{_explicit}' is set in config.yaml but no API key "
-                        f"was found. Set the {_explicit.upper()}_API_KEY environment "
-                        f"variable, or switch to a different provider with `/model`."
-                    )
-                # For auto/custom with no credentials, try the full auto chain
-                # rather than hardcoding OpenRouter (which may be depleted).
-                # Pass model=None so each provider uses its own default —
-                # resolved_model may be an OpenRouter-format slug that doesn't
-                # work on other providers.
-                if not resolved_base_url:
-                    logger.info("Auxiliary %s: provider %s unavailable, trying auto-detection chain",
-                                task or "call", resolved_provider)
-                    client, final_model = _get_cached_client("auto", main_runtime=main_runtime)
-            if client is None:
-                raise RuntimeError(
-                    f"No LLM provider configured for task={task} provider={resolved_provider}. "
-                    f"Run: /api")
-
+    target = _resolve_auxiliary_call_target(
+        task=task,
+        provider=provider,
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
+        main_runtime=main_runtime,
+        async_mode=False,
+    )
     effective_timeout = timeout if timeout is not None else _get_task_timeout(task)
-
-    # Log what we're about to do — makes auxiliary operations visible
-    _base_info = str(getattr(client, "base_url", resolved_base_url) or "")
     if task:
-        logger.info("Auxiliary %s: using %s (%s)%s",
-                     task, resolved_provider or "auto", final_model or "default",
-                     f" at {_base_info}" if _base_info and "openrouter" not in _base_info else "")
+        logger.info(
+            "Auxiliary %s: using %s (%s)%s",
+            task,
+            target.active_provider,
+            target.model,
+            (
+                f" at {target.base_url}"
+                if target.base_url and "openrouter" not in target.base_url.lower()
+                else ""
+            ),
+        )
 
     kwargs = _build_call_kwargs(
-        resolved_provider, final_model, messages,
-        temperature=temperature, max_tokens=max_tokens,
-        tools=tools, timeout=effective_timeout, extra_body=extra_body,
-        base_url=resolved_base_url)
-
-    # Handle max_tokens vs max_completion_tokens retry, then payment fallback.
-    try:
-        return _validate_llm_response(
-            client.chat.completions.create(**kwargs), task)
-    except Exception as first_err:
-        err_str = str(first_err)
-        if "max_tokens" in err_str or "unsupported_parameter" in err_str:
-            kwargs.pop("max_tokens", None)
-            kwargs["max_completion_tokens"] = max_tokens
-            try:
-                return _validate_llm_response(
-                    client.chat.completions.create(**kwargs), task)
-            except Exception as retry_err:
-                # If the max_tokens retry also hits a payment or connection
-                # error, fall through to the fallback chain below.
-                if not (_is_payment_error(retry_err) or _is_connection_error(retry_err)):
-                    raise
-                first_err = retry_err
-
-        # ── Payment / credit exhaustion fallback ──────────────────────
-        # When the resolved provider returns 402 or a credit-related error,
-        # try alternative providers instead of giving up.  This handles the
-        # common case where a user runs out of OpenRouter credits but has
-        # another configured provider available.
-        #
-        # ── Connection error fallback ────────────────────────────────
-        # When a provider endpoint is unreachable (DNS failure, connection
-        # refused, timeout), try alternative providers.  This handles stale
-        # credentials that authenticate but whose endpoint is down,
-        # and providers the user never configured that got picked up by
-        # the auto-detection chain.
-        should_fallback = _is_payment_error(first_err) or _is_connection_error(first_err)
-        # Only try alternative providers when the user didn't explicitly
-        # configure this task's provider.  Explicit provider = hard constraint;
-        # auto (the default) = best-effort fallback chain.  (#7559)
-        is_auto = resolved_provider in ("auto", "", None)
-        if should_fallback and is_auto:
-            reason = "payment error" if _is_payment_error(first_err) else "connection error"
-            logger.info("Auxiliary %s: %s on %s (%s), trying fallback",
-                        task or "call", reason, resolved_provider, first_err)
-            fb_client, fb_model, fb_label = _try_payment_fallback(
-                resolved_provider, task, reason=reason)
-            if fb_client is not None:
-                fb_kwargs = _build_call_kwargs(
-                    fb_label, fb_model, messages,
-                    temperature=temperature, max_tokens=max_tokens,
-                    tools=tools, timeout=effective_timeout,
-                    extra_body=extra_body)
-                return _validate_llm_response(
-                    fb_client.chat.completions.create(**fb_kwargs), task)
-        raise
+        target.active_provider,
+        target.model,
+        messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        tools=tools,
+        timeout=effective_timeout,
+        extra_body=extra_body,
+        base_url=target.base_url,
+    )
+    return _execute_sync_auxiliary_call(
+        target=target,
+        task=task,
+        kwargs=kwargs,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        tools=tools,
+        timeout=effective_timeout,
+        extra_body=extra_body,
+    )
 
 
 def extract_content_or_reasoning(response) -> str:
-    """Extract content from an LLM response, falling back to reasoning fields.
-
-    Mirrors the main agent loop's behavior when a reasoning model (DeepSeek-R1,
-    Qwen-QwQ, etc.) returns ``content=None`` with reasoning in structured fields.
-
-    Resolution order:
-      1. ``message.content`` — strip inline think/reasoning blocks, check for
-         remaining non-whitespace text.
-      2. ``message.reasoning`` / ``message.reasoning_content`` — direct
-         structured reasoning fields (DeepSeek, Moonshot, Novita, etc.).
-      3. ``message.reasoning_details`` — OpenRouter unified array format.
-
-    Returns the best available text, or ``""`` if nothing found.
-    """
-    import re
-
-    msg = response.choices[0].message
-    content = (msg.content or "").strip()
-
-    if content:
-        # Strip inline think/reasoning blocks (mirrors _strip_think_blocks)
-        cleaned = re.sub(
-
-            r"<(?:think|thinking|reasoning|thought|REASONING_SCRATCHPAD)>"
-            r".*?"
-            r"</(?:think|thinking|reasoning|thought|REASONING_SCRATCHPAD)>",
-            "", content, flags=re.DOTALL | re.IGNORECASE,
-        ).strip()
-        if cleaned:
-            return cleaned
-
-    # Content is empty or reasoning-only — try structured reasoning fields
-    reasoning_parts: list[str] = []
-    for field in ("reasoning", "reasoning_content"):
-        val = getattr(msg, field, None)
-        if val and isinstance(val, str) and val.strip() and val not in reasoning_parts:
-            reasoning_parts.append(val.strip())
-
-    details = getattr(msg, "reasoning_details", None)
-    if details and isinstance(details, list):
-        for detail in details:
-            if isinstance(detail, dict):
-                summary = (
-                    detail.get("summary")
-                    or detail.get("content")
-                    or detail.get("text")
-                )
-                if summary and summary not in reasoning_parts:
-                    reasoning_parts.append(summary.strip() if isinstance(summary, str) else str(summary))
-
-    if reasoning_parts:
-        return "\n\n".join(reasoning_parts)
-
-    return ""
+    """Extract visible content or reasoning through the shared response contract."""
+    return visible_or_reasoning_text(response.choices[0].message)
 
 
 async def async_call_llm(
@@ -1732,6 +1918,7 @@ async def async_call_llm(
     model: str = None,
     base_url: str = None,
     api_key: str = None,
+    main_runtime: Optional[Dict[str, Any]] = None,
     messages: list,
     temperature: float = None,
     max_tokens: int = None,
@@ -1743,103 +1930,36 @@ async def async_call_llm(
 
     Same as call_llm() but async. See call_llm() for full documentation.
     """
-    resolved_provider, resolved_model, resolved_base_url, resolved_api_key = _resolve_task_provider_model(
-        task, provider, model, base_url, api_key)
-
-    if task == "vision":
-        effective_provider, client, final_model = resolve_vision_provider_client(
-            provider=provider,
-            model=model,
-            base_url=base_url,
-            api_key=api_key,
-            async_mode=True,
-        )
-        if client is None and resolved_provider != "auto" and not resolved_base_url:
-            logger.warning(
-                "Vision provider %s unavailable, falling back to auto vision backends",
-                resolved_provider,
-            )
-            effective_provider, client, final_model = resolve_vision_provider_client(
-                provider="auto",
-                model=resolved_model,
-                async_mode=True,
-            )
-        if client is None:
-            raise RuntimeError(
-                f"No LLM provider configured for task={task} provider={resolved_provider}. "
-                f"Run: /api"
-            )
-            resolved_provider = effective_provider or resolved_provider
-        else:
-            client, final_model = _get_cached_client(
-                resolved_provider,
-                resolved_model,
-                async_mode=True,
-                base_url=resolved_base_url,
-                api_key=resolved_api_key,
-            )
-            if client is None:
-                _explicit = (resolved_provider or "").strip().lower()
-                if _explicit and _explicit not in ("auto", "openrouter", "custom"):
-                    raise RuntimeError(
-                        f"Provider '{_explicit}' is set in config.yaml but no API key "
-                        f"was found. Set the {_explicit.upper()}_API_KEY environment "
-                        f"variable, or switch to a different provider with `/model`."
-                    )
-                if not resolved_base_url:
-                    logger.info("Auxiliary %s: provider %s unavailable, trying auto-detection chain",
-                                task or "call", resolved_provider)
-                    client, final_model = _get_cached_client("auto", async_mode=True)
-            if client is None:
-                raise RuntimeError(
-                    f"No LLM provider configured for task={task} provider={resolved_provider}. "
-                    f"Run: /api")
-
+    target = _resolve_auxiliary_call_target(
+        task=task,
+        provider=provider,
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
+        main_runtime=main_runtime,
+        async_mode=True,
+    )
     effective_timeout = timeout if timeout is not None else _get_task_timeout(task)
 
     kwargs = _build_call_kwargs(
-        resolved_provider, final_model, messages,
-        temperature=temperature, max_tokens=max_tokens,
-        tools=tools, timeout=effective_timeout, extra_body=extra_body,
-        base_url=resolved_base_url)
-
-    try:
-        return _validate_llm_response(
-            await client.chat.completions.create(**kwargs), task)
-    except Exception as first_err:
-        err_str = str(first_err)
-        if "max_tokens" in err_str or "unsupported_parameter" in err_str:
-            kwargs.pop("max_tokens", None)
-            kwargs["max_completion_tokens"] = max_tokens
-            try:
-                return _validate_llm_response(
-                    await client.chat.completions.create(**kwargs), task)
-            except Exception as retry_err:
-                # If the max_tokens retry also hits a payment or connection
-                # error, fall through to the fallback chain below.
-                if not (_is_payment_error(retry_err) or _is_connection_error(retry_err)):
-                    raise
-                first_err = retry_err
-
-        # ── Payment / connection fallback (mirrors sync call_llm) ─────
-        should_fallback = _is_payment_error(first_err) or _is_connection_error(first_err)
-        is_auto = resolved_provider in ("auto", "", None)
-        if should_fallback and is_auto:
-            reason = "payment error" if _is_payment_error(first_err) else "connection error"
-            logger.info("Auxiliary %s (async): %s on %s (%s), trying fallback",
-                        task or "call", reason, resolved_provider, first_err)
-            fb_client, fb_model, fb_label = _try_payment_fallback(
-                resolved_provider, task, reason=reason)
-            if fb_client is not None:
-                fb_kwargs = _build_call_kwargs(
-                    fb_label, fb_model, messages,
-                    temperature=temperature, max_tokens=max_tokens,
-                    tools=tools, timeout=effective_timeout,
-                    extra_body=extra_body)
-                # Convert sync fallback client to async
-                async_fb, async_fb_model = _to_async_client(fb_client, fb_model or "")
-                if async_fb_model and async_fb_model != fb_kwargs.get("model"):
-                    fb_kwargs["model"] = async_fb_model
-                return _validate_llm_response(
-                    await async_fb.chat.completions.create(**fb_kwargs), task)
-        raise
+        target.active_provider,
+        target.model,
+        messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        tools=tools,
+        timeout=effective_timeout,
+        extra_body=extra_body,
+        base_url=target.base_url,
+    )
+    return await _execute_async_auxiliary_call(
+        target=target,
+        task=task,
+        kwargs=kwargs,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        tools=tools,
+        timeout=effective_timeout,
+        extra_body=extra_body,
+    )

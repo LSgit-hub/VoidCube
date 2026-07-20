@@ -465,7 +465,7 @@ lm_eval --model hf \
 
 **自定义任务**：参见[references/custom-tasks.md](references/custom-tasks.md)创建领域特定评估任务。
 
-**API评估**：参见[references/api-evaluation.md](references/api-evaluation.md)评估OpenAI、Anthropic和其他API模型。
+**API评估**：参见[references/api-evaluation.md](references/api-evaluation.md)评估 OpenAI 及本地兼容 API 模型。
 
 **多GPU策略**：参见[references/distributed-eval.md](references/distributed-eval.md)了解数据并行和张量并行评估。
 

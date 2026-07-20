@@ -14,6 +14,8 @@ import urllib.error
 from difflib import get_close_matches
 from typing import Any, Optional
 
+from agent.integration_policy import contains_retired_integration
+
 COPILOT_BASE_URL = "https://api.githubcopilot.com"
 COPILOT_MODELS_URL = f"{COPILOT_BASE_URL}/models"
 COPILOT_EDITOR_VERSION = "vscode/1.104.1"
@@ -551,7 +553,10 @@ def fetch_openrouter_models(
     if _openrouter_catalog_cache is not None and not force_refresh:
         return list(_openrouter_catalog_cache)
 
-    fallback = list(OPENROUTER_MODELS)
+    fallback = [
+        entry for entry in OPENROUTER_MODELS
+        if not contains_retired_integration(entry[0])
+    ]
     preferred_ids = [mid for mid, _ in fallback]
 
     try:
@@ -580,6 +585,8 @@ def fetch_openrouter_models(
         
         # Clean model ID to remove duplicate suffixes like ':free:free'
         mid = _clean_model_id(mid)
+        if contains_retired_integration(mid):
+            continue
         
         live_by_id[mid] = item
         
@@ -1141,7 +1148,7 @@ def resolve_fast_mode_overrides(model_id: Optional[str]) -> dict[str, Any] | Non
     - OpenAI models: ``{"service_tier": "priority"}`` (Priority Processing)
 
     The overrides are injected into the API request kwargs by
-    ``_build_api_kwargs`` in run_agent.py.
+    ``build_chat_completion_kwargs`` in ``agent.api_request``.
     """
     if not model_supports_fast_mode(model_id):
         return None
@@ -1159,7 +1166,11 @@ def _resolve_copilot_catalog_api_key() -> str:
         return ""
 
 
-def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) -> list[str]:
+def _provider_model_ids_unfiltered(
+    provider: Optional[str],
+    *,
+    force_refresh: bool = False,
+) -> list[str]:
     """Return the best known model catalog for a provider.
 
     Tries live API endpoints for providers that support them,
@@ -1205,6 +1216,18 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
             if live:
                 return live
     return list(_PROVIDER_MODELS.get(normalized, []))
+
+
+def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) -> list[str]:
+    """Return visible provider models after enforcing project integration policy."""
+    return [
+        model_id
+        for model_id in _provider_model_ids_unfiltered(
+            provider,
+            force_refresh=force_refresh,
+        )
+        if not contains_retired_integration(model_id)
+    ]
 
 
 def _payload_items(payload: Any) -> list[dict[str, Any]]:

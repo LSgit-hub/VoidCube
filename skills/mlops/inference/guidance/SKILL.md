@@ -43,8 +43,8 @@ pip install guidance[llama_cpp]     # llama.cpp模型
 ```python
 from guidance import models, gen
 
-# 加载模型（支持OpenAI、Transformers、llama.cpp）
-lm = models.OpenAI("gpt-4")
+# 加载本地模型
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 
 # 带约束生成
 result = lm + "The capital of France is " + gen("capital", max_tokens=5)
@@ -52,13 +52,12 @@ result = lm + "The capital of France is " + gen("capital", max_tokens=5)
 print(result["capital"])  # "Paris"
 ```
 
-### 使用Anthropic Claude
+### 使用本地 Transformers 模型
 
 ```python
 from guidance import models, gen, system, user, assistant
 
-# 配置Claude
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 
 # 使用上下文管理器实现聊天格式
 with system():
@@ -80,7 +79,7 @@ Guidance使用Python式上下文管理器进行聊天式交互。
 ```python
 from guidance import system, user, assistant, gen
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 
 # 系统消息
 with system():
@@ -111,7 +110,7 @@ Guidance使用正则或语法确保输出匹配指定模式。
 ```python
 from guidance import models, gen
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 
 # 约束为有效邮箱格式
 lm += "Email: " + gen("email", regex=r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
@@ -136,7 +135,7 @@ print(lm["date"])   # 保证YYYY-MM-DD格式
 ```python
 from guidance import models, gen, select
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 
 # 约束为特定选项
 lm += "Sentiment: " + select(["positive", "negative", "neutral"], name="sentiment")
@@ -170,7 +169,7 @@ prompt = "The capital of France is "
 ```python
 from guidance import models, gen
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 
 # 默认启用token修复
 lm += "The capital of France is " + gen("capital", max_tokens=5)
@@ -189,7 +188,7 @@ lm += "The capital of France is " + gen("capital", max_tokens=5)
 ```python
 from guidance import models, gen
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 
 # JSON语法（简化）
 json_grammar = """
@@ -227,7 +226,7 @@ def generate_person(lm):
     return lm
 
 # 使用函数
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 lm = generate_person(lm)
 
 print(lm["name"])
@@ -264,17 +263,6 @@ def react_agent(lm, question, tools, max_rounds=5):
 ```
 
 ## 后端配置
-
-### Anthropic Claude
-
-```python
-from guidance import models
-
-lm = models.Anthropic(
-    model="claude-sonnet-4-5-20250929",
-    api_key="your-api-key"  # 或设置ANTHROPIC_API_KEY环境变量
-)
-```
 
 ### OpenAI
 
@@ -315,7 +303,7 @@ lm = LlamaCpp(
 ```python
 from guidance import models, gen, system, user, assistant
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 
 with system():
     lm += "You generate valid JSON."
@@ -338,7 +326,7 @@ print(lm)  # 保证有效JSON
 ```python
 from guidance import models, gen, select
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 
 text = "This product is amazing! I love it."
 
@@ -369,7 +357,7 @@ def chain_of_thought(lm, question):
 
     return lm
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 lm = chain_of_thought(lm, "What is 15% of 200?")
 
 print(lm["answer"])
@@ -411,7 +399,7 @@ def react_agent(lm, question):
 
     return lm
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 lm = react_agent(lm, "What is 25 * 4 + 10?")
 print(lm["answer"])
 ```
@@ -442,7 +430,7 @@ def extract_entities(lm, text):
 
 text = "Tim Cook announced at Apple Park on 2024-09-15 in Cupertino."
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 lm = extract_entities(lm, text)
 
 print(f"人物: {lm['person']}")

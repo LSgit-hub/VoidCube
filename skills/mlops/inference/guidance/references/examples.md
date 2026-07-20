@@ -32,7 +32,7 @@ def generate_user(lm):
     return lm
 
 # 使用它
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 lm += "Generate a user profile:\n"
 lm = generate_user(lm)
 
@@ -73,7 +73,7 @@ def generate_order(lm):
     lm += "}"
     return lm
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 lm = generate_order(lm)
 ```
 
@@ -98,7 +98,7 @@ def generate_user_list(lm, count=3):
     lm += "]"
     return lm
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 lm = generate_user_list(lm, count=5)
 ```
 
@@ -148,7 +148,7 @@ schema = {
     }
 }
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 lm = json_from_schema(lm, schema)
 ```
 
@@ -178,7 +178,7 @@ def extract_person_info(lm, text):
 
 text = "John Smith is a 35-year-old software engineer. Contact: john@example.com"
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 
 with system():
     lm += "You extract structured information from text."
@@ -228,7 +228,7 @@ to discuss the collaboration between Apple and Microsoft. The meeting continued
 in Cupertino on 2024-09-20.
 """
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 lm = extract_entities(lm, text)
 ```
 
@@ -258,7 +258,7 @@ texts = [
     "Carol has no strong feelings either way"
 ]
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 lm = batch_extract(lm, texts)
 ```
 
@@ -269,7 +269,7 @@ lm = batch_extract(lm, texts)
 ```python
 from guidance import models, select, gen
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 
 text = "This product is absolutely amazing! Best purchase ever."
 
@@ -322,7 +322,7 @@ Apple announced new AI features in iOS 18, leveraging machine learning to improv
 battery life and performance. The company's stock rose 5% following the announcement.
 """
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 lm = classify_article(lm, article)
 ```
 
@@ -362,7 +362,7 @@ def classify_intent(lm, message):
 
 message = "My account was charged twice for the same order. Need help ASAP!"
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 lm = classify_intent(lm, message)
 
 print(f"Intent: {lm['intent']}")
@@ -417,7 +417,7 @@ tools = {
 }
 
 # 使用代理
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 lm = react_agent(lm, "What is (25 * 4) + 10?", tools)
 
 print(lm["answer"])
@@ -461,7 +461,7 @@ def writer_agent(lm, topic):
 # 协调工作流
 task = "Write an article about AI safety"
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 lm = coordinator_agent(lm, task)
 
 specialist = lm["specialist"]
@@ -503,7 +503,7 @@ def validated_tool_agent(lm, question):
 
     return lm
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 lm = validated_tool_agent(lm, "What is (10 + 5) * 3?")
 ```
 
@@ -527,7 +527,7 @@ def chain_of_thought(lm, question):
 
     return lm
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 lm = chain_of_thought(lm, "If a train travels 60 mph for 2.5 hours, how far does it go?")
 
 print(lm["answer"])
@@ -555,7 +555,7 @@ def self_consistency(lm, question, num_samples=3):
     lm += f"Final Answer (by majority): {most_common}\n"
     return lm
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 lm = self_consistency(lm, "What is 15% of 200?")
 ```
 
@@ -585,7 +585,7 @@ def plan_and_execute(lm, goal):
 
     return lm
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 lm = plan_and_execute(lm, "Build a REST API for a blog platform")
 ```
 
@@ -611,7 +611,7 @@ def generate_python_function(lm, description):
 
     return lm
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 lm = generate_python_function(lm, "Check if a number is prime")
 
 print(lm)
@@ -637,7 +637,7 @@ def generate_sql(lm, description):
 
     return lm
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 lm = generate_sql(lm, "Get all users who signed up in the last 30 days")
 ```
 
@@ -672,7 +672,7 @@ def generate_api_endpoint(lm, description):
 
     return lm
 
-lm = models.Anthropic("claude-sonnet-4-5-20250929")
+lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
 lm = generate_api_endpoint(lm, "Create a new blog post")
 ```
 
@@ -703,7 +703,7 @@ from functools import lru_cache
 @lru_cache(maxsize=100)
 def cached_generation(text):
     """缓存 LLM 生成。"""
-    lm = models.Anthropic("claude-sonnet-4-5-20250929")
+    lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
     lm += f"Analyze: {text}\n"
     lm += "Sentiment: " + select(["positive", "negative", "neutral"], name="sentiment")
     return lm["sentiment"]
@@ -742,7 +742,7 @@ def monitored_generation(lm, text):
 ```python
 def batch_process(texts, batch_size=10):
     """批量处理文本。"""
-    lm = models.Anthropic("claude-sonnet-4-5-20250929")
+    lm = models.Transformers("Qwen/Qwen2.5-7B-Instruct")
     results = []
 
     for i in range(0, len(texts), batch_size):

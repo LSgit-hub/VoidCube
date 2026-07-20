@@ -30,9 +30,15 @@
 - 本地附件路径解析、文件拖放、图像参数收集与徽标格式化已收口到 `VoidCube_cli/attachments.py`；Windows 盘符路径和 Termux POSIX 示例均有独立回归测试。
 - Agent 消息 surrogate / 非 ASCII 恢复统一由 `agent/message_sanitizer.py` 提供，`run_agent.py` 不再维护重复实现。
 - 跨模块的内部 function-tool 标准化由 `agent/tool_schema.py` 唯一提供，主执行器只负责装配和调用。
+- Chat Completions 请求准备已收口到纯输入输出模块 `agent/api_request.py`；`run_agent.py` 只快照当前运行态并编排调用，不再维护 Provider 参数、消息角色和 reasoning payload 的重复构建分支。
+- Chat Completions 响应规范化已收口到 `agent/api_response.py`；主 Agent 与辅助调用共用可见文本清理和 reasoning 提取规则，tool-call / reasoning-details 的持久化结构也由该模块唯一生成。
+- API 错误分类、展示摘要、限流上下文、Retry-After 和流中断判断统一由 `agent/error_classifier.py` 提供；CLI 不再探测 Agent 私有错误方法，主循环也不再保留重复提取实现或引用已删除的错误枚举。
+- 凭据池恢复之后的重试动作由 `agent/retry_utils.py` 的不可变 `RetryDirective` 决定：限流回退、payload/context 恢复、非重试终止、连接重建和等待分支不再散落于主循环；confirmed billing 在凭据池与回退均不可用时不会继续重试同一凭据。
+- context overflow 恢复计划已并入 `agent/context_compressor.py`：输出上限修正、真实窗口解析、probe tier 降级、压缩次数和探测持久化标志由不可变计划统一决定；命名压缩结果统一判断消息缩减或窗口降级是否取得进展，主循环只执行压缩、session 切换和状态输出。
+- 记忆刷新回退、MoA 参考模型和聚合模型请求已统一通过 `agent/api_request.py` 构建；MoA 的自定义聚合模型会实际参与请求，输出上限、reasoning 和退役集成策略不再由工具私自拼装。
 - API-A 主调用、辅助模型、模型切换和子 Agent 委派统一使用 OpenAI-compatible `chat.completions`；配置层不再保留协议探测、协议切换或专用响应适配字段。
 - 从未实际写文件的 `save_trajectories` 空实现已连同参数、帮助和死分支删除；仍可使用独立入口的 `save_sample` 导出单次样本。
-- 主仓当前收集 760 项测试。日常修改先跑 smoke 和受影响模块，合并或发布前跑全量测试与构建。
+- 主仓当前收集 827 项测试。日常修改先跑 smoke 和受影响模块，合并或发布前跑全量测试与构建。
 - Mem 子系统当前有 108 项测试，需通过 `python -m pytest Mem/tests -q` 单独运行。
 
 ## 推荐阅读路径

@@ -72,7 +72,7 @@ pip uninstall xformers -y
 
 Run Qwen3-Coder-30B-A3B-Instruct and 480B-A35B locally with Unsloth Dynamic quants.
 
-Qwen3-Coder is Qwen’s new series of coding agent models, available in 30B (**Qwen3-Coder-Flash**) and 480B parameters. **Qwen3-480B-A35B-Instruct** achieves SOTA coding performance rivalling Claude Sonnet-4, GPT-4.1, and [Kimi K2](https://docs.unsloth.ai/models/tutorials-how-to-fine-tune-and-run-llms/kimi-k2-how-to-run-locally), with 61.8% on Aider Polygot and support for 256K (extendable to 1M) token context.
+Qwen3-Coder is Qwen’s new series of coding agent models, available in 30B (**Qwen3-Coder-Flash**) and 480B parameters. **Qwen3-480B-A35B-Instruct** achieves SOTA coding performance rivalling a closed-model baseline, GPT-4.1, and [Kimi K2](https://docs.unsloth.ai/models/tutorials-how-to-fine-tune-and-run-llms/kimi-k2-how-to-run-locally), with 61.8% on Aider Polygot and support for 256K (extendable to 1M) token context.
 
 We also uploaded Qwen3-Coder with native <mark style="background-color:purple;">**1M context length**</mark> extended by YaRN and full-precision 8bit and 16bit versions. [Unsloth](https://github.com/unslothai/unsloth) also now supports fine-tuning and [RL](https://docs.unsloth.ai/get-started/reinforcement-learning-rl-guide) of Qwen3-Coder.
 
@@ -1017,7 +1017,7 @@ Please see <https://docs.unsloth.ai/basics/deepseek-r1-0528-how-to-run-locally> 
 
 DeepSeek is at it again! After releasing V3, R1 Zero and R1 back in December 2024 and January 2025, DeepSeek updated their checkpoints / models for V3, and released a March update!
 
-According to DeepSeek, MMLU-Pro jumped +5.3% to 81.2%. **GPQA +9.3% points**. AIME + 19.8% and LiveCodeBench + 10.0%! They provided a plot showing how they compared to the previous V3 checkpoint and other models like GPT 4.5 and Claude Sonnet 3.7. <mark style="background-color:blue;">**But how do we run a 671 billion parameter model locally?**</mark>
+According to DeepSeek, MMLU-Pro jumped +5.3% to 81.2%. **GPQA +9.3% points**. AIME + 19.8% and LiveCodeBench + 10.0%! They provided a plot showing how they compared to the previous V3 checkpoint and other models like GPT 4.5 and a closed-model baseline. <mark style="background-color:blue;">**But how do we run a 671 billion parameter model locally?**</mark>
 
 <table data-full-width="true"><thead><tr><th>MoE Bits</th><th>Type</th><th>Disk Size</th><th>Accuracy</th><th>Link</th><th>Details</th></tr></thead><tbody><tr><td>1.78bit</td><td>IQ1_S</td><td><strong>173GB</strong></td><td>Ok</td><td><a href="https://huggingface.co/unsloth/DeepSeek-V3-0324-GGUF/tree/main/UD-IQ1_S">Link</a></td><td>2.06/1.56bit</td></tr><tr><td>1.93bit</td><td>IQ1_M</td><td><strong>183GB</strong></td><td>Fair</td><td><a href="https://huggingface.co/unsloth/DeepSeek-V3-0324-GGUF/tree/main/UD-IQ1_M">Link</a></td><td>2.5/2.06/1.56</td></tr><tr><td>2.42bit</td><td>IQ2_XXS</td><td><strong>203GB</strong></td><td><mark style="background-color:blue;"><strong>Suggested</strong></mark></td><td><a href="https://huggingface.co/unsloth/DeepSeek-V3-0324-GGUF/tree/main/UD-IQ2_XXS">Link</a></td><td>2.5/2.06bit</td></tr><tr><td>2.71bit</td><td>Q2_K_XL</td><td><strong>231GB</strong></td><td><mark style="background-color:purple;"><strong>Suggested</strong></mark></td><td><a href="https://huggingface.co/unsloth/DeepSeek-V3-0324-GGUF/tree/main/UD-Q2_K_XL">Link</a></td><td> 3.5/2.5bit</td></tr><tr><td>3.5bit</td><td>Q3_K_XL</td><td><strong>320GB</strong></td><td>Great</td><td><a href="https://huggingface.co/unsloth/DeepSeek-V3-0324-GGUF/tree/main/UD-Q3_K_XL">Link</a></td><td> 4.5/3.5bit</td></tr><tr><td>4.5bit</td><td>Q4_K_XL</td><td><strong>406GB</strong></td><td>Best</td><td><a href="https://huggingface.co/unsloth/DeepSeek-V3-0324-GGUF/tree/main/UD-Q4_K_XL">Link</a></td><td> 5.5/4.5bit</td></tr></tbody></table>
 
@@ -8759,15 +8759,15 @@ def formatting_prompts_func(examples):
 
 性能 的 Unsloth Dynamic GGUFs 在 Aider Polyglot Benchmarks
 
-We’re excited to share that Unsloth Dynamic GGUFs shows how it's possible to quantize LLMs like [DeepSeek-V3.1](https://docs.unsloth.ai/models/deepseek-v3.1-how-to-run-locally) (671B) down to just **1-bit** or **3-bit**, and still be able to outperform SOTA models like **GPT-4.5, GPT-4.1** (April 2025) and **Claude-4-Opus** (May 2025).
+We’re excited to share that Unsloth Dynamic GGUFs shows how it's possible to quantize LLMs like [DeepSeek-V3.1](https://docs.unsloth.ai/models/deepseek-v3.1-how-to-run-locally) (671B) down to just **1-bit** or **3-bit**, and still be able to outperform SOTA models like **GPT-4.5, GPT-4.1** (April 2025) and **closed-model baseline** (May 2025).
 
 Previously, [we demonstrated](https://docs.unsloth.ai/basics/unsloth-dynamic-2.0-ggufs) how Unsloth Dynamic GGUFs outperform other quantization methods on 5-shot MMLU and KL Divergence. Now, we’re showcasing their performance on independent third-party evaluations using the **Aider Polyglot** **benchmark.**
 
 <div><figure><img src="https://3215535692-files.gitbook.io/~/files/v0/b/gitbook-x-prod.appspot.com/o/spaces%2FxhOjnexMCB3dmuQFQ2Zq%2Fuploads%2F4PkEKacoiSyJj5JIysXt%2Faider%20thinking.png?alt=media&#x26;词元=41d888bb-8d46-4b3e-9624-78034bb3d7e4" alt="" width="563"><figcaption><p>Thinking Aider Benchmarks</p></figcaption></figure> <figure><img src="https://3215535692-files.gitbook.io/~/files/v0/b/gitbook-x-prod.appspot.com/o/spaces%2FxhOjnexMCB3dmuQFQ2Zq%2Fuploads%2FTG2xW8wGD2hQTuT4437N%2Faider%20non.png?alt=media&#x26;词元=ab73810b-b584-4d46-b056-07594ada2845" alt="" width="563"><figcaption><p>No Thinking Aider Benchmarks</p></figcaption></figure></div>
 
 * Our **1-bit** Unsloth Dynamic GGUF shrinks DeepSeek-V3.1 从 **671GB → 192GB (-75% size)** 和 no-thinking mode greatly outperforms GPT-4.1 (Apr 2025), GPT-4.5, 和 DeepSeek-V3-0324.
-* **3-bit** Unsloth DeepSeek-V3.1 (thinking) GGUF: Outperforms Claude-4-Opus-20250514 (thinking).
-* **5-bit** Unsloth DeepSeek-V3.1 (non-thinking) GGUF: Matches Claude-4-Opus-20250514 (non-thinking) 性能.
+* **3-bit** Unsloth DeepSeek-V3.1 (thinking) GGUF: Outperforms closed-model baseline (thinking).
+* **5-bit** Unsloth DeepSeek-V3.1 (non-thinking) GGUF: Matches closed-model baseline (non-thinking) 性能.
 * Unsloth Dynamic GGUFs perform consistently better than other non-Unsloth Dynamic imatrix GGUFs
 * Other non-Unsloth 1-bit 和 2-bit DeepSeek-V3.1 quantizations, as well as standard 1-bit quantization without selective 层 quantization, either failed 到 load 或 produced gibberish 和 looping outputs. This highlights how Unsloth Dynamic GGUFs 是 able 到 largely retain accuracy whereas other methods 做 not even 函数.
 
@@ -8817,7 +8817,7 @@ We also showed dynamic benchmarks 在 <https://docs.unsloth.ai/basics/unsloth-dy
 
 用于 our DeepSeek-V3.1 experiments, we compared different bits 的 **Unsloth Dynamic GGUFs** against:
 
-* **Full-precision, unquantized LLMs** including GPT 4.5, 4.1, Claude-4-Opus, DeepSeek-V3-0324 etc.
+* **Full-precision, unquantized LLMs** including GPT 4.5, 4.1, closed-model baseline, DeepSeek-V3-0324 etc.
 * ***Other*****&#x20;dynamic imatrix V3.1 GGUFs**
 * ***Semi-*****dynamic** (some selective 层 quantization) imatrix V3.1 GGUFs 用于 **ablation purposes**.
 
@@ -8832,11 +8832,11 @@ Benchmark experiments were mainly conducted by [David Sluys](https://www.linkedi
 | o3                                | 76.9     |
 | DeepSeek V3.1                     | 76.1     |
 | **(3 bit) DeepSeek V3.1 Unsloth** | **75.6** |
-| Claude-4-Opus (可能)               | 72       |
+| closed-model baseline (可能)               | 72       |
 | o4-mini (High)                    | 72       |
 | DeepSeek R1 0528                  | 71.4     |
 | **(2 bit) DeepSeek V3.1 Unsloth** | **66.7** |
-| Claude-3.7-Sonnet (Feb)           | 64.9     |
+| closed-model baseline (Feb)           | 64.9     |
 | **(1 bit) DeepSeek V3.1 Unsloth** | **57.8** |
 | DeepSeek R1                       | 56.9     |
 
@@ -8845,7 +8845,7 @@ Benchmark experiments were mainly conducted by [David Sluys](https://www.linkedi
 | 模型                             | Accuracy |
 | --------------------------------- | -------- |
 | DeepSeek V3.1                     | 71.6     |
-| Claude-4-Opus (可能)               | 70.7     |
+| closed-model baseline (可能)               | 70.7     |
 | **(5 bit) DeepSeek V3.1 Unsloth** | **70.7** |
 | **(4 bit) DeepSeek V3.1 Unsloth** | **69.7** |
 | **(3 bit) DeepSeek V3.1 Unsloth** | **68.4** |

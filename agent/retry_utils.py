@@ -8,12 +8,99 @@ rate-limited provider concurrently.
 import random
 import threading
 import time
+from dataclasses import dataclass
+from enum import Enum
+
+from agent.error_classifier import ClassifiedError, FailoverReason
 
 # Monotonic counter for jitter seed uniqueness within the same process.
 # Protected by a lock to avoid race conditions in concurrent retry paths
 # (e.g. multiple gateway sessions retrying simultaneously).
 _jitter_counter = 0
 _jitter_lock = threading.Lock()
+
+
+class RetryKind(str, Enum):
+    """The next stateful recovery branch the Agent must execute."""
+
+    compress_payload = "compress_payload"
+    recover_context = "recover_context"
+    abort_client_error = "abort_client_error"
+    exhausted = "exhausted"
+    wait = "wait"
+
+
+@dataclass(frozen=True, slots=True)
+class RetryDirective:
+    kind: RetryKind
+    is_rate_limited: bool = False
+    try_eager_fallback: bool = False
+    try_transport_recovery: bool = False
+    try_fallback: bool = False
+
+
+def decide_retry_directive(
+    classified: ClassifiedError,
+    error: Exception,
+    *,
+    retry_count: int,
+    max_retries: int,
+    fallback_available: bool,
+    credential_pool_may_recover: bool,
+    primary_recovery_attempted: bool,
+) -> RetryDirective:
+    """Choose the post-credential recovery branch without changing Agent state."""
+    is_rate_limited = classified.reason in (
+        FailoverReason.rate_limit,
+        FailoverReason.billing,
+    )
+    eager_fallback = (
+        is_rate_limited
+        and fallback_available
+        and not credential_pool_may_recover
+    )
+
+    if classified.reason == FailoverReason.payload_too_large:
+        return RetryDirective(
+            RetryKind.compress_payload,
+            is_rate_limited=is_rate_limited,
+            try_eager_fallback=eager_fallback,
+        )
+    if classified.reason == FailoverReason.context_overflow:
+        return RetryDirective(
+            RetryKind.recover_context,
+            is_rate_limited=is_rate_limited,
+            try_eager_fallback=eager_fallback,
+        )
+
+    is_local_validation_error = (
+        isinstance(error, (ValueError, TypeError))
+        and not isinstance(error, UnicodeEncodeError)
+    )
+    if is_local_validation_error or (
+        not classified.retryable and not classified.should_compress
+    ):
+        return RetryDirective(
+            RetryKind.abort_client_error,
+            is_rate_limited=is_rate_limited,
+            try_eager_fallback=eager_fallback,
+            try_fallback=fallback_available,
+        )
+
+    if retry_count >= max_retries:
+        return RetryDirective(
+            RetryKind.exhausted,
+            is_rate_limited=is_rate_limited,
+            try_eager_fallback=eager_fallback,
+            try_transport_recovery=not primary_recovery_attempted,
+            try_fallback=fallback_available,
+        )
+
+    return RetryDirective(
+        RetryKind.wait,
+        is_rate_limited=is_rate_limited,
+        try_eager_fallback=eager_fallback,
+    )
 
 
 def jittered_backoff(

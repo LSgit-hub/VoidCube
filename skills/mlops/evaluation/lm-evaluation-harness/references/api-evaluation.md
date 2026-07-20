@@ -1,12 +1,11 @@
 # API 模型评估
 
-评估 OpenAI、Anthropic 和其他基于 API 的语言模型的指南。
+评估 OpenAI 及本地兼容 API 语言模型的指南。
 
 ## 概述
 
 lm-evaluation-harness 通过统一的 `TemplateAPI` 接口支持评估基于 API 的模型。这允许对以下模型进行基准测试：
 - OpenAI 模型（GPT-4、GPT-3.5 等）
-- Anthropic 模型（Claude 3、Claude 2 等）
 - 本地 OpenAI 兼容 API
 - 自定义 API 端点
 
@@ -22,8 +21,6 @@ lm-evaluation-harness 通过统一的 `TemplateAPI` 接口支持评估基于 API
 |--------|----------|----------|----------|
 | OpenAI (completions) | `openai-completions` | 全部 | ✅ 是 |
 | OpenAI (chat) | `openai-chat-completions` | 仅 `generate_until` | ❌ 否 |
-| Anthropic (completions) | `anthropic-completions` | 全部 | ❌ 否 |
-| Anthropic (chat) | `anthropic-chat` | 仅 `generate_until` | ❌ 否 |
 | 本地 (OpenAI 兼容) | `local-completions` | 取决于服务器 | 可变 |
 
 **注意**：不提供对数概率的模型只能在生成任务上评估，不能在困惑度或对数似然任务上评估。
@@ -112,71 +109,6 @@ print(f"Estimated cost: ${total_cost:.2f}")
 - 先用 `gpt-3.5-turbo` 再用 `gpt-4`
 - 将 `max_gen_toks` 设置为所需最小值
 - 尽可能使用 `num_fewshot=0` 进行零样本评估
-
-## Anthropic 模型
-
-### 设置
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-```
-
-### 衡全模型（旧版）
-
-```bash
-lm_eval --model anthropic-completions \
-  --model_args model=claude-2.1 \
-  --tasks lambada_openai,hellaswag \
-  --batch_size auto
-```
-
-### 聊天模型（推荐）
-
-**可用模型**：`claude-3-5-sonnet-20241022`、`claude-3-opus-20240229`、`claude-3-sonnet-20240229`、`claude-3-haiku-20240307`
-
-```bash
-lm_eval --model anthropic-chat \
-  --model_args model=claude-3-5-sonnet-20241022 \
-  --tasks mmlu,gsm8k,humaneval \
-  --num_fewshot 5 \
-  --batch_size auto
-```
-
-**别名**：`anthropic-chat-completions`（与 `anthropic-chat` 相同）
-
-### 配置选项
-
-```bash
-lm_eval --model anthropic-chat \
-  --model_args \
-    model=claude-3-5-sonnet-20241022,\
-    base_url=https://api.anthropic.com,\
-    num_concurrent=5,\
-    max_retries=3,\
-    timeout=60
-```
-
-### 成本管理
-
-Anthropic 定价（截至 2024 年）：
-- Claude 3.5 Sonnet：$3.00 / 1M 输入，$15.00 / 1M 输出
-- Claude 3 Opus：$15.00 / 1M 输入，$75.00 / 1M 输出
-- Claude 3 Haiku：$0.25 / 1M 输入，$1.25 / 1M 输出
-
-**预算友好的策略**：
-```bash
-# 先在小样本上测试
-lm_eval --model anthropic-chat \
-  --model_args model=claude-3-haiku-20240307 \
-  --tasks mmlu \
-  --limit 100
-
-# 然后在最佳模型上运行完整评估
-lm_eval --model anthropic-chat \
-  --model_args model=claude-3-5-sonnet-20241022 \
-  --tasks mmlu \
-  --num_fewshot 5
-```
 
 ## 本地 OpenAI 兼容 API
 
@@ -340,7 +272,6 @@ python scripts/compare_results.py \
 | 模型 | MMLU | GSM8K | HumanEval | 成本 |
 |------|------|-------|-----------|------|
 | GPT-4 Turbo | 86.4% | 92.0% | 67.0% | $$$$ |
-| Claude 3 Opus | 86.8% | 95.0% | 84.9% | $$$$ |
 | GPT-3.5 Turbo | 70.0% | 57.1% | 48.1% | $$ |
 | Llama 2 70B | 68.9% | 56.8% | 29.9% | 免费（自托管） |
 | Mixtral 8x7B | 70.6% | 58.4% | 40.2% | 免费（自托管） |
@@ -367,14 +298,6 @@ lm_eval --model openai-chat-completions \
   --model_args model=gpt-4-turbo \
   --tasks mmlu \
   --gen_kwargs temperature=0.0
-```
-
-或使用 `seed` 进行采样：
-```bash
-lm_eval --model anthropic-chat \
-  --model_args model=claude-3-5-sonnet-20241022 \
-  --tasks gsm8k \
-  --gen_kwargs temperature=0.7,seed=42
 ```
 
 ### 缓存
@@ -415,7 +338,6 @@ lm_eval --model openai-chat-completions \
 检查 API 密钥：
 ```bash
 echo $OPENAI_API_KEY  # 应该输出 sk-...
-echo $ANTHROPIC_API_KEY  # 应该输出 sk-ant-...
 ```
 
 ### "超出速率限制"
@@ -484,7 +406,5 @@ lm_eval --model openai-chat-completions \
 ## 参考资料
 
 - OpenAI API：https://platform.openai.com/docs/api-reference
-- Anthropic API：https://docs.anthropic.com/claude/reference
 - TemplateAPI：`lm_eval/models/api_models.py`
 - OpenAI 模型：`lm_eval/models/openai_completions.py`
-- Anthropic 模型：`lm_eval/models/anthropic_llms.py`

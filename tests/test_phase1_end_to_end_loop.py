@@ -63,6 +63,20 @@ def _make_supervisor(tmp_path: Path) -> Supervisor:
     sv._execution_facade.execute_self_learning_followup = AsyncMock(
         return_value={"status": "learn_only_completed"}
     )
+    sv._review_task_governance_with_supervisor = AsyncMock(return_value={})
+    # These consumers have dedicated coverage in the autonomous-chain store
+    # suite. Keep them neutral here so dynamic regulation cannot rewrite the
+    # handoff target while this file is testing the Phase 1 execution path.
+    empty_consumption = {"count": 0, "consumed": []}
+    sv._consume_endogenous_governance_review_events = Mock(
+        return_value=dict(empty_consumption)
+    )
+    sv._consume_endogenous_alignment_events = Mock(
+        return_value=dict(empty_consumption)
+    )
+    sv._consume_endogenous_truthfulness_alerts = Mock(
+        return_value=dict(empty_consumption)
+    )
     sv._touch_gateway_activity = AsyncMock()
     sv._fetch_gateway_activity_snapshot = AsyncMock()
     sv._endogenous_drive_task = None
@@ -401,10 +415,12 @@ class TestPhase1ExecutionDispatchAndTraceWriteback:
 
         # 跑完整复核与交接闭环。
         result = await sv._run_autonomous_chain_review_cycle()
-        assert result["handed_off"], f"No tasks handed off: {result}"
+        updated = await sv.get_autonomous_chain_task(mem_task["task_id"])
+        assert result["handed_off"], (
+            f"No tasks handed off: result={result}, task={updated}"
+        )
 
         # 确认执行已经被交接并留下结果。
-        updated = await sv.get_autonomous_chain_task(mem_task["task_id"])
         assert updated["status"] in ("running", "completed"), (
             f"status not running/completed. status={updated.get('status')}, metadata={updated.get('metadata', {})}"
         )

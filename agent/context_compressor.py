@@ -19,14 +19,18 @@ Improvements over v2:
 
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from agent.auxiliary_client import call_llm
 from agent.context_engine import ContextEngine
 from agent.model_metadata import (
     MINIMUM_CONTEXT_LENGTH,
+    get_next_probe_tier,
     get_model_context_length,
     estimate_messages_tokens_rough,
+    parse_available_output_tokens_from_error,
+    parse_context_limit_from_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,6 +59,113 @@ _PRUNED_TOOL_PLACEHOLDER = "[Old tool output cleared to save context space]"
 # Chars per token rough estimate
 _CHARS_PER_TOKEN = 4
 _SUMMARY_FAILURE_COOLDOWN_SECONDS = 600
+
+
+@dataclass(frozen=True, slots=True)
+class CompressionAttempt:
+    number: int
+    maximum: int
+
+    @property
+    def exhausted(self) -> bool:
+        return self.number > self.maximum
+
+
+@dataclass(frozen=True, slots=True)
+class ContextRecoveryPlan:
+    attempt: CompressionAttempt
+    current_context_length: int
+    available_output_tokens: int | None = None
+    output_token_limit: int | None = None
+    next_context_length: int | None = None
+    parsed_context_limit: bool = False
+
+    @property
+    def context_length_changed(self) -> bool:
+        return bool(
+            self.next_context_length
+            and self.next_context_length < self.current_context_length
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CompressionRecoveryResult:
+    messages: list[dict[str, Any]]
+    system_prompt: str
+    original_message_count: int
+    context_length_changed: bool = False
+
+    @property
+    def message_count_reduced(self) -> bool:
+        return len(self.messages) < self.original_message_count
+
+    @property
+    def made_progress(self) -> bool:
+        return self.message_count_reduced or self.context_length_changed
+
+
+def next_compression_attempt(previous: int, maximum: int) -> CompressionAttempt:
+    """Advance the bounded recovery counter once."""
+    return CompressionAttempt(number=previous + 1, maximum=maximum)
+
+
+def build_context_recovery_plan(
+    error_message: str,
+    *,
+    current_context_length: int,
+    previous_attempts: int,
+    max_attempts: int,
+    output_safety_margin: int = 64,
+) -> ContextRecoveryPlan:
+    """Plan output-cap recovery or context compression without mutating state."""
+    attempt = next_compression_attempt(previous_attempts, max_attempts)
+    available_output = parse_available_output_tokens_from_error(error_message)
+    if available_output is not None:
+        return ContextRecoveryPlan(
+            attempt=attempt,
+            current_context_length=current_context_length,
+            available_output_tokens=available_output,
+            output_token_limit=max(1, available_output - output_safety_margin),
+        )
+
+    parsed_limit = parse_context_limit_from_error(error_message)
+    if parsed_limit is not None and parsed_limit < current_context_length:
+        next_length = parsed_limit
+        parsed = True
+    else:
+        next_length = get_next_probe_tier(current_context_length)
+        parsed = False
+    return ContextRecoveryPlan(
+        attempt=attempt,
+        current_context_length=current_context_length,
+        next_context_length=next_length,
+        parsed_context_limit=parsed,
+    )
+
+
+def apply_context_recovery_plan(
+    compressor: Any,
+    plan: ContextRecoveryPlan,
+    *,
+    model: str,
+    base_url: str,
+    api_key: str,
+    provider: str,
+) -> bool:
+    """Apply a planned context-window reduction and return whether it changed."""
+    if plan.attempt.exhausted or not plan.context_length_changed:
+        return False
+    compressor.update_model(
+        model=model,
+        context_length=plan.next_context_length,
+        base_url=base_url,
+        api_key=api_key,
+        provider=provider,
+    )
+    if hasattr(compressor, "_context_probed"):
+        compressor._context_probed = True
+        compressor._context_probe_persistable = plan.parsed_context_limit
+    return True
 
 
 class ContextCompressor(ContextEngine):

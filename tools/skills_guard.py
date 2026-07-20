@@ -29,6 +29,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Tuple
 
+from agent.integration_policy import (
+    RETIRED_INTEGRATION_CATEGORY,
+    RETIRED_INTEGRATION_MARKERS,
+)
 
 
 
@@ -476,6 +480,20 @@ THREAT_PATTERNS = [
      "instructs agent to send data to a URL"),
 ]
 
+# Project-retired integrations are a product policy, not a trust decision.
+# Treat even documentation and aliases as critical so downloaded skills cannot
+# quietly restore a provider through examples or setup instructions.
+THREAT_PATTERNS.extend(
+    (
+        re.escape(marker),
+        f"retired_integration_{index}",
+        "critical",
+        RETIRED_INTEGRATION_CATEGORY,
+        "references an integration retired by project policy",
+    )
+    for index, marker in enumerate(RETIRED_INTEGRATION_MARKERS, start=1)
+)
+
 # Structural limits for skill directories
 MAX_FILE_COUNT = 50       # skills shouldn't have 50+ files
 MAX_TOTAL_SIZE_KB = 1024  # 1MB total is suspicious for a skill
@@ -643,6 +661,12 @@ def should_allow_install(result: ScanResult, force: bool = False) -> Tuple[bool,
     Returns:
         (allowed, reason) tuple
     """
+    if any(
+        finding.category == RETIRED_INTEGRATION_CATEGORY
+        for finding in result.findings
+    ):
+        return False, "Blocked by non-overridable project integration policy"
+
     policy = INSTALL_POLICY.get(result.trust_level, INSTALL_POLICY["community"])
     vi = VERDICT_INDEX.get(result.verdict, 2)
     decision = policy[vi]

@@ -74,10 +74,11 @@ python -m pip install -e ".[all]"
 python -m pip install -e ".[all,dev]"
 python -m pytest -m smoke -q
 python -m pytest -q
-python -m build
+python scripts/build_wheel.py
 ```
 
-构建生成的 wheel 位于 `dist/`。离线部署时，应在联网环境预下载该 wheel
+构建脚本会先清理可能保留已删除模块的 setuptools 中间目录，并验证 wheel
+中的代码与当前源码完全对应。生成的 wheel 位于 `dist/`。离线部署时，应在联网环境预下载该 wheel
 及其依赖，再使用 `pip install --no-index --find-links <wheelhouse>` 安装。
 测试分层、模块回归和安装验收见 [`docs/开发与验证.md`](docs/开发与验证.md)。
 

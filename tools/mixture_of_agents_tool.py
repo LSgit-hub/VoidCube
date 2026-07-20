@@ -53,7 +53,9 @@ import datetime
 from typing import Dict, Any, List, Optional
 from tools.openrouter_client import get_async_client as _get_openrouter_client, check_api_key as check_openrouter_api_key
 from agent.auxiliary_client import extract_content_or_reasoning
+from agent.api_request import ChatRequestConfig, build_chat_completion_kwargs
 from tools.debug_helpers import DebugSession
+from VoidCube_core.constants import OPENROUTER_BASE_URL
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +103,31 @@ def _construct_aggregator_prompt(system_prompt: str, responses: List[str]) -> st
     return f"{system_prompt}\n\n{response_text}"
 
 
+def _build_openrouter_request(
+    *,
+    model: str,
+    messages: List[Dict[str, str]],
+    temperature: float,
+    max_tokens: Optional[int],
+) -> Dict[str, Any]:
+    """Build an MoA request through the shared chat-completions contract."""
+    model_name = model.rsplit("/", 1)[-1].lower()
+    overrides: Dict[str, Any] = {}
+    if not model_name.startswith("gpt-"):
+        overrides["temperature"] = temperature
+    return build_chat_completion_kwargs(
+        ChatRequestConfig(
+            model=model,
+            base_url=OPENROUTER_BASE_URL,
+            max_tokens=max_tokens,
+            reasoning_config={"enabled": True, "effort": "xhigh"},
+            request_overrides=overrides,
+        ),
+        messages,
+        include_tools=False,
+    )
+
+
 async def _run_reference_model_safe(
     model: str,
     user_prompt: str,
@@ -125,22 +152,12 @@ async def _run_reference_model_safe(
         try:
             logger.info("Querying %s (attempt %s/%s)", model, attempt + 1, max_retries)
             
-            # Build parameters for the API call
-            api_params = {
-                "model": model,
-                "messages": [{"role": "user", "content": user_prompt}],
-                "extra_body": {
-                    "reasoning": {
-                        "enabled": True,
-                        "effort": "xhigh"
-                    }
-                }
-            }
-            
-            # GPT models (especially gpt-4o-mini) don't support custom temperature values
-            # Only include temperature for non-GPT models
-            if not model.lower().startswith('gpt-'):
-                api_params["temperature"] = temperature
+            api_params = _build_openrouter_request(
+                model=model,
+                messages=[{"role": "user", "content": user_prompt}],
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
             
             response = await _get_openrouter_client().chat.completions.create(**api_params)
             
@@ -177,6 +194,7 @@ async def _run_reference_model_safe(
 
 
 async def _run_aggregator_model(
+    model: str,
     system_prompt: str,
     user_prompt: str,
     temperature: float = AGGREGATOR_TEMPERATURE,
@@ -186,6 +204,7 @@ async def _run_aggregator_model(
     Run the aggregator model to synthesize the final response.
     
     Args:
+        model (str): Aggregator model identifier selected for this request
         system_prompt (str): System prompt with all reference responses
         user_prompt (str): Original user query
         temperature (float): Focused temperature for consistent aggregation
@@ -194,27 +213,17 @@ async def _run_aggregator_model(
     Returns:
         str: Synthesized final response
     """
-    logger.info("Running aggregator model: %s", AGGREGATOR_MODEL)
+    logger.info("Running aggregator model: %s", model)
 
-    # Build parameters for the API call
-    api_params = {
-        "model": AGGREGATOR_MODEL,
-        "messages": [
+    api_params = _build_openrouter_request(
+        model=model,
+        messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
+            {"role": "user", "content": user_prompt},
         ],
-        "extra_body": {
-            "reasoning": {
-                "enabled": True,
-                "effort": "xhigh"
-            }
-        }
-    }
-
-    # GPT models (especially gpt-4o-mini) don't support custom temperature values
-    # Only include temperature for non-GPT models
-    if not AGGREGATOR_MODEL.lower().startswith('gpt-'):
-        api_params["temperature"] = temperature
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
 
     response = await _get_openrouter_client().chat.completions.create(**api_params)
 
@@ -347,6 +356,7 @@ async def mixture_of_agents_tool(
         )
         
         final_response = await _run_aggregator_model(
+            agg_model,
             aggregator_system_prompt,
             user_prompt,
             AGGREGATOR_TEMPERATURE
