@@ -95,6 +95,9 @@ def _install_dependencies(provider_name: str) -> None:
         print(f"  {t('memory.re_run')}")
         return
 
+    manual_command = (
+        f"uv pip install --python {sys.executable} {' '.join(missing)}"
+    )
     try:
         subprocess.run(
             [uv_path, "pip", "install", "--python", sys.executable, "--quiet"] + missing,
@@ -107,10 +110,10 @@ def _install_dependencies(provider_name: str) -> None:
         stderr = (e.stderr or b"").decode()[:200]
         if stderr:
             print(f"    {stderr}")
-        print(f"  {t('memory.run_manually', cmd=f'uv pip install --python {sys.executable} {" ".join(missing)}')}")
+        print(f"  {t('memory.run_manually', cmd=manual_command)}")
     except Exception as e:
         print(f"  {t('memory.install_failed', error=e)}")
-        print(f"  {t('memory.run_manually', cmd=f'uv pip install --python {sys.executable} {" ".join(missing)}')}")
+        print(f"  {t('memory.run_manually', cmd=manual_command)}")
 
     # Also show external dependencies (non-pip) if any
     ext_deps = meta.get("external_dependencies", [])

@@ -6,6 +6,13 @@ from tools.path_runtime import resolve_runtime_path
 
 
 @pytest.mark.unit
+def test_memory_setup_module_is_importable():
+    from VoidCube_cli.memory_setup import memory_command
+
+    assert callable(memory_command)
+
+
+@pytest.mark.unit
 def test_resolve_runtime_path_maps_host_path_into_docker_workspace():
     env = SimpleNamespace(
         _voidcube_active_backend="docker",

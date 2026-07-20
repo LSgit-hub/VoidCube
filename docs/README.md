@@ -38,7 +38,7 @@
 - 记忆刷新回退、MoA 参考模型和聚合模型请求已统一通过 `agent/api_request.py` 构建；MoA 的自定义聚合模型会实际参与请求，输出上限、reasoning 和退役集成策略不再由工具私自拼装。
 - API-A 主调用、辅助模型、模型切换和子 Agent 委派统一使用 OpenAI-compatible `chat.completions`；配置层不再保留协议探测、协议切换或专用响应适配字段。
 - 从未实际写文件的 `save_trajectories` 空实现已连同参数、帮助和死分支删除；仍可使用独立入口的 `save_sample` 导出单次样本。
-- 主仓当前收集 827 项测试。日常修改先跑 smoke 和受影响模块，合并或发布前跑全量测试与构建。
+- 主仓当前收集 839 项测试。日常修改先跑 smoke 和受影响模块，合并或发布前跑全量测试与构建。
 - Mem 子系统当前有 108 项测试，需通过 `python -m pytest Mem/tests -q` 单独运行。
 
 ## 推荐阅读路径
