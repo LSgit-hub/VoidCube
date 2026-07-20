@@ -993,6 +993,7 @@ probe 失败属于确定性的候选清退事实：升级管线必须再次请�
 - Supervisor 与 Execution Service 根 health 在槽位完整时返回 `healthy`，在槽位结构损坏时返回 `degraded` 并携带完整 `body_runtime` 报告；`degraded` 仍使用 HTTP 200 表示进程可达，供启动探针与结构健康分层判断。周期 health 与 `/body/registry` 必须复用同一报告，不得复制另一套判断标准。
 - `/body/registry` 必须以 integrity 报告为主，即使 registry 或某个 slot meta 不可读也要返回 canonical violation 与仍可读取的 slot 快照，不得在生成诊断前因强制加载完整状态而直接失败。
 - 默认启动不新增 Executor daemon：Supervisor 将 `VoidCubeExecutionService` 挂载到同一 FastAPI 应用的 `/executor/*`，并向 Gateway 注册独立的 `executor` service type；Gateway 的 `/api/executor/*` 只路由到这一内嵌标准面。启动验收必须同时确认 `supervisor` 和 `executor` 两类注册存在。
+- Supervisor 必须分别维护 `supervisor` 与 `executor` 的 Gateway service ID。周期健康循环逐项验证注册，仅补注册缺失或失效的类型；任一类型单独丢失时，另一类型的 service ID 必须保持不变，不得退回全量注册。
 - Web room 必须通过 `body_status.integrity` 原样承载该报告：健康抽屉负责展示完整 violations，槽位卡片只能投影报告中的槽位级健康状态。registry 不可读时仍需返回明确诊断和空卡片列表，不得把异常吞成无状态，也不得在读取 UI 状态时触发自动修复。
 
 这些任务语义属于 activity / trace / execution 事实层，而不是长期服务注册身份层；服务注册 metadata 应优先表达稳定服务身份与路由信息。

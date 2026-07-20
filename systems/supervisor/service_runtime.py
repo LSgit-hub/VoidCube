@@ -136,41 +136,64 @@ class ServiceRuntimeMixin:
             return False
 
     async def register_with_gateway(self) -> Optional[str]:
-        execution_config = self.config.execution
-        address = f"http://{self.config.host}:{self.config.port}"
-        url = f"{execution_config.gateway_address}/register"
-        supervisor_id = await self._register_gateway_service(
-            url,
-            {
-                "service_name": "supervisor",
-                "service_type": "supervisor",
-                "address": address,
-                "health_endpoint": "/",
-                "metadata": {"version": "1.0"},
-            },
-        )
+        supervisor_id = await self._register_gateway_service_type("supervisor")
         if not supervisor_id:
             return None
-        self._gateway_service_id = supervisor_id
-
-        executor_id = await self._register_gateway_service(
-            url,
-            {
-                "service_name": "executor",
-                "service_type": "executor",
-                "address": address,
-                "health_endpoint": "/executor/health",
-                "metadata": {"version": "1.0", "embedded_in": "supervisor"},
-            },
-        )
-        if executor_id:
-            self._gateway_executor_service_id = executor_id
-        else:
+        if not await self._register_gateway_service_type("executor"):
             logger.warning(
                 "Supervisor registered without its embedded executor route; "
                 "gateway /api/executor will remain unavailable until re-registration."
             )
         return supervisor_id
+
+    def _gateway_registration_payload(self, service_type: str) -> Dict[str, Any]:
+        address = f"http://{self.config.host}:{self.config.port}"
+        if service_type == "supervisor":
+            return {
+                "service_name": "supervisor",
+                "service_type": "supervisor",
+                "address": address,
+                "health_endpoint": "/",
+                "metadata": {"version": "1.0"},
+            }
+        if service_type == "executor":
+            return {
+                "service_name": "executor",
+                "service_type": "executor",
+                "address": address,
+                "health_endpoint": "/executor/health",
+                "metadata": {"version": "1.0", "embedded_in": "supervisor"},
+            }
+        raise ValueError(f"Unsupported gateway service type: {service_type}")
+
+    async def _register_gateway_service_type(
+        self,
+        service_type: str,
+    ) -> Optional[str]:
+        url = f"{self.config.execution.gateway_address}/register"
+        service_id = await self._register_gateway_service(
+            url,
+            self._gateway_registration_payload(service_type),
+        )
+        if service_type == "supervisor":
+            self._gateway_service_id = service_id
+        elif service_type == "executor":
+            self._gateway_executor_service_id = service_id
+        return service_id
+
+    async def _restore_gateway_registrations(
+        self,
+        missing_service_types: set[str],
+    ) -> None:
+        for service_type in ("supervisor", "executor"):
+            if service_type not in missing_service_types:
+                continue
+            service_id = await self._register_gateway_service_type(service_type)
+            if not service_id:
+                logger.warning(
+                    "Failed to restore %s gateway registration.",
+                    service_type,
+                )
 
     async def _register_gateway_service(
         self,
@@ -243,31 +266,34 @@ class ServiceRuntimeMixin:
                     # Re-register with gateway if the connection was lost
                     # (e.g., gateway restarted).  Verify registration is still
                     # valid by checking if our service_id is still known.
-                    registration_ids = [
-                        self._gateway_service_id,
-                        self._gateway_executor_service_id,
-                    ]
-                    needs_reregister = not all(registration_ids)
-                    if not needs_reregister:
+                    registration_ids = {
+                        "supervisor": self._gateway_service_id,
+                        "executor": self._gateway_executor_service_id,
+                    }
+                    missing_service_types = {
+                        service_type
+                        for service_type, service_id in registration_ids.items()
+                        if not service_id
+                    }
+                    if not missing_service_types:
                         # Verify: Gateway may have restarted and lost either registration.
                         try:
                             import aiohttp
                             gw = self.config.execution.gateway_address
                             async with aiohttp.ClientSession() as s:
-                                for service_id in registration_ids:
+                                for service_type, service_id in registration_ids.items():
                                     async with s.get(
                                         f"{gw}/admin/services/{service_id}",
                                         timeout=5,
                                     ) as r:
                                         if r.status != 200:
-                                            needs_reregister = True
-                                            break
+                                            missing_service_types.add(service_type)
                         except Exception:
-                            needs_reregister = True
-                    if needs_reregister:
-                        svc_id = await self.register_with_gateway()
-                        if svc_id:
-                            self._gateway_service_id = svc_id
+                            missing_service_types.update(registration_ids)
+                    if missing_service_types:
+                        await self._restore_gateway_registrations(
+                            missing_service_types
+                        )
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
