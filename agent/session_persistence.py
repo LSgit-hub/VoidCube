@@ -68,6 +68,7 @@ class SessionPersistence:
     ) -> None:
         self.enabled = enabled
         self.logs_dir = Path(logs_dir)
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.session_db = session_db
         self.session_start = session_start
         self._session_id = session_id
@@ -109,7 +110,7 @@ class SessionPersistence:
         conversation_history: Sequence[Message] | None = None,
     ) -> None:
         """Append messages not yet written to the SQLite session store."""
-        if not self.session_db:
+        if not self.enabled or not self.session_db:
             return
         try:
             self.session_db.ensure_session(
@@ -153,6 +154,8 @@ class SessionPersistence:
 
     def save_log(self, messages: list[Message] | None = None) -> None:
         """Write the latest complete raw transcript to its JSON session log."""
+        if not self.enabled:
+            return
         if messages is not None:
             self.messages = messages
         active_messages = messages or self.messages

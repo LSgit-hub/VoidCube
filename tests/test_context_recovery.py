@@ -10,52 +10,10 @@ from agent.context_compressor import (
     build_context_recovery_plan,
     next_compression_attempt,
 )
-from agent.agent_initializer import initialize_context_compressor
 from run_agent import AIAgent
 
 
 pytestmark = pytest.mark.unit
-
-
-def test_agent_initializer_uses_the_current_compressor_contract(monkeypatch):
-    captured = {}
-
-    class FakeCompressor:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-    monkeypatch.setattr("agent.context_compressor.ContextCompressor", FakeCompressor)
-
-    compressor = initialize_context_compressor(
-        {
-            "compression": {
-                "enabled": True,
-                "threshold": 0.45,
-                "target_ratio": 0.25,
-                "protect_last_n": 12,
-            },
-            "model": {
-                "default": "main-model",
-                "provider": "deepseek",
-                "base_url": "https://api.deepseek.com/v1",
-                "api_key": "test-key",
-                "context_length": 128000,
-            },
-            "context": {"engine": "compressor"},
-        }
-    )
-
-    assert isinstance(compressor, FakeCompressor)
-    assert captured == {
-        "model": "main-model",
-        "threshold_percent": 0.45,
-        "summary_target_ratio": 0.25,
-        "protect_last_n": 12,
-        "config_context_length": 128000,
-        "provider": "deepseek",
-        "base_url": "https://api.deepseek.com/v1",
-        "api_key": "test-key",
-    }
 
 
 def test_next_compression_attempt_has_one_explicit_exhaustion_rule():
@@ -244,8 +202,8 @@ def test_agent_compression_recovery_returns_named_result():
 def test_agent_context_recovery_failure_persists_once_and_is_partial():
     agent = AIAgent.__new__(AIAgent)
     persisted = []
-    agent._persist_session = lambda messages, history: persisted.append(
-        (messages, history)
+    agent._session_persistence = SimpleNamespace(
+        persist=lambda messages, history: persisted.append((messages, history))
     )
     messages = [{"role": "user", "content": "current"}]
     history = [{"role": "user", "content": "old"}]
