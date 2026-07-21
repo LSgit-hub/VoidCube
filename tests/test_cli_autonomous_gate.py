@@ -25,6 +25,7 @@ from VoidCube_cli.autonomous_status_host import (
 )
 from VoidCube_cli.cli_handlers import _git_head_commit, _git_improvement_diff
 from VoidCube_cli.chat_render_state import CliStreamRenderState
+from VoidCube_cli.chat_stream_renderer import CliStreamRenderer
 
 
 class _FakeUrlopenResponse:
@@ -757,6 +758,13 @@ def test_embedded_autonomous_component_chat_does_not_emit_response_panel_or_touc
     cli.streaming_enabled = False
     cli.bell_on_complete = False
     cli._stream_render_state = CliStreamRenderState()
+    cli._stream_renderer = CliStreamRenderer(
+        cli._stream_render_state,
+        emit_line=lambda text: None,
+        should_emit=lambda: False,
+        show_reasoning=lambda: cli.show_reasoning,
+        verbose=lambda: cli.verbose,
+    )
     cli._session_db = None
     cli.session_id = "embedded-session"
     cli._pending_model_switch_note = None

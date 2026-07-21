@@ -3,9 +3,7 @@ from __future__ import annotations
 import pytest
 
 from VoidCube_cli.chat_render_state import CliStreamRenderState
-from cli import VoidcubeCLI
-
-
+from VoidCube_cli.chat_stream_renderer import CliStreamRenderer
 pytestmark = [pytest.mark.unit, pytest.mark.smoke]
 
 
@@ -42,21 +40,19 @@ def test_begin_turn_resets_stream_and_turn_level_reasoning_history() -> None:
     assert state == CliStreamRenderState()
 
 
-def test_cli_intermediate_stream_reset_preserves_turn_reasoning_history() -> None:
-    cli = VoidcubeCLI.__new__(VoidcubeCLI)
-    cli._stream_render_state = _populated_state()
-
-    cli._reset_stream_state()
-
-    assert cli._stream_render_state == CliStreamRenderState(
-        reasoning_shown_this_turn=True
-    )
-
-
 def test_hidden_stream_updates_started_state_and_boundary_resets_it() -> None:
+    from cli import VoidcubeCLI
+
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._stream_render_state = CliStreamRenderState()
     cli._should_emit_scrollback_output = lambda: False
+    cli._stream_renderer = CliStreamRenderer(
+        cli._stream_render_state,
+        emit_line=lambda text: None,
+        should_emit=cli._should_emit_scrollback_output,
+        show_reasoning=lambda: False,
+        verbose=lambda: False,
+    )
 
     cli._stream_delta("content")
     assert cli._stream_render_state.started is True

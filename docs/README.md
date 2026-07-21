@@ -30,7 +30,8 @@
 - 模型请求统一使用 OpenAI-compatible Chat Completions；项目退役集成在源码、可加载技能和 wheel 中必须保持零入口。
 - Agent 会话持久化由 `agent/session_persistence.py` 统一负责；共享/请求级客户端和连接清理由 `agent/client_lifecycle.py` 统一负责；请求线程、超时、流式重连与非流式降级由 `agent/chat_transport.py` 统一负责。
 - 流式 chunk 装配由 `agent/stream_response.py` 统一负责；工具调用的解析、顺序/并发调度、计时与中断补位由 `agent/tool_execution.py` 统一负责。`run_agent.py` 不再持有这些职责的第二套实现。
-- CLI 流式文本、推理框和用户回合级展示状态由 `VoidCube_cli/chat_render_state.py` 统一持有；`cli.py` 只协调渲染动作，不再维护平铺的兼容字段。
+- CLI 流式状态由 `VoidCube_cli/chat_render_state.py` 持有，标签过滤与缓冲转换由 `chat_stream_processor.py` 负责，终端边框、颜色和输出顺序由 `chat_stream_renderer.py` 负责；`cli.py` 只保留真实回调入口。
+- CLI slash/path 判定、中央 alias 规范化、慢命令状态以及 quick/plugin/skill/前缀优先级由 `VoidCube_cli/command_router.py` 统一负责；失效的 `/cron`、`/insights` 兼容入口已删除。
 
 ## 分阶段路线
 
@@ -42,8 +43,8 @@
 
 ### 阶段 2：主路径解耦
 
-- Agent 用户链路中的会话持久化、请求/响应、客户端、传输、流式装配、工具执行、单轮/attempt 状态、retry/compression recovery、response disposition、成功工具 turn 和 finalization 已有唯一所有者；CLI 流式渲染状态也已收口。
-- 继续把 `cli.py` 的纯渲染转换移入 CLI UI 模块，再分离命令路由；自主链路桥接继续留在 `VoidCube_cli/autonomous_*`。
+- Agent 用户链路中的会话持久化、请求/响应、客户端、传输、流式装配、工具执行、单轮/attempt 状态、retry/compression recovery、response disposition、成功工具 turn 和 finalization 已有唯一所有者；CLI 流式状态、转换和输出协调也已收口。
+- 下一步把 `cli.py` 的内建命令执行分支改为显式执行表，并提取 busy 命令生命周期；自主链路桥接继续留在 `VoidCube_cli/autonomous_*`。
 - 每迁移一项职责，同轮删除原实现、旧参数和只服务旧路径的测试。
 
 ### 阶段 3：Memory 服务收口

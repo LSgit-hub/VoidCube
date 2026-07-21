@@ -61,6 +61,17 @@ from typing import List, Dict, Any, Optional, TYPE_CHECKING
 
 from agent.error_classifier import summarize_api_error
 from VoidCube_cli.chat_render_state import CliStreamRenderState
+from VoidCube_cli.chat_stream_renderer import CliStreamRenderer
+from VoidCube_cli.command_router import (
+    looks_like_slash_command as _looks_like_slash_command,
+    parse_cli_command,
+    resolve_dynamic_command,
+    slow_command_status,
+)
+from VoidCube_cli.command_execution import (
+    BuiltinCommandExecutor,
+    CommandBusyLifecycle,
+)
 
 if TYPE_CHECKING:
     from run_agent import AIAgent  # noqa: F401 — only for static type-checkers
@@ -1095,28 +1106,6 @@ def _build_compact_banner() -> str:
 
 
 # ============================================================================
-# Slash-command detection helper
-# ============================================================================
-
-def _looks_like_slash_command(text: str) -> bool:
-    """Return True if *text* looks like a slash command, not a file path.
-
-    Slash commands are ``/help``, ``/model gpt-4``, ``/q``, etc.
-    File paths like ``/Users/ironin/file.md:45-46 can you fix this?``
-    also start with ``/`` but contain additional ``/`` characters in
-    the first whitespace-delimited word.  This helper distinguishes
-    the two so that pasted paths are sent to the agent instead of
-    triggering "Unknown command".
-    """
-    if not text or not text.startswith("/"):
-        return False
-    first_word = text.split()[0]
-    # After stripping the leading /, a command name has no slashes.
-    # A path like /Users/foo/bar.md always does.
-    return "/" not in first_word[1:]
-
-
-# ============================================================================
 # Skill Slash Commands — dynamic commands generated from installed skills
 # ============================================================================
 
@@ -1287,6 +1276,13 @@ class VoidcubeCLI:
         self._inline_diffs_enabled = display_config.get("inline_diffs", True)
 
         self._stream_render_state = CliStreamRenderState()
+        self._stream_renderer = CliStreamRenderer(
+            self._stream_render_state,
+            emit_line=lambda text: _cprint(text),
+            should_emit=self._should_emit_scrollback_output,
+            show_reasoning=lambda: self.show_reasoning,
+            verbose=lambda: self.verbose,
+        )
         self._pending_edit_snapshots: Dict[str, Any] = {}
         
         # Configuration - priority: CLI args > env vars > config file.
@@ -1522,6 +1518,11 @@ class VoidcubeCLI:
         self._last_scrollback_tool: str = ""  # last tool name printed to scrollback (for "new" dedup)
         self._command_running = False
         self._command_status = ""
+        self._command_busy_lifecycle = CommandBusyLifecycle(self)
+        self._builtin_command_executor = BuiltinCommandExecutor(
+            self,
+            self._command_busy_lifecycle,
+        )
         self._attached_images: list[Path] = []
         self._image_counter = 0
         self.preloaded_skills: list[str] = []
@@ -2705,407 +2706,25 @@ class VoidcubeCLI:
             return self._on_reasoning
         return None
 
-    def _emit_reasoning_preview(self, reasoning_text: str) -> None:
-        """Render a buffered reasoning preview as a single [thinking] block."""
-        import re
-        import textwrap
-
-        preview_text = reasoning_text.strip()
-        if not preview_text:
-            return
-
-        try:
-            term_width = shutil.get_terminal_size().columns
-        except Exception:
-            term_width = 80
-        prefix = "  [思考中] "
-        wrap_width = max(30, term_width - len(prefix) - 2)
-
-        paragraphs = []
-        raw_paragraphs = re.split(r"\n\s*\n+", preview_text.replace("\r\n", "\n"))
-        for paragraph in raw_paragraphs:
-            compact = " ".join(line.strip() for line in paragraph.splitlines() if line.strip())
-            if compact:
-                paragraphs.append(textwrap.fill(compact, width=wrap_width))
-        preview_text = "\n".join(paragraphs)
-        if not preview_text:
-            return
-
-        if self.verbose:
-            _cprint(f"  {_DIM}[思考中] {preview_text}{_RST}")
-            return
-
-        lines = preview_text.splitlines()
-        if len(lines) > 5:
-            preview = "\n".join(lines[:5])
-            preview += f"\n  ... ({len(lines) - 5} more lines)"
-        else:
-            preview = preview_text
-        _cprint(f"  {_DIM}[思考中] {preview}{_RST}")
-
     def _flush_reasoning_preview(self, *, force: bool = False) -> None:
-        """Flush buffered reasoning text at natural boundaries.
-
-        Some providers stream reasoning in tiny word or punctuation chunks.
-        Buffer them here so the preview path does not print one `[thinking]`
-        line per token.
-        """
-        state = self._stream_render_state
-        buf = state.reasoning_preview_buffer
-        if not buf:
-            return
-
-        try:
-            term_width = shutil.get_terminal_size().columns
-        except Exception:
-            term_width = 80
-        target_width = max(40, term_width - len("  [思考中] ") - 4)
-
-        flush_text = ""
-
-        if force:
-            flush_text = buf
-            buf = ""
-        else:
-            line_break = buf.rfind("\n")
-            min_newline_flush = max(16, target_width // 3)
-            if line_break != -1 and (
-                line_break >= min_newline_flush
-                or buf.endswith("\n\n")
-                or buf.endswith(".\n")
-                or buf.endswith("!\n")
-                or buf.endswith("?\n")
-                or buf.endswith(":\n")
-            ):
-                flush_text = buf[: line_break + 1]
-                buf = buf[line_break + 1 :]
-            elif len(buf) >= target_width:
-                search_start = max(20, target_width // 2)
-                search_end = min(len(buf), max(target_width + (target_width // 3), target_width + 8))
-                cut = -1
-                for boundary in (" ", "\t", ".", "!", "?", ",", ";", ":"):
-                    cut = max(cut, buf.rfind(boundary, search_start, search_end))
-                if cut != -1:
-                    flush_text = buf[: cut + 1]
-                    buf = buf[cut + 1 :]
-
-        state.reasoning_preview_buffer = buf.lstrip() if flush_text else buf
-        if flush_text:
-            self._emit_reasoning_preview(flush_text)
+        """Flush buffered reasoning text at natural boundaries."""
+        self._stream_renderer.flush_reasoning_preview(force=force)
 
     def _stream_reasoning_delta(self, text: str) -> None:
-        """Stream reasoning/thinking tokens into a dim box above the response.
-
-        Opens a dim reasoning box on first token, streams line-by-line.
-        The box is closed automatically when content tokens start arriving
-        (via _stream_delta → _emit_stream_text).
-
-        Once the response box is open, suppress any further reasoning
-        rendering — a late thinking block (e.g. after an interrupt) would
-        otherwise draw a reasoning box inside the response box.
-        """
-        if not self._should_emit_scrollback_output():
-            return
-        if not text:
-            return
-        state = self._stream_render_state
-        state.reasoning_shown_this_turn = True
-        if state.response_box_open:
-            return
-
-        # Open reasoning box on first reasoning token
-        if not state.reasoning_box_open:
-            state.reasoning_box_open = True
-            w = shutil.get_terminal_size().columns
-            r_label = " Reasoning "
-            r_fill = w - 2 - len(r_label)
-            _cprint(f"\n{_DIM}┌─{r_label}{'─' * max(r_fill - 1, 0)}┐{_RST}")
-
-        state.reasoning_buffer += text
-
-        # Emit complete lines, and force-flush long partial lines so
-        # reasoning is visible in real-time even without newlines.
-        while "\n" in state.reasoning_buffer:
-            line, state.reasoning_buffer = state.reasoning_buffer.split("\n", 1)
-            _cprint(f"{_DIM}{line}{_RST}")
-        if len(state.reasoning_buffer) > 80:
-            _cprint(f"{_DIM}{state.reasoning_buffer}{_RST}")
-            state.reasoning_buffer = ""
+        """Stream reasoning tokens through the CLI renderer."""
+        self._stream_renderer.stream_reasoning_delta(text)
 
     def _close_reasoning_box(self) -> None:
         """Close the live reasoning box if it's open."""
-        state = self._stream_render_state
-        if not self._should_emit_scrollback_output():
-            state.reasoning_box_open = False
-            state.reasoning_buffer = ""
-            state.deferred_content = ""
-            return
-        if state.reasoning_box_open:
-            # Flush remaining reasoning buffer
-            buf = state.reasoning_buffer
-            if buf:
-                _cprint(f"{_DIM}{buf}{_RST}")
-                state.reasoning_buffer = ""
-            w = shutil.get_terminal_size().columns
-            _cprint(f"{_DIM}└{'─' * (w - 2)}┘{_RST}")
-            state.reasoning_box_open = False
-
-            # Flush any content that was deferred while reasoning was rendering.
-            deferred = state.deferred_content
-            if deferred:
-                state.deferred_content = ""
-                self._emit_stream_text(deferred)
+        self._stream_renderer.close_reasoning_box()
 
     def _stream_delta(self, text) -> None:
-        """Line-buffered streaming callback for real-time token rendering.
-
-        Receives text deltas from the agent as tokens arrive. Buffers
-        partial lines and emits complete lines via _cprint to work
-        reliably with prompt_toolkit's patch_stdout.
-
-        Reasoning/thinking blocks (<REASONING_SCRATCHPAD>, <think>, etc.)
-        are suppressed during streaming since they'd display raw XML tags.
-        The agent strips them from the final response anyway.
-
-        A ``None`` value signals an intermediate turn boundary (tools are
-        about to execute).  Flushes any open boxes and resets state so
-        tool feed lines render cleanly between turns.
-        """
-        if not self._should_emit_scrollback_output():
-            if text is None:
-                self._reset_stream_state()
-            elif text:
-                self._stream_render_state.started = True
-            return
-        if text is None:
-            self._flush_stream()
-            self._reset_stream_state()
-            return
-        if not text:
-            return
-
-        state = self._stream_render_state
-        state.started = True
-
-        # ── Tag-based reasoning suppression ──
-        # Track whether we're inside a reasoning/thinking block.
-        # These tags are model-generated (system prompt tells the model
-        # to use them) and get stripped from final_response. We must
-        # suppress them during streaming too — unless show_reasoning is
-        # enabled, in which case we route the inner content to the
-        # reasoning display box instead of discarding it.
-        _OPEN_TAGS = ("<REASONING_SCRATCHPAD>", "<think>", "<reasoning>", "<THINKING>", "<thinking>", "<thought>")
-        _CLOSE_TAGS = ("</REASONING_SCRATCHPAD>", "</think>", "</reasoning>", "</THINKING>", "</thinking>", "</thought>")
-
-        # Append to a pre-filter buffer first
-        state.prefilter_buffer += text
-
-        # Check if we're entering a reasoning block.
-        # Only match tags that appear at a "block boundary": start of the
-        # stream, after a newline (with optional whitespace), or when nothing
-        # but whitespace has been emitted on the current line.
-        # This prevents false positives when models *mention* tags in prose
-        # like "(/think not producing <think> tags)".
-        #
-        # last_was_newline tracks whether the last character emitted
-        # (or the start of the stream) is a line boundary.  It's True at
-        # stream start and set True whenever emitted text ends with '\n'.
-        if not state.in_reasoning_block:
-            for tag in _OPEN_TAGS:
-                search_start = 0
-                while True:
-                    idx = state.prefilter_buffer.find(tag, search_start)
-                    if idx == -1:
-                        break
-                    # Check if this is a block boundary position
-                    preceding = state.prefilter_buffer[:idx]
-                    if idx == 0:
-                        # At buffer start — only a boundary if we're at
-                        # a line start (stream start or last emit ended
-                        # with newline)
-                        is_block_boundary = state.last_was_newline
-                    else:
-                        # Find last newline in the buffer before the tag
-                        last_nl = preceding.rfind("\n")
-                        if last_nl == -1:
-                            # No newline in buffer — boundary only if
-                            # last emit was a newline AND only whitespace
-                            # has accumulated before the tag
-                            is_block_boundary = (
-                                state.last_was_newline
-                                and preceding.strip() == ""
-                            )
-                        else:
-                            # Text between last newline and tag must be
-                            # whitespace-only
-                            is_block_boundary = preceding[last_nl + 1:].strip() == ""
-                    if is_block_boundary:
-                        # Emit everything before the tag
-                        if preceding:
-                            self._emit_stream_text(preceding)
-                            state.last_was_newline = preceding.endswith("\n")
-                        state.in_reasoning_block = True
-                        state.prefilter_buffer = state.prefilter_buffer[idx + len(tag):]
-                        break
-                    # Not a block boundary — keep searching after this occurrence
-                    search_start = idx + 1
-                if state.in_reasoning_block:
-                    break
-
-            # Could also be a partial open tag at the end — hold it back
-            if not state.in_reasoning_block:
-                # Check for partial tag match at the end
-                safe = state.prefilter_buffer
-                for tag in _OPEN_TAGS:
-                    for i in range(1, len(tag)):
-                        if state.prefilter_buffer.endswith(tag[:i]):
-                            safe = state.prefilter_buffer[:-i]
-                            break
-                if safe:
-                    self._emit_stream_text(safe)
-                    state.last_was_newline = safe.endswith("\n")
-                    state.prefilter_buffer = state.prefilter_buffer[len(safe):]
-                return
-
-        # Inside a reasoning block — look for close tag.
-        # Keep accumulating the prefilter buffer because close tags can arrive
-        # split across multiple tokens (e.g. "</REASONING_SCRATCH" + "PAD>...").
-        if state.in_reasoning_block:
-            for tag in _CLOSE_TAGS:
-                idx = state.prefilter_buffer.find(tag)
-                if idx != -1:
-                    state.in_reasoning_block = False
-                    # When show_reasoning is on, route inner content to
-                    # the reasoning display box instead of discarding.
-                    if self.show_reasoning:
-                        inner = state.prefilter_buffer[:idx]
-                        if inner:
-                            self._stream_reasoning_delta(inner)
-                    after = state.prefilter_buffer[idx + len(tag):]
-                    state.prefilter_buffer = ""
-                    # Process remaining text after close tag through full
-                    # filtering (it could contain another open tag)
-                    if after:
-                        self._stream_delta(after)
-                    return
-            # When show_reasoning is on, stream reasoning content live
-            # instead of silently accumulating. Keep only the tail that
-            # could be a partial close tag prefix.
-            max_tag_len = max(len(t) for t in _CLOSE_TAGS)
-            if len(state.prefilter_buffer) > max_tag_len:
-                if self.show_reasoning:
-                    # Route the safe prefix to reasoning display
-                    safe_reasoning = state.prefilter_buffer[:-max_tag_len]
-                    self._stream_reasoning_delta(safe_reasoning)
-                state.prefilter_buffer = state.prefilter_buffer[-max_tag_len:]
-            return
-
-    def _emit_stream_text(self, text: str) -> None:
-        """Emit filtered text to the streaming display."""
-        if not self._should_emit_scrollback_output():
-            return
-        if not text:
-            return
-
-        # When show_reasoning is on and reasoning is still rendering,
-        # defer content until the reasoning box closes.  This ensures the
-        # reasoning block always appears BEFORE the response in the terminal.
-        state = self._stream_render_state
-        if self.show_reasoning and state.reasoning_box_open:
-            state.deferred_content += text
-            return
-
-        # Close the live reasoning box before opening the response box
-        self._close_reasoning_box()
-
-        # Open the response box header on the very first visible text
-        if not state.response_box_open:
-            # Strip leading whitespace/newlines before first visible content
-            text = text.lstrip("\n")
-            if not text:
-                return
-            state.response_box_open = True
-            try:
-                from VoidCube_cli.skin_engine import get_active_skin
-                _skin = get_active_skin()
-                label = _skin.get_branding("response_label", "> Voidcube")  # type: ignore[attr-defined]
-                _text_hex = _skin.get_color("banner_text", "#FFF8DC")  # type: ignore[attr-defined]
-            except Exception:
-                label = "> Voidcube"
-                _text_hex = "#FFF8DC"
-            # Build a true-color ANSI escape for the response text color
-            # so streamed content matches the Rich Panel appearance.
-            try:
-                _r = int(_text_hex[1:3], 16)
-                _g = int(_text_hex[3:5], 16)
-                _b = int(_text_hex[5:7], 16)
-                state.text_ansi = f"\033[38;2;{_r};{_g};{_b}m"
-            except (ValueError, IndexError):
-                state.text_ansi = ""
-            w = shutil.get_terminal_size().columns
-            fill = w - 2 - len(label)
-            _cprint(f"\n{_ACCENT}╭─{label}{'─' * max(fill - 1, 0)}╮{_RST}")
-
-        state.text_buffer += text
-
-        # Emit complete lines, keep partial remainder in buffer
-        _tc = state.text_ansi
-        while "\n" in state.text_buffer:
-            line, state.text_buffer = state.text_buffer.split("\n", 1)
-            _cprint(f"{_tc}{line}{_RST}" if _tc else line)
+        """Render one text delta or an intermediate tool-turn boundary."""
+        self._stream_renderer.stream_delta(text)
 
     def _flush_stream(self) -> None:
         """Emit any remaining partial line from the stream buffer and close the box."""
-        state = self._stream_render_state
-        if not self._should_emit_scrollback_output():
-            state.text_buffer = ""
-            state.response_box_open = False
-            state.prefilter_buffer = ""
-            state.in_reasoning_block = False
-            return
-        # If we're still inside a "reasoning block" at end-of-stream, it was
-        # a false positive — the model mentioned a tag like <think> in prose
-        # but never closed it.  Recover the buffered content as regular text.
-        if state.in_reasoning_block and state.prefilter_buffer:
-            state.in_reasoning_block = False
-            self._emit_stream_text(state.prefilter_buffer)
-            state.prefilter_buffer = ""
-
-        # Close reasoning box if still open (in case no content tokens arrived)
-        self._close_reasoning_box()
-
-        if state.text_buffer:
-            _tc = state.text_ansi
-            _cprint(f"{_tc}{state.text_buffer}{_RST}" if _tc else state.text_buffer)
-            state.text_buffer = ""
-
-        # Close the response box
-        if state.response_box_open:
-            w = shutil.get_terminal_size().columns
-            _cprint(f"{_ACCENT}╰{'─' * (w - 2)}╯{_RST}")
-
-    def _reset_stream_state(self) -> None:
-        """Reset streaming state before each agent invocation."""
-        self._stream_render_state.reset_stream()
-
-    def _slow_command_status(self, command: str) -> str:
-        """Return a user-facing status message for slower slash commands."""
-        cmd_lower = command.lower().strip()
-        if cmd_lower.startswith("/skills search"):
-            return "Searching skills..."
-        if cmd_lower.startswith("/skills browse"):
-            return "Loading skills..."
-        if cmd_lower.startswith("/skills inspect"):
-            return "Inspecting skill..."
-        if cmd_lower.startswith("/skills install"):
-            return "Installing skill..."
-        if cmd_lower.startswith("/skills"):
-            return "Processing skills command..."
-        if cmd_lower == "/reload-mcp":
-            return "Reloading MCP servers..."
-        if cmd_lower.startswith("/browser"):
-            return "Configuring browser..."
-        return "Processing command..."
+        self._stream_renderer.flush_stream()
 
     def _command_spinner_frame(self) -> str:
         """Return the current spinner frame for slow slash commands."""
@@ -5973,6 +5592,229 @@ class VoidcubeCLI:
         
         print()
 
+    def _handle_doctor_command(self) -> None:
+        from VoidCube_cli.config_validator import print_diagnosis
+
+        print_diagnosis()
+
+    def _handle_api_command(self) -> None:
+        from VoidCube_cli.api_config import run_api_config_wizard
+
+        run_api_config_wizard(self)
+
+    def _handle_clear_command(self) -> None:
+        self.new_session(silent=True)
+        if self._app:
+            output = self._app.output
+            output.erase_screen()
+            output.cursor_goto(0, 0)
+            output.flush()
+        else:
+            self.console.clear()
+
+        if self._app:
+            console = ChatConsole()
+            terminal_width = shutil.get_terminal_size().columns
+            if self.compact or terminal_width < 80:
+                console.print(_build_compact_banner())
+            else:
+                tools = _get_tool_definitions(
+                    enabled_toolsets=self.enabled_toolsets,
+                    quiet_mode=True,
+                )
+                cwd = os.getenv("TERMINAL_CWD", os.getcwd())
+                context_length = None
+                if (
+                    getattr(self, "agent", None)
+                    and hasattr(self.agent, "context_compressor")
+                ):
+                    context_length = self.agent.context_compressor.context_length
+                build_welcome_banner(
+                    console=console,
+                    model=self.model,
+                    cwd=cwd,
+                    tools=tools,
+                    enabled_toolsets=self.enabled_toolsets,
+                    session_id=self.session_id,
+                    context_length=context_length,
+                    conversation_history=self.conversation_history,
+                )
+            _cprint(
+                f"  {t('tips.fresh_start', default='✨ (◕‿◕)✨ Fresh start! Screen cleared and conversation reset.')}\n"
+            )
+        else:
+            console = self.console
+            self.show_banner()
+            print(
+                f"  {t('tips.fresh_start', default='✨ (◕‿◕)✨ Fresh start! Screen cleared and conversation reset.')}\n"
+            )
+
+        try:
+            from VoidCube_cli.skin_engine import get_active_skin
+            from VoidCube_cli.tips import get_random_tip
+
+            tip = get_random_tip()
+            try:
+                tip_color = get_active_skin().get_color("banner_dim", "#B8860B")
+            except Exception:
+                tip_color = "#B8860B"
+            console.print(
+                f"[dim {tip_color}]"
+                f"{t('tips.tip_prefix', default='✦ Tip:')} {tip}[/]"
+            )
+        except Exception:
+            pass
+
+    def _handle_title_command(self, command: str) -> None:
+        parts = command.split(maxsplit=1)
+        if len(parts) == 1:
+            if not self._session_db:
+                _cprint(t("  Session database not available."))
+                return
+            _cprint(f"  Session ID: {self.session_id}")
+            session = self._session_db.get_session(self.session_id)
+            if session and session.get("title"):
+                _cprint(f"  Title: {session['title']}")
+            elif self._pending_title:
+                _cprint(f"  Title (pending): {self._pending_title}")
+            else:
+                _cprint("  No title set. Usage: /title <your session title>")
+            return
+
+        raw_title = parts[1].strip()
+        if not raw_title:
+            _cprint("  Usage: /title <your session title>")
+            return
+        if not self._session_db:
+            _cprint(t("  Session database not available."))
+            return
+
+        try:
+            from VoidCube_core.state import SessionDB
+
+            new_title = SessionDB.sanitize_title(raw_title)
+        except ValueError as exc:
+            _cprint(f"  {exc}")
+            new_title = None
+        if not new_title:
+            _cprint("  Title is empty after cleanup. Please use printable characters.")
+            return
+        if self._session_db.get_session(self.session_id):
+            try:
+                if self._session_db.set_session_title(self.session_id, new_title):
+                    _cprint(f"  Session title set: {new_title}")
+                else:
+                    _cprint("  Session not found in database.")
+            except ValueError as exc:
+                _cprint(f"  {exc}")
+            return
+
+        existing = self._session_db.get_session_by_title(new_title)
+        if existing:
+            _cprint(
+                f"  Title '{new_title}' is already in use by session {existing['id']}"
+            )
+        else:
+            self._pending_title = new_title
+            _cprint(
+                f"  Session title queued: {new_title} (will be saved on first message)"
+            )
+
+    def _handle_provider_command(self, command: str) -> None:
+        parts = command.split()
+        use_ops_handler = (
+            len(parts) >= 3
+            and not parts[2].startswith("-")
+            and parts[1] != "--global"
+        ) or (len(parts) >= 2 and parts[1] in ("status", "list"))
+        if not use_ops_handler:
+            self._handle_provider_switch(command)
+            return
+
+        from VoidCube_cli.ops.provider import handle_slash_provider
+
+        arguments = command.split(None, 1)[1] if len(parts) > 1 else ""
+        _cprint(handle_slash_provider(arguments))
+
+    def _handle_auto_command(self, command: str) -> None:
+        _handle_auto_command_view(
+            self,
+            command,
+            cprint=_cprint,
+            refresh_gateway_cli_presence_callback=lambda *, force=False: _refresh_gateway_cli_presence_view(
+                self,
+                force=force,
+                is_gateway_running=_is_gateway_running,
+                register_with_gateway=_register_with_gateway,
+                push_cli_agent_scene=_push_cli_agent_scene,
+                monotonic_time=time.monotonic,
+            ),
+            thread_factory=threading.Thread,
+        )
+
+    def _handle_auto_q_command(self) -> None:
+        _handle_auto_q_command_view(
+            self,
+            cprint=_cprint,
+            interrupt_current_task_callback=self._interrupt_autonomous_component_task,
+            push_cli_agent_scene_callback=_push_cli_agent_scene,
+            thread_factory=threading.Thread,
+        )
+
+    def _handle_retry_command(self) -> None:
+        retry_message = self.retry_last()
+        if retry_message and hasattr(self, "_pending_input"):
+            self._pending_input.put(retry_message)
+
+    def _handle_statusbar_command(self) -> None:
+        self._status_bar_visible = not self._status_bar_visible
+        state = "visible" if self._status_bar_visible else "hidden"
+        self.console.print(f"  Status bar {state}")
+
+    def _handle_plugins_command(self) -> None:
+        try:
+            from VoidCube_cli.plugins import discover_plugins, get_plugin_manager
+
+            discover_plugins()
+            plugins = get_plugin_manager().list_plugins()
+            if not plugins:
+                print("No plugins installed.")
+                print(
+                    f"Drop plugin directories into {display_VoidCube_home()}/plugins/ "
+                    "to get started."
+                )
+                return
+            print(f"Plugins ({len(plugins)}):")
+            for plugin in plugins:
+                status = "✓" if plugin["enabled"] else "✗"
+                version = f" v{plugin['version']}" if plugin["version"] else ""
+                tools = f"{plugin['tools']} tools" if plugin["tools"] else ""
+                hooks = f"{plugin['hooks']} hooks" if plugin["hooks"] else ""
+                detail_parts = [part for part in (tools, hooks) if part]
+                detail = f" ({', '.join(detail_parts)})" if detail_parts else ""
+                error = f" — {plugin['error']}" if plugin["error"] else ""
+                print(f"  {status} {plugin['name']}{version}{detail}{error}")
+        except Exception as exc:
+            print(f"Plugin system error: {exc}")
+
+    def _handle_queue_command(self, command: str) -> None:
+        parts = command.split(None, 1)
+        payload = parts[1].strip() if len(parts) > 1 else ""
+        if not payload:
+            _cprint("  Usage: /queue <prompt>")
+            return
+        self._pending_input.put(payload)
+        preview = f"{payload[:80]}{'...' if len(payload) > 80 else ''}"
+        if self._agent_running:
+            _cprint(f"  Queued for the next turn: {preview}")
+        else:
+            _cprint(f"  Queued: {preview}")
+
+    def _handle_language_command(self, command: str) -> None:
+        from VoidCube_cli.language_command import handle_language_command
+
+        handle_language_command(self, command)
+
     def process_command(self, command: str) -> bool:
         """
         Process a slash command.
@@ -5983,16 +5825,10 @@ class VoidcubeCLI:
         Returns:
             bool: True to continue, False to exit
         """
-        # Lowercase only for dispatch matching; preserve original case for arguments
-        cmd_lower = command.lower().strip()
-        cmd_original = command.strip()
-
-        # Resolve aliases via central registry so adding an alias is a one-line
-        # change in VoidCube_cli/commands.py instead of touching every dispatch site.
-        from VoidCube_cli.commands import resolve_command as _resolve_cmd
-        _base_word = cmd_lower.split()[0].lstrip("/")
-        _cmd_def = _resolve_cmd(_base_word)
-        canonical = _cmd_def.name if _cmd_def else _base_word
+        request = parse_cli_command(command)
+        cmd_lower = request.normalized
+        cmd_original = request.original
+        canonical = request.canonical
         
         if canonical == "quit":
             return False
@@ -6190,10 +6026,8 @@ class VoidcubeCLI:
             self._handle_branch_command(cmd_original)
         elif canonical == "save":
             self.save_conversation()
-        elif canonical == "cron":
-            _cprint("  ⚠️ /cron command has been removed. Scheduled tasks feature is no longer available.")
         elif canonical == "skills":
-            with self._busy_command(self._slow_command_status(cmd_original)):
+            with self._busy_command(slow_command_status(request)):
                 self._handle_skills_command(cmd_original)
         elif canonical == "mcp":
             self._handle_mcp_command(cmd_original)
@@ -6217,8 +6051,6 @@ class VoidcubeCLI:
             self._manual_compress(cmd_original)
         elif canonical == "usage":
             self._show_usage()
-        elif canonical == "insights":
-            _cprint("  ⚠️ /insights command has been removed. Usage analytics feature is no longer available.")
         elif canonical == "debug":
             self._handle_debug_command()
         elif canonical == "paste":
@@ -6226,7 +6058,7 @@ class VoidcubeCLI:
         elif canonical == "image":
             self._handle_image_command(cmd_original)
         elif canonical == "reload-mcp":
-            with self._busy_command(self._slow_command_status(cmd_original)):
+            with self._busy_command(slow_command_status(request)):
                 self._reload_mcp()
         elif canonical == "browser":
             self._handle_browser_command(cmd_original)
@@ -6284,109 +6116,86 @@ class VoidcubeCLI:
         elif canonical == "connect":
             self._handle_connect_command(cmd_original)
         else:
-            # Check for user-defined quick commands (bypass agent loop, no LLM call)
-            base_cmd = cmd_lower.split()[0]
             _skcmds = _get_skill_commands()
-            quick_commands = self.config.get("quick_commands", {})
-            if base_cmd.lstrip("/") in quick_commands:
-                qcmd = quick_commands[base_cmd.lstrip("/")]
-                if qcmd.get("type") == "exec":
-                    import subprocess
-                    import shlex
-                    exec_cmd = qcmd.get("command", "")
-                    if exec_cmd:
-                        try:
-                            result = subprocess.run(
-                                shlex.split(exec_cmd), capture_output=True,
-                                text=True, timeout=30
-                            )
-                            output = result.stdout.strip() or result.stderr.strip()
-                            if output:
-                                self.console.print(_rich_text_from_ansi(output))
-                            else:
-                                self.console.print("[dim]Command returned no output[/]")
-                        except subprocess.TimeoutExpired:
-                            self.console.print("[bold red]Quick command timed out (30s)[/]")
-                        except Exception as e:
-                            self.console.print(f"[bold red]Quick command error: {e}[/]")
+            from VoidCube_cli.commands import COMMANDS
+
+            route = resolve_dynamic_command(
+                request,
+                quick_commands=self.config.get("quick_commands", {}),
+                plugin_names=_get_plugin_cmd_handler_names(),
+                skill_commands=_skcmds,
+                known_commands=set(COMMANDS),
+            )
+            if route.kind == "quick_exec":
+                import shlex
+                import subprocess
+
+                try:
+                    result = subprocess.run(
+                        shlex.split(route.executable),
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    output = result.stdout.strip() or result.stderr.strip()
+                    if output:
+                        self.console.print(_rich_text_from_ansi(output))
                     else:
-                        self.console.print(f"[bold red]Quick command '{base_cmd}' has no command defined[/]")
-                elif qcmd.get("type") == "alias":
-                    target = qcmd.get("target", "").strip()
-                    if target:
-                        target = target if target.startswith("/") else f"/{target}"
-                        user_args = cmd_original[len(base_cmd):].strip()
-                        aliased_command = f"{target} {user_args}".strip()
-                        return self.process_command(aliased_command)
-                    else:
-                        self.console.print(f"[bold red]Quick command '{base_cmd}' has no target defined[/]")
+                        self.console.print("[dim]Command returned no output[/]")
+                except subprocess.TimeoutExpired:
+                    self.console.print("[bold red]Quick command timed out (30s)[/]")
+                except Exception as e:
+                    self.console.print(f"[bold red]Quick command error: {e}[/]")
+            elif route.kind == "quick_alias":
+                return self.process_command(route.redirect_command)
+            elif route.kind == "quick_invalid":
+                if route.quick_type == "exec":
+                    self.console.print(
+                        f"[bold red]Quick command '{request.base_token}' has no command defined[/]"
+                    )
+                elif route.quick_type == "alias":
+                    self.console.print(
+                        f"[bold red]Quick command '{request.base_token}' has no target defined[/]"
+                    )
                 else:
-                    self.console.print(f"[bold red]Quick command '{base_cmd}' has unsupported type (supported: 'exec', 'alias')[/]")
-            # Check for plugin-registered slash commands
-            elif base_cmd.lstrip("/") in _get_plugin_cmd_handler_names():
+                    self.console.print(
+                        f"[bold red]Quick command '{request.base_token}' has unsupported type "
+                        "(supported: 'exec', 'alias')"
+                    )
+            elif route.kind == "plugin":
                 from VoidCube_cli.plugins import get_plugin_command_handler
-                plugin_handler = get_plugin_command_handler(base_cmd.lstrip("/"))
+
+                plugin_handler = get_plugin_command_handler(request.name)
                 if plugin_handler:
-                    user_args = cmd_original[len(base_cmd):].strip()
                     try:
-                        result = plugin_handler(user_args)
+                        result = plugin_handler(request.arguments)
                         if result:
                             _cprint(str(result))
                     except Exception as e:
                         _cprint(f"\033[1;31mPlugin command error: {e}{_RST}")
-            # Check for skill slash commands (/gif-search, /axolotl, etc.)
-            elif base_cmd in _get_skill_commands():
-                user_instruction = cmd_original[len(base_cmd):].strip()
+            elif route.kind == "skill":
                 msg = _get_skill_invocation_message(
-                    base_cmd, user_instruction, task_id=self.session_id
+                    request.base_token,
+                    request.arguments,
+                    task_id=self.session_id,
                 )
                 if msg:
-                    skill_name = _skcmds[base_cmd]["name"]
+                    skill_name = _skcmds[request.base_token]["name"]
                     print(f"\n🔧 Loading skill: {skill_name}")
                     if hasattr(self, '_pending_input'):
                         self._pending_input.put(msg)
                 else:
-                    ChatConsole().print(f"[bold red]Failed to load skill for {base_cmd}[/]")
+                    ChatConsole().print(
+                        f"[bold red]Failed to load skill for {request.base_token}[/]"
+                    )
+            elif route.kind == "redirect":
+                return self.process_command(route.redirect_command)
+            elif route.kind == "ambiguous":
+                _cprint(f"{_ACCENT}Ambiguous command: {cmd_lower}{_RST}")
+                _cprint(f"{_DIM}Did you mean: {', '.join(route.matches)}?{_RST}")
             else:
-                # Prefix matching: if input uniquely identifies one command, execute it.
-                # Matches against both built-in COMMANDS and installed skill commands so
-                # that execution-time resolution agrees with tab-completion.
-                from VoidCube_cli.commands import COMMANDS
-                typed_base = cmd_lower.split()[0]
-                all_known = set(COMMANDS) | set(_skcmds)
-                matches = [c for c in all_known if c.startswith(typed_base)]
-                if len(matches) > 1:
-                    # Prefer an exact match (typed the full command name)
-                    exact = [c for c in matches if c == typed_base]
-                    if len(exact) == 1:
-                        matches = exact
-                    else:
-                        # Prefer the unique shortest match:
-                        # /qui → /quit (5) wins over /quint-pipeline (15)
-                        min_len = min(len(c) for c in matches)
-                        shortest = [c for c in matches if len(c) == min_len]
-                        if len(shortest) == 1:
-                            matches = shortest
-                if len(matches) == 1:
-                    # Expand the prefix to the full command name, preserving arguments.
-                    # Guard against redispatching the same token to avoid infinite
-                    # recursion when the expanded name still doesn't hit an exact branch
-                    # (e.g. /config with extra args that are not yet handled above).
-                    full_name = matches[0]
-                    if full_name == typed_base:
-                        # Already an exact token — no expansion possible; fall through
-                        _cprint(f"\033[1;31mUnknown command: {cmd_lower}{_RST}")
-                        _cprint(f"{_DIM}{_ACCENT}Type /help for available commands{_RST}")
-                    else:
-                        remainder = cmd_original.strip()[len(typed_base):]
-                        full_cmd = full_name + remainder
-                        return self.process_command(full_cmd)
-                elif len(matches) > 1:
-                    _cprint(f"{_ACCENT}Ambiguous command: {cmd_lower}{_RST}")
-                    _cprint(f"{_DIM}Did you mean: {', '.join(sorted(matches))}?{_RST}")
-                else:
-                    _cprint(f"\033[1;31mUnknown command: {cmd_lower}{_RST}")
-                    _cprint(f"{_DIM}{_ACCENT}Type /help for available commands{_RST}")
+                _cprint(f"\033[1;31mUnknown command: {cmd_lower}{_RST}")
+                _cprint(f"{_DIM}{_ACCENT}Type /help for available commands{_RST}")
         
         return True
 
