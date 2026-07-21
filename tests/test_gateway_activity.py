@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import sys
 
+import pytest
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -1000,6 +1001,43 @@ def test_gateway_registration_validation_preserves_bad_request_status():
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Missing required fields"
+
+
+def test_gateway_health_update_preserves_missing_service_status():
+    client = TestClient(InternalGateway(GatewayConfig()).app)
+
+    response = client.post("/health/missing-service", json={"healthy": False})
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Service not found"
+
+
+def test_gateway_keeps_distinct_agent_slot_registrations():
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+
+    for slot_id in ("slot-A", "slot-B"):
+        response = client.post(
+            "/register",
+            json={
+                "service_id": f"agent-{slot_id}",
+                "service_name": f"agent-{slot_id}",
+                "service_type": "agent",
+                "address": f"http://agent-{slot_id.lower()}",
+                "metadata": {"slot_id": slot_id},
+            },
+        )
+        assert response.status_code == 201
+
+    services = client.get("/admin/services").json()["services"]
+    agent_ids = [
+        item["service_id"] for item in services if item["service_type"] == "agent"
+    ]
+    assert agent_ids == ["agent-slot-A", "agent-slot-B"]
+    assert all(
+        route["target_service"] != "agent"
+        for route in client.get("/admin/routes").json()["routes"]
+    )
 
 
 def test_gateway_supervisor_route_is_marked_as_governance_runtime_surface():

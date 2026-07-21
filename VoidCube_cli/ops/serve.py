@@ -253,6 +253,9 @@ def _build_service_config(name: str, port: int, system_config: Any | None = None
             port=port,
             db_path=system_config.memory.db_path,
             gateway_address=system_config.memory.gateway_address,
+            gateway_registration_check_interval=(
+                system_config.memory.gateway_registration_check_interval
+            ),
             decay_interval_hours=system_config.memory.decay_interval_hours,
         )
     raise ValueError(f"Unknown service: {name}")

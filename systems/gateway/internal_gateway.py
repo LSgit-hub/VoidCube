@@ -1176,6 +1176,8 @@ class InternalGateway:
         if service_type == "memory":
             self._memory_service_url = None
 
+        if service_type not in {"supervisor", "executor"}:
+            return
         scene_cache = self._scenes_cache.get(service_type)
         if isinstance(scene_cache, dict):
             scene_cache.update(
@@ -1230,6 +1232,8 @@ class InternalGateway:
                 return {"status": "updated"}
             else:
                 raise HTTPException(status_code=404, detail="Service not found")
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Error updating health: {e}")
             raise HTTPException(status_code=500, detail=str(e))

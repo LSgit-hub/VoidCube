@@ -102,6 +102,7 @@ class MemoryServiceConfig(BaseModel):
     port: int = 6001
     db_path: str = "./memory.db"
     gateway_address: str = "http://127.0.0.1:6000"
+    gateway_registration_check_interval: int = 30
     decay_interval_hours: int = 24
     compression_interval: int = 3600  # seconds between auto-compression runs
     # Tier 1 config
@@ -258,6 +259,10 @@ class MemoryService:
     def __init__(self, config: MemoryServiceConfig = None):
         self.config = config or MemoryServiceConfig()
         self._compression_task: asyncio.Task | None = None
+        self._gateway_registration_task: asyncio.Task | None = None
+        self._gateway_service_id: Optional[str] = None
+        self._gateway_registration_healthy = False
+        self._last_gateway_registration_check_at: Optional[str] = None
         self.app = FastAPI(
             title="VoidCube Memory Service",
             version="1.0",
@@ -732,9 +737,8 @@ class MemoryService:
             return None, ""
 
     async def _app_lifespan(self, app: FastAPI):
-        """Register with Gateway on startup, run compression loop, cleanup on shutdown."""
+        """Own Gateway registration and memory maintenance background tasks."""
         del app
-        # Register with Gateway so the supervisor can route memory requests
         svc_id = await self.register_with_gateway()
         if svc_id:
             logger.info("Memory service registered with gateway: %s", svc_id)
@@ -746,16 +750,81 @@ class MemoryService:
             logger.info("LLM health check passed: model=%s", self._llm_model)
         else:
             logger.warning("LLM health check FAILED — memory compression will be degraded")
+        self._gateway_registration_task = asyncio.create_task(
+            self._gateway_registration_loop()
+        )
         self._compression_task = asyncio.create_task(self._compression_loop())
         try:
             yield
         finally:
-            if self._compression_task and not self._compression_task.done():
-                self._compression_task.cancel()
+            tasks = (
+                self._gateway_registration_task,
+                self._compression_task,
+            )
+            for task in tasks:
+                if task and not task.done():
+                    task.cancel()
+            for task in tasks:
+                if task is None:
+                    continue
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+    async def _gateway_registration_is_current(self) -> bool:
+        service_id = self._gateway_service_id
+        self._last_gateway_registration_check_at = datetime.now().isoformat()
+        if not service_id:
+            self._gateway_registration_healthy = False
+            return False
+
+        expected_address = f"http://{self.config.host}:{self.config.port}".rstrip("/")
+        try:
+            import aiohttp
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{self.config.gateway_address}/admin/services/{service_id}",
+                    timeout=5,
+                ) as response:
+                    if response.status != 200:
+                        self._gateway_registration_healthy = False
+                        return False
+                    payload = await response.json()
+            is_current = (
+                payload.get("service_type") == "memory"
+                and str(payload.get("address") or "").rstrip("/")
+                == expected_address
+            )
+            self._gateway_registration_healthy = is_current
+            return is_current
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._gateway_registration_healthy = False
+            logger.debug("Memory gateway registration check failed: %s", exc)
+            return False
+
+    async def _ensure_gateway_registration(self) -> Optional[str]:
+        if await self._gateway_registration_is_current():
+            return self._gateway_service_id
+        return await self.register_with_gateway(max_retries=1)
+
+    async def _gateway_registration_loop(self) -> None:
+        interval = max(1, int(self.config.gateway_registration_check_interval))
+        while True:
+            await asyncio.sleep(interval)
             try:
-                await self._compression_task
+                await self._ensure_gateway_registration()
             except asyncio.CancelledError:
-                pass
+                raise
+            except Exception:
+                self._gateway_registration_healthy = False
+                logger.warning(
+                    "Memory gateway registration recovery failed",
+                    exc_info=True,
+                )
 
     async def _compression_loop(self) -> None:
         """Periodically trigger memory compression (runs in the memory service).
@@ -936,7 +1005,17 @@ class MemoryService:
         return 0
 
     async def health_check(self):
-        return {"status": "healthy", "service": "memory-service"}
+        return {
+            "status": (
+                "healthy" if self._gateway_registration_healthy else "degraded"
+            ),
+            "service": "memory-service",
+            "gateway_registration": {
+                "healthy": self._gateway_registration_healthy,
+                "service_id": self._gateway_service_id,
+                "last_checked_at": self._last_gateway_registration_check_at,
+            },
+        }
 
     async def get_mem_usage(self) -> Dict[str, Any]:
         """Return cumulative LLM token usage for the memory model.
@@ -2288,9 +2367,7 @@ class MemoryService:
         except Exception:
             return None, "llm_error"
 
-    async def register_with_gateway(self):
-        import asyncio as _asyncio
-
+    async def register_with_gateway(self, *, max_retries: int = 5):
         url = f"{self.config.gateway_address}/register"
         payload = {
             "service_name": "memory-service",
@@ -2300,7 +2377,6 @@ class MemoryService:
             "metadata": {"version": "1.0"},
         }
 
-        max_retries = 5
         base_delay = 1.0
 
         for attempt in range(1, max_retries + 1):
@@ -2312,7 +2388,12 @@ class MemoryService:
                         if response.status == 201:
                             result = await response.json()
                             logger.info("Registered with gateway (attempt %d): %s", attempt, result)
-                            return result["service_id"]
+                            self._gateway_service_id = result["service_id"]
+                            self._gateway_registration_healthy = True
+                            self._last_gateway_registration_check_at = (
+                                datetime.now().isoformat()
+                            )
+                            return self._gateway_service_id
                         else:
                             logger.debug(
                                 "Gateway registration attempt %d returned status %d",
@@ -2330,16 +2411,16 @@ class MemoryService:
                     attempt + 1,
                     max_retries,
                 )
-                await _asyncio.sleep(delay)
+                await asyncio.sleep(delay)
 
+        self._gateway_registration_healthy = False
+        self._last_gateway_registration_check_at = datetime.now().isoformat()
         logger.warning("Failed to register with gateway after %d attempts", max_retries)
         return None
 
     async def start(self):
         import uvicorn
-        
-        await self.register_with_gateway()
-        
+
         logger.info(f"Starting memory service on {self.config.host}:{self.config.port}")
         await uvicorn.Server(
             uvicorn.Config(
