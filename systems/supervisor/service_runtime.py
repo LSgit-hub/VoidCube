@@ -195,6 +195,49 @@ class ServiceRuntimeMixin:
                     service_type,
                 )
 
+    async def _missing_gateway_service_types(self) -> set[str]:
+        registration_ids = {
+            "supervisor": self._gateway_service_id,
+            "executor": self._gateway_executor_service_id,
+        }
+        missing_service_types = {
+            service_type
+            for service_type, service_id in registration_ids.items()
+            if not service_id
+        }
+        registered_service_ids = {
+            service_type: service_id
+            for service_type, service_id in registration_ids.items()
+            if service_id
+        }
+        if not registered_service_ids:
+            return missing_service_types
+
+        import aiohttp
+
+        gateway_address = self.config.execution.gateway_address
+        try:
+            async with aiohttp.ClientSession() as session:
+                for service_type, service_id in registered_service_ids.items():
+                    try:
+                        async with session.get(
+                            f"{gateway_address}/admin/services/{service_id}",
+                            timeout=5,
+                        ) as response:
+                            if response.status != 200:
+                                missing_service_types.add(service_type)
+                    except Exception as exc:
+                        logger.debug(
+                            "Failed to verify %s gateway registration: %s",
+                            service_type,
+                            exc,
+                        )
+                        missing_service_types.add(service_type)
+        except Exception as exc:
+            logger.debug("Failed to create gateway verification session: %s", exc)
+            missing_service_types.update(registered_service_ids)
+        return missing_service_types
+
     async def _register_gateway_service(
         self,
         url: str,
@@ -263,33 +306,9 @@ class ServiceRuntimeMixin:
             while True:
                 try:
                     await self.run_health_checks()
-                    # Re-register with gateway if the connection was lost
-                    # (e.g., gateway restarted).  Verify registration is still
-                    # valid by checking if our service_id is still known.
-                    registration_ids = {
-                        "supervisor": self._gateway_service_id,
-                        "executor": self._gateway_executor_service_id,
-                    }
-                    missing_service_types = {
-                        service_type
-                        for service_type, service_id in registration_ids.items()
-                        if not service_id
-                    }
-                    if not missing_service_types:
-                        # Verify: Gateway may have restarted and lost either registration.
-                        try:
-                            import aiohttp
-                            gw = self.config.execution.gateway_address
-                            async with aiohttp.ClientSession() as s:
-                                for service_type, service_id in registration_ids.items():
-                                    async with s.get(
-                                        f"{gw}/admin/services/{service_id}",
-                                        timeout=5,
-                                    ) as r:
-                                        if r.status != 200:
-                                            missing_service_types.add(service_type)
-                        except Exception:
-                            missing_service_types.update(registration_ids)
+                    missing_service_types = (
+                        await self._missing_gateway_service_types()
+                    )
                     if missing_service_types:
                         await self._restore_gateway_registrations(
                             missing_service_types

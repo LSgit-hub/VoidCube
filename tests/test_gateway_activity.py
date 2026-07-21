@@ -920,6 +920,88 @@ def test_gateway_executor_registration_adds_standard_route_and_health_count():
     assert health_executor_route["route_policy"]["status"] == "preferred_execution_surface"
 
 
+@pytest.mark.parametrize(
+    ("service_type", "route_prefix"),
+    [
+        ("memory", "/mem/"),
+        ("supervisor", "/supervisor/"),
+        ("executor", "/executor/"),
+    ],
+)
+def test_gateway_replaces_previous_instance_for_routed_singleton_service(
+    service_type,
+    route_prefix,
+):
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+
+    first = client.post(
+        "/register",
+        json={
+            "service_id": f"{service_type}-old",
+            "service_name": f"{service_type}-old",
+            "service_type": service_type,
+            "address": "http://127.0.0.1:65520",
+        },
+    )
+    second = client.post(
+        "/register",
+        json={
+            "service_id": f"{service_type}-new",
+            "service_name": f"{service_type}-new",
+            "service_type": service_type,
+            "address": "http://127.0.0.1:65521",
+        },
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert client.get(f"/admin/services/{service_type}-old").status_code == 404
+    services = client.get("/admin/services").json()["services"]
+    matching = [item for item in services if item["service_type"] == service_type]
+    assert [item["service_id"] for item in matching] == [f"{service_type}-new"]
+    routes = client.get("/admin/routes").json()["routes"]
+    route = next(item for item in routes if item["path_prefix"] == route_prefix)
+    assert route["target_instance"] == f"{service_type}-new"
+
+
+def test_gateway_memory_registration_invalidates_cached_address():
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+
+    client.post(
+        "/register",
+        json={
+            "service_id": "memory-old",
+            "service_name": "memory-old",
+            "service_type": "memory",
+            "address": "http://memory-old",
+        },
+    )
+    assert gateway._resolve_memory_service_url() == "http://memory-old"
+
+    client.post(
+        "/register",
+        json={
+            "service_id": "memory-new",
+            "service_name": "memory-new",
+            "service_type": "memory",
+            "address": "http://memory-new",
+        },
+    )
+
+    assert gateway._resolve_memory_service_url() == "http://memory-new"
+
+
+def test_gateway_registration_validation_preserves_bad_request_status():
+    client = TestClient(InternalGateway(GatewayConfig()).app)
+
+    response = client.post("/register", json={"service_name": "incomplete"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Missing required fields"
+
+
 def test_gateway_supervisor_route_is_marked_as_governance_runtime_surface():
     gateway = InternalGateway(GatewayConfig())
     client = TestClient(gateway.app)

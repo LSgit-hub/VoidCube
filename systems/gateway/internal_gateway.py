@@ -87,6 +87,13 @@ class SessionRegisterRequest(BaseModel):
 
 
 class InternalGateway:
+    ROUTE_PREFIX_BY_SERVICE_TYPE = {
+        "memory": "/mem/",
+        "supervisor": "/supervisor/",
+        "executor": "/executor/",
+    }
+    ROUTED_SINGLETON_SERVICE_TYPES = frozenset(ROUTE_PREFIX_BY_SERVICE_TYPE)
+
     def __init__(self, config: GatewayConfig = None):
         self.config = config or GatewayConfig()
         self.app = FastAPI(title="VoidCube Internal Gateway", version="1.0")
@@ -1102,11 +1109,11 @@ class InternalGateway:
     async def register_service(self, request: Request):
         try:
             data = await request.json()
-            service_id = data.get("service_id", str(uuid.uuid4()))
-            service_name = data.get("service_name")
-            service_type = data.get("service_type")
-            address = data.get("address")
-            health_endpoint = data.get("health_endpoint", "/health")
+            service_id = str(data.get("service_id") or uuid.uuid4()).strip()
+            service_name = str(data.get("service_name") or "").strip()
+            service_type = str(data.get("service_type") or "").strip()
+            address = str(data.get("address") or "").strip().rstrip("/")
+            health_endpoint = str(data.get("health_endpoint") or "/health").strip()
             
             if not all([service_name, service_type, address]):
                 raise HTTPException(status_code=400, detail="Missing required fields")
@@ -1122,13 +1129,23 @@ class InternalGateway:
                 last_health_check=datetime.now(),
                 healthy=True
             )
-            
+
+            replaced_service_ids = self._remove_superseded_service_registrations(
+                service_info
+            )
             self._services[service_id] = service_info
-            await self._auto_configure_route(service_type, service_id, address)
-            
+            self._auto_configure_route(service_type, service_id)
+
+            if replaced_service_ids:
+                logger.info(
+                    "Replaced stale %s gateway registrations: %s",
+                    service_type,
+                    ", ".join(replaced_service_ids),
+                )
             logger.info(f"Service registered: {service_name} ({service_id}) at {address}")
             return JSONResponse(content={"service_id": service_id, "status": "registered"}, status_code=201)
-            
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Error registering service: {e}")
             raise HTTPException(status_code=500, detail=str(e))
@@ -1140,14 +1157,8 @@ class InternalGateway:
             "body_slots": self._list_body_slots(),
         }
 
-    async def _auto_configure_route(self, service_type: str, service_id: str, address: str):
-        route_map = {
-            "memory": "/mem/",
-            "supervisor": "/supervisor/",
-            "executor": "/executor/",
-        }
-        
-        path_prefix = route_map.get(service_type)
+    def _auto_configure_route(self, service_type: str, service_id: str):
+        path_prefix = self.ROUTE_PREFIX_BY_SERVICE_TYPE.get(service_type)
         if path_prefix:
             existing_route = self._routes.get(path_prefix)
             if existing_route:
@@ -1160,6 +1171,52 @@ class InternalGateway:
                     weight=100,
                     enabled=True
                 )
+
+    def _invalidate_service_registration_cache(self, service_type: str) -> None:
+        if service_type == "memory":
+            self._memory_service_url = None
+
+        scene_cache = self._scenes_cache.get(service_type)
+        if isinstance(scene_cache, dict):
+            scene_cache.update(
+                {
+                    "service_id": None,
+                    "address": None,
+                    "reachable": False,
+                    "last_fetched_at": None,
+                }
+            )
+
+    def _remove_service_registration(self, service_id: str) -> Optional[ServiceInfo]:
+        service = self._services.pop(service_id, None)
+        if service is None:
+            return None
+
+        self._invalidate_service_registration_cache(service.service_type)
+        for prefix, route in list(self._routes.items()):
+            if route.target_instance == service_id:
+                del self._routes[prefix]
+        return service
+
+    def _remove_superseded_service_registrations(
+        self,
+        service: ServiceInfo,
+    ) -> List[str]:
+        replaced_service_ids: List[str] = []
+        existing = self._remove_service_registration(service.service_id)
+        if existing is not None:
+            replaced_service_ids.append(existing.service_id)
+
+        if service.service_type in self.ROUTED_SINGLETON_SERVICE_TYPES:
+            for registered in list(self._services.values()):
+                if registered.service_type != service.service_type:
+                    continue
+                removed = self._remove_service_registration(registered.service_id)
+                if removed is not None:
+                    replaced_service_ids.append(removed.service_id)
+
+        self._invalidate_service_registration_cache(service.service_type)
+        return replaced_service_ids
 
     async def update_health(self, service_id: str, request: Request):
         try:
@@ -1188,16 +1245,8 @@ class InternalGateway:
         raise HTTPException(status_code=404, detail="Service not found")
 
     async def remove_service(self, service_id: str):
-        if service_id in self._services:
-            service = self._services.pop(service_id)
-            # Invalidate cached memory service URL
-            if service.service_type == "memory":
-                self._memory_service_url = None
-            
-            for prefix, route in list(self._routes.items()):
-                if route.target_instance == service_id:
-                    del self._routes[prefix]
-            
+        service = self._remove_service_registration(service_id)
+        if service is not None:
             logger.info(f"Service removed: {service.service_name} ({service_id})")
             return {"status": "removed"}
         raise HTTPException(status_code=404, detail="Service not found")

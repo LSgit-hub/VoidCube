@@ -313,6 +313,56 @@ async def test_supervisor_registers_embedded_executor_with_gateway(tmp_path, mon
     assert supervisor._gateway_executor_service_id == "executor-service"
 
 
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_gateway_verification_isolates_single_request_failure(
+    tmp_path,
+    monkeypatch,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._gateway_service_id = "supervisor-service"
+    supervisor._gateway_executor_service_id = "executor-service"
+    requested_ids = []
+
+    class _Response:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, *, timeout):
+            service_id = url.rsplit("/", 1)[-1]
+            requested_ids.append((service_id, timeout))
+            if service_id == "executor-service":
+                raise OSError("transient executor verification failure")
+            return _Response()
+
+    monkeypatch.setitem(sys.modules, "aiohttp", SimpleNamespace(ClientSession=_Session))
+
+    missing_service_types = await supervisor._missing_gateway_service_types()
+    supervisor._register_gateway_service_type = AsyncMock(  # type: ignore[method-assign]
+        return_value="restored-executor-service"
+    )
+    await supervisor._restore_gateway_registrations(missing_service_types)
+
+    assert requested_ids == [
+        ("supervisor-service", 5),
+        ("executor-service", 5),
+    ]
+    assert missing_service_types == {"executor"}
+    supervisor._register_gateway_service_type.assert_awaited_once_with("executor")  # type: ignore[attr-defined]
+
+
 @pytest.mark.unit
 def test_supervisor_wires_execution_facade_to_canonical_executors(tmp_path):
     supervisor = _make_supervisor(tmp_path)
