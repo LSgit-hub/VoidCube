@@ -24,6 +24,7 @@ from VoidCube_cli.autonomous_status_host import (
     format_gateway_autonomous_execute_snapshot,
 )
 from VoidCube_cli.cli_handlers import _git_head_commit, _git_improvement_diff
+from VoidCube_cli.chat_render_state import CliStreamRenderState
 
 
 class _FakeUrlopenResponse:
@@ -755,6 +756,7 @@ def test_embedded_autonomous_component_chat_does_not_emit_response_panel_or_touc
     cli.show_reasoning = False
     cli.streaming_enabled = False
     cli.bell_on_complete = False
+    cli._stream_render_state = CliStreamRenderState()
     cli._session_db = None
     cli.session_id = "embedded-session"
     cli._pending_model_switch_note = None
@@ -943,7 +945,7 @@ def test_refresh_gateway_cli_presence_keeps_user_turn_in_user_chat_lane_during_a
     cli._active_chat_agent_role = "user_chat"
     cli._agent_running = True
     cli._command_running = False
-    cli._stream_started = False
+    cli._stream_render_state = CliStreamRenderState()
     cli._gateway_presence_refresh_interval_seconds = 30.0
     cli._last_gateway_presence_refresh_at = 0.0
 

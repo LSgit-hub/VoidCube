@@ -124,10 +124,11 @@ def current_gateway_presence_snapshot(host: Any) -> tuple[str, str | None, str |
         if task_id:
             return "learning", task_id, execution_kind
         return "executing", None, None
+    stream_state = getattr(host, "_stream_render_state", None)
     if (
         getattr(host, "_agent_running", False)
         or getattr(host, "_command_running", False)
-        or getattr(host, "_stream_started", False)
+        or bool(stream_state and stream_state.started)
         or host._get_subagent_observability_snapshot().get("active")
     ):
         return "executing", None, None

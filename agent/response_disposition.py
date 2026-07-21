@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Protocol
 
-from agent.api_response import has_visible_content, strip_thinking_blocks
+from agent.api_response import (
+    extract_reasoning,
+    has_visible_content,
+    strip_thinking_blocks,
+)
+from agent.conversation_turn import ConversationTurnState
+
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_assistant_content(content: Any) -> str | None:
@@ -175,3 +184,327 @@ def decide_text_response_disposition(
         structured_reasoning=structured_reasoning,
         truly_empty=truly_empty,
     )
+
+
+class ResponseDispositionPort(Protocol):
+    model: str
+    provider: str
+    log_prefix: str
+    valid_tool_names: Iterable[str]
+    quiet_mode: bool
+    _invalid_tool_retries: int
+    _invalid_json_retries: int
+    _empty_content_retries: int
+    _thinking_prefill_retries: int
+    _last_content_with_tools: str | None
+    _fallback_chain: list[Any]
+    _response_was_previewed: bool
+    _session_persistence: Any
+
+    def _vprint(self, message: str, *, force: bool = False) -> None: ...
+
+    def _emit_status(self, message: str) -> None: ...
+
+    def _build_assistant_message(
+        self,
+        assistant_message: Any,
+        finish_reason: str,
+    ) -> dict[str, Any]: ...
+
+    def _cleanup_task_resources(self, task_id: str) -> None: ...
+
+    def _try_activate_fallback(self) -> bool: ...
+
+
+class ResponseLoopControl(str, Enum):
+    proceed = "proceed"
+    continue_loop = "continue_loop"
+    break_loop = "break_loop"
+    terminal = "terminal"
+
+
+@dataclass(frozen=True, slots=True)
+class ResponseActionExecution:
+    control: ResponseLoopControl
+    terminal_result: dict[str, Any] | None = None
+
+
+def apply_tool_call_inspection(
+    owner: ResponseDispositionPort,
+    inspection: ToolCallInspection,
+    *,
+    assistant_message: Any,
+    finish_reason: str,
+    messages: list[dict[str, Any]],
+    conversation_history: list[dict[str, Any]] | None,
+    api_call_count: int,
+    task_id: str,
+) -> ResponseActionExecution:
+    """Apply tool validation state changes and recovery messages once."""
+    for repair in inspection.repairs:
+        print(
+            f"{owner.log_prefix}🔧 Auto-repaired tool name: "
+            f"'{repair.original}' -> '{repair.repaired}'"
+        )
+
+    if inspection.invalid_tool_names:
+        owner._invalid_tool_retries += 1
+        available = ", ".join(sorted(owner.valid_tool_names))
+        invalid_name = inspection.invalid_tool_names[0]
+        invalid_preview = (
+            invalid_name[:80] + "..." if len(invalid_name) > 80 else invalid_name
+        )
+        owner._vprint(
+            f"{owner.log_prefix}⚠️  Unknown tool '{invalid_preview}' — "
+            "sending error to model "
+            f"for self-correction ({owner._invalid_tool_retries}/3)"
+        )
+        if owner._invalid_tool_retries >= 3:
+            owner._vprint(
+                f"{owner.log_prefix}❌ Max retries (3) for invalid tool calls "
+                "exceeded. "
+                "Stopping as partial.",
+                force=True,
+            )
+            owner._invalid_tool_retries = 0
+            owner._session_persistence.persist(messages, conversation_history)
+            return ResponseActionExecution(
+                ResponseLoopControl.terminal,
+                {
+                    "final_response": None,
+                    "messages": messages,
+                    "api_calls": api_call_count,
+                    "completed": False,
+                    "partial": True,
+                    "error": f"Model generated invalid tool call: {invalid_preview}",
+                },
+            )
+
+        messages.append(
+            owner._build_assistant_message(assistant_message, finish_reason)
+        )
+        for tool_call in assistant_message.tool_calls:
+            if tool_call.function.name not in owner.valid_tool_names:
+                content = (
+                    f"Tool '{tool_call.function.name}' does not exist. "
+                    f"Available tools: {available}"
+                )
+            else:
+                content = (
+                    "Skipped: another tool call in this turn used an invalid "
+                    "name. Please retry this tool call."
+                )
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": content,
+                }
+            )
+        return ResponseActionExecution(ResponseLoopControl.continue_loop)
+
+    owner._invalid_tool_retries = 0
+    invalid_json = inspection.invalid_json_arguments
+    if not invalid_json:
+        owner._invalid_json_retries = 0
+        return ResponseActionExecution(ResponseLoopControl.proceed)
+
+    if inspection.truncated_json_arguments:
+        owner._vprint(
+            f"{owner.log_prefix}⚠️  Truncated tool call arguments detected "
+            f"(finish_reason={finish_reason!r}) — refusing to execute.",
+            force=True,
+        )
+        owner._invalid_json_retries = 0
+        owner._cleanup_task_resources(task_id)
+        owner._session_persistence.persist(messages, conversation_history)
+        return ResponseActionExecution(
+            ResponseLoopControl.terminal,
+            {
+                "final_response": None,
+                "messages": messages,
+                "api_calls": api_call_count,
+                "completed": False,
+                "partial": True,
+                "error": "Response truncated due to output length limit",
+            },
+        )
+
+    owner._invalid_json_retries += 1
+    tool_name, error = invalid_json[0]
+    owner._vprint(
+        f"{owner.log_prefix}⚠️  Invalid JSON in tool call arguments for "
+        f"'{tool_name}': {error}"
+    )
+    if owner._invalid_json_retries < 3:
+        owner._vprint(
+            f"{owner.log_prefix}🔄 Retrying API call "
+            f"({owner._invalid_json_retries}/3)..."
+        )
+        return ResponseActionExecution(ResponseLoopControl.continue_loop)
+
+    owner._vprint(
+        f"{owner.log_prefix}⚠️  Injecting recovery tool results for invalid JSON..."
+    )
+    owner._invalid_json_retries = 0
+    messages.append(
+        owner._build_assistant_message(assistant_message, finish_reason)
+    )
+    invalid_names = {name for name, _ in invalid_json}
+    errors = dict(invalid_json)
+    for tool_call in assistant_message.tool_calls:
+        if tool_call.function.name in invalid_names:
+            tool_result = (
+                f"Error: Invalid JSON arguments. "
+                f"{errors[tool_call.function.name]}. For tools with no required "
+                "parameters, use an empty object: {}. Please retry with valid JSON."
+            )
+        else:
+            tool_result = (
+                "Skipped: other tool call in this response had invalid JSON."
+            )
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "content": tool_result,
+            }
+        )
+    return ResponseActionExecution(ResponseLoopControl.continue_loop)
+
+
+def apply_text_response_disposition(
+    owner: ResponseDispositionPort,
+    disposition: TextResponseDisposition,
+    *,
+    assistant_message: Any,
+    finish_reason: str,
+    state: ConversationTurnState,
+    messages: list[dict[str, Any]],
+) -> ResponseActionExecution:
+    """Apply one text disposition and return explicit loop control."""
+    if disposition.action is TextResponseAction.final_text:
+        return ResponseActionExecution(ResponseLoopControl.proceed)
+
+    if disposition.action is TextResponseAction.use_prior_content:
+        prior_content = owner._last_content_with_tools or ""
+        state.exit_reason = "fallback_prior_turn_content"
+        logger.info(
+            "Empty follow-up after tool calls — using prior turn content as "
+            "final response"
+        )
+        owner._emit_status(
+            "↻ Empty response after tool calls — using earlier content as final answer"
+        )
+        owner._last_content_with_tools = None
+        owner._empty_content_retries = 0
+        for message in reversed(messages):
+            if message.get("role") != "assistant" or not message.get("tool_calls"):
+                continue
+            tool_names = [
+                tool_call.get("function", {}).get("name", "unknown")
+                for tool_call in message["tool_calls"]
+                if isinstance(tool_call, dict)
+            ]
+            plural = "s" if len(tool_names) > 1 else ""
+            message["content"] = (
+                f"Calling the {', '.join(tool_names)} tool{plural}..."
+            )
+            break
+        state.final_response = strip_thinking_blocks(prior_content).strip()
+        owner._response_was_previewed = True
+        return ResponseActionExecution(ResponseLoopControl.break_loop)
+
+    if disposition.action is TextResponseAction.prefill_reasoning:
+        owner._thinking_prefill_retries += 1
+        logger.info(
+            "Thinking-only response (no visible content) — prefilling to "
+            "continue (%d/2)",
+            owner._thinking_prefill_retries,
+        )
+        owner._emit_status(
+            "↻ Thinking-only response — prefilling to continue "
+            f"({owner._thinking_prefill_retries}/2)"
+        )
+        interim = owner._build_assistant_message(assistant_message, "incomplete")
+        interim["_thinking_prefill"] = True
+        messages.append(interim)
+        owner._session_persistence.save_log(messages)
+        state.final_response = None
+        return ResponseActionExecution(ResponseLoopControl.continue_loop)
+
+    if disposition.action is TextResponseAction.retry_empty:
+        owner._empty_content_retries += 1
+        logger.warning(
+            "Empty response (no content or reasoning) — retry %d/3 (model=%s)",
+            owner._empty_content_retries,
+            owner.model,
+        )
+        owner._emit_status(
+            f"⚠️ Empty response from model — retrying "
+            f"({owner._empty_content_retries}/3)"
+        )
+        state.final_response = None
+        return ResponseActionExecution(ResponseLoopControl.continue_loop)
+
+    if disposition.action is TextResponseAction.try_fallback:
+        logger.warning(
+            "Empty response after %d retries — attempting fallback "
+            "(model=%s, provider=%s)",
+            owner._empty_content_retries,
+            owner.model,
+            owner.provider,
+        )
+        owner._emit_status(
+            "⚠️ Model returning empty responses — switching to fallback provider..."
+        )
+        if owner._try_activate_fallback():
+            owner._empty_content_retries = 0
+            owner._emit_status(
+                f"↻ Switched to fallback: {owner.model} ({owner.provider})"
+            )
+            logger.info(
+                "Fallback activated after empty responses: now using %s on %s",
+                owner.model,
+                owner.provider,
+            )
+            state.final_response = None
+            return ResponseActionExecution(ResponseLoopControl.continue_loop)
+
+    state.exit_reason = "empty_response_exhausted"
+    reasoning = extract_reasoning(assistant_message)
+    terminal_message = owner._build_assistant_message(
+        assistant_message,
+        finish_reason,
+    )
+    terminal_message["content"] = "(empty)"
+    messages.append(terminal_message)
+    if reasoning:
+        preview = reasoning[:500] + "..." if len(reasoning) > 500 else reasoning
+        logger.warning(
+            "Reasoning-only response (no visible content) after exhausting "
+            "retries and fallback. Reasoning: %s",
+            preview,
+        )
+        owner._emit_status(
+            "⚠️ Model produced reasoning but no visible response after all "
+            "retries. Returning empty."
+        )
+    else:
+        logger.warning(
+            "Empty response (no content or reasoning) after %d retries. "
+            "No fallback available. model=%s provider=%s",
+            owner._empty_content_retries,
+            owner.model,
+            owner.provider,
+        )
+        owner._emit_status(
+            "❌ Model returned no content after all retries"
+            + (
+                " and fallback attempts."
+                if owner._fallback_chain
+                else ". No fallback providers configured."
+            )
+        )
+    state.final_response = "(empty)"
+    return ResponseActionExecution(ResponseLoopControl.break_loop)

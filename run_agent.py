@@ -129,6 +129,10 @@ from agent.tool_execution import (
     ToolCallOutcome,
     ToolExecutionCoordinator,
 )
+from agent.tool_turn import (
+    context_pressure_tracker,
+    execute_successful_tool_turn,
+)
 from agent.turn_finalization import finalize_conversation_turn
 from agent.conversation_turn import ConversationTurnState
 from agent.iteration_control import IterationBudget
@@ -142,15 +146,15 @@ from agent.api_request import (
 from agent.api_response import (
     TruncationAction,
     decide_truncation_recovery,
-    extract_reasoning,
-    has_visible_content,
     inspect_chat_response,
     normalize_assistant_message,
     strip_thinking_blocks,
     strip_thinking_tags,
 )
 from agent.response_disposition import (
-    TextResponseAction,
+    ResponseLoopControl,
+    apply_text_response_disposition,
+    apply_tool_call_inspection,
     decide_text_response_disposition,
     inspect_tool_calls,
     normalize_assistant_content,
@@ -228,13 +232,6 @@ class AIAgent:
     This class manages the conversation flow, tool execution, and response handling
     for AI models that support function calling.
     """
-
-    # ── Class-level context pressure dedup (survives across instances) ──
-    # The gateway creates a new AIAgent per message, so instance-level flags
-    # reset every time.  This dict tracks {session_id: (warn_level, timestamp)}
-    # to suppress duplicate warnings within a cooldown window.
-    _context_pressure_last_warned: dict = {}
-    _CONTEXT_PRESSURE_COOLDOWN = 300  # seconds between re-warning same session
 
     @property
     def base_url(self) -> str:
@@ -437,12 +434,6 @@ class AIAgent:
         self.request_overrides = dict(request_overrides or {})
         self.prefill_messages = prefill_messages or []  # Prefilled conversation turns
         
-        # Context pressure warnings: notify the USER (not the LLM) as context
-        # fills up.  Purely informational — displayed in CLI output and sent via
-        # status_callback for gateway platforms.  Does NOT inject into messages.
-        # Tiered: fires at 85% and again at 95% of compaction threshold.
-        self._context_pressure_warned_at = 0.0  # highest tier already shown
-
         # Activity tracking — updated on each API call, tool execution, and
         # stream chunk.  Used by the gateway timeout handler to report what the
         # agent was doing when it was killed, and by the "still working"
@@ -3092,11 +3083,7 @@ class AIAgent:
         if self.context_compressor.threshold_tokens > 0:
             _post_progress = _compressed_est / self.context_compressor.threshold_tokens
             if _post_progress < 0.85:
-                self._context_pressure_warned_at = 0.0
-                # Clear class-level dedup for this session so a fresh
-                # warning cycle can start if context grows again.
-                _sid = self.session_id or "default"
-                AIAgent._context_pressure_last_warned.pop(_sid, None)
+                context_pressure_tracker.reset(self.session_id or "default")
 
         # Clear the file-read dedup cache.  After compression the original
         # read content is summarised away — if the model re-reads the same
@@ -5222,296 +5209,35 @@ class AIAgent:
                         valid_tool_names=self.valid_tool_names,
                         repair_tool_name=self._repair_tool_call,
                     )
-                    for repair in tool_inspection.repairs:
-                        print(
-                            f"{self.log_prefix}🔧 Auto-repaired tool name: "
-                            f"'{repair.original}' -> '{repair.repaired}'"
-                        )
-                    invalid_tool_calls = tool_inspection.invalid_tool_names
-                    if invalid_tool_calls:
-                        # Track retries for invalid tool calls
-                        self._invalid_tool_retries += 1
-
-                        # Return helpful error to model — model can self-correct next turn
-                        available = ", ".join(sorted(self.valid_tool_names))
-                        invalid_name = invalid_tool_calls[0]
-                        invalid_preview = invalid_name[:80] + "..." if len(invalid_name) > 80 else invalid_name
-                        self._vprint(f"{self.log_prefix}⚠️  Unknown tool '{invalid_preview}' — sending error to model for self-correction ({self._invalid_tool_retries}/3)")
-
-                        if self._invalid_tool_retries >= 3:
-                            self._vprint(f"{self.log_prefix}❌ Max retries (3) for invalid tool calls exceeded. Stopping as partial.", force=True)
-                            self._invalid_tool_retries = 0
-                            self._session_persistence.persist(messages, conversation_history)
-                            return {
-                                "final_response": None,
-                                "messages": messages,
-                                "api_calls": turn_state.api_call_count,
-                                "completed": False,
-                                "partial": True,
-                                "error": f"Model generated invalid tool call: {invalid_preview}"
-                            }
-
-                        assistant_msg = self._build_assistant_message(
-                            assistant_message,
-                            attempt_state.finish_reason,
-                        )
-                        messages.append(assistant_msg)
-                        for tc in assistant_message.tool_calls:
-                            if tc.function.name not in self.valid_tool_names:
-                                content = f"Tool '{tc.function.name}' does not exist. Available tools: {available}"
-                            else:
-                                content = "Skipped: another tool call in this turn used an invalid name. Please retry this tool call."
-                            messages.append({
-                                "role": "tool",
-                                "tool_call_id": tc.id,
-                                "content": content,
-                            })
+                    tool_action = apply_tool_call_inspection(
+                        self,
+                        tool_inspection,
+                        assistant_message=assistant_message,
+                        finish_reason=attempt_state.finish_reason,
+                        messages=messages,
+                        conversation_history=conversation_history,
+                        api_call_count=turn_state.api_call_count,
+                        task_id=effective_task_id,
+                    )
+                    if tool_action.control is ResponseLoopControl.terminal:
+                        return tool_action.terminal_result
+                    if tool_action.control is ResponseLoopControl.continue_loop:
                         continue
-                    # Reset retry counter on successful tool call validation
-                    self._invalid_tool_retries = 0
-                    
-                    invalid_json_args = tool_inspection.invalid_json_arguments
-                    if invalid_json_args:
-                        # Check if the invalid JSON is due to truncation rather
-                        # than a model formatting mistake.  Routers sometimes
-                        # rewrite finish_reason from "length" to "tool_calls",
-                        # hiding the truncation from the length handler above.
-                        # Detect truncation: args that don't end with } or ]
-                        # (after stripping whitespace) are cut off mid-stream.
-                        if tool_inspection.truncated_json_arguments:
-                            self._vprint(
-                                f"{self.log_prefix}⚠️  Truncated tool call arguments detected "
-                                f"(finish_reason={attempt_state.finish_reason!r}) — refusing to execute.",
-                                force=True,
-                            )
-                            self._invalid_json_retries = 0
-                            self._cleanup_task_resources(effective_task_id)
-                            self._session_persistence.persist(messages, conversation_history)
-                            return {
-                                "final_response": None,
-                                "messages": messages,
-                                "api_calls": turn_state.api_call_count,
-                                "completed": False,
-                                "partial": True,
-                                "error": "Response truncated due to output length limit",
-                            }
 
-                        # Track retries for invalid JSON arguments
-                        self._invalid_json_retries += 1
-
-                        tool_name, error_msg = invalid_json_args[0]
-                        self._vprint(f"{self.log_prefix}⚠️  Invalid JSON in tool call arguments for '{tool_name}': {error_msg}")
-
-                        if self._invalid_json_retries < 3:
-                            self._vprint(f"{self.log_prefix}🔄 Retrying API call ({self._invalid_json_retries}/3)...")
-                            # Don't add anything to messages, just retry the API call
-                            continue
-                        else:
-                            # Instead of returning partial, inject tool error results so the model can recover.
-                            # Using tool results (not user messages) preserves role alternation.
-                            self._vprint(f"{self.log_prefix}⚠️  Injecting recovery tool results for invalid JSON...")
-                            self._invalid_json_retries = 0  # Reset for next attempt
-                            
-                            # Append the assistant message with its (broken) tool_calls
-                            recovery_assistant = self._build_assistant_message(
-                                assistant_message,
-                                attempt_state.finish_reason,
-                            )
-                            messages.append(recovery_assistant)
-                            
-                            # Respond with tool error results for each tool call
-                            invalid_names = {name for name, _ in invalid_json_args}
-                            for tc in assistant_message.tool_calls:
-                                if tc.function.name in invalid_names:
-                                    err = next(e for n, e in invalid_json_args if n == tc.function.name)
-                                    tool_result = (
-                                        f"Error: Invalid JSON arguments. {err}. "
-                                        f"For tools with no required parameters, use an empty object: {{}}. "
-                                        f"Please retry with valid JSON."
-                                    )
-                                else:
-                                    tool_result = "Skipped: other tool call in this response had invalid JSON."
-                                messages.append({
-                                    "role": "tool",
-                                    "tool_call_id": tc.id,
-                                    "content": tool_result,
-                                })
-                            continue
-                    
-                    # Reset retry counter on successful JSON validation
-                    self._invalid_json_retries = 0
-
-                    # ── Post-call guardrails ──────────────────────────
-                    assistant_message.tool_calls = self._cap_delegate_task_calls(
-                        assistant_message.tool_calls
+                    tool_turn = execute_successful_tool_turn(
+                        self,
+                        state=turn_state,
+                        assistant_message=assistant_message,
+                        finish_reason=attempt_state.finish_reason,
+                        messages=messages,
+                        system_message=system_message,
+                        active_system_prompt=active_system_prompt,
+                        task_id=effective_task_id,
                     )
-                    assistant_message.tool_calls = self._deduplicate_tool_calls(
-                        assistant_message.tool_calls
-                    )
-
-                    assistant_msg = self._build_assistant_message(
-                        assistant_message,
-                        attempt_state.finish_reason,
-                    )
-                    
-                    # If this turn has both content AND tool_calls, capture the content
-                    # as a fallback final response. Common pattern: model delivers its
-                    # answer and calls memory/skill tools as a side-effect in the same
-                    # turn. If the follow-up turn after tools is empty, we use this.
-                    turn_content = assistant_message.content or ""
-                    if turn_content and has_visible_content(turn_content):
-                        self._last_content_with_tools = turn_content
-                        # Only mute subsequent output when EVERY tool call in
-                        # this turn is post-response housekeeping (memory, todo,
-                        # skill_manage, etc.).  If any substantive tool is present
-                        # (search_files, read_file, write_file, terminal, ...),
-                        # keep output visible so the user sees progress.
-                        _HOUSEKEEPING_TOOLS = frozenset({
-                            "memory", "todo", "skill_manage", "session_search",
-                        })
-                        _all_housekeeping = all(
-                            tc.function.name in _HOUSEKEEPING_TOOLS
-                            for tc in assistant_message.tool_calls
-                        )
-                        if _all_housekeeping and self._has_stream_consumers():
-                            self._mute_post_response = True
-                        elif self.quiet_mode:
-                            clean = strip_thinking_blocks(turn_content).strip()
-                            if clean:
-                                self._vprint(f"  ┊ 💬 {clean}")
-                    
-                    # Pop thinking-only prefill message(s) before appending
-                    # (tool-call path — same rationale as the final-response path).
-                    _had_prefill = False
-                    while (
-                        messages
-                        and isinstance(messages[-1], dict)
-                        and messages[-1].get("_thinking_prefill")
-                    ):
-                        messages.pop()
-                        _had_prefill = True
-
-                    # Reset prefill counter when tool calls follow a prefill
-                    # recovery.  Without this, the counter accumulates across
-                    # the whole conversation — a model that intermittently
-                    # empties (empty → prefill → tools → empty → prefill →
-                    # tools) burns both prefill attempts and the third empty
-                    # gets zero recovery.  Resetting here treats each tool-
-                    # call success as a fresh start.
-                    if _had_prefill:
-                        self._thinking_prefill_retries = 0
-                        self._empty_content_retries = 0
-
-                    messages.append(assistant_msg)
-                    self._emit_interim_assistant_message(assistant_msg)
-
-                    # Close any open streaming display (response box, reasoning
-                    # box) before tool execution begins.  Intermediate turns may
-                    # have streamed early content that opened the response box;
-                    # flushing here prevents it from wrapping tool feed lines.
-                    # Only signal the display callback — TTS (_stream_callback)
-                    # should NOT receive None (it uses None as end-of-stream).
-                    if self.stream_delta_callback:
-                        try:
-                            self.stream_delta_callback(None)
-                        except Exception:
-                            pass
-
-                    self._execute_tool_calls(
-                        assistant_message, messages, effective_task_id
-                    )
-
-                    # Reset per-turn retry counters after successful tool
-                    # execution so a single truncation doesn't poison the
-                    # entire conversation.
-                    turn_state.truncated_tool_call_retries = 0
-
-                    # Signal that a paragraph break is needed before the next
-                    # streamed text.  We don't emit it immediately because
-                    # multiple consecutive tool iterations would stack up
-                    # redundant blank lines.  Instead, _fire_stream_delta()
-                    # will prepend a single "\n\n" the next time real text
-                    # arrives.
-                    self._stream_needs_break = True
-
-                    # Refund the iteration if the ONLY tool(s) called were
-                    # execute_code (programmatic tool calling).  These are
-                    # cheap RPC-style calls that shouldn't eat the budget.
-                    _tc_names = {tc.function.name for tc in assistant_message.tool_calls}
-                    if _tc_names == {"execute_code"}:
-                        self.iteration_budget.refund()
-                    
-                    # Use real token counts from the API response to decide
-                    # compression.  prompt_tokens + completion_tokens is the
-                    # actual context size the provider reported plus the
-                    # assistant turn — a tight lower bound for the next prompt.
-                    # Tool results appended above aren't counted yet, but the
-                    # threshold (default 50%) leaves ample headroom; if tool
-                    # results push past it, the next API call will report the
-                    # real total and trigger compression then.
-                    #
-                    # If last_prompt_tokens is 0 (stale after API disconnect
-                    # or provider returned no usage data), fall back to rough
-                    # estimate to avoid missing compression.  Without this,
-                    # a session can grow unbounded after disconnects because
-                    # should_compress(0) never fires.  (#2153)
-                    _compressor = self.context_compressor
-                    if _compressor.last_prompt_tokens > 0:
-                        _real_tokens = (
-                            _compressor.last_prompt_tokens
-                            + _compressor.last_completion_tokens
-                        )
-                    else:
-                        _real_tokens = estimate_messages_tokens_rough(messages)
-
-                    # ── Context pressure warnings (user-facing only) ──────────
-                    # Notify the user (NOT the LLM) as context approaches the
-                    # compaction threshold.  Thresholds are relative to where
-                    # compaction fires, not the raw context window.
-                    # Does not inject into messages — just prints to CLI output
-                    # and fires status_callback for gateway platforms.
-                    # Tiered: 85% (orange) and 95% (red/critical).
-                    if _compressor.threshold_tokens > 0:
-                        _compaction_progress = _real_tokens / _compressor.threshold_tokens
-                        # Determine the warning tier for this progress level
-                        _warn_tier = 0.0
-                        if _compaction_progress >= 0.95:
-                            _warn_tier = 0.95
-                        elif _compaction_progress >= 0.85:
-                            _warn_tier = 0.85
-                        if _warn_tier > self._context_pressure_warned_at:
-                            # Class-level dedup: check if this session was already
-                            # warned at this tier within the cooldown window.
-                            _sid = self.session_id or "default"
-                            _last = AIAgent._context_pressure_last_warned.get(_sid)
-                            _now = time.time()
-                            if _last is None or _last[0] < _warn_tier or (_now - _last[1]) >= self._CONTEXT_PRESSURE_COOLDOWN:
-                                self._context_pressure_warned_at = _warn_tier
-                                AIAgent._context_pressure_last_warned[_sid] = (_warn_tier, _now)
-                                self._emit_context_pressure(_compaction_progress, _compressor)
-                                # Evict stale entries (older than 2x cooldown)
-                                _cutoff = _now - self._CONTEXT_PRESSURE_COOLDOWN * 2
-                                AIAgent._context_pressure_last_warned = {
-                                    k: v for k, v in AIAgent._context_pressure_last_warned.items()
-                                    if v[1] > _cutoff
-                                }
-
-                    if self.compression_enabled and _compressor.should_compress(_real_tokens):
-                        self._safe_print("  ⟳ compacting context…")
-                        messages, active_system_prompt = self._compress_context(
-                            messages, system_message,
-                            approx_tokens=self.context_compressor.last_prompt_tokens,
-                            task_id=effective_task_id,
-                        )
-                        # Compression created a new session — clear history so
-                        # SessionPersistence writes compressed messages
-                        # to the new session (see preflight compression comment).
+                    messages = tool_turn.messages
+                    active_system_prompt = tool_turn.system_prompt
+                    if tool_turn.conversation_history_reset:
                         conversation_history = None
-                    
-                    # Save session log incrementally (so progress is visible even if interrupted)
-                    self._session_persistence.save_log(messages)
-                    
-                    # Continue loop for next response
                     continue
                 
                 else:
@@ -5536,142 +5262,17 @@ class AIAgent:
                         fallback_available=bool(self._fallback_chain),
                     )
 
-                    if disposition.action is TextResponseAction.use_prior_content:
-                        turn_state.exit_reason = "fallback_prior_turn_content"
-                        logger.info(
-                            "Empty follow-up after tool calls — using prior "
-                            "turn content as final response"
-                        )
-                        self._emit_status(
-                            "↻ Empty response after tool calls — using earlier "
-                            "content as final answer"
-                        )
-                        self._last_content_with_tools = None
-                        self._empty_content_retries = 0
-                        for message in reversed(messages):
-                            if (
-                                message.get("role") == "assistant"
-                                and message.get("tool_calls")
-                            ):
-                                tool_names = [
-                                    tool_call.get("function", {}).get(
-                                        "name",
-                                        "unknown",
-                                    )
-                                    for tool_call in message["tool_calls"]
-                                    if isinstance(tool_call, dict)
-                                ]
-                                plural = "s" if len(tool_names) > 1 else ""
-                                message["content"] = (
-                                    f"Calling the {', '.join(tool_names)} "
-                                    f"tool{plural}..."
-                                )
-                                break
-                        turn_state.final_response = strip_thinking_blocks(
-                            prior_content
-                        ).strip()
-                        self._response_was_previewed = True
-                        break
-
-                    if disposition.action is TextResponseAction.prefill_reasoning:
-                        self._thinking_prefill_retries += 1
-                        logger.info(
-                            "Thinking-only response (no visible content) — "
-                            "prefilling to continue (%d/2)",
-                            self._thinking_prefill_retries,
-                        )
-                        self._emit_status(
-                            "↻ Thinking-only response — prefilling to continue "
-                            f"({self._thinking_prefill_retries}/2)"
-                        )
-                        interim_msg = self._build_assistant_message(
-                            assistant_message,
-                            "incomplete",
-                        )
-                        interim_msg["_thinking_prefill"] = True
-                        messages.append(interim_msg)
-                        self._session_persistence.save_log(messages)
-                        turn_state.final_response = None
+                    text_action = apply_text_response_disposition(
+                        self,
+                        disposition,
+                        assistant_message=assistant_message,
+                        finish_reason=attempt_state.finish_reason,
+                        state=turn_state,
+                        messages=messages,
+                    )
+                    if text_action.control is ResponseLoopControl.continue_loop:
                         continue
-
-                    if disposition.action is TextResponseAction.retry_empty:
-                        self._empty_content_retries += 1
-                        logger.warning(
-                            "Empty response (no content or reasoning) — "
-                            "retry %d/3 (model=%s)",
-                            self._empty_content_retries,
-                            self.model,
-                        )
-                        self._emit_status(
-                            f"⚠️ Empty response from model — retrying "
-                            f"({self._empty_content_retries}/3)"
-                        )
-                        turn_state.final_response = None
-                        continue
-
-                    if disposition.action is TextResponseAction.try_fallback:
-                        logger.warning(
-                            "Empty response after %d retries — attempting "
-                            "fallback (model=%s, provider=%s)",
-                            self._empty_content_retries,
-                            self.model,
-                            self.provider,
-                        )
-                        self._emit_status(
-                            "⚠️ Model returning empty responses — switching "
-                            "to fallback provider..."
-                        )
-                        if self._try_activate_fallback():
-                            self._empty_content_retries = 0
-                            self._emit_status(
-                                f"↻ Switched to fallback: {self.model} "
-                                f"({self.provider})"
-                            )
-                            logger.info(
-                                "Fallback activated after empty responses: "
-                                "now using %s on %s",
-                                self.model,
-                                self.provider,
-                            )
-                            turn_state.final_response = None
-                            continue
-
-                    if disposition.action is not TextResponseAction.final_text:
-                        turn_state.exit_reason = "empty_response_exhausted"
-                        reasoning_text = extract_reasoning(assistant_message)
-                        assistant_msg = self._build_assistant_message(
-                            assistant_message,
-                            attempt_state.finish_reason,
-                        )
-                        assistant_msg["content"] = "(empty)"
-                        messages.append(assistant_msg)
-
-                        if reasoning_text:
-                            reasoning_preview = reasoning_text[:500] + "..." if len(reasoning_text) > 500 else reasoning_text
-                            logger.warning(
-                                "Reasoning-only response (no visible content) "
-                                "after exhausting retries and fallback. "
-                                "Reasoning: %s", reasoning_preview,
-                            )
-                            self._emit_status(
-                                "⚠️ Model produced reasoning but no visible "
-                                "response after all retries. Returning empty."
-                            )
-                        else:
-                            logger.warning(
-                                "Empty response (no content or reasoning) "
-                                "after %d retries. No fallback available. "
-                                "model=%s provider=%s",
-                                self._empty_content_retries, self.model,
-                                self.provider,
-                            )
-                            self._emit_status(
-                                "❌ Model returned no content after all retries"
-                                + (" and fallback attempts." if self._fallback_chain else
-                                   ". No fallback providers configured.")
-                            )
-
-                        turn_state.final_response = "(empty)"
+                    if text_action.control is ResponseLoopControl.break_loop:
                         break
                     
                     # Reset retry counter/signature on successful content

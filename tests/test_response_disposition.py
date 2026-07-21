@@ -5,7 +5,11 @@ from types import SimpleNamespace
 import pytest
 
 from agent.response_disposition import (
+    ResponseLoopControl,
     TextResponseAction,
+    TextResponseDisposition,
+    apply_text_response_disposition,
+    apply_tool_call_inspection,
     decide_text_response_disposition,
     inspect_tool_calls,
     normalize_assistant_content,
@@ -126,3 +130,155 @@ def test_text_response_disposition_selects_one_loop_action(options, expected):
     disposition = decide_text_response_disposition(**values)
 
     assert disposition.action is expected
+
+
+def _action_owner(events, *, fallback=False):
+    def build_message(message, finish_reason):
+        return {
+            "role": "assistant",
+            "content": message.content,
+            "finish_reason": finish_reason,
+            "tool_calls": [
+                {
+                    "id": call.id,
+                    "function": {
+                        "name": call.function.name,
+                        "arguments": call.function.arguments,
+                    },
+                }
+                for call in (message.tool_calls or [])
+            ],
+        }
+
+    return SimpleNamespace(
+        model="safe-model",
+        provider="test-provider",
+        log_prefix="[test] ",
+        valid_tool_names={"terminal"},
+        quiet_mode=True,
+        _invalid_tool_retries=0,
+        _invalid_json_retries=0,
+        _empty_content_retries=0,
+        _thinking_prefill_retries=0,
+        _last_content_with_tools=None,
+        _fallback_chain=[{"model": "fallback"}] if fallback else [],
+        _response_was_previewed=False,
+        _session_persistence=SimpleNamespace(
+            persist=lambda messages, history: events.append(
+                ("persist", messages, history)
+            ),
+            save_log=lambda messages: events.append(("save_log", messages)),
+        ),
+        _vprint=lambda message, **kwargs: events.append(
+            ("print", message, kwargs)
+        ),
+        _emit_status=lambda message: events.append(("status", message)),
+        _build_assistant_message=build_message,
+        _cleanup_task_resources=lambda task_id: events.append(
+            ("cleanup", task_id)
+        ),
+        _try_activate_fallback=lambda: fallback,
+    )
+
+
+def test_tool_action_applies_unknown_name_recovery_messages():
+    events = []
+    owner = _action_owner(events)
+    call = _tool_call("missing", "{}")
+    assistant = SimpleNamespace(content="", tool_calls=[call])
+    inspection = inspect_tool_calls(
+        [call],
+        valid_tool_names=owner.valid_tool_names,
+        repair_tool_name=lambda _name: None,
+    )
+    messages = []
+
+    execution = apply_tool_call_inspection(
+        owner,
+        inspection,
+        assistant_message=assistant,
+        finish_reason="tool_calls",
+        messages=messages,
+        conversation_history=None,
+        api_call_count=1,
+        task_id="task-1",
+    )
+
+    assert execution.control is ResponseLoopControl.continue_loop
+    assert owner._invalid_tool_retries == 1
+    assert [message["role"] for message in messages] == ["assistant", "tool"]
+    assert "does not exist" in messages[-1]["content"]
+
+
+def test_tool_action_returns_terminal_result_for_truncated_json():
+    events = []
+    owner = _action_owner(events)
+    call = _tool_call("terminal", '{"command": "echo')
+    assistant = SimpleNamespace(content="", tool_calls=[call])
+    inspection = inspect_tool_calls(
+        [call],
+        valid_tool_names=owner.valid_tool_names,
+        repair_tool_name=lambda _name: None,
+    )
+
+    execution = apply_tool_call_inspection(
+        owner,
+        inspection,
+        assistant_message=assistant,
+        finish_reason="tool_calls",
+        messages=[],
+        conversation_history=None,
+        api_call_count=2,
+        task_id="task-1",
+    )
+
+    assert execution.control is ResponseLoopControl.terminal
+    assert execution.terminal_result["partial"] is True
+    assert [event[0] for event in events if event[0] != "print"] == [
+        "cleanup",
+        "persist",
+    ]
+
+
+def test_text_action_applies_prefill_and_returns_continue():
+    events = []
+    owner = _action_owner(events)
+    state = SimpleNamespace(final_response="", exit_reason="unknown")
+    assistant = SimpleNamespace(content="", tool_calls=[])
+    messages = []
+
+    execution = apply_text_response_disposition(
+        owner,
+        TextResponseDisposition(TextResponseAction.prefill_reasoning),
+        assistant_message=assistant,
+        finish_reason="stop",
+        state=state,
+        messages=messages,
+    )
+
+    assert execution.control is ResponseLoopControl.continue_loop
+    assert state.final_response is None
+    assert owner._thinking_prefill_retries == 1
+    assert messages[-1]["_thinking_prefill"] is True
+
+
+def test_failed_empty_fallback_becomes_terminal_empty():
+    events = []
+    owner = _action_owner(events, fallback=False)
+    owner._fallback_chain = [{"model": "unavailable"}]
+    state = SimpleNamespace(final_response="", exit_reason="unknown")
+    assistant = SimpleNamespace(content="", tool_calls=[], reasoning=None)
+    messages = []
+
+    execution = apply_text_response_disposition(
+        owner,
+        TextResponseDisposition(TextResponseAction.try_fallback),
+        assistant_message=assistant,
+        finish_reason="stop",
+        state=state,
+        messages=messages,
+    )
+
+    assert execution.control is ResponseLoopControl.break_loop
+    assert state.final_response == "(empty)"
+    assert state.exit_reason == "empty_response_exhausted"

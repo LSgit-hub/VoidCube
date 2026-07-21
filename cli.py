@@ -60,6 +60,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
 
 from agent.error_classifier import summarize_api_error
+from VoidCube_cli.chat_render_state import CliStreamRenderState
 
 if TYPE_CHECKING:
     from run_agent import AIAgent  # noqa: F401 — only for static type-checkers
@@ -1285,11 +1286,7 @@ class VoidcubeCLI:
         # Inline diff previews for write actions (display.inline_diffs in config.yaml)
         self._inline_diffs_enabled = display_config.get("inline_diffs", True)
 
-        # Streaming display state
-        self._stream_buf = ""        # Partial line buffer for line-buffered rendering
-        self._stream_started = False  # True once first delta arrives
-        self._stream_box_opened = False  # True once the response box header is printed
-        self._reasoning_preview_buf = ""  # Coalesce tiny reasoning chunks for [thinking] output
+        self._stream_render_state = CliStreamRenderState()
         self._pending_edit_snapshots: Dict[str, Any] = {}
         
         # Configuration - priority: CLI args > env vars > config file.
@@ -2507,7 +2504,7 @@ class VoidcubeCLI:
                 getattr(self, '_spinner_text', '') != '' or  # thinking
                 getattr(self, '_tool_start_time', 0) > 0 or  # tool running
                 getattr(self, '_command_running', False) or  # command running
-                getattr(self, '_stream_started', False)     # streaming
+                self._stream_render_state.started           # streaming
             )
             
             # Marquee effect when agent is active - 3 character highlighting with white/gray
@@ -2753,7 +2750,8 @@ class VoidcubeCLI:
         Buffer them here so the preview path does not print one `[thinking]`
         line per token.
         """
-        buf = getattr(self, "_reasoning_preview_buf", "")
+        state = self._stream_render_state
+        buf = state.reasoning_preview_buffer
         if not buf:
             return
 
@@ -2791,7 +2789,7 @@ class VoidcubeCLI:
                     flush_text = buf[: cut + 1]
                     buf = buf[cut + 1 :]
 
-        self._reasoning_preview_buf = buf.lstrip() if flush_text else buf
+        state.reasoning_preview_buffer = buf.lstrip() if flush_text else buf
         if flush_text:
             self._emit_reasoning_preview(flush_text)
 
@@ -2810,50 +2808,52 @@ class VoidcubeCLI:
             return
         if not text:
             return
-        self._reasoning_shown_this_turn = True
-        if getattr(self, "_stream_box_opened", False):
+        state = self._stream_render_state
+        state.reasoning_shown_this_turn = True
+        if state.response_box_open:
             return
 
         # Open reasoning box on first reasoning token
-        if not getattr(self, "_reasoning_box_opened", False):
-            self._reasoning_box_opened = True
+        if not state.reasoning_box_open:
+            state.reasoning_box_open = True
             w = shutil.get_terminal_size().columns
             r_label = " Reasoning "
             r_fill = w - 2 - len(r_label)
             _cprint(f"\n{_DIM}┌─{r_label}{'─' * max(r_fill - 1, 0)}┐{_RST}")
 
-        self._reasoning_buf = getattr(self, "_reasoning_buf", "") + text
+        state.reasoning_buffer += text
 
         # Emit complete lines, and force-flush long partial lines so
         # reasoning is visible in real-time even without newlines.
-        while "\n" in self._reasoning_buf:
-            line, self._reasoning_buf = self._reasoning_buf.split("\n", 1)
+        while "\n" in state.reasoning_buffer:
+            line, state.reasoning_buffer = state.reasoning_buffer.split("\n", 1)
             _cprint(f"{_DIM}{line}{_RST}")
-        if len(self._reasoning_buf) > 80:
-            _cprint(f"{_DIM}{self._reasoning_buf}{_RST}")
-            self._reasoning_buf = ""
+        if len(state.reasoning_buffer) > 80:
+            _cprint(f"{_DIM}{state.reasoning_buffer}{_RST}")
+            state.reasoning_buffer = ""
 
     def _close_reasoning_box(self) -> None:
         """Close the live reasoning box if it's open."""
+        state = self._stream_render_state
         if not self._should_emit_scrollback_output():
-            self._reasoning_box_opened = False
-            self._reasoning_buf = ""
-            self._deferred_content = ""
+            state.reasoning_box_open = False
+            state.reasoning_buffer = ""
+            state.deferred_content = ""
             return
-        if getattr(self, "_reasoning_box_opened", False):
+        if state.reasoning_box_open:
             # Flush remaining reasoning buffer
-            buf = getattr(self, "_reasoning_buf", "")
+            buf = state.reasoning_buffer
             if buf:
                 _cprint(f"{_DIM}{buf}{_RST}")
-                self._reasoning_buf = ""
+                state.reasoning_buffer = ""
             w = shutil.get_terminal_size().columns
             _cprint(f"{_DIM}└{'─' * (w - 2)}┘{_RST}")
-            self._reasoning_box_opened = False
+            state.reasoning_box_open = False
 
             # Flush any content that was deferred while reasoning was rendering.
-            deferred = getattr(self, "_deferred_content", "")
+            deferred = state.deferred_content
             if deferred:
-                self._deferred_content = ""
+                state.deferred_content = ""
                 self._emit_stream_text(deferred)
 
     def _stream_delta(self, text) -> None:
@@ -2875,7 +2875,7 @@ class VoidcubeCLI:
             if text is None:
                 self._reset_stream_state()
             elif text:
-                self._stream_started = True
+                self._stream_render_state.started = True
             return
         if text is None:
             self._flush_stream()
@@ -2884,7 +2884,8 @@ class VoidcubeCLI:
         if not text:
             return
 
-        self._stream_started = True
+        state = self._stream_render_state
+        state.started = True
 
         # ── Tag-based reasoning suppression ──
         # Track whether we're inside a reasoning/thinking block.
@@ -2897,7 +2898,7 @@ class VoidcubeCLI:
         _CLOSE_TAGS = ("</REASONING_SCRATCHPAD>", "</think>", "</reasoning>", "</THINKING>", "</thinking>", "</thought>")
 
         # Append to a pre-filter buffer first
-        self._stream_prefilt = getattr(self, "_stream_prefilt", "") + text
+        state.prefilter_buffer += text
 
         # Check if we're entering a reasoning block.
         # Only match tags that appear at a "block boundary": start of the
@@ -2906,26 +2907,23 @@ class VoidcubeCLI:
         # This prevents false positives when models *mention* tags in prose
         # like "(/think not producing <think> tags)".
         #
-        # _stream_last_was_newline tracks whether the last character emitted
+        # last_was_newline tracks whether the last character emitted
         # (or the start of the stream) is a line boundary.  It's True at
         # stream start and set True whenever emitted text ends with '\n'.
-        if not hasattr(self, "_stream_last_was_newline"):
-            self._stream_last_was_newline = True  # start of stream = boundary
-
-        if not getattr(self, "_in_reasoning_block", False):
+        if not state.in_reasoning_block:
             for tag in _OPEN_TAGS:
                 search_start = 0
                 while True:
-                    idx = self._stream_prefilt.find(tag, search_start)
+                    idx = state.prefilter_buffer.find(tag, search_start)
                     if idx == -1:
                         break
                     # Check if this is a block boundary position
-                    preceding = self._stream_prefilt[:idx]
+                    preceding = state.prefilter_buffer[:idx]
                     if idx == 0:
                         # At buffer start — only a boundary if we're at
                         # a line start (stream start or last emit ended
                         # with newline)
-                        is_block_boundary = getattr(self, "_stream_last_was_newline", True)
+                        is_block_boundary = state.last_was_newline
                     else:
                         # Find last newline in the buffer before the tag
                         last_nl = preceding.rfind("\n")
@@ -2934,7 +2932,7 @@ class VoidcubeCLI:
                             # last emit was a newline AND only whitespace
                             # has accumulated before the tag
                             is_block_boundary = (
-                                getattr(self, "_stream_last_was_newline", True)
+                                state.last_was_newline
                                 and preceding.strip() == ""
                             )
                         else:
@@ -2945,46 +2943,46 @@ class VoidcubeCLI:
                         # Emit everything before the tag
                         if preceding:
                             self._emit_stream_text(preceding)
-                            self._stream_last_was_newline = preceding.endswith("\n")
-                        self._in_reasoning_block = True
-                        self._stream_prefilt = self._stream_prefilt[idx + len(tag):]
+                            state.last_was_newline = preceding.endswith("\n")
+                        state.in_reasoning_block = True
+                        state.prefilter_buffer = state.prefilter_buffer[idx + len(tag):]
                         break
                     # Not a block boundary — keep searching after this occurrence
                     search_start = idx + 1
-                if getattr(self, "_in_reasoning_block", False):
+                if state.in_reasoning_block:
                     break
 
             # Could also be a partial open tag at the end — hold it back
-            if not getattr(self, "_in_reasoning_block", False):
+            if not state.in_reasoning_block:
                 # Check for partial tag match at the end
-                safe = self._stream_prefilt
+                safe = state.prefilter_buffer
                 for tag in _OPEN_TAGS:
                     for i in range(1, len(tag)):
-                        if self._stream_prefilt.endswith(tag[:i]):
-                            safe = self._stream_prefilt[:-i]
+                        if state.prefilter_buffer.endswith(tag[:i]):
+                            safe = state.prefilter_buffer[:-i]
                             break
                 if safe:
                     self._emit_stream_text(safe)
-                    self._stream_last_was_newline = safe.endswith("\n")
-                    self._stream_prefilt = self._stream_prefilt[len(safe):]
+                    state.last_was_newline = safe.endswith("\n")
+                    state.prefilter_buffer = state.prefilter_buffer[len(safe):]
                 return
 
         # Inside a reasoning block — look for close tag.
-        # Keep accumulating _stream_prefilt because close tags can arrive
+        # Keep accumulating the prefilter buffer because close tags can arrive
         # split across multiple tokens (e.g. "</REASONING_SCRATCH" + "PAD>...").
-        if getattr(self, "_in_reasoning_block", False):
+        if state.in_reasoning_block:
             for tag in _CLOSE_TAGS:
-                idx = self._stream_prefilt.find(tag)
+                idx = state.prefilter_buffer.find(tag)
                 if idx != -1:
-                    self._in_reasoning_block = False
+                    state.in_reasoning_block = False
                     # When show_reasoning is on, route inner content to
                     # the reasoning display box instead of discarding.
                     if self.show_reasoning:
-                        inner = self._stream_prefilt[:idx]
+                        inner = state.prefilter_buffer[:idx]
                         if inner:
                             self._stream_reasoning_delta(inner)
-                    after = self._stream_prefilt[idx + len(tag):]
-                    self._stream_prefilt = ""
+                    after = state.prefilter_buffer[idx + len(tag):]
+                    state.prefilter_buffer = ""
                     # Process remaining text after close tag through full
                     # filtering (it could contain another open tag)
                     if after:
@@ -2994,12 +2992,12 @@ class VoidcubeCLI:
             # instead of silently accumulating. Keep only the tail that
             # could be a partial close tag prefix.
             max_tag_len = max(len(t) for t in _CLOSE_TAGS)
-            if len(self._stream_prefilt) > max_tag_len:
+            if len(state.prefilter_buffer) > max_tag_len:
                 if self.show_reasoning:
                     # Route the safe prefix to reasoning display
-                    safe_reasoning = self._stream_prefilt[:-max_tag_len]
+                    safe_reasoning = state.prefilter_buffer[:-max_tag_len]
                     self._stream_reasoning_delta(safe_reasoning)
-                self._stream_prefilt = self._stream_prefilt[-max_tag_len:]
+                state.prefilter_buffer = state.prefilter_buffer[-max_tag_len:]
             return
 
     def _emit_stream_text(self, text: str) -> None:
@@ -3012,20 +3010,21 @@ class VoidcubeCLI:
         # When show_reasoning is on and reasoning is still rendering,
         # defer content until the reasoning box closes.  This ensures the
         # reasoning block always appears BEFORE the response in the terminal.
-        if self.show_reasoning and getattr(self, "_reasoning_box_opened", False):
-            self._deferred_content = getattr(self, "_deferred_content", "") + text
+        state = self._stream_render_state
+        if self.show_reasoning and state.reasoning_box_open:
+            state.deferred_content += text
             return
 
         # Close the live reasoning box before opening the response box
         self._close_reasoning_box()
 
         # Open the response box header on the very first visible text
-        if not self._stream_box_opened:
+        if not state.response_box_open:
             # Strip leading whitespace/newlines before first visible content
             text = text.lstrip("\n")
             if not text:
                 return
-            self._stream_box_opened = True
+            state.response_box_open = True
             try:
                 from VoidCube_cli.skin_engine import get_active_skin
                 _skin = get_active_skin()
@@ -3040,63 +3039,54 @@ class VoidcubeCLI:
                 _r = int(_text_hex[1:3], 16)
                 _g = int(_text_hex[3:5], 16)
                 _b = int(_text_hex[5:7], 16)
-                self._stream_text_ansi = f"\033[38;2;{_r};{_g};{_b}m"
+                state.text_ansi = f"\033[38;2;{_r};{_g};{_b}m"
             except (ValueError, IndexError):
-                self._stream_text_ansi = ""
+                state.text_ansi = ""
             w = shutil.get_terminal_size().columns
             fill = w - 2 - len(label)
             _cprint(f"\n{_ACCENT}╭─{label}{'─' * max(fill - 1, 0)}╮{_RST}")
 
-        self._stream_buf += text
+        state.text_buffer += text
 
         # Emit complete lines, keep partial remainder in buffer
-        _tc = getattr(self, "_stream_text_ansi", "")
-        while "\n" in self._stream_buf:
-            line, self._stream_buf = self._stream_buf.split("\n", 1)
+        _tc = state.text_ansi
+        while "\n" in state.text_buffer:
+            line, state.text_buffer = state.text_buffer.split("\n", 1)
             _cprint(f"{_tc}{line}{_RST}" if _tc else line)
 
     def _flush_stream(self) -> None:
         """Emit any remaining partial line from the stream buffer and close the box."""
+        state = self._stream_render_state
         if not self._should_emit_scrollback_output():
-            self._stream_buf = ""
-            self._stream_box_opened = False
-            self._stream_prefilt = ""
-            self._in_reasoning_block = False
+            state.text_buffer = ""
+            state.response_box_open = False
+            state.prefilter_buffer = ""
+            state.in_reasoning_block = False
             return
         # If we're still inside a "reasoning block" at end-of-stream, it was
         # a false positive — the model mentioned a tag like <think> in prose
         # but never closed it.  Recover the buffered content as regular text.
-        if getattr(self, "_in_reasoning_block", False) and getattr(self, "_stream_prefilt", ""):
-            self._in_reasoning_block = False
-            self._emit_stream_text(self._stream_prefilt)
-            self._stream_prefilt = ""
+        if state.in_reasoning_block and state.prefilter_buffer:
+            state.in_reasoning_block = False
+            self._emit_stream_text(state.prefilter_buffer)
+            state.prefilter_buffer = ""
 
         # Close reasoning box if still open (in case no content tokens arrived)
         self._close_reasoning_box()
 
-        if self._stream_buf:
-            _tc = getattr(self, "_stream_text_ansi", "")
-            _cprint(f"{_tc}{self._stream_buf}{_RST}" if _tc else self._stream_buf)
-            self._stream_buf = ""
+        if state.text_buffer:
+            _tc = state.text_ansi
+            _cprint(f"{_tc}{state.text_buffer}{_RST}" if _tc else state.text_buffer)
+            state.text_buffer = ""
 
         # Close the response box
-        if self._stream_box_opened:
+        if state.response_box_open:
             w = shutil.get_terminal_size().columns
             _cprint(f"{_ACCENT}╰{'─' * (w - 2)}╯{_RST}")
 
     def _reset_stream_state(self) -> None:
         """Reset streaming state before each agent invocation."""
-        self._stream_buf = ""
-        self._stream_started = False
-        self._stream_box_opened = False
-        self._stream_text_ansi = ""
-        self._stream_prefilt = ""
-        self._in_reasoning_block = False
-        self._stream_last_was_newline = True
-        self._reasoning_box_opened = False
-        self._reasoning_buf = ""
-        self._reasoning_preview_buf = ""
-        self._deferred_content = ""
+        self._stream_render_state.reset_stream()
 
     def _slow_command_status(self, command: str) -> str:
         """Return a user-facing status message for slower slash commands."""
@@ -7192,7 +7182,7 @@ class VoidcubeCLI:
         """Callback for intermediate reasoning display during tool-call loops."""
         if not reasoning_text:
             return
-        self._reasoning_preview_buf = getattr(self, "_reasoning_preview_buf", "") + reasoning_text
+        self._stream_render_state.reasoning_preview_buffer += reasoning_text
         self._flush_reasoning_preview(force=False)
 
     def _manual_compress(self, cmd_original: str = ""):
@@ -7507,9 +7497,9 @@ class VoidcubeCLI:
         """
         if not self._should_emit_scrollback_output():
             return
-        if getattr(self, "_stream_box_opened", False):
+        if self._stream_render_state.response_box_open:
             self._flush_stream()
-            self._stream_box_opened = False
+            self._stream_render_state.response_box_open = False
         self._close_reasoning_box()
 
         from agent.display import get_tool_emoji
@@ -8595,12 +8585,7 @@ class VoidcubeCLI:
             # Run the conversation with interrupt monitoring
             result = None
 
-            # Reset streaming display state for this turn
-            self._reset_stream_state()
-            # Separate from _reset_stream_state because this must persist
-            # across intermediate turn boundaries (tool-calling loops) — only
-            # reset at the start of each user turn.
-            self._reasoning_shown_this_turn = False
+            self._stream_render_state.begin_turn()
 
             # --- Streaming TTS setup ---
             # When ElevenLabs is the TTS provider and sounddevice is available,
@@ -8892,12 +8877,9 @@ class VoidcubeCLI:
             response_previewed = result.get("response_previewed", False) if result else False
 
             # Display reasoning (thinking) box if enabled and available.
-            # Skip when streaming already showed reasoning live.  Use the
-            # turn-persistent flag (_reasoning_shown_this_turn) instead of
-            # _reasoning_stream_started — the latter gets reset during
-            # intermediate turn boundaries (tool-calling loops), which caused
-            # the reasoning box to re-render after the final response.
-            _reasoning_already_shown = getattr(self, '_reasoning_shown_this_turn', False)
+            # Intermediate tool turns reset stream framing but preserve this
+            # user-turn-level flag so reasoning is not rendered twice.
+            _reasoning_already_shown = self._stream_render_state.reasoning_shown_this_turn
             if self.show_reasoning and result and not _reasoning_already_shown:
                 reasoning = result.get("last_reasoning")
                 if reasoning:
@@ -8930,7 +8912,11 @@ class VoidcubeCLI:
                     _resp_text = "#FFF8DC"
 
                 is_error_response = result and (result.get("failed") or result.get("partial"))
-                already_streamed = self._stream_started and self._stream_box_opened and not is_error_response
+                already_streamed = (
+                    self._stream_render_state.started
+                    and self._stream_render_state.response_box_open
+                    and not is_error_response
+                )
                 if use_streaming_tts and _streaming_box_opened and not is_error_response:
                     # Text was already printed sentence-by-sentence; just close the box
                     w = shutil.get_terminal_size().columns
@@ -10779,7 +10765,7 @@ class VoidcubeCLI:
                     and (
                         self._agent_running
                         or getattr(self, "_command_running", False)
-                        or getattr(self, "_stream_started", False)
+                        or self._stream_render_state.started
                         or self._get_subagent_observability_snapshot().get("active")
                     )
                 ):
