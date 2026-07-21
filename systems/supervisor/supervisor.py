@@ -194,20 +194,8 @@ class Supervisor(
         return self._autonomous_chain_gate_status()
 
     async def deactivate_autonomous_chain_gate(self, request: dict | None = None) -> Dict[str, Any]:
-        """Disable the manual autonomous-chain runtime, keeping health-check alive.
-
-        Boot-owned autonomous cadence is intentionally sticky; callers must pass
-        {"force": true} for emergency/admin shutdown.
-        """
-        payload = request or {}
-        if (
-            self.config.service_runtime.autonomous_chain_start_on_boot
-            and not bool(payload.get("force"))
-        ):
-            status = self._autonomous_chain_gate_status()
-            status["deactivation_skipped"] = True
-            status["reason"] = "autonomous_chain_start_on_boot"
-            return status
+        """Disable the autonomous-chain runtime, keeping health-check alive."""
+        del request
         await self._stop_autonomous_chain_gate()
         return self._autonomous_chain_gate_status()
 

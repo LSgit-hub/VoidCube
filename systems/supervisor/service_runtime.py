@@ -369,9 +369,6 @@ class ServiceRuntimeMixin:
             self._structured_maintenance_task = asyncio.create_task(structured_maintenance_loop())
             logger.info("Structured memory maintenance loop started (interval=%ds)", maintenance_interval)
 
-        if runtime_config.autonomous_chain_start_on_boot:
-            await self._start_autonomous_chain_gate()
-
         self._ensure_watch_window_task()
         self._service_runtime_started = True
 
@@ -391,65 +388,52 @@ class ServiceRuntimeMixin:
             self._autonomous_chain_review_task.cancel()
 
         async def autonomous_chain_review_loop() -> None:
+            delay = min(5, runtime_config.autonomous_chain_review_interval)
             while True:
+                self._service_runtime.next_review_at = datetime.now(timezone.utc) + timedelta(
+                    seconds=delay
+                )
+                await asyncio.sleep(delay)
                 now = datetime.now(timezone.utc)
                 self._service_runtime.last_review_at = now
-                self._service_runtime.next_review_at = now + timedelta(
-                    seconds=runtime_config.autonomous_chain_review_interval
-                )
-                await asyncio.sleep(runtime_config.autonomous_chain_review_interval)
                 try:
                     await self._run_autonomous_chain_review_cycle()
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
                     logger.warning(f"Autonomous-chain review loop iteration failed: {exc}")
+                delay = runtime_config.autonomous_chain_review_interval
 
         self._autonomous_chain_review_task = asyncio.create_task(autonomous_chain_review_loop())
         logger.info("Autonomous chain: review loop started (interval=%ds)", runtime_config.autonomous_chain_review_interval)
-
-        # ── Immediate first review after drive has had time to produce candidates ──
-        async def _immediate_first_review():
-            await asyncio.sleep(5)  # wait for drive's immediate first-run
-            await self._run_autonomous_chain_review_cycle()
-        asyncio.create_task(_immediate_first_review())
 
         if self._endogenous_drive_task:
             self._endogenous_drive_task.cancel()
 
         if runtime_config.endogenous_drive_enabled:
             async def endogenous_drive_loop() -> None:
+                delay = min(2, runtime_config.endogenous_drive_interval)
                 while True:
+                    self._service_runtime.next_drive_at = datetime.now(timezone.utc) + timedelta(
+                        seconds=delay
+                    )
+                    await asyncio.sleep(delay)
                     now = datetime.now(timezone.utc)
                     self._service_runtime.last_drive_at = now
-                    self._service_runtime.next_drive_at = now + timedelta(
-                        seconds=runtime_config.endogenous_drive_interval
-                    )
-                    await asyncio.sleep(runtime_config.endogenous_drive_interval)
                     try:
                         await self._run_endogenous_drive_cycle()
                     except asyncio.CancelledError:
                         raise
                     except Exception as exc:
                         logger.warning(f"Endogenous-drive loop iteration failed: {exc}")
+                    delay = runtime_config.endogenous_drive_interval
 
             self._endogenous_drive_task = asyncio.create_task(endogenous_drive_loop())
             logger.info("Autonomous chain: drive loop started (interval=%ds)", runtime_config.endogenous_drive_interval)
 
-            # ── Immediate first-run: fire the first cycle without waiting for the interval ──
-            asyncio.create_task(self._run_immediate_endogenous_drive_once())
         else:
             self._endogenous_drive_task = None
             logger.info("Autonomous chain: drive loop disabled (endogenous_drive_enabled=False)")
-
-    async def _run_immediate_endogenous_drive_once(self) -> None:
-        await asyncio.sleep(2)  # short grace for gateway notification
-        try:
-            await self._run_endogenous_drive_cycle()
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.warning(f"Immediate endogenous-drive cycle failed: {exc}")
 
     async def _stop_autonomous_chain_gate(self) -> None:
         """Stop the autonomous chain review/drive loops immediately.
@@ -476,9 +460,11 @@ class ServiceRuntimeMixin:
 
         await cancel_task(self._autonomous_chain_review_task)
         self._autonomous_chain_review_task = None
+        self._service_runtime.next_review_at = None
 
         await cancel_task(self._endogenous_drive_task)
         self._endogenous_drive_task = None
+        self._service_runtime.next_drive_at = None
 
         logger.info("Autonomous chain stopped — baseline health-check loop still running")
 
@@ -489,10 +475,6 @@ class ServiceRuntimeMixin:
         """
         return {
             "autonomous_chain_gate_active": self._service_runtime.autonomous_chain_gate_active,
-            "autonomous_chain_start_on_boot": self.config.service_runtime.autonomous_chain_start_on_boot,
-            "autonomous_chain_runtime_mode": (
-                "boot" if self.config.service_runtime.autonomous_chain_start_on_boot else "manual"
-            ),
             "review_loop_running": (
                 self._service_runtime.autonomous_chain_review_task is not None
                 and not self._service_runtime.autonomous_chain_review_task.done()
@@ -533,14 +515,10 @@ class ServiceRuntimeMixin:
             except Exception as exc:
                 logger.warning(f"Periodic runtime task exited with error during shutdown: {exc}")
 
+        await self._stop_autonomous_chain_gate()
+
         await cancel_task(self._health_check_task)
         self._health_check_task = None
-
-        await cancel_task(self._autonomous_chain_review_task)
-        self._autonomous_chain_review_task = None
-
-        await cancel_task(self._endogenous_drive_task)
-        self._endogenous_drive_task = None
 
         watch_window_task = getattr(self, "_watch_window_task", None)
         await cancel_task(watch_window_task)

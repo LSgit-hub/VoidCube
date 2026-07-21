@@ -645,7 +645,7 @@ class TestPhase1GovernorMode:
     @pytest.mark.asyncio
     @pytest.mark.unit
     async def test_autonomous_chain_gate_activation_sets_flags(self, tmp_path):
-        """监督者启动后默认进入自主链路常驻运行态。"""
+        """监督者启动保持门控关闭，显式激活后才运行自主链路。"""
         sv = _make_supervisor(tmp_path)
         sv._ensure_watch_window_task = Mock()
         sv.run_health_checks = AsyncMock(return_value={"results": []})
@@ -656,9 +656,9 @@ class TestPhase1GovernorMode:
         })
 
         await sv._start_periodic_tasks()
-        assert sv._service_runtime.autonomous_chain_gate_active is True
-        assert sv._autonomous_chain_review_task is not None
-        assert sv._endogenous_drive_task is not None
+        assert sv._service_runtime.autonomous_chain_gate_active is False
+        assert sv._autonomous_chain_review_task is None
+        assert sv._endogenous_drive_task is None
 
         await sv._start_autonomous_chain_gate()
         assert sv._service_runtime.autonomous_chain_gate_active is True

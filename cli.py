@@ -9611,7 +9611,7 @@ class VoidcubeCLI:
                         if _base in ("auto-q", "auto-quit", "auto-stop"):
                             # ── FAST PATH: exit immediately, bypass queue ──
                             event.app.current_buffer.reset(append_to_history=True)
-                            _cprint(f"  🔓 退出自主链路观测/执行面...")
+                            _cprint(f"  🔓 临时停用自主链路...")
                             _exit_autonomous_gate_fast_view(
                                 self,
                                 cprint=_cprint,
@@ -10581,7 +10581,7 @@ class VoidcubeCLI:
 
         def _get_autonomous_gate_text():
             return [
-                ("class:auto-mode", " 🤖 自主链路观测面已接入 | API-A 执行组件按需显示 | /auto-q 退出"),
+                ("class:auto-mode", " 🤖 自主链路已启用 | API-A 执行组件按需显示 | /auto-q 停用"),
             ]
 
         autonomous_gate_bar = ConditionalContainer(

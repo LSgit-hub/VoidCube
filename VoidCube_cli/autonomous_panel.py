@@ -404,7 +404,7 @@ def build_autonomous_execution_panel_rows(host: Any) -> list[tuple[str, str]]:
         msg = f"{event.get('at', '--:--:--')} · {event.get('message', '')}"
         rows.append((style, host._trim_status_bar_text(msg, inner_width)))
 
-    rows.append(("class:auto-panel-dim", "控制: /auto-q 退出本地观测/执行面"))
+    rows.append(("class:auto-panel-dim", "控制: /auto-q 临时停用自主链路"))
     return rows
 
 

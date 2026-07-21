@@ -77,7 +77,6 @@ def _create_supervisor(
             service_runtime=SupervisorServiceRuntimeConfig(
                 health_check_interval=health_check_interval,
                 governor_llm_advisory_enabled=False,
-                autonomous_chain_start_on_boot=False,
                 endogenous_drive_enabled=False,
             ),
         )

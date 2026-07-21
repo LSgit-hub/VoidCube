@@ -261,7 +261,6 @@ class SupervisorExecutionConfig(BaseModel):
 class SupervisorServiceRuntimeConfig(BaseModel):
     health_check_interval: int = 30
     governor_llm_advisory_enabled: bool = True
-    autonomous_chain_start_on_boot: bool = True
     autonomous_chain_review_interval: int = 300
     autonomous_chain_handoff_limit_per_cycle: int = 1
     activity_guard_user_seconds: int = DEFAULT_ACTIVITY_GUARD_SECONDS

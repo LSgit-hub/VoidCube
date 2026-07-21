@@ -852,11 +852,11 @@ def test_auto_q_fast_path_marks_current_task_interrupted(monkeypatch):
     assert cli._last_agent_turn_result is None
 
 
-def test_auto_q_fast_path_keeps_boot_owned_supervisor_runtime(monkeypatch):
+def test_auto_q_fast_path_deactivates_supervisor_without_status_probe(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._autonomous_gate_active = True
     cli._current_autonomous_task = None
-    cli.session_id = "cli-autoq-boot"
+    cli.session_id = "cli-autoq-stop"
     cli._autonomous_execution_events = []
 
     requests = []
@@ -867,16 +867,8 @@ def test_auto_q_fast_path_keeps_boot_owned_supervisor_runtime(monkeypatch):
         del timeout
         if isinstance(request, Request):
             requests.append(request.full_url)
-            if request.full_url.endswith("/autonomous-chain-gate/status"):
-                return _FakeUrlopenResponse(
-                    {
-                        "autonomous_chain_gate_active": True,
-                        "autonomous_chain_start_on_boot": True,
-                        "autonomous_chain_runtime_mode": "boot",
-                    }
-                )
             if request.full_url.endswith("/autonomous-chain-gate/deactivate"):
-                raise AssertionError("boot-owned /auto-q must not deactivate Supervisor")
+                return _FakeUrlopenResponse({"autonomous_chain_gate_active": False})
         return _FakeUrlopenResponse({})
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
@@ -889,9 +881,9 @@ def test_auto_q_fast_path_keeps_boot_owned_supervisor_runtime(monkeypatch):
     ) is True
 
     assert cli._autonomous_gate_active is False
-    assert any(url.endswith("/autonomous-chain-gate/status") for url in requests)
-    assert not any(url.endswith("/autonomous-chain-gate/deactivate") for url in requests)
-    assert any("保持常驻运行" in line for line in printed)
+    assert len(requests) == 1
+    assert requests[0].endswith("/autonomous-chain-gate/deactivate")
+    assert any("已停止" in line for line in printed)
     assert pushed
 
 

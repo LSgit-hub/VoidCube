@@ -2251,28 +2251,20 @@ async def test_supervisor_periodic_compression_runtime_does_not_route_through_ex
     )
     supervisor._execution_facade.memory_maintenance = original_memory_maintenance
 
-    assert supervisor._service_runtime.autonomous_chain_gate_active is True
-    assert supervisor._autonomous_chain_review_task is not None
-    assert supervisor._endogenous_drive_task is not None
+    assert supervisor._service_runtime.autonomous_chain_gate_active is False
+    assert supervisor._autonomous_chain_review_task is None
+    assert supervisor._endogenous_drive_task is None
     await supervisor._stop_periodic_tasks()
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_supervisor_manual_autonomous_chain_mode_does_not_start_on_boot(tmp_path):
+async def test_supervisor_periodic_runtime_does_not_start_autonomous_chain(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._ensure_watch_window_task = Mock()  # type: ignore[method-assign]
     supervisor.run_health_checks = AsyncMock(return_value={"results": []})  # type: ignore[method-assign]
     supervisor._run_autonomous_chain_review_cycle = AsyncMock(return_value={"reviewed": 0})  # type: ignore[method-assign]
     supervisor._run_endogenous_drive_cycle = AsyncMock(return_value={"planned": 0})  # type: ignore[method-assign]
-    supervisor.config = supervisor.config.model_copy(
-        update={
-            "service_runtime": supervisor.config.service_runtime.model_copy(
-                update={"autonomous_chain_start_on_boot": False}
-            )
-        }
-    )
-
     await supervisor._start_periodic_tasks()
 
     assert supervisor._service_runtime.autonomous_chain_gate_active is False
@@ -2283,7 +2275,7 @@ async def test_supervisor_manual_autonomous_chain_mode_does_not_start_on_boot(tm
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_supervisor_boot_owned_autonomous_chain_deactivate_requires_force(tmp_path):
+async def test_supervisor_autonomous_chain_deactivate_stops_enabled_runtime(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._ensure_watch_window_task = Mock()  # type: ignore[method-assign]
     supervisor.run_health_checks = AsyncMock(return_value={"results": []})  # type: ignore[method-assign]
@@ -2291,15 +2283,11 @@ async def test_supervisor_boot_owned_autonomous_chain_deactivate_requires_force(
     supervisor._run_endogenous_drive_cycle = AsyncMock(return_value={"planned": 0})  # type: ignore[method-assign]
 
     await supervisor._start_periodic_tasks()
+    await supervisor._start_autonomous_chain_gate()
 
-    skipped = await supervisor.deactivate_autonomous_chain_gate({})
-    assert skipped["deactivation_skipped"] is True
-    assert skipped["autonomous_chain_runtime_mode"] == "boot"
-    assert skipped["autonomous_chain_gate_active"] is True
-    assert supervisor._autonomous_chain_review_task is not None
-
-    stopped = await supervisor.deactivate_autonomous_chain_gate({"force": True})
+    stopped = await supervisor.deactivate_autonomous_chain_gate({})
     assert stopped["autonomous_chain_gate_active"] is False
+    assert "autonomous_chain_runtime_mode" not in stopped
     assert supervisor._autonomous_chain_review_task is None
     assert supervisor._endogenous_drive_task is None
     await supervisor._stop_periodic_tasks()
@@ -2449,6 +2437,7 @@ async def test_supervisor_periodic_autonomous_chain_review_runtime_invokes_cycle
     supervisor.config = config
 
     await supervisor._start_periodic_tasks()
+    await supervisor._start_autonomous_chain_gate()
 
     with pytest.raises(asyncio.CancelledError):
         await supervisor._autonomous_chain_review_task
@@ -2486,6 +2475,7 @@ async def test_supervisor_periodic_endogenous_drive_runtime_invokes_cycle(tmp_pa
     supervisor.config = config
 
     await supervisor._start_periodic_tasks()
+    await supervisor._start_autonomous_chain_gate()
 
     with pytest.raises(asyncio.CancelledError):
         await supervisor._endogenous_drive_task
@@ -2498,20 +2488,6 @@ async def test_supervisor_periodic_endogenous_drive_runtime_invokes_cycle(tmp_pa
     supervisor._autonomous_chain_review_task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await supervisor._autonomous_chain_review_task
-
-
-@pytest.mark.asyncio
-@pytest.mark.unit
-async def test_supervisor_immediate_endogenous_drive_logs_and_survives_exception(tmp_path):
-    supervisor = _make_supervisor(tmp_path)
-    supervisor._run_endogenous_drive_cycle = AsyncMock(  # type: ignore[method-assign]
-        side_effect=RuntimeError("transient immediate drive failure")
-    )
-
-    with patch("systems.supervisor.service_runtime.asyncio.sleep", new=AsyncMock()):
-        await supervisor._run_immediate_endogenous_drive_once()
-
-    supervisor._run_endogenous_drive_cycle.assert_awaited_once_with()  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
@@ -2571,6 +2547,7 @@ async def test_supervisor_autonomous_chain_review_loop_survives_iteration_except
     supervisor.config = config
 
     await supervisor._start_periodic_tasks()
+    await supervisor._start_autonomous_chain_gate()
 
     with pytest.raises(asyncio.CancelledError):
         await supervisor._autonomous_chain_review_task

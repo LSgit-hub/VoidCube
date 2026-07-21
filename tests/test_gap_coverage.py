@@ -212,49 +212,17 @@ class TestServiceRuntimeLifecycle:
             await sv._start_periodic_tasks()
             assert sv._service_runtime_started is True
             assert sv._health_check_task is not None
+            assert sv._service_runtime.autonomous_chain_gate_active is False
+            assert sv._autonomous_chain_review_task is None
+            assert sv._endogenous_drive_task is None
+
+            await sv._start_autonomous_chain_gate()
             assert sv._service_runtime.autonomous_chain_gate_active is True
             assert sv._autonomous_chain_review_task is not None
             assert sv._endogenous_drive_task is not None
             await sv._stop_periodic_tasks()
             assert sv._service_runtime_started is False
-        asyncio.run(_run())
-
-    def test_periodic_tasks_survive_iteration_error(self, tmp_path):
-        from systems.supervisor.supervisor import Supervisor, SupervisorConfig
-        cfg = SupervisorConfig()
-        cfg.soul_store_path = str(tmp_path)
-        cfg.execution.git_repo_path = str(tmp_path)
-        (tmp_path / ".git").mkdir(exist_ok=True)
-        sv = Supervisor(config=cfg)
-        sv._fetch_gateway_activity_snapshot = AsyncMock(return_value={
-            "last_user_request_at": None, "last_agent_work_at": None,
-            "last_memory_task_at": None, "counts": {}, "active_sessions": 0,
-        })
-        sv._agents = {}
-        sv._governor = Mock()
-        sv._governor.list_history = Mock(return_value=[])
-        sv._governor.get_latest = Mock(return_value=None)
-        sv._governor.record_boundary_defer = Mock()
-        sv._body_registry = Mock()
-        sv._body_registry.initialize_layout = Mock()
-        sv._body_registry.load_registry = Mock()
-        sv._body_registry.load_slot_meta = Mock()
-        sv._execution_facade = Mock()
-        sv._execution_facade.get_body_registry = Mock(return_value={})
-        sv._execution_facade.list_body_slots = Mock(return_value={"slots": {}})
-        sv._endogenous_drive_task = None
-        sv._run_autonomous_chain_review_cycle = AsyncMock(side_effect=ValueError("transient"))
-        sv._run_endogenous_drive_cycle = AsyncMock(return_value={"status": "idle", "planned": 0})
-        sv._touch_gateway_activity = AsyncMock()
-        sv._memory_maintenance_executor = Mock()
-        sv._ensure_watch_window_task = Mock()
-        sv._watch_window_runtime = Mock()
-
-        async def _run():
-            await sv._start_periodic_tasks()
-            await asyncio.sleep(0.1)
-            assert sv._service_runtime_started is True
-            await sv._stop_periodic_tasks()
+            assert sv._service_runtime.autonomous_chain_gate_active is False
         asyncio.run(_run())
 
 
@@ -313,7 +281,7 @@ class TestConfigurationValidation:
         assert cfg.host == "127.0.0.1"
         assert cfg.port == 6002
         assert cfg.service_runtime.endogenous_drive_enabled is True
-        assert cfg.service_runtime.autonomous_chain_start_on_boot is True
+        assert "autonomous_chain_start_on_boot" not in cfg.service_runtime.model_fields
         assert cfg.service_runtime.autonomous_chain_review_interval == 300
 
     def test_supervisor_config_segmented(self):
