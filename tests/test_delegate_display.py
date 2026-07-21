@@ -82,7 +82,7 @@ def test_delegate_task_enables_rich_display_when_cli_print_fn_exists(monkeypatch
     assistant_message = SimpleNamespace(tool_calls=[_build_delegate_tool_call()])
     messages: list[dict] = []
 
-    agent._execute_tool_calls_sequential(assistant_message, messages, "task-1")
+    agent._execute_tool_calls(assistant_message, messages, "task-1")
 
     assert captured["enable_display"] is True
     assert captured["parent_agent"] is agent
@@ -119,7 +119,7 @@ def test_delegate_task_falls_back_to_legacy_spinner_without_cli_print_fn(monkeyp
     assistant_message = SimpleNamespace(tool_calls=[_build_delegate_tool_call()])
     messages: list[dict] = []
 
-    agent._execute_tool_calls_sequential(assistant_message, messages, "task-2")
+    agent._execute_tool_calls(assistant_message, messages, "task-2")
 
     assert captured["enable_display"] is False
     assert spinner_events == ["init", "start", "stop:delegate finished"]

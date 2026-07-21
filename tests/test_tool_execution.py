@@ -1,0 +1,376 @@
+from __future__ import annotations
+
+import json
+import threading
+import time
+from types import SimpleNamespace
+
+import pytest
+
+from agent.tool_execution import ToolExecutionCoordinator
+from run_agent import AIAgent
+
+
+pytestmark = [pytest.mark.smoke, pytest.mark.unit]
+
+
+def _tool_call(call_id: str, name: str, arguments) -> SimpleNamespace:
+    raw_arguments = arguments if isinstance(arguments, str) else json.dumps(arguments)
+    return SimpleNamespace(
+        id=call_id,
+        function=SimpleNamespace(name=name, arguments=raw_arguments),
+    )
+
+
+def _coordinator(*, invoke, interrupted=lambda: False, delay=0, sleep=time.sleep):
+    return ToolExecutionCoordinator(
+        invoke=invoke,
+        is_interrupted=interrupted,
+        classify_failure=lambda _name, content: (content.startswith("Error"), ""),
+        max_workers=4,
+        delay=delay,
+        sleep=sleep,
+    )
+
+
+def _agent() -> AIAgent:
+    agent = AIAgent.__new__(AIAgent)
+    agent._interrupt_requested = False
+    agent._executing_tools = False
+    agent._turns_since_memory = 2
+    agent._iters_since_skill = 2
+    agent._current_tool = None
+    agent._delegate_spinner = None
+    agent._context_engine_tool_names = set()
+    agent._memory_manager = None
+    agent._memory_store = None
+    agent._session_db = None
+    agent._todo_store = None
+    agent._checkpoint_mgr = SimpleNamespace(enabled=False)
+    agent._subdirectory_hints = SimpleNamespace(
+        check_tool_call=lambda _name, _args: ""
+    )
+    agent.quiet_mode = True
+    agent.verbose_logging = False
+    agent.log_prefix_chars = 80
+    agent.log_prefix = ""
+    agent._print_fn = None
+    agent.tool_progress_callback = None
+    agent.tool_start_callback = None
+    agent.tool_complete_callback = None
+    agent.tool_delay = 0
+    agent.session_id = "session-tools"
+    agent.valid_tool_names = ["custom_tool", "read_file", "search_files"]
+    agent.clarify_callback = None
+    agent._current_main_runtime = lambda: {"provider": "safe"}
+    agent._touch_activity = lambda _message: None
+    agent._vprint = lambda *_args, **_kwargs: None
+    agent._safe_print = lambda *_args, **_kwargs: None
+    agent._should_start_quiet_spinner = lambda: False
+    return agent
+
+
+def test_prepare_preserves_calls_and_normalizes_invalid_arguments():
+    calls = ToolExecutionCoordinator.prepare(
+        [
+            _tool_call("call-1", "read_file", {"path": "README.md"}),
+            _tool_call("call-2", "search_files", "not-json"),
+            _tool_call("call-3", "search_files", "[]"),
+        ]
+    )
+
+    assert [(call.position, call.call_id, call.name) for call in calls] == [
+        (1, "call-1", "read_file"),
+        (2, "call-2", "search_files"),
+        (3, "call-3", "search_files"),
+    ]
+    assert calls[0].arguments == {"path": "README.md"}
+    assert calls[1].arguments == {}
+    assert calls[2].arguments == {}
+
+
+def test_parallel_execution_emits_outcomes_in_original_call_order():
+    release_first = threading.Event()
+    second_finished = threading.Event()
+
+    def invoke(call):
+        if call.call_id == "call-1":
+            assert release_first.wait(timeout=2)
+        else:
+            second_finished.set()
+            release_first.set()
+        return call.call_id
+
+    coordinator = _coordinator(invoke=invoke)
+    calls = coordinator.prepare(
+        [
+            _tool_call("call-1", "read_file", {"path": "a"}),
+            _tool_call("call-2", "read_file", {"path": "b"}),
+        ]
+    )
+    completed: list[str] = []
+
+    outcomes = coordinator.execute(
+        calls,
+        parallel=True,
+        after_call=lambda outcome: completed.append(outcome.call.call_id),
+    )
+
+    assert second_finished.is_set()
+    assert [outcome.content for outcome in outcomes] == ["call-1", "call-2"]
+    assert completed == ["call-1", "call-2"]
+
+
+def test_sequential_interrupt_after_first_call_completes_remaining_protocol_slots():
+    interrupted = False
+    invoked: list[str] = []
+
+    def invoke(call):
+        nonlocal interrupted
+        invoked.append(call.call_id)
+        interrupted = True
+        return "done"
+
+    coordinator = _coordinator(invoke=invoke, interrupted=lambda: interrupted)
+    calls = coordinator.prepare(
+        [
+            _tool_call("call-1", "first", {}),
+            _tool_call("call-2", "second", {}),
+            _tool_call("call-3", "third", {}),
+        ]
+    )
+
+    outcomes = coordinator.execute(calls, parallel=False)
+
+    assert invoked == ["call-1"]
+    assert len(outcomes) == 3
+    assert outcomes[0].skipped is False
+    assert [outcome.skip_reason for outcome in outcomes[1:]] == [
+        "after_call",
+        "after_call",
+    ]
+    assert "not started" in outcomes[1].content
+
+
+def test_preexisting_interrupt_skips_every_call_without_invocation():
+    coordinator = _coordinator(
+        invoke=lambda _call: pytest.fail("tool should not run"),
+        interrupted=lambda: True,
+    )
+    calls = coordinator.prepare([_tool_call("call-1", "read_file", {})])
+
+    outcomes = coordinator.execute(calls, parallel=True)
+
+    assert len(outcomes) == 1
+    assert outcomes[0].skip_reason == "before_batch"
+    assert "cancelled" in outcomes[0].content
+
+
+def test_invocation_exception_becomes_an_error_outcome():
+    def fail(_call):
+        raise RuntimeError("backend unavailable")
+
+    coordinator = _coordinator(invoke=fail)
+    calls = coordinator.prepare([_tool_call("call-1", "web_search", {})])
+
+    outcome = coordinator.execute(calls, parallel=False)[0]
+
+    assert outcome.is_error is True
+    assert outcome.content == "Error executing tool 'web_search': backend unavailable"
+
+
+def test_sequential_delay_runs_only_between_started_calls():
+    sleeps: list[float] = []
+    coordinator = _coordinator(
+        invoke=lambda call: call.name,
+        delay=0.25,
+        sleep=sleeps.append,
+    )
+    calls = coordinator.prepare(
+        [
+            _tool_call("call-1", "first", {}),
+            _tool_call("call-2", "second", {}),
+        ]
+    )
+
+    coordinator.execute(calls, parallel=False)
+
+    assert sleeps == [0.25]
+
+
+def test_agent_canonical_path_routes_callbacks_persistence_and_hints(monkeypatch):
+    import run_agent
+
+    events: list[tuple] = []
+    routed: list[dict] = []
+    budgeted: list[list[dict]] = []
+    agent = _agent()
+    agent.tool_progress_callback = lambda event, name, *_args, **kwargs: events.append(
+        (event, name, kwargs.get("is_error"))
+    )
+    agent.tool_start_callback = lambda call_id, name, args: events.append(
+        ("start", call_id, name, args)
+    )
+    agent.tool_complete_callback = lambda call_id, name, args, result: events.append(
+        ("complete", call_id, name, args, result)
+    )
+    agent._subdirectory_hints = SimpleNamespace(
+        check_tool_call=lambda name, _args: f"\n[hint:{name}]"
+    )
+
+    def route(name, args, task_id, **kwargs):
+        routed.append(
+            {"name": name, "args": args, "task_id": task_id, **kwargs}
+        )
+        return "raw-result"
+
+    monkeypatch.setattr(run_agent, "handle_function_call", route)
+    monkeypatch.setattr(
+        run_agent,
+        "maybe_persist_tool_result",
+        lambda **kwargs: kwargs["content"] + "\n[persisted]",
+    )
+    monkeypatch.setattr(run_agent, "get_active_env", lambda task_id: f"env:{task_id}")
+    monkeypatch.setattr(
+        run_agent,
+        "enforce_turn_budget",
+        lambda messages, env=None: budgeted.append(list(messages)),
+    )
+    assistant = SimpleNamespace(
+        tool_calls=[_tool_call("call-1", "custom_tool", {"value": 3})]
+    )
+    messages: list[dict] = []
+
+    agent._execute_tool_calls(assistant, messages, "task-1")
+
+    assert routed == [
+        {
+            "name": "custom_tool",
+            "args": {"value": 3},
+            "task_id": "task-1",
+            "tool_call_id": "call-1",
+            "session_id": "session-tools",
+            "enabled_tools": ["custom_tool", "read_file", "search_files"],
+            "main_runtime": {"provider": "safe"},
+        }
+    ]
+    assert [event[0] for event in events] == [
+        "tool.started",
+        "start",
+        "tool.completed",
+        "complete",
+    ]
+    assert messages == [
+        {
+            "role": "tool",
+            "content": "raw-result\n[persisted]\n[hint:custom_tool]",
+            "tool_call_id": "call-1",
+        }
+    ]
+    assert budgeted == [messages]
+
+
+def test_agent_parallel_path_writes_results_in_assistant_order(monkeypatch):
+    import run_agent
+
+    agent = _agent()
+    release_first = threading.Event()
+    second_finished = threading.Event()
+
+    def route(_name, args, _task_id, **_kwargs):
+        if args["path"] == "a.txt":
+            assert release_first.wait(timeout=2)
+        else:
+            second_finished.set()
+            release_first.set()
+        return args["path"]
+
+    monkeypatch.setattr(run_agent, "handle_function_call", route)
+    monkeypatch.setattr(
+        run_agent,
+        "maybe_persist_tool_result",
+        lambda **kwargs: kwargs["content"],
+    )
+    monkeypatch.setattr(run_agent, "get_active_env", lambda _task_id: None)
+    monkeypatch.setattr(run_agent, "enforce_turn_budget", lambda *_args, **_kwargs: None)
+    assistant = SimpleNamespace(
+        tool_calls=[
+            _tool_call("call-1", "read_file", {"path": "a.txt"}),
+            _tool_call("call-2", "read_file", {"path": "b.txt"}),
+        ]
+    )
+    messages: list[dict] = []
+
+    agent._execute_tool_calls(assistant, messages, "task-2")
+
+    assert second_finished.is_set()
+    assert [message["tool_call_id"] for message in messages] == [
+        "call-1",
+        "call-2",
+    ]
+    assert [message["content"] for message in messages] == ["a.txt", "b.txt"]
+
+
+def test_agent_memory_write_uses_the_single_route_and_notifies_provider(monkeypatch):
+    import run_agent
+    from tools import memory_tool
+
+    writes: list[tuple[str, str, str]] = []
+    agent = _agent()
+    agent._memory_manager = SimpleNamespace(
+        on_memory_write=lambda action, target, content: writes.append(
+            (action, target, content)
+        ),
+        has_tool=lambda _name: False,
+    )
+    monkeypatch.setattr(memory_tool, "memory_tool", lambda **_kwargs: "stored")
+    monkeypatch.setattr(
+        run_agent,
+        "maybe_persist_tool_result",
+        lambda **kwargs: kwargs["content"],
+    )
+    monkeypatch.setattr(run_agent, "get_active_env", lambda _task_id: None)
+    monkeypatch.setattr(run_agent, "enforce_turn_budget", lambda *_args, **_kwargs: None)
+    assistant = SimpleNamespace(
+        tool_calls=[
+            _tool_call(
+                "call-memory",
+                "memory",
+                {"action": "add", "target": "memory", "content": "fact"},
+            )
+        ]
+    )
+    messages: list[dict] = []
+
+    agent._execute_tool_calls(assistant, messages, "task-memory")
+
+    assert writes == [("add", "memory", "fact")]
+    assert messages[0]["content"] == "stored"
+    assert agent._turns_since_memory == 0
+
+
+def test_agent_interrupt_still_completes_every_tool_protocol_slot(monkeypatch):
+    import run_agent
+
+    agent = _agent()
+    agent._interrupt_requested = True
+    started: list[str] = []
+    agent.tool_start_callback = lambda call_id, *_args: started.append(call_id)
+    monkeypatch.setattr(run_agent, "get_active_env", lambda _task_id: None)
+    monkeypatch.setattr(run_agent, "enforce_turn_budget", lambda *_args, **_kwargs: None)
+    assistant = SimpleNamespace(
+        tool_calls=[
+            _tool_call("call-1", "read_file", {"path": "a.txt"}),
+            _tool_call("call-2", "read_file", {"path": "b.txt"}),
+        ]
+    )
+    messages: list[dict] = []
+
+    agent._execute_tool_calls(assistant, messages, "task-interrupt")
+
+    assert started == []
+    assert [message["tool_call_id"] for message in messages] == [
+        "call-1",
+        "call-2",
+    ]
+    assert all("cancelled" in message["content"] for message in messages)
