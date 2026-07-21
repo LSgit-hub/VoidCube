@@ -20,7 +20,8 @@ Improvements over v2:
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from enum import Enum
+from typing import Any, Callable, Dict, List, Optional
 
 from agent.auxiliary_client import call_llm
 from agent.context_engine import ContextEngine
@@ -104,6 +105,35 @@ class CompressionRecoveryResult:
         return self.message_count_reduced or self.context_length_changed
 
 
+class ContextRecoveryKind(str, Enum):
+    payload_too_large = "payload_too_large"
+    context_overflow = "context_overflow"
+
+
+class ContextRecoveryAction(str, Enum):
+    restart = "restart"
+    fail = "fail"
+
+
+@dataclass(frozen=True, slots=True)
+class ContextRecoveryExecution:
+    kind: ContextRecoveryKind
+    action: ContextRecoveryAction
+    attempt: CompressionAttempt
+    compression: CompressionRecoveryResult | None = None
+    error: str | None = None
+    output_token_limit: int | None = None
+    available_output_tokens: int | None = None
+    current_context_length: int | None = None
+    next_context_length: int | None = None
+    parsed_context_limit: bool = False
+    context_length_changed: bool = False
+
+    @property
+    def history_reset_required(self) -> bool:
+        return self.compression is not None
+
+
 def next_compression_attempt(previous: int, maximum: int) -> CompressionAttempt:
     """Advance the bounded recovery counter once."""
     return CompressionAttempt(number=previous + 1, maximum=maximum)
@@ -166,6 +196,126 @@ def apply_context_recovery_plan(
         compressor._context_probed = True
         compressor._context_probe_persistable = plan.parsed_context_limit
     return True
+
+
+def execute_context_recovery(
+    kind: ContextRecoveryKind,
+    *,
+    error_message: str,
+    messages: list[dict[str, Any]],
+    system_prompt: str,
+    approx_tokens: int,
+    task_id: str,
+    previous_attempts: int,
+    max_attempts: int,
+    compressor: Any,
+    model: str,
+    base_url: str,
+    api_key: str,
+    provider: str,
+    compress: Callable[..., CompressionRecoveryResult],
+) -> ContextRecoveryExecution:
+    """Execute one bounded payload/context recovery operation."""
+    if kind is ContextRecoveryKind.payload_too_large:
+        attempt = next_compression_attempt(previous_attempts, max_attempts)
+        if attempt.exhausted:
+            return ContextRecoveryExecution(
+                kind=kind,
+                action=ContextRecoveryAction.fail,
+                attempt=attempt,
+                error=(
+                    "Request payload too large: max compression attempts "
+                    f"({max_attempts}) reached."
+                ),
+            )
+        compression = compress(
+            messages,
+            system_prompt,
+            approx_tokens=approx_tokens,
+            task_id=task_id,
+        )
+        if not compression.made_progress:
+            return ContextRecoveryExecution(
+                kind=kind,
+                action=ContextRecoveryAction.fail,
+                attempt=attempt,
+                compression=compression,
+                error="Request payload too large (413). Cannot compress further.",
+            )
+        return ContextRecoveryExecution(
+            kind=kind,
+            action=ContextRecoveryAction.restart,
+            attempt=attempt,
+            compression=compression,
+        )
+
+    plan = build_context_recovery_plan(
+        error_message,
+        current_context_length=compressor.context_length,
+        previous_attempts=previous_attempts,
+        max_attempts=max_attempts,
+    )
+    if plan.attempt.exhausted:
+        return ContextRecoveryExecution(
+            kind=kind,
+            action=ContextRecoveryAction.fail,
+            attempt=plan.attempt,
+            error=(
+                "Context length exceeded: max compression attempts "
+                f"({max_attempts}) reached."
+            ),
+            current_context_length=plan.current_context_length,
+        )
+    if plan.output_token_limit is not None:
+        return ContextRecoveryExecution(
+            kind=kind,
+            action=ContextRecoveryAction.restart,
+            attempt=plan.attempt,
+            output_token_limit=plan.output_token_limit,
+            available_output_tokens=plan.available_output_tokens,
+            current_context_length=plan.current_context_length,
+        )
+
+    context_length_changed = apply_context_recovery_plan(
+        compressor,
+        plan,
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
+        provider=provider,
+    )
+    compression = compress(
+        messages,
+        system_prompt,
+        approx_tokens=approx_tokens,
+        task_id=task_id,
+        context_length_changed=context_length_changed,
+    )
+    if not compression.made_progress:
+        return ContextRecoveryExecution(
+            kind=kind,
+            action=ContextRecoveryAction.fail,
+            attempt=plan.attempt,
+            compression=compression,
+            error=(
+                f"Context length exceeded ({approx_tokens:,} tokens). "
+                "Cannot compress further."
+            ),
+            current_context_length=plan.current_context_length,
+            next_context_length=plan.next_context_length,
+            parsed_context_limit=plan.parsed_context_limit,
+            context_length_changed=context_length_changed,
+        )
+    return ContextRecoveryExecution(
+        kind=kind,
+        action=ContextRecoveryAction.restart,
+        attempt=plan.attempt,
+        compression=compression,
+        current_context_length=plan.current_context_length,
+        next_context_length=plan.next_context_length,
+        parsed_context_limit=plan.parsed_context_limit,
+        context_length_changed=context_length_changed,
+    )
 
 
 class ContextCompressor(ContextEngine):

@@ -116,9 +116,9 @@ from agent.model_metadata import (
 from agent.context_compressor import (
     CompressionRecoveryResult,
     ContextCompressor,
-    apply_context_recovery_plan,
-    build_context_recovery_plan,
-    next_compression_attempt,
+    ContextRecoveryAction,
+    ContextRecoveryKind,
+    execute_context_recovery,
 )
 from agent.api_attempt import ApiAttemptState
 from agent.client_lifecycle import ChatClientLifecycle
@@ -129,6 +129,7 @@ from agent.tool_execution import (
     ToolCallOutcome,
     ToolExecutionCoordinator,
 )
+from agent.turn_finalization import finalize_conversation_turn
 from agent.conversation_turn import ConversationTurnState
 from agent.iteration_control import IterationBudget
 from agent.subdirectory_hints import SubdirectoryHintTracker
@@ -147,6 +148,12 @@ from agent.api_response import (
     normalize_assistant_message,
     strip_thinking_blocks,
     strip_thinking_tags,
+)
+from agent.response_disposition import (
+    TextResponseAction,
+    decide_text_response_disposition,
+    inspect_tool_calls,
+    normalize_assistant_content,
 )
 from agent.usage_pricing import estimate_usage_cost, normalize_usage
 from agent.tool_scheduler import (
@@ -4829,164 +4836,139 @@ class AIAgent:
                         attempt_state.retry_count = 0
                         continue
 
-                    if retry_directive.kind is RetryKind.compress_payload:
-                        compression_attempt = next_compression_attempt(
-                            turn_state.compression_attempts,
-                            attempt_state.max_compression_attempts,
+                    if retry_directive.kind in {
+                        RetryKind.compress_payload,
+                        RetryKind.recover_context,
+                    }:
+                        recovery_kind = (
+                            ContextRecoveryKind.payload_too_large
+                            if retry_directive.kind is RetryKind.compress_payload
+                            else ContextRecoveryKind.context_overflow
                         )
-                        turn_state.compression_attempts = compression_attempt.number
-                        if compression_attempt.exhausted:
-                            self._vprint(f"{self.log_prefix}❌ Max compression attempts ({attempt_state.max_compression_attempts}) reached for payload-too-large error.", force=True)
-                            self._vprint(f"{self.log_prefix}   💡 Try /new to start a fresh conversation, or /compress to retry compression.", force=True)
-                            logging.error(f"{self.log_prefix}413 compression failed after {attempt_state.max_compression_attempts} attempts.")
-                            return self._context_recovery_failure_result(
-                                messages=messages,
-                                conversation_history=conversation_history,
-                                api_call_count=turn_state.api_call_count,
-                                error=f"Request payload too large: max compression attempts ({attempt_state.max_compression_attempts}) reached.",
-                            )
-                        self._emit_status(
-                            "⚠️  Request payload too large (413) — compression "
-                            f"attempt {turn_state.compression_attempts}/"
-                            f"{attempt_state.max_compression_attempts}..."
-                        )
-
-                        compression_result = self._compress_for_api_recovery(
-                            messages, system_message, approx_tokens=approx_tokens,
-                            task_id=effective_task_id,
-                        )
-                        messages = compression_result.messages
-                        active_system_prompt = compression_result.system_prompt
-                        # Compression created a new session — clear history
-                        # so SessionPersistence writes compressed
-                        # messages to the new session, not skipping them.
-                        conversation_history = None
-
-                        if compression_result.made_progress:
+                        expected_attempt = turn_state.compression_attempts + 1
+                        if recovery_kind is ContextRecoveryKind.payload_too_large:
                             self._emit_status(
-                                f"🗜️ Compressed {compression_result.original_message_count} "
-                                f"→ {len(messages)} messages, retrying..."
+                                "⚠️  Request payload too large (413) — compression "
+                                f"attempt {expected_attempt}/"
+                                f"{attempt_state.max_compression_attempts}..."
                             )
-                            time.sleep(2)  # Brief pause between compression retries
-                            attempt_state.request_compressed_restart()
-                            break
                         else:
-                            self._vprint(f"{self.log_prefix}❌ Payload too large and cannot compress further.", force=True)
-                            self._vprint(f"{self.log_prefix}   💡 Try /new to start a fresh conversation, or /compress to retry compression.", force=True)
-                            logging.error(f"{self.log_prefix}413 payload too large. Cannot compress further.")
-                            return self._context_recovery_failure_result(
-                                messages=messages,
-                                conversation_history=conversation_history,
-                                api_call_count=turn_state.api_call_count,
-                                error="Request payload too large (413). Cannot compress further.",
+                            self._emit_status(
+                                f"🗜️ Context too large (~{approx_tokens:,} tokens) — "
+                                f"recovery attempt {expected_attempt}/"
+                                f"{attempt_state.max_compression_attempts}..."
                             )
 
-                    # Check for context-length errors BEFORE generic 4xx handler.
-                    # The classifier detects context overflow from: explicit error
-                    # messages, generic 400 + large session heuristic (#1630), and
-                    # server disconnect + large session pattern (#2153).
-                    is_context_length_error = (
-                        retry_directive.kind is RetryKind.recover_context
-                    )
-
-                    if is_context_length_error:
-                        compressor = self.context_compressor
-                        old_ctx = compressor.context_length
-                        recovery_plan = build_context_recovery_plan(
-                            error_msg,
-                            current_context_length=old_ctx,
+                        recovery = execute_context_recovery(
+                            recovery_kind,
+                            error_message=error_msg,
+                            messages=messages,
+                            system_prompt=system_message,
+                            approx_tokens=approx_tokens,
+                            task_id=effective_task_id,
                             previous_attempts=turn_state.compression_attempts,
                             max_attempts=attempt_state.max_compression_attempts,
-                        )
-                        turn_state.compression_attempts = recovery_plan.attempt.number
-                        if recovery_plan.attempt.exhausted:
-                            self._vprint(f"{self.log_prefix}❌ Max compression attempts ({attempt_state.max_compression_attempts}) reached.", force=True)
-                            self._vprint(f"{self.log_prefix}   💡 Try /new to start a fresh conversation, or /compress to retry compression.", force=True)
-                            logging.error(f"{self.log_prefix}Context compression failed after {attempt_state.max_compression_attempts} attempts.")
-                            return self._context_recovery_failure_result(
-                                messages=messages,
-                                conversation_history=conversation_history,
-                                api_call_count=turn_state.api_call_count,
-                                error=f"Context length exceeded: max compression attempts ({attempt_state.max_compression_attempts}) reached.",
-                            )
-
-                        if recovery_plan.output_token_limit is not None:
-                            self._ephemeral_max_output_tokens = recovery_plan.output_token_limit
-                            self._vprint(
-                                f"{self.log_prefix}⚠️  Output cap too large for current prompt — "
-                                f"retrying with max_tokens={recovery_plan.output_token_limit:,} "
-                                f"(available_tokens={recovery_plan.available_output_tokens:,}; "
-                                f"context_length unchanged at {old_ctx:,})",
-                                force=True,
-                            )
-                            attempt_state.request_compressed_restart()
-                            break
-
-                        context_length_changed = apply_context_recovery_plan(
-                            compressor,
-                            recovery_plan,
+                            compressor=self.context_compressor,
                             model=self.model,
                             base_url=self.base_url,
                             api_key=getattr(self, "api_key", ""),
                             provider=self.provider,
+                            compress=self._compress_for_api_recovery,
                         )
-                        new_ctx = recovery_plan.next_context_length
-                        if context_length_changed:
-                            if recovery_plan.parsed_context_limit:
+                        turn_state.compression_attempts = recovery.attempt.number
+
+                        if recovery.compression is not None:
+                            messages = recovery.compression.messages
+                            active_system_prompt = (
+                                recovery.compression.system_prompt
+                            )
+                            conversation_history = None
+
+                        if recovery.action is ContextRecoveryAction.fail:
+                            if recovery.attempt.exhausted:
                                 self._vprint(
-                                    f"{self.log_prefix}⚠️  Context limit detected from API: "
-                                    f"{new_ctx:,} tokens (was {old_ctx:,})",
+                                    f"{self.log_prefix}❌ Max compression attempts "
+                                    f"({attempt_state.max_compression_attempts}) "
+                                    "reached.",
+                                    force=True,
+                                )
+                            elif recovery_kind is ContextRecoveryKind.payload_too_large:
+                                self._vprint(
+                                    f"{self.log_prefix}❌ Payload too large and "
+                                    "cannot compress further.",
+                                    force=True,
+                                )
+                            else:
+                                self._vprint(
+                                    f"{self.log_prefix}❌ Context length exceeded "
+                                    "and cannot compress further.",
                                     force=True,
                                 )
                             self._vprint(
-                                f"{self.log_prefix}⚠️  Context length exceeded — "
-                                f"stepping down: {old_ctx:,} → {new_ctx:,} tokens",
+                                f"{self.log_prefix}   💡 Try /new to start a "
+                                "fresh conversation, or /compress to retry "
+                                "compression.",
                                 force=True,
                             )
-                        else:
-                            self._vprint(
-                                f"{self.log_prefix}⚠️  Context length exceeded at minimum tier — "
-                                f"attempting compression...",
-                                force=True,
-                            )
-                        self._emit_status(
-                            f"🗜️ Context too large (~{approx_tokens:,} tokens) — "
-                            f"compressing ({turn_state.compression_attempts}/"
-                            f"{attempt_state.max_compression_attempts})..."
-                        )
-
-                        compression_result = self._compress_for_api_recovery(
-                            messages, system_message, approx_tokens=approx_tokens,
-                            task_id=effective_task_id,
-                            context_length_changed=context_length_changed,
-                        )
-                        messages = compression_result.messages
-                        active_system_prompt = compression_result.system_prompt
-                        # Compression created a new session — clear history
-                        # so SessionPersistence writes compressed
-                        # messages to the new session, not skipping them.
-                        conversation_history = None
-
-                        if compression_result.made_progress:
-                            if compression_result.message_count_reduced:
-                                self._emit_status(
-                                    f"🗜️ Compressed {compression_result.original_message_count} "
-                                    f"→ {len(messages)} messages, retrying..."
-                                )
-                            time.sleep(2)  # Brief pause between compression retries
-                            attempt_state.request_compressed_restart()
-                            break
-                        else:
-                            # Can't compress further and already at minimum tier
-                            self._vprint(f"{self.log_prefix}❌ Context length exceeded and cannot compress further.", force=True)
-                            self._vprint(f"{self.log_prefix}   💡 The conversation has accumulated too much content. Try /new to start fresh, or /compress to manually trigger compression.", force=True)
-                            logging.error(f"{self.log_prefix}Context length exceeded: {approx_tokens:,} tokens. Cannot compress further.")
+                            logging.error("%s%s", self.log_prefix, recovery.error)
                             return self._context_recovery_failure_result(
                                 messages=messages,
                                 conversation_history=conversation_history,
                                 api_call_count=turn_state.api_call_count,
-                                error=f"Context length exceeded ({approx_tokens:,} tokens). Cannot compress further.",
+                                error=recovery.error,
                             )
+
+                        if recovery.output_token_limit is not None:
+                            self._ephemeral_max_output_tokens = (
+                                recovery.output_token_limit
+                            )
+                            self._vprint(
+                                f"{self.log_prefix}⚠️  Output cap too large for "
+                                "current prompt — retrying with "
+                                f"max_tokens={recovery.output_token_limit:,} "
+                                f"(available_tokens="
+                                f"{recovery.available_output_tokens:,}; "
+                                "context_length unchanged at "
+                                f"{recovery.current_context_length:,})",
+                                force=True,
+                            )
+                            attempt_state.request_compressed_restart()
+                            break
+
+                        if recovery_kind is ContextRecoveryKind.context_overflow:
+                            if recovery.context_length_changed:
+                                if recovery.parsed_context_limit:
+                                    self._vprint(
+                                        f"{self.log_prefix}⚠️  Context limit "
+                                        "detected from API: "
+                                        f"{recovery.next_context_length:,} tokens "
+                                        f"(was {recovery.current_context_length:,})",
+                                        force=True,
+                                    )
+                                self._vprint(
+                                    f"{self.log_prefix}⚠️  Context length "
+                                    "exceeded — stepping down: "
+                                    f"{recovery.current_context_length:,} → "
+                                    f"{recovery.next_context_length:,} tokens",
+                                    force=True,
+                                )
+                            else:
+                                self._vprint(
+                                    f"{self.log_prefix}⚠️  Context length "
+                                    "exceeded at minimum tier — attempting "
+                                    "compression...",
+                                    force=True,
+                                )
+
+                        compression = recovery.compression
+                        if compression and compression.message_count_reduced:
+                            self._emit_status(
+                                f"🗜️ Compressed {compression.original_message_count} "
+                                f"→ {len(messages)} messages, retrying..."
+                            )
+                        time.sleep(2)
+                        attempt_state.request_compressed_restart()
+                        break
 
                     if retry_directive.kind is RetryKind.abort_client_error:
                         if attempt_state.request_kwargs is not None:
@@ -5165,27 +5147,9 @@ class AIAgent:
 
             try:
                 assistant_message = attempt_state.response_inspection.message
-                
-                # Normalize content to string — some OpenAI-compatible servers
-                # (llama-server, etc.) return content as a dict or list instead
-                # of a plain string, which crashes downstream .strip() calls.
-                if assistant_message.content is not None and not isinstance(assistant_message.content, str):
-                    raw = assistant_message.content
-                    if isinstance(raw, dict):
-                        assistant_message.content = raw.get("text", "") or raw.get("content", "") or json.dumps(raw)
-                    elif isinstance(raw, list):
-                        # Multimodal content list — extract text parts
-                        parts = []
-                        for part in raw:
-                            if isinstance(part, str):
-                                parts.append(part)
-                            elif isinstance(part, dict) and part.get("type") == "text":
-                                parts.append(part.get("text", ""))
-                            elif isinstance(part, dict) and "text" in part:
-                                parts.append(str(part["text"]))
-                        assistant_message.content = "\n".join(parts)
-                    else:
-                        assistant_message.content = str(raw)
+                assistant_message.content = normalize_assistant_content(
+                    assistant_message.content
+                )
 
                 try:
                     from VoidCube_cli.plugins import invoke_hook as _invoke_hook
@@ -5253,18 +5217,17 @@ class AIAgent:
                         for tc in assistant_message.tool_calls:
                             logging.debug(f"Tool call: {tc.function.name} with args: {tc.function.arguments[:200]}...")
                     
-                    # Validate tool call names - detect model hallucinations
-                    # Repair mismatched tool names before validating
-                    for tc in assistant_message.tool_calls:
-                        if tc.function.name not in self.valid_tool_names:
-                            repaired = self._repair_tool_call(tc.function.name)
-                            if repaired:
-                                print(f"{self.log_prefix}🔧 Auto-repaired tool name: '{tc.function.name}' -> '{repaired}'")
-                                tc.function.name = repaired
-                    invalid_tool_calls = [
-                        tc.function.name for tc in assistant_message.tool_calls
-                        if tc.function.name not in self.valid_tool_names
-                    ]
+                    tool_inspection = inspect_tool_calls(
+                        assistant_message.tool_calls,
+                        valid_tool_names=self.valid_tool_names,
+                        repair_tool_name=self._repair_tool_call,
+                    )
+                    for repair in tool_inspection.repairs:
+                        print(
+                            f"{self.log_prefix}🔧 Auto-repaired tool name: "
+                            f"'{repair.original}' -> '{repair.repaired}'"
+                        )
+                    invalid_tool_calls = tool_inspection.invalid_tool_names
                     if invalid_tool_calls:
                         # Track retries for invalid tool calls
                         self._invalid_tool_retries += 1
@@ -5307,26 +5270,7 @@ class AIAgent:
                     # Reset retry counter on successful tool call validation
                     self._invalid_tool_retries = 0
                     
-                    # Validate tool call arguments are valid JSON
-                    # Handle empty strings as empty objects (common model quirk)
-                    invalid_json_args = []
-                    for tc in assistant_message.tool_calls:
-                        args = tc.function.arguments
-                        if isinstance(args, (dict, list)):
-                            tc.function.arguments = json.dumps(args)
-                            continue
-                        if args is not None and not isinstance(args, str):
-                            tc.function.arguments = str(args)
-                            args = tc.function.arguments
-                        # Treat empty/whitespace strings as empty object
-                        if not args or not args.strip():
-                            tc.function.arguments = "{}"
-                            continue
-                        try:
-                            json.loads(args)
-                        except json.JSONDecodeError as e:
-                            invalid_json_args.append((tc.function.name, str(e)))
-                    
+                    invalid_json_args = tool_inspection.invalid_json_arguments
                     if invalid_json_args:
                         # Check if the invalid JSON is due to truncation rather
                         # than a model formatting mistake.  Routers sometimes
@@ -5334,12 +5278,7 @@ class AIAgent:
                         # hiding the truncation from the length handler above.
                         # Detect truncation: args that don't end with } or ]
                         # (after stripping whitespace) are cut off mid-stream.
-                        _truncated = any(
-                            not (tc.function.arguments or "").rstrip().endswith(("}", "]"))
-                            for tc in assistant_message.tool_calls
-                            if tc.function.name in {n for n, _ in invalid_json_args}
-                        )
-                        if _truncated:
+                        if tool_inspection.truncated_json_arguments:
                             self._vprint(
                                 f"{self.log_prefix}⚠️  Truncated tool call arguments detected "
                                 f"(finish_reason={attempt_state.finish_reason!r}) — refusing to execute.",
@@ -5578,132 +5517,126 @@ class AIAgent:
                 else:
                     # No tool calls - this is the final response
                     turn_state.final_response = assistant_message.content or ""
-                    
-                    # Check if response only has think block with no actual content after it
-                    if not has_visible_content(turn_state.final_response):
-                        # If the previous turn already delivered real content alongside
-                        # tool calls (e.g. "You're welcome!" + memory save), the model
-                        # has nothing more to say. Use the earlier content immediately
-                        # instead of wasting API calls on retries that won't help.
-                        fallback = getattr(self, '_last_content_with_tools', None)
-                        if fallback:
-                            turn_state.exit_reason = "fallback_prior_turn_content"
-                            logger.info("Empty follow-up after tool calls — using prior turn content as final response")
-                            self._emit_status("↻ Empty response after tool calls — using earlier content as final answer")
-                            self._last_content_with_tools = None
-                            self._empty_content_retries = 0
-                            for i in range(len(messages) - 1, -1, -1):
-                                msg = messages[i]
-                                if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                                    tool_names = []
-                                    for tc in msg["tool_calls"]:
-                                        if not tc or not isinstance(tc, dict): continue
-                                        fn = tc.get("function", {})
-                                        tool_names.append(fn.get("name", "unknown"))
-                                    msg["content"] = f"Calling the {', '.join(tool_names)} tool{'s' if len(tool_names) > 1 else ''}..."
-                                    break
-                            turn_state.final_response = strip_thinking_blocks(
-                                fallback
-                            ).strip()
-                            self._response_was_previewed = True
-                            break
+                    structured_reasoning = bool(
+                        getattr(assistant_message, "reasoning", None)
+                        or getattr(assistant_message, "reasoning_content", None)
+                        or getattr(assistant_message, "reasoning_details", None)
+                    )
+                    prior_content = getattr(
+                        self,
+                        "_last_content_with_tools",
+                        None,
+                    )
+                    disposition = decide_text_response_disposition(
+                        turn_state.final_response,
+                        structured_reasoning=structured_reasoning,
+                        thinking_prefill_retries=self._thinking_prefill_retries,
+                        empty_content_retries=self._empty_content_retries,
+                        prior_content_available=bool(prior_content),
+                        fallback_available=bool(self._fallback_chain),
+                    )
 
-                        # ── Thinking-only prefill continuation ──────────
-                        # The model produced structured reasoning (via API
-                        # fields) but no visible text content.  Rather than
-                        # giving up, append the assistant message as-is and
-                        # continue — the model will see its own reasoning
-                        # on the next turn and produce the text portion.
-                        # Inspired by clawdbot's "incomplete-text" recovery.
-                        _has_structured = bool(
-                            getattr(assistant_message, "reasoning", None)
-                            or getattr(assistant_message, "reasoning_content", None)
-                            or getattr(assistant_message, "reasoning_details", None)
+                    if disposition.action is TextResponseAction.use_prior_content:
+                        turn_state.exit_reason = "fallback_prior_turn_content"
+                        logger.info(
+                            "Empty follow-up after tool calls — using prior "
+                            "turn content as final response"
                         )
-                        if _has_structured and self._thinking_prefill_retries < 2:
-                            self._thinking_prefill_retries += 1
-                            logger.info(
-                                "Thinking-only response (no visible content) — "
-                                "prefilling to continue (%d/2)",
-                                self._thinking_prefill_retries,
-                            )
-                            self._emit_status(
-                                f"↻ Thinking-only response — prefilling to continue "
-                                f"({self._thinking_prefill_retries}/2)"
-                            )
-                            interim_msg = self._build_assistant_message(
-                                assistant_message, "incomplete"
-                            )
-                            interim_msg["_thinking_prefill"] = True
-                            messages.append(interim_msg)
-                            self._session_persistence.save_log(messages)
-                            turn_state.final_response = None
-                            continue
-
-                        # ── Empty response retry ──────────────────────
-                        # Model returned nothing usable.  Retry up to 3
-                        # times before attempting fallback.  This covers
-                        # both truly empty responses (no content, no
-                        # reasoning) AND reasoning-only responses after
-                        # prefill exhaustion — models like mimo-v2-pro
-                        # always populate reasoning fields via OpenRouter,
-                        # so the old `not _has_structured` guard blocked
-                        # retries for every reasoning model after prefill.
-                        _truly_empty = not strip_thinking_blocks(
-                            turn_state.final_response
+                        self._emit_status(
+                            "↻ Empty response after tool calls — using earlier "
+                            "content as final answer"
+                        )
+                        self._last_content_with_tools = None
+                        self._empty_content_retries = 0
+                        for message in reversed(messages):
+                            if (
+                                message.get("role") == "assistant"
+                                and message.get("tool_calls")
+                            ):
+                                tool_names = [
+                                    tool_call.get("function", {}).get(
+                                        "name",
+                                        "unknown",
+                                    )
+                                    for tool_call in message["tool_calls"]
+                                    if isinstance(tool_call, dict)
+                                ]
+                                plural = "s" if len(tool_names) > 1 else ""
+                                message["content"] = (
+                                    f"Calling the {', '.join(tool_names)} "
+                                    f"tool{plural}..."
+                                )
+                                break
+                        turn_state.final_response = strip_thinking_blocks(
+                            prior_content
                         ).strip()
-                        _prefill_exhausted = (
-                            _has_structured
-                            and self._thinking_prefill_retries >= 2
-                        )
-                        if _truly_empty and (not _has_structured or _prefill_exhausted) and self._empty_content_retries < 3:
-                            self._empty_content_retries += 1
-                            logger.warning(
-                                "Empty response (no content or reasoning) — "
-                                "retry %d/3 (model=%s)",
-                                self._empty_content_retries, self.model,
-                            )
-                            self._emit_status(
-                                f"⚠️ Empty response from model — retrying "
-                                f"({self._empty_content_retries}/3)"
-                            )
-                            turn_state.final_response = None
-                            continue
+                        self._response_was_previewed = True
+                        break
 
-                        # ── Exhausted retries — try fallback provider ──
-                        # Before giving up with "(empty)", attempt to
-                        # switch to the next provider in the fallback
-                        # chain.  This covers the case where a model
-                        # (e.g. GLM-4.5-Air) consistently returns empty
-                        # due to context degradation or provider issues.
-                        if _truly_empty and self._fallback_chain:
-                            logger.warning(
-                                "Empty response after %d retries — "
-                                "attempting fallback (model=%s, provider=%s)",
-                                self._empty_content_retries, self.model,
+                    if disposition.action is TextResponseAction.prefill_reasoning:
+                        self._thinking_prefill_retries += 1
+                        logger.info(
+                            "Thinking-only response (no visible content) — "
+                            "prefilling to continue (%d/2)",
+                            self._thinking_prefill_retries,
+                        )
+                        self._emit_status(
+                            "↻ Thinking-only response — prefilling to continue "
+                            f"({self._thinking_prefill_retries}/2)"
+                        )
+                        interim_msg = self._build_assistant_message(
+                            assistant_message,
+                            "incomplete",
+                        )
+                        interim_msg["_thinking_prefill"] = True
+                        messages.append(interim_msg)
+                        self._session_persistence.save_log(messages)
+                        turn_state.final_response = None
+                        continue
+
+                    if disposition.action is TextResponseAction.retry_empty:
+                        self._empty_content_retries += 1
+                        logger.warning(
+                            "Empty response (no content or reasoning) — "
+                            "retry %d/3 (model=%s)",
+                            self._empty_content_retries,
+                            self.model,
+                        )
+                        self._emit_status(
+                            f"⚠️ Empty response from model — retrying "
+                            f"({self._empty_content_retries}/3)"
+                        )
+                        turn_state.final_response = None
+                        continue
+
+                    if disposition.action is TextResponseAction.try_fallback:
+                        logger.warning(
+                            "Empty response after %d retries — attempting "
+                            "fallback (model=%s, provider=%s)",
+                            self._empty_content_retries,
+                            self.model,
+                            self.provider,
+                        )
+                        self._emit_status(
+                            "⚠️ Model returning empty responses — switching "
+                            "to fallback provider..."
+                        )
+                        if self._try_activate_fallback():
+                            self._empty_content_retries = 0
+                            self._emit_status(
+                                f"↻ Switched to fallback: {self.model} "
+                                f"({self.provider})"
+                            )
+                            logger.info(
+                                "Fallback activated after empty responses: "
+                                "now using %s on %s",
+                                self.model,
                                 self.provider,
                             )
-                            self._emit_status(
-                                "⚠️ Model returning empty responses — "
-                                "switching to fallback provider..."
-                            )
-                            if self._try_activate_fallback():
-                                self._empty_content_retries = 0
-                                self._emit_status(
-                                    f"↻ Switched to fallback: {self.model} "
-                                    f"({self.provider})"
-                                )
-                                logger.info(
-                                    "Fallback activated after empty responses: "
-                                    "now using %s on %s",
-                                    self.model, self.provider,
-                                )
-                                turn_state.final_response = None
-                                continue
+                            turn_state.final_response = None
+                            continue
 
-                        # Exhausted retries and fallback chain (or no
-                        # fallback configured).  Fall through to the
-                        # "(empty)" terminal.
+                    if disposition.action is not TextResponseAction.final_text:
                         turn_state.exit_reason = "empty_response_exhausted"
                         reasoning_text = extract_reasoning(assistant_message)
                         assistant_msg = self._build_assistant_message(
@@ -5871,193 +5804,15 @@ class AIAgent:
                 turn_state.api_call_count,
             )
 
-        # Determine if conversation completed successfully
-        completed = turn_state.completed(max_iterations=self.max_iterations)
-
-        # Clean up VM and browser for this task after conversation completes
-        self._cleanup_task_resources(effective_task_id)
-
-        # Persist session to both JSON log and SQLite
-        self._session_persistence.persist(messages, conversation_history)
-
-        # ── Turn-exit diagnostic log ─────────────────────────────────────
-        # Always logged at INFO so agent.log captures WHY every turn ended.
-        # When the last message is a tool result (agent was mid-work), log
-        # at WARNING — this is the "just stops" scenario users report.
-        _last_msg_role = messages[-1].get("role") if messages else None
-        _last_tool_name = None
-        if _last_msg_role == "tool":
-            # Walk back to find the assistant message with the tool call
-            for _m in reversed(messages):
-                if _m.get("role") == "assistant" and _m.get("tool_calls"):
-                    _tcs = _m["tool_calls"]
-                    if _tcs and isinstance(_tcs[0], dict):
-                        _last_tool_name = _tcs[-1].get("function", {}).get("name")
-                    break
-
-        _turn_tool_count = sum(
-            1 for m in messages
-            if isinstance(m, dict) and m.get("role") == "assistant" and m.get("tool_calls")
+        return finalize_conversation_turn(
+            self,
+            state=turn_state,
+            messages=messages,
+            conversation_history=conversation_history,
+            task_id=effective_task_id,
+            original_user_message=original_user_message,
+            review_memory=_should_review_memory,
         )
-        _resp_len = (
-            len(turn_state.final_response) if turn_state.final_response else 0
-        )
-        _budget_used = self.iteration_budget.used if self.iteration_budget else 0
-        _budget_max = self.iteration_budget.max_total if self.iteration_budget else 0
-
-        _diag_msg = (
-            "Turn ended: reason=%s model=%s api_calls=%d/%d budget=%d/%d "
-            "tool_turns=%d last_msg_role=%s response_len=%d session=%s"
-        )
-        _diag_args = (
-            turn_state.exit_reason,
-            self.model,
-            turn_state.api_call_count,
-            self.max_iterations,
-            _budget_used, _budget_max,
-            _turn_tool_count, _last_msg_role, _resp_len,
-            self.session_id or "none",
-        )
-
-        if _last_msg_role == "tool" and not turn_state.interrupted:
-            # Agent was mid-work — this is the "just stops" case.
-            logger.warning(
-                "Turn ended with pending tool result (agent may appear stuck). "
-                + _diag_msg + " last_tool=%s",
-                *_diag_args, _last_tool_name,
-            )
-        else:
-            logger.info(_diag_msg, *_diag_args)
-
-        # Plugin hook: post_llm_call
-        # Fired once per turn after the tool-calling loop completes.
-        # Plugins can use this to persist conversation data (e.g. sync
-        # to an external memory system).
-        if turn_state.final_response and not turn_state.interrupted:
-            try:
-                from VoidCube_cli.plugins import invoke_hook as _invoke_hook
-                _invoke_hook(
-                    "post_llm_call",
-                    session_id=self.session_id,
-                    user_message=original_user_message,
-                    assistant_response=turn_state.final_response,
-                    conversation_history=list(messages),
-                    model=self.model,
-                    platform=getattr(self, "platform", None) or "",
-                )
-            except Exception as exc:
-                logger.warning("post_llm_call hook failed: %s", exc)
-
-        # Extract reasoning from the last assistant message (if any)
-        last_reasoning = None
-        for msg in reversed(messages):
-            if msg.get("role") == "assistant" and msg.get("reasoning"):
-                last_reasoning = msg["reasoning"]
-                break
-
-        # Build result with interrupt info if applicable
-        result = {
-            "final_response": turn_state.final_response,
-            "last_reasoning": last_reasoning,
-            "messages": messages,
-            "api_calls": turn_state.api_call_count,
-            "completed": completed,
-            "partial": False,  # True only when stopped due to invalid tool calls
-            "interrupted": turn_state.interrupted,
-            "response_previewed": getattr(self, "_response_was_previewed", False),
-            "model": self.model,
-            "provider": self.provider,
-            "base_url": self.base_url,
-            "input_tokens": self.session_input_tokens,
-            "output_tokens": self.session_output_tokens,
-            "cache_read_tokens": self.session_cache_read_tokens,
-            "cache_write_tokens": self.session_cache_write_tokens,
-            "reasoning_tokens": self.session_reasoning_tokens,
-            "prompt_tokens": self.session_prompt_tokens,
-            "completion_tokens": self.session_completion_tokens,
-            "total_tokens": self.session_total_tokens,
-            "last_prompt_tokens": getattr(self.context_compressor, "last_prompt_tokens", 0) or 0,
-            "estimated_cost_usd": self.session_estimated_cost_usd,
-            "cost_status": self.session_cost_status,
-            "cost_source": self.session_cost_source,
-        }
-        self._response_was_previewed = False
-        
-        # Include interrupt message if one triggered the interrupt
-        if turn_state.interrupted and self._interrupt_message:
-            result["interrupt_message"] = self._interrupt_message
-        
-        # Clear interrupt state after handling
-        self.clear_interrupt()
-
-        # Clear stream callback so it doesn't leak into future calls
-        self._stream_callback = None
-
-        # Check skill trigger NOW — based on how many tool iterations THIS turn used.
-        _should_review_skills = False
-        if (self._skill_nudge_interval > 0
-                and self._iters_since_skill >= self._skill_nudge_interval
-                and "skill_manage" in self.valid_tool_names):
-            _should_review_skills = True
-            self._iters_since_skill = 0
-
-        # External memory provider: sync the completed turn + queue next prefetch.
-        # Use original_user_message (clean input) — user_message may contain
-        # injected skill content that bloats / breaks provider queries.
-        if (
-            self._memory_manager
-            and turn_state.final_response
-            and original_user_message
-        ):
-            try:
-                self._memory_manager.sync_all(
-                    original_user_message,
-                    turn_state.final_response,
-                )
-                self._memory_manager.queue_prefetch_all(original_user_message)
-            except Exception:
-                pass
-
-        # Background memory/skill review — runs AFTER the response is delivered
-        # so it never competes with the user's task for model attention.
-        if (
-            turn_state.final_response
-            and not turn_state.interrupted
-            and (_should_review_memory or _should_review_skills)
-        ):
-            try:
-                self._spawn_background_review(
-                    messages_snapshot=list(messages),
-                    review_memory=_should_review_memory,
-                    review_skills=_should_review_skills,
-                )
-            except Exception:
-                pass  # Background review is best-effort
-
-        # Note: Memory provider on_session_end() + shutdown_all() are NOT
-        # called here — run_conversation() is called once per user message in
-        # multi-turn sessions. Shutting down after every turn would kill the
-        # provider before the second message. Actual session-end cleanup is
-        # handled by the CLI (atexit / /reset) and gateway (session expiry /
-        # _reset_session).
-
-        # Plugin hook: on_session_end
-        # Fired at the very end of every run_conversation call.
-        # Plugins can use this for cleanup, flushing buffers, etc.
-        try:
-            from VoidCube_cli.plugins import invoke_hook as _invoke_hook
-            _invoke_hook(
-                "on_session_end",
-                session_id=self.session_id,
-                completed=completed,
-                interrupted=turn_state.interrupted,
-                model=self.model,
-                platform=getattr(self, "platform", None) or "",
-            )
-        except Exception as exc:
-            logger.warning("on_session_end hook failed: %s", exc)
-
-        return result
 
     def chat(self, message: str, stream_callback: Optional[callable] = None) -> str:
         """

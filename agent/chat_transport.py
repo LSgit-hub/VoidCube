@@ -288,12 +288,14 @@ class ChatTransport:
                 self._close_slot(slot, reason="stream_request_complete")
 
         stale_timeout = self.stream_stale_timeout(api_kwargs)
+        stale_abort_requested = False
         thread = threading.Thread(target=worker, daemon=True)
         thread.start()
         while thread.is_alive():
             thread.join(timeout=self._poll_interval)
             stale_elapsed = self._clock() - last_chunk_time["value"]
-            if stale_elapsed > stale_timeout:
+            if stale_elapsed > stale_timeout and not stale_abort_requested:
+                stale_abort_requested = True
                 estimated_tokens = self.estimate_context_tokens(api_kwargs)
                 logger.warning(
                     "Stream stale for %.0fs (threshold %.0fs); model=%s "

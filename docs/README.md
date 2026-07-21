@@ -41,7 +41,7 @@
 
 ### 阶段 2：主路径解耦
 
-- 会话持久化、请求消息准备、客户端生命周期、聊天传输、响应结构校验与截断恢复决策、流式响应装配、工具执行编排、单轮/attempt 状态以及 retry/fallback/transport/wait 执行顺序已经抽离；下一步提取 compression/context recovery 执行和 turn finalization，再处理 CLI 会话 UI。
+- 会话持久化、请求消息准备、客户端生命周期、聊天传输、响应结构校验与截断恢复决策、流式响应装配、工具执行编排、单轮/attempt 状态、retry/compression recovery、response disposition 判定和 turn finalization 已经抽离；下一步提取 disposition action 应用与循环时序，再处理 CLI 会话 UI。
 - 再拆分 `cli.py` 的会话 UI、命令路由和自主链路桥接。
 - 每迁移一项职责，同轮删除原实现、旧参数和只服务旧路径的测试。
 

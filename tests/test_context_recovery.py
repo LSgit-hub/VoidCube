@@ -6,8 +6,11 @@ import pytest
 
 from agent.context_compressor import (
     CompressionRecoveryResult,
+    ContextRecoveryAction,
+    ContextRecoveryKind,
     apply_context_recovery_plan,
     build_context_recovery_plan,
+    execute_context_recovery,
     next_compression_attempt,
 )
 from run_agent import AIAgent
@@ -223,3 +226,134 @@ def test_agent_context_recovery_failure_persists_once_and_is_partial():
         "error": "cannot compress",
         "partial": True,
     }
+
+
+def _execute_recovery(kind, **overrides):
+    messages = overrides.pop(
+        "messages",
+        [
+            {"role": "user", "content": "old"},
+            {"role": "user", "content": "current"},
+        ],
+    )
+    compressor = overrides.pop(
+        "compressor",
+        SimpleNamespace(context_length=128000, update_model=lambda **_kwargs: None),
+    )
+    options = {
+        "error_message": "prompt is too long",
+        "messages": messages,
+        "system_prompt": "policy",
+        "approx_tokens": 100000,
+        "task_id": "task-1",
+        "previous_attempts": 0,
+        "max_attempts": 3,
+        "compressor": compressor,
+        "model": "test-model",
+        "base_url": "https://example.test/v1",
+        "api_key": "secret",
+        "provider": "test",
+        "compress": lambda source, policy, **kwargs: CompressionRecoveryResult(
+            messages=source[-1:],
+            system_prompt=policy,
+            original_message_count=len(source),
+            context_length_changed=kwargs.get("context_length_changed", False),
+        ),
+    }
+    options.update(overrides)
+    return execute_context_recovery(kind, **options)
+
+
+def test_payload_recovery_returns_one_restart_result():
+    result = _execute_recovery(ContextRecoveryKind.payload_too_large)
+
+    assert result.action is ContextRecoveryAction.restart
+    assert result.attempt.number == 1
+    assert result.compression.message_count_reduced is True
+    assert result.history_reset_required is True
+
+
+def test_payload_recovery_fails_before_calling_compressor_when_exhausted():
+    calls = []
+    result = _execute_recovery(
+        ContextRecoveryKind.payload_too_large,
+        previous_attempts=3,
+        compress=lambda *_args, **_kwargs: calls.append(True),
+    )
+
+    assert result.action is ContextRecoveryAction.fail
+    assert "max compression attempts (3) reached" in result.error
+    assert calls == []
+
+
+def test_context_recovery_can_restart_by_reducing_only_output_limit():
+    calls = []
+    result = _execute_recovery(
+        ContextRecoveryKind.context_overflow,
+        error_message=(
+            "max_tokens: 32768 > context_window: 200000 - "
+            "input_tokens: 190000 = available_tokens: 10000"
+        ),
+        compress=lambda *_args, **_kwargs: calls.append(True),
+    )
+
+    assert result.action is ContextRecoveryAction.restart
+    assert result.output_token_limit == 9936
+    assert result.available_output_tokens == 10000
+    assert result.history_reset_required is False
+    assert calls == []
+
+
+def test_context_recovery_applies_context_change_before_compression():
+    updates = []
+    compression_flags = []
+    compressor = SimpleNamespace(
+        context_length=128000,
+        _context_probed=False,
+        _context_probe_persistable=False,
+        update_model=lambda **kwargs: updates.append(kwargs),
+    )
+
+    def compress(source, policy, **kwargs):
+        compression_flags.append(kwargs["context_length_changed"])
+        return CompressionRecoveryResult(
+            messages=source,
+            system_prompt=policy,
+            original_message_count=len(source),
+            context_length_changed=kwargs["context_length_changed"],
+        )
+
+    result = _execute_recovery(
+        ContextRecoveryKind.context_overflow,
+        error_message="maximum context length is 65536 tokens",
+        compressor=compressor,
+        compress=compress,
+    )
+
+    assert result.action is ContextRecoveryAction.restart
+    assert result.context_length_changed is True
+    assert result.next_context_length == 65536
+    assert compression_flags == [True]
+    assert updates[0]["context_length"] == 65536
+
+
+def test_context_recovery_returns_canonical_failure_when_no_progress():
+    messages = [{"role": "user", "content": "current"}]
+    result = _execute_recovery(
+        ContextRecoveryKind.context_overflow,
+        messages=messages,
+        compressor=SimpleNamespace(
+            context_length=8000,
+            update_model=lambda **_kwargs: None,
+        ),
+        compress=lambda source, policy, **_kwargs: CompressionRecoveryResult(
+            messages=source,
+            system_prompt=policy,
+            original_message_count=len(source),
+        ),
+    )
+
+    assert result.action is ContextRecoveryAction.fail
+    assert result.error == (
+        "Context length exceeded (100,000 tokens). Cannot compress further."
+    )
