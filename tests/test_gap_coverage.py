@@ -281,7 +281,7 @@ class TestConfigurationValidation:
         assert cfg.host == "127.0.0.1"
         assert cfg.port == 6002
         assert cfg.service_runtime.endogenous_drive_enabled is True
-        assert "autonomous_chain_start_on_boot" not in cfg.service_runtime.model_fields
+        assert "autonomous_chain_start_on_boot" not in type(cfg.service_runtime).model_fields
         assert cfg.service_runtime.autonomous_chain_review_interval == 300
 
     def test_supervisor_config_segmented(self):

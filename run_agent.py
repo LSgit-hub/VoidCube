@@ -151,8 +151,12 @@ from agent.message_sanitizer import (
     sanitize_messages_surrogates,
     sanitize_surrogates,
 )
+from agent.session_persistence import (
+    SessionPersistence,
+    messages_before_last_assistant,
+)
 from agent.tool_schema import normalize_tool_definitions
-from VoidCube_core.utils import atomic_json_write, env_var_enabled
+from VoidCube_core.utils import env_var_enabled
 
 
 
@@ -337,7 +341,6 @@ class AIAgent:
         self.background_review_callback = None  # Optional sync callback for gateway delivery
         self.skip_context_files = skip_context_files
         self.pass_session_id = pass_session_id
-        self.persist_session = persist_session
         self._credential_pool = credential_pool
         self.log_prefix_chars = log_prefix_chars
         self.log_prefix = f"{log_prefix} " if log_prefix else ""
@@ -637,10 +640,6 @@ class AIAgent:
         VoidCube_home = get_VoidCube_home()
         self.logs_dir = VoidCube_home / "sessions"
         self.logs_dir.mkdir(parents=True, exist_ok=True)
-        self.session_log_file = self.logs_dir / f"session_{self.session_id}.json"
-        
-        # Track conversation messages for session logging
-        self._session_messages: List[Dict[str, Any]] = []
         
         # Session state management
         self._session_state = None
@@ -663,7 +662,6 @@ class AIAgent:
         # SQLite session store (optional -- provided by CLI or gateway)
         self._session_db = session_db
         self._parent_session_id = parent_session_id
-        self._last_flushed_db_idx = 0  # tracks DB-write cursor to prevent duplicate writes
         if self._session_db:
             try:
                 self._session_db.create_session(
@@ -688,6 +686,24 @@ class AIAgent:
                 logger.warning(
                     "Session DB create_session failed (session_search still available): %s", e
                 )
+
+        self._session_persistence = SessionPersistence(
+            enabled=persist_session,
+            logs_dir=self.logs_dir,
+            session_db=self._session_db,
+            session_start=self.session_start,
+            session_id=lambda: self.session_id,
+            model=lambda: self.model,
+            base_url=lambda: self.base_url,
+            platform=lambda: self.platform,
+            system_prompt=lambda: self._cached_system_prompt,
+            tools=lambda: self.tools,
+            user_message_override=lambda: (
+                self._persist_user_message_idx,
+                self._persist_user_message_override,
+            ),
+            verbose_logging=self.verbose_logging,
+        )
         
         # In-memory todo list for task planning (one per agent/session)
         from tools.todo_tool import TodoStore
@@ -1479,7 +1495,7 @@ class AIAgent:
                 # Scan the review agent's messages for successful tool actions
                 # and surface a compact summary to the user.
                 actions = []
-                for msg in getattr(review_agent, "_session_messages", []):
+                for msg in review_agent._session_persistence.messages:
                     if not isinstance(msg, dict) or msg.get("role") != "tool":
                         continue
                     try:
@@ -1529,115 +1545,6 @@ class AIAgent:
         t = threading.Thread(target=_run_review, daemon=True, name="bg-review")
         t.start()
 
-    def _apply_persist_user_message_override(self, messages: List[Dict]) -> None:
-        """Rewrite the current-turn user message before persistence/return.
-
-        Some call paths need an API-only user-message variant without letting
-        that synthetic text leak into persisted transcripts or resumed session
-        history. When an override is configured for the active turn, mutate the
-        in-memory messages list in place so both persistence and returned
-        history stay clean.
-        """
-        idx = getattr(self, "_persist_user_message_idx", None)
-        override = getattr(self, "_persist_user_message_override", None)
-        if override is None or idx is None:
-            return
-        if 0 <= idx < len(messages):
-            msg = messages[idx]
-            if isinstance(msg, dict) and msg.get("role") == "user":
-                msg["content"] = override
-
-    def _persist_session(self, messages: List[Dict], conversation_history: List[Dict] = None):
-        """Save session state to both JSON log and SQLite on any exit path.
-
-        Ensures conversations are never lost, even on errors or early returns.
-        Skipped when ``persist_session=False`` (ephemeral helper flows).
-        """
-        if not self.persist_session:
-            return
-        self._apply_persist_user_message_override(messages)
-        self._session_messages = messages
-        self._save_session_log(messages)
-        self._flush_messages_to_session_db(messages, conversation_history)
-
-    def _flush_messages_to_session_db(self, messages: List[Dict], conversation_history: List[Dict] = None):
-        """Persist any un-flushed messages to the SQLite session store.
-
-        Uses _last_flushed_db_idx to track which messages have already been
-        written, so repeated calls (from multiple exit paths) only write
-        truly new messages — preventing the duplicate-write bug (#860).
-        """
-        if not self._session_db:
-            return
-        self._apply_persist_user_message_override(messages)
-        try:
-            # If create_session() failed at startup (e.g. transient lock), the
-            # session row may not exist yet.  ensure_session() uses INSERT OR
-            # IGNORE so it is a no-op when the row is already there.
-            self._session_db.ensure_session(
-                self.session_id,
-                source=self.platform or "cli",
-                model=self.model,
-            )
-            start_idx = len(conversation_history) if conversation_history else 0
-            flush_from = max(start_idx, self._last_flushed_db_idx)
-            for msg in messages[flush_from:]:
-                role = msg.get("role", "unknown")
-                content = msg.get("content")
-                tool_calls_data = None
-                if hasattr(msg, "tool_calls") and msg.tool_calls:
-                    tool_calls_data = [
-                        {"name": tc.function.name, "arguments": tc.function.arguments}
-                        for tc in msg.tool_calls
-                    ]
-                elif isinstance(msg.get("tool_calls"), list):
-                    tool_calls_data = msg["tool_calls"]
-                self._session_db.append_message(
-                    session_id=self.session_id,
-                    role=role,
-                    content=content,
-                    tool_name=msg.get("tool_name"),
-                    tool_calls=tool_calls_data,
-                    tool_call_id=msg.get("tool_call_id"),
-                    finish_reason=msg.get("finish_reason"),
-                    reasoning=msg.get("reasoning") if role == "assistant" else None,
-                    reasoning_details=msg.get("reasoning_details") if role == "assistant" else None,
-                )
-            self._last_flushed_db_idx = len(messages)
-        except Exception as e:
-            logger.warning("Session DB append_message failed: %s", e)
-
-    def _get_messages_up_to_last_assistant(self, messages: List[Dict]) -> List[Dict]:
-        """
-        Get messages up to (but not including) the last assistant turn.
-        
-        This is used when we need to "roll back" to the last successful point
-        in the conversation, typically when the final assistant message is
-        incomplete or malformed.
-        
-        Args:
-            messages: Full message list
-            
-        Returns:
-            Messages up to the last complete assistant turn (ending with user/tool message)
-        """
-        if not messages:
-            return []
-        
-        # Find the index of the last assistant message
-        last_assistant_idx = None
-        for i in range(len(messages) - 1, -1, -1):
-            if messages[i].get("role") == "assistant":
-                last_assistant_idx = i
-                break
-        
-        if last_assistant_idx is None:
-            # No assistant message found, return all messages
-            return messages.copy()
-        
-        # Return everything up to (not including) the last assistant message
-        return messages[:last_assistant_idx]
-    
     def _format_tools_for_system_message(self) -> str:
         """
         Format tool definitions for the system message in the trajectory format.
@@ -1930,81 +1837,6 @@ class AIAgent:
                 logging.warning(f"Failed to dump API request debug payload: {dump_error}")
             return None
 
-    @staticmethod
-    def _clean_session_content(content: str) -> str:
-        """Normalize whitespace around existing think blocks."""
-        if not content:
-            return content
-        content = re.sub(r'\n+(<think>)', r'\n\1', content)
-        content = re.sub(r'(</think>)\n+', r'\1\n', content)
-        return content.strip()
-
-    def _save_session_log(self, messages: List[Dict[str, Any]] = None):
-        """
-        Save the full raw session to a JSON file.
-
-        Stores every message exactly as the agent sees it: user messages,
-        assistant messages (with reasoning, finish_reason, tool_calls),
-        tool responses (with tool_call_id, tool_name), and injected system
-        messages (compression summaries, todo snapshots, etc.).
-
-        REASONING_SCRATCHPAD tags are converted to <think> blocks for consistency.
-        Overwritten after each turn so it always reflects the latest state.
-        """
-        messages = messages or self._session_messages
-        if not messages:
-            return
-
-        try:
-            # Clean assistant content for session logs
-            cleaned = []
-            for msg in messages:
-                if msg.get("role") == "assistant" and msg.get("content"):
-                    msg = dict(msg)
-                    msg["content"] = self._clean_session_content(msg["content"])
-                cleaned.append(msg)
-
-            # Guard: never overwrite a larger session log with fewer messages.
-            # This protects against data loss when --resume loads a session whose
-            # messages weren't fully written to SQLite — the resumed agent starts
-            # with partial history and would otherwise clobber the full JSON log.
-            if self.session_log_file.exists():
-                try:
-                    existing = json.loads(self.session_log_file.read_text(encoding="utf-8"))
-                    existing_count = existing.get("message_count", len(existing.get("messages", [])))
-                    if existing_count > len(cleaned):
-                        logging.debug(
-                            "Skipping session log overwrite: existing has %d messages, current has %d",
-                            existing_count, len(cleaned),
-                        )
-                        return
-                except Exception:
-                    pass  # corrupted existing file — allow the overwrite
-
-            entry = {
-                "session_id": self.session_id,
-                "model": self.model,
-                "base_url": self.base_url,
-                "platform": self.platform,
-                "session_start": self.session_start.isoformat(),
-                "last_updated": datetime.now().isoformat(),
-                "system_prompt": self._cached_system_prompt or "",
-                "tools": self.tools or [],
-                "message_count": len(cleaned),
-                "messages": cleaned,
-            }
-
-            atomic_json_write(
-                self.session_log_file,
-                entry,
-                indent=2,
-                default=str,
-            )
-
-        except Exception as e:
-            if self.verbose_logging:
-                logging.warning(f"Failed to save session log: {e}")
-    
     def interrupt(self, message: str = None) -> None:
         """
         Request the agent to interrupt its current tool-calling loop.
@@ -3887,7 +3719,7 @@ class AIAgent:
 
         Args:
             messages: The current conversation messages. If None, uses
-                      self._session_messages (last run_conversation state).
+                      the session persistence buffer (last run_conversation state).
             min_turns: Minimum user turns required to trigger the flush.
                        None = use config value (flush_min_turns).
                        0 = always flush (used for compression).
@@ -3901,7 +3733,7 @@ class AIAgent:
             return
 
         if messages is None:
-            messages = getattr(self, '_session_messages', None)
+            messages = self._session_persistence.messages
         if not messages or len(messages) < 3:
             return
 
@@ -4057,8 +3889,6 @@ class AIAgent:
                 self._session_db.end_session(self.session_id, "compression")
                 old_session_id = self.session_id
                 self.session_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
-                # Update session_log_file to point to the new session's JSON file
-                self.session_log_file = self.logs_dir / f"session_{self.session_id}.json"
                 self._session_db.create_session(
                     session_id=self.session_id,
                     source=self.platform or os.environ.get("VOIDCUBE_SESSION_SOURCE", "cli"),
@@ -4073,8 +3903,7 @@ class AIAgent:
                     except (ValueError, Exception) as e:
                         logger.debug("Could not propagate title on compression: %s", e)
                 self._session_db.update_system_prompt(self.session_id, new_system_prompt)
-                # Reset flush cursor — new session starts with no messages written
-                self._last_flushed_db_idx = 0
+                self._session_persistence.reset_flush_cursor()
             except Exception as e:
                 logger.warning("Session DB compression split failed — new session will NOT be indexed: %s", e)
 
@@ -4159,7 +3988,7 @@ class AIAgent:
         error: str,
     ) -> dict:
         """Persist once and build the canonical partial context failure result."""
-        self._persist_session(messages, conversation_history)
+        self._session_persistence.persist(messages, conversation_history)
         return {
             "messages": messages,
             "completed": False,
@@ -5665,7 +5494,7 @@ class AIAgent:
                                 continue
                             self._emit_status(f"❌ Max retries ({max_retries}) exceeded for invalid responses. Giving up.")
                             logging.error(f"{self.log_prefix}Invalid API response after {max_retries} retries.")
-                            self._persist_session(messages, conversation_history)
+                            self._session_persistence.persist(messages, conversation_history)
                             return {
                                 "messages": messages,
                                 "completed": False,
@@ -5684,7 +5513,7 @@ class AIAgent:
                         while time.time() < sleep_end:
                             if self._interrupt_requested:
                                 self._vprint(f"{self.log_prefix}🔧 Interrupt detected during retry wait, aborting.", force=True)
-                                self._persist_session(messages, conversation_history)
+                                self._session_persistence.persist(messages, conversation_history)
                                 self.clear_interrupt()
                                 return {
                                     "final_response": f"Operation interrupted during retry ({_failure_hint}, attempt {retry_count}/{max_retries}).",
@@ -5754,7 +5583,7 @@ class AIAgent:
                                 "set `model.max_tokens` in config.yaml"
                             )
                             self._cleanup_task_resources(effective_task_id)
-                            self._persist_session(messages, conversation_history)
+                            self._session_persistence.persist(messages, conversation_history)
                             return {
                                 "final_response": _exhaust_response,
                                 "messages": messages,
@@ -5786,14 +5615,13 @@ class AIAgent:
                                     ),
                                 }
                                 messages.append(continue_msg)
-                                self._session_messages = messages
-                                self._save_session_log(messages)
+                                self._session_persistence.save_log(messages)
                                 restart_with_length_continuation = True
                                 break
 
                             partial_response = strip_thinking_blocks(truncated_response_prefix).strip()
                             self._cleanup_task_resources(effective_task_id)
-                            self._persist_session(messages, conversation_history)
+                            self._session_persistence.persist(messages, conversation_history)
                             return {
                                 "final_response": partial_response or None,
                                 "messages": messages,
@@ -5819,7 +5647,7 @@ class AIAgent:
                                 force=True,
                             )
                             self._cleanup_task_resources(effective_task_id)
-                            self._persist_session(messages, conversation_history)
+                            self._session_persistence.persist(messages, conversation_history)
                             return {
                                 "final_response": None,
                                 "messages": messages,
@@ -5832,10 +5660,10 @@ class AIAgent:
                         # If we have prior messages, roll back to last complete state
                         if len(messages) > 1:
                             self._vprint(f"{self.log_prefix}   ⏪ Rolling back to last complete assistant turn")
-                            rolled_back_messages = self._get_messages_up_to_last_assistant(messages)
+                            rolled_back_messages = messages_before_last_assistant(messages)
 
                             self._cleanup_task_resources(effective_task_id)
-                            self._persist_session(messages, conversation_history)
+                            self._session_persistence.persist(messages, conversation_history)
 
                             return {
                                 "final_response": None,
@@ -5848,7 +5676,7 @@ class AIAgent:
                         else:
                             # First message was truncated - mark as failed
                             self._vprint(f"{self.log_prefix}❌ First response truncated - cannot recover", force=True)
-                            self._persist_session(messages, conversation_history)
+                            self._session_persistence.persist(messages, conversation_history)
                             return {
                                 "final_response": None,
                                 "messages": messages,
@@ -5959,7 +5787,7 @@ class AIAgent:
                         self.thinking_callback("")
                     api_elapsed = time.time() - api_start_time
                     self._vprint(f"{self.log_prefix}🔧 Interrupted during API call.", force=True)
-                    self._persist_session(messages, conversation_history)
+                    self._session_persistence.persist(messages, conversation_history)
                     interrupted = True
                     final_response = f"Operation interrupted: waiting for model response ({api_elapsed:.1f}s elapsed)."
                     break
@@ -6104,7 +5932,7 @@ class AIAgent:
                     # Check for interrupt before deciding to retry
                     if self._interrupt_requested:
                         self._vprint(f"{self.log_prefix}🔧 Interrupt detected during error handling, aborting retries.", force=True)
-                        self._persist_session(messages, conversation_history)
+                        self._session_persistence.persist(messages, conversation_history)
                         self.clear_interrupt()
                         return {
                             "final_response": f"Operation interrupted: handling API error ({error_type}: {clean_error_message(str(api_error))}).",
@@ -6337,7 +6165,7 @@ class AIAgent:
                                 force=True,
                             )
                         else:
-                            self._persist_session(messages, conversation_history)
+                            self._session_persistence.persist(messages, conversation_history)
                         return {
                             "final_response": None,
                             "messages": messages,
@@ -6403,7 +6231,7 @@ class AIAgent:
                             self._dump_api_request_debug(
                                 api_kwargs, reason="max_retries_exhausted", error=api_error,
                             )
-                        self._persist_session(messages, conversation_history)
+                        self._session_persistence.persist(messages, conversation_history)
                         _final_response = f"API call failed after {max_retries} retries: {_final_summary}"
                         if _is_stream_drop:
                             _final_response += (
@@ -6444,7 +6272,7 @@ class AIAgent:
                     while time.time() < sleep_end:
                         if self._interrupt_requested:
                             self._vprint(f"{self.log_prefix}🔧 Interrupt detected during retry wait, aborting.", force=True)
-                            self._persist_session(messages, conversation_history)
+                            self._session_persistence.persist(messages, conversation_history)
                             self.clear_interrupt()
                             return {
                                 "final_response": f"Operation interrupted: retrying API call after error (retry {retry_count}/{max_retries}).",
@@ -6479,7 +6307,7 @@ class AIAgent:
             if response is None:
                 _turn_exit_reason = "all_retries_exhausted_no_response"
                 print(f"{self.log_prefix}❌ All API retries exhausted with no successful response.")
-                self._persist_session(messages, conversation_history)
+                self._session_persistence.persist(messages, conversation_history)
                 break
 
             try:
@@ -6591,7 +6419,7 @@ class AIAgent:
                         if self._invalid_tool_retries >= 3:
                             self._vprint(f"{self.log_prefix}❌ Max retries (3) for invalid tool calls exceeded. Stopping as partial.", force=True)
                             self._invalid_tool_retries = 0
-                            self._persist_session(messages, conversation_history)
+                            self._session_persistence.persist(messages, conversation_history)
                             return {
                                 "final_response": None,
                                 "messages": messages,
@@ -6657,7 +6485,7 @@ class AIAgent:
                             )
                             self._invalid_json_retries = 0
                             self._cleanup_task_resources(effective_task_id)
-                            self._persist_session(messages, conversation_history)
+                            self._session_persistence.persist(messages, conversation_history)
                             return {
                                 "final_response": None,
                                 "messages": messages,
@@ -6872,8 +6700,7 @@ class AIAgent:
                         conversation_history = None
                     
                     # Save session log incrementally (so progress is visible even if interrupted)
-                    self._session_messages = messages
-                    self._save_session_log(messages)
+                    self._session_persistence.save_log(messages)
                     
                     # Continue loop for next response
                     continue
@@ -6937,8 +6764,7 @@ class AIAgent:
                             )
                             interim_msg["_thinking_prefill"] = True
                             messages.append(interim_msg)
-                            self._session_messages = messages
-                            self._save_session_log(messages)
+                            self._session_persistence.save_log(messages)
                             continue
 
                         # ── Empty response retry ──────────────────────
@@ -7158,7 +6984,7 @@ class AIAgent:
         self._cleanup_task_resources(effective_task_id)
 
         # Persist session to both JSON log and SQLite
-        self._persist_session(messages, conversation_history)
+        self._session_persistence.persist(messages, conversation_history)
 
         # ── Turn-exit diagnostic log ─────────────────────────────────────
         # Always logged at INFO so agent.log captures WHY every turn ended.
