@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -137,6 +138,58 @@ def test_failed_configuration_preserves_primary_and_parameters():
     assert lifecycle.primary is old_client
     assert lifecycle.snapshot_kwargs() == old_kwargs
     assert old_client.close_count == 0
+
+
+def test_rebuild_cannot_restore_a_stale_configuration_during_concurrent_switch():
+    rebuild_started = threading.Event()
+    configure_started = threading.Event()
+    release_rebuild = threading.Event()
+    created: list[_Client] = []
+
+    def factory(kwargs):
+        client = _Client(kwargs)
+        created.append(client)
+        if len(created) > 1 and kwargs["api_key"] == "key-1":
+            rebuild_started.set()
+            assert release_rebuild.wait(timeout=2)
+        elif kwargs["api_key"] == "key-2":
+            configure_started.set()
+        return client
+
+    lifecycle, _ = _lifecycle(factory)
+    lifecycle.initialize_primary(reason="test_init")
+    rebuild_result: list[bool] = []
+    configure_result: list[bool] = []
+
+    rebuild_thread = threading.Thread(
+        target=lambda: rebuild_result.append(
+            lifecycle.replace_primary(reason="test_rebuild")
+        )
+    )
+    rebuild_thread.start()
+    assert rebuild_started.wait(timeout=2)
+
+    configure_thread = threading.Thread(
+        target=lambda: configure_result.append(
+            lifecycle.configure(
+                {"api_key": "key-2", "base_url": "https://next.example/v1"},
+                reason="test_switch",
+            )
+        )
+    )
+    configure_thread.start()
+
+    assert configure_started.wait(timeout=0.1) is False
+    release_rebuild.set()
+    rebuild_thread.join(timeout=2)
+    configure_thread.join(timeout=2)
+
+    assert rebuild_thread.is_alive() is False
+    assert configure_thread.is_alive() is False
+    assert rebuild_result == [True]
+    assert configure_result == [True]
+    assert lifecycle.snapshot_kwargs()["api_key"] == "key-2"
+    assert lifecycle.primary.api_key == "key-2"
 
 
 def test_adopt_uses_resolved_client_and_releases_previous_primary():

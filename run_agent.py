@@ -119,6 +119,7 @@ from agent.context_compressor import (
     next_compression_attempt,
 )
 from agent.client_lifecycle import ChatClientLifecycle
+from agent.stream_response import StreamingResponseAssembler
 from agent.iteration_control import IterationBudget
 from agent.subdirectory_hints import SubdirectoryHintTracker
 from agent.prompt_builder import build_skills_system_prompt, build_context_files_prompt, build_environment_hints, load_soul_md, TOOL_USE_ENFORCEMENT_GUIDANCE, TOOL_USE_ENFORCEMENT_MODELS, GOOGLE_MODEL_OPERATIONAL_GUIDANCE, OPENAI_MODEL_EXECUTION_GUIDANCE
@@ -2767,20 +2768,7 @@ class AIAgent:
             # response via .response before any chunks are consumed.
             self._capture_rate_limits(getattr(stream, "response", None))
 
-            content_parts: list = []
-            tool_calls_acc: dict = {}
-            tool_gen_notified: set = set()
-            # Ollama-compatible endpoints reuse index 0 for every tool call
-            # in a parallel batch, distinguishing them only by id.  Track
-            # the last seen id per raw index so we can detect a new tool
-            # call starting at the same index and redirect it to a fresh slot.
-            _last_id_at_idx: dict = {}      # raw_index -> last seen non-empty id
-            _active_slot_by_idx: dict = {}  # raw_index -> current slot in tool_calls_acc
-            finish_reason = None
-            model_name = None
-            role = "assistant"
-            reasoning_parts: list = []
-            usage_obj = None
+            assembler = StreamingResponseAssembler()
             _first_chunk_seen = False
             for chunk in stream:
                 last_chunk_time["t"] = time.time()
@@ -2791,31 +2779,15 @@ class AIAgent:
                 if self._interrupt_requested:
                     break
 
-                if not chunk.choices:
-                    if hasattr(chunk, "model") and chunk.model:
-                        model_name = chunk.model
-                    # Usage comes in the final chunk with empty choices
-                    if hasattr(chunk, "usage") and chunk.usage:
-                        usage_obj = chunk.usage
-                    continue
-
-                delta = chunk.choices[0].delta
-                if hasattr(chunk, "model") and chunk.model:
-                    model_name = chunk.model
-
-                # Accumulate reasoning content
-                reasoning_text = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
-                if reasoning_text:
-                    reasoning_parts.append(reasoning_text)
+                update = assembler.add(chunk)
+                if update.starts_delivery:
                     _fire_first_delta()
-                    self._fire_reasoning_delta(reasoning_text)
+                if update.reasoning:
+                    self._fire_reasoning_delta(update.reasoning)
 
-                # Accumulate text content — fire callback only when no tool calls
-                if delta and delta.content:
-                    content_parts.append(delta.content)
-                    if not tool_calls_acc:
-                        _fire_first_delta()
-                        self._fire_stream_delta(delta.content)
+                if update.content:
+                    if update.stream_content:
+                        self._fire_stream_delta(update.content)
                         deltas_were_sent["yes"] = True
                     else:
                         # Tool calls suppress regular content streaming (avoids
@@ -2831,114 +2803,15 @@ class AIAgent:
                         # box is already closed (tool boundary flush).
                         if self.stream_delta_callback:
                             try:
-                                self.stream_delta_callback(delta.content)
-                                self._record_streamed_assistant_text(delta.content)
+                                self.stream_delta_callback(update.content)
+                                self._record_streamed_assistant_text(update.content)
                             except Exception:
                                 pass
 
-                # Accumulate tool call deltas — notify display on first name
-                if delta and delta.tool_calls:
-                    for tc_delta in delta.tool_calls:
-                        raw_idx = tc_delta.index if tc_delta.index is not None else 0
-                        delta_id = tc_delta.id or ""
+                for tool_name in update.started_tools:
+                    self._fire_tool_gen_started(tool_name)
 
-                        # Ollama fix: detect a new tool call reusing the same
-                        # raw index (different id) and redirect to a fresh slot.
-                        if raw_idx not in _active_slot_by_idx:
-                            _active_slot_by_idx[raw_idx] = raw_idx
-                        if (
-                            delta_id
-                            and raw_idx in _last_id_at_idx
-                            and delta_id != _last_id_at_idx[raw_idx]
-                        ):
-                            new_slot = max(tool_calls_acc, default=-1) + 1
-                            _active_slot_by_idx[raw_idx] = new_slot
-                        if delta_id:
-                            _last_id_at_idx[raw_idx] = delta_id
-                        idx = _active_slot_by_idx[raw_idx]
-
-                        if idx not in tool_calls_acc:
-                            tool_calls_acc[idx] = {
-                                "id": tc_delta.id or "",
-                                "type": "function",
-                                "function": {"name": "", "arguments": ""},
-                                "extra_content": None,
-                            }
-                        entry = tool_calls_acc[idx]
-                        if tc_delta.id:
-                            entry["id"] = tc_delta.id
-                        if tc_delta.function:
-                            if tc_delta.function.name:
-                                entry["function"]["name"] += tc_delta.function.name
-                            if tc_delta.function.arguments:
-                                entry["function"]["arguments"] += tc_delta.function.arguments
-                        extra = getattr(tc_delta, "extra_content", None)
-                        if extra is None and hasattr(tc_delta, "model_extra"):
-                            extra = (tc_delta.model_extra or {}).get("extra_content")
-                        if extra is not None:
-                            if hasattr(extra, "model_dump"):
-                                extra = extra.model_dump()
-                            entry["extra_content"] = extra
-                        # Fire once per tool when the full name is available
-                        name = entry["function"]["name"]
-                        if name and idx not in tool_gen_notified:
-                            tool_gen_notified.add(idx)
-                            _fire_first_delta()
-                            self._fire_tool_gen_started(name)
-
-                if chunk.choices[0].finish_reason:
-                    finish_reason = chunk.choices[0].finish_reason
-
-                # Usage in the final chunk
-                if hasattr(chunk, "usage") and chunk.usage:
-                    usage_obj = chunk.usage
-
-            # Build mock response matching non-streaming shape
-            full_content = "".join(content_parts) or None
-            mock_tool_calls = None
-            has_truncated_tool_args = False
-            if tool_calls_acc:
-                mock_tool_calls = []
-                for idx in sorted(tool_calls_acc):
-                    tc = tool_calls_acc[idx]
-                    arguments = tc["function"]["arguments"]
-                    if arguments and arguments.strip():
-                        try:
-                            json.loads(arguments)
-                        except json.JSONDecodeError:
-                            has_truncated_tool_args = True
-                    mock_tool_calls.append(SimpleNamespace(
-                        id=tc["id"],
-                        type=tc["type"],
-                        extra_content=tc.get("extra_content"),
-                        function=SimpleNamespace(
-                            name=tc["function"]["name"],
-                            arguments=arguments,
-                        ),
-                    ))
-
-            effective_finish_reason = finish_reason or "stop"
-            if has_truncated_tool_args:
-                effective_finish_reason = "length"
-
-            full_reasoning = "".join(reasoning_parts) or None
-            mock_message = SimpleNamespace(
-                role=role,
-                content=full_content,
-                tool_calls=mock_tool_calls,
-                reasoning_content=full_reasoning,
-            )
-            mock_choice = SimpleNamespace(
-                index=0,
-                message=mock_message,
-                finish_reason=effective_finish_reason,
-            )
-            return SimpleNamespace(
-                id="stream-" + str(uuid.uuid4()),
-                model=model_name,
-                choices=[mock_choice],
-                usage=usage_obj,
-            )
+            return assembler.build_response()
 
         def _call():
             import httpx as _httpx
@@ -3163,17 +3036,8 @@ class AIAgent:
                     "response to prevent duplicate messages: %s",
                     result["error"],
                 )
-                _stub_msg = SimpleNamespace(
-                    role="assistant", content=None, tool_calls=None,
-                    reasoning_content=None,
-                )
-                return SimpleNamespace(
-                    id="partial-stream-stub",
-                    model=getattr(self, "model", "unknown"),
-                    choices=[SimpleNamespace(
-                        index=0, message=_stub_msg, finish_reason="stop",
-                    )],
-                    usage=None,
+                return StreamingResponseAssembler.partial_delivery_response(
+                    getattr(self, "model", "unknown")
                 )
             raise result["error"]
         return result["response"]

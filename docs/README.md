@@ -27,7 +27,7 @@
 - Web 小屋只观察 API-B 判断、转交、执行回报和 Mem 回流，不承担用户聊天或人工队列控制。
 - 新身体必须经过候选物化、probe、Governor 审查和用户同意后才能激活；用户同意门不能被自动化绕过。
 - 模型请求统一使用 OpenAI-compatible Chat Completions；项目退役集成在源码、可加载技能和 wheel 中必须保持零入口。
-- Agent 会话持久化由 `agent/session_persistence.py` 统一负责；共享/请求级客户端、连接替换和死 socket 清理由 `agent/client_lifecycle.py` 统一负责。`run_agent.py` 不再持有第二套方法、游标、客户端参数或连接锁。
+- Agent 会话持久化由 `agent/session_persistence.py` 统一负责；共享/请求级客户端、连接替换和死 socket 清理由 `agent/client_lifecycle.py` 统一负责；流式 chunk 装配由 `agent/stream_response.py` 统一负责。`run_agent.py` 只编排这些组件，不再持有第二套游标、客户端状态或流式累积结构。
 
 ## 分阶段路线
 
@@ -39,7 +39,7 @@
 
 ### 阶段 2：主路径解耦
 
-- 会话持久化与客户端生命周期已经抽离；下一步按调用关系拆分流式响应装配和工具循环。
+- 会话持久化、客户端生命周期与流式响应装配已经抽离；下一步按调用关系拆分工具执行编排。
 - 再拆分 `cli.py` 的会话 UI、命令路由和自主链路桥接。
 - 每迁移一项职责，同轮删除原实现、旧参数和只服务旧路径的测试。
 

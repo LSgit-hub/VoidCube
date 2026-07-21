@@ -66,29 +66,7 @@ class ChatClientLifecycle:
 
     def configure(self, client_kwargs: Mapping[str, Any], *, reason: str) -> bool:
         """Build and adopt a shared client for a new runtime configuration."""
-        next_kwargs = dict(client_kwargs)
-        try:
-            new_client = self._create_client(
-                next_kwargs,
-                reason=reason,
-                shared=True,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Failed to rebuild shared chat client (%s) %s error=%s",
-                reason,
-                self.log_context(),
-                exc,
-            )
-            return False
-
-        with self._lock:
-            old_client = self._primary
-            self._client_kwargs = next_kwargs
-            self._primary = new_client
-        if old_client is not new_client:
-            self.close_client(old_client, reason=f"replace:{reason}", shared=True)
-        return True
+        return self._replace(client_kwargs, reason=reason)
 
     def adopt(
         self,
@@ -106,7 +84,7 @@ class ChatClientLifecycle:
             self.close_client(old_client, reason=f"adopt:{reason}", shared=True)
 
     def replace_primary(self, *, reason: str) -> bool:
-        return self.configure(self.snapshot_kwargs(), reason=reason)
+        return self._replace(None, reason=reason)
 
     def ensure_primary(self, *, reason: str) -> Any:
         require_active_integration(
@@ -257,6 +235,39 @@ class ChatClientLifecycle:
             self.log_context(),
         )
         return client
+
+    def _replace(
+        self,
+        client_kwargs: Mapping[str, Any] | None,
+        *,
+        reason: str,
+    ) -> bool:
+        """Serialize configuration snapshots with primary-client replacement."""
+        try:
+            with self._lock:
+                next_kwargs = dict(
+                    self._client_kwargs if client_kwargs is None else client_kwargs
+                )
+                new_client = self._create_client(
+                    next_kwargs,
+                    reason=reason,
+                    shared=True,
+                )
+                old_client = self._primary
+                self._client_kwargs = next_kwargs
+                self._primary = new_client
+        except Exception as exc:
+            logger.warning(
+                "Failed to rebuild shared chat client (%s) %s error=%s",
+                reason,
+                self.log_context(),
+                exc,
+            )
+            return False
+
+        if old_client is not new_client:
+            self.close_client(old_client, reason=f"replace:{reason}", shared=True)
+        return True
 
     @staticmethod
     def _connections(client: Any) -> list[Any]:
