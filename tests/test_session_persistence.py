@@ -10,7 +10,6 @@ from agent.session_persistence import (
     SessionPersistence,
     apply_user_message_override,
     clean_session_content,
-    messages_before_last_assistant,
 )
 
 
@@ -68,20 +67,6 @@ def test_apply_user_message_override_only_changes_target_user_message():
         {"role": "system", "content": "policy"},
         {"role": "user", "content": "original user text"},
     ]
-
-
-def test_messages_before_last_assistant_returns_independent_prefix():
-    messages = [
-        {"role": "user", "content": "one"},
-        {"role": "assistant", "content": "first"},
-        {"role": "tool", "content": "result"},
-        {"role": "assistant", "content": "second"},
-    ]
-
-    prefix = messages_before_last_assistant(messages)
-
-    assert prefix == messages[:3]
-    assert prefix is not messages
 
 
 def test_persist_restores_user_text_and_flushes_only_new_messages(tmp_path):

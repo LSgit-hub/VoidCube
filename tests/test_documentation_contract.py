@@ -20,6 +20,7 @@ ACTIVE_DOCS = {
     "内生驱动核心设计.md",
     "全链路问题清单.md",
     "开发与验证.md",
+    "项目架构与逻辑架构.md",
     "项目文件架构说明.md",
 }
 
@@ -93,3 +94,22 @@ def test_auto_gate_semantics_are_consistent_in_mainline_docs():
     assert "`/auto-q` 是对应的临时停用开关" in baseline
     assert all(fragment not in combined for fragment in STALE_AUTO_SEMANTICS)
     assert all(name not in combined for name in REMOVED_DOCS)
+
+
+def test_mainline_architecture_plan_has_ordered_gates_and_precise_state_ownership():
+    architecture = (DOCS / "项目架构与逻辑架构.md").read_text(encoding="utf-8")
+    baseline = (DOCS / "voidcube架构基线.md").read_text(encoding="utf-8")
+    systems_entry = (ROOT / "systems" / "architecture.md").read_text(encoding="utf-8")
+
+    phase_markers = [f"M{index} " for index in range(6)]
+    phase_positions = [architecture.index(marker) for marker in phase_markers]
+
+    assert phase_positions == sorted(phase_positions)
+    assert "当前模型协议只允许 OpenAI-compatible Chat Completions" in architecture
+    assert "AutonomousChainStore" in architecture
+    assert "在途状态归 Store，长期历史归 Mem 治理事件" in architecture
+    assert "Gateway 是跨进程调用 Executor 的唯一标准入口" in baseline
+    assert "Supervisor 进程内部通过" in baseline
+    assert "VoidCubeExecutionFacade" in baseline
+    assert "Agent 保持无状态" not in systems_entry
+    assert "不拥有长期身份、治理裁决或跨会话事实真相" in systems_entry

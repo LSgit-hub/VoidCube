@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent.stream_response import StreamingResponseAssembler
+from agent.stream_response import StreamChunkUpdate, StreamingResponseAssembler
 from run_agent import AIAgent
 
 
@@ -181,60 +181,33 @@ def test_partial_delivery_response_prevents_a_second_visible_answer():
     assert response.choices[0].finish_reason == "stop"
 
 
-def test_agent_streaming_transport_uses_assembler_and_preserves_callbacks(monkeypatch):
-    usage = SimpleNamespace(prompt_tokens=4, completion_tokens=2)
-    stream = [
-        _chunk(reasoning="check ", content="hello "),
-        _chunk(content="world", finish_reason="stop"),
-        _chunk(choices=False, usage=usage),
-    ]
-    request_client = SimpleNamespace(
-        chat=SimpleNamespace(
-            completions=SimpleNamespace(create=lambda **_kwargs: stream)
-        )
-    )
-    closed: list[tuple[object, str]] = []
+def test_agent_delivers_transport_updates_to_existing_ui_callbacks():
     text_deltas: list[str] = []
     reasoning_deltas: list[str] = []
-    first_deltas: list[bool] = []
-    activity: list[str] = []
+    tool_names: list[str] = []
 
     agent = AIAgent.__new__(AIAgent)
-    agent.base_url = "https://api.example/v1"
-    agent.model = "safe-model"
-    agent._interrupt_requested = False
     agent._stream_callback = None
     agent._stream_needs_break = False
     agent._current_streamed_assistant_text = ""
     agent.stream_delta_callback = text_deltas.append
     agent.reasoning_callback = reasoning_deltas.append
-    agent.tool_gen_callback = None
-    agent._client_lifecycle = SimpleNamespace(
-        create_request_client=lambda *, reason: request_client,
-        close_request_client=lambda client, *, reason: closed.append(
-            (client, reason)
-        ),
-    )
-    agent._touch_activity = activity.append
-    agent._capture_rate_limits = lambda _response: None
-    agent._emit_status = lambda _message: None
-    agent._safe_print = lambda *_args, **_kwargs: None
+    agent.tool_gen_callback = tool_names.append
 
-    monkeypatch.setenv("VOIDCUBE_STREAM_STALE_TIMEOUT", "60")
-    response = agent._interruptible_streaming_api_call(
-        {"model": "safe-model", "messages": []},
-        on_first_delta=lambda: first_deltas.append(True),
+    agent._deliver_stream_update(
+        StreamChunkUpdate(reasoning="check ", content="hello ", stream_content=True)
+    )
+    agent._deliver_stream_update(
+        StreamChunkUpdate(
+            content="hidden reasoning tag",
+            stream_content=False,
+            started_tools=("read_file",),
+        )
     )
 
-    assert text_deltas == ["hello ", "world"]
+    assert text_deltas == ["hello ", "hidden reasoning tag"]
     assert reasoning_deltas == ["check "]
-    assert first_deltas == [True]
-    assert agent._current_streamed_assistant_text == "hello world"
-    assert response.usage is usage
-    assert response.choices[0].message.content == "hello world"
-    assert response.choices[0].message.reasoning_content == "check "
-    assert activity == [
-        "waiting for provider response (streaming)",
-        "receiving stream response",
-    ]
-    assert closed == [(request_client, "stream_request_complete")]
+    assert tool_names == ["read_file"]
+    assert agent._current_streamed_assistant_text == (
+        "hello hidden reasoning tag"
+    )

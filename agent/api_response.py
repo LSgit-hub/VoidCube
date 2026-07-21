@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 import uuid
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 
@@ -18,6 +20,43 @@ _THINKING_TAG_RE = re.compile(
     r"</?(?:think|thinking|reasoning|thought|REASONING_SCRATCHPAD)\b[^>]*>\s*",
     flags=re.IGNORECASE,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ChatResponseInspection:
+    """Validated first-choice view plus provider diagnostics."""
+
+    choice: Any = None
+    message: Any = None
+    finish_reason: str = "stop"
+    errors: tuple[str, ...] = ()
+    provider_name: str = "Unknown"
+    provider_error: str = "Unknown"
+    error_code: int | None = None
+    failure_hint: str = "invalid response"
+
+    @property
+    def valid(self) -> bool:
+        return not self.errors
+
+
+class TruncationAction(str, Enum):
+    proceed = "proceed"
+    fail_thinking_budget = "fail_thinking_budget"
+    continue_text = "continue_text"
+    return_partial_text = "return_partial_text"
+    retry_tool_call = "retry_tool_call"
+    fail_tool_call = "fail_tool_call"
+
+
+@dataclass(frozen=True, slots=True)
+class TruncationRecovery:
+    """Pure decision for one response truncated by the output limit."""
+
+    action: TruncationAction
+    content: str = ""
+    text_truncation_count: int = 0
+    tool_truncation_count: int = 0
 
 
 def has_thinking_tags(content: str) -> bool:
@@ -62,6 +101,161 @@ def _value(source: Any, key: str, default: Any = None) -> Any:
     if isinstance(source, Mapping):
         return source.get(key, default)
     return getattr(source, key, default)
+
+
+def inspect_chat_response(
+    response: Any,
+    *,
+    duration_seconds: float = 0.0,
+) -> ChatResponseInspection:
+    """Validate one chat-completions response without mutating Agent state."""
+    errors: list[str] = []
+    choice = None
+    message = None
+    finish_reason = "stop"
+
+    if response is None:
+        errors.append("response is None")
+    else:
+        missing = object()
+        choices = _value(response, "choices", missing)
+        if choices is missing:
+            errors.append("response has no 'choices' attribute")
+        elif choices is None:
+            errors.append("response.choices is None")
+        else:
+            try:
+                choice = choices[0]
+            except (IndexError, KeyError, TypeError):
+                errors.append("response.choices is empty")
+            if choice is None and not errors:
+                errors.append("response.choices[0] is None")
+            elif choice is not None:
+                raw_message = _value(choice, "message", missing)
+                if raw_message is missing:
+                    errors.append("response.choices[0] has no 'message' attribute")
+                elif raw_message is None:
+                    errors.append("response.choices[0].message is None")
+                else:
+                    message = raw_message
+                    finish_reason = str(
+                        _value(choice, "finish_reason", "stop") or "stop"
+                    )
+
+    provider_name = "Unknown"
+    provider_error = "Unknown"
+    error_code = None
+    response_error = _value(response, "error") if response is not None else None
+    if response_error:
+        provider_error = str(response_error)
+        metadata = _value(response_error, "metadata")
+        metadata_mapping = _object_mapping(metadata)
+        if metadata_mapping:
+            provider_name = str(
+                metadata_mapping.get("provider_name") or provider_name
+            )
+        raw_code = _value(response_error, "code")
+        if raw_code is not None:
+            try:
+                error_code = int(raw_code)
+            except (TypeError, ValueError):
+                pass
+    else:
+        response_message = _value(response, "message") if response is not None else None
+        if response_message:
+            provider_error = str(response_message)
+
+    response_model = _value(response, "model") if response is not None else None
+    if provider_name == "Unknown" and response_model:
+        provider_name = f"model={response_model}"
+
+    duration = max(0.0, float(duration_seconds))
+    if error_code == 524:
+        failure_hint = f"upstream provider timed out (Cloudflare 524, {duration:.0f}s)"
+    elif error_code == 504:
+        failure_hint = f"upstream gateway timeout (504, {duration:.0f}s)"
+    elif error_code == 429:
+        failure_hint = "rate limited by upstream provider (429)"
+    elif error_code in (500, 502):
+        failure_hint = f"upstream server error ({error_code}, {duration:.0f}s)"
+    elif error_code in (503, 529):
+        failure_hint = f"upstream provider overloaded ({error_code})"
+    elif error_code is not None:
+        failure_hint = f"upstream error (code {error_code}, {duration:.0f}s)"
+    elif duration < 10:
+        failure_hint = f"fast response ({duration:.1f}s) - likely rate limited"
+    elif duration > 60:
+        failure_hint = f"slow response ({duration:.0f}s) - likely upstream timeout"
+    else:
+        failure_hint = f"response time {duration:.1f}s"
+
+    return ChatResponseInspection(
+        choice=choice,
+        message=message,
+        finish_reason=finish_reason,
+        errors=tuple(errors),
+        provider_name=provider_name,
+        provider_error=provider_error,
+        error_code=error_code,
+        failure_hint=failure_hint,
+    )
+
+
+def decide_truncation_recovery(
+    message: Any,
+    finish_reason: str,
+    *,
+    text_truncation_count: int,
+    tool_truncation_count: int,
+    max_text_truncations: int = 3,
+    max_tool_retries: int = 1,
+) -> TruncationRecovery:
+    """Choose the recovery action without mutating messages or retry state."""
+    if finish_reason != "length":
+        return TruncationRecovery(action=TruncationAction.proceed)
+
+    raw_content = _value(message, "content")
+    content = raw_content if isinstance(raw_content, str) else ""
+    has_tool_calls = bool(_value(message, "tool_calls"))
+    thinking_exhausted = (
+        not has_tool_calls
+        and has_thinking_tags(content)
+        and not has_visible_content(content)
+    )
+    if thinking_exhausted:
+        return TruncationRecovery(
+            action=TruncationAction.fail_thinking_budget,
+            content=content,
+            text_truncation_count=max(0, text_truncation_count),
+            tool_truncation_count=max(0, tool_truncation_count),
+        )
+
+    if has_tool_calls:
+        next_count = max(0, tool_truncation_count) + 1
+        action = (
+            TruncationAction.retry_tool_call
+            if next_count <= max(0, max_tool_retries)
+            else TruncationAction.fail_tool_call
+        )
+        return TruncationRecovery(
+            action=action,
+            content=content,
+            text_truncation_count=max(0, text_truncation_count),
+            tool_truncation_count=next_count,
+        )
+
+    next_count = max(0, text_truncation_count) + 1
+    action = (
+        TruncationAction.continue_text
+        if next_count < max(1, max_text_truncations)
+        else TruncationAction.return_partial_text
+    )
+    return TruncationRecovery(
+        action=action,
+        content=content,
+        text_truncation_count=next_count,
+        tool_truncation_count=max(0, tool_truncation_count),
+    )
 
 
 def extract_reasoning(message: Any) -> str | None:

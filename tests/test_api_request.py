@@ -5,10 +5,95 @@ import uuid
 
 import pytest
 
-from agent.api_request import ChatRequestConfig, build_chat_completion_kwargs
+from agent.api_request import (
+    ChatRequestConfig,
+    build_chat_completion_kwargs,
+    prepare_chat_messages,
+    sanitize_chat_messages,
+)
 
 
 pytestmark = pytest.mark.unit
+
+
+def test_prepare_chat_messages_builds_api_copy_and_preserves_history():
+    history = [
+        {"role": "user", "content": "  question  "},
+        {
+            "role": "assistant",
+            "content": " answer ",
+            "reasoning": "private plan",
+            "finish_reason": "tool_calls",
+            "_thinking_prefill": True,
+            "_flush_sentinel": "internal-marker",
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "inspect",
+                        "arguments": '{"b": 2, "a": 1}',
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call-1", "content": " result "},
+    ]
+
+    prepared = prepare_chat_messages(
+        history,
+        system_prompt="base policy",
+        ephemeral_system_prompt="turn policy",
+        prefill_messages=({"role": "user", "content": " example "},),
+        user_message_index=0,
+        user_contexts=("memory context", "plugin context"),
+    )
+
+    assert prepared[0] == {
+        "role": "system",
+        "content": "base policy\n\nturn policy",
+    }
+    assert prepared[1] == {"role": "user", "content": "example"}
+    assert prepared[2]["content"] == (
+        "question\n\nmemory context\n\nplugin context"
+    )
+    assert prepared[3]["reasoning_content"] == "private plan"
+    assert "reasoning" not in prepared[3]
+    assert "finish_reason" not in prepared[3]
+    assert "_thinking_prefill" not in prepared[3]
+    assert "_flush_sentinel" not in prepared[3]
+    assert prepared[3]["tool_calls"][0]["function"]["arguments"] == (
+        '{"a":1,"b":2}'
+    )
+    assert history[0]["content"] == "  question  "
+    assert history[1]["tool_calls"][0]["function"]["arguments"] == (
+        '{"b": 2, "a": 1}'
+    )
+
+
+def test_sanitize_chat_messages_repairs_tool_pairs_and_invalid_roles():
+    messages = [
+        {"role": "invalid", "content": "drop"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "missing", "function": {"name": "inspect", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "orphan", "content": "drop"},
+    ]
+
+    sanitized = sanitize_chat_messages(messages)
+
+    assert sanitized == [
+        messages[1],
+        {
+            "role": "tool",
+            "content": "[Result unavailable - see context summary above]",
+            "tool_call_id": "missing",
+        },
+    ]
 
 
 def test_direct_openai_request_uses_developer_role_and_completion_limit():

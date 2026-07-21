@@ -10,6 +10,7 @@ import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
+from typing import Callable
 
 from agent.error_classifier import ClassifiedError, FailoverReason
 
@@ -30,6 +31,12 @@ class RetryKind(str, Enum):
     wait = "wait"
 
 
+class RetryRecoveryKind(str, Enum):
+    none = "none"
+    fallback = "fallback"
+    transport = "transport"
+
+
 @dataclass(frozen=True, slots=True)
 class RetryDirective:
     kind: RetryKind
@@ -37,6 +44,15 @@ class RetryDirective:
     try_eager_fallback: bool = False
     try_transport_recovery: bool = False
     try_fallback: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class RetryRecoveryResult:
+    kind: RetryRecoveryKind
+
+    @property
+    def recovered(self) -> bool:
+        return self.kind is not RetryRecoveryKind.none
 
 
 def decide_retry_directive(
@@ -103,6 +119,40 @@ def decide_retry_directive(
     )
 
 
+def execute_retry_recovery(
+    directive: RetryDirective,
+    error: Exception,
+    *,
+    retry_count: int,
+    max_retries: int,
+    activate_fallback: Callable[[], bool],
+    recover_transport: Callable[[Exception, int, int], bool],
+) -> RetryRecoveryResult:
+    """Execute recovery hooks in the order required by a retry directive."""
+    fallback_attempted = False
+    if directive.try_eager_fallback:
+        fallback_attempted = True
+        if activate_fallback():
+            return RetryRecoveryResult(RetryRecoveryKind.fallback)
+
+    if (
+        directive.kind is RetryKind.exhausted
+        and directive.try_transport_recovery
+        and recover_transport(error, retry_count, max_retries)
+    ):
+        return RetryRecoveryResult(RetryRecoveryKind.transport)
+
+    if (
+        directive.kind in {RetryKind.abort_client_error, RetryKind.exhausted}
+        and directive.try_fallback
+        and not fallback_attempted
+        and activate_fallback()
+    ):
+        return RetryRecoveryResult(RetryRecoveryKind.fallback)
+
+    return RetryRecoveryResult(RetryRecoveryKind.none)
+
+
 def jittered_backoff(
     attempt: int,
     *,
@@ -142,3 +192,21 @@ def jittered_backoff(
     jitter = rng.uniform(0, jitter_ratio * delay)
 
     return delay + jitter
+
+
+def wait_for_retry(
+    delay: float,
+    *,
+    interrupted: Callable[[], bool],
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.time,
+    poll_interval: float = 0.2,
+) -> bool:
+    """Wait in interruptible slices and report whether the delay completed."""
+    deadline = clock() + max(0.0, delay)
+    while clock() < deadline:
+        if interrupted():
+            return False
+        remaining = deadline - clock()
+        sleep(min(max(0.001, poll_interval), remaining))
+    return not interrupted()

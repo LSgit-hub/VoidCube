@@ -74,3 +74,23 @@ def test_trajectory_conversion_preserves_assistant_content():
         "from": "gpt",
         "value": "<think>\n</think>\nanswer",
     }
+
+
+def test_memory_flush_without_tool_schema_preserves_history():
+    agent = AIAgent.__new__(AIAgent)
+    agent._memory_flush_min_turns = 1
+    agent._user_turn_count = 1
+    agent.valid_tool_names = ["memory"]
+    agent._memory_store = object()
+    agent.tools = []
+    agent._cached_system_prompt = ""
+    messages = [
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "answer"},
+        {"role": "user", "content": "follow-up"},
+    ]
+    original_messages = [message.copy() for message in messages]
+
+    agent.flush_memories(messages)
+
+    assert messages == original_messages

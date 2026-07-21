@@ -3,13 +3,23 @@
 from __future__ import annotations
 
 import copy
+import json
+import logging
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 from agent.integration_policy import require_active_integration
 from agent.prompt_builder import DEVELOPER_ROLE_MODELS
 from agent.tool_schema import normalize_tool_definitions
+
+
+logger = logging.getLogger(__name__)
+VALID_CHAT_ROLES = frozenset(
+    {"system", "user", "assistant", "tool", "function", "developer"}
+)
+INTERNAL_CHAT_MESSAGE_FIELDS = frozenset({"reasoning", "finish_reason"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +153,159 @@ def _provider_preferences(config: ChatRequestConfig) -> dict[str, Any]:
     if config.provider_data_collection:
         preferences["data_collection"] = config.provider_data_collection
     return preferences
+
+
+def _tool_call_id(tool_call: Any) -> str:
+    if isinstance(tool_call, dict):
+        return str(tool_call.get("id") or "")
+    return str(getattr(tool_call, "id", "") or "")
+
+
+def sanitize_chat_messages(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Repair role and tool-call/result invariants before an API request."""
+    filtered: list[dict[str, Any]] = []
+    for message in messages:
+        role = message.get("role")
+        if role not in VALID_CHAT_ROLES:
+            logger.debug(
+                "Pre-call sanitizer: dropping message with invalid role %r",
+                role,
+            )
+            continue
+        filtered.append(message)
+
+    surviving_call_ids = {
+        call_id
+        for message in filtered
+        if message.get("role") == "assistant"
+        for tool_call in (message.get("tool_calls") or [])
+        if (call_id := _tool_call_id(tool_call))
+    }
+    result_call_ids = {
+        str(message.get("tool_call_id"))
+        for message in filtered
+        if message.get("role") == "tool" and message.get("tool_call_id")
+    }
+
+    orphaned_results = result_call_ids - surviving_call_ids
+    if orphaned_results:
+        filtered = [
+            message
+            for message in filtered
+            if not (
+                message.get("role") == "tool"
+                and str(message.get("tool_call_id")) in orphaned_results
+            )
+        ]
+        logger.debug(
+            "Pre-call sanitizer: removed %d orphaned tool result(s)",
+            len(orphaned_results),
+        )
+
+    missing_results = surviving_call_ids - result_call_ids
+    if not missing_results:
+        return filtered
+
+    patched: list[dict[str, Any]] = []
+    for message in filtered:
+        patched.append(message)
+        if message.get("role") != "assistant":
+            continue
+        for tool_call in message.get("tool_calls") or []:
+            call_id = _tool_call_id(tool_call)
+            if call_id in missing_results:
+                patched.append(
+                    {
+                        "role": "tool",
+                        "content": "[Result unavailable - see context summary above]",
+                        "tool_call_id": call_id,
+                    }
+                )
+    logger.debug(
+        "Pre-call sanitizer: added %d stub tool result(s)",
+        len(missing_results),
+    )
+    return patched
+
+
+def prepare_chat_messages(
+    messages: Sequence[dict[str, Any]],
+    *,
+    system_prompt: str = "",
+    ephemeral_system_prompt: str = "",
+    prefill_messages: Sequence[dict[str, Any]] = (),
+    user_message_index: int | None = None,
+    user_contexts: Sequence[str] = (),
+) -> list[dict[str, Any]]:
+    """Build the API-only message list without mutating persisted history."""
+    prepared: list[dict[str, Any]] = []
+    contexts = [context.strip() for context in user_contexts if context.strip()]
+    for index, message in enumerate(messages):
+        api_message = dict(message)
+        if (
+            index == user_message_index
+            and message.get("role") == "user"
+            and contexts
+        ):
+            base_content = api_message.get("content", "")
+            if isinstance(base_content, str):
+                api_message["content"] = (
+                    base_content.strip() + "\n\n" + "\n\n".join(contexts)
+                )
+
+        if message.get("role") == "assistant" and message.get("reasoning"):
+            api_message["reasoning_content"] = message["reasoning"]
+        for field_name in tuple(api_message):
+            if (
+                field_name in INTERNAL_CHAT_MESSAGE_FIELDS
+                or field_name.startswith("_")
+            ):
+                api_message.pop(field_name, None)
+        prepared.append(api_message)
+
+    effective_system = system_prompt or ""
+    if ephemeral_system_prompt:
+        effective_system = (
+            effective_system + "\n\n" + ephemeral_system_prompt
+        ).strip()
+    if effective_system:
+        prepared.insert(0, {"role": "system", "content": effective_system})
+
+    if prefill_messages:
+        system_offset = 1 if effective_system else 0
+        for index, prefill in enumerate(prefill_messages):
+            prepared.insert(system_offset + index, dict(prefill))
+
+    prepared = sanitize_chat_messages(prepared)
+    for message in prepared:
+        if isinstance(message.get("content"), str):
+            message["content"] = message["content"].strip()
+        tool_calls = message.get("tool_calls")
+        if not tool_calls:
+            continue
+        normalized_calls: list[Any] = []
+        for tool_call in tool_calls:
+            if isinstance(tool_call, dict) and "function" in tool_call:
+                try:
+                    arguments = json.loads(tool_call["function"]["arguments"])
+                    tool_call = {
+                        **tool_call,
+                        "function": {
+                            **tool_call["function"],
+                            "arguments": json.dumps(
+                                arguments,
+                                separators=(",", ":"),
+                                sort_keys=True,
+                            ),
+                        },
+                    }
+                except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                    pass
+            normalized_calls.append(tool_call)
+        message["tool_calls"] = normalized_calls
+    return prepared
 
 
 def build_chat_completion_kwargs(

@@ -3,7 +3,14 @@ from __future__ import annotations
 import pytest
 
 from agent.error_classifier import ClassifiedError, FailoverReason
-from agent.retry_utils import RetryKind, decide_retry_directive
+from agent.retry_utils import (
+    RetryDirective,
+    RetryKind,
+    RetryRecoveryKind,
+    decide_retry_directive,
+    execute_retry_recovery,
+    wait_for_retry,
+)
 
 
 pytestmark = pytest.mark.unit
@@ -118,3 +125,111 @@ def test_exhausted_retry_does_not_repeat_transport_recovery():
 
     assert directive.kind is RetryKind.exhausted
     assert directive.try_transport_recovery is False
+
+
+def test_retry_wait_completes_in_interruptible_slices():
+    now = [0.0]
+    sleeps: list[float] = []
+
+    def sleep(delay: float) -> None:
+        sleeps.append(delay)
+        now[0] += delay
+
+    completed = wait_for_retry(
+        0.5,
+        interrupted=lambda: False,
+        sleep=sleep,
+        clock=lambda: now[0],
+        poll_interval=0.2,
+    )
+
+    assert completed is True
+    assert sleeps == pytest.approx([0.2, 0.2, 0.1])
+
+
+def test_retry_wait_stops_as_soon_as_interrupt_is_observed():
+    now = [0.0]
+    checks = [0]
+
+    def interrupted() -> bool:
+        checks[0] += 1
+        return checks[0] >= 2
+
+    def sleep(delay: float) -> None:
+        now[0] += delay
+
+    completed = wait_for_retry(
+        5.0,
+        interrupted=interrupted,
+        sleep=sleep,
+        clock=lambda: now[0],
+        poll_interval=0.2,
+    )
+
+    assert completed is False
+    assert now[0] == pytest.approx(0.2)
+
+
+def test_retry_recovery_prefers_eager_fallback():
+    events: list[str] = []
+    directive = RetryDirective(
+        RetryKind.exhausted,
+        try_eager_fallback=True,
+        try_transport_recovery=True,
+        try_fallback=True,
+    )
+
+    result = execute_retry_recovery(
+        directive,
+        RuntimeError("failure"),
+        retry_count=3,
+        max_retries=3,
+        activate_fallback=lambda: events.append("fallback") or True,
+        recover_transport=lambda *_args: events.append("transport") or True,
+    )
+
+    assert result.kind is RetryRecoveryKind.fallback
+    assert events == ["fallback"]
+
+
+def test_retry_recovery_does_not_attempt_fallback_twice():
+    events: list[str] = []
+    directive = RetryDirective(
+        RetryKind.exhausted,
+        try_eager_fallback=True,
+        try_transport_recovery=True,
+        try_fallback=True,
+    )
+
+    result = execute_retry_recovery(
+        directive,
+        RuntimeError("failure"),
+        retry_count=3,
+        max_retries=3,
+        activate_fallback=lambda: events.append("fallback") or False,
+        recover_transport=lambda *_args: events.append("transport") or False,
+    )
+
+    assert result.kind is RetryRecoveryKind.none
+    assert events == ["fallback", "transport"]
+
+
+def test_retry_recovery_uses_transport_before_terminal_fallback():
+    events: list[str] = []
+    directive = RetryDirective(
+        RetryKind.exhausted,
+        try_transport_recovery=True,
+        try_fallback=True,
+    )
+
+    result = execute_retry_recovery(
+        directive,
+        RuntimeError("failure"),
+        retry_count=3,
+        max_retries=3,
+        activate_fallback=lambda: events.append("fallback") or True,
+        recover_transport=lambda *_args: events.append("transport") or True,
+    )
+
+    assert result.kind is RetryRecoveryKind.transport
+    assert events == ["transport"]

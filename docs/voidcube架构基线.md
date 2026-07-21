@@ -40,6 +40,10 @@ Gateway :6000
 
 Executor 不运行独立 daemon。`VoidCubeExecutionService` 挂载在 Supervisor 进程中，经 Gateway 的标准 executor 路由访问。
 
+Gateway 是跨进程调用 Executor 的唯一标准入口；Supervisor 进程内部通过
+`VoidCubeExecutionFacade` 调用同一组 Execution Adapter，不需要为了形式统一绕行 HTTP。
+两条入口必须收敛到同一实现，Supervisor 的判断逻辑不得直接修改身体或绕过 Adapter。
+
 Supervisor 进程启动不等于自主链路启动。基础健康检查、结构化记忆维护、服务注册恢复和身体观察可以继续运行，自主链路门控初始为关闭。
 
 ## 4. 两条执行链路
@@ -138,6 +142,7 @@ Tier 1 -> Tier 2 桥接使用 API-B 的 LLM 提取与 Scholar 能力。LLM 不�
 ## 8. 请求与集成边界
 
 - 所有现役模型调用统一构建 OpenAI-compatible `chat.completions` 请求。
+- 在该协议边界改变前，通用聊天模型输出的浮点数组不构成正式 embedding 能力；真正语义检索必须先明确独立协议、模型版本、写入和回填规则。
 - Provider 配置只描述模型、Base URL、凭据和明确支持的调用选项，不进行协议探测或消息协议切换。
 - 主 Agent、辅助模型、Memory 和工具侧模型调用共享退役集成策略，不能各自保留隐藏回退。
 - 可加载技能、运行态配置、源码、测试夹具和 wheel 都属于退役扫描表面。

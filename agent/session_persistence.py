@@ -30,14 +30,6 @@ def apply_user_message_override(
         message["content"] = override
 
 
-def messages_before_last_assistant(messages: Sequence[Message]) -> list[Message]:
-    """Return the history before the latest assistant message."""
-    for index in range(len(messages) - 1, -1, -1):
-        if messages[index].get("role") == "assistant":
-            return list(messages[:index])
-    return list(messages)
-
-
 def clean_session_content(content: str) -> str:
     """Normalize whitespace around existing think blocks."""
     if not content:

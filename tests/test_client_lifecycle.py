@@ -309,27 +309,6 @@ def test_credential_swap_configures_transport_before_updating_runtime():
     ]
 
 
-def test_agent_interruptible_call_uses_and_closes_request_client():
-    closed: list[tuple[object, str]] = []
-    completions = SimpleNamespace(create=lambda **kwargs: {"request": kwargs})
-    request_client = SimpleNamespace(
-        chat=SimpleNamespace(completions=completions)
-    )
-    agent = AIAgent.__new__(AIAgent)
-    agent._interrupt_requested = False
-    agent._client_lifecycle = SimpleNamespace(
-        create_request_client=lambda *, reason: request_client,
-        close_request_client=lambda client, *, reason: closed.append(
-            (client, reason)
-        ),
-    )
-
-    response = agent._interruptible_api_call({"model": "safe-model"})
-
-    assert response == {"request": {"model": "safe-model"}}
-    assert closed == [(request_client, "request_complete")]
-
-
 def test_failed_model_switch_restores_previous_runtime_fields():
     agent = AIAgent.__new__(AIAgent)
     agent.model = "primary-model"

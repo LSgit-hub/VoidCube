@@ -88,8 +88,11 @@ from VoidCube_core.constants import OPENROUTER_BASE_URL
 from agent.memory_manager import build_memory_context_block
 from agent.retry_utils import (
     RetryKind,
+    RetryRecoveryKind,
     decide_retry_directive,
+    execute_retry_recovery,
     jittered_backoff,
+    wait_for_retry,
 )
 from agent.error_classifier import (
     FailoverReason,
@@ -117,24 +120,30 @@ from agent.context_compressor import (
     build_context_recovery_plan,
     next_compression_attempt,
 )
+from agent.api_attempt import ApiAttemptState
 from agent.client_lifecycle import ChatClientLifecycle
-from agent.stream_response import StreamingResponseAssembler
+from agent.chat_transport import ChatTransport
+from agent.stream_response import StreamChunkUpdate
 from agent.tool_execution import (
     PreparedToolCall,
     ToolCallOutcome,
     ToolExecutionCoordinator,
 )
+from agent.conversation_turn import ConversationTurnState
 from agent.iteration_control import IterationBudget
 from agent.subdirectory_hints import SubdirectoryHintTracker
 from agent.prompt_builder import build_skills_system_prompt, build_context_files_prompt, build_environment_hints, load_soul_md, TOOL_USE_ENFORCEMENT_GUIDANCE, TOOL_USE_ENFORCEMENT_MODELS, GOOGLE_MODEL_OPERATIONAL_GUIDANCE, OPENAI_MODEL_EXECUTION_GUIDANCE
 from agent.api_request import (
     ChatRequestConfig,
     build_chat_completion_kwargs,
+    prepare_chat_messages,
 )
 from agent.api_response import (
+    TruncationAction,
+    decide_truncation_recovery,
     extract_reasoning,
-    has_thinking_tags,
     has_visible_content,
+    inspect_chat_response,
     normalize_assistant_message,
     strip_thinking_blocks,
     strip_thinking_tags,
@@ -156,7 +165,6 @@ from agent.message_sanitizer import (
 )
 from agent.session_persistence import (
     SessionPersistence,
-    messages_before_last_assistant,
 )
 from agent.tool_schema import normalize_tool_definitions
 from VoidCube_core.utils import env_var_enabled
@@ -422,15 +430,6 @@ class AIAgent:
         self.request_overrides = dict(request_overrides or {})
         self.prefill_messages = prefill_messages or []  # Prefilled conversation turns
         
-        # Iteration budget: the LLM is only notified when it actually exhausts
-        # the iteration budget (api_call_count >= max_iterations).  At that
-        # point we inject ONE message, allow one final API call, and if the
-        # model doesn't produce a text response, force a user-message asking
-        # it to summarise.  No intermediate pressure warnings — they caused
-        # models to "give up" prematurely on complex tasks (#7915).
-        self._budget_exhausted_injected = False
-        self._budget_grace_call = False
-
         # Context pressure warnings: notify the USER (not the LLM) as context
         # fills up.  Purely informational — displayed in CLI output and sent via
         # status_callback for gateway platforms.  Does NOT inject into messages.
@@ -568,6 +567,16 @@ class AIAgent:
                     print(f"⚠️  Warning: API key appears invalid or missing (got: '{key_used[:20] if key_used else 'none'}...')")
         except Exception as e:
             raise RuntimeError(f"Failed to initialize OpenAI-compatible client: {e}")
+        self._chat_transport = ChatTransport(
+            client_lifecycle=self._client_lifecycle,
+            base_url=lambda: self.base_url or "",
+            model=lambda: self.model or "",
+            interrupted=lambda: self._interrupt_requested,
+            activity=self._touch_activity,
+            capture_rate_limits=self._capture_rate_limits,
+            emit_status=self._emit_status,
+            emit_warning=lambda message: self._safe_print(f"\n⚠ {message}\n"),
+        )
         
         # Provider fallback chain — ordered list of backup providers tried
         # when the primary is exhausted (rate-limit, overload, connection
@@ -2239,85 +2248,6 @@ class AIAgent:
     # =========================================================================
 
     @staticmethod
-    def _get_tool_call_id_static(tc) -> str:
-        """Extract call ID from a tool_call entry (dict or object)."""
-        if isinstance(tc, dict):
-            return tc.get("id", "") or ""
-        return getattr(tc, "id", "") or ""
-
-    _VALID_API_ROLES = frozenset({"system", "user", "assistant", "tool", "function", "developer"})
-
-    @staticmethod
-    def _sanitize_api_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Fix orphaned tool_call / tool_result pairs before every LLM call.
-
-        Runs unconditionally — not gated on whether the context compressor
-        is present — so orphans from session loading or manual message
-        manipulation are always caught.
-        """
-        # --- Role allowlist: drop messages with roles the API won't accept ---
-        filtered = []
-        for msg in messages:
-            role = msg.get("role")
-            if role not in AIAgent._VALID_API_ROLES:
-                logger.debug(
-                    "Pre-call sanitizer: dropping message with invalid role %r",
-                    role,
-                )
-                continue
-            filtered.append(msg)
-        messages = filtered
-
-        surviving_call_ids: set = set()
-        for msg in messages:
-            if msg.get("role") == "assistant":
-                for tc in msg.get("tool_calls") or []:
-                    cid = AIAgent._get_tool_call_id_static(tc)
-                    if cid:
-                        surviving_call_ids.add(cid)
-
-        result_call_ids: set = set()
-        for msg in messages:
-            if msg.get("role") == "tool":
-                cid = msg.get("tool_call_id")
-                if cid:
-                    result_call_ids.add(cid)
-
-        # 1. Drop tool results with no matching assistant call
-        orphaned_results = result_call_ids - surviving_call_ids
-        if orphaned_results:
-            messages = [
-                m for m in messages
-                if not (m.get("role") == "tool" and m.get("tool_call_id") in orphaned_results)
-            ]
-            logger.debug(
-                "Pre-call sanitizer: removed %d orphaned tool result(s)",
-                len(orphaned_results),
-            )
-
-        # 2. Inject stub results for calls whose result was dropped
-        missing_results = surviving_call_ids - result_call_ids
-        if missing_results:
-            patched: List[Dict[str, Any]] = []
-            for msg in messages:
-                patched.append(msg)
-                if msg.get("role") == "assistant":
-                    for tc in msg.get("tool_calls") or []:
-                        cid = AIAgent._get_tool_call_id_static(tc)
-                        if cid in missing_results:
-                            patched.append({
-                                "role": "tool",
-                                "content": "[Result unavailable — see context summary above]",
-                                "tool_call_id": cid,
-                            })
-            messages = patched
-            logger.debug(
-                "Pre-call sanitizer: added %d stub tool result(s)",
-                len(missing_results),
-            )
-        return messages
-
-    @staticmethod
     def _cap_delegate_task_calls(tool_calls: list) -> list:
         """Truncate excess delegate_task calls to max_concurrent_children.
 
@@ -2555,56 +2485,6 @@ class AIAgent:
 
         return False, has_retried_429
 
-    def _interruptible_api_call(self, api_kwargs: dict):
-        """
-        Run the API call in a background thread so the main conversation loop
-        can detect interrupts without waiting for the full HTTP round-trip.
-
-        Each worker thread gets its own OpenAI client instance. Interrupts only
-        close that worker-local client, so retries and other requests never
-        inherit a closed transport.
-        """
-        result = {"response": None, "error": None}
-        request_client_holder = {"client": None}
-
-        def _call():
-            try:
-                request_client_holder["client"] = self._client_lifecycle.create_request_client(
-                    reason="chat_completion_request"
-                )
-                result["response"] = request_client_holder["client"].chat.completions.create(**api_kwargs)
-            except Exception as e:
-                result["error"] = e
-            finally:
-                request_client = request_client_holder.get("client")
-                if request_client is not None:
-                    self._client_lifecycle.close_request_client(
-                        request_client, reason="request_complete"
-                    )
-
-        t = threading.Thread(target=_call, daemon=True)
-        t.start()
-        while t.is_alive():
-            t.join(timeout=0.3)
-            if self._interrupt_requested:
-                # Force-close the in-flight worker-local HTTP connection to stop
-                # token generation without poisoning the shared client used to
-                # seed future retries.
-                try:
-                    request_client = request_client_holder.get("client")
-                    if request_client is not None:
-                        self._client_lifecycle.close_request_client(
-                            request_client, reason="interrupt_abort"
-                        )
-                except Exception:
-                    pass
-                raise InterruptedError("Agent interrupted during API call")
-        if result["error"] is not None:
-            raise result["error"]
-        return result["response"]
-
-    # ── Unified streaming API call ─────────────────────────────────────────
-
     def _reset_stream_delivery_tracking(self) -> None:
         """Reset tracking for text delivered during the current model response."""
         self._current_streamed_assistant_text = ""
@@ -2692,360 +2572,28 @@ class AIAgent:
             except Exception:
                 pass
 
+    def _deliver_stream_update(self, update: StreamChunkUpdate) -> None:
+        """Adapt transport-neutral stream events to Agent UI callbacks."""
+        if update.reasoning:
+            self._fire_reasoning_delta(update.reasoning)
+        if update.content:
+            if update.stream_content:
+                self._fire_stream_delta(update.content)
+            elif self.stream_delta_callback:
+                try:
+                    self.stream_delta_callback(update.content)
+                    self._record_streamed_assistant_text(update.content)
+                except Exception:
+                    pass
+        for tool_name in update.started_tools:
+            self._fire_tool_gen_started(tool_name)
+
     def _has_stream_consumers(self) -> bool:
         """Return True if any streaming consumer is registered."""
         return (
             self.stream_delta_callback is not None
             or getattr(self, "_stream_callback", None) is not None
         )
-
-    def _interruptible_streaming_api_call(
-        self, api_kwargs: dict, *, on_first_delta: callable = None
-    ):
-        """Streaming variant of _interruptible_api_call for real-time token delivery.
-
-        Uses stream=True on OpenAI-compatible chat-completions endpoints.
-
-        Fires stream_delta_callback and _stream_callback for each text token.
-        Tool-call turns suppress the callback — only text-only final responses
-        stream to the consumer.  Returns a SimpleNamespace that mimics the
-        non-streaming response shape so the rest of the agent loop is unchanged.
-
-        Falls back to _interruptible_api_call on provider errors indicating
-        streaming is not supported.
-        """
-        result = {"response": None, "error": None}
-        request_client_holder = {"client": None}
-        first_delta_fired = {"done": False}
-        deltas_were_sent = {"yes": False}  # Track if any deltas were fired (for fallback)
-        # Wall-clock timestamp of the last real streaming chunk.  The outer
-        # poll loop uses this to detect stale connections that keep receiving
-        # SSE keep-alive pings but no actual data.
-        last_chunk_time = {"t": time.time()}
-
-        def _fire_first_delta():
-            if not first_delta_fired["done"] and on_first_delta:
-                first_delta_fired["done"] = True
-                try:
-                    on_first_delta()
-                except Exception:
-                    pass
-
-        def _call_chat_completions():
-            """Stream a chat completions response."""
-            import httpx as _httpx
-            _base_timeout = float(os.getenv("VOIDCUBE_API_TIMEOUT", 1800.0))
-            _stream_read_timeout = float(os.getenv("VOIDCUBE_STREAM_READ_TIMEOUT", 120.0))
-            # Local providers (Ollama, llama.cpp, vLLM) can take minutes for
-            # prefill on large contexts before producing the first token.
-            # Auto-increase the httpx read timeout unless the user explicitly
-            # overrode VOIDCUBE_STREAM_READ_TIMEOUT.
-            if _stream_read_timeout == 120.0 and self.base_url and is_local_endpoint(self.base_url):
-                _stream_read_timeout = _base_timeout
-                logger.debug(
-                    "Local provider detected (%s) — stream read timeout raised to %.0fs",
-                    self.base_url, _stream_read_timeout,
-                )
-            stream_kwargs = {
-                **api_kwargs,
-                "stream": True,
-                "stream_options": {"include_usage": True},
-                "timeout": _httpx.Timeout(
-                    connect=30.0,
-                    read=_stream_read_timeout,
-                    write=_base_timeout,
-                    pool=30.0,
-                ),
-            }
-            request_client_holder["client"] = self._client_lifecycle.create_request_client(
-                reason="chat_completion_stream_request"
-            )
-            # Reset stale-stream timer so the detector measures from this
-            # attempt's start, not a previous attempt's last chunk.
-            last_chunk_time["t"] = time.time()
-            self._touch_activity("waiting for provider response (streaming)")
-            stream = request_client_holder["client"].chat.completions.create(**stream_kwargs)
-
-            # Capture rate limit headers from the initial HTTP response.
-            # The OpenAI SDK Stream object exposes the underlying httpx
-            # response via .response before any chunks are consumed.
-            self._capture_rate_limits(getattr(stream, "response", None))
-
-            assembler = StreamingResponseAssembler()
-            _first_chunk_seen = False
-            for chunk in stream:
-                last_chunk_time["t"] = time.time()
-                if not _first_chunk_seen:
-                    _first_chunk_seen = True
-                    self._touch_activity("receiving stream response")
-
-                if self._interrupt_requested:
-                    break
-
-                update = assembler.add(chunk)
-                if update.starts_delivery:
-                    _fire_first_delta()
-                if update.reasoning:
-                    self._fire_reasoning_delta(update.reasoning)
-
-                if update.content:
-                    if update.stream_content:
-                        self._fire_stream_delta(update.content)
-                        deltas_were_sent["yes"] = True
-                    else:
-                        # Tool calls suppress regular content streaming (avoids
-                        # displaying chatty "I'll use the tool..." text alongside
-                        # tool calls).  But reasoning tags embedded in suppressed
-                        # content should still reach the display — otherwise the
-                        # reasoning box only appears as a post-response fallback,
-                        # rendering it confusingly after the already-streamed
-                        # response.  Route suppressed content through the stream
-                        # delta callback so its tag extraction can fire the
-                        # reasoning display.  Non-reasoning text is harmlessly
-                        # suppressed by the CLI's _stream_delta when the stream
-                        # box is already closed (tool boundary flush).
-                        if self.stream_delta_callback:
-                            try:
-                                self.stream_delta_callback(update.content)
-                                self._record_streamed_assistant_text(update.content)
-                            except Exception:
-                                pass
-
-                for tool_name in update.started_tools:
-                    self._fire_tool_gen_started(tool_name)
-
-            return assembler.build_response()
-
-        def _call():
-            import httpx as _httpx
-
-            _max_stream_retries = int(os.getenv("VOIDCUBE_STREAM_RETRIES", 2))
-
-            try:
-                for _stream_attempt in range(_max_stream_retries + 1):
-                    try:
-                        result["response"] = _call_chat_completions()
-                        return  # success
-                    except Exception as e:
-                        if deltas_were_sent["yes"]:
-                            # Streaming failed AFTER some tokens were already
-                            # delivered.  Don't retry or fall back — partial
-                            # content already reached the user.
-                            logger.warning(
-                                "Streaming failed after partial delivery, not retrying: %s", e
-                            )
-                            result["error"] = e
-                            return
-
-                        _is_timeout = isinstance(
-                            e, (_httpx.ReadTimeout, _httpx.ConnectTimeout, _httpx.PoolTimeout)
-                        )
-                        _is_conn_err = isinstance(
-                            e, (_httpx.ConnectError, _httpx.RemoteProtocolError, ConnectionError)
-                        )
-
-                        # SSE error events from proxies (e.g. OpenRouter sends
-                        # {"error":{"message":"Network connection lost."}}) are
-                        # raised as APIError by the OpenAI SDK.  These are
-                        # semantically identical to httpx connection drops —
-                        # the upstream stream died — and should be retried with
-                        # a fresh connection.  Distinguish from HTTP errors:
-                        # APIError from SSE has no status_code, while
-                        # APIStatusError (4xx/5xx) always has one.
-                        _is_sse_conn_err = False
-                        if not _is_timeout and not _is_conn_err:
-                            from openai import APIError as _APIError
-                            if isinstance(e, _APIError) and not getattr(e, "status_code", None):
-                                _err_lower_sse = str(e).lower()
-                                _SSE_CONN_PHRASES = (
-                                    "connection lost",
-                                    "connection reset",
-                                    "connection closed",
-                                    "connection terminated",
-                                    "network error",
-                                    "network connection",
-                                    "terminated",
-                                    "peer closed",
-                                    "broken pipe",
-                                    "upstream connect error",
-                                )
-                                _is_sse_conn_err = any(
-                                    phrase in _err_lower_sse
-                                    for phrase in _SSE_CONN_PHRASES
-                                )
-
-                        if _is_timeout or _is_conn_err or _is_sse_conn_err:
-                            # Transient network / timeout error. Retry the
-                            # streaming request with a fresh connection first.
-                            if _stream_attempt < _max_stream_retries:
-                                logger.info(
-                                    "Streaming attempt %s/%s failed (%s: %s), "
-                                    "retrying with fresh connection...",
-                                    _stream_attempt + 1,
-                                    _max_stream_retries + 1,
-                                    type(e).__name__,
-                                    e,
-                                )
-                                self._emit_status(
-                                    f"⚠️ Connection to provider dropped "
-                                    f"({type(e).__name__}). Reconnecting… "
-                                    f"(attempt {_stream_attempt + 2}/{_max_stream_retries + 1})"
-                                )
-                                # Close the stale request client before retry
-                                stale = request_client_holder.get("client")
-                                if stale is not None:
-                                    self._client_lifecycle.close_request_client(
-                                        stale, reason="stream_retry_cleanup"
-                                    )
-                                    request_client_holder["client"] = None
-                                # Also rebuild the primary client to purge
-                                # any dead connections from the pool.
-                                try:
-                                    self._client_lifecycle.replace_primary(
-                                        reason="stream_retry_pool_cleanup"
-                                    )
-                                except Exception:
-                                    pass
-                                continue
-                            self._emit_status(
-                                "❌ Connection to provider failed after "
-                                f"{_max_stream_retries + 1} attempts. "
-                                "The provider may be experiencing issues — "
-                                "try again in a moment."
-                            )
-                            logger.warning(
-                                "Streaming exhausted %s retries on transient error, "
-                                "falling back to non-streaming: %s",
-                                _max_stream_retries + 1,
-                                e,
-                            )
-                        else:
-                            _err_lower = str(e).lower()
-                            _is_stream_unsupported = (
-                                "stream" in _err_lower
-                                and "not supported" in _err_lower
-                            )
-                            if _is_stream_unsupported:
-                                self._safe_print(
-                                    "\n⚠  Streaming is not supported for this "
-                                    "model/provider. Falling back to non-streaming.\n"
-                                    "   To avoid this delay, set display.streaming: false "
-                                    "in config.yaml\n"
-                                )
-                            logger.info(
-                                "Streaming failed before delivery, falling back to non-streaming: %s",
-                                e,
-                            )
-
-                        try:
-                            # Reset stale timer — the non-streaming fallback
-                            # uses its own client; prevent the stale detector
-                            # from firing on stale timestamps from failed streams.
-                            last_chunk_time["t"] = time.time()
-                            result["response"] = self._interruptible_api_call(api_kwargs)
-                        except Exception as fallback_err:
-                            result["error"] = fallback_err
-                        return
-            finally:
-                request_client = request_client_holder.get("client")
-                if request_client is not None:
-                    self._client_lifecycle.close_request_client(
-                        request_client, reason="stream_request_complete"
-                    )
-
-        _stream_stale_timeout_base = float(os.getenv("VOIDCUBE_STREAM_STALE_TIMEOUT", 180.0))
-        # Local providers (Ollama, oMLX, llama-cpp) can take 300+ seconds
-        # for prefill on large contexts.  Disable the stale detector unless
-        # the user explicitly set VOIDCUBE_STREAM_STALE_TIMEOUT.
-        if _stream_stale_timeout_base == 180.0 and self.base_url and is_local_endpoint(self.base_url):
-            _stream_stale_timeout = float("inf")
-            logger.debug("Local provider detected (%s) — stale stream timeout disabled", self.base_url)
-        else:
-            # Scale the stale timeout for large contexts: slow models (like Opus)
-            # can legitimately think for minutes before producing the first token
-            # when the context is large.  Without this, the stale detector kills
-            # healthy connections during the model's thinking phase, producing
-            # spurious RemoteProtocolError ("peer closed connection").
-            _est_tokens = sum(len(str(v)) for v in api_kwargs.get("messages", [])) // 4
-            if _est_tokens > 100_000:
-                _stream_stale_timeout = max(_stream_stale_timeout_base, 300.0)
-            elif _est_tokens > 50_000:
-                _stream_stale_timeout = max(_stream_stale_timeout_base, 240.0)
-            else:
-                _stream_stale_timeout = _stream_stale_timeout_base
-
-        t = threading.Thread(target=_call, daemon=True)
-        t.start()
-        while t.is_alive():
-            t.join(timeout=0.3)
-
-            # Detect stale streams: connections kept alive by SSE pings
-            # but delivering no real chunks.  Kill the client so the
-            # inner retry loop can start a fresh connection.
-            _stale_elapsed = time.time() - last_chunk_time["t"]
-            if _stale_elapsed > _stream_stale_timeout:
-                _est_ctx = sum(len(str(v)) for v in api_kwargs.get("messages", [])) // 4
-                logger.warning(
-                    "Stream stale for %.0fs (threshold %.0fs) — no chunks received. "
-                    "model=%s context=~%s tokens. Killing connection.",
-                    _stale_elapsed, _stream_stale_timeout,
-                    api_kwargs.get("model", "unknown"), f"{_est_ctx:,}",
-                )
-                self._emit_status(
-                    f"⚠️ No response from provider for {int(_stale_elapsed)}s "
-                    f"(model: {api_kwargs.get('model', 'unknown')}, "
-                    f"context: ~{_est_ctx:,} tokens). "
-                    f"Reconnecting..."
-                )
-                try:
-                    rc = request_client_holder.get("client")
-                    if rc is not None:
-                        self._client_lifecycle.close_request_client(
-                            rc, reason="stale_stream_kill"
-                        )
-                except Exception:
-                    pass
-                # Rebuild the primary client too — its connection pool
-                # may hold dead sockets from the same provider outage.
-                try:
-                    self._client_lifecycle.replace_primary(
-                        reason="stale_stream_pool_cleanup"
-                    )
-                except Exception:
-                    pass
-                # Reset the timer so we don't kill repeatedly while
-                # the inner thread processes the closure.
-                last_chunk_time["t"] = time.time()
-
-            if self._interrupt_requested:
-                try:
-                    request_client = request_client_holder.get("client")
-                    if request_client is not None:
-                        self._client_lifecycle.close_request_client(
-                            request_client, reason="stream_interrupt_abort"
-                        )
-                except Exception:
-                    pass
-                raise InterruptedError("Agent interrupted during streaming API call")
-        if result["error"] is not None:
-            if deltas_were_sent["yes"]:
-                # Streaming failed AFTER some tokens were already delivered to
-                # the platform.  Re-raising would let the outer retry loop make
-                # a new API call, creating a duplicate message.  Return a
-                # partial "stop" response instead so the outer loop treats this
-                # turn as complete (no retry, no fallback).
-                logger.warning(
-                    "Partial stream delivered before error; returning stub "
-                    "response to prevent duplicate messages: %s",
-                    result["error"],
-                )
-                return StreamingResponseAssembler.partial_delivery_response(
-                    getattr(self, "model", "unknown")
-                )
-            raise result["error"]
-        return result["response"]
-
-    # ── Provider fallback ──────────────────────────────────────────────────
 
     def _try_activate_fallback(self) -> bool:
         """Switch to the next fallback model/provider in the chain.
@@ -3365,22 +2913,10 @@ class AIAgent:
         messages.append(flush_msg)
 
         try:
-            # Build API messages for the flush call
-            api_messages = []
-            for msg in messages:
-                api_msg = msg.copy()
-                if msg.get("role") == "assistant":
-                    reasoning = msg.get("reasoning")
-                    if reasoning:
-                        api_msg["reasoning_content"] = reasoning
-                api_msg.pop("reasoning", None)
-                api_msg.pop("finish_reason", None)
-                api_msg.pop("_flush_sentinel", None)
-                api_msg.pop("_thinking_prefill", None)
-                api_messages.append(api_msg)
-
-            if self._cached_system_prompt:
-                api_messages = [{"role": "system", "content": self._cached_system_prompt}] + api_messages
+            api_messages = prepare_chat_messages(
+                messages,
+                system_prompt=self._cached_system_prompt or "",
+            )
 
             # Make one API call with only the memory tool available
             memory_tool_def = None
@@ -3390,7 +2926,6 @@ class AIAgent:
                     break
 
             if not memory_tool_def:
-                messages.pop()  # remove flush msg
                 return
 
             # Use the auxiliary client for the flush call when available.
@@ -3422,16 +2957,13 @@ class AIAgent:
                     flush_config,
                     api_messages,
                 )
-                response = self._client_lifecycle.ensure_primary(
-                    reason="flush_memories"
-                ).chat.completions.create(
-                    **api_kwargs
-                )
+                response = self._chat_transport.complete(api_kwargs)
 
             # Extract tool calls from the chat-completions response.
             tool_calls = []
-            if hasattr(response, "choices") and response.choices:
-                assistant_message = response.choices[0].message
+            response_inspection = inspect_chat_response(response)
+            if response_inspection.valid:
+                assistant_message = response_inspection.message
                 if assistant_message.tool_calls:
                     tool_calls = assistant_message.tool_calls
 
@@ -4175,24 +3707,12 @@ class AIAgent:
         messages.append({"role": "user", "content": summary_request})
 
         try:
-            # Build API messages, stripping internal-only fields
-            # (finish_reason, reasoning) that strict APIs like Mistral reject with 422
-            api_messages = []
-            for msg in messages:
-                api_msg = msg.copy()
-                for internal_field in ("reasoning", "finish_reason", "_thinking_prefill"):
-                    api_msg.pop(internal_field, None)
-                api_messages.append(api_msg)
-
-            effective_system = self._cached_system_prompt or ""
-            if self.ephemeral_system_prompt:
-                effective_system = (effective_system + "\n\n" + self.ephemeral_system_prompt).strip()
-            if effective_system:
-                api_messages = [{"role": "system", "content": effective_system}] + api_messages
-            if self.prefill_messages:
-                sys_offset = 1 if effective_system else 0
-                for idx, pfm in enumerate(self.prefill_messages):
-                    api_messages.insert(sys_offset + idx, pfm.copy())
+            api_messages = prepare_chat_messages(
+                messages,
+                system_prompt=self._cached_system_prompt or "",
+                ephemeral_system_prompt=self.ephemeral_system_prompt or "",
+                prefill_messages=self.prefill_messages or (),
+            )
 
             summary_kwargs = build_chat_completion_kwargs(
                 self._chat_request_config(),
@@ -4201,13 +3721,13 @@ class AIAgent:
                 include_request_overrides=False,
             )
 
-            summary_response = self._client_lifecycle.ensure_primary(
-                reason="iteration_limit_summary"
-            ).chat.completions.create(**summary_kwargs)
-            if summary_response.choices and summary_response.choices[0].message.content:
-                final_response = summary_response.choices[0].message.content
-            else:
-                final_response = ""
+            summary_response = self._chat_transport.complete(summary_kwargs)
+            summary_inspection = inspect_chat_response(summary_response)
+            final_response = (
+                summary_inspection.message.content
+                if summary_inspection.valid and summary_inspection.message.content
+                else ""
+            )
 
             if final_response:
                 final_response = strip_thinking_blocks(final_response).strip()
@@ -4217,13 +3737,13 @@ class AIAgent:
                     final_response = "I reached the iteration limit and couldn't generate a summary."
             else:
                 # Retry summary generation
-                summary_response = self._client_lifecycle.ensure_primary(
-                    reason="iteration_limit_summary_retry"
-                ).chat.completions.create(**summary_kwargs)
-                if summary_response.choices and summary_response.choices[0].message.content:
-                    final_response = summary_response.choices[0].message.content
-                else:
-                    final_response = ""
+                summary_response = self._chat_transport.complete(summary_kwargs)
+                summary_inspection = inspect_chat_response(summary_response)
+                final_response = (
+                    summary_inspection.message.content
+                    if summary_inspection.valid and summary_inspection.message.content
+                    else ""
+                )
 
                 if final_response:
                     final_response = strip_thinking_blocks(final_response).strip()
@@ -4294,7 +3814,7 @@ class AIAgent:
         if isinstance(persist_user_message, str):
             persist_user_message = sanitize_surrogates(persist_user_message)
 
-        # Store stream callback for _interruptible_api_call to pick up
+        # Store the per-turn stream callback consumed by _deliver_stream_update.
         self._stream_callback = stream_callback
         self._persist_user_message_idx = None
         self._persist_user_message_override = persist_user_message
@@ -4531,14 +4051,7 @@ class AIAgent:
             logger.warning("pre_llm_call hook failed: %s", exc)
 
         # Main conversation loop
-        api_call_count = 0
-        final_response = None
-        interrupted = False
-        length_continue_retries = 0
-        truncated_tool_call_retries = 0
-        truncated_response_prefix = ""
-        compression_attempts = 0
-        _turn_exit_reason = "unknown"  # Diagnostic: why the loop ended
+        turn_state = ConversationTurnState()
         
         # Record the execution thread so interrupt()/clear_interrupt() can
         # scope the tool-level interrupt signal to THIS agent's thread only.
@@ -4561,32 +4074,31 @@ class AIAgent:
             except Exception:
                 pass
 
-        while (api_call_count < self.max_iterations and self.iteration_budget.remaining > 0) or self._budget_grace_call:
+        while turn_state.can_continue(
+            max_iterations=self.max_iterations,
+            iteration_budget=self.iteration_budget,
+        ):
             # Reset per-turn checkpoint dedup so each iteration can take one snapshot
             self._checkpoint_mgr.new_turn()
 
             # Check for interrupt request (e.g., user sent new message)
             if self._interrupt_requested:
-                interrupted = True
-                _turn_exit_reason = "interrupted_by_user"
+                turn_state.interrupted = True
+                turn_state.exit_reason = "interrupted_by_user"
                 if not self.quiet_mode:
                     self._safe_print("\n🔧 Breaking out of tool loop due to interrupt...")
                 break
-            
-            api_call_count += 1
-            self._api_call_count = api_call_count
-            self._touch_activity(f"starting API call #{api_call_count}")
 
-            # Grace call: the budget is exhausted but we gave the model one
-            # more chance.  Consume the grace flag so the loop exits after
-            # this iteration regardless of outcome.
-            if self._budget_grace_call:
-                self._budget_grace_call = False
-            elif not self.iteration_budget.consume():
-                _turn_exit_reason = "budget_exhausted"
+            iteration_started = turn_state.begin_iteration(self.iteration_budget)
+            self._api_call_count = turn_state.api_call_count
+            if not iteration_started:
+                turn_state.exit_reason = "budget_exhausted"
                 if not self.quiet_mode:
                     self._safe_print(f"\n⚠️  Iteration budget exhausted ({self.iteration_budget.used}/{self.iteration_budget.max_total} iterations used)")
                 break
+            self._touch_activity(
+                f"starting API call #{turn_state.api_call_count}"
+            )
 
             # Fire step_callback for gateway hooks (agent:step event)
             if self.step_callback is not None:
@@ -4611,9 +4123,13 @@ class AIAgent:
                                 if isinstance(tc, dict)
                             ]
                             break
-                    self.step_callback(api_call_count, prev_tools)
+                    self.step_callback(turn_state.api_call_count, prev_tools)
                 except Exception as _step_err:
-                    logger.debug("step_callback error (iteration %s): %s", api_call_count, _step_err)
+                    logger.debug(
+                        "step_callback error (iteration %s): %s",
+                        turn_state.api_call_count,
+                        _step_err,
+                    )
 
             # Track tool-calling iterations for skill nudge.
             # Counter resets whenever skill_manage is actually used.
@@ -4621,110 +4137,21 @@ class AIAgent:
                     and "skill_manage" in self.valid_tool_names):
                 self._iters_since_skill += 1
             
-            # Prepare messages for API call
-            # If we have an ephemeral system prompt, prepend it to the messages
-            # Note: Reasoning is embedded in content via <think> tags for trajectory storage.
-            # However, providers like Moonshot AI require a separate 'reasoning_content' field
-            # on assistant messages with tool_calls. We handle both cases here.
-            api_messages = []
-            for idx, msg in enumerate(messages):
-                api_msg = msg.copy()
-
-                # Inject ephemeral context into the current turn's user message.
-                # Sources: memory manager prefetch + plugin pre_llm_call hooks
-                # with target="user_message" (the default).  Both are
-                # API-call-time only — the original message in `messages` is
-                # never mutated, so nothing leaks into session persistence.
-                if idx == current_turn_user_idx and msg.get("role") == "user":
-                    _injections = []
-                    if _ext_prefetch_cache:
-                        _fenced = build_memory_context_block(_ext_prefetch_cache)
-                        if _fenced:
-                            _injections.append(_fenced)
-                    if _plugin_user_context:
-                        _injections.append(_plugin_user_context)
-                    if _injections:
-                        _base = api_msg.get("content", "")
-                        if isinstance(_base, str):
-                            api_msg["content"] = _base + "\n\n" + "\n\n".join(_injections)
-
-                # For ALL assistant messages, pass reasoning back to the API
-                # This ensures multi-turn reasoning context is preserved
-                if msg.get("role") == "assistant":
-                    reasoning_text = msg.get("reasoning")
-                    if reasoning_text:
-                        # Add reasoning_content for API compatibility (Moonshot AI, Novita, OpenRouter)
-                        api_msg["reasoning_content"] = reasoning_text
-
-                # Remove 'reasoning' field - it's for trajectory storage only
-                # We've copied it to 'reasoning_content' for the API above
-                if "reasoning" in api_msg:
-                    api_msg.pop("reasoning")
-                # Remove finish_reason - not accepted by strict APIs (e.g. Mistral)
-                if "finish_reason" in api_msg:
-                    api_msg.pop("finish_reason")
-                # Strip internal thinking-prefill marker
-                api_msg.pop("_thinking_prefill", None)
-                # Keep 'reasoning_details' - OpenRouter uses this for multi-turn reasoning context
-                # The signature field helps maintain reasoning continuity
-                api_messages.append(api_msg)
-
-            # Build the final system message: cached prompt + ephemeral system prompt.
-            # Ephemeral additions are API-call-time only (not persisted to session DB).
-            # External recall context is injected into the user message, not the system
-            # prompt, so the stable cache prefix remains unchanged.
-            effective_system = active_system_prompt or ""
-            if self.ephemeral_system_prompt:
-                effective_system = (effective_system + "\n\n" + self.ephemeral_system_prompt).strip()
-            # NOTE: Plugin context from pre_llm_call hooks is injected into the
-            # user message (see injection block above), NOT the system prompt.
-            # This is intentional — system prompt modifications break the prompt
-            # cache prefix.  The system prompt is reserved for Voidcube internals.
-            if effective_system:
-                api_messages = [{"role": "system", "content": effective_system}] + api_messages
-
-            # Inject ephemeral prefill messages right after the system prompt
-            # but before conversation history. Same API-call-time-only pattern.
-            if self.prefill_messages:
-                sys_offset = 1 if effective_system else 0
-                for idx, pfm in enumerate(self.prefill_messages):
-                    api_messages.insert(sys_offset + idx, pfm.copy())
-
-            # Safety net: strip orphaned tool results / add stubs for missing
-            # results before sending to the API.  Runs unconditionally — not
-            # gated on context_compressor — so orphans from session loading or
-            # manual message manipulation are always caught.
-            api_messages = self._sanitize_api_messages(api_messages)
-
-            # Normalize message whitespace and tool-call JSON for consistent
-            # prefix matching.  Ensures bit-perfect prefixes across turns,
-            # which enables KV cache reuse on local inference servers
-            # (llama.cpp, vLLM, Ollama) and improves cache hit rates for
-            # cloud providers.  Operates on api_messages (the API copy) so
-            # the original conversation history in `messages` is untouched.
-            for am in api_messages:
-                if isinstance(am.get("content"), str):
-                    am["content"] = am["content"].strip()
-            for am in api_messages:
-                tcs = am.get("tool_calls")
-                if not tcs:
-                    continue
-                new_tcs = []
-                for tc in tcs:
-                    if isinstance(tc, dict) and "function" in tc:
-                        try:
-                            args_obj = json.loads(tc["function"]["arguments"])
-                            tc = {**tc, "function": {
-                                **tc["function"],
-                                "arguments": json.dumps(
-                                    args_obj, separators=(",", ":"),
-                                    sort_keys=True,
-                                ),
-                            }}
-                        except Exception:
-                            pass
-                    new_tcs.append(tc)
-                am["tool_calls"] = new_tcs
+            user_contexts = []
+            if _ext_prefetch_cache:
+                fenced_memory = build_memory_context_block(_ext_prefetch_cache)
+                if fenced_memory:
+                    user_contexts.append(fenced_memory)
+            if _plugin_user_context:
+                user_contexts.append(_plugin_user_context)
+            api_messages = prepare_chat_messages(
+                messages,
+                system_prompt=active_system_prompt or "",
+                ephemeral_system_prompt=self.ephemeral_system_prompt or "",
+                prefill_messages=self.prefill_messages or (),
+                user_message_index=current_turn_user_idx,
+                user_contexts=user_contexts,
+            )
 
             # Calculate approximate request size for logging
             total_chars = sum(len(str(msg)) for msg in api_messages)
@@ -4734,7 +4161,10 @@ class AIAgent:
             thinking_spinner = None
             
             if not self.quiet_mode:
-                self._vprint(f"\n{self.log_prefix}🔄 正在发起 API 调用 #{api_call_count}/{self.max_iterations}...")
+                self._vprint(
+                    f"\n{self.log_prefix}🔄 正在发起 API 调用 "
+                    f"#{turn_state.api_call_count}/{self.max_iterations}..."
+                )
                 self._vprint(f"{self.log_prefix}   📊 请求规模: {len(api_messages)} 条消息, ~{approx_tokens:,} tokens (~{total_chars:,} 字符)")
                 self._vprint(f"{self.log_prefix}   🔧 可用工具: {len(self.tools) if self.tools else 0}")
             else:
@@ -4758,24 +4188,12 @@ class AIAgent:
                 logging.debug(f"Last message role: {messages[-1]['role'] if messages else 'none'}")
                 logging.debug(f"Total message size: ~{approx_tokens:,} tokens")
             
-            api_start_time = time.time()
-            retry_count = 0
-            max_retries = 3
-            primary_recovery_attempted = False
-            max_compression_attempts = 3
-            nous_auth_retry_attempted=False
-            has_retried_429 = False
-            restart_with_compressed_messages = False
-            restart_with_length_continuation = False
+            attempt_state = ApiAttemptState(started_at=time.time())
 
-            finish_reason = "stop"
-            response = None  # Guard against UnboundLocalError if all retries fail
-            api_kwargs = None  # Guard against UnboundLocalError in except handler
-
-            while retry_count < max_retries:
+            while attempt_state.can_retry:
                 try:
                     self._reset_stream_delivery_tracking()
-                    api_kwargs = build_chat_completion_kwargs(
+                    attempt_state.request_kwargs = build_chat_completion_kwargs(
                         self._chat_request_config(),
                         api_messages,
                     )
@@ -4789,7 +4207,7 @@ class AIAgent:
                             model=self.model,
                             provider=self.provider,
                             base_url=self.base_url,
-                            api_call_count=api_call_count,
+                            api_call_count=turn_state.api_call_count,
                             message_count=len(api_messages),
                             tool_count=len(self.tools or []),
                             approx_input_tokens=approx_tokens,
@@ -4800,11 +4218,14 @@ class AIAgent:
                         pass
 
                     if env_var_enabled("VOIDCUBE_DUMP_REQUESTS"):
-                        self._dump_api_request_debug(api_kwargs, reason="preflight")
+                        self._dump_api_request_debug(
+                            attempt_state.request_kwargs,
+                            reason="preflight",
+                        )
 
                     # Always prefer the streaming path — even without stream
                     # consumers.  Streaming gives us fine-grained health
-                    # checking (90s stale-stream detection, 60s read timeout)
+                    # checking (configurable stale-stream and read timeouts)
                     # that the non-streaming path lacks.  Without this,
                     # subagents and other quiet-mode callers can hang
                     # indefinitely when the provider keeps the connection
@@ -4821,23 +4242,13 @@ class AIAgent:
                         if self.thinking_callback:
                             self.thinking_callback("")
 
-                    _use_streaming = True
-                    if not self._has_stream_consumers():
-                        # No display/TTS consumer. Still prefer streaming for
-                        # health checking, but skip for Mock clients in tests
-                        # (mocks return SimpleNamespace, not stream iterators).
-                        from unittest.mock import Mock
-                        if isinstance(getattr(self, "client", None), Mock):
-                            _use_streaming = False
-
-                    if _use_streaming:
-                        response = self._interruptible_streaming_api_call(
-                            api_kwargs, on_first_delta=_stop_spinner
-                        )
-                    else:
-                        response = self._interruptible_api_call(api_kwargs)
+                    attempt_state.response = self._chat_transport.stream(
+                        attempt_state.request_kwargs,
+                        on_update=self._deliver_stream_update,
+                        on_first_delta=_stop_spinner,
+                    )
                     
-                    api_duration = time.time() - api_start_time
+                    api_duration = time.time() - attempt_state.started_at
                     
                     # Stop thinking spinner silently -- the response box or tool
                     # execution messages that follow are more informative.
@@ -4852,24 +4263,30 @@ class AIAgent:
                     
                     if self.verbose_logging:
                         # Log response with provider info if available
-                        resp_model = getattr(response, 'model', 'N/A') if response else 'N/A'
-                        logging.debug(f"API Response received - Model: {resp_model}, Usage: {response.usage if hasattr(response, 'usage') else 'N/A'}")
+                        resp_model = (
+                            getattr(attempt_state.response, "model", "N/A")
+                            if attempt_state.response
+                            else "N/A"
+                        )
+                        response_usage = (
+                            attempt_state.response.usage
+                            if hasattr(attempt_state.response, "usage")
+                            else "N/A"
+                        )
+                        logging.debug(
+                            "API Response received - Model: %s, Usage: %s",
+                            resp_model,
+                            response_usage,
+                        )
                     
-                    # Validate response shape before proceeding
-                    response_invalid = False
-                    error_details = []
-                    if response is None or not hasattr(response, 'choices') or response.choices is None or not response.choices:
-                        response_invalid = True
-                        if response is None:
-                            error_details.append("response is None")
-                        elif not hasattr(response, 'choices'):
-                            error_details.append("response has no 'choices' attribute")
-                        elif response.choices is None:
-                            error_details.append("response.choices is None")
-                        else:
-                            error_details.append("response.choices is empty")
-
-                    if response_invalid:
+                    attempt_state.response_inspection = inspect_chat_response(
+                        attempt_state.response,
+                        duration_seconds=api_duration,
+                    )
+                    if not attempt_state.response_inspection.valid:
+                        error_details = list(
+                            attempt_state.response_inspection.errors
+                        )
                         # Stop spinner before printing error messages
                         if thinking_spinner:
                             thinking_spinner.stop("(´;ω;`) oops, retrying...")
@@ -4879,7 +4296,7 @@ class AIAgent:
                         
                         # Invalid response — could be rate limiting, provider timeout,
                         # upstream server error, or malformed response.
-                        retry_count += 1
+                        attempt_state.record_failure()
                         
                         # Eager fallback: empty/malformed responses are a common
                         # rate-limit symptom.  Switch to fallback immediately
@@ -4887,148 +4304,87 @@ class AIAgent:
                         if self._fallback_index < len(self._fallback_chain):
                             self._emit_status("⚠️ Empty/malformed response — switching to fallback...")
                         if self._try_activate_fallback():
-                            retry_count = 0
-                            compression_attempts = 0
-                            primary_recovery_attempted = False
+                            attempt_state.reset_retry_cycle()
+                            turn_state.compression_attempts = 0
                             continue
 
-                        # Check for error field in response (some providers include this)
-                        error_msg = "Unknown"
-                        provider_name = "Unknown"
-                        if response and hasattr(response, 'error') and response.error:
-                            error_msg = str(response.error)
-                            # Try to extract provider from error metadata
-                            if hasattr(response.error, 'metadata') and response.error.metadata:
-                                provider_name = response.error.metadata.get('provider_name', 'Unknown')
-                        elif response and hasattr(response, 'message') and response.message:
-                            error_msg = str(response.message)
-                        
-                        # Try to get provider from model field (OpenRouter often returns actual model used)
-                        if provider_name == "Unknown" and response and hasattr(response, 'model') and response.model:
-                            provider_name = f"model={response.model}"
-                        
-                        # Check for x-openrouter-provider or similar metadata
-                        if provider_name == "Unknown" and response:
-                            # Log all response attributes for debugging
-                            resp_attrs = {k: str(v)[:100] for k, v in vars(response).items() if not k.startswith('_')}
-                            if self.verbose_logging:
-                                logging.debug(f"Response attributes for invalid response: {resp_attrs}")
-                        
-                        # Extract error code from response for contextual diagnostics
-                        _resp_error_code = None
-                        if response and hasattr(response, 'error') and response.error:
-                            _code_raw = getattr(response.error, 'code', None)
-                            if _code_raw is None and isinstance(response.error, dict):
-                                _code_raw = response.error.get('code')
-                            if _code_raw is not None:
-                                try:
-                                    _resp_error_code = int(_code_raw)
-                                except (TypeError, ValueError):
-                                    pass
+                        error_msg = attempt_state.response_inspection.provider_error
+                        provider_name = attempt_state.response_inspection.provider_name
+                        _failure_hint = attempt_state.response_inspection.failure_hint
 
-                        # Build a human-readable failure hint from the error code
-                        # and response time, instead of always assuming rate limiting.
-                        if _resp_error_code == 524:
-                            _failure_hint = f"upstream provider timed out (Cloudflare 524, {api_duration:.0f}s)"
-                        elif _resp_error_code == 504:
-                            _failure_hint = f"upstream gateway timeout (504, {api_duration:.0f}s)"
-                        elif _resp_error_code == 429:
-                            _failure_hint = f"rate limited by upstream provider (429)"
-                        elif _resp_error_code in (500, 502):
-                            _failure_hint = f"upstream server error ({_resp_error_code}, {api_duration:.0f}s)"
-                        elif _resp_error_code in (503, 529):
-                            _failure_hint = f"upstream provider overloaded ({_resp_error_code})"
-                        elif _resp_error_code is not None:
-                            _failure_hint = f"upstream error (code {_resp_error_code}, {api_duration:.0f}s)"
-                        elif api_duration < 10:
-                            _failure_hint = f"fast response ({api_duration:.1f}s) — likely rate limited"
-                        elif api_duration > 60:
-                            _failure_hint = f"slow response ({api_duration:.0f}s) — likely upstream timeout"
-                        else:
-                            _failure_hint = f"response time {api_duration:.1f}s"
-
-                        self._vprint(f"{self.log_prefix}⚠️  Invalid API response (attempt {retry_count}/{max_retries}): {', '.join(error_details)}", force=True)
+                        self._vprint(f"{self.log_prefix}⚠️  Invalid API response (attempt {attempt_state.retry_count}/{attempt_state.max_retries}): {', '.join(error_details)}", force=True)
                         self._vprint(f"{self.log_prefix}   🏢 Provider: {provider_name}", force=True)
                         cleaned_provider_error = clean_error_message(error_msg)
                         self._vprint(f"{self.log_prefix}   📝 Provider message: {cleaned_provider_error}", force=True)
                         self._vprint(f"{self.log_prefix}   ⏱️  {_failure_hint}", force=True)
                         
-                        if retry_count >= max_retries:
+                        if not attempt_state.can_retry:
                             # Try fallback before giving up
-                            self._emit_status(f"⚠️ Max retries ({max_retries}) for invalid responses — trying fallback...")
+                            self._emit_status(f"⚠️ Max retries ({attempt_state.max_retries}) for invalid responses — trying fallback...")
                             if self._try_activate_fallback():
-                                retry_count = 0
-                                compression_attempts = 0
-                                primary_recovery_attempted = False
+                                attempt_state.reset_retry_cycle()
+                                turn_state.compression_attempts = 0
                                 continue
-                            self._emit_status(f"❌ Max retries ({max_retries}) exceeded for invalid responses. Giving up.")
-                            logging.error(f"{self.log_prefix}Invalid API response after {max_retries} retries.")
+                            self._emit_status(f"❌ Max retries ({attempt_state.max_retries}) exceeded for invalid responses. Giving up.")
+                            logging.error(f"{self.log_prefix}Invalid API response after {attempt_state.max_retries} retries.")
                             self._session_persistence.persist(messages, conversation_history)
                             return {
                                 "messages": messages,
                                 "completed": False,
-                                "api_calls": api_call_count,
-                                "error": f"Invalid API response after {max_retries} retries: {_failure_hint}",
+                                "api_calls": turn_state.api_call_count,
+                                "error": f"Invalid API response after {attempt_state.max_retries} retries: {_failure_hint}",
                                 "failed": True  # Mark as failure for filtering
                             }
                         
                         # Backoff before retry — jittered exponential: 5s base, 120s cap
-                        wait_time = jittered_backoff(retry_count, base_delay=5.0, max_delay=120.0)
+                        wait_time = jittered_backoff(attempt_state.retry_count, base_delay=5.0, max_delay=120.0)
                         self._vprint(f"{self.log_prefix}⏳ Retrying in {wait_time:.1f}s ({_failure_hint})...", force=True)
-                        logging.warning(f"Invalid API response (retry {retry_count}/{max_retries}): {', '.join(error_details)} | Provider: {provider_name}")
+                        logging.warning(f"Invalid API response (retry {attempt_state.retry_count}/{attempt_state.max_retries}): {', '.join(error_details)} | Provider: {provider_name}")
                         
-                        # Sleep in small increments to stay responsive to interrupts
-                        sleep_end = time.time() + wait_time
-                        while time.time() < sleep_end:
-                            if self._interrupt_requested:
-                                self._vprint(f"{self.log_prefix}🔧 Interrupt detected during retry wait, aborting.", force=True)
-                                self._session_persistence.persist(messages, conversation_history)
-                                self.clear_interrupt()
-                                return {
-                                    "final_response": f"Operation interrupted during retry ({_failure_hint}, attempt {retry_count}/{max_retries}).",
-                                    "messages": messages,
-                                    "api_calls": api_call_count,
-                                    "completed": False,
-                                    "interrupted": True,
-                                }
-                            time.sleep(0.2)
+                        if not wait_for_retry(
+                            wait_time,
+                            interrupted=lambda: self._interrupt_requested,
+                        ):
+                            self._vprint(
+                                f"{self.log_prefix}🔧 Interrupt detected during "
+                                "retry wait, aborting.",
+                                force=True,
+                            )
+                            self._session_persistence.persist(
+                                messages,
+                                conversation_history,
+                            )
+                            self.clear_interrupt()
+                            return {
+                                "final_response": (
+                                    "Operation interrupted during retry "
+                                    f"({_failure_hint}, attempt "
+                                    f"{attempt_state.retry_count}/"
+                                    f"{attempt_state.max_retries})."
+                                ),
+                                "messages": messages,
+                                "api_calls": turn_state.api_call_count,
+                                "completed": False,
+                                "interrupted": True,
+                            }
                         continue  # Retry the API call
 
                     # Check finish_reason before proceeding
-                    finish_reason = response.choices[0].finish_reason
+                    attempt_state.finish_reason = (
+                        attempt_state.response_inspection.finish_reason
+                    )
 
-                    if finish_reason == "length":
+                    if attempt_state.finish_reason == "length":
                         self._vprint(f"{self.log_prefix}⚠️  Response truncated (finish_reason='length') - model hit max output tokens", force=True)
-
-                        # ── Detect thinking-budget exhaustion ──────────────
-                        # When the model spends ALL output tokens on reasoning
-                        # and has none left for the response, continuation
-                        # retries are pointless.  Detect this early and give a
-                        # targeted error instead of wasting 3 API calls.
-                        _trunc_content = None
-                        _trunc_has_tool_calls = False
-                        _trunc_msg = response.choices[0].message if (hasattr(response, "choices") and response.choices) else None
-                        _trunc_content = getattr(_trunc_msg, "content", None) if _trunc_msg else None
-                        _trunc_has_tool_calls = bool(getattr(_trunc_msg, "tool_calls", None)) if _trunc_msg else False
-
-                        # A response is "thinking exhausted" only when the model
-                        # actually produced reasoning blocks but no visible text after
-                        # them.  Models that do not use <think> tags (e.g. GLM-4.7 on
-                        # NVIDIA Build, minimax) may return content=None or an empty
-                        # string for unrelated reasons — treat those as normal
-                        # truncations that deserve continuation retries, not as
-                        # thinking-budget exhaustion.
-                        _has_think_tags = has_thinking_tags(_trunc_content or "")
-                        _thinking_exhausted = (
-                            not _trunc_has_tool_calls
-                            and _has_think_tags
-                            and (
-                                (_trunc_content is not None and not has_visible_content(_trunc_content))
-                                or _trunc_content is None
-                            )
+                        assistant_message = attempt_state.response_inspection.message
+                        truncation = decide_truncation_recovery(
+                            assistant_message,
+                            attempt_state.finish_reason,
+                            text_truncation_count=turn_state.length_continue_retries,
+                            tool_truncation_count=turn_state.truncated_tool_call_retries,
                         )
 
-                        if _thinking_exhausted:
+                        if truncation.action is TruncationAction.fail_thinking_budget:
                             _exhaust_error = (
                                 "Model used all output tokens on reasoning with none left "
                                 "for the response. Try lowering reasoning effort or "
@@ -5056,24 +4412,31 @@ class AIAgent:
                             return {
                                 "final_response": _exhaust_response,
                                 "messages": messages,
-                                "api_calls": api_call_count,
+                                "api_calls": turn_state.api_call_count,
                                 "completed": False,
                                 "partial": True,
                                 "error": _exhaust_error,
                             }
 
-                        assistant_message = response.choices[0].message
-                        if not assistant_message.tool_calls:
-                            length_continue_retries += 1
-                            interim_msg = self._build_assistant_message(assistant_message, finish_reason)
+                        if truncation.action in {
+                            TruncationAction.continue_text,
+                            TruncationAction.return_partial_text,
+                        }:
+                            turn_state.length_continue_retries = (
+                                truncation.text_truncation_count
+                            )
+                            interim_msg = self._build_assistant_message(
+                                assistant_message,
+                                attempt_state.finish_reason,
+                            )
                             messages.append(interim_msg)
-                            if assistant_message.content:
-                                truncated_response_prefix += assistant_message.content
+                            if truncation.content:
+                                turn_state.truncated_response_prefix += truncation.content
 
-                            if length_continue_retries < 3:
+                            if truncation.action is TruncationAction.continue_text:
                                 self._vprint(
                                     f"{self.log_prefix}↻ Requesting continuation "
-                                    f"({length_continue_retries}/3)..."
+                                    f"({turn_state.length_continue_retries}/3)..."
                                 )
                                 continue_msg = {
                                     "role": "user",
@@ -5085,32 +4448,39 @@ class AIAgent:
                                 }
                                 messages.append(continue_msg)
                                 self._session_persistence.save_log(messages)
-                                restart_with_length_continuation = True
+                                attempt_state.request_length_continuation()
                                 break
 
-                            partial_response = strip_thinking_blocks(truncated_response_prefix).strip()
+                            partial_response = strip_thinking_blocks(
+                                turn_state.truncated_response_prefix
+                            ).strip()
                             self._cleanup_task_resources(effective_task_id)
                             self._session_persistence.persist(messages, conversation_history)
                             return {
                                 "final_response": partial_response or None,
                                 "messages": messages,
-                                "api_calls": api_call_count,
+                                "api_calls": turn_state.api_call_count,
                                 "completed": False,
                                 "partial": True,
                                 "error": "Response remained truncated after 3 continuation attempts",
                             }
 
-                        if assistant_message.tool_calls:
-                            if truncated_tool_call_retries < 1:
-                                truncated_tool_call_retries += 1
-                                self._vprint(
-                                    f"{self.log_prefix}⚠️  Truncated tool call detected — retrying API call...",
-                                    force=True,
-                                )
-                                # Don't append the broken response to messages;
-                                # just re-run the same API call from the current
-                                # message state, giving the model another chance.
-                                continue
+                        if truncation.action is TruncationAction.retry_tool_call:
+                            turn_state.truncated_tool_call_retries = (
+                                truncation.tool_truncation_count
+                            )
+                            self._vprint(
+                                f"{self.log_prefix}⚠️  Truncated tool call detected — retrying API call...",
+                                force=True,
+                            )
+                            # Don't append the broken response to messages; rerun
+                            # the same request so incomplete arguments never execute.
+                            continue
+
+                        if truncation.action is TruncationAction.fail_tool_call:
+                            turn_state.truncated_tool_call_retries = (
+                                truncation.tool_truncation_count
+                            )
                             self._vprint(
                                 f"{self.log_prefix}⚠️  Truncated tool call response detected again — refusing to execute incomplete tool arguments.",
                                 force=True,
@@ -5120,44 +4490,20 @@ class AIAgent:
                             return {
                                 "final_response": None,
                                 "messages": messages,
-                                "api_calls": api_call_count,
+                                "api_calls": turn_state.api_call_count,
                                 "completed": False,
                                 "partial": True,
                                 "error": "Response truncated due to output length limit",
                             }
-
-                        # If we have prior messages, roll back to last complete state
-                        if len(messages) > 1:
-                            self._vprint(f"{self.log_prefix}   ⏪ Rolling back to last complete assistant turn")
-                            rolled_back_messages = messages_before_last_assistant(messages)
-
-                            self._cleanup_task_resources(effective_task_id)
-                            self._session_persistence.persist(messages, conversation_history)
-
-                            return {
-                                "final_response": None,
-                                "messages": rolled_back_messages,
-                                "api_calls": api_call_count,
-                                "completed": False,
-                                "partial": True,
-                                "error": "Response truncated due to output length limit"
-                            }
-                        else:
-                            # First message was truncated - mark as failed
-                            self._vprint(f"{self.log_prefix}❌ First response truncated - cannot recover", force=True)
-                            self._session_persistence.persist(messages, conversation_history)
-                            return {
-                                "final_response": None,
-                                "messages": messages,
-                                "api_calls": api_call_count,
-                                "completed": False,
-                                "failed": True,
-                                "error": "First response truncated due to output length limit"
-                            }
                     
                     # Track actual token usage from response for context management
-                    if hasattr(response, 'usage') and response.usage:
-                        canonical_usage = normalize_usage(response.usage)
+                    if (
+                        hasattr(attempt_state.response, "usage")
+                        and attempt_state.response.usage
+                    ):
+                        canonical_usage = normalize_usage(
+                            attempt_state.response.usage
+                        )
                         prompt_tokens = canonical_usage.prompt_tokens
                         completion_tokens = canonical_usage.output_tokens
                         total_tokens = canonical_usage.total_tokens
@@ -5244,8 +4590,10 @@ class AIAgent:
                         if self.verbose_logging:
                             logging.debug(f"Token usage: prompt={usage_dict['prompt_tokens']:,}, completion={usage_dict['completion_tokens']:,}, total={usage_dict['total_tokens']:,}")
                         
-                    has_retried_429 = False  # Reset on success
-                    self._touch_activity(f"API call #{api_call_count} completed")
+                    attempt_state.rate_limit_retry_attempted = False
+                    self._touch_activity(
+                        f"API call #{turn_state.api_call_count} completed"
+                    )
                     break  # Success, exit retry loop
 
                 except InterruptedError:
@@ -5254,11 +4602,14 @@ class AIAgent:
                         thinking_spinner = None
                     if self.thinking_callback:
                         self.thinking_callback("")
-                    api_elapsed = time.time() - api_start_time
+                    api_elapsed = time.time() - attempt_state.started_at
                     self._vprint(f"{self.log_prefix}🔧 Interrupted during API call.", force=True)
                     self._session_persistence.persist(messages, conversation_history)
-                    interrupted = True
-                    final_response = f"Operation interrupted: waiting for model response ({api_elapsed:.1f}s elapsed)."
+                    turn_state.interrupted = True
+                    turn_state.final_response = (
+                        "Operation interrupted: waiting for model response "
+                        f"({api_elapsed:.1f}s elapsed)."
+                    )
                     break
 
                 except Exception as api_error:
@@ -5325,9 +4676,12 @@ class AIAgent:
                         classified.should_rotate_credential, classified.should_fallback,
                     )
 
-                    recovered_with_pool, has_retried_429 = self._recover_with_credential_pool(
+                    (
+                        recovered_with_pool,
+                        attempt_state.rate_limit_retry_attempted,
+                    ) = self._recover_with_credential_pool(
                         status_code=status_code,
-                        has_retried_429=has_retried_429,
+                        has_retried_429=attempt_state.rate_limit_retry_attempted,
                         classified_reason=classified.reason,
                         error_context=error_context,
                     )
@@ -5336,22 +4690,22 @@ class AIAgent:
                     if (
                         self.provider == "nous"
                         and status_code == 401
-                        and not nous_auth_retry_attempted
+                        and not attempt_state.subscription_auth_retry_attempted
                     ):
-                        nous_auth_retry_attempted = True
+                        attempt_state.subscription_auth_retry_attempted = True
                         if self._try_refresh_nous_client_credentials(force=True):
                             print(f"{self.log_prefix}🔐 Nous agent key refreshed after 401. Retrying request...")
                             continue
-                    retry_count += 1
-                    elapsed_time = time.time() - api_start_time
+                    attempt_state.record_failure()
+                    elapsed_time = time.time() - attempt_state.started_at
                     
                     error_type = type(api_error).__name__
                     error_msg = str(api_error).lower()
                     _error_summary = summarize_api_error(api_error)
                     logger.warning(
                         "API call failed (attempt %s/%s) error_type=%s %s summary=%s",
-                        retry_count,
-                        max_retries,
+                        attempt_state.retry_count,
+                        attempt_state.max_retries,
                         error_type,
                         self._client_lifecycle.log_context(),
                         _error_summary,
@@ -5361,7 +4715,7 @@ class AIAgent:
                     _base = getattr(self, "base_url", "unknown")
                     _model = getattr(self, "model", "unknown")
                     _status_code_str = f" [HTTP {status_code}]" if status_code else ""
-                    self._vprint(f"{self.log_prefix}⚠️  API call failed (attempt {retry_count}/{max_retries}): {error_type}{_status_code_str}", force=True)
+                    self._vprint(f"{self.log_prefix}⚠️  API call failed (attempt {attempt_state.retry_count}/{attempt_state.max_retries}): {error_type}{_status_code_str}", force=True)
                     self._vprint(f"{self.log_prefix}   🔌 Provider: {_provider}  Model: {_model}", force=True)
                     self._vprint(f"{self.log_prefix}   🌐 Endpoint: {_base}", force=True)
                     self._vprint(f"{self.log_prefix}   📝 Error: {_error_summary}", force=True)
@@ -5406,7 +4760,7 @@ class AIAgent:
                         return {
                             "final_response": f"Operation interrupted: handling API error ({error_type}: {clean_error_message(str(api_error))}).",
                             "messages": messages,
-                            "api_calls": api_call_count,
+                            "api_calls": turn_state.api_call_count,
                             "completed": False,
                             "interrupted": True,
                         }
@@ -5425,39 +4779,77 @@ class AIAgent:
                     retry_directive = decide_retry_directive(
                         classified,
                         api_error,
-                        retry_count=retry_count,
-                        max_retries=max_retries,
+                        retry_count=attempt_state.retry_count,
+                        max_retries=attempt_state.max_retries,
                         fallback_available=fallback_available,
                         credential_pool_may_recover=pool_may_recover,
-                        primary_recovery_attempted=primary_recovery_attempted,
+                        primary_recovery_attempted=(
+                            attempt_state.primary_recovery_attempted
+                        ),
                     )
                     is_rate_limited = retry_directive.is_rate_limited
 
-                    if retry_directive.try_eager_fallback:
-                        self._emit_status("⚠️ Rate limited — switching to fallback provider...")
-                        if self._try_activate_fallback():
-                            retry_count = 0
-                            compression_attempts = 0
-                            primary_recovery_attempted = False
-                            continue
+                    def _activate_directive_fallback() -> bool:
+                        if retry_directive.try_eager_fallback:
+                            self._emit_status(
+                                "⚠️ Rate limited — switching to fallback provider..."
+                            )
+                        elif retry_directive.kind is RetryKind.abort_client_error:
+                            self._emit_status(
+                                f"⚠️ Non-retryable error (HTTP {status_code}) — "
+                                "trying fallback..."
+                            )
+                        else:
+                            self._emit_status(
+                                f"⚠️ Max retries ({attempt_state.max_retries}) "
+                                "exhausted — trying fallback..."
+                            )
+                        return self._try_activate_fallback()
+
+                    recovery_result = execute_retry_recovery(
+                        retry_directive,
+                        api_error,
+                        retry_count=attempt_state.retry_count,
+                        max_retries=attempt_state.max_retries,
+                        activate_fallback=_activate_directive_fallback,
+                        recover_transport=lambda error, count, maximum: (
+                            self._try_recover_primary_transport(
+                                error,
+                                retry_count=count,
+                                max_retries=maximum,
+                            )
+                        ),
+                    )
+                    if recovery_result.kind is RetryRecoveryKind.fallback:
+                        attempt_state.reset_retry_cycle()
+                        turn_state.compression_attempts = 0
+                        continue
+                    if recovery_result.kind is RetryRecoveryKind.transport:
+                        attempt_state.primary_recovery_attempted = True
+                        attempt_state.retry_count = 0
+                        continue
 
                     if retry_directive.kind is RetryKind.compress_payload:
                         compression_attempt = next_compression_attempt(
-                            compression_attempts,
-                            max_compression_attempts,
+                            turn_state.compression_attempts,
+                            attempt_state.max_compression_attempts,
                         )
-                        compression_attempts = compression_attempt.number
+                        turn_state.compression_attempts = compression_attempt.number
                         if compression_attempt.exhausted:
-                            self._vprint(f"{self.log_prefix}❌ Max compression attempts ({max_compression_attempts}) reached for payload-too-large error.", force=True)
+                            self._vprint(f"{self.log_prefix}❌ Max compression attempts ({attempt_state.max_compression_attempts}) reached for payload-too-large error.", force=True)
                             self._vprint(f"{self.log_prefix}   💡 Try /new to start a fresh conversation, or /compress to retry compression.", force=True)
-                            logging.error(f"{self.log_prefix}413 compression failed after {max_compression_attempts} attempts.")
+                            logging.error(f"{self.log_prefix}413 compression failed after {attempt_state.max_compression_attempts} attempts.")
                             return self._context_recovery_failure_result(
                                 messages=messages,
                                 conversation_history=conversation_history,
-                                api_call_count=api_call_count,
-                                error=f"Request payload too large: max compression attempts ({max_compression_attempts}) reached.",
+                                api_call_count=turn_state.api_call_count,
+                                error=f"Request payload too large: max compression attempts ({attempt_state.max_compression_attempts}) reached.",
                             )
-                        self._emit_status(f"⚠️  Request payload too large (413) — compression attempt {compression_attempts}/{max_compression_attempts}...")
+                        self._emit_status(
+                            "⚠️  Request payload too large (413) — compression "
+                            f"attempt {turn_state.compression_attempts}/"
+                            f"{attempt_state.max_compression_attempts}..."
+                        )
 
                         compression_result = self._compress_for_api_recovery(
                             messages, system_message, approx_tokens=approx_tokens,
@@ -5476,7 +4868,7 @@ class AIAgent:
                                 f"→ {len(messages)} messages, retrying..."
                             )
                             time.sleep(2)  # Brief pause between compression retries
-                            restart_with_compressed_messages = True
+                            attempt_state.request_compressed_restart()
                             break
                         else:
                             self._vprint(f"{self.log_prefix}❌ Payload too large and cannot compress further.", force=True)
@@ -5485,7 +4877,7 @@ class AIAgent:
                             return self._context_recovery_failure_result(
                                 messages=messages,
                                 conversation_history=conversation_history,
-                                api_call_count=api_call_count,
+                                api_call_count=turn_state.api_call_count,
                                 error="Request payload too large (413). Cannot compress further.",
                             )
 
@@ -5503,19 +4895,19 @@ class AIAgent:
                         recovery_plan = build_context_recovery_plan(
                             error_msg,
                             current_context_length=old_ctx,
-                            previous_attempts=compression_attempts,
-                            max_attempts=max_compression_attempts,
+                            previous_attempts=turn_state.compression_attempts,
+                            max_attempts=attempt_state.max_compression_attempts,
                         )
-                        compression_attempts = recovery_plan.attempt.number
+                        turn_state.compression_attempts = recovery_plan.attempt.number
                         if recovery_plan.attempt.exhausted:
-                            self._vprint(f"{self.log_prefix}❌ Max compression attempts ({max_compression_attempts}) reached.", force=True)
+                            self._vprint(f"{self.log_prefix}❌ Max compression attempts ({attempt_state.max_compression_attempts}) reached.", force=True)
                             self._vprint(f"{self.log_prefix}   💡 Try /new to start a fresh conversation, or /compress to retry compression.", force=True)
-                            logging.error(f"{self.log_prefix}Context compression failed after {max_compression_attempts} attempts.")
+                            logging.error(f"{self.log_prefix}Context compression failed after {attempt_state.max_compression_attempts} attempts.")
                             return self._context_recovery_failure_result(
                                 messages=messages,
                                 conversation_history=conversation_history,
-                                api_call_count=api_call_count,
-                                error=f"Context length exceeded: max compression attempts ({max_compression_attempts}) reached.",
+                                api_call_count=turn_state.api_call_count,
+                                error=f"Context length exceeded: max compression attempts ({attempt_state.max_compression_attempts}) reached.",
                             )
 
                         if recovery_plan.output_token_limit is not None:
@@ -5527,7 +4919,7 @@ class AIAgent:
                                 f"context_length unchanged at {old_ctx:,})",
                                 force=True,
                             )
-                            restart_with_compressed_messages = True
+                            attempt_state.request_compressed_restart()
                             break
 
                         context_length_changed = apply_context_recovery_plan(
@@ -5557,7 +4949,11 @@ class AIAgent:
                                 f"attempting compression...",
                                 force=True,
                             )
-                        self._emit_status(f"🗜️ Context too large (~{approx_tokens:,} tokens) — compressing ({compression_attempts}/{max_compression_attempts})...")
+                        self._emit_status(
+                            f"🗜️ Context too large (~{approx_tokens:,} tokens) — "
+                            f"compressing ({turn_state.compression_attempts}/"
+                            f"{attempt_state.max_compression_attempts})..."
+                        )
 
                         compression_result = self._compress_for_api_recovery(
                             messages, system_message, approx_tokens=approx_tokens,
@@ -5578,7 +4974,7 @@ class AIAgent:
                                     f"→ {len(messages)} messages, retrying..."
                                 )
                             time.sleep(2)  # Brief pause between compression retries
-                            restart_with_compressed_messages = True
+                            attempt_state.request_compressed_restart()
                             break
                         else:
                             # Can't compress further and already at minimum tier
@@ -5588,22 +4984,16 @@ class AIAgent:
                             return self._context_recovery_failure_result(
                                 messages=messages,
                                 conversation_history=conversation_history,
-                                api_call_count=api_call_count,
+                                api_call_count=turn_state.api_call_count,
                                 error=f"Context length exceeded ({approx_tokens:,} tokens). Cannot compress further.",
                             )
 
                     if retry_directive.kind is RetryKind.abort_client_error:
-                        # Try fallback before aborting — a different provider
-                        # may not have the same issue (rate limit, auth, etc.)
-                        self._emit_status(f"⚠️ Non-retryable error (HTTP {status_code}) — trying fallback...")
-                        if retry_directive.try_fallback and self._try_activate_fallback():
-                            retry_count = 0
-                            compression_attempts = 0
-                            primary_recovery_attempted = False
-                            continue
-                        if api_kwargs is not None:
+                        if attempt_state.request_kwargs is not None:
                             self._dump_api_request_debug(
-                                api_kwargs, reason="non_retryable_client_error", error=api_error,
+                                attempt_state.request_kwargs,
+                                reason="non_retryable_client_error",
+                                error=api_error,
                             )
                         self._emit_status(
                             f"❌ Non-retryable error (HTTP {status_code}): "
@@ -5638,35 +5028,18 @@ class AIAgent:
                         return {
                             "final_response": None,
                             "messages": messages,
-                            "api_calls": api_call_count,
+                            "api_calls": turn_state.api_call_count,
                             "completed": False,
                             "failed": True,
                             "error": str(api_error),
                         }
 
                     if retry_directive.kind is RetryKind.exhausted:
-                        # Before falling back, try rebuilding the primary
-                        # client once for transient transport errors (stale
-                        # connection pool, TCP reset).  Only attempted once
-                        # per API call block.
-                        if retry_directive.try_transport_recovery and self._try_recover_primary_transport(
-                            api_error, retry_count=retry_count, max_retries=max_retries,
-                        ):
-                            primary_recovery_attempted = True
-                            retry_count = 0
-                            continue
-                        # Try fallback before giving up entirely
-                        self._emit_status(f"⚠️ Max retries ({max_retries}) exhausted — trying fallback...")
-                        if retry_directive.try_fallback and self._try_activate_fallback():
-                            retry_count = 0
-                            compression_attempts = 0
-                            primary_recovery_attempted = False
-                            continue
                         _final_summary = summarize_api_error(api_error)
                         if is_rate_limited:
-                            self._emit_status(f"❌ Rate limited after {max_retries} retries — {_final_summary}")
+                            self._emit_status(f"❌ Rate limited after {attempt_state.max_retries} retries — {_final_summary}")
                         else:
-                            self._emit_status(f"❌ API failed after {max_retries} retries — {_final_summary}")
+                            self._emit_status(f"❌ API failed after {attempt_state.max_retries} retries — {_final_summary}")
                         self._vprint(f"{self.log_prefix}   💀 Final error: {_final_summary}", force=True)
 
                         # Detect SSE stream-drop pattern (e.g. "Network
@@ -5693,15 +5066,17 @@ class AIAgent:
 
                         logging.error(
                             "%sAPI call failed after %s retries. %s | provider=%s model=%s msgs=%s tokens=~%s",
-                            self.log_prefix, max_retries, _final_summary,
+                            self.log_prefix, attempt_state.max_retries, _final_summary,
                             _provider, _model, len(api_messages), f"{approx_tokens:,}",
                         )
-                        if api_kwargs is not None:
+                        if attempt_state.request_kwargs is not None:
                             self._dump_api_request_debug(
-                                api_kwargs, reason="max_retries_exhausted", error=api_error,
+                                attempt_state.request_kwargs,
+                                reason="max_retries_exhausted",
+                                error=api_error,
                             )
                         self._session_persistence.persist(messages, conversation_history)
-                        _final_response = f"API call failed after {max_retries} retries: {_final_summary}"
+                        _final_response = f"API call failed after {attempt_state.max_retries} retries: {_final_summary}"
                         if _is_stream_drop:
                             _final_response += (
                                 "\n\nThe provider's stream connection keeps "
@@ -5714,7 +5089,7 @@ class AIAgent:
                         return {
                             "final_response": _final_response,
                             "messages": messages,
-                            "api_calls": api_call_count,
+                            "api_calls": turn_state.api_call_count,
                             "completed": False,
                             "failed": True,
                             "error": _final_summary,
@@ -5722,65 +5097,74 @@ class AIAgent:
 
                     # For rate limits, respect the Retry-After header if present
                     _retry_after = retry_after_seconds(api_error) if is_rate_limited else None
-                    wait_time = _retry_after if _retry_after else jittered_backoff(retry_count, base_delay=2.0, max_delay=60.0)
+                    wait_time = _retry_after if _retry_after else jittered_backoff(attempt_state.retry_count, base_delay=2.0, max_delay=60.0)
                     if is_rate_limited:
-                        self._emit_status(f"⏱️ Rate limit reached. Waiting {wait_time}s before retry (attempt {retry_count + 1}/{max_retries})...")
+                        self._emit_status(f"⏱️ Rate limit reached. Waiting {wait_time}s before retry (attempt {attempt_state.retry_count + 1}/{attempt_state.max_retries})...")
                     else:
-                        self._emit_status(f"⏳ Retrying in {wait_time}s (attempt {retry_count}/{max_retries})...")
+                        self._emit_status(f"⏳ Retrying in {wait_time}s (attempt {attempt_state.retry_count}/{attempt_state.max_retries})...")
                     logger.warning(
                         "Retrying API call in %ss (attempt %s/%s) %s error=%s",
                         wait_time,
-                        retry_count,
-                        max_retries,
+                        attempt_state.retry_count,
+                        attempt_state.max_retries,
                         self._client_lifecycle.log_context(),
                         api_error,
                     )
-                    # Sleep in small increments so we can respond to interrupts quickly
-                    # instead of blocking the entire wait_time in one sleep() call
-                    sleep_end = time.time() + wait_time
-                    while time.time() < sleep_end:
-                        if self._interrupt_requested:
-                            self._vprint(f"{self.log_prefix}🔧 Interrupt detected during retry wait, aborting.", force=True)
-                            self._session_persistence.persist(messages, conversation_history)
-                            self.clear_interrupt()
-                            return {
-                                "final_response": f"Operation interrupted: retrying API call after error (retry {retry_count}/{max_retries}).",
-                                "messages": messages,
-                                "api_calls": api_call_count,
-                                "completed": False,
-                                "interrupted": True,
-                            }
-                        time.sleep(0.2)  # Check interrupt every 200ms
+                    if not wait_for_retry(
+                        wait_time,
+                        interrupted=lambda: self._interrupt_requested,
+                    ):
+                        self._vprint(
+                            f"{self.log_prefix}🔧 Interrupt detected during "
+                            "retry wait, aborting.",
+                            force=True,
+                        )
+                        self._session_persistence.persist(
+                            messages,
+                            conversation_history,
+                        )
+                        self.clear_interrupt()
+                        return {
+                            "final_response": (
+                                "Operation interrupted: retrying API call "
+                                f"after error (retry {attempt_state.retry_count}/"
+                                f"{attempt_state.max_retries})."
+                            ),
+                            "messages": messages,
+                            "api_calls": turn_state.api_call_count,
+                            "completed": False,
+                            "interrupted": True,
+                        }
             
             # If the API call was interrupted, skip response processing
-            if interrupted:
-                _turn_exit_reason = "interrupted_during_api_call"
+            if turn_state.interrupted:
+                turn_state.exit_reason = "interrupted_during_api_call"
                 break
 
-            if restart_with_compressed_messages:
-                api_call_count -= 1
+            if attempt_state.restart_with_compressed_messages:
+                turn_state.api_call_count -= 1
                 self.iteration_budget.refund()
-                # Count compression restarts toward the retry limit to prevent
-                # infinite loops when compression reduces messages but not enough
-                # to fit the context window.
-                retry_count += 1
-                restart_with_compressed_messages = False
+                # Compression attempts are retained by the turn state across
+                # the refunded outer-loop restart.
                 continue
 
-            if restart_with_length_continuation:
+            if attempt_state.restart_with_length_continuation:
                 continue
 
             # Guard: if all retries exhausted without a successful response
             # (e.g. repeated context-length errors that exhausted retry_count),
-            # the `response` variable is still None. Break out cleanly.
-            if response is None:
-                _turn_exit_reason = "all_retries_exhausted_no_response"
+            # the attempt has no valid response inspection. Break out cleanly.
+            if (
+                attempt_state.response_inspection is None
+                or not attempt_state.response_inspection.valid
+            ):
+                turn_state.exit_reason = "all_retries_exhausted_no_response"
                 print(f"{self.log_prefix}❌ All API retries exhausted with no successful response.")
                 self._session_persistence.persist(messages, conversation_history)
                 break
 
             try:
-                assistant_message = response.choices[0].message
+                assistant_message = attempt_state.response_inspection.message
                 
                 # Normalize content to string — some OpenAI-compatible servers
                 # (llama-server, etc.) return content as a dict or list instead
@@ -5815,12 +5199,18 @@ class AIAgent:
                         model=self.model,
                         provider=self.provider,
                         base_url=self.base_url,
-                        api_call_count=api_call_count,
+                        api_call_count=turn_state.api_call_count,
                         api_duration=api_duration,
-                        finish_reason=finish_reason,
+                        finish_reason=attempt_state.finish_reason,
                         message_count=len(api_messages),
-                        response_model=getattr(response, "model", None),
-                        usage=self._usage_summary_for_api_request_hook(response),
+                        response_model=getattr(
+                            attempt_state.response,
+                            "model",
+                            None,
+                        ),
+                        usage=self._usage_summary_for_api_request_hook(
+                            attempt_state.response
+                        ),
                         assistant_content_chars=len(_assistant_text),
                         assistant_tool_call_count=len(_assistant_tool_calls),
                     )
@@ -5892,13 +5282,16 @@ class AIAgent:
                             return {
                                 "final_response": None,
                                 "messages": messages,
-                                "api_calls": api_call_count,
+                                "api_calls": turn_state.api_call_count,
                                 "completed": False,
                                 "partial": True,
                                 "error": f"Model generated invalid tool call: {invalid_preview}"
                             }
 
-                        assistant_msg = self._build_assistant_message(assistant_message, finish_reason)
+                        assistant_msg = self._build_assistant_message(
+                            assistant_message,
+                            attempt_state.finish_reason,
+                        )
                         messages.append(assistant_msg)
                         for tc in assistant_message.tool_calls:
                             if tc.function.name not in self.valid_tool_names:
@@ -5949,7 +5342,7 @@ class AIAgent:
                         if _truncated:
                             self._vprint(
                                 f"{self.log_prefix}⚠️  Truncated tool call arguments detected "
-                                f"(finish_reason={finish_reason!r}) — refusing to execute.",
+                                f"(finish_reason={attempt_state.finish_reason!r}) — refusing to execute.",
                                 force=True,
                             )
                             self._invalid_json_retries = 0
@@ -5958,7 +5351,7 @@ class AIAgent:
                             return {
                                 "final_response": None,
                                 "messages": messages,
-                                "api_calls": api_call_count,
+                                "api_calls": turn_state.api_call_count,
                                 "completed": False,
                                 "partial": True,
                                 "error": "Response truncated due to output length limit",
@@ -5981,7 +5374,10 @@ class AIAgent:
                             self._invalid_json_retries = 0  # Reset for next attempt
                             
                             # Append the assistant message with its (broken) tool_calls
-                            recovery_assistant = self._build_assistant_message(assistant_message, finish_reason)
+                            recovery_assistant = self._build_assistant_message(
+                                assistant_message,
+                                attempt_state.finish_reason,
+                            )
                             messages.append(recovery_assistant)
                             
                             # Respond with tool error results for each tool call
@@ -6014,7 +5410,10 @@ class AIAgent:
                         assistant_message.tool_calls
                     )
 
-                    assistant_msg = self._build_assistant_message(assistant_message, finish_reason)
+                    assistant_msg = self._build_assistant_message(
+                        assistant_message,
+                        attempt_state.finish_reason,
+                    )
                     
                     # If this turn has both content AND tool_calls, capture the content
                     # as a fallback final response. Common pattern: model delivers its
@@ -6086,7 +5485,7 @@ class AIAgent:
                     # Reset per-turn retry counters after successful tool
                     # execution so a single truncation doesn't poison the
                     # entire conversation.
-                    truncated_tool_call_retries = 0
+                    turn_state.truncated_tool_call_retries = 0
 
                     # Signal that a paragraph break is needed before the next
                     # streamed text.  We don't emit it immediately because
@@ -6178,17 +5577,17 @@ class AIAgent:
                 
                 else:
                     # No tool calls - this is the final response
-                    final_response = assistant_message.content or ""
+                    turn_state.final_response = assistant_message.content or ""
                     
                     # Check if response only has think block with no actual content after it
-                    if not has_visible_content(final_response):
+                    if not has_visible_content(turn_state.final_response):
                         # If the previous turn already delivered real content alongside
                         # tool calls (e.g. "You're welcome!" + memory save), the model
                         # has nothing more to say. Use the earlier content immediately
                         # instead of wasting API calls on retries that won't help.
                         fallback = getattr(self, '_last_content_with_tools', None)
                         if fallback:
-                            _turn_exit_reason = "fallback_prior_turn_content"
+                            turn_state.exit_reason = "fallback_prior_turn_content"
                             logger.info("Empty follow-up after tool calls — using prior turn content as final response")
                             self._emit_status("↻ Empty response after tool calls — using earlier content as final answer")
                             self._last_content_with_tools = None
@@ -6203,7 +5602,9 @@ class AIAgent:
                                         tool_names.append(fn.get("name", "unknown"))
                                     msg["content"] = f"Calling the {', '.join(tool_names)} tool{'s' if len(tool_names) > 1 else ''}..."
                                     break
-                            final_response = strip_thinking_blocks(fallback).strip()
+                            turn_state.final_response = strip_thinking_blocks(
+                                fallback
+                            ).strip()
                             self._response_was_previewed = True
                             break
 
@@ -6236,6 +5637,7 @@ class AIAgent:
                             interim_msg["_thinking_prefill"] = True
                             messages.append(interim_msg)
                             self._session_persistence.save_log(messages)
+                            turn_state.final_response = None
                             continue
 
                         # ── Empty response retry ──────────────────────
@@ -6248,7 +5650,7 @@ class AIAgent:
                         # so the old `not _has_structured` guard blocked
                         # retries for every reasoning model after prefill.
                         _truly_empty = not strip_thinking_blocks(
-                            final_response
+                            turn_state.final_response
                         ).strip()
                         _prefill_exhausted = (
                             _has_structured
@@ -6265,6 +5667,7 @@ class AIAgent:
                                 f"⚠️ Empty response from model — retrying "
                                 f"({self._empty_content_retries}/3)"
                             )
+                            turn_state.final_response = None
                             continue
 
                         # ── Exhausted retries — try fallback provider ──
@@ -6295,14 +5698,18 @@ class AIAgent:
                                     "now using %s on %s",
                                     self.model, self.provider,
                                 )
+                                turn_state.final_response = None
                                 continue
 
                         # Exhausted retries and fallback chain (or no
                         # fallback configured).  Fall through to the
                         # "(empty)" terminal.
-                        _turn_exit_reason = "empty_response_exhausted"
+                        turn_state.exit_reason = "empty_response_exhausted"
                         reasoning_text = extract_reasoning(assistant_message)
-                        assistant_msg = self._build_assistant_message(assistant_message, finish_reason)
+                        assistant_msg = self._build_assistant_message(
+                            assistant_message,
+                            attempt_state.finish_reason,
+                        )
                         assistant_msg["content"] = "(empty)"
                         messages.append(assistant_msg)
 
@@ -6331,22 +5738,29 @@ class AIAgent:
                                    ". No fallback providers configured.")
                             )
 
-                        final_response = "(empty)"
+                        turn_state.final_response = "(empty)"
                         break
                     
                     # Reset retry counter/signature on successful content
                     self._empty_content_retries = 0
                     self._thinking_prefill_retries = 0
 
-                    if truncated_response_prefix:
-                        final_response = truncated_response_prefix + final_response
-                        truncated_response_prefix = ""
-                        length_continue_retries = 0
+                    if turn_state.truncated_response_prefix:
+                        turn_state.final_response = (
+                            turn_state.truncated_response_prefix
+                            + turn_state.final_response
+                        )
+                        turn_state.clear_text_continuation()
                     
                     # Strip <think> blocks from user-facing response (keep raw in messages for trajectory)
-                    final_response = strip_thinking_blocks(final_response).strip()
+                    turn_state.final_response = strip_thinking_blocks(
+                        turn_state.final_response
+                    ).strip()
                     
-                    final_msg = self._build_assistant_message(assistant_message, finish_reason)
+                    final_msg = self._build_assistant_message(
+                        assistant_message,
+                        attempt_state.finish_reason,
+                    )
 
                     # Pop thinking-only prefill message(s) before appending
                     # the final response.  This avoids consecutive assistant
@@ -6360,19 +5774,33 @@ class AIAgent:
 
                     messages.append(final_msg)
                     
-                    _turn_exit_reason = f"text_response(finish_reason={finish_reason})"
+                    turn_state.exit_reason = (
+                        "text_response("
+                        f"finish_reason={attempt_state.finish_reason})"
+                    )
                     if not self.quiet_mode:
-                        self._safe_print(f"🎉 Conversation completed after {api_call_count} OpenAI-compatible API call(s)")
+                        self._safe_print(
+                            "🎉 Conversation completed after "
+                            f"{turn_state.api_call_count} OpenAI-compatible "
+                            "API call(s)"
+                        )
                     break
                 
             except Exception as e:
-                error_msg = f"Error during OpenAI-compatible API call #{api_call_count}: {str(e)}"
+                error_msg = (
+                    "Error during OpenAI-compatible API call "
+                    f"#{turn_state.api_call_count}: {str(e)}"
+                )
                 try:
                     print(f"❌ {error_msg}")
                 except (OSError, ValueError):
                     logger.error(error_msg)
                 
-                logger.debug("Outer loop error in API call #%d", api_call_count, exc_info=True)
+                logger.debug(
+                    "Outer loop error in API call #%d",
+                    turn_state.api_call_count,
+                    exc_info=True,
+                )
                 
                 # If an assistant message with tool_calls was already appended,
                 # the API expects a role="tool" result for every tool_call_id.
@@ -6407,49 +5835,44 @@ class AIAgent:
                 # role-alternation invariants.
 
                 # If we're near the limit, break to avoid infinite loops
-                if api_call_count >= self.max_iterations - 1:
-                    _turn_exit_reason = f"error_near_max_iterations({error_msg[:80]})"
-                    final_response = f"I apologize, but I encountered repeated errors: {error_msg}"
+                if turn_state.api_call_count >= self.max_iterations - 1:
+                    turn_state.exit_reason = (
+                        f"error_near_max_iterations({error_msg[:80]})"
+                    )
+                    turn_state.final_response = (
+                        "I apologize, but I encountered repeated errors: "
+                        f"{error_msg}"
+                    )
                     # Append as assistant so the history stays valid for
                     # session resume (avoids consecutive user messages).
-                    messages.append({"role": "assistant", "content": final_response})
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": turn_state.final_response,
+                        }
+                    )
                     break
-        
-        if final_response is None and (
-            api_call_count >= self.max_iterations
-            or self.iteration_budget.remaining <= 0
-        ) and not self._budget_exhausted_injected:
-            # Budget exhausted but we haven't tried asking the model to
-            # summarise yet.  Inject a user message and give it one grace
-            # API call to produce a text response.
-            self._budget_exhausted_injected = True
-            self._budget_grace_call = True
-            _grace_msg = (
-                "Your tool budget ran out. Please give me the information "
-                "or actions you've completed so far."
-            )
-            messages.append({"role": "user", "content": _grace_msg})
-            self._emit_status(
-                f"⚠️ Iteration budget exhausted ({api_call_count}/{self.max_iterations}) "
-                "— asking model to summarise"
-            )
-            if not self.quiet_mode:
-                self._safe_print(
-                    f"\n⚠️  Iteration budget exhausted ({api_call_count}/{self.max_iterations}) "
-                    "— requesting summary..."
-                )
 
-        if final_response is None and (
-            api_call_count >= self.max_iterations
-            or self.iteration_budget.remaining <= 0
-        ) and not self._budget_grace_call:
-            _turn_exit_reason = f"max_iterations_reached({api_call_count}/{self.max_iterations})"
+        if (
+            turn_state.final_response is None
+            and turn_state.exhausted(
+                max_iterations=self.max_iterations,
+                iteration_budget=self.iteration_budget,
+            )
+        ):
+            turn_state.exit_reason = (
+                "max_iterations_reached("
+                f"{turn_state.api_call_count}/{self.max_iterations})"
+            )
             if self.iteration_budget.remaining <= 0 and not self.quiet_mode:
                 print(f"\n⚠️  Iteration budget exhausted ({self.iteration_budget.used}/{self.iteration_budget.max_total} iterations used)")
-            final_response = self._handle_max_iterations(messages, api_call_count)
-        
+            turn_state.final_response = self._handle_max_iterations(
+                messages,
+                turn_state.api_call_count,
+            )
+
         # Determine if conversation completed successfully
-        completed = final_response is not None and api_call_count < self.max_iterations
+        completed = turn_state.completed(max_iterations=self.max_iterations)
 
         # Clean up VM and browser for this task after conversation completes
         self._cleanup_task_resources(effective_task_id)
@@ -6476,7 +5899,9 @@ class AIAgent:
             1 for m in messages
             if isinstance(m, dict) and m.get("role") == "assistant" and m.get("tool_calls")
         )
-        _resp_len = len(final_response) if final_response else 0
+        _resp_len = (
+            len(turn_state.final_response) if turn_state.final_response else 0
+        )
         _budget_used = self.iteration_budget.used if self.iteration_budget else 0
         _budget_max = self.iteration_budget.max_total if self.iteration_budget else 0
 
@@ -6485,13 +5910,16 @@ class AIAgent:
             "tool_turns=%d last_msg_role=%s response_len=%d session=%s"
         )
         _diag_args = (
-            _turn_exit_reason, self.model, api_call_count, self.max_iterations,
+            turn_state.exit_reason,
+            self.model,
+            turn_state.api_call_count,
+            self.max_iterations,
             _budget_used, _budget_max,
             _turn_tool_count, _last_msg_role, _resp_len,
             self.session_id or "none",
         )
 
-        if _last_msg_role == "tool" and not interrupted:
+        if _last_msg_role == "tool" and not turn_state.interrupted:
             # Agent was mid-work — this is the "just stops" case.
             logger.warning(
                 "Turn ended with pending tool result (agent may appear stuck). "
@@ -6505,14 +5933,14 @@ class AIAgent:
         # Fired once per turn after the tool-calling loop completes.
         # Plugins can use this to persist conversation data (e.g. sync
         # to an external memory system).
-        if final_response and not interrupted:
+        if turn_state.final_response and not turn_state.interrupted:
             try:
                 from VoidCube_cli.plugins import invoke_hook as _invoke_hook
                 _invoke_hook(
                     "post_llm_call",
                     session_id=self.session_id,
                     user_message=original_user_message,
-                    assistant_response=final_response,
+                    assistant_response=turn_state.final_response,
                     conversation_history=list(messages),
                     model=self.model,
                     platform=getattr(self, "platform", None) or "",
@@ -6529,13 +5957,13 @@ class AIAgent:
 
         # Build result with interrupt info if applicable
         result = {
-            "final_response": final_response,
+            "final_response": turn_state.final_response,
             "last_reasoning": last_reasoning,
             "messages": messages,
-            "api_calls": api_call_count,
+            "api_calls": turn_state.api_call_count,
             "completed": completed,
             "partial": False,  # True only when stopped due to invalid tool calls
-            "interrupted": interrupted,
+            "interrupted": turn_state.interrupted,
             "response_previewed": getattr(self, "_response_was_previewed", False),
             "model": self.model,
             "provider": self.provider,
@@ -6556,7 +5984,7 @@ class AIAgent:
         self._response_was_previewed = False
         
         # Include interrupt message if one triggered the interrupt
-        if interrupted and self._interrupt_message:
+        if turn_state.interrupted and self._interrupt_message:
             result["interrupt_message"] = self._interrupt_message
         
         # Clear interrupt state after handling
@@ -6576,16 +6004,27 @@ class AIAgent:
         # External memory provider: sync the completed turn + queue next prefetch.
         # Use original_user_message (clean input) — user_message may contain
         # injected skill content that bloats / breaks provider queries.
-        if self._memory_manager and final_response and original_user_message:
+        if (
+            self._memory_manager
+            and turn_state.final_response
+            and original_user_message
+        ):
             try:
-                self._memory_manager.sync_all(original_user_message, final_response)
+                self._memory_manager.sync_all(
+                    original_user_message,
+                    turn_state.final_response,
+                )
                 self._memory_manager.queue_prefetch_all(original_user_message)
             except Exception:
                 pass
 
         # Background memory/skill review — runs AFTER the response is delivered
         # so it never competes with the user's task for model attention.
-        if final_response and not interrupted and (_should_review_memory or _should_review_skills):
+        if (
+            turn_state.final_response
+            and not turn_state.interrupted
+            and (_should_review_memory or _should_review_skills)
+        ):
             try:
                 self._spawn_background_review(
                     messages_snapshot=list(messages),
@@ -6611,7 +6050,7 @@ class AIAgent:
                 "on_session_end",
                 session_id=self.session_id,
                 completed=completed,
-                interrupted=interrupted,
+                interrupted=turn_state.interrupted,
                 model=self.model,
                 platform=getattr(self, "platform", None) or "",
             )
