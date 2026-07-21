@@ -26,6 +26,7 @@ from VoidCube_cli.autonomous_status_host import (
 from VoidCube_cli.cli_handlers import _git_head_commit, _git_improvement_diff
 from VoidCube_cli.chat_render_state import CliStreamRenderState
 from VoidCube_cli.chat_stream_renderer import CliStreamRenderer
+from VoidCube_cli.command_execution import initialize_command_execution
 
 
 class _FakeUrlopenResponse:
@@ -2418,6 +2419,10 @@ def test_process_command_allows_regular_slash_commands_while_autonomous_gate_act
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli._autonomous_gate_active = True
     cli._current_autonomous_task = {"task_id": "learn-allow-help"}
+    cli._command_running = False
+    cli._command_status = ""
+    cli._invalidate = lambda **kwargs: None
+    initialize_command_execution(cli)
 
     called = {"help": 0}
 

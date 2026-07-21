@@ -32,6 +32,7 @@
 - 流式 chunk 装配由 `agent/stream_response.py` 统一负责；工具调用的解析、顺序/并发调度、计时与中断补位由 `agent/tool_execution.py` 统一负责。`run_agent.py` 不再持有这些职责的第二套实现。
 - CLI 流式状态由 `VoidCube_cli/chat_render_state.py` 持有，标签过滤与缓冲转换由 `chat_stream_processor.py` 负责，终端边框、颜色和输出顺序由 `chat_stream_renderer.py` 负责；`cli.py` 只保留真实回调入口。
 - CLI slash/path 判定、中央 alias 规范化、慢命令状态以及 quick/plugin/skill/前缀优先级由 `VoidCube_cli/command_router.py` 统一负责；失效的 `/cron`、`/insights` 兼容入口已删除。
+- CLI 内建命令由 `VoidCube_cli/command_execution.py` 的不可变 spec 表分发；同一模块统一管理 busy 状态、嵌套恢复和异常收尾，`process_command()` 只协调内建执行与动态路由。
 
 ## 分阶段路线
 
@@ -44,7 +45,7 @@
 ### 阶段 2：主路径解耦
 
 - Agent 用户链路中的会话持久化、请求/响应、客户端、传输、流式装配、工具执行、单轮/attempt 状态、retry/compression recovery、response disposition、成功工具 turn 和 finalization 已有唯一所有者；CLI 流式状态、转换和输出协调也已收口。
-- 下一步把 `cli.py` 的内建命令执行分支改为显式执行表，并提取 busy 命令生命周期；自主链路桥接继续留在 `VoidCube_cli/autonomous_*`。
+- M1 进入整体验收审计：核对用户输入、命令、流式/非流式、工具循环、恢复、持久化和中断证据；通过前不进入 M2。自主链路桥接继续留在 `VoidCube_cli/autonomous_*`。
 - 每迁移一项职责，同轮删除原实现、旧参数和只服务旧路径的测试。
 
 ### 阶段 3：Memory 服务收口

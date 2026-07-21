@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import cli
 from VoidCube_cli.commands import COMMANDS_BY_CATEGORY, resolve_command
+from VoidCube_cli.command_execution import initialize_command_execution
 from agent.subagent_display import SubagentStatus
 
 
@@ -111,6 +112,10 @@ def test_handle_tasks_command_falls_back_to_background_summary(monkeypatch):
 def test_process_command_routes_tasks(monkeypatch):
     app = cli.VoidcubeCLI.__new__(cli.VoidcubeCLI)
     app._autonomous_gate_active = False
+    app._command_running = False
+    app._command_status = ""
+    app._invalidate = lambda **kwargs: None
+    initialize_command_execution(app)
 
     called = {"tasks": 0}
     app._handle_tasks_command = lambda cmd="/tasks": called.__setitem__("tasks", called["tasks"] + 1)

@@ -66,11 +66,9 @@ from VoidCube_cli.command_router import (
     looks_like_slash_command as _looks_like_slash_command,
     parse_cli_command,
     resolve_dynamic_command,
-    slow_command_status,
 )
 from VoidCube_cli.command_execution import (
-    BuiltinCommandExecutor,
-    CommandBusyLifecycle,
+    initialize_command_execution,
 )
 
 if TYPE_CHECKING:
@@ -1518,11 +1516,7 @@ class VoidcubeCLI:
         self._last_scrollback_tool: str = ""  # last tool name printed to scrollback (for "new" dedup)
         self._command_running = False
         self._command_status = ""
-        self._command_busy_lifecycle = CommandBusyLifecycle(self)
-        self._builtin_command_executor = BuiltinCommandExecutor(
-            self,
-            self._command_busy_lifecycle,
-        )
+        initialize_command_execution(self)
         self._attached_images: list[Path] = []
         self._image_counter = 0
         self.preloaded_skills: list[str] = []
@@ -2732,20 +2726,6 @@ class VoidcubeCLI:
 
         frame_idx = int(_time.monotonic() * 10) % len(_COMMAND_SPINNER_FRAMES)
         return _COMMAND_SPINNER_FRAMES[frame_idx]
-
-    @contextmanager
-    def _busy_command(self, status: str):
-        """Expose a temporary busy state in the TUI while a slash command runs."""
-        self._command_running = True
-        self._command_status = status
-        self._invalidate(min_interval=0.0)
-        try:
-            print(f"⏳ {status}")
-            yield
-        finally:
-            self._command_running = False
-            self._command_status = ""
-            self._invalidate(min_interval=0.0)
 
     def _ensure_runtime_credentials(self) -> bool:
         """
@@ -5650,11 +5630,12 @@ class VoidcubeCLI:
             )
 
         try:
-            from VoidCube_cli.skin_engine import get_active_skin
             from VoidCube_cli.tips import get_random_tip
 
             tip = get_random_tip()
             try:
+                from VoidCube_cli.skin_engine import get_active_skin
+
                 tip_color = get_active_skin().get_color("banner_dim", "#B8860B")
             except Exception:
                 tip_color = "#B8860B"
@@ -5827,375 +5808,90 @@ class VoidcubeCLI:
         """
         request = parse_cli_command(command)
         cmd_lower = request.normalized
-        cmd_original = request.original
-        canonical = request.canonical
-        
-        if canonical == "quit":
-            return False
-        elif canonical == "help":
-            self.show_help()
-        elif canonical == "doctor":
-            from VoidCube_cli.config_validator import print_diagnosis
-            print_diagnosis()
-        elif canonical == "api":
-            from VoidCube_cli.api_config import run_api_config_wizard
-            run_api_config_wizard(self)
-        elif canonical == "profile":
-            self._handle_profile_command()
-        elif canonical == "tools":
-            self._handle_tools_command(cmd_original)
-        elif canonical == "toolsets":
-            self.show_toolsets()
-        elif canonical == "config":
-            self.show_config()
-        elif canonical == "clear":
-            self.new_session(silent=True)
-            # Clear terminal screen.  Inside the TUI, Rich's console.clear()
-            # goes through patch_stdout's StdoutProxy which swallows the
-            # screen-clear escape sequences.  Use prompt_toolkit's output
-            # object directly to actually clear the terminal.
-            if self._app:
-                out = self._app.output
-                out.erase_screen()
-                out.cursor_goto(0, 0)
-                out.flush()
-            else:
-                self.console.clear()
-            # Show fresh banner.  Inside the TUI we must route Rich output
-            # through ChatConsole (which uses prompt_toolkit's native ANSI
-            # renderer) instead of self.console (which writes raw to stdout
-            # and gets mangled by patch_stdout).
-            if self._app:
-                cc = ChatConsole()
-                term_w = shutil.get_terminal_size().columns
-                if self.compact or term_w < 80:
-                    cc.print(_build_compact_banner())
-                else:
-                    tools = _get_tool_definitions(enabled_toolsets=self.enabled_toolsets, quiet_mode=True)
-                    cwd = os.getenv("TERMINAL_CWD", os.getcwd())
-                    ctx_len = None
-                    if hasattr(self, 'agent') and self.agent and hasattr(self.agent, 'context_compressor'):
-                        ctx_len = self.agent.context_compressor.context_length
-                    build_welcome_banner(
-                        console=cc,
-                        model=self.model,
-                        cwd=cwd,
-                        tools=tools,
-                        enabled_toolsets=self.enabled_toolsets,
-                        session_id=self.session_id,
-                        context_length=ctx_len,
-                        conversation_history=self.conversation_history,
-                    )
-                _cprint(f"  {t('tips.fresh_start', default='✨ (◕‿◕)✨ Fresh start! Screen cleared and conversation reset.')}\n")
-                # Show a random tip on new session
-                try:
-                    from VoidCube_cli.tips import get_random_tip
-                    _tip = get_random_tip()
-                    try:
-                        from VoidCube_cli.skin_engine import get_active_skin
-                        _tip_color = get_active_skin().get_color("banner_dim", "#B8860B")  # type: ignore[attr-defined]
-                    except Exception:
-                        _tip_color = "#B8860B"
-                    cc.print(f"[dim {_tip_color}]{t('tips.tip_prefix', default='✦ Tip:')} {_tip}[/]")
-                except Exception:
-                    pass
-            else:
-                self.show_banner()
-                print(f"  {t('tips.fresh_start', default='✨ (◕‿◕)✨ Fresh start! Screen cleared and conversation reset.')}\n")
-                # Show a random tip on new session
-                try:
-                    from VoidCube_cli.tips import get_random_tip
-                    _tip = get_random_tip()
-                    try:
-                        from VoidCube_cli.skin_engine import get_active_skin
-                        _tip_color = get_active_skin().get_color("banner_dim", "#B8860B")  # type: ignore[attr-defined]
-                    except Exception:
-                        _tip_color = "#B8860B"
-                    self.console.print(f"[dim {_tip_color}]{t('tips.tip_prefix', default='✦ Tip:')} {_tip}[/]")
-                except Exception:
-                    pass
-        elif canonical == "history":
-            self.show_history()
-        elif canonical == "title":
-            parts = cmd_original.split(maxsplit=1)
-            if len(parts) > 1:
-                raw_title = parts[1].strip()
-                if raw_title:
-                    if self._session_db:
-                        # Sanitize the title early so feedback matches what gets stored
-                        try:
-                            from VoidCube_core.state import SessionDB
-                            new_title = SessionDB.sanitize_title(raw_title)
-                        except ValueError as e:
-                            _cprint(f"  {e}")
-                            new_title = None
-                        if not new_title:
-                            _cprint("  Title is empty after cleanup. Please use printable characters.")
-                        elif self._session_db.get_session(self.session_id):
-                            # Session exists in DB — set title directly
-                            try:
-                                if self._session_db.set_session_title(self.session_id, new_title):
-                                    _cprint(f"  Session title set: {new_title}")
-                                else:
-                                    _cprint("  Session not found in database.")
-                            except ValueError as e:
-                                _cprint(f"  {e}")
-                        else:
-                            # Session not created yet — defer the title
-                            # Check uniqueness proactively with the sanitized title
-                            existing = self._session_db.get_session_by_title(new_title)
-                            if existing:
-                                _cprint(f"  Title '{new_title}' is already in use by session {existing['id']}")
-                            else:
-                                self._pending_title = new_title
-                                _cprint(f"  Session title queued: {new_title} (will be saved on first message)")
-                    else:
-                        _cprint(t('  Session database not available.'))
-                else:
-                    _cprint("  Usage: /title <your session title>")
-            else:
-                # Show current title and session ID if no argument given
-                if self._session_db:
-                    _cprint(f"  Session ID: {self.session_id}")
-                    session = self._session_db.get_session(self.session_id)
-                    if session and session.get("title"):
-                        _cprint(f"  Title: {session['title']}")
-                    elif self._pending_title:
-                        _cprint(f"  Title (pending): {self._pending_title}")
-                    else:
-                        _cprint("  No title set. Usage: /title <your session title>")
-                else:
-                    _cprint(t('  Session database not available.'))
-        elif canonical == "new":
-            self.new_session()
-        elif canonical == "resume":
-            self._handle_resume_command(cmd_original)
-        elif canonical == "model":
-            self._handle_model_switch(cmd_original)
-        elif canonical == "provider":
-            parts = cmd_original.strip().split()
-            if len(parts) >= 3 and not parts[2].startswith("-") and parts[1] not in ("--global",):
-                from VoidCube_cli.ops.provider import handle_slash_provider
-                args_str = cmd_original.strip().split(None, 1)[1] if len(cmd_original.strip().split(None, 1)) > 1 else ""
-                _cprint(handle_slash_provider(args_str))
-            elif len(parts) >= 2 and parts[1] in ("status", "list"):
-                from VoidCube_cli.ops.provider import handle_slash_provider
-                args_str = cmd_original.strip().split(None, 1)[1] if len(cmd_original.strip().split(None, 1)) > 1 else ""
-                _cprint(handle_slash_provider(args_str))
-            else:
-                self._handle_provider_switch(cmd_original)
-        elif canonical == "memory":
-            self._handle_memory_switch(cmd_original)
+        builtin = self._builtin_command_executor.execute(request)
+        if builtin.handled:
+            return builtin.continue_running
 
-        elif canonical == "personality":
-            # Use original case (handler lowercases the personality name itself)
-            self._handle_personality_command(cmd_original)
-        elif canonical == "auto":
-            _handle_auto_command_view(
-                self,
-                cmd_original,
-                cprint=_cprint,
-                refresh_gateway_cli_presence_callback=lambda *, force=False: _refresh_gateway_cli_presence_view(
-                    self,
-                    force=force,
-                    is_gateway_running=_is_gateway_running,
-                    register_with_gateway=_register_with_gateway,
-                    push_cli_agent_scene=_push_cli_agent_scene,
-                    monotonic_time=time.monotonic,
-                ),
-                thread_factory=threading.Thread,
-            )
-        elif canonical == "auto-q":
-            _handle_auto_q_command_view(
-                self,
-                cprint=_cprint,
-                interrupt_current_task_callback=self._interrupt_autonomous_component_task,
-                push_cli_agent_scene_callback=_push_cli_agent_scene,
-                thread_factory=threading.Thread,
-            )
-        elif canonical == "plan":
-            self._handle_plan_command(cmd_original)
-        elif canonical == "retry":
-            retry_msg = self.retry_last()
-            if retry_msg and hasattr(self, '_pending_input'):
-                # Re-queue the message so process_loop sends it to the agent
-                self._pending_input.put(retry_msg)
-        elif canonical == "undo":
-            self.undo_last()
-        elif canonical == "branch":
-            self._handle_branch_command(cmd_original)
-        elif canonical == "save":
-            self.save_conversation()
-        elif canonical == "skills":
-            with self._busy_command(slow_command_status(request)):
-                self._handle_skills_command(cmd_original)
-        elif canonical == "mcp":
-            self._handle_mcp_command(cmd_original)
-        elif canonical == "status":
-            self._show_session_status()
-        elif canonical == "tasks":
-            self._handle_tasks_command(cmd_original)
-        elif canonical == "statusbar":
-            self._status_bar_visible = not self._status_bar_visible
-            state = "visible" if self._status_bar_visible else "hidden"
-            self.console.print(f"  Status bar {state}")
-        elif canonical == "verbose":
-            self._toggle_verbose()
-        elif canonical == "yolo":
-            self._toggle_yolo()
-        elif canonical == "reasoning":
-            self._handle_reasoning_command(cmd_original)
-        elif canonical == "fast":
-            self._handle_fast_command(cmd_original)
-        elif canonical == "compress":
-            self._manual_compress(cmd_original)
-        elif canonical == "usage":
-            self._show_usage()
-        elif canonical == "debug":
-            self._handle_debug_command()
-        elif canonical == "paste":
-            self._handle_paste_command()
-        elif canonical == "image":
-            self._handle_image_command(cmd_original)
-        elif canonical == "reload-mcp":
-            with self._busy_command(slow_command_status(request)):
-                self._reload_mcp()
-        elif canonical == "browser":
-            self._handle_browser_command(cmd_original)
-        elif canonical == "plugins":
+        _skcmds = _get_skill_commands()
+        from VoidCube_cli.commands import COMMANDS
+
+        route = resolve_dynamic_command(
+            request,
+            quick_commands=self.config.get("quick_commands", {}),
+            plugin_names=_get_plugin_cmd_handler_names(),
+            skill_commands=_skcmds,
+            known_commands=set(COMMANDS),
+        )
+        if route.kind == "quick_exec":
+            import shlex
+            import subprocess
+
             try:
-                from VoidCube_cli.plugins import get_plugin_manager, discover_plugins
-                discover_plugins()
-                mgr = get_plugin_manager()
-                plugins = mgr.list_plugins()  # type: ignore[attr-defined]
-                if not plugins:
-                    print("No plugins installed.")
-                    print(f"Drop plugin directories into {display_VoidCube_home()}/plugins/ to get started.")
-                else:
-                    print(f"Plugins ({len(plugins)}):")
-                    for p in plugins:
-                        status = "✓" if p["enabled"] else "✗"
-                        version = f" v{p['version']}" if p["version"] else ""
-                        tools = f"{p['tools']} tools" if p["tools"] else ""
-                        hooks = f"{p['hooks']} hooks" if p["hooks"] else ""
-                        parts = [x for x in [tools, hooks] if x]
-                        detail = f" ({', '.join(parts)})" if parts else ""
-                        error = f" — {p['error']}" if p["error"] else ""
-                        print(f"  {status} {p['name']}{version}{detail}{error}")
-            except Exception as e:
-                print(f"Plugin system error: {e}")
-        elif canonical == "rollback":
-            self._handle_rollback_command(cmd_original)
-        elif canonical == "stop":
-            self._handle_stop_command()
-        elif canonical == "background":
-            self._handle_background_command(cmd_original)
-        elif canonical == "btw":
-            self._handle_btw_command(cmd_original)
-        elif canonical == "queue":
-            # Extract prompt after "/queue " or "/q "
-            parts = cmd_original.split(None, 1)
-            payload = parts[1].strip() if len(parts) > 1 else ""
-            if not payload:
-                _cprint("  Usage: /queue <prompt>")
-            else:
-                self._pending_input.put(payload)
-                if self._agent_running:
-                    _cprint(f"  Queued for the next turn: {payload[:80]}{'...' if len(payload) > 80 else ''}")
-                else:
-                    _cprint(f"  Queued: {payload[:80]}{'...' if len(payload) > 80 else ''}")
-        elif canonical == "language":
-            from VoidCube_cli.language_command import handle_language_command
-            handle_language_command(self, cmd_original)
-        elif canonical == "skin":
-            self._handle_skin_command(cmd_original)
-        elif canonical == "voice":
-            self._handle_voice_command(cmd_original)
-        elif canonical == "preset":
-            self._handle_preset_command(cmd_original)
-        elif canonical == "connect":
-            self._handle_connect_command(cmd_original)
-        else:
-            _skcmds = _get_skill_commands()
-            from VoidCube_cli.commands import COMMANDS
-
-            route = resolve_dynamic_command(
-                request,
-                quick_commands=self.config.get("quick_commands", {}),
-                plugin_names=_get_plugin_cmd_handler_names(),
-                skill_commands=_skcmds,
-                known_commands=set(COMMANDS),
-            )
-            if route.kind == "quick_exec":
-                import shlex
-                import subprocess
-
-                try:
-                    result = subprocess.run(
-                        shlex.split(route.executable),
-                        capture_output=True,
-                        text=True,
-                        timeout=30,
-                    )
-                    output = result.stdout.strip() or result.stderr.strip()
-                    if output:
-                        self.console.print(_rich_text_from_ansi(output))
-                    else:
-                        self.console.print("[dim]Command returned no output[/]")
-                except subprocess.TimeoutExpired:
-                    self.console.print("[bold red]Quick command timed out (30s)[/]")
-                except Exception as e:
-                    self.console.print(f"[bold red]Quick command error: {e}[/]")
-            elif route.kind == "quick_alias":
-                return self.process_command(route.redirect_command)
-            elif route.kind == "quick_invalid":
-                if route.quick_type == "exec":
-                    self.console.print(
-                        f"[bold red]Quick command '{request.base_token}' has no command defined[/]"
-                    )
-                elif route.quick_type == "alias":
-                    self.console.print(
-                        f"[bold red]Quick command '{request.base_token}' has no target defined[/]"
-                    )
-                else:
-                    self.console.print(
-                        f"[bold red]Quick command '{request.base_token}' has unsupported type "
-                        "(supported: 'exec', 'alias')"
-                    )
-            elif route.kind == "plugin":
-                from VoidCube_cli.plugins import get_plugin_command_handler
-
-                plugin_handler = get_plugin_command_handler(request.name)
-                if plugin_handler:
-                    try:
-                        result = plugin_handler(request.arguments)
-                        if result:
-                            _cprint(str(result))
-                    except Exception as e:
-                        _cprint(f"\033[1;31mPlugin command error: {e}{_RST}")
-            elif route.kind == "skill":
-                msg = _get_skill_invocation_message(
-                    request.base_token,
-                    request.arguments,
-                    task_id=self.session_id,
+                result = subprocess.run(
+                    shlex.split(route.executable),
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
                 )
-                if msg:
-                    skill_name = _skcmds[request.base_token]["name"]
-                    print(f"\n🔧 Loading skill: {skill_name}")
-                    if hasattr(self, '_pending_input'):
-                        self._pending_input.put(msg)
+                output = result.stdout.strip() or result.stderr.strip()
+                if output:
+                    self.console.print(_rich_text_from_ansi(output))
                 else:
-                    ChatConsole().print(
-                        f"[bold red]Failed to load skill for {request.base_token}[/]"
-                    )
-            elif route.kind == "redirect":
-                return self.process_command(route.redirect_command)
-            elif route.kind == "ambiguous":
-                _cprint(f"{_ACCENT}Ambiguous command: {cmd_lower}{_RST}")
-                _cprint(f"{_DIM}Did you mean: {', '.join(route.matches)}?{_RST}")
+                    self.console.print("[dim]Command returned no output[/]")
+            except subprocess.TimeoutExpired:
+                self.console.print("[bold red]Quick command timed out (30s)[/]")
+            except Exception as e:
+                self.console.print(f"[bold red]Quick command error: {e}[/]")
+        elif route.kind == "quick_alias":
+            return self.process_command(route.redirect_command)
+        elif route.kind == "quick_invalid":
+            if route.quick_type == "exec":
+                self.console.print(
+                    f"[bold red]Quick command '{request.base_token}' has no command defined[/]"
+                )
+            elif route.quick_type == "alias":
+                self.console.print(
+                    f"[bold red]Quick command '{request.base_token}' has no target defined[/]"
+                )
             else:
-                _cprint(f"\033[1;31mUnknown command: {cmd_lower}{_RST}")
-                _cprint(f"{_DIM}{_ACCENT}Type /help for available commands{_RST}")
+                self.console.print(
+                    f"[bold red]Quick command '{request.base_token}' has unsupported type "
+                    "(supported: 'exec', 'alias')"
+                )
+        elif route.kind == "plugin":
+            from VoidCube_cli.plugins import get_plugin_command_handler
+
+            plugin_handler = get_plugin_command_handler(request.name)
+            if plugin_handler:
+                try:
+                    result = plugin_handler(request.arguments)
+                    if result:
+                        _cprint(str(result))
+                except Exception as e:
+                    _cprint(f"\033[1;31mPlugin command error: {e}{_RST}")
+        elif route.kind == "skill":
+            msg = _get_skill_invocation_message(
+                request.base_token,
+                request.arguments,
+                task_id=self.session_id,
+            )
+            if msg:
+                skill_name = _skcmds[request.base_token]["name"]
+                print(f"\n🔧 Loading skill: {skill_name}")
+                if hasattr(self, '_pending_input'):
+                    self._pending_input.put(msg)
+            else:
+                ChatConsole().print(
+                    f"[bold red]Failed to load skill for {request.base_token}[/]"
+                )
+        elif route.kind == "redirect":
+            return self.process_command(route.redirect_command)
+        elif route.kind == "ambiguous":
+            _cprint(f"{_ACCENT}Ambiguous command: {cmd_lower}{_RST}")
+            _cprint(f"{_DIM}Did you mean: {', '.join(route.matches)}?{_RST}")
+        else:
+            _cprint(f"\033[1;31mUnknown command: {cmd_lower}{_RST}")
+            _cprint(f"{_DIM}{_ACCENT}Type /help for available commands{_RST}")
         
         return True
 
@@ -9210,8 +8906,7 @@ class VoidcubeCLI:
         self._approval_lock = threading.Lock()  # serialize concurrent approval prompts (delegation race fix)
 
         # Slash command loading state
-        self._command_running = False
-        self._command_status = ""
+        self._command_busy_lifecycle.reset()
 
         # Secure secret capture state for skill setup
         self._secret_state = None       # dict with var_name, prompt, metadata, response_queue

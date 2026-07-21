@@ -152,3 +152,10 @@ class BuiltinCommandExecutor:
         else:
             invoke()
         return BuiltinExecutionResult(handled=True)
+
+
+def initialize_command_execution(host: Any) -> None:
+    """Install the command lifecycle and executor owned by a CLI host."""
+    lifecycle = CommandBusyLifecycle(host)
+    host._command_busy_lifecycle = lifecycle
+    host._builtin_command_executor = BuiltinCommandExecutor(host, lifecycle)
