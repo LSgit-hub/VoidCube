@@ -16,7 +16,6 @@ class ServiceRuntimeState:
     endogenous_drive_task: Optional[asyncio.Task[Any]] = None
     started: bool = False
     autonomous_chain_gate_active: bool = False
-    structured_maintenance_task: Optional[asyncio.Task[Any]] = None
     # Observation cadence timestamps for API-B read-only monitoring
     last_review_at: Optional[datetime] = None
     next_review_at: Optional[datetime] = None
@@ -64,14 +63,6 @@ class ServiceRuntimeMixin:
     @_endogenous_drive_task.setter
     def _endogenous_drive_task(self, task: Optional[asyncio.Task[Any]]) -> None:
         self._service_runtime.endogenous_drive_task = task
-
-    @property
-    def _structured_maintenance_task(self) -> Optional[asyncio.Task[Any]]:
-        return self._service_runtime.structured_maintenance_task
-
-    @_structured_maintenance_task.setter
-    def _structured_maintenance_task(self, task: Optional[asyncio.Task[Any]]) -> None:
-        self._service_runtime.structured_maintenance_task = task
 
     async def health_check(self) -> Dict[str, Any]:
         body_integrity = self._body_registry.inspect_layout()
@@ -321,54 +312,6 @@ class ServiceRuntimeMixin:
 
         self._health_check_task = asyncio.create_task(health_check_loop())
 
-        # ── Memory compression is now owned by the Memory Service ──
-        # Per architecture baseline §3.4, Mem is responsible for its own
-        # maintenance (compression, decay, summarisation).  The supervisor
-        # only schedules / decides, not executes maintenance.
-        # The memory service runs its own background compression loop via
-        # its FastAPI lifespan.
-
-        # ── Structured memory maintenance loop (baseline background task) ──
-        maintenance_interval = getattr(
-            runtime_config, "structured_memory_maintenance_interval", 0
-        )
-        if maintenance_interval > 0:
-            if self._structured_maintenance_task:
-                self._structured_maintenance_task.cancel()
-
-            async def structured_maintenance_loop() -> None:
-                await asyncio.sleep(60)  # startup grace period
-                base_interval = maintenance_interval
-                current_interval = base_interval
-                min_interval = max(600, base_interval // 6)    # min 10 min
-                max_interval = min(86400, base_interval * 4)   # max 24 h
-                last_event_count = 0
-                while True:
-                    try:
-                        logger.debug("Running structured memory maintenance (interval=%ds)", current_interval)
-                        facade = getattr(self, "_execution_facade", None)
-                        if facade is not None:
-                            result = await facade.trigger_memory_compression({})
-                            # Adapt interval based on memory growth
-                            structured = result.get("structured_maintenance", {}) if isinstance(result, dict) else {}
-                            revision_count = int(structured.get("revision_count", 0) or 0)
-                            if revision_count > 2:
-                                current_interval = max(min_interval, current_interval // 2)
-                            elif revision_count == 0:
-                                current_interval = min(max_interval, current_interval * 2)
-                            else:
-                                current_interval = base_interval
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as exc:
-                        logger.warning(
-                            "Structured memory maintenance loop iteration failed: %s", exc
-                        )
-                    await asyncio.sleep(current_interval)
-
-            self._structured_maintenance_task = asyncio.create_task(structured_maintenance_loop())
-            logger.info("Structured memory maintenance loop started (interval=%ds)", maintenance_interval)
-
         self._ensure_watch_window_task()
         self._service_runtime_started = True
 
@@ -534,9 +477,6 @@ class ServiceRuntimeMixin:
         await cancel_task(watch_window_task)
         if hasattr(self, "_watch_window_task"):
             self._watch_window_task = None
-
-        await cancel_task(self._structured_maintenance_task)
-        self._structured_maintenance_task = None
 
         self._service_runtime_started = False
 

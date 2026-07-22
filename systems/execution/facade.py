@@ -14,6 +14,7 @@ class VoidCubeExecutionFacade:
     body_lifecycle: Any
     body_upgrade: Any
     memory_maintenance: Any
+    governor_review: Any = None
     supervisor: Any = None
 
     def get_watch_window_status(self) -> Dict[str, Any]:
@@ -42,6 +43,11 @@ class VoidCubeExecutionFacade:
 
     async def execute_body_upgrade(self, request: dict | None = None) -> Dict[str, Any]:
         return await self.body_upgrade.execute_body_upgrade(request)
+
+    def review_body(self, request: Any) -> Dict[str, Any]:
+        if self.governor_review is None:
+            raise RuntimeError("Governor review adapter is not configured")
+        return self.governor_review.execute_governor_request(request)
 
     async def confirm_body_switch(self, request: dict | None = None) -> Dict[str, Any]:
         result = await self.body_upgrade.confirm_body_switch(request)

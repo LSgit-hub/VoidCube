@@ -209,8 +209,8 @@ memory:
   user_char_limit: 1375
   provider: mem
   mem:
-    db_path: null
-    incremental_lookback_days: 14
+    gateway_address: ""
+    request_timeout_seconds: 2.0
     auto_sync: true
 
 # 委托配置

@@ -342,17 +342,18 @@ class MemGovernorBridge:
         }
 
     def _record(self, record: MemGovernorRecord) -> None:
+        gov_event = self._to_governance_event(record)
+        self._governance_repo.append(gov_event)
+
         payload = record.model_dump(mode="json")
-        with self._lock:
-            with self.history_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-            atomic_json_write(self.latest_path, payload)
         try:
-            gov_event = self._to_governance_event(record)
-            self._governance_repo.append(gov_event)
+            with self._lock:
+                with self.history_path.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+                atomic_json_write(self.latest_path, payload)
         except Exception as exc:
             logger.warning(
-                "Governance repository write failed for record %s: %s",
+                "Governor observation projection write failed for record %s: %s",
                 record.record_id,
                 exc,
                 exc_info=True,

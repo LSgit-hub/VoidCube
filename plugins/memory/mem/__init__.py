@@ -7,7 +7,6 @@ import logging
 import queue
 import threading
 import uuid
-from datetime import date
 from typing import Any, Dict, List
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen

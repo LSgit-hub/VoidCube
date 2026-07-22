@@ -175,11 +175,15 @@ async def test_execution_facade_delegates_to_current_adapters():
     memory_maintenance = SimpleNamespace(
         trigger_memory_compression=AsyncMock(return_value={"status": "compressed"}),
     )
+    governor_review = SimpleNamespace(
+        execute_governor_request=Mock(return_value={"status": "reviewed"}),
+    )
     facade = VoidCubeExecutionFacade(
         watch_window=watch_window,
         body_lifecycle=body_lifecycle,
         body_upgrade=body_upgrade,
         memory_maintenance=memory_maintenance,
+        governor_review=governor_review,
     )
 
     assert facade.get_watch_window_status() == {"status": "watch_status"}
@@ -192,6 +196,15 @@ async def test_execution_facade_delegates_to_current_adapters():
     assert await facade.mark_body_candidate("slot-B", {}) == {"status": "candidate_marked"}
     assert await facade.execute_body_upgrade({}) == {"status": "upgrade_awaiting_user_consent"}
     assert await facade.confirm_body_switch({"approved": True}) == {"status": "body_switch_activated"}
+    governor_request = GovernorRequest(
+        request_id="facade-review",
+        event_type="health_review_request",
+        body_id="slot-B",
+        source_actor="test",
+        summary="review through facade",
+    )
+    assert facade.review_body(governor_request) == {"status": "reviewed"}
+    governor_review.execute_governor_request.assert_called_once_with(governor_request)
     formal_result = await facade.execute_autonomous_chain_request(
         {
             "task_id": "task-1",
@@ -275,7 +288,6 @@ async def test_memory_maintenance_uses_canonical_rule_compression_endpoint(monke
     adapter = MemoryMaintenanceExecutionAdapter(
         config=SimpleNamespace(
             gateway_address="http://gateway",
-            memory_gateway_path="/mem/",
         ),
         attach_execution_route_hint=_attach_route_hint,
     )

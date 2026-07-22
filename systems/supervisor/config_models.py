@@ -261,7 +261,6 @@ class EndogenousDriveCognitionCharterConfig(BaseModel):
 
 class SupervisorExecutionConfig(BaseModel):
     gateway_address: str = "http://127.0.0.1:6000"
-    memory_gateway_path: str = "/mem/"
     agent_base_port: int = 6080
     git_repo_path: str = "./"
     probe_watch_window_seconds: int = 300
@@ -275,9 +274,6 @@ class SupervisorServiceRuntimeConfig(BaseModel):
     activity_guard_user_seconds: int = DEFAULT_ACTIVITY_GUARD_SECONDS
     activity_guard_memory_seconds: int = DEFAULT_ACTIVITY_GUARD_SECONDS
     activity_guard_workflow_seconds: int = DEFAULT_ACTIVITY_GUARD_SECONDS
-    # Deprecated: compression is now owned by MemoryService (baseline §3.4).
-    # Kept for config-file compatibility; no longer read by the supervisor.
-    memory_compression_interval: int = 3600
     endogenous_drive_enabled: bool = True
     endogenous_drive_interval: int = 900
     endogenous_drive_max_candidates: int = 3
@@ -311,12 +307,6 @@ class SupervisorServiceRuntimeConfig(BaseModel):
     body_improvement_editable_dirs: list[str] = ["skills/", "tools/", "agent/", "prompts/"]
     body_improvement_forbidden_patterns: list[str] = ["**/credential*", "**/.env*", "systems/**"]
     body_improvement_max_files: int = 5
-    # Interval in seconds for the structured 4-layer memory maintenance loop
-    # (Event→Scene→Arc→Epoch compression via MemoryMaintenanceEngine).
-    # Runs as a baseline supervisor background task independent of the autonomous-chain gate. 0 = disabled.
-    structured_memory_maintenance_interval: int = 3600
-
-
 class SupervisorBodyRuntimeConfig(BaseModel):
     state_root: str = Field(default_factory=_default_body_state_root)
     slot_a_name: str = "slot-A"

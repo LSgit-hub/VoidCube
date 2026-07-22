@@ -116,7 +116,7 @@ class Supervisor(
         async def execute_governor_review_request(request: dict):
             try:
                 governor_request = GovernorRequest.model_validate(request)
-                return self._governor_review_executor.execute_governor_request(governor_request)
+                return self._execution_facade.review_body(governor_request)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc))
 

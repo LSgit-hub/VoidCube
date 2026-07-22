@@ -1,10 +1,16 @@
+import pytest
+
 from systems.self_learning import (
     LearningRecommendation,
     SupervisorTaskProposal,
 )
 from systems.self_learning.conclusion_store import SelfLearningConclusionStore
-from systems.supervisor.autonomous_chain_store import AutonomousChainStore
 from memai.governance_repository import GovernanceEventRepository
+
+
+class _FailingGovernanceRepository:
+    def append(self, event):
+        raise RuntimeError(f"cannot persist {event.id}")
 
 
 def test_self_learning_conclusion_store_persists_conclusion_and_only_builds_payload(tmp_path):
@@ -74,55 +80,24 @@ def test_self_learning_conclusion_store_persists_conclusion_and_only_builds_payl
     assert execution_result["recommendations_count"] == 1
 
 
-def test_self_learning_conclusion_store_can_submit_recommendations_into_supervisor_backlog(tmp_path):
-    store = SelfLearningConclusionStore(tmp_path / "self-learning")
-    backlog = AutonomousChainStore(tmp_path / "backlog" / "autonomous_chain_store.json")
-
-    topic = store.create_topic(
-        title="Probe retry tuning",
-        reason="Need a follow-up task with evidence.",
-        tags=["probe"],
+def test_self_learning_conclusion_does_not_report_success_without_governance_event(tmp_path):
+    store = SelfLearningConclusionStore(
+        tmp_path / "self-learning",
+        governance_repository=_FailingGovernanceRepository(),
     )
-    session = store.plan_session(topic=topic, planned_minutes=15, trigger="scheduled")
-    experiment = store.record_experiment(
-        topic=topic,
-        session=session,
-        hypothesis="A bounded retry policy reduces flaky probe noise.",
-        method="Compare no-retry and bounded-retry probe results.",
-        observations=["Bounded retry removed transient failures in the sample."],
-        outcome="passed",
-        compared_against=["no-retry"],
-    )
-    conclusion = store.submit_conclusion(
-        topic=topic,
-        session=session,
-        experiments=[experiment],
-        comparisons=["bounded-retry > no-retry"],
-        summary="Use a bounded retry policy for probe execution follow-up review.",
-        verified=True,
-        recommendations=[
-            LearningRecommendation(
-                recommendation_type="propose_evolution_task",
-                title="Review bounded probe retry policy",
-                summary="Create a guarded supervisor-visible task with evidence attached.",
-                evidence={"confidence": "medium"},
-                constraints={"window": "night"},
-            )
-        ],
-    )
+    topic = store.create_topic(title="Durable evidence", reason="governance first")
+    session = store.plan_session(topic=topic)
 
-    created = store.submit_to_supervisor_backlog(conclusion=conclusion, backlog=backlog)
-
-    assert len(created) == 1
-    assert created[0]["title"] == "Review bounded probe retry policy"
-    assert created[0]["trace_id"]
-    assert created[0]["task_type"] == "self_evolution"
-    assert created[0]["governance_task_type"] == "self_evolution"
-    assert created[0]["task_family"] == "general_self_evolution"
-    assert created[0]["execution_kind"] == "general_self_evolution"
-    assert created[0]["metadata"]["conclusion_id"] == conclusion.conclusion_id
-    assert created[0]["evidence"]["confidence"] == "medium"
-    assert not (tmp_path / "self-learning" / "mem_governance.jsonl").exists()
+    with pytest.raises(RuntimeError, match="cannot persist"):
+        store.submit_conclusion(
+            topic=topic,
+            session=session,
+            experiments=[],
+            comparisons=[],
+            summary="This conclusion requires canonical governance history.",
+            verified=True,
+        )
+    assert list((tmp_path / "self-learning" / "conclusions").glob("*.json")) == []
 
 
 def test_self_learning_conclusion_store_marks_experiment_followups_as_self_learning(tmp_path):
@@ -158,34 +133,4 @@ def test_self_learning_conclusion_store_marks_experiment_followups_as_self_learn
     assert payload["proposals"][0]["execution_kind"] is None
 
 
-def test_self_learning_backlog_payload_prefers_canonical_runtime_profile_over_broad_task_type(tmp_path):
-    store = SelfLearningConclusionStore(tmp_path / "self-learning")
-    backlog = AutonomousChainStore(tmp_path / "backlog" / "autonomous_chain_store.json")
-
-    proposal = SupervisorTaskProposal(
-        title="Promote body candidate",
-        summary="Use canonical body-switch runtime semantics.",
-        task_type="self_evolution",
-        governance_task_type="self_evolution",
-        task_family="body_switch",
-        execution_kind="body_switch",
-        source="self_learning",
-    )
-
-    task = backlog.create_task(
-        title=proposal.title,
-        summary=proposal.summary,
-        task_type=store._resolved_proposal_task_type(proposal),
-        source=proposal.source,
-        priority=proposal.priority,
-        metadata=store._proposal_task_metadata(proposal),
-        evidence=proposal.evidence,
-        constraints=proposal.constraints,
-    )
-    created = store._serialize_task_payload(task)
-
-    assert created["task_type"] == "self_evolution"
-    assert created["governance_task_type"] == "self_evolution"
-    assert created["task_family"] == "body_switch"
-    assert created["execution_kind"] == "body_switch"
 

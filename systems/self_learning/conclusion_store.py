@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from VoidCube_core.utils import atomic_json_write
-from systems.runtime_task_profile import derive_runtime_task_profile, resolve_broad_task_type
+from systems.runtime_task_profile import derive_runtime_task_profile
 
 from .models import (
     ExperimentRecord,
@@ -134,63 +134,35 @@ class SelfLearningConclusionStore:
             verified=verified,
             recommendations=list(recommendations or []),
         )
-        self._write_model(self.conclusions_root / f"{conclusion.conclusion_id}.json", conclusion)
         # The injected repository is the only local governance-event writer.
         if self.governance_repository is not None:
-            try:
-                from memai.governance import GovernanceEvent, GovernanceEventType, GovernanceDecision
-                self.governance_repository.append(GovernanceEvent.create(
-                    event_type=GovernanceEventType.CANDIDATE_REVIEW,
-                    source_actor="self_learning",
-                    decision=GovernanceDecision.RECORD_ONLY,
-                    reason=f"Self-learning conclusion: {summary[:120]}",
-                    task_id=conclusion.conclusion_id,
-                    execution_result={
-                        "title": conclusion.topic.title,
-                        "summary": conclusion.summary,
-                        "task_type": "self_learning",
-                        "runtime_task_profile": {
-                            "governance_task_type": "self_learning",
-                            "task_family": "self_learning",
-                            "execution_kind": None,
-                        },
-                        "constraints": {},
-                        "topic_id": conclusion.topic.topic_id,
-                        "session_id": conclusion.session.session_id,
-                        "verified": conclusion.verified,
-                        "recommendations_count": len(conclusion.recommendations),
+            from memai.governance import GovernanceEvent, GovernanceEventType, GovernanceDecision
+            self.governance_repository.append(GovernanceEvent.create(
+                event_type=GovernanceEventType.CANDIDATE_REVIEW,
+                source_actor="self_learning",
+                decision=GovernanceDecision.RECORD_ONLY,
+                reason=f"Self-learning conclusion: {summary[:120]}",
+                task_id=conclusion.conclusion_id,
+                execution_result={
+                    "title": conclusion.topic.title,
+                    "summary": conclusion.summary,
+                    "task_type": "self_learning",
+                    "runtime_task_profile": {
+                        "governance_task_type": "self_learning",
+                        "task_family": "self_learning",
+                        "execution_kind": None,
                     },
-                ))
-            except Exception as exc:
-                logger.warning(
-                    "Governance repository write failed for conclusion %s: %s",
-                    conclusion.conclusion_id,
-                    exc,
-                    exc_info=True,
-                )
-
-        # ── Best-effort mirror to Gateway Mem service (§7.2) ──
-        try:
-            import urllib.request, json as _json
-            gateway = self.gateway_url if getattr(self, "gateway_url", None) else "http://127.0.0.1:6000"
-            payload = _json.dumps({
-                "event_type": "self_learning_conclusion",
-                "conclusion_id": conclusion.conclusion_id,
-                "topic_id": conclusion.topic.topic_id,
-                "title": conclusion.topic.title,
-                "summary": conclusion.summary[:200],
-                "verified": conclusion.verified,
-                "recommendations_count": len(conclusion.recommendations),
-            }).encode()
-            req = urllib.request.Request(
-                f"{gateway}/mem/governance",
-                data=payload,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            urllib.request.urlopen(req, timeout=5)
-        except Exception:
-            pass  # best-effort mirror; the injected repository is authoritative
+                    "constraints": {},
+                    "topic_id": conclusion.topic.topic_id,
+                    "session_id": conclusion.session.session_id,
+                    "verified": conclusion.verified,
+                    "recommendations_count": len(conclusion.recommendations),
+                },
+            ))
+        self._write_model(
+            self.conclusions_root / f"{conclusion.conclusion_id}.json",
+            conclusion,
+        )
 
         return conclusion
 
@@ -248,28 +220,6 @@ class SelfLearningConclusionStore:
             if proposal.get("task_type") is None:
                 proposal.pop("task_type", None)
         return payload
-
-    def submit_to_supervisor_backlog(
-        self,
-        *,
-        conclusion: LearningConclusion,
-        backlog: Any,
-    ) -> List[Dict[str, Any]]:
-        submission = self.build_supervisor_submission(conclusion)
-        created = []
-        for proposal in submission.proposals:
-            task = backlog.create_task(
-                title=proposal.title,
-                summary=proposal.summary,
-                task_type=self._resolved_proposal_task_type(proposal),
-                source=proposal.source,
-                priority=proposal.priority,
-                metadata=self._proposal_task_metadata(proposal),
-                evidence=proposal.evidence,
-                constraints=proposal.constraints,
-            )
-            created.append(self._serialize_task_payload(task))
-        return created
 
     def _build_task_proposals(
         self,
@@ -335,43 +285,3 @@ class SelfLearningConclusionStore:
 
     def _write_model(self, path: Path, model: Any) -> None:
         atomic_json_write(path, model.model_dump(mode="json"))
-
-    def _proposal_task_metadata(self, proposal: SupervisorTaskProposal) -> Dict[str, Any]:
-        metadata = dict(proposal.metadata)
-        if proposal.governance_task_type is not None:
-            metadata.setdefault("governance_task_type", proposal.governance_task_type)
-        if proposal.task_family is not None:
-            metadata.setdefault("task_family", proposal.task_family)
-        if proposal.execution_kind is not None:
-            metadata.setdefault("execution_kind", proposal.execution_kind)
-        return metadata
-
-    def _resolved_proposal_task_type(self, proposal: SupervisorTaskProposal) -> str:
-        return resolve_broad_task_type(
-            task_type=proposal.task_type,
-            governance_task_type=proposal.governance_task_type,
-            task_family=proposal.task_family,
-            execution_kind=proposal.execution_kind,
-            source=proposal.source,
-        )
-
-    def _serialize_task_payload(self, task: Any) -> Dict[str, Any]:
-        payload = task.model_dump(mode="json")
-        metadata = dict(payload.get("metadata") or {})
-        runtime_task_profile = derive_runtime_task_profile(
-            task_type=payload.get("task_type"),
-            governance_task_type=(
-                payload.get("governance_task_type")
-                or metadata.get("governance_task_type")
-            ),
-            task_family=payload.get("task_family") or metadata.get("task_family"),
-            execution_kind=(
-                payload.get("execution_kind")
-                or metadata.get("execution_kind")
-            ),
-            default_task_family="general_self_evolution",
-        )
-        payload["governance_task_type"] = runtime_task_profile["governance_task_type"]
-        payload["task_family"] = runtime_task_profile["task_family"]
-        payload["execution_kind"] = runtime_task_profile["execution_kind"]
-        return payload

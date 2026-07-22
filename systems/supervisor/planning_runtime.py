@@ -8071,7 +8071,23 @@ class PlanningRuntimeMixin:
         )
 
         payload = execution_request.model_dump(mode="json")
-        result = await self._execution_facade.execute_autonomous_chain_request(payload)
+        try:
+            result = await self._execution_facade.execute_autonomous_chain_request(payload)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            result = {
+                "status": "execution_handoff_error",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+            self._record_execution_handoff_failure(
+                task,
+                result=result,
+                result_status=result["status"],
+                max_retries=max_retries,
+            )
+            return result
 
         # ── Failure recovery: restore approved state so the task can be ──
         # retried on the next cycle.  Only explicit success statuses close the
@@ -8125,74 +8141,12 @@ class PlanningRuntimeMixin:
             )
             return result
         if is_failure:
-            failure_count = int(task_metadata.get("execution_failure_count") or 0) + 1
-            task_governance_type = self._task_governance_type(task)
-            # memory_maintenance tasks are handled by the supervisor's internal
-            # memory service (baseline §3.4). API-A pull paths only see
-            # autonomous-executor tasks, so retry keeps the task
-            # approved for the supervisor handoff lane instead of pushing it
-            # through the API-A supervisor_task lane poll.
-            if task_governance_type == "memory_maintenance":
-                if failure_count < max_retries:
-                    self._update_task_status(
-                        task.task_id,
-                        status="approved",
-                        actor="supervisor_memory_service",
-                        reason=(
-                            f"记忆维护自主交接失败 "
-                            f"({failure_count}/{max_retries})；已恢复为待执行，"
-                            f"等待监督者下一轮重新交接。"
-                            f"executor_status={str(result_status)[:60]}"
-                        ),
-                        event_type="execution_handoff_failed",
-                    )
-                else:
-                    self._update_task_status(
-                        task.task_id,
-                        status="failed",
-                        actor="supervisor_memory_service",
-                        reason=(
-                            f"记忆维护自主交接在 {max_retries} 次重试后仍失败。"
-                            f"executor_status={str(result_status)[:60]}"
-                        ),
-                        event_type="execution_handoff_failed",
-                    )
-                self._update_task_metadata(
-                    task.task_id,
-                    metadata={
-                        "execution_failed": True,
-                        "execution_failure_count": failure_count,
-                        "execution_result": result,
-                    },
-                )
-                return result
-            if failure_count < max_retries:
-                # Allow retry — set back to approved so it can be re-handed off.
-                self._update_task_status(
-                    task.task_id,
-                    status="approved",
-                    actor="supervisor",
-                    reason=f"自主交接重试 {failure_count}/{max_retries}",
-                    event_type="execution_handoff_retry",
-                )
-                self._update_task_metadata(
-                    task.task_id,
-                    metadata={
-                        "execution_failed": True,
-                        "execution_failure_count": failure_count,
-                        "execution_result": result,
-                    },
-                )
-            else:
-                # Permanent failure — keep the failed lineage so it is not retried.
-                self._update_task_metadata(
-                    task.task_id,
-                    metadata={
-                        "execution_failed": True,
-                        "execution_failure_count": failure_count,
-                        "execution_result": result,
-                    },
-                )
+            self._record_execution_handoff_failure(
+                task,
+                result=result,
+                result_status=result_status,
+                max_retries=max_retries,
+            )
             return result
 
         # Success path — mark completed.  Reason text is split by execution
@@ -8254,6 +8208,48 @@ class PlanningRuntimeMixin:
             },
         )
         return result
+
+    def _record_execution_handoff_failure(
+        self,
+        task: AutonomousChainTask,
+        *,
+        result: Dict[str, Any],
+        result_status: Any,
+        max_retries: int,
+    ) -> None:
+        current = self._autonomous_chain_store.get_task(task.task_id) or task
+        failure_count = int(
+            dict(current.metadata or {}).get("execution_failure_count") or 0
+        ) + 1
+        task_governance_type = self._task_governance_type(current)
+        actor = (
+            "supervisor_memory_service"
+            if task_governance_type == "memory_maintenance"
+            else "supervisor_executor"
+        )
+        terminal = failure_count >= max_retries
+        self._update_task_status(
+            task.task_id,
+            status="failed" if terminal else "approved",
+            actor=actor,
+            reason=(
+                f"Execution handoff failed after {failure_count}/{max_retries} attempt(s); "
+                f"executor_status={str(result_status)[:80] or 'unknown'}."
+            ),
+            event_type=(
+                "execution_handoff_failed"
+                if terminal
+                else "execution_handoff_retry"
+            ),
+        )
+        self._update_task_metadata(
+            task.task_id,
+            metadata={
+                "execution_failed": True,
+                "execution_failure_count": failure_count,
+                "execution_result": dict(result),
+            },
+        )
 
     def _reconcile_body_switch_consent_outcome(
         self,
@@ -9161,5 +9157,5 @@ class PlanningRuntimeMixin:
                 "previous_healthy_commit": slot_meta.previous_healthy_commit,
             },
         )
-        return self._governor_review_executor.execute_governor_request(request)
+        return self._execution_facade.review_body(request)
 

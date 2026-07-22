@@ -431,14 +431,12 @@ def test_supervisor_exposes_segmented_runtime_config_views_and_uses_them_for_exe
         execution=SupervisorExecutionConfig(
             git_repo_path=str(tmp_path),
             gateway_address="http://gateway.segmented.local",
-            memory_gateway_path="/memory-api/",
             agent_base_port=9100,
             probe_watch_window_seconds=180,
         ),
         soul_store_path=str(tmp_path / ".soul-runtime"),
         service_runtime=SupervisorServiceRuntimeConfig(
             health_check_interval=45,
-            memory_compression_interval=7200,
             autonomous_chain_review_interval=900,
             endogenous_drive_enabled=True,
             endogenous_drive_interval=600,
@@ -453,12 +451,10 @@ def test_supervisor_exposes_segmented_runtime_config_views_and_uses_them_for_exe
     supervisor = Supervisor(config)
 
     assert config.execution.gateway_address == "http://gateway.segmented.local"
-    assert config.execution.memory_gateway_path == "/memory-api/"
     assert config.execution.agent_base_port == 9100
     assert config.execution.probe_watch_window_seconds == 180
     assert config.service_runtime.health_check_interval == 45
     assert config.service_runtime.governor_llm_advisory_enabled is True
-    assert config.service_runtime.memory_compression_interval == 7200
     assert config.service_runtime.autonomous_chain_review_interval == 900
     assert config.service_runtime.endogenous_drive_enabled is True
     assert config.service_runtime.endogenous_drive_interval == 600
@@ -471,7 +467,6 @@ def test_supervisor_exposes_segmented_runtime_config_views_and_uses_them_for_exe
     assert config.body_runtime.slot_a_name == "slot-blue"
     assert config.body_runtime.slot_b_name == "slot-green"
     assert supervisor._body_upgrade_executor.config.probe_watch_window_seconds == 180
-    assert supervisor._memory_maintenance_executor.config.memory_gateway_path == "/memory-api/"
     registry = supervisor._body_registry.load_registry()
     assert registry.active_slot == "slot-blue"
     assert registry.shell_slot == "slot-green"
@@ -2243,15 +2238,6 @@ async def test_supervisor_periodic_compression_runtime_does_not_route_through_ex
         )
     )
     supervisor._execution_facade.memory_maintenance = facade_memory_maintenance
-
-    config = supervisor.config.model_copy(
-        update={
-            "service_runtime": supervisor.config.service_runtime.model_copy(
-                update={"memory_compression_interval": 0}
-            )
-        }
-    )
-    supervisor.config = config
 
     await supervisor._start_periodic_tasks()
 

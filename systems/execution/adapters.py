@@ -686,7 +686,6 @@ class BodyUpgradeExecutionAdapter:
                     "probe_execution": probe_execution,
                     "abandonment": abandonment,
                 }
-                await self._writeback_execution_outcome(outcome)
                 return self.attach_execution_route_hint(
                     outcome,
                     "body.upgrade.execute",
@@ -748,8 +747,6 @@ class BodyUpgradeExecutionAdapter:
                 "active_target": active_target,
             }
             result = self.attach_execution_route_hint(outcome, "body.upgrade.execute")
-            # E-04: writeback execution outcome to Mem governance
-            await self._writeback_execution_outcome(outcome)
             return result
         except HTTPException:
             raise
@@ -881,54 +878,6 @@ class BodyUpgradeExecutionAdapter:
             raise
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-
-    async def _writeback_execution_outcome(
-        self, outcome: Dict[str, Any]
-    ) -> None:
-        """Best-effort writeback of execution outcome to Mem governance (E-04)."""
-        try:
-            from memai.governance import GovernanceEvent, GovernanceEventType, GovernanceDecision
-            execution_request = dict(outcome.get("execution_request") or {})
-            runtime_task_profile = dict(
-                execution_request.get("runtime_task_profile")
-                or outcome.get("runtime_task_profile")
-                or {}
-            )
-            if not runtime_task_profile:
-                runtime_task_profile = {
-                    "governance_task_type": "self_evolution",
-                    "task_family": "body_upgrade",
-                    "execution_kind": "body_improvement",
-                }
-            execution_result = {
-                **dict(outcome),
-                "title": (
-                    execution_request.get("title")
-                    or outcome.get("title")
-                    or "Body upgrade execution outcome"
-                ),
-                "summary": (
-                    execution_request.get("summary")
-                    or outcome.get("summary")
-                    or f"Body upgrade: {outcome.get('status', 'unknown')}"
-                ),
-                "runtime_task_profile": runtime_task_profile,
-                "constraints": dict(execution_request.get("constraints") or {}),
-            }
-            self.governance_repository.append(GovernanceEvent.create(
-                event_type=GovernanceEventType.EXECUTION_OUTCOME,
-                source_actor="executor",
-                decision=(
-                    GovernanceDecision.RECORD_ONLY
-                    if outcome.get("status") == "upgrade_awaiting_user_consent"
-                    else GovernanceDecision.FAILED
-                ),
-                reason=f"Body upgrade: {outcome.get('status', 'unknown')}",
-                task_id=outcome.get("task_id", ""),
-                execution_result=execution_result,
-            ))
-        except Exception:
-            pass  # best-effort; never block the upgrade path
 
     def _serialize_running_agents(self) -> list[Dict[str, Any]]:
         return [
@@ -1313,7 +1262,7 @@ class BodyLifecycleExecutionAdapter:
         try:
             import aiohttp
             async with aiohttp.ClientSession() as session:
-                url = f"{self.config.gateway_address}/mem/memories/decay"
+                url = f"{str(self.config.gateway_address).rstrip('/')}/api/mem/memories/decay"
                 async with session.post(url, json={
                     "namespace": namespace,
                     "decay_factor": request.get("decay_factor", 0.1),
@@ -1333,7 +1282,8 @@ class BodyLifecycleExecutionAdapter:
         try:
             import aiohttp
             async with aiohttp.ClientSession() as session:
-                url = f"{self.config.gateway_address}/mem/memories/namespace/{namespace}"
+                gateway = str(self.config.gateway_address).rstrip("/")
+                url = f"{gateway}/api/mem/memories/namespace/{namespace}"
                 async with session.get(url) as resp:
                     if resp.status != 200:
                         return {"status": "cleanup_failed"}
@@ -1345,7 +1295,7 @@ class BodyLifecycleExecutionAdapter:
                     memory_id = entry.get("memory_id")
                     if score < min_score and memory_id:
                         async with session.delete(
-                            f"{self.config.gateway_address}/mem/memories/{memory_id}"
+                            f"{gateway}/api/mem/memories/{memory_id}"
                         ) as del_resp:
                             if del_resp.status == 200:
                                 removed += 1

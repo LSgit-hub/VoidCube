@@ -19078,6 +19078,79 @@ async def test_body_handoff_waits_for_user_consent_before_terminal_completion(tm
 
 
 @pytest.mark.asyncio
+async def test_execution_handoff_exception_retries_then_forms_failed_terminal_state(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    planned = await supervisor.plan_autonomous_chain_task(
+        {
+            "title": "Executor transport failure",
+            "metadata": {
+                "governance_task_type": "self_evolution",
+                "task_family": "body_switch",
+                "execution_kind": "body_switch",
+                "target_slot_id": "slot-B",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+    request = AutonomousChainExecutionRequest.model_validate(
+        {
+            "task_id": task_id,
+            "trace_id": planned["tasks"][0]["trace_id"],
+            "kind": "general_self_evolution",
+            "target_slot_id": "slot-B",
+            "git_lineage": {
+                "source_commit": "aaa111",
+                "candidate_commit": "bbb222",
+                "rollback_commit": "aaa111",
+                "changed_files": ["agent/runtime.py"],
+            },
+        }
+    )
+    supervisor._autonomous_chain_store.update_status(
+        task_id,
+        status="approved",
+        execution_request=request,
+        reason="ready",
+    )
+    supervisor._execution_facade = type(
+        "_FailingExecutionFacade",
+        (),
+        {
+            "execute_autonomous_chain_request": AsyncMock(
+                side_effect=ConnectionError("executor unavailable")
+            )
+        },
+    )()
+
+    first = await supervisor._handoff_autonomous_chain_execution_request(
+        supervisor._autonomous_chain_store.get_task(task_id),
+        max_retries=2,
+    )
+    after_first = supervisor._autonomous_chain_store.get_task(task_id)
+
+    assert first["status"] == "execution_handoff_error"
+    assert first["error_type"] == "ConnectionError"
+    assert after_first.status == "approved"
+    assert after_first.metadata["execution_failure_count"] == 1
+
+    second = await supervisor._handoff_autonomous_chain_execution_request(
+        after_first,
+        max_retries=2,
+    )
+    terminal = supervisor._autonomous_chain_store.get_task(task_id)
+
+    assert second["status"] == "execution_handoff_error"
+    assert terminal.status == "failed"
+    assert terminal.metadata["execution_failure_count"] == 2
+
+    recovered = AutonomousChainStore(tmp_path / "recovered-handoff-failure.json")
+    recovered.recover_from_governance_events(
+        supervisor._governor.governance_repository.list_events()
+    )
+    assert recovered.get_task(task_id).status == "failed"
+
+
+@pytest.mark.asyncio
 async def test_body_handoff_user_rejection_cancels_original_task(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     planned = await supervisor.plan_autonomous_chain_task(

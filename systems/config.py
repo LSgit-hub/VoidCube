@@ -135,12 +135,6 @@ def load_config_from_env() -> SystemConfig:
             config.supervisor.service_runtime.health_check_interval,
         )
     )
-    config.supervisor.service_runtime.memory_compression_interval = int(
-        os.getenv(
-            "SUPERVISOR_COMPRESSION_INTERVAL",
-            config.supervisor.service_runtime.memory_compression_interval,
-        )
-    )
     config.supervisor.service_runtime.autonomous_chain_review_interval = int(
         os.getenv(
             "SUPERVISOR_AUTONOMOUS_CHAIN_REVIEW_INTERVAL",
