@@ -29,6 +29,10 @@ from systems.self_learning.conclusion_store import SelfLearningConclusionStore
 def _make_supervisor_config(tmp_path: Path) -> SupervisorConfig:
     return SupervisorConfig(
         execution=SupervisorExecutionConfig(git_repo_path=str(tmp_path)),
+        soul_store_path=str(tmp_path / ".soul-runtime"),
+        body_runtime=SupervisorBodyRuntimeConfig(
+            state_root=str(tmp_path / "body-state")
+        ),
         service_runtime=SupervisorServiceRuntimeConfig(
             governor_llm_advisory_enabled=False,
             endogenous_drive_lm_task_generation_enabled=False,
@@ -428,6 +432,7 @@ def test_supervisor_exposes_segmented_runtime_config_views_and_uses_them_for_exe
             agent_base_port=9100,
             probe_watch_window_seconds=180,
         ),
+        soul_store_path=str(tmp_path / ".soul-runtime"),
         service_runtime=SupervisorServiceRuntimeConfig(
             health_check_interval=45,
             memory_compression_interval=7200,
@@ -437,8 +442,7 @@ def test_supervisor_exposes_segmented_runtime_config_views_and_uses_them_for_exe
             endogenous_drive_max_candidates=2,
         ),
         body_runtime=SupervisorBodyRuntimeConfig(
-            slots_dir_name=".slots-segmented",
-            registry_file_name=".registry-segmented.json",
+            state_root=str(tmp_path / "body-state"),
             slot_a_name="slot-blue",
             slot_b_name="slot-green",
         ),
@@ -460,8 +464,7 @@ def test_supervisor_exposes_segmented_runtime_config_views_and_uses_them_for_exe
     assert config.ui_auto_open is True
     assert config.ui_event_interval_seconds == 3.0
     assert config.ui_activity_buffer_size == 100
-    assert config.body_runtime.slots_dir_name == ".slots-segmented"
-    assert config.body_runtime.registry_file_name == ".registry-segmented.json"
+    assert config.body_runtime.state_root == str(tmp_path / "body-state")
     assert config.body_runtime.slot_a_name == "slot-blue"
     assert config.body_runtime.slot_b_name == "slot-green"
     assert supervisor._body_upgrade_executor.config.probe_watch_window_seconds == 180

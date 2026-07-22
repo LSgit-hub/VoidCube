@@ -45,14 +45,15 @@
 ### 阶段 2：主路径解耦
 
 - Agent 用户链路中的会话持久化、请求/响应、客户端、传输、流式装配、工具执行、单轮/attempt 状态、retry/compression recovery、response disposition、成功工具 turn 和 finalization 已有唯一所有者；CLI 流式状态、转换和输出协调也已收口。
-- M1 进入整体验收审计：核对用户输入、命令、流式/非流式、工具循环、恢复、持久化和中断证据；通过前不进入 M2。自主链路桥接继续留在 `VoidCube_cli/autonomous_*`。
+- M1 已完成整体验收：用户输入、命令、流式/非流式、工具循环、恢复、模型切换、持久化和中断均有直接测试证据；模型 picker 与 `/model` 共用 `_apply_model_switch_result()`。
+- M2 已完成 canonical layout、Memory/Supervisor/Body/治理日志一次性迁移、配置优先级、重启幂等和新安装仓库根零运行态验收；真实旧数据只在对应服务下次启动时迁移，不手工移动。
 - 每迁移一项职责，同轮删除原实现、旧参数和只服务旧路径的测试。
 
 ### 阶段 3：Memory 服务收口
 
-- 消除 `memory_service.py` 与 `tier1_to_tier2_bridge.py` 的 Tier 1 -> Tier 2 重复实现。
-- 明确服务层、MemAI 领域层和持久化层的所有权。
-- 保持 LLM 不可用时的行为显式、可观察且不会误删记忆。
+- Tier 1 -> Tier 2 的候选、质量判断、归档和写事务由 `tier1_to_tier2_bridge.py` 唯一负责。
+- 时间衰减、质量审计、在线备份/验证恢复/导出与显式语义降级已有聚焦测试。
+- M3 主实现已完成，正在执行重复运行、重启、退役扫描、主仓、Mem 和打包总门禁。
 
 ### 阶段 4：运行态与发布
 

@@ -10,7 +10,6 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from VoidCube_core.constants import get_VoidCube_home
 from systems.body_registry import BodyRegistry, BodySlotMeta
 from systems.evolution_boundary import classify_agent_evolution_changes
 from systems.governor import GovernorDecisionEngine, GovernorRequest, GovernorResponse
@@ -35,24 +34,16 @@ class MemGovernorRecord(BaseModel):
 
 
 class MemGovernorBridge:
-    """Mem-side governor bridge — wraps the decision engine and persists
-    governance history to BOTH the legacy JSONL store AND (optionally) the
-    MemAI ``GovernanceEventRepository``.
-
-    When ``governance_repo`` is provided, every recorded event is mirrored
-    into the repository so that MemAI's query, failure-sample, and evidence-
-    summary APIs can see VoidCube governance data (M-08).
-    """
+    """Persist Governor audit records and canonical governance events."""
 
     def __init__(
         self,
         *,
-        storage_root: str | Path | None = None,
+        storage_root: str | Path,
         engine: GovernorDecisionEngine | None = None,
         governance_repo: Any | None = None,
     ) -> None:
-        root = Path(storage_root) if storage_root else get_VoidCube_home() / "soul"
-        self.storage_root = root.resolve()
+        self.storage_root = Path(storage_root).resolve()
         self.storage_root.mkdir(parents=True, exist_ok=True)
         self.history_path = self.storage_root / "governor_history.jsonl"
         self.latest_path = self.storage_root / "governor_latest.json"
@@ -66,18 +57,17 @@ class MemGovernorBridge:
                 reasoner = None
             self._engine = GovernorDecisionEngine(llm_reasoner=reasoner)
         self._lock = threading.Lock()
-        # Auto-create a default GovernanceEventRepository when none provided.
-        # Per M-03: the repository should not be an optional dependency that
-        # defaults to None — it should always be available for governance writes.
         if governance_repo is not None:
             self._governance_repo = governance_repo
         else:
-            try:
-                from memai.governance_repository import GovernanceEventRepository
-                repo_path = self.storage_root / "mem_governance.jsonl"
-                self._governance_repo = GovernanceEventRepository(str(repo_path))
-            except Exception:
-                self._governance_repo = None
+            from memai.governance_repository import GovernanceEventRepository
+
+            repo_path = self.storage_root / "mem_governance.jsonl"
+            self._governance_repo = GovernanceEventRepository(repo_path)
+
+    @property
+    def governance_repository(self) -> Any:
+        return self._governance_repo
 
     def review(
         self,
@@ -254,15 +244,7 @@ class MemGovernorBridge:
                 self.history_path.write_text("", encoding="utf-8")
             if self.latest_path.exists():
                 self.latest_path.unlink()
-        repo = getattr(self, "_governance_repo", None)
-        repo_path = self.storage_root / "mem_governance.jsonl"
-        if repo is not None and hasattr(repo, "path"):
-            try:
-                repo_path = Path(getattr(repo, "path"))
-            except Exception:
-                repo_path = self.storage_root / "mem_governance.jsonl"
-        if repo_path.exists():
-            repo_path.write_text("", encoding="utf-8")
+        self._governance_repo.clear()
 
     def _extract_evolution_lineage(
         self,
@@ -365,18 +347,16 @@ class MemGovernorBridge:
             with self.history_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(payload, ensure_ascii=False) + "\n")
             atomic_json_write(self.latest_path, payload)
-        # Mirror into MemAI GovernanceEventRepository when available
-        if self._governance_repo is not None:
-            try:
-                gov_event = self._to_governance_event(record)
-                self._governance_repo.append(gov_event)
-            except Exception as exc:
-                logger.warning(
-                    "Governance repository mirror write failed for record %s: %s",
-                    record.record_id,
-                    exc,
-                    exc_info=True,
-                )
+        try:
+            gov_event = self._to_governance_event(record)
+            self._governance_repo.append(gov_event)
+        except Exception as exc:
+            logger.warning(
+                "Governance repository write failed for record %s: %s",
+                record.record_id,
+                exc,
+                exc_info=True,
+            )
 
     @staticmethod
     def _to_governance_event(record: MemGovernorRecord) -> Any:

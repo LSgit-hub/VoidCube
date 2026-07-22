@@ -4,17 +4,32 @@ MemAI is a time-first memory management toolkit for long-running language model 
 
 ## VoidCube Integration Position
 
-MemAI is intended to become VoidCube's long-term memory and governance memory foundation. The target integration contract is defined in [`docs/mem-integration-contract.md`](../docs/mem-integration-contract.md).
+MemAI is VoidCube's active long-term memory domain layer. The Memory Service owns
+HTTP, Tier 1 SQLite state, maintenance scheduling, backup/restore, and the single
+Tier 1 to Tier 2 transaction. MemAI owns `Event`, `Scene`, `Arc`, `Epoch`,
+extraction, hierarchy construction, query semantics, and maintenance policy.
 
-The important rule is: VoidCube should be designed as if Mem is the long-term memory and governance soul, even while the current Mem implementation is still being completed.
+The active integration contract is defined in
+[`docs/mem-integration-contract.md`](../docs/mem-integration-contract.md). Neither
+layer may maintain a second bridge or a second long-term truth store.
 
-Current VoidCube integration should follow this boundary:
-- keep existing lightweight governor history as a temporary adapter that follows the future Mem contract
-- do not let unfinished Mem retrieval or self-learning features block body switching, executor handoff, or developer-managed VoidCube changes until those features are mature
-- continue improving MemAI as an independent mainline until schema, query, governance-event indexing, and failure-sample reuse are stable
-- connect MemAI back into VoidCube's autonomous-chain governance loop according to the contract, not by changing the target architecture
+VoidCube stores Memory runtime data under
+`VOIDCUBE_HOME/runtime/memory/`:
 
-In short: MemAI is not being dropped or bypassed. It should be completed deliberately so it can become the memory soul of VoidCube's autonomous evolution loop.
+- `memory.db`: Tier 1, archive, Tier 2, and compression-quality audit data;
+- `backups/`: validated online SQLite backups with bounded rotation;
+- `exports/`: explicit versioned JSON exports.
+
+Tier 1 relevance decay is based on elapsed time and a persisted
+`last_decay_at` anchor. Compression is accepted only after event coverage,
+source backlink completeness, compression ratio, and degraded fraction pass the
+configured gate. A rejected batch stays active in Tier 1 and its evidence is
+written to `compression_quality_audit`.
+
+The semantic-search route currently reports an explicit keyword fallback.
+There is no embedding column or chat-model-generated pseudo-vector path. A real
+semantic index requires a separate protocol decision covering model/version,
+write, backfill, and invalidation behavior.
 
 The first implementation pass in this repository focuses on a `Chronicle Scholar LM` design:
 - structured memory objects: `Event`, `Scene`, `Arc`, `Epoch`
@@ -56,11 +71,10 @@ This v0.1 codebase implements the first executable layer of the design docs:
 - persistent memory state and incremental updates
 - benchmark runner with multi-fixture scoring
 
-The next natural steps are:
-- compression and revision engine
-- stronger arc/epoch scoring
-- production LM-backed extraction and ranking
-- richer benchmark datasets
+The remaining MemAI domain priorities are stronger arc/epoch scoring, richer
+benchmark datasets, and evidence-driven revision quality. Cross-service
+governance and execution closure is tracked by the root VoidCube architecture,
+not redefined in this subproject.
 
 The architecture now also includes a `TemporalScorer` insertion point, so a future time-series Transformer can be attached as a scoring module without replacing the rest of the memory pipeline.
 

@@ -3,6 +3,7 @@ import json
 from typing import Optional
 from pydantic import BaseModel, Field
 
+from systems.memory.config import MemoryServiceConfig
 from systems.supervisor.config_models import SupervisorConfig
 
 
@@ -53,14 +54,6 @@ class GatewayConfig(BaseModel):
     auth_token: Optional[str] = None
     log_level: str = "INFO"
 
-
-class MemoryServiceConfig(BaseModel):
-    host: str = "127.0.0.1"
-    port: int = 6001
-    db_path: str = "./memory.db"
-    gateway_address: str = "http://127.0.0.1:6000"
-    gateway_registration_check_interval: int = 30
-    decay_interval_hours: int = 24
 
 class AgentConfig(BaseModel):
     host: str = "127.0.0.1"
@@ -124,6 +117,14 @@ def load_config_from_env() -> SystemConfig:
         )
     )
     config.supervisor.ui_path = os.getenv("SUPERVISOR_UI_PATH", config.supervisor.ui_path)
+    config.supervisor.soul_store_path = os.getenv(
+        "SUPERVISOR_SOUL_STORE_PATH",
+        config.supervisor.soul_store_path,
+    )
+    config.supervisor.autonomous_chain_store_path = os.getenv(
+        "SUPERVISOR_AUTONOMOUS_CHAIN_STORE_PATH",
+        config.supervisor.autonomous_chain_store_path,
+    )
     config.supervisor.execution.gateway_address = os.getenv(
         "SUPERVISOR_GATEWAY_ADDRESS",
         config.supervisor.execution.gateway_address,
@@ -416,13 +417,9 @@ def load_config_from_env() -> SystemConfig:
     config.agent.port = int(os.getenv("AGENT_PORT", config.agent.port))
     config.agent.gateway_address = os.getenv("AGENT_GATEWAY_ADDRESS", config.agent.gateway_address)
 
-    config.supervisor.body_runtime.slots_dir_name = os.getenv(
-        "BODY_SLOTS_DIR_NAME",
-        config.supervisor.body_runtime.slots_dir_name,
-    )
-    config.supervisor.body_runtime.registry_file_name = os.getenv(
-        "BODY_REGISTRY_FILE_NAME",
-        config.supervisor.body_runtime.registry_file_name,
+    config.supervisor.body_runtime.state_root = os.getenv(
+        "BODY_STATE_ROOT",
+        config.supervisor.body_runtime.state_root,
     )
     config.supervisor.body_runtime.slot_a_name = os.getenv(
         "BODY_SLOT_A_NAME",

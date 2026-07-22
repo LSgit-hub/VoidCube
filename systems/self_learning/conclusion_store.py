@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
@@ -19,16 +20,25 @@ from .models import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 class SelfLearningConclusionStore:
-    """Compatibility store for learning conclusions and supervisor payloads.
+    """Persistence store for learning conclusions and supervisor payloads.
 
     This class persists historical learning artifacts and builds Supervisor
     submissions. It is not an autonomous execution service; API-A autonomous
     execution of `self_learning` tasks happens through the task pull path.
     """
 
-    def __init__(self, storage_root: str | Path) -> None:
+    def __init__(
+        self,
+        storage_root: str | Path,
+        *,
+        governance_repository: Any | None = None,
+    ) -> None:
         self.storage_root = Path(storage_root).resolve()
+        self.governance_repository = governance_repository
         self.topics_root = self.storage_root / "topics"
         self.sessions_root = self.storage_root / "sessions"
         self.experiments_root = self.storage_root / "experiments"
@@ -125,40 +135,39 @@ class SelfLearningConclusionStore:
             recommendations=list(recommendations or []),
         )
         self._write_model(self.conclusions_root / f"{conclusion.conclusion_id}.json", conclusion)
-        # Best-effort writeback to MemAI governance repository (SL-01).
-        # Failure here must not block the conclusion save or the supervisor
-        # submission — Mem is the long-term soul layer, but the local file
-        # is the authoritative store for now.
-        # ── Write to local authoritative store ──
-        try:
-            from memai.governance import GovernanceEvent, GovernanceEventType, GovernanceDecision
-            from memai.governance_repository import GovernanceEventRepository
-            repo_path = self.storage_root / "mem_governance.jsonl"
-            repo = GovernanceEventRepository(str(repo_path))
-            repo.append(GovernanceEvent.create(
-                event_type=GovernanceEventType.CANDIDATE_REVIEW,
-                source_actor="self_learning",
-                decision=GovernanceDecision.RECORD_ONLY,
-                reason=f"Self-learning conclusion: {summary[:120]}",
-                task_id=conclusion.conclusion_id,
-                execution_result={
-                    "title": conclusion.topic.title,
-                    "summary": conclusion.summary,
-                    "task_type": "self_learning",
-                    "runtime_task_profile": {
-                        "governance_task_type": "self_learning",
-                        "task_family": "self_learning",
-                        "execution_kind": None,
+        # The injected repository is the only local governance-event writer.
+        if self.governance_repository is not None:
+            try:
+                from memai.governance import GovernanceEvent, GovernanceEventType, GovernanceDecision
+                self.governance_repository.append(GovernanceEvent.create(
+                    event_type=GovernanceEventType.CANDIDATE_REVIEW,
+                    source_actor="self_learning",
+                    decision=GovernanceDecision.RECORD_ONLY,
+                    reason=f"Self-learning conclusion: {summary[:120]}",
+                    task_id=conclusion.conclusion_id,
+                    execution_result={
+                        "title": conclusion.topic.title,
+                        "summary": conclusion.summary,
+                        "task_type": "self_learning",
+                        "runtime_task_profile": {
+                            "governance_task_type": "self_learning",
+                            "task_family": "self_learning",
+                            "execution_kind": None,
+                        },
+                        "constraints": {},
+                        "topic_id": conclusion.topic.topic_id,
+                        "session_id": conclusion.session.session_id,
+                        "verified": conclusion.verified,
+                        "recommendations_count": len(conclusion.recommendations),
                     },
-                    "constraints": {},
-                    "topic_id": conclusion.topic.topic_id,
-                    "session_id": conclusion.session.session_id,
-                    "verified": conclusion.verified,
-                    "recommendations_count": len(conclusion.recommendations),
-                },
-            ))
-        except Exception:
-            pass
+                ))
+            except Exception as exc:
+                logger.warning(
+                    "Governance repository write failed for conclusion %s: %s",
+                    conclusion.conclusion_id,
+                    exc,
+                    exc_info=True,
+                )
 
         # ── Best-effort mirror to Gateway Mem service (§7.2) ──
         try:
@@ -181,7 +190,7 @@ class SelfLearningConclusionStore:
             )
             urllib.request.urlopen(req, timeout=5)
         except Exception:
-            pass  # best-effort mirror; local file is authoritative
+            pass  # best-effort mirror; the injected repository is authoritative
 
         return conclusion
 

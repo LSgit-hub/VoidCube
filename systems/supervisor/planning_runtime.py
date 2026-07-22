@@ -264,7 +264,6 @@ class PlanningRuntimeMixin:
         runtime_root = Path(
             getattr(self, "_runtime_root", None)
             or self.config.soul_store_path
-            or (Path(self.config.execution.git_repo_path) / ".soul-runtime")
         ).resolve()
         runtime_root.mkdir(parents=True, exist_ok=True)
         resolved = runtime_root / "endogenous_drive_history.json"
@@ -278,7 +277,6 @@ class PlanningRuntimeMixin:
         runtime_root = Path(
             getattr(self, "_runtime_root", None)
             or self.config.soul_store_path
-            or (Path(self.config.execution.git_repo_path) / ".soul-runtime")
         ).resolve()
         runtime_root.mkdir(parents=True, exist_ok=True)
         resolved = runtime_root / "endogenous_governance_events.json"
@@ -292,7 +290,6 @@ class PlanningRuntimeMixin:
         runtime_root = Path(
             getattr(self, "_runtime_root", None)
             or self.config.soul_store_path
-            or (Path(self.config.execution.git_repo_path) / ".soul-runtime")
         ).resolve()
         runtime_root.mkdir(parents=True, exist_ok=True)
         resolved = runtime_root / "endogenous_cognition_state.json"
@@ -306,7 +303,6 @@ class PlanningRuntimeMixin:
         runtime_root = Path(
             getattr(self, "_runtime_root", None)
             or self.config.soul_store_path
-            or (Path(self.config.execution.git_repo_path) / ".soul-runtime")
         ).resolve()
         runtime_root.mkdir(parents=True, exist_ok=True)
         resolved = runtime_root / "endogenous_self_regulation.json"
@@ -7289,23 +7285,25 @@ class PlanningRuntimeMixin:
 
     def _mem_governance_repository_path(self) -> Path:
         governor = getattr(self, "_governor", None)
+        repository = getattr(governor, "governance_repository", None)
+        repository_path = getattr(repository, "path", None)
+        if repository_path:
+            return Path(repository_path)
         storage_root = getattr(governor, "storage_root", None)
         if storage_root:
             return Path(storage_root) / "mem_governance.jsonl"
         runtime_root = Path(
             getattr(self, "_runtime_root", None)
             or self.config.soul_store_path
-            or (Path(self.config.execution.git_repo_path) / ".soul-runtime")
         )
         return runtime_root / "mem_governance.jsonl"
 
     def _load_mem_governance_events(self) -> list[Any]:
-        repo_path = self._mem_governance_repository_path()
-        if not repo_path.exists():
+        governor = getattr(self, "_governor", None)
+        repository = getattr(governor, "governance_repository", None)
+        if repository is None:
             return []
-        from memai.governance_repository import GovernanceEventRepository
-
-        return GovernanceEventRepository(repo_path).list_events()
+        return repository.list_events()
 
     def _recover_autonomous_chain_store_from_mem_governance(
         self,

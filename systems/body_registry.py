@@ -150,18 +150,18 @@ class BodyRegistryManager:
 
     def __init__(
         self,
-        repo_root: str | Path,
+        source_root: str | Path,
         *,
+        state_root: str | Path,
         slot_ids: Iterable[str] = DEFAULT_SLOT_IDS,
-        slots_dir_name: str = ".body-slots",
-        registry_file_name: str = ".body-registry.json",
     ) -> None:
-        self.repo_root = Path(repo_root).resolve()
+        self.source_root = Path(source_root).resolve()
+        self.state_root = Path(state_root).resolve()
         self.slot_ids = tuple(slot_ids)
         if len(self.slot_ids) < 2:
             raise ValueError("At least two body slots are required")
-        self.slots_root = self.repo_root / slots_dir_name
-        self.registry_path = self.repo_root / registry_file_name
+        self.slots_root = self.state_root / "slots"
+        self.registry_path = self.state_root / "registry.json"
 
     def initialize_layout(self) -> BodyRegistry:
         """Create independent child-agent slot directories and a default registry."""
@@ -207,7 +207,7 @@ class BodyRegistryManager:
             if not self._slot_workspace_is_materialized(active_meta):
                 active_meta = self.prepare_slot_workspace(
                     registry.active_slot,
-                    source_path=self.repo_root,
+                    source_path=self.source_root,
                     clear_existing=True,
                 )
             active_meta.body_state = "active"
@@ -447,8 +447,8 @@ class BodyRegistryManager:
         changed_files: Optional[Iterable[str]] = None,
     ) -> BodySlotMeta:
         meta = self.transition_slot(slot_id, "candidate")
-        auto_commit = self._git_head_for_path(Path(meta.worktree_path)) or self._git_head_for_path(self.repo_root)
-        auto_branch = self._git_branch_for_path(Path(meta.worktree_path)) or self._git_branch_for_path(self.repo_root)
+        auto_commit = self._git_head_for_path(Path(meta.worktree_path)) or self._git_head_for_path(self.source_root)
+        auto_branch = self._git_branch_for_path(Path(meta.worktree_path)) or self._git_branch_for_path(self.source_root)
         if body_version:
             meta.body_version = body_version
         if build_from_commit:
@@ -471,7 +471,7 @@ class BodyRegistryManager:
                 meta.rollback_commit or meta.source_commit,
                 meta.candidate_commit,
             ) or self._git_changed_files_for_path(
-                self.repo_root,
+                self.source_root,
                 meta.rollback_commit or meta.source_commit,
                 meta.candidate_commit,
             )
@@ -536,7 +536,7 @@ class BodyRegistryManager:
             target.candidate_commit
             or target.build_from_commit
             or self._git_head_for_path(Path(target.worktree_path))
-            or self._git_head_for_path(self.repo_root)
+            or self._git_head_for_path(self.source_root)
         )
         self.save_slot_meta(target)
 
@@ -1020,7 +1020,7 @@ class BodyRegistryManager:
                 meta.rollback_commit or meta.source_commit,
                 meta.candidate_commit,
             ) or self._git_changed_files_for_path(
-                self.repo_root,
+                self.source_root,
                 meta.rollback_commit or meta.source_commit,
                 meta.candidate_commit,
             )
@@ -1096,7 +1096,7 @@ class BodyRegistryManager:
         return self.slot_root(slot_id) / "worktree-origin.json"
 
     def active_body_pointer_path(self) -> Path:
-        return self.repo_root / ".body-active.json"
+        return self.state_root / "active.json"
 
     def build_launch_target(self, slot_id: str) -> BodyLaunchTarget:
         meta = self.load_slot_meta(slot_id)

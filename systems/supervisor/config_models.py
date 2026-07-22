@@ -3,7 +3,16 @@ from __future__ import annotations
 from typing import Optional
 
 from pydantic import BaseModel, Field
+from VoidCube_core.runtime_paths import get_runtime_layout
 from systems.runtime_thresholds import DEFAULT_ACTIVITY_GUARD_SECONDS
+
+
+def _default_supervisor_runtime_root() -> str:
+    return str(get_runtime_layout().supervisor_root)
+
+
+def _default_body_state_root() -> str:
+    return str(get_runtime_layout().body_root)
 
 
 class EndogenousDriveCognitiveControlPolicyConfig(BaseModel):
@@ -309,8 +318,7 @@ class SupervisorServiceRuntimeConfig(BaseModel):
 
 
 class SupervisorBodyRuntimeConfig(BaseModel):
-    slots_dir_name: str = ".body-slots"
-    registry_file_name: str = ".body-registry.json"
+    state_root: str = Field(default_factory=_default_body_state_root)
     slot_a_name: str = "slot-A"
     slot_b_name: str = "slot-B"
     stable_window_days: int = 3
@@ -329,7 +337,7 @@ class SupervisorConfig(BaseModel):
     ui_event_interval_seconds: float = 3.0
     ui_activity_buffer_size: int = 100
     ui_path: str = "/ui"
-    soul_store_path: Optional[str] = None
+    soul_store_path: str = Field(default_factory=_default_supervisor_runtime_root)
     autonomous_chain_store_path: Optional[str] = None
 
 

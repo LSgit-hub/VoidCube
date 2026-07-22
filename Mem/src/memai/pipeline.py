@@ -174,38 +174,3 @@ class ChroniclePipeline:
             text=payload["text"],
             timestamp=parsed,
         )
-
-    # ── Governance API (M-08) ──────────────────────────────────────────
-    # The pipeline exposes governance event recording, querying, failure-
-    # sample retrieval, and evidence summarisation as a single entry point
-    # for VoidCube callers.  Under the hood these delegate to the
-    # GovernanceEventRepository (M-02 / M-03 / M-04 / M-05).
-
-    def _require_governance_repo(self):
-        """Lazy-import and return a repository bound to the soul store."""
-        from .governance_repository import GovernanceEventRepository
-        if not hasattr(self, "_governance_repo"):
-            self._governance_repo = GovernanceEventRepository(
-                self._governance_store_path()
-            )
-        return self._governance_repo
-
-    def _governance_store_path(self) -> str:
-        """Default path; callers can override by setting the attribute."""
-        return str(Path.home() / ".VoidCube" / "soul" / "mem_governance.jsonl")
-
-    def record_governance_event(self, event) -> Any:
-        """Append a governance event (idempotent by event ID)."""
-        return self._require_governance_repo().append(event)
-
-    def query_governance_events(self, query) -> list:
-        """Query governance history by event_type, task_id, body_id, etc."""
-        return self._require_governance_repo().query(query)
-
-    def query_failure_samples(self, query) -> list:
-        """Find similar past failures for risk assessment."""
-        return self._require_governance_repo().query_failure_samples(query)
-
-    def summarize_governance_context(self, query) -> Any:
-        """Build an evidence summary for supervisor decision context."""
-        return self._require_governance_repo().summarize_governance_context(query)

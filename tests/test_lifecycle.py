@@ -14,7 +14,7 @@ from systems.lifecycle import BodyLifecycleExecutor
 
 @pytest.mark.unit
 def test_lifecycle_applies_probe_lease_action(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     slot = manager.mark_candidate("slot-B")
 
@@ -41,7 +41,7 @@ def test_lifecycle_applies_probe_lease_action(tmp_path):
 
 @pytest.mark.unit
 def test_lifecycle_applies_user_consent_gate_before_activate_slot_action(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
     slot = manager.start_probe("slot-B")
@@ -91,7 +91,7 @@ def test_lifecycle_applies_user_consent_gate_before_activate_slot_action(tmp_pat
 
 @pytest.mark.unit
 def test_lifecycle_activates_slot_after_user_consent(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
     manager.start_probe("slot-B")
@@ -125,7 +125,7 @@ def test_lifecycle_activates_slot_after_user_consent(tmp_path):
 
 @pytest.mark.unit
 def test_lifecycle_applies_rollback_restore_action(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
     manager.start_probe("slot-B")
@@ -156,7 +156,7 @@ def test_lifecycle_applies_rollback_restore_action(tmp_path):
 
 @pytest.mark.unit
 def test_lifecycle_applies_recycle_action_after_post_switch_review(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
     manager.start_probe("slot-B")
@@ -185,7 +185,7 @@ def test_lifecycle_applies_recycle_action_after_post_switch_review(tmp_path):
 
 @pytest.mark.unit
 def test_lifecycle_abandons_failed_probe_to_shell(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
     manager.start_probe("slot-B")
@@ -207,7 +207,7 @@ def test_lifecycle_abandons_failed_probe_to_shell(tmp_path):
 
 @pytest.mark.unit
 def test_record_evolution_event_is_noop_but_successful(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
 
     engine = GovernorDecisionEngine()

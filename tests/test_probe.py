@@ -71,7 +71,7 @@ def test_probe_runner_fails_when_required_check_fails():
 
 @pytest.mark.unit
 def test_lifecycle_can_persist_probe_report_to_slot_meta(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
     manager.start_probe("slot-B")
@@ -99,7 +99,7 @@ def test_lifecycle_can_persist_probe_report_to_slot_meta(tmp_path):
 
 @pytest.mark.unit
 def test_probe_report_persistence_inherits_slot_git_lineage(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.mark_candidate(
         "slot-B",
@@ -137,7 +137,7 @@ def test_probe_report_persistence_inherits_slot_git_lineage(tmp_path):
 
 @pytest.mark.unit
 def test_lifecycle_rejects_probe_report_for_wrong_slot(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
     manager.start_probe("slot-B")
@@ -172,7 +172,7 @@ def test_probe_executor_runs_real_minimal_checks(tmp_path):
     soul_dir = tmp_path / ".soul-runtime"
     soul_dir.mkdir()
 
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.prepare_slot_workspace("slot-B")
     manager.mark_candidate("slot-B")

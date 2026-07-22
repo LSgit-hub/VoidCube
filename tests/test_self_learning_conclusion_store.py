@@ -8,7 +8,13 @@ from memai.governance_repository import GovernanceEventRepository
 
 
 def test_self_learning_conclusion_store_persists_conclusion_and_only_builds_payload(tmp_path):
-    store = SelfLearningConclusionStore(tmp_path / "self-learning")
+    governance = GovernanceEventRepository(
+        tmp_path / "supervisor" / "mem_governance.jsonl"
+    )
+    store = SelfLearningConclusionStore(
+        tmp_path / "self-learning",
+        governance_repository=governance,
+    )
 
     topic = store.create_topic(
         title="Gateway idle-window policy",
@@ -52,9 +58,7 @@ def test_self_learning_conclusion_store_persists_conclusion_and_only_builds_payl
     assert payload["proposals"][0]["execution_kind"] == "general_self_evolution"
     assert (tmp_path / "self-learning" / "conclusions" / f"{conclusion.conclusion_id}.json").exists()
 
-    events = GovernanceEventRepository(
-        tmp_path / "self-learning" / "mem_governance.jsonl"
-    ).list_events()
+    events = governance.list_events()
     assert len(events) == 1
     execution_result = events[0].execution_result or {}
     assert execution_result["title"] == "Gateway idle-window policy"
@@ -118,6 +122,7 @@ def test_self_learning_conclusion_store_can_submit_recommendations_into_supervis
     assert created[0]["execution_kind"] == "general_self_evolution"
     assert created[0]["metadata"]["conclusion_id"] == conclusion.conclusion_id
     assert created[0]["evidence"]["confidence"] == "medium"
+    assert not (tmp_path / "self-learning" / "mem_governance.jsonl").exists()
 
 
 def test_self_learning_conclusion_store_marks_experiment_followups_as_self_learning(tmp_path):

@@ -66,21 +66,22 @@ def _create_supervisor(
     port: int,
     health_check_interval: int = 30,
 ) -> Supervisor:
-    return Supervisor(
-        SupervisorConfig(
+    config = SupervisorConfig(
             host="127.0.0.1",
             port=port,
             execution=SupervisorExecutionConfig(
                 gateway_address=gateway_url,
                 git_repo_path=str(repo_path),
             ),
+            soul_store_path=str(repo_path / ".soul-runtime"),
             service_runtime=SupervisorServiceRuntimeConfig(
                 health_check_interval=health_check_interval,
                 governor_llm_advisory_enabled=False,
                 endogenous_drive_enabled=False,
             ),
-        )
     )
+    config.body_runtime.state_root = str(repo_path / "body-state")
+    return Supervisor(config)
 
 
 async def _start_uvicorn(app, port: int):

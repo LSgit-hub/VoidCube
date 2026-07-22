@@ -5,14 +5,16 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from systems.memory.backup import MemoryBackupManager, MemoryRestoreError
+from systems.memory.config import MemoryServiceConfig
+from systems.memory.runtime_migration import migrate_memory_database
 from systems.memory.tier1_to_tier2_bridge import (
-    _build_stable_cmem_ids,
-    _write_compressed_memories_to_db as _write_compressed_memories,
+    Tier1ToTier2Bridge,
     open_memory_sqlite,
 )
 
@@ -97,22 +99,6 @@ class Tier2CompressRequest(BaseModel):
     force_oldest: bool = False
 
 
-class MemoryServiceConfig(BaseModel):
-    host: str = "127.0.0.1"
-    port: int = 6001
-    db_path: str = "./memory.db"
-    gateway_address: str = "http://127.0.0.1:6000"
-    gateway_registration_check_interval: int = 30
-    decay_interval_hours: int = 24
-    compression_interval: int = 3600  # seconds between auto-compression runs
-    # Tier 1 config
-    tier1_retention_days: int = 30
-    tier1_max_turns: int = 10000
-    tier1_decay_rate: float = 0.99
-    tier1_min_relevance: float = 0.1
-    tier1_archive_keep_original: bool = True
-
-
 # ── Content-aware weight model (five dimensions) ─────────────────
 # W_final = clamp(W_base + content_bonus + access_bonus + citation_bonus, 0, 1)
 # Then: if pinned → W=1.0; if hidden → W=0.0
@@ -128,39 +114,6 @@ _CONTENT_IMPORTANCE_BONUS = {
     "progress":   0.04,   # 进展
     None:         0.00,   # 无分类 → 不加分
 }
-
-
-def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    """Compute cosine similarity between two float vectors (pure Python, no numpy)."""
-    if not a or not b:
-        return 0.0
-    n = min(len(a), len(b))
-    dot = sum(a[i] * b[i] for i in range(n))
-    norm_a = sum(v * v for v in a[:n]) ** 0.5
-    norm_b = sum(v * v for v in b[:n]) ** 0.5
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return dot / (norm_a * norm_b)
-
-
-def _hash_embedding(text: str, dims: int = 64) -> list[float]:
-    """Deterministic pseudo-embedding from text hash (fallback when LLM unavailable).
-
-    Uses character n-gram hashing — fast, deterministic, no LLM dependency.
-    NOT semantically meaningful but provides consistent similarity for exact matches.
-    """
-    import hashlib
-    result = [0.0] * dims
-    # Character trigram hashing
-    for i in range(len(text) - 2):
-        trigram = text[i:i + 3]
-        h = int(hashlib.md5(trigram.encode()).hexdigest()[:8], 16)
-        result[h % dims] += 1.0
-    # Normalize
-    total = sum(v * v for v in result) ** 0.5
-    if total > 0:
-        result = [v / total for v in result]
-    return result
 
 
 def compute_dynamic_weight(
@@ -269,6 +222,7 @@ class MemoryService:
             lifespan=self._app_lifespan,
         )
         self._db_path = Path(self.config.db_path)
+        self._migrate_legacy_default_database()
         self._namespace_cache: Dict[str, List[MemoryEntry]] = {}
         # Rule execution tracking
         self._last_rule_run: Dict[str, str] = {}
@@ -280,8 +234,62 @@ class MemoryService:
         self._llm_model: str = ""
         self._llm_error: str = ""
         self._last_llm_health_check_at: Optional[str] = None
+        self._backup_manager = MemoryBackupManager(
+            self._db_path,
+            retention_count=self.config.backup_retention_count,
+        )
+        self._backup_before_destructive_schema_migration()
         self._setup_database()
         self._setup_routes()
+
+    def _migrate_legacy_default_database(self) -> None:
+        from VoidCube_core.runtime_paths import (
+            get_legacy_project_runtime_layout,
+            get_runtime_layout,
+        )
+
+        canonical = get_runtime_layout().memory_db
+        if self._db_path.resolve() != canonical.resolve():
+            return
+        result = migrate_memory_database(
+            source=get_legacy_project_runtime_layout(Path.cwd()).memory_db,
+            target=canonical,
+        )
+        if result.status == "migrated":
+            logger.info(
+                "Migrated Memory database from %s to %s (integrity=%s)",
+                result.source,
+                result.target,
+                result.integrity_check,
+            )
+
+    def _backup_before_destructive_schema_migration(self) -> None:
+        if not self._db_path.is_file():
+            return
+        conn = open_memory_sqlite(self._db_path)
+        try:
+            table_exists = conn.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'compressed_memories'"
+            ).fetchone()
+            if not table_exists:
+                return
+            columns = {
+                row[1]
+                for row in conn.execute(
+                    "PRAGMA table_info(compressed_memories)"
+                ).fetchall()
+            }
+        finally:
+            conn.close()
+        if "embedding" not in columns:
+            return
+        backup = self._backup_manager.create_backup()
+        logger.info(
+            "Created pre-migration Memory backup %s before removing obsolete "
+            "compressed_memories.embedding",
+            backup["backup_id"],
+        )
 
     def _setup_database(self):
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -335,6 +343,7 @@ class MemoryService:
                 metadata TEXT,
                 dedup_key TEXT,
                 compressed_to_tier2 INTEGER DEFAULT 0,
+                last_decay_at TEXT,
                 FOREIGN KEY (session_id) REFERENCES sessions(session_id)
             )
         ''')
@@ -351,6 +360,28 @@ class MemoryService:
                 compressed_at TEXT NOT NULL,
                 event_ids TEXT,
                 scene_ids TEXT
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS compression_quality_audit (
+                audit_id TEXT PRIMARY KEY,
+                evaluated_at TEXT NOT NULL,
+                status TEXT NOT NULL,
+                candidate_count INTEGER NOT NULL,
+                event_count INTEGER NOT NULL,
+                covered_turn_count INTEGER NOT NULL,
+                event_coverage REAL NOT NULL,
+                backlinked_event_count INTEGER NOT NULL,
+                backlink_completeness REAL NOT NULL,
+                source_chars INTEGER NOT NULL,
+                event_summary_chars INTEGER NOT NULL,
+                compression_ratio REAL NOT NULL,
+                degraded_event_count INTEGER NOT NULL,
+                degraded_fraction REAL NOT NULL,
+                thresholds TEXT NOT NULL,
+                failed_checks TEXT NOT NULL,
+                sample_turn_ids TEXT NOT NULL
             )
         ''')
 
@@ -383,8 +414,7 @@ class MemoryService:
                 last_accessed_at TEXT,                -- ISO timestamp of last query hit
                 citation_count INTEGER DEFAULT 0,     -- times referenced by parent arcs/scenes
                 pinned INTEGER DEFAULT 0,             -- 1 = user pinned (weight locked at 1.0)
-                hidden INTEGER DEFAULT 0,             -- 1 = user hidden (excluded from default queries)
-                embedding TEXT                        -- JSON float array for semantic similarity
+                hidden INTEGER DEFAULT 0              -- 1 = user hidden (excluded from default queries)
             )
         ''')
 
@@ -401,6 +431,8 @@ class MemoryService:
             "ON turns(session_id, dedup_key) WHERE dedup_key IS NOT NULL",
             "CREATE INDEX IF NOT EXISTS idx_archive_timestamp ON turns_archive(timestamp)",
             "CREATE INDEX IF NOT EXISTS idx_archive_session ON turns_archive(session_id)",
+            "CREATE INDEX IF NOT EXISTS idx_compression_quality_evaluated "
+            "ON compression_quality_audit(evaluated_at)",
             "CREATE INDEX IF NOT EXISTS idx_cmem_type ON compressed_memories(memory_type)",
             "CREATE INDEX IF NOT EXISTS idx_cmem_timespan ON compressed_memories(timespan_start, timespan_end)",
             "CREATE INDEX IF NOT EXISTS idx_cmem_status ON compressed_memories(status)",
@@ -417,6 +449,8 @@ class MemoryService:
         existing = {row[1] for row in cursor.execute("PRAGMA table_info(turns)").fetchall()}
         if "dedup_key" not in existing:
             cursor.execute("ALTER TABLE turns ADD COLUMN dedup_key TEXT")
+        if "last_decay_at" not in existing:
+            cursor.execute("ALTER TABLE turns ADD COLUMN last_decay_at TEXT")
 
     @staticmethod
     def _migrate_compressed_memories_schema(cursor) -> None:
@@ -434,11 +468,12 @@ class MemoryService:
             ("citation_count", "INTEGER DEFAULT 0"),
             ("pinned", "INTEGER DEFAULT 0"),
             ("hidden", "INTEGER DEFAULT 0"),
-            ("embedding", "TEXT"),
         ]
         for col_name, col_def in migrations:
             if col_name not in existing:
                 cursor.execute(f"ALTER TABLE compressed_memories ADD COLUMN {col_name} {col_def}")
+        if "embedding" in existing:
+            cursor.execute("ALTER TABLE compressed_memories DROP COLUMN embedding")
 
     # ── Compression Lifecycle ─────────────────────────────────────
 
@@ -715,6 +750,37 @@ class MemoryService:
         self.app.add_api_route("/compressed/{memory_id}/hide", self.hide_memory, methods=["POST"])
         self.app.add_api_route("/compressed/{memory_id}/unpin", self.unpin_memory, methods=["POST"])
         self.app.add_api_route("/llm/health", self.llm_health, methods=["GET"])
+        self.app.add_api_route("/admin/backups", self.create_backup, methods=["POST"])
+        self.app.add_api_route("/admin/backups", self.list_backups, methods=["GET"])
+        self.app.add_api_route(
+            "/admin/backups/{backup_id}/restore",
+            self.restore_backup,
+            methods=["POST"],
+        )
+        self.app.add_api_route("/admin/exports", self.export_memory, methods=["POST"])
+
+    async def create_backup(self):
+        result = await asyncio.to_thread(self._backup_manager.create_backup)
+        return {"status": "created", **result}
+
+    async def list_backups(self):
+        backups = await asyncio.to_thread(self._backup_manager.list_backups)
+        return {"backups": backups, "count": len(backups)}
+
+    async def restore_backup(self, backup_id: str):
+        try:
+            result = await asyncio.to_thread(
+                self._backup_manager.restore_backup,
+                backup_id,
+                post_restore=self._setup_database,
+            )
+        except MemoryRestoreError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        self._namespace_cache.clear()
+        return result
+
+    async def export_memory(self):
+        return await asyncio.to_thread(self._backup_manager.export_json)
 
     def _resolve_mem_llm_client(self):
         """Resolve a configured Mem LLM client.
@@ -936,25 +1002,82 @@ class MemoryService:
             "llm_health_checked_at": self._last_llm_health_check_at,
         }
 
-    async def _tier1_decay_cycle(self) -> int:
-        """Apply exponential decay to Tier 1 turn relevance scores.
+    async def _tier1_decay_cycle(self, *, now: datetime | None = None) -> int:
+        """Apply elapsed-time-based exponential decay to Tier 1 turns.
 
         Returns the number of turns actually updated, so the caller can tell a
         real maintenance write apart from a no-op cycle (P0-4 健康信号).
         """
         conn = open_memory_sqlite(self._db_path)
-        rate = self.config.tier1_decay_rate
-        cur = conn.execute(
-            "UPDATE turns SET relevance_score = relevance_score * ? "
-            "WHERE compressed_to_tier2 = 0",
-            (rate,),
-        )
-        updated = cur.rowcount
-        conn.commit()
-        conn.close()
+        rate = float(self.config.tier1_decay_rate)
+        interval_seconds = float(self.config.decay_interval_hours) * 3600.0
+        if interval_seconds <= 0:
+            conn.close()
+            raise ValueError("decay_interval_hours must be greater than zero")
+        if not 0.0 <= rate <= 1.0:
+            conn.close()
+            raise ValueError("tier1_decay_rate must be between zero and one")
+
+        local_timezone = datetime.now().astimezone().tzinfo or timezone.utc
+        reference_time = now or datetime.now().astimezone()
+        if reference_time.tzinfo is None:
+            reference_time = reference_time.replace(tzinfo=local_timezone)
+        reference_utc = reference_time.astimezone(timezone.utc)
+        reference_iso = reference_time.isoformat()
+        updates: list[tuple[float, str, str]] = []
+
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                "SELECT turn_id, relevance_score, timestamp, last_decay_at "
+                "FROM turns WHERE compressed_to_tier2 = 0"
+            ).fetchall()
+            for turn_id, relevance_score, timestamp, last_decay_at in rows:
+                anchor_value = last_decay_at or timestamp
+                try:
+                    anchor = datetime.fromisoformat(anchor_value)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Skipping Tier 1 decay for turn %s: invalid decay anchor %r",
+                        turn_id,
+                        anchor_value,
+                    )
+                    continue
+                if anchor.tzinfo is None:
+                    anchor = anchor.replace(tzinfo=local_timezone)
+                elapsed_seconds = (
+                    reference_utc - anchor.astimezone(timezone.utc)
+                ).total_seconds()
+                if elapsed_seconds <= 0:
+                    continue
+                elapsed_intervals = elapsed_seconds / interval_seconds
+                decayed_score = float(relevance_score or 0.0) * (
+                    rate ** elapsed_intervals
+                )
+                updates.append((decayed_score, reference_iso, turn_id))
+
+            if updates:
+                conn.executemany(
+                    "UPDATE turns SET relevance_score = ?, last_decay_at = ? "
+                    "WHERE turn_id = ? AND compressed_to_tier2 = 0",
+                    updates,
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+        updated = len(updates)
         if updated:
-            logger.debug("Tier 1 decay applied to %d turns (rate=%.3f)", updated, rate)
-        return int(updated or 0)
+            logger.debug(
+                "Tier 1 decay applied to %d turns (rate=%.3f per %.1f hours)",
+                updated,
+                rate,
+                self.config.decay_interval_hours,
+            )
+        return updated
 
     async def _tier2_bridge_cycle(self) -> int:
         """Auto-trigger Tier 1→Tier 2 compression for expired turns.
@@ -1575,7 +1698,7 @@ class MemoryService:
     async def add_turn(self, session_id: str, request: TurnCreate):
         """Add a conversation turn to a session."""
         conn = open_memory_sqlite(self._db_path)
-        now = datetime.now().isoformat()
+        now = datetime.now().astimezone().isoformat()
         # Ensure session exists in the same DB transaction as the turn write.
         ses = conn.execute(
             "SELECT session_id FROM sessions WHERE session_id = ?", (session_id,)
@@ -1609,8 +1732,9 @@ class MemoryService:
         turn_id = str(uuid.uuid4())
         conn.execute(
             "INSERT INTO turns (turn_id, session_id, speaker, text, timestamp, "
-            "relevance_score, decay_factor, tags, metadata, dedup_key, compressed_to_tier2) "
-            "VALUES (?, ?, ?, ?, ?, 1.0, 0.01, ?, ?, ?, 0)",
+            "relevance_score, decay_factor, tags, metadata, dedup_key, "
+            "compressed_to_tier2, last_decay_at) "
+            "VALUES (?, ?, ?, ?, ?, 1.0, 0.01, ?, ?, ?, 0, ?)",
             (
                 turn_id,
                 session_id,
@@ -1620,6 +1744,7 @@ class MemoryService:
                 json.dumps([]),
                 json.dumps(request.metadata),
                 dedup_key,
+                now,
             ),
         )
         conn.execute(
@@ -1747,79 +1872,35 @@ class MemoryService:
         }
 
     async def tier2_compress(self, request: Tier2CompressRequest = None):
-        """Trigger Tier 1 → Tier 2 compression for turns older than retention window."""
+        """Run the canonical Tier 1 → Tier 2 bridge with request-scoped policy."""
         req = request or Tier2CompressRequest()
-        conn = open_memory_sqlite(self._db_path)
-        cutoff = (datetime.now() - timedelta(days=req.retention_days)).isoformat()
-        low_relevance_fallback = False
-        if req.force_oldest:
-            rows = conn.execute(
-                "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score "
-                "FROM turns WHERE compressed_to_tier2 = 0 "
-                "AND relevance_score >= ? "
-                "ORDER BY timestamp ASC LIMIT ?",
-                (req.min_relevance, req.batch_size),
-            ).fetchall()
-            if not rows:
-                rows = conn.execute(
-                    "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score "
-                    "FROM turns WHERE compressed_to_tier2 = 0 "
-                    "ORDER BY timestamp ASC LIMIT ?",
-                    (req.batch_size,),
-                ).fetchall()
-                low_relevance_fallback = bool(rows)
-        else:
-            rows = conn.execute(
-                "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score "
-                "FROM turns WHERE timestamp < ? AND compressed_to_tier2 = 0 "
-                "AND relevance_score >= ? "
-                "ORDER BY timestamp ASC LIMIT ?",
-                (cutoff, req.min_relevance, req.batch_size),
-            ).fetchall()
-            if not rows:
-                rows = conn.execute(
-                    "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score "
-                    "FROM turns WHERE timestamp < ? AND compressed_to_tier2 = 0 "
-                    "ORDER BY timestamp ASC LIMIT ?",
-                    (cutoff, req.batch_size),
-                ).fetchall()
-                low_relevance_fallback = bool(rows)
-        conn.close()
-        if not rows:
-            return {"status": "no_candidates", "cutoff": cutoff, "force_oldest": req.force_oldest}
-        if req.dry_run:
-            return {
-                "status": "dry_run",
-                "candidate_count": len(rows),
-                "cutoff": cutoff,
-                "force_oldest": req.force_oldest,
-                "low_relevance_fallback": low_relevance_fallback,
-                "sample_turn_ids": [r[0] for r in rows[:5]],
-            }
-        # Convert to TranscriptTurn and feed into ChroniclePipeline
-        result = await self._bridge_to_tier2(rows)
-        if not result.get("events"):
-            return {
-                "status": "no_events_generated",
-                "turns_processed": 0,
-                "candidate_count": len(rows),
-                "events_generated": 0,
-                "scenes_generated": 0,
-                "arcs_generated": 0,
-                "cutoff": cutoff,
-                "force_oldest": req.force_oldest,
-                "low_relevance_fallback": low_relevance_fallback,
-            }
-        return {
-            "status": "compressed",
-            "turns_processed": len(rows),
-            "events_generated": len(result.get("events", [])),
-            "scenes_generated": len(result.get("scenes", [])),
-            "arcs_generated": len(result.get("arcs", [])),
-            "cutoff": cutoff,
-            "force_oldest": req.force_oldest,
-            "low_relevance_fallback": low_relevance_fallback,
-        }
+        bridge = Tier1ToTier2Bridge(
+            self._db_path,
+            retention_days=req.retention_days,
+            batch_size=req.batch_size,
+            min_relevance=req.min_relevance,
+            archive_keep_original=self.config.tier1_archive_keep_original,
+            max_turns=self.config.tier1_max_turns,
+            pipeline_factory=self._build_compression_pipeline,
+            compression_degraded=not self._llm_healthy,
+            min_event_coverage=self.config.tier2_min_event_coverage,
+            min_backlink_completeness=self.config.tier2_min_backlink_completeness,
+            max_compression_ratio=self.config.tier2_max_compression_ratio,
+            max_degraded_fraction=self.config.tier2_max_degraded_fraction,
+        )
+        result = await asyncio.to_thread(
+            bridge.run_cycle,
+            dry_run=req.dry_run,
+            force_oldest=req.force_oldest,
+        )
+        payload = result.to_dict()
+        payload["compression_degraded"] = not self._llm_healthy
+        payload["compression_method"] = (
+            "llm" if self._llm_healthy else "heuristic"
+        )
+        if not self._llm_healthy:
+            payload["degradation_reason"] = self._llm_error or "llm_unavailable"
+        return payload
 
     async def _check_llm_health(self) -> bool:
         """Verify LLM connectivity. Probed at startup and re-probed each
@@ -1954,122 +2035,6 @@ class MemoryService:
                 "Failed to build LLM compression pipeline: %s; falling back to heuristic", exc
             )
             return ChroniclePipeline()
-
-    async def _bridge_to_tier2(self, rows) -> Dict[str, Any]:
-        """Feed Tier 1 turns into the Mem ChroniclePipeline and archive them.
-
-        Uses LLM-backed extraction and scholar backends when an API key is
-        available.  Falls back to heuristic (keyword-based) compression when
-        no LLM credentials are configured — the system always works, but
-        compression quality depends on LLM availability.
-        """
-        from memai.pipeline import ChroniclePipeline
-        from memai.schema import TranscriptTurn
-        from datetime import datetime as dt, timezone
-
-        transcript_turns = []
-        for r in rows:
-            turn_id, session_id, speaker, text, timestamp_str, relevance = r
-            parsed_ts = dt.fromisoformat(timestamp_str)
-            if parsed_ts.tzinfo is None:
-                parsed_ts = parsed_ts.replace(tzinfo=timezone.utc)
-            transcript_turns.append(
-                TranscriptTurn(
-                    turn_id=turn_id,
-                    speaker=speaker,
-                    text=text,
-                    timestamp=parsed_ts,
-                )
-            )
-
-        if not self._llm_healthy:
-            logger.warning(
-                "Tier2 bridge: LLM unhealthy — compression degraded to heuristic "
-                "(keyword matching, template summaries). Quality will be low."
-            )
-        pipeline = self._build_compression_pipeline()
-        # Run synchronous pipeline.ingest in thread to avoid blocking event loop
-        import asyncio as _asyncio
-        result = await _asyncio.to_thread(pipeline.ingest, transcript_turns)
-        # ... rest unchanged
-
-        if not getattr(result, "events", None):
-            logger.warning(
-                "Tier2 bridge produced no events for %d candidate turns; keeping turns "
-                "uncompressed in Tier1 to avoid data loss.",
-                len(rows),
-            )
-            return {
-                "events": [],
-                "scenes": [],
-                "arcs": [],
-                "epochs": [],
-                "profile_memories": [],
-                "skipped_reason": "no_events_generated",
-            }
-
-        # Archive processed turns with back-references
-        stable_ids = _build_stable_cmem_ids(result)
-        turn_to_events: Dict[str, list] = {}
-        for event in result.events:
-            for src_turn_id in event.source_turns:
-                turn_to_events.setdefault(src_turn_id, []).append(stable_ids.get(event.id, event.id))
-
-        turn_to_scenes: Dict[str, list] = {}
-        for scene in result.scenes:
-            for ev_id in scene.child_ids:
-                stable_ev_id = stable_ids.get(ev_id, ev_id)
-                for turn_id, ev_ids in turn_to_events.items():
-                    if stable_ev_id in ev_ids and turn_id not in turn_to_scenes:
-                        turn_to_scenes.setdefault(turn_id, []).append(stable_ids.get(scene.id, scene.id))
-
-        now = datetime.now().isoformat()
-        conn = open_memory_sqlite(self._db_path)
-        try:
-            try:
-                for r in rows:
-                    turn_id, session_id, speaker, text, timestamp_str, relevance = r
-                    event_ids = turn_to_events.get(turn_id, [])
-                    scene_ids = turn_to_scenes.get(turn_id, [])
-                    original_text = text if self.config.tier1_archive_keep_original else None
-                    text_summary = text[:500] if len(text) > 500 else text
-                    conn.execute(
-                        "INSERT OR REPLACE INTO turns_archive "
-                        "(turn_id, session_id, speaker, text_summary, original_text, "
-                        "timestamp, compressed_at, event_ids, scene_ids) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            turn_id, session_id, speaker, text_summary, original_text,
-                            timestamp_str, now,
-                            json.dumps(event_ids), json.dumps(scene_ids),
-                        ),
-                    )
-                    conn.execute(
-                        "UPDATE turns SET compressed_to_tier2 = 1 WHERE turn_id = ?",
-                        (turn_id,),
-                    )
-
-                # ── Write compressed memories back to SQLite ─────────────
-                _write_compressed_memories(conn, result, now)
-
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
-        finally:
-            conn.close()
-
-        logger.info(
-            "Tier2 bridge: %d turns → %d events, %d scenes, %d arcs",
-            len(rows), len(result.events), len(result.scenes), len(result.arcs),
-        )
-        return {
-            "events": [e.to_dict() for e in result.events],
-            "scenes": [s.to_dict() for s in result.scenes],
-            "arcs": [a.to_dict() for a in result.arcs],
-            "epochs": [ep.to_dict() for ep in result.epochs],
-            "profile_memories": [p.to_dict() for p in result.profile_memories],
-        }
 
     async def tier1_stats(self):
         """Return Tier 1 storage statistics."""
@@ -2282,90 +2247,23 @@ class MemoryService:
     # ── Semantic Search (Dimension 5) ─────────────────────────────
 
     async def semantic_search(self, request: dict):
-        """Search compressed memories by semantic similarity using cosine on embeddings.
-
-        If embeddings are not pre-computed, generates them on-the-fly via the Mem LLM.
-        Falls back to keyword search if LLM is unavailable.
-        """
+        """Return a truthful keyword fallback until embedding protocol is defined."""
         query_text = request.get("query", "")
         limit = request.get("limit", 10)
         min_similarity = request.get("min_similarity", 0.3)
 
         if not query_text:
-            return {"results": [], "count": 0, "method": "none"}
+            raise HTTPException(status_code=400, detail="query is required")
 
-        # Generate query embedding
-        query_embedding, embedding_method = await self._generate_embedding(query_text)
-        if query_embedding is None:
-            fallback = await self.search_compressed({"query": query_text, "limit": limit})
-            fallback["method"] = "keyword_fallback"
-            fallback["semantic_degraded"] = True
-            fallback["embedding_method"] = embedding_method
-            fallback["ignored_min_similarity"] = min_similarity
-            return fallback
-
-        # Fetch active memories with embeddings, compute cosine similarity
-        conn = open_memory_sqlite(self._db_path)
-        rows = conn.execute(
-            "SELECT * FROM compressed_memories WHERE status = 'active' AND hidden = 0 "
-            "AND embedding IS NOT NULL LIMIT 500"
-        ).fetchall()
-        conn.close()
-
-        scored = []
-        for r in rows:
-            d = _cmem_row_to_dict(r)
-            emb_json = r[23] if len(r) > 23 else None  # col index 23 = embedding
-            if not emb_json:
-                continue
-            try:
-                emb = json.loads(emb_json)
-            except (json.JSONDecodeError, TypeError):
-                continue
-            sim = _cosine_similarity(query_embedding, emb)
-            if sim >= min_similarity:
-                d["semantic_similarity"] = round(sim, 4)
-                scored.append(d)
-
-        scored.sort(key=lambda x: x.get("semantic_similarity", 0), reverse=True)
-        return {
-            "results": scored[:limit],
-            "count": len(scored[:limit]),
-            "method": "semantic",
-            "semantic_degraded": False,
-            "embedding_method": embedding_method,
-        }
-
-    async def _generate_embedding(self, text: str) -> tuple[list[float] | None, str]:
-        """Generate embedding vector via the configured Mem LLM.
-
-        Routes through ``_resolve_mem_llm_client`` so the embedding model
-        is whatever the user has selected in ``memory.llm.*``. When the
-        LLM is unavailable, callers should
-        degrade to keyword search instead of pretending hash vectors are
-        semantic embeddings.
-        """
-        try:
-            import asyncio as _asyncio
-
-            def _run() -> tuple[list[float] | None, str]:
-                client, _ = self._resolve_mem_llm_client()
-                if client is None:
-                    return None, "llm_unavailable"
-                # Use the embeddings endpoint if available, else fallback to completion
-                result = client.complete_json(
-                    system_prompt="You are an embedding generator. Output JSON: {\"embedding\": [float, ...]}",
-                    user_payload={"text": text},
-                    task="embedding",
-                )
-                if isinstance(result, dict) and "embedding" in result:
-                    emb = result["embedding"]
-                    if isinstance(emb, list) and len(emb) > 0 and isinstance(emb[0], (int, float)):
-                        return [float(v) for v in emb[:256]], "llm"
-                return None, "llm_invalid_embedding"
-            return await _asyncio.to_thread(_run)
-        except Exception:
-            return None, "llm_error"
+        fallback = await self.search_compressed({"query": query_text, "limit": limit})
+        fallback["method"] = "keyword_fallback"
+        fallback["semantic_degraded"] = True
+        fallback["semantic_available"] = False
+        fallback["semantic_unavailable_reason"] = (
+            "embedding_protocol_not_configured"
+        )
+        fallback["ignored_min_similarity"] = min_similarity
+        return fallback
 
     async def register_with_gateway(self, *, max_retries: int = 5):
         url = f"{self.config.gateway_address}/register"
@@ -2434,11 +2332,16 @@ class MemoryService:
 
 if __name__ == "__main__":
     import argparse
+    from VoidCube_core.runtime_paths import get_runtime_layout
     
     parser = argparse.ArgumentParser(description="VoidCube Memory Service")
     parser.add_argument("--host", default="127.0.0.1", help="Service host")
     parser.add_argument("--port", type=int, default=6001, help="Service port")
-    parser.add_argument("--db-path", default="./memory.db", help="SQLite database path")
+    parser.add_argument(
+        "--db-path",
+        default=str(get_runtime_layout().memory_db),
+        help="SQLite database path",
+    )
     parser.add_argument("--gateway", default="http://127.0.0.1:6000", help="Gateway address")
     args = parser.parse_args()
     

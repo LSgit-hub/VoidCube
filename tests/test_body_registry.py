@@ -17,8 +17,30 @@ def _await_user_consent(manager: BodyRegistryManager, slot_id: str = "slot-B"):
 
 
 @pytest.mark.unit
+def test_source_and_state_roots_are_independent(tmp_path):
+    source_root = tmp_path / "source"
+    state_root = tmp_path / "state"
+    source_root.mkdir()
+    (source_root / "run_agent.py").write_text("print('source')\n", encoding="utf-8")
+
+    manager = BodyRegistryManager(source_root, state_root=state_root)
+    manager.initialize_layout()
+
+    active = manager.load_slot_meta("slot-A")
+    assert manager.source_root == source_root.resolve()
+    assert manager.state_root == state_root.resolve()
+    assert manager.registry_path == state_root / "registry.json"
+    assert manager.active_body_pointer_path() == state_root / "active.json"
+    assert manager.slots_root == state_root / "slots"
+    assert (Path(active.worktree_path) / "run_agent.py").is_file()
+    assert not (source_root / ".body-registry.json").exists()
+    assert not (source_root / ".body-active.json").exists()
+    assert not (source_root / ".body-slots").exists()
+
+
+@pytest.mark.unit
 def test_initialize_layout_bootstraps_dual_slots(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     registry = manager.initialize_layout()
 
     assert registry.active_slot == "slot-A"
@@ -42,7 +64,7 @@ def test_initialize_layout_bootstraps_dual_slots(tmp_path):
 @pytest.mark.unit
 def test_initialize_layout_repairs_unmaterialized_active_slot(tmp_path):
     (tmp_path / "run_agent.py").write_text("print('active')\n", encoding="utf-8")
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     active_meta = manager.load_slot_meta("slot-A")
     active_worktree = Path(active_meta.worktree_path)
@@ -68,7 +90,7 @@ def test_initialize_layout_repairs_unmaterialized_active_slot(tmp_path):
 
 @pytest.mark.unit
 def test_default_materialization_rejects_missing_active_baseline(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     active_meta = manager.load_slot_meta("slot-A")
     manager.slot_worktree_manifest_path("slot-A").unlink()
@@ -81,7 +103,7 @@ def test_default_materialization_rejects_missing_active_baseline(tmp_path):
 
 @pytest.mark.unit
 def test_initialize_layout_preserves_in_progress_probe_state(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
     probe = manager.start_probe("slot-B")
@@ -98,7 +120,7 @@ def test_initialize_layout_preserves_in_progress_probe_state(tmp_path):
 
 @pytest.mark.unit
 def test_inspect_layout_reports_healthy_initialized_registry(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
 
     report = manager.inspect_layout()
@@ -113,7 +135,7 @@ def test_inspect_layout_reports_healthy_initialized_registry(tmp_path):
 
 @pytest.mark.unit
 def test_inspect_layout_reports_manifest_and_pointer_corruption(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.slot_worktree_manifest_path("slot-A").unlink()
     pointer = json.loads(manager.active_body_pointer_path().read_text(encoding="utf-8"))
@@ -135,7 +157,7 @@ def test_inspect_layout_reports_manifest_and_pointer_corruption(tmp_path):
 
 @pytest.mark.unit
 def test_probe_to_active_switch_retires_previous_active(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
 
     manager.mark_candidate("slot-B", body_version="v2")
@@ -158,7 +180,7 @@ def test_probe_to_active_switch_retires_previous_active(tmp_path):
 
 @pytest.mark.unit
 def test_activate_slot_records_active_ref_and_commit(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
 
     manager.mark_candidate(
@@ -188,7 +210,7 @@ def test_activate_slot_records_active_ref_and_commit(tmp_path):
 
 @pytest.mark.unit
 def test_candidate_slot_records_git_lineage_metadata(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
 
     meta = manager.mark_candidate(
@@ -232,7 +254,7 @@ def test_candidate_slot_auto_records_git_head_when_lineage_is_not_provided(tmp_p
         text=True,
     ).stdout.strip()
 
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     prepared = manager.prepare_slot_workspace("slot-B")
     meta = manager.mark_candidate("slot-B")
@@ -297,7 +319,7 @@ def test_candidate_slot_auto_records_changed_files_from_git_diff(tmp_path):
         text=True,
     ).stdout.strip()
 
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     meta = manager.mark_candidate(
         "slot-B",
@@ -311,7 +333,7 @@ def test_candidate_slot_auto_records_changed_files_from_git_diff(tmp_path):
 
 @pytest.mark.unit
 def test_recycle_retired_slot_returns_it_to_shell(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     (tmp_path / "run_agent.py").write_text("print('stable shell')\n", encoding="utf-8")
     manager.mark_candidate("slot-B")
@@ -330,7 +352,7 @@ def test_recycle_retired_slot_returns_it_to_shell(tmp_path):
 
 @pytest.mark.unit
 def test_recycle_retired_slot_can_sync_from_stable_slot(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     (tmp_path / "run_agent.py").write_text("print('root stable')\n", encoding="utf-8")
     manager.prepare_slot_workspace("slot-A", source_path=tmp_path)
@@ -368,7 +390,7 @@ def test_recycle_retired_slot_can_sync_from_stable_slot(tmp_path):
 
 @pytest.mark.unit
 def test_illegal_transition_is_rejected(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
 
     with pytest.raises(ValueError, match="Illegal body state transition"):
@@ -387,7 +409,7 @@ def test_prepare_slot_workspace_copies_repo_template_and_bootstraps_runtime(tmp_
         runtime_dir.mkdir()
         (runtime_dir / "stale.json").write_text("{}\n", encoding="utf-8")
 
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     meta = manager.prepare_slot_workspace("slot-B")
 
@@ -415,7 +437,7 @@ def test_prepare_slot_workspace_copies_repo_template_and_bootstraps_runtime(tmp_
 @pytest.mark.unit
 def test_prepare_slot_workspace_resets_stale_non_active_baseline_metadata(tmp_path):
     (tmp_path / "run_agent.py").write_text("print('stable')\n", encoding="utf-8")
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     meta = manager.load_slot_meta("slot-B")
     meta.body_version = "stale-version"
@@ -471,7 +493,7 @@ def test_prepare_slot_workspace_resets_stale_non_active_baseline_metadata(tmp_pa
 @pytest.mark.unit
 def test_abandon_candidate_restores_clean_shell_baseline(tmp_path):
     (tmp_path / "run_agent.py").write_text("print('stable')\n", encoding="utf-8")
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.prepare_slot_workspace("slot-B", source_path=tmp_path)
     worktree = Path(manager.load_slot_meta("slot-B").worktree_path)
@@ -508,7 +530,7 @@ def test_abandon_candidate_restores_clean_shell_baseline(tmp_path):
 def test_prepare_slot_workspace_can_clone_from_active_slot_worktree(tmp_path):
     (tmp_path / "run_agent.py").write_text("print('repo root')\n", encoding="utf-8")
 
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.prepare_slot_workspace("slot-A", source_path=tmp_path)
     active_worktree = Path(manager.load_slot_meta("slot-A").worktree_path)
@@ -523,7 +545,7 @@ def test_prepare_slot_workspace_can_clone_from_active_slot_worktree(tmp_path):
 
 @pytest.mark.unit
 def test_active_body_pointer_tracks_current_active_slot(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.prepare_slot_workspace("slot-A", source_path=tmp_path)
     pointer = manager.load_active_body_pointer()
@@ -559,7 +581,7 @@ def test_restore_previous_healthy_commit_requires_clean_isolated_worktree(tmp_pa
         text=True,
     ).stdout.strip()
 
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     meta = manager.prepare_slot_workspace("slot-B")
     worktree = Path(meta.worktree_path)
@@ -625,7 +647,7 @@ def test_restore_previous_healthy_commit_requires_clean_isolated_worktree(tmp_pa
 
 @pytest.mark.unit
 def test_activate_slot_records_stable_window_settings(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
     manager.start_probe("slot-B")
@@ -646,7 +668,7 @@ def test_activate_slot_records_stable_window_settings(tmp_path):
 
 @pytest.mark.unit
 def test_activate_slot_can_record_runtime_task_profile(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
     manager.start_probe("slot-B")

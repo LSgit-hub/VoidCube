@@ -41,6 +41,7 @@ def _make_supervisor(tmp_path: Path) -> Supervisor:
     cfg = SupervisorConfig()
     cfg.execution.git_repo_path = str(repo)
     cfg.soul_store_path = str(tmp_path / ".soul-runtime")
+    cfg.body_runtime.state_root = str(tmp_path / "body-state")
     cfg.service_runtime.endogenous_drive_lm_task_generation_enabled = False
 
     sv = Supervisor(config=cfg)

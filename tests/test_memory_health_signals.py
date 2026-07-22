@@ -4,16 +4,17 @@ import sys
 import json
 import sqlite3
 import logging
+import inspect
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from systems.memory import memory_service as memory_service_module
 from systems.memory import tier1_to_tier2_bridge as bridge_module
 from systems.memory.memory_service import (
     MemoryService,
@@ -21,15 +22,25 @@ from systems.memory.memory_service import (
     SessionCreate,
     Tier2CompressRequest,
     TurnCreate,
-    _write_compressed_memories,
 )
-from systems.memory.tier1_to_tier2_bridge import Tier1ToTier2Bridge
-from systems.memory.tier1_to_tier2_bridge import open_memory_sqlite
+from systems.memory.tier1_to_tier2_bridge import (
+    Tier1ToTier2Bridge,
+    _write_compressed_memories_to_db,
+    open_memory_sqlite,
+)
 
 
 def _make_service(tmp_path: Path) -> MemoryService:
     cfg = MemoryServiceConfig(db_path=str(tmp_path / "mem.db"))
     return MemoryService(cfg)
+
+
+def test_memory_service_does_not_own_a_second_tier2_bridge() -> None:
+    source = inspect.getsource(MemoryService)
+
+    assert "_bridge_to_tier2" not in source
+    assert "_write_compressed_memories" not in source
+    assert "_build_stable_cmem_ids" not in source
 
 
 def test_memory_sqlite_connections_use_busy_timeout_and_wal(tmp_path):
@@ -147,6 +158,195 @@ async def test_effective_activity_stamped_when_decay_writes_rows(tmp_path):
     result = await svc._run_all_rules_internal()
     assert result["_effective_work"] >= 1
     assert svc._last_effective_activity_at is not None
+
+
+@pytest.mark.asyncio
+async def test_tier1_decay_depends_on_elapsed_time_not_run_frequency(tmp_path):
+    cfg = MemoryServiceConfig(
+        db_path=str(tmp_path / "mem.db"),
+        decay_interval_hours=24,
+        tier1_decay_rate=0.81,
+    )
+    svc = MemoryService(cfg)
+    await svc.create_session(SessionCreate(session_id="decay", metadata={}))
+    first = await svc.add_turn(
+        "decay", TurnCreate(speaker="user", text="half intervals", metadata={})
+    )
+    second = await svc.add_turn(
+        "decay", TurnCreate(speaker="user", text="full interval", metadata={})
+    )
+    start = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        conn.execute(
+            "UPDATE turns SET timestamp = ?, last_decay_at = ?, relevance_score = 1.0",
+            (start.isoformat(), start.isoformat()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert await svc._tier1_decay_cycle(now=start + timedelta(hours=12)) == 2
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        conn.execute(
+            "UPDATE turns SET relevance_score = 1.0, last_decay_at = ? WHERE turn_id = ?",
+            (start.isoformat(), second["turn_id"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    svc = MemoryService(cfg)
+    full_time = start + timedelta(hours=24)
+    assert await svc._tier1_decay_cycle(now=full_time) == 2
+    assert await svc._tier1_decay_cycle(now=full_time) == 0
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        scores = dict(
+            conn.execute("SELECT turn_id, relevance_score FROM turns").fetchall()
+        )
+    finally:
+        conn.close()
+    backups = svc._backup_manager.list_backups()
+    assert len(backups) == 1
+    backup_conn = open_memory_sqlite(backups[0]["path"])
+    try:
+        backup_columns = {
+            row[1]
+            for row in backup_conn.execute(
+                "PRAGMA table_info(compressed_memories)"
+            ).fetchall()
+        }
+        stored_embedding = backup_conn.execute(
+            "SELECT embedding FROM compressed_memories "
+            "WHERE memory_id = 'cmem-keyword-fallback'"
+        ).fetchone()[0]
+    finally:
+        backup_conn.close()
+
+    assert scores[first["turn_id"]] == pytest.approx(0.81)
+    assert scores[second["turn_id"]] == pytest.approx(0.81)
+
+
+@pytest.mark.asyncio
+async def test_tier1_decay_ignores_compressed_and_future_anchored_turns(tmp_path):
+    cfg = MemoryServiceConfig(
+        db_path=str(tmp_path / "mem.db"),
+        decay_interval_hours=24,
+        tier1_decay_rate=0.5,
+    )
+    svc = MemoryService(cfg)
+    await svc.create_session(SessionCreate(session_id="decay", metadata={}))
+    compressed = await svc.add_turn(
+        "decay", TurnCreate(speaker="user", text="compressed", metadata={})
+    )
+    future = await svc.add_turn(
+        "decay", TurnCreate(speaker="user", text="future", metadata={})
+    )
+    now = datetime(2026, 7, 2, tzinfo=timezone.utc)
+    future_anchor = now + timedelta(hours=12)
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        conn.execute(
+            "UPDATE turns SET relevance_score = 0.7, timestamp = ?, "
+            "last_decay_at = ?, compressed_to_tier2 = 1 WHERE turn_id = ?",
+            ((now - timedelta(days=1)).isoformat(), (now - timedelta(days=1)).isoformat(), compressed["turn_id"]),
+        )
+        conn.execute(
+            "UPDATE turns SET relevance_score = 0.8, timestamp = ?, last_decay_at = ? "
+            "WHERE turn_id = ?",
+            (future_anchor.isoformat(), future_anchor.isoformat(), future["turn_id"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert await svc._tier1_decay_cycle(now=now) == 0
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        rows = dict(
+            conn.execute(
+                "SELECT turn_id, relevance_score FROM turns ORDER BY turn_id"
+            ).fetchall()
+        )
+        future_last_decay = conn.execute(
+            "SELECT last_decay_at FROM turns WHERE turn_id = ?", (future["turn_id"],)
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert rows[compressed["turn_id"]] == pytest.approx(0.7)
+    assert rows[future["turn_id"]] == pytest.approx(0.8)
+    assert future_last_decay == future_anchor.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_tier1_decay_migrates_legacy_null_anchor_from_turn_timestamp(tmp_path):
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE turns ("
+            "turn_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, speaker TEXT NOT NULL, "
+            "text TEXT NOT NULL, timestamp TEXT NOT NULL, relevance_score REAL DEFAULT 1.0, "
+            "decay_factor REAL DEFAULT 0.01, tags TEXT, metadata TEXT, dedup_key TEXT, "
+            "compressed_to_tier2 INTEGER DEFAULT 0)"
+        )
+        start = datetime(2026, 7, 1, tzinfo=timezone.utc)
+        conn.execute(
+            "INSERT INTO turns VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("legacy-turn", "legacy", "user", "old", start.isoformat(), 1.0, 0.01, "[]", "{}", None, 0),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    svc = MemoryService(
+        MemoryServiceConfig(
+            db_path=str(db_path), decay_interval_hours=24, tier1_decay_rate=0.5
+        )
+    )
+    conn = open_memory_sqlite(db_path)
+    try:
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(turns)").fetchall()
+        }
+    finally:
+        conn.close()
+    assert "last_decay_at" in columns
+
+    reference = start + timedelta(days=1)
+    assert await svc._tier1_decay_cycle(now=reference) == 1
+    conn = open_memory_sqlite(db_path)
+    try:
+        score, last_decay_at = conn.execute(
+            "SELECT relevance_score, last_decay_at FROM turns WHERE turn_id = 'legacy-turn'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert score == pytest.approx(0.5)
+    assert last_decay_at == reference.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_new_turn_initializes_decay_anchor_to_creation_timestamp(tmp_path):
+    svc = _make_service(tmp_path)
+    await svc.create_session(SessionCreate(session_id="decay", metadata={}))
+    created = await svc.add_turn(
+        "decay", TurnCreate(speaker="user", text="new", metadata={})
+    )
+
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        timestamp, last_decay_at = conn.execute(
+            "SELECT timestamp, last_decay_at FROM turns WHERE turn_id = ?",
+            (created["turn_id"],),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert last_decay_at == timestamp == created["timestamp"]
 
 
 @pytest.mark.asyncio
@@ -355,17 +555,17 @@ async def test_tier1_add_turn_auto_creates_missing_session_atomically(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_semantic_search_reports_keyword_fallback_when_embedding_unavailable(tmp_path):
+async def test_semantic_search_is_explicit_keyword_fallback_without_embedding_protocol(tmp_path):
     svc = _make_service(tmp_path)
-    svc._resolve_mem_llm_client = lambda: (None, "none")  # type: ignore[method-assign]
     now = datetime.now(timezone.utc).isoformat()
     conn = open_memory_sqlite(svc._db_path)
     try:
+        conn.execute("ALTER TABLE compressed_memories ADD COLUMN embedding TEXT")
         conn.execute(
             "INSERT INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
-            "compressed_at, compression_level, status, weight) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "compressed_at, compression_level, status, weight, embedding) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 "cmem-keyword-fallback",
                 "event",
@@ -377,9 +577,25 @@ async def test_semantic_search_reports_keyword_fallback_when_embedding_unavailab
                 0,
                 "active",
                 1.0,
+                json.dumps([1.0, 0.0]),
             ),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+    svc = _make_service(tmp_path)
+    svc._resolve_mem_llm_client = lambda: (_ for _ in ()).throw(  # type: ignore[method-assign]
+        AssertionError("semantic search must not call Chat Completions")
+    )
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        columns = {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(compressed_memories)"
+            ).fetchall()
+        }
     finally:
         conn.close()
 
@@ -389,9 +605,24 @@ async def test_semantic_search_reports_keyword_fallback_when_embedding_unavailab
 
     assert result["method"] == "keyword_fallback"
     assert result["semantic_degraded"] is True
-    assert result["embedding_method"] == "llm_unavailable"
+    assert result["semantic_available"] is False
+    assert result["semantic_unavailable_reason"] == "embedding_protocol_not_configured"
     assert result["ignored_min_similarity"] == 0.9
     assert result["count"] == 1
+    assert "embedding" not in columns
+    assert "embedding" in backup_columns
+    assert json.loads(stored_embedding) == [1.0, 0.0]
+
+
+@pytest.mark.asyncio
+async def test_semantic_search_requires_nonempty_query(tmp_path):
+    svc = _make_service(tmp_path)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await svc.semantic_search({"query": ""})
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "query is required"
 
 
 @pytest.mark.asyncio
@@ -561,6 +792,8 @@ async def test_tier2_compress_keeps_turns_uncompressed_when_no_events_generated(
 
     assert result["status"] == "no_events_generated"
     assert result["turns_processed"] == 0
+    assert result["compression_degraded"] is True
+    assert result["compression_method"] == "heuristic"
     assert compressed == 0
     assert archive_count == 0
 
@@ -603,10 +836,203 @@ async def test_standalone_bridge_keeps_turns_uncompressed_when_no_events_generat
 
 
 @pytest.mark.asyncio
+async def test_compression_quality_gate_rejects_incomplete_turn_coverage_and_audits(tmp_path):
+    svc = _make_service(tmp_path)
+    await svc.create_session(SessionCreate(session_id="quality-reject", metadata={}))
+    first = await svc.add_turn(
+        "quality-reject",
+        TurnCreate(speaker="user", text="A durable architecture decision was made.", metadata={}),
+    )
+    await svc.add_turn(
+        "quality-reject",
+        TurnCreate(speaker="agent", text="The implementation plan was also confirmed.", metadata={}),
+    )
+    now_dt = datetime(2026, 7, 2, tzinfo=timezone.utc)
+    event = SimpleNamespace(
+        id="event-partial",
+        parent_ids=[],
+        event_kind="decision",
+        title="Architecture decision",
+        summary="Architecture decision.",
+        timespan_start=now_dt,
+        timespan_end=now_dt,
+        importance=0.8,
+        confidence=0.9,
+        topics=["memory"],
+        entities=["VoidCube"],
+        source_turns=[first["turn_id"]],
+    )
+    event.to_dict = lambda: {
+        "id": event.id,
+        "summary": event.summary,
+        "source_turns": list(event.source_turns),
+    }
+
+    class _PartialPipeline:
+        def ingest(self, turns):
+            return SimpleNamespace(
+                events=[event], scenes=[], arcs=[], epochs=[], profile_memories=[]
+            )
+
+    svc._build_compression_pipeline = lambda: _PartialPipeline()  # type: ignore[method-assign]
+    result = await svc.tier2_compress(
+        Tier2CompressRequest(min_relevance=0.0, force_oldest=True)
+    )
+    repeated = await svc.tier2_compress(
+        Tier2CompressRequest(min_relevance=0.0, force_oldest=True)
+    )
+
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        active_count = conn.execute(
+            "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0"
+        ).fetchone()[0]
+        archive_count = conn.execute("SELECT COUNT(*) FROM turns_archive").fetchone()[0]
+        audit_status, event_coverage, failed_checks = conn.execute(
+            "SELECT status, event_coverage, failed_checks "
+            "FROM compression_quality_audit"
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert result["status"] == "quality_rejected"
+    assert result["turns_processed"] == 0
+    assert result["quality_evidence"]["event_coverage"] == pytest.approx(0.5)
+    assert result["quality_evidence"]["failed_checks"] == ["event_coverage"]
+    assert active_count == 2
+    assert archive_count == 0
+    assert audit_status == "rejected"
+    assert event_coverage == pytest.approx(0.5)
+    assert json.loads(failed_checks) == ["event_coverage"]
+
+
+@pytest.mark.asyncio
+async def test_compression_quality_gate_passes_with_complete_reciprocal_backlinks(tmp_path):
+    svc = _make_service(tmp_path)
+    await svc.create_session(SessionCreate(session_id="quality-pass", metadata={}))
+    first = await svc.add_turn(
+        "quality-pass",
+        TurnCreate(speaker="user", text="A durable architecture decision was made.", metadata={}),
+    )
+    second = await svc.add_turn(
+        "quality-pass",
+        TurnCreate(speaker="agent", text="The implementation plan was confirmed.", metadata={}),
+    )
+    now_dt = datetime(2026, 7, 2, tzinfo=timezone.utc)
+    event = SimpleNamespace(
+        id="event-complete",
+        parent_ids=[],
+        event_kind="decision",
+        title="Architecture decision",
+        summary="Architecture decision and implementation plan confirmed.",
+        timespan_start=now_dt,
+        timespan_end=now_dt,
+        importance=0.8,
+        confidence=0.9,
+        topics=["memory"],
+        entities=["VoidCube"],
+        source_turns=[first["turn_id"], second["turn_id"]],
+    )
+    event.to_dict = lambda: {
+        "id": event.id,
+        "summary": event.summary,
+        "source_turns": list(event.source_turns),
+    }
+
+    class _CompletePipeline:
+        def ingest(self, turns):
+            return SimpleNamespace(
+                events=[event], scenes=[], arcs=[], epochs=[], profile_memories=[]
+            )
+
+    svc._build_compression_pipeline = lambda: _CompletePipeline()  # type: ignore[method-assign]
+    result = await svc.tier2_compress(
+        Tier2CompressRequest(min_relevance=0.0, force_oldest=True)
+    )
+
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        archive_rows = conn.execute(
+            "SELECT turn_id, event_ids FROM turns_archive ORDER BY turn_id"
+        ).fetchall()
+        audit_status = conn.execute(
+            "SELECT status FROM compression_quality_audit"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert result["status"] == "compressed"
+    assert result["turns_processed"] == 2
+    assert result["quality_evidence"]["passed"] is True
+    assert result["quality_evidence"]["event_coverage"] == pytest.approx(1.0)
+    assert result["quality_evidence"]["backlink_completeness"] == pytest.approx(1.0)
+    assert repeated["status"] == "no_candidates"
+    assert len(archive_rows) == 2
+    assert all(json.loads(event_ids) for _, event_ids in archive_rows)
+    assert audit_status == "passed"
+
+
+@pytest.mark.asyncio
+async def test_compression_quality_gate_can_reject_degraded_pipeline(tmp_path):
+    cfg = MemoryServiceConfig(
+        db_path=str(tmp_path / "mem.db"),
+        tier2_max_degraded_fraction=0.0,
+    )
+    svc = MemoryService(cfg)
+    await svc.create_session(SessionCreate(session_id="quality-degraded", metadata={}))
+    turn = await svc.add_turn(
+        "quality-degraded",
+        TurnCreate(speaker="user", text="A durable architecture decision was made.", metadata={}),
+    )
+    now_dt = datetime(2026, 7, 2, tzinfo=timezone.utc)
+    event = SimpleNamespace(
+        id="event-degraded",
+        parent_ids=[],
+        event_kind="decision",
+        title="Architecture decision",
+        summary="Architecture decision.",
+        timespan_start=now_dt,
+        timespan_end=now_dt,
+        importance=0.8,
+        confidence=0.9,
+        topics=["memory"],
+        entities=["VoidCube"],
+        source_turns=[turn["turn_id"]],
+    )
+    event.to_dict = lambda: {
+        "id": event.id,
+        "summary": event.summary,
+        "source_turns": list(event.source_turns),
+    }
+
+    class _DegradedPipeline:
+        def ingest(self, turns):
+            return SimpleNamespace(
+                events=[event], scenes=[], arcs=[], epochs=[], profile_memories=[]
+            )
+
+    svc._build_compression_pipeline = lambda: _DegradedPipeline()  # type: ignore[method-assign]
+    result = await svc.tier2_compress(
+        Tier2CompressRequest(min_relevance=0.0, force_oldest=True)
+    )
+
+    assert result["status"] == "quality_rejected"
+    assert result["quality_evidence"]["degraded_fraction"] == pytest.approx(1.0)
+    assert result["quality_evidence"]["failed_checks"] == ["degraded_fraction"]
+
+
+@pytest.mark.asyncio
 async def test_tier2_compress_rolls_back_archive_when_compressed_write_fails(tmp_path, monkeypatch):
     svc = _make_service(tmp_path)
     await svc.create_session(SessionCreate(session_id="rollback", metadata={}))
-    await svc.add_turn("rollback", TurnCreate(speaker="user", text="decision memory", metadata={}))
+    await svc.add_turn(
+        "rollback",
+        TurnCreate(
+            speaker="user",
+            text="decision memory with enough source detail for a concise durable summary",
+            metadata={},
+        ),
+    )
     now_dt = datetime(2026, 7, 2, tzinfo=timezone.utc)
 
     event = SimpleNamespace(
@@ -639,17 +1065,16 @@ async def test_tier2_compress_rolls_back_archive_when_compressed_write_fails(tmp
         raise RuntimeError("compressed write failed")
 
     svc._build_compression_pipeline = lambda: _Pipeline()  # type: ignore[method-assign]
-    monkeypatch.setattr(memory_service_module, "_write_compressed_memories", fail_write)
+    monkeypatch.setattr(bridge_module, "_write_compressed_memories_to_db", fail_write)
 
-    with pytest.raises(RuntimeError, match="compressed write failed"):
-        await svc.tier2_compress(
-            Tier2CompressRequest(
-                retention_days=30,
-                batch_size=10,
-                min_relevance=0.0,
-                force_oldest=True,
-            )
+    result = await svc.tier2_compress(
+        Tier2CompressRequest(
+            retention_days=30,
+            batch_size=10,
+            min_relevance=0.0,
+            force_oldest=True,
         )
+    )
 
     conn = sqlite3.connect(str(svc._db_path))
     try:
@@ -661,15 +1086,33 @@ async def test_tier2_compress_rolls_back_archive_when_compressed_write_fails(tmp
     finally:
         conn.close()
 
+    assert result["status"] == "failed"
+    assert result["turns_processed"] == 0
+    assert result["errors"] == ["compressed write failed"]
     assert compressed == 0
     assert archive_count == 0
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        audit_status = conn.execute(
+            "SELECT status FROM compression_quality_audit"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert audit_status == "commit_failed"
 
 
 @pytest.mark.asyncio
 async def test_standalone_bridge_rolls_back_archive_when_compressed_write_fails(tmp_path, monkeypatch):
     svc = _make_service(tmp_path)
     await svc.create_session(SessionCreate(session_id="rollback", metadata={}))
-    await svc.add_turn("rollback", TurnCreate(speaker="user", text="decision memory", metadata={}))
+    await svc.add_turn(
+        "rollback",
+        TurnCreate(
+            speaker="user",
+            text="decision memory with enough source detail for a concise durable summary",
+            metadata={},
+        ),
+    )
     now_dt = datetime(2026, 7, 2, tzinfo=timezone.utc)
 
     event = SimpleNamespace(
@@ -723,7 +1166,8 @@ async def test_standalone_bridge_rolls_back_archive_when_compressed_write_fails(
     finally:
         conn.close()
 
-    assert result.turns_processed == 1
+    assert result.status == "failed"
+    assert result.turns_processed == 0
     assert result.errors == ["compressed write failed"]
     assert compressed == 0
     assert archive_count == 0
@@ -766,8 +1210,16 @@ def test_compressed_memory_write_uses_stable_ids_for_duplicate_events(tmp_path):
 
     conn = sqlite3.connect(str(svc._db_path))
     try:
-        _write_compressed_memories(conn, result_with_event("event_random_a"), now_dt.isoformat())
-        _write_compressed_memories(conn, result_with_event("event_random_b"), now_dt.isoformat())
+        _write_compressed_memories_to_db(
+            conn,
+            result_with_event("event_random_a"),
+            now_dt.isoformat(),
+        )
+        _write_compressed_memories_to_db(
+            conn,
+            result_with_event("event_random_b"),
+            now_dt.isoformat(),
+        )
         conn.commit()
         rows = conn.execute(
             "SELECT memory_id, memory_type, event_kind FROM compressed_memories ORDER BY memory_type"

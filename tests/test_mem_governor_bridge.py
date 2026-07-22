@@ -86,14 +86,14 @@ def test_mem_governor_bridge_records_review_and_latest(tmp_path):
 
 
 @pytest.mark.unit
-def test_mem_governor_bridge_warns_when_repository_mirror_fails(tmp_path, caplog):
+def test_mem_governor_bridge_warns_when_repository_write_fails(tmp_path, caplog):
     bridge = MemGovernorBridge(
         storage_root=tmp_path / "soul",
         governance_repo=_FailingGovernanceRepo(),
     )
     request = GovernorRequest(
-        request_id="review-mirror-failure",
-        trace_id="trace-mirror-failure",
+        request_id="review-repository-failure",
+        trace_id="trace-repository-failure",
         task_type="self_evolution",
         event_type="health_review_request",
         body_id="slot-B",
@@ -109,8 +109,8 @@ def test_mem_governor_bridge_warns_when_repository_mirror_fails(tmp_path, caplog
     latest = bridge.get_latest()
     assert response.decision == "approve"
     assert latest is not None
-    assert latest["request"]["request_id"] == "review-mirror-failure"
-    assert "Governance repository mirror write failed" in caplog.text
+    assert latest["request"]["request_id"] == "review-repository-failure"
+    assert "Governance repository write failed" in caplog.text
     assert "repo mirror failed" in caplog.text
 
 

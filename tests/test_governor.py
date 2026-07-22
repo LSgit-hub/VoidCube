@@ -13,7 +13,7 @@ from systems.governor import GovernorDecisionEngine, GovernorRequest
 
 @pytest.mark.unit
 def test_candidate_to_probe_health_review_approves_when_build_ready(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     slot = manager.mark_candidate("slot-B", body_version="v-next")
 
@@ -36,7 +36,7 @@ def test_candidate_to_probe_health_review_approves_when_build_ready(tmp_path):
 
 @pytest.mark.unit
 def test_probe_to_active_health_review_requires_passing_probe(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
     manager.start_probe("slot-B")
@@ -65,7 +65,7 @@ def test_probe_to_active_health_review_requires_passing_probe(tmp_path):
 
 @pytest.mark.unit
 def test_probe_to_active_health_review_requires_user_consent(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
     manager.start_probe("slot-B")
@@ -90,7 +90,7 @@ def test_probe_to_active_health_review_requires_user_consent(tmp_path):
 
 @pytest.mark.unit
 def test_failed_probe_health_review_approves_candidate_abandonment(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
     slot = manager.start_probe("slot-B")
@@ -116,7 +116,7 @@ def test_failed_probe_health_review_approves_candidate_abandonment(tmp_path):
 
 @pytest.mark.unit
 def test_switch_request_rejects_failed_probe(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
     slot = manager.start_probe("slot-B")
@@ -137,7 +137,7 @@ def test_switch_request_rejects_failed_probe(tmp_path):
 
 @pytest.mark.unit
 def test_switch_request_stops_at_user_consent_gate(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
     slot = manager.start_probe("slot-B")
@@ -178,7 +178,7 @@ def test_rollback_request_emits_restore_action():
 
 @pytest.mark.unit
 def test_improvement_rollback_requires_failure_signal_and_healthy_ancestor(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     slot = manager.load_slot_meta("slot-B")
     slot.current_healthy_commit = "b" * 40
@@ -220,7 +220,7 @@ def test_improvement_rollback_requires_failure_signal_and_healthy_ancestor(tmp_p
 
 @pytest.mark.unit
 def test_post_switch_review_recycles_retired_slot(tmp_path):
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
     manager.start_probe("slot-B")

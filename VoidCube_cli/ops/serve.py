@@ -228,7 +228,7 @@ def _build_service_config(name: str, port: int, system_config: Any | None = None
     """Build the runtime config object used by a named service."""
     from systems.gateway.internal_gateway import GatewayConfig
     from systems.supervisor.supervisor import SupervisorConfig
-    from systems.memory.memory_service import MemoryServiceConfig
+    from systems.memory.config import MemoryServiceConfig
     from systems.config import get_config
 
     system_config = system_config or get_config()
@@ -248,16 +248,9 @@ def _build_service_config(name: str, port: int, system_config: Any | None = None
         supervisor_config.port = port
         return supervisor_config
     elif name == "memory":
-        return MemoryServiceConfig(
-            host=system_config.memory.host,
-            port=port,
-            db_path=system_config.memory.db_path,
-            gateway_address=system_config.memory.gateway_address,
-            gateway_registration_check_interval=(
-                system_config.memory.gateway_registration_check_interval
-            ),
-            decay_interval_hours=system_config.memory.decay_interval_hours,
-        )
+        memory_config = system_config.memory.model_copy(deep=True)
+        memory_config.port = port
+        return memory_config
     raise ValueError(f"Unknown service: {name}")
 
 

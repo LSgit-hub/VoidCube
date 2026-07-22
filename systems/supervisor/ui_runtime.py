@@ -4896,7 +4896,6 @@ class SupervisorUIMixin:
         runtime_root = Path(
             getattr(self, "_runtime_root", None)
             or self.config.soul_store_path
-            or (Path(self.config.execution.git_repo_path) / ".soul-runtime")
         ).resolve()
         runtime_root.mkdir(parents=True, exist_ok=True)
         self._supervisor_ui_activity_path = runtime_root / "supervisor-ui-activity.json"

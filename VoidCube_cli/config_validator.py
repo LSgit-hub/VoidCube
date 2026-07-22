@@ -571,9 +571,8 @@ def _diagnose_body_registry() -> AgentCheck:
         body_config = supervisor_config.body_runtime
         manager = BodyRegistryManager(
             supervisor_config.execution.git_repo_path,
+            state_root=body_config.state_root,
             slot_ids=(body_config.slot_a_name, body_config.slot_b_name),
-            slots_dir_name=body_config.slots_dir_name,
-            registry_file_name=body_config.registry_file_name,
         )
         if not manager.registry_path.is_file():
             return AgentCheck(

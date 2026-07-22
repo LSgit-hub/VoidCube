@@ -26,6 +26,7 @@ from systems.governor import GovernorDecisionEngine
 from systems.lifecycle import BodyLifecycleExecutor
 from systems.probe import ProbeExecutor, ProbeRunner
 from systems.supervisor.supervisor import AgentInstance
+from memai.governance_repository import GovernanceEventRepository
 
 
 def _attach_route_hint(payload: dict, interface_id: str) -> dict:
@@ -59,7 +60,7 @@ def _seed_body_repo(tmp_path: Path, *, probe_ready: bool) -> None:
 
 
 def _make_body_upgrade_runtime(tmp_path: Path) -> SimpleNamespace:
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     lifecycle = BodyLifecycleExecutor(manager)
     body_lifecycle = BodyLifecycleExecutionAdapter(
@@ -106,6 +107,9 @@ def _make_body_upgrade_runtime(tmp_path: Path) -> SimpleNamespace:
         run_body_probe=body_lifecycle.run_body_probe,
         attach_execution_route_hint=_attach_route_hint,
         agents={},
+        governance_repository=GovernanceEventRepository(
+            tmp_path / ".soul-runtime" / "mem_governance.jsonl"
+        ),
         governor_request_executor=governor_request_executor,
     )
     return SimpleNamespace(
@@ -119,7 +123,7 @@ def _make_body_upgrade_runtime(tmp_path: Path) -> SimpleNamespace:
 
 
 def _make_body_lifecycle_runtime(tmp_path: Path) -> SimpleNamespace:
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     lifecycle = BodyLifecycleExecutor(manager)
     adapter = BodyLifecycleExecutionAdapter(

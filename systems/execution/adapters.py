@@ -486,16 +486,16 @@ class BodyUpgradeExecutionAdapter:
         run_body_probe: Callable[[dict], Awaitable[Dict[str, Any]]],
         attach_execution_route_hint: Callable[[Dict[str, Any], str], Dict[str, Any]],
         agents: MutableMapping[str, Any],
+        governance_repository: Any,
         governor_request_executor: Optional[GovernorRequestExecutorProtocol] = None,
-        governor_storage_root: Optional[str] = None,
     ) -> None:
         self.config = config
         self.body_registry = body_registry
         self.run_body_probe = run_body_probe
         self.attach_execution_route_hint = attach_execution_route_hint
         self.agents = agents
+        self.governance_repository = governance_repository
         self.governor_request_executor = governor_request_executor
-        self._governor_storage_root = governor_storage_root
 
     def bind_governor_request_executor(
         self,
@@ -844,10 +844,6 @@ class BodyUpgradeExecutionAdapter:
         """Best-effort writeback of execution outcome to Mem governance (E-04)."""
         try:
             from memai.governance import GovernanceEvent, GovernanceEventType, GovernanceDecision
-            from memai.governance_repository import GovernanceEventRepository
-            repo = GovernanceEventRepository(
-                str(Path(self._governor_storage_root or ".") / "mem_governance.jsonl")
-            )
             execution_request = dict(outcome.get("execution_request") or {})
             runtime_task_profile = dict(
                 execution_request.get("runtime_task_profile")
@@ -875,7 +871,7 @@ class BodyUpgradeExecutionAdapter:
                 "runtime_task_profile": runtime_task_profile,
                 "constraints": dict(execution_request.get("constraints") or {}),
             }
-            repo.append(GovernanceEvent.create(
+            self.governance_repository.append(GovernanceEvent.create(
                 event_type=GovernanceEventType.EXECUTION_OUTCOME,
                 source_actor="executor",
                 decision=(

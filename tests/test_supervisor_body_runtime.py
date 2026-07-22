@@ -23,13 +23,16 @@ from systems.supervisor.supervisor import (
 
 
 def _make_supervisor_config(tmp_path: Path) -> SupervisorConfig:
-    return SupervisorConfig(
+    config = SupervisorConfig(
         execution=SupervisorExecutionConfig(git_repo_path=str(tmp_path)),
+        soul_store_path=str(tmp_path / ".soul-runtime"),
         service_runtime=SupervisorServiceRuntimeConfig(
             governor_llm_advisory_enabled=False,
             endogenous_drive_lm_task_generation_enabled=False,
         ),
     )
+    config.body_runtime.state_root = str(tmp_path / "body-state")
+    return config
 
 
 def _seed_probe_ready_files(tmp_path: Path) -> None:
@@ -551,7 +554,7 @@ async def test_supervisor_prepare_body_slot_preserves_execution_result_from_exec
     expected = {
         "status": "slot_prepared",
         "slot": {"slot_id": "slot-B", "materialized_from": "repo_root"},
-        "runtime_manifest_path": str(tmp_path / ".body-slots" / "slot-B" / "runtime" / "slot-runtime.json"),
+        "runtime_manifest_path": str(tmp_path / "body-state" / "slots" / "slot-B" / "runtime" / "slot-runtime.json"),
     }
 
     prepare_body_slot = AsyncMock(return_value=expected)

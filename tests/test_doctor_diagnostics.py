@@ -94,8 +94,7 @@ def _stub_body_system_config(monkeypatch, tmp_path: Path) -> None:
         body_runtime=SimpleNamespace(
             slot_a_name="slot-A",
             slot_b_name="slot-B",
-            slots_dir_name=".body-slots",
-            registry_file_name=".body-registry.json",
+            state_root=str(tmp_path),
         ),
     )
     monkeypatch.setattr(
@@ -108,7 +107,7 @@ def _stub_body_system_config(monkeypatch, tmp_path: Path) -> None:
 def test_doctor_reports_healthy_body_registry(monkeypatch, tmp_path):
     from systems.body_registry import BodyRegistryManager
 
-    BodyRegistryManager(tmp_path).initialize_layout()
+    BodyRegistryManager(tmp_path, state_root=tmp_path).initialize_layout()
     _stub_body_system_config(monkeypatch, tmp_path)
 
     check = config_validator._diagnose_body_registry()
@@ -122,7 +121,7 @@ def test_doctor_reports_healthy_body_registry(monkeypatch, tmp_path):
 def test_doctor_reports_broken_body_registry(monkeypatch, tmp_path):
     from systems.body_registry import BodyRegistryManager
 
-    manager = BodyRegistryManager(tmp_path)
+    manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
     manager.slot_worktree_manifest_path("slot-A").unlink()
     _stub_body_system_config(monkeypatch, tmp_path)

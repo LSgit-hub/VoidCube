@@ -181,6 +181,7 @@ class TestServiceRuntimeLifecycle:
         cfg = SupervisorConfig()
         cfg.soul_store_path = str(tmp_path)
         cfg.execution.git_repo_path = str(tmp_path)
+        cfg.body_runtime.state_root = str(tmp_path / "body-state")
         (tmp_path / ".git").mkdir(exist_ok=True)
         sv = Supervisor(config=cfg)
         sv._fetch_gateway_activity_snapshot = AsyncMock(return_value={
@@ -293,11 +294,11 @@ class TestConfigurationValidation:
             service_runtime=SupervisorServiceRuntimeConfig(
                 endogenous_drive_interval=600,
             ),
-            body_runtime=SupervisorBodyRuntimeConfig(slots_dir_name=".custom-slots"),
+            body_runtime=SupervisorBodyRuntimeConfig(state_root="custom-body-state"),
         )
         assert cfg.execution.gateway_address == "http://gw:6000"
         assert cfg.service_runtime.endogenous_drive_interval == 600
-        assert cfg.body_runtime.slots_dir_name == ".custom-slots"
+        assert cfg.body_runtime.state_root == "custom-body-state"
 
     def test_supervisor_config_ui_disabled(self):
         cfg = SupervisorConfig(ui_enabled=False, ui_auto_open=False)

@@ -19,7 +19,7 @@ import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -187,11 +187,19 @@ class BridgeResult:
     arcs_generated: int
     epochs_generated: int
     profiles_generated: int
+    status: str = "compressed"
     dry_run: bool = False
     candidate_count: int = 0
+    cutoff: str = ""
+    force_oldest: bool = False
+    low_relevance_fallback: bool = False
+    sample_turn_ids: List[str] = None
     errors: List[str] = None
+    quality_evidence: Dict[str, Any] | None = None
 
     def __post_init__(self):
+        if self.sample_turn_ids is None:
+            self.sample_turn_ids = []
         if self.errors is None:
             self.errors = []
 
@@ -203,10 +211,24 @@ class BridgeResult:
             "arcs_generated": self.arcs_generated,
             "epochs_generated": self.epochs_generated,
             "profiles_generated": self.profiles_generated,
+            "status": self.status,
             "dry_run": self.dry_run,
             "candidate_count": self.candidate_count,
+            "cutoff": self.cutoff,
+            "force_oldest": self.force_oldest,
+            "low_relevance_fallback": self.low_relevance_fallback,
+            "sample_turn_ids": self.sample_turn_ids,
             "errors": self.errors,
+            "quality_evidence": self.quality_evidence,
         }
+
+
+@dataclass(frozen=True)
+class CandidateBatch:
+    turns: List[Dict[str, Any]]
+    cutoff: str
+    force_oldest: bool
+    low_relevance_fallback: bool
 
 
 class Tier1ToTier2Bridge:
@@ -214,7 +236,7 @@ class Tier1ToTier2Bridge:
 
     Usage::
 
-        bridge = Tier1ToTier2Bridge(db_path="./memory.db")
+        bridge = Tier1ToTier2Bridge(db_path="<VOIDCUBE_HOME>/runtime/memory/memory.db")
         result = bridge.run_cycle()
         print(result.to_dict())
     """
@@ -228,6 +250,12 @@ class Tier1ToTier2Bridge:
         min_relevance: float = 0.1,
         archive_keep_original: bool = True,
         max_turns: int = 10000,
+        pipeline_factory: Callable[[], Any] | None = None,
+        compression_degraded: bool | None = None,
+        min_event_coverage: float = 0.8,
+        min_backlink_completeness: float = 1.0,
+        max_compression_ratio: float = 1.0,
+        max_degraded_fraction: float = 1.0,
     ) -> None:
         self.db_path = Path(db_path)
         self.retention_days = retention_days
@@ -235,48 +263,49 @@ class Tier1ToTier2Bridge:
         self.min_relevance = min_relevance
         self.archive_keep_original = archive_keep_original
         self.max_turns = max_turns
+        self.pipeline_factory = pipeline_factory
+        self.compression_degraded = compression_degraded
+        self.quality_thresholds = {
+            "min_event_coverage": min_event_coverage,
+            "min_backlink_completeness": min_backlink_completeness,
+            "max_compression_ratio": max_compression_ratio,
+            "max_degraded_fraction": max_degraded_fraction,
+        }
 
     # ── Query candidates ──────────────────────────────────────────
 
-    def find_candidate_turns(self) -> List[Dict[str, Any]]:
-        """Find turns older than retention window, not yet compressed."""
+    def select_candidate_turns(self, *, force_oldest: bool = False) -> CandidateBatch:
+        """Select one deterministic candidate batch and report fallback semantics."""
         cutoff = (datetime.now(timezone.utc) - timedelta(days=self.retention_days)).isoformat()
         conn = open_memory_sqlite(self.db_path)
+        time_clause = "" if force_oldest else "timestamp < ? AND "
+        params: tuple[Any, ...] = (
+            (self.min_relevance, self.batch_size)
+            if force_oldest
+            else (cutoff, self.min_relevance, self.batch_size)
+        )
         rows = conn.execute(
             "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score "
-            "FROM turns WHERE timestamp < ? AND compressed_to_tier2 = 0 "
-            "AND relevance_score >= ? "
-            "ORDER BY timestamp ASC LIMIT ?",
-            (cutoff, self.min_relevance, self.batch_size),
+            f"FROM turns WHERE {time_clause}compressed_to_tier2 = 0 "
+            "AND relevance_score >= ? ORDER BY timestamp ASC LIMIT ?",
+            params,
         ).fetchall()
+        low_relevance_fallback = False
         if not rows:
+            fallback_params: tuple[Any, ...] = (
+                (self.batch_size,)
+                if force_oldest
+                else (cutoff, self.batch_size)
+            )
             rows = conn.execute(
                 "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score "
-                "FROM turns WHERE timestamp < ? AND compressed_to_tier2 = 0 "
+                f"FROM turns WHERE {time_clause}compressed_to_tier2 = 0 "
                 "ORDER BY timestamp ASC LIMIT ?",
-                (cutoff, self.batch_size),
+                fallback_params,
             ).fetchall()
-        if not rows:
-            total = conn.execute(
-                "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0"
-            ).fetchone()[0]
-            if total >= self.max_turns:
-                rows = conn.execute(
-                    "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score "
-                    "FROM turns WHERE compressed_to_tier2 = 0 "
-                    "AND relevance_score >= ? "
-                    "ORDER BY timestamp ASC LIMIT ?",
-                    (self.min_relevance, self.batch_size),
-                ).fetchall()
-                if not rows:
-                    rows = conn.execute(
-                        "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score "
-                        "FROM turns WHERE compressed_to_tier2 = 0 "
-                        "ORDER BY timestamp ASC LIMIT ?",
-                        (self.batch_size,),
-                    ).fetchall()
+            low_relevance_fallback = bool(rows)
         conn.close()
-        return [
+        turns = [
             {
                 "turn_id": r[0],
                 "session_id": r[1],
@@ -287,6 +316,25 @@ class Tier1ToTier2Bridge:
             }
             for r in rows
         ]
+        return CandidateBatch(
+            turns=turns,
+            cutoff=cutoff,
+            force_oldest=force_oldest,
+            low_relevance_fallback=low_relevance_fallback,
+        )
+
+    def find_candidate_turns(self) -> List[Dict[str, Any]]:
+        """Find age-eligible turns, or oldest turns after volume overflow."""
+        force_oldest = self._active_turn_count() >= self.max_turns
+        return self.select_candidate_turns(force_oldest=force_oldest).turns
+
+    def _active_turn_count(self) -> int:
+        conn = open_memory_sqlite(self.db_path)
+        count = conn.execute(
+            "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0"
+        ).fetchone()[0]
+        conn.close()
+        return int(count)
 
     def count_candidates(self) -> int:
         """Count how many turns are eligible for compression."""
@@ -328,6 +376,9 @@ class Tier1ToTier2Bridge:
         across all Mem LLM callers and is controlled entirely by the
         CLI ``/api`` command's writes to ``memory.llm.*``.
         """
+        if self.pipeline_factory is not None:
+            return self.pipeline_factory()
+
         from memai.pipeline import ChroniclePipeline
 
         try:
@@ -374,7 +425,7 @@ class Tier1ToTier2Bridge:
         except Exception:
             return ChroniclePipeline()
 
-    def bridge_to_tier2(self, turns: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _build_tier2_output(self, turns: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Convert turns to TranscriptTurn and feed into ChroniclePipeline."""
         from memai.schema import TranscriptTurn
 
@@ -394,6 +445,10 @@ class Tier1ToTier2Bridge:
 
         pipeline = self._build_pipeline()
         result = pipeline.ingest(transcript_turns)
+        compression_degraded = self.compression_degraded
+        if compression_degraded is None:
+            backend = getattr(getattr(pipeline, "event_extractor", None), "backend", None)
+            compression_degraded = getattr(backend, "name", None) == "heuristic"
 
         return {
             "events": [e.to_dict() for e in result.events],
@@ -402,12 +457,136 @@ class Tier1ToTier2Bridge:
             "epochs": [ep.to_dict() for ep in result.epochs],
             "profile_memories": [p.to_dict() for p in result.profile_memories],
             "_pipeline_result": result,
+            "_compression_degraded": bool(compression_degraded),
         }
+
+    def _evaluate_quality(
+        self,
+        turns: List[Dict[str, Any]],
+        tier2_output: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        result = tier2_output.get("_pipeline_result")
+        events = list(getattr(result, "events", []) or [])
+        candidate_ids = {str(turn["turn_id"]) for turn in turns}
+        covered_turn_ids: set[str] = set()
+        backlinked_events = 0
+        event_summary_chars = 0
+
+        for event in events:
+            source_turns = {
+                str(turn_id)
+                for turn_id in (getattr(event, "source_turns", []) or [])
+                if str(turn_id)
+            }
+            valid_source_turns = source_turns & candidate_ids
+            covered_turn_ids.update(valid_source_turns)
+            if source_turns and source_turns <= candidate_ids:
+                backlinked_events += 1
+            event_summary_chars += len(str(getattr(event, "summary", "") or "").strip())
+
+        candidate_count = len(turns)
+        event_count = len(events)
+        source_chars = sum(len(str(turn.get("text", "") or "").strip()) for turn in turns)
+        event_coverage = len(covered_turn_ids) / candidate_count if candidate_count else 1.0
+        backlink_completeness = backlinked_events / event_count if event_count else 0.0
+        compression_ratio = event_summary_chars / source_chars if source_chars else 0.0
+        degraded_event_count = (
+            event_count if tier2_output.get("_compression_degraded") else 0
+        )
+        degraded_fraction = degraded_event_count / event_count if event_count else 0.0
+
+        failed_checks: list[str] = []
+        if event_coverage < self.quality_thresholds["min_event_coverage"]:
+            failed_checks.append("event_coverage")
+        if backlink_completeness < self.quality_thresholds["min_backlink_completeness"]:
+            failed_checks.append("backlink_completeness")
+        if compression_ratio > self.quality_thresholds["max_compression_ratio"]:
+            failed_checks.append("compression_ratio")
+        if degraded_fraction > self.quality_thresholds["max_degraded_fraction"]:
+            failed_checks.append("degraded_fraction")
+
+        evaluated_at = datetime.now(timezone.utc).isoformat()
+        audit_payload = {
+            "evaluated_at": evaluated_at,
+            "candidate_count": candidate_count,
+            "event_count": event_count,
+            "covered_turn_count": len(covered_turn_ids),
+            "event_coverage": round(event_coverage, 6),
+            "backlinked_event_count": backlinked_events,
+            "backlink_completeness": round(backlink_completeness, 6),
+            "source_chars": source_chars,
+            "event_summary_chars": event_summary_chars,
+            "compression_ratio": round(compression_ratio, 6),
+            "degraded_event_count": degraded_event_count,
+            "degraded_fraction": round(degraded_fraction, 6),
+            "thresholds": dict(self.quality_thresholds),
+            "failed_checks": failed_checks,
+            "sample_turn_ids": [turn["turn_id"] for turn in turns[:5]],
+        }
+        audit_seed = json.dumps(audit_payload, ensure_ascii=False, sort_keys=True)
+        audit_payload["audit_id"] = "cqa_" + hashlib.sha1(
+            audit_seed.encode("utf-8")
+        ).hexdigest()[:20]
+        audit_payload["passed"] = not failed_checks
+        return audit_payload
+
+    @staticmethod
+    def _write_quality_audit(
+        conn: sqlite3.Connection,
+        quality_evidence: Dict[str, Any],
+        status: str,
+    ) -> None:
+        conn.execute(
+            "INSERT OR REPLACE INTO compression_quality_audit "
+            "(audit_id, evaluated_at, status, candidate_count, event_count, "
+            "covered_turn_count, event_coverage, backlinked_event_count, "
+            "backlink_completeness, source_chars, event_summary_chars, "
+            "compression_ratio, degraded_event_count, degraded_fraction, "
+            "thresholds, failed_checks, sample_turn_ids) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                quality_evidence["audit_id"],
+                quality_evidence["evaluated_at"],
+                status,
+                quality_evidence["candidate_count"],
+                quality_evidence["event_count"],
+                quality_evidence["covered_turn_count"],
+                quality_evidence["event_coverage"],
+                quality_evidence["backlinked_event_count"],
+                quality_evidence["backlink_completeness"],
+                quality_evidence["source_chars"],
+                quality_evidence["event_summary_chars"],
+                quality_evidence["compression_ratio"],
+                quality_evidence["degraded_event_count"],
+                quality_evidence["degraded_fraction"],
+                json.dumps(quality_evidence["thresholds"], sort_keys=True),
+                json.dumps(quality_evidence["failed_checks"]),
+                json.dumps(quality_evidence["sample_turn_ids"]),
+            ),
+        )
+
+    def _persist_quality_audit(
+        self,
+        quality_evidence: Dict[str, Any],
+        status: str,
+    ) -> None:
+        conn = open_memory_sqlite(self.db_path)
+        try:
+            self._write_quality_audit(conn, quality_evidence, status)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     # ── Archive processed turns ───────────────────────────────────
 
-    def archive_turns(
-        self, turns: List[Dict[str, Any]], tier2_output: Dict[str, Any]
+    def _commit_tier2_output(
+        self,
+        turns: List[Dict[str, Any]],
+        tier2_output: Dict[str, Any],
+        quality_evidence: Dict[str, Any],
     ) -> None:
         """Move processed turns to archive with Tier 2 back-references."""
         result = tier2_output.get("_pipeline_result")
@@ -465,6 +644,7 @@ class Tier1ToTier2Bridge:
 
                 # ── Write compressed memories back to SQLite ─────────────
                 _write_compressed_memories_to_db(conn, result, now)
+                self._write_quality_audit(conn, quality_evidence, "passed")
 
                 conn.commit()
             except Exception:
@@ -476,41 +656,58 @@ class Tier1ToTier2Bridge:
 
     # ── Full cycle ────────────────────────────────────────────────
 
-    def run_cycle(self, *, dry_run: bool = False) -> BridgeResult:
-        """Execute one full Tier 1 → Tier 2 compression cycle."""
-        candidates = self.find_candidate_turns()
+    def run_cycle(
+        self,
+        *,
+        dry_run: bool = False,
+        force_oldest: bool | None = None,
+    ) -> BridgeResult:
+        """Execute the only Tier 1 → Tier 2 compression transaction."""
+        if force_oldest is None:
+            force_oldest = self._active_turn_count() >= self.max_turns
+        batch = self.select_candidate_turns(force_oldest=force_oldest)
+        candidates = batch.turns
+        metadata = {
+            "candidate_count": len(candidates),
+            "cutoff": batch.cutoff,
+            "force_oldest": batch.force_oldest,
+            "low_relevance_fallback": batch.low_relevance_fallback,
+            "sample_turn_ids": [item["turn_id"] for item in candidates[:5]],
+        }
         if not candidates:
             return BridgeResult(
                 turns_processed=0, events_generated=0, scenes_generated=0,
                 arcs_generated=0, epochs_generated=0, profiles_generated=0,
-                dry_run=dry_run, candidate_count=0,
+                status="no_candidates", dry_run=dry_run, **metadata,
             )
 
         if dry_run:
             return BridgeResult(
                 turns_processed=0, events_generated=0, scenes_generated=0,
                 arcs_generated=0, epochs_generated=0, profiles_generated=0,
-                dry_run=True, candidate_count=len(candidates),
+                status="dry_run", dry_run=True, **metadata,
             )
 
         errors: List[str] = []
         try:
-            tier2_output = self.bridge_to_tier2(candidates)
+            tier2_output = self._build_tier2_output(candidates)
         except Exception as exc:
             logger.exception("Tier 2 bridge failed")
             errors.append(str(exc))
             return BridgeResult(
                 turns_processed=0, events_generated=0, scenes_generated=0,
                 arcs_generated=0, epochs_generated=0, profiles_generated=0,
-                errors=errors,
+                status="failed", errors=errors, **metadata,
             )
 
+        quality_evidence = self._evaluate_quality(candidates, tier2_output)
         if not tier2_output.get("events"):
             logger.warning(
                 "Tier 2 bridge cycle produced no events for %d candidate turns; "
                 "leaving Tier1 turns uncompressed.",
                 len(candidates),
             )
+            self._persist_quality_audit(quality_evidence, "rejected")
             return BridgeResult(
                 turns_processed=0,
                 events_generated=0,
@@ -518,35 +715,62 @@ class Tier1ToTier2Bridge:
                 arcs_generated=0,
                 epochs_generated=0,
                 profiles_generated=0,
-                candidate_count=len(candidates),
+                status="no_events_generated",
+                quality_evidence=quality_evidence,
+                **metadata,
+            )
+
+        if not quality_evidence["passed"]:
+            logger.warning(
+                "Tier 2 compression quality gate rejected %d turns: %s",
+                len(candidates),
+                ", ".join(quality_evidence["failed_checks"]),
+            )
+            self._persist_quality_audit(quality_evidence, "rejected")
+            return BridgeResult(
+                turns_processed=0,
+                events_generated=len(tier2_output.get("events", [])),
+                scenes_generated=len(tier2_output.get("scenes", [])),
+                arcs_generated=len(tier2_output.get("arcs", [])),
+                epochs_generated=len(tier2_output.get("epochs", [])),
+                profiles_generated=len(tier2_output.get("profile_memories", [])),
+                status="quality_rejected",
+                quality_evidence=quality_evidence,
+                **metadata,
             )
 
         try:
-            self.archive_turns(candidates, tier2_output)
+            self._commit_tier2_output(candidates, tier2_output, quality_evidence)
         except Exception as exc:
             logger.exception("Archive failed")
             errors.append(str(exc))
+            self._persist_quality_audit(quality_evidence, "commit_failed")
 
         events_count = len(tier2_output.get("events", []))
         scenes_count = len(tier2_output.get("scenes", []))
         arcs_count = len(tier2_output.get("arcs", []))
         epochs_count = len(tier2_output.get("epochs", []))
         profiles_count = len(tier2_output.get("profile_memories", []))
+        status = "failed" if errors else "compressed"
+        turns_processed = 0 if errors else len(candidates)
 
         logger.info(
             "Tier 2 bridge cycle: %d turns → %dE/%dS/%dA/%dEp/%dP (%d errors)",
-            len(candidates), events_count, scenes_count, arcs_count,
+            turns_processed, events_count, scenes_count, arcs_count,
             epochs_count, profiles_count, len(errors),
         )
 
         return BridgeResult(
-            turns_processed=len(candidates),
+            turns_processed=turns_processed,
             events_generated=events_count,
             scenes_generated=scenes_count,
             arcs_generated=arcs_count,
             epochs_generated=epochs_count,
             profiles_generated=profiles_count,
+            status=status,
             errors=errors,
+            quality_evidence=quality_evidence,
+            **metadata,
         )
 
     # ── Stats ─────────────────────────────────────────────────────
@@ -580,9 +804,10 @@ class Tier1ToTier2Bridge:
 
 if __name__ == "__main__":
     import argparse
+    from VoidCube_core.runtime_paths import get_runtime_layout
 
     parser = argparse.ArgumentParser(description="Tier 1 → Tier 2 Bridge")
-    parser.add_argument("--db-path", default="./memory.db")
+    parser.add_argument("--db-path", default=str(get_runtime_layout().memory_db))
     parser.add_argument("--retention-days", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=100)
     parser.add_argument("--dry-run", action="store_true")

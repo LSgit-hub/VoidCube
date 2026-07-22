@@ -31,13 +31,16 @@ from systems.config import load_config_from_env
 
 
 def _make_supervisor_config(tmp_path: Path) -> SupervisorConfig:
-    return SupervisorConfig(
+    config = SupervisorConfig(
         execution=SupervisorExecutionConfig(git_repo_path=str(tmp_path)),
+        soul_store_path=str(tmp_path / ".soul-runtime"),
         service_runtime=SupervisorServiceRuntimeConfig(
             governor_llm_advisory_enabled=False,
             endogenous_drive_lm_task_generation_enabled=False,
         ),
     )
+    config.body_runtime.state_root = str(tmp_path / "body-state")
+    return config
 
 
 def _make_supervisor(tmp_path: Path) -> Supervisor:
@@ -18704,6 +18707,7 @@ def test_supervisor_boot_recovers_empty_autonomous_store_from_mem_governance(tmp
     cfg = SupervisorConfig()
     cfg.execution.git_repo_path = str(repo)
     cfg.soul_store_path = str(runtime_root)
+    cfg.body_runtime.state_root = str(tmp_path / "body-state")
     supervisor = Supervisor(config=cfg)
 
     tasks = supervisor._autonomous_chain_store.list_tasks()

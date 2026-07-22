@@ -8,11 +8,12 @@ from systems.supervisor.supervisor import Supervisor, SupervisorConfig, Supervis
 
 
 def _make_supervisor(tmp_path: Path) -> Supervisor:
-    return Supervisor(
-        SupervisorConfig(
-            execution=SupervisorExecutionConfig(git_repo_path=str(tmp_path))
-        )
+    config = SupervisorConfig(
+        execution=SupervisorExecutionConfig(git_repo_path=str(tmp_path)),
+        soul_store_path=str(tmp_path / ".soul-runtime"),
     )
+    config.body_runtime.state_root = str(tmp_path / "body-state")
+    return Supervisor(config)
 
 
 @pytest.mark.asyncio

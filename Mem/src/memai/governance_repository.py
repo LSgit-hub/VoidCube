@@ -62,10 +62,13 @@ class GovernanceEventRepository:
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
-
-    def __init__(self, path: str | Path) -> None:
-        self.path = Path(path)
         self.retry_path = self.path.with_suffix(".retry.jsonl")
+
+    def clear(self) -> None:
+        """Clear primary and retry state through the repository owner."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text("", encoding="utf-8")
+        self.retry_path.unlink(missing_ok=True)
 
     def append(self, event: GovernanceEvent) -> GovernanceEvent:
         """Append with idempotency, write protection, and retry-log fallback.
