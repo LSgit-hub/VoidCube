@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
 from VoidCube_cli.autonomous_events import append_autonomous_execution_event
+from VoidCube_cli.ops.executor import default_gateway_url
 
 
 AUTONOMOUS_LEARNING_TASK_PREFIX = "[Autonomous Learning Task]"
@@ -177,7 +178,7 @@ class AutonomousExecutorRuntime:
         try:
             resp = json.loads(
                 urllib.request.urlopen(
-                    "http://127.0.0.1:6000/v1/tasks?status=running",
+                    f"{default_gateway_url()}/v1/tasks?status=running",
                     timeout=10,
                 ).read()
             )
@@ -233,7 +234,7 @@ class AutonomousExecutorRuntime:
     def report_current_task_timeout_if_needed(
         self,
         *,
-        gateway_base: str = "http://127.0.0.1:6000",
+        gateway_base: str | None = None,
         timeout: float = 15,
         now: float | None = None,
     ) -> bool:
@@ -291,8 +292,9 @@ class AutonomousExecutorRuntime:
         context: Dict[str, Any] | None = None,
         final_response: str = "",
         timeout: float = 15,
-        gateway_base: str = "http://127.0.0.1:6000",
+        gateway_base: str | None = None,
     ) -> bool:
+        gateway_base = (gateway_base or default_gateway_url()).rstrip("/")
         payload: Dict[str, Any] = {
             "decision": decision,
             "reason": reason,
@@ -332,7 +334,7 @@ class AutonomousExecutorRuntime:
         reason: str,
         source: str,
         timeout: float = 5,
-        gateway_base: str = "http://127.0.0.1:6000",
+        gateway_base: str | None = None,
     ) -> bool:
         current = getattr(self.host, "_current_autonomous_task", None)
         if current is None:
@@ -364,7 +366,7 @@ class AutonomousExecutorRuntime:
         return ok
 
     def poll_workflow(self) -> None:
-        gateway_base = "http://127.0.0.1:6000"
+        gateway_base = default_gateway_url()
 
         if getattr(self.host, "_current_autonomous_task", None) is None:
             recovered_task = self.find_owned_running_task()

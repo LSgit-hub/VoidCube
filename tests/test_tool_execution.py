@@ -37,6 +37,11 @@ def _agent() -> AIAgent:
     agent = AIAgent.__new__(AIAgent)
     agent._interrupt_requested = False
     agent._executing_tools = False
+    agent._execution_thread_id = threading.current_thread().ident
+    agent._tool_thread_ids = set()
+    agent._tool_thread_ids_lock = threading.Lock()
+    agent._active_children = []
+    agent._active_children_lock = threading.Lock()
     agent._turns_since_memory = 2
     agent._iters_since_skill = 2
     agent._current_tool = None
@@ -374,3 +379,75 @@ def test_agent_interrupt_still_completes_every_tool_protocol_slot(monkeypatch):
         "call-2",
     ]
     assert all("cancelled" in message["content"] for message in messages)
+
+
+def test_parallel_tool_workers_receive_agent_interrupt(monkeypatch):
+    import run_agent
+    from tools.interrupt import is_interrupted
+
+    agent = _agent()
+    workers_started = threading.Barrier(3)
+
+    def route(_name, _args, _task_id, **_kwargs):
+        workers_started.wait(timeout=2)
+        deadline = time.monotonic() + 2
+        while not is_interrupted() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return "interrupted" if is_interrupted() else "timed out"
+
+    monkeypatch.setattr(run_agent, "handle_function_call", route)
+    monkeypatch.setattr(
+        run_agent,
+        "maybe_persist_tool_result",
+        lambda **kwargs: kwargs["content"],
+    )
+    monkeypatch.setattr(run_agent, "get_active_env", lambda _task_id: None)
+    monkeypatch.setattr(run_agent, "enforce_turn_budget", lambda *_args, **_kwargs: None)
+    assistant = SimpleNamespace(
+        tool_calls=[
+            _tool_call("call-1", "read_file", {"path": "a.txt"}),
+            _tool_call("call-2", "read_file", {"path": "b.txt"}),
+        ]
+    )
+    messages: list[dict] = []
+
+    execution = threading.Thread(
+        target=agent._execute_tool_calls,
+        args=(assistant, messages, "task-parallel-interrupt"),
+    )
+    execution.start()
+    workers_started.wait(timeout=2)
+    agent.interrupt("new input")
+    execution.join(timeout=2)
+    agent.clear_interrupt()
+
+    assert not execution.is_alive()
+    assert [message["content"] for message in messages] == [
+        "interrupted",
+        "interrupted",
+    ]
+    assert agent._tool_thread_ids == set()
+
+
+def test_tool_worker_inherits_interrupt_that_arrived_before_registration():
+    from tools.interrupt import is_interrupted
+
+    agent = _agent()
+    agent.interrupt("new input")
+    observed: list[bool] = []
+
+    def invoke_in_worker():
+        thread_id = agent._register_tool_thread()
+        try:
+            observed.append(is_interrupted())
+        finally:
+            agent._unregister_tool_thread(thread_id)
+        observed.append(is_interrupted())
+
+    worker = threading.Thread(target=invoke_in_worker)
+    worker.start()
+    worker.join(timeout=2)
+    agent.clear_interrupt()
+
+    assert observed == [True, False]
+    assert agent._tool_thread_ids == set()

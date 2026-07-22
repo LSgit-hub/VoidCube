@@ -96,18 +96,19 @@ def test_auto_gate_semantics_are_consistent_in_mainline_docs():
     assert all(name not in combined for name in REMOVED_DOCS)
 
 
-def test_mainline_architecture_plan_has_ordered_gates_and_precise_state_ownership():
+def test_mainline_architecture_has_precise_collaboration_and_state_ownership():
     architecture = (DOCS / "项目架构与逻辑架构.md").read_text(encoding="utf-8")
     baseline = (DOCS / "voidcube架构基线.md").read_text(encoding="utf-8")
     systems_entry = (ROOT / "systems" / "architecture.md").read_text(encoding="utf-8")
 
-    phase_markers = [f"M{index} " for index in range(6)]
-    phase_positions = [architecture.index(marker) for marker in phase_markers]
-
-    assert phase_positions == sorted(phase_positions)
-    assert "当前模型协议只允许 OpenAI-compatible Chat Completions" in architecture
+    assert all(f"M{index} " not in architecture for index in range(6))
+    assert "AIAgent -> mem Provider -> Gateway /api/mem/* -> Memory Service -> MemAI" in architecture
     assert "AutonomousChainStore" in architecture
-    assert "在途状态归 Store，长期历史归 Mem 治理事件" in architecture
+    assert "GovernanceEventRepository" in architecture
+    assert "任务状态变化必须先追加治理事件" in architecture
+    assert "Supervisor -> VoidCubeExecutionFacade -> Adapter" in architecture
+    assert "ToolExecutionCoordinator" in architecture
+    assert "并行结果按模型原始顺序写回" in architecture
     assert "Gateway 是跨进程调用 Executor 的唯一标准入口" in baseline
     assert "Supervisor 进程内部通过" in baseline
     assert "VoidCubeExecutionFacade" in baseline

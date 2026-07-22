@@ -2457,6 +2457,8 @@ def test_push_cli_agent_scene_includes_session_id(monkeypatch):
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr("threading.Thread", _ImmediateThread)
+    monkeypatch.setenv("GATEWAY_HOST", "127.0.0.9")
+    monkeypatch.setenv("GATEWAY_PORT", "6123")
 
     autonomous_presence_module.push_cli_agent_scene(
         "learning",
@@ -2464,7 +2466,7 @@ def test_push_cli_agent_scene_includes_session_id(monkeypatch):
         task_id="learn-2",
     )
 
-    assert requests[0]["url"].endswith("/admin/activity/touch")
+    assert requests[0]["url"] == "http://127.0.0.9:6123/admin/activity/touch"
     assert requests[0]["data"]["session_id"] == "cli-session-2"
     assert requests[0]["data"]["metadata"]["scene"] == "learning"
 

@@ -1,6 +1,6 @@
 # VoidCube 文档导航
 
-更新日期：2026-07-21
+更新日期：2026-07-22
 
 本目录只保留现役架构、工程说明和仍在使用的专项设计。已完成的改造计划、阶段差距报告和迁移流水不留在主干；需要追溯时使用 Git 历史。
 
@@ -21,7 +21,7 @@
 
 - 唯一安装入口是 `voidcube.py`，交互链路继续进入 `VoidCube_cli/main.py -> cli.py -> run_agent.py`。
 - 默认服务启动顺序是 `Gateway -> Memory -> Supervisor`；Executor 由 Supervisor 进程挂载并注册到 Gateway。
-- Supervisor 启动后只运行基础健康检查、记忆维护和身体观察等基线任务，自主链路门控默认关闭。
+- Supervisor 启动后只运行基础健康检查、服务注册恢复和身体观察等基线任务，自主链路门控默认关闭；结构化记忆维护由 Memory Service 独占。
 - `/auto` 是当前临时启用开关：它启用 Supervisor 的内生驱动与治理复核循环，并启动当前 CLI 内的 API-A 自主执行组件。
 - `/auto-q` 是对应的临时停用开关：它停止自主链路周期任务并中断当前自主任务；基础服务和用户主 CLI 保持可用。
 - `/auto` 不是用户对话模式。用户请求始终走 `user_chat`，自主任务执行走 `supervisor_task`，两条泳道不得互相覆盖。
@@ -33,32 +33,16 @@
 - CLI 流式状态由 `VoidCube_cli/chat_render_state.py` 持有，标签过滤与缓冲转换由 `chat_stream_processor.py` 负责，终端边框、颜色和输出顺序由 `chat_stream_renderer.py` 负责；`cli.py` 只保留真实回调入口。
 - CLI slash/path 判定、中央 alias 规范化、慢命令状态以及 quick/plugin/skill/前缀优先级由 `VoidCube_cli/command_router.py` 统一负责；失效的 `/cron`、`/insights` 兼容入口已删除。
 - CLI 内建命令由 `VoidCube_cli/command_execution.py` 的不可变 spec 表分发；同一模块统一管理 busy 状态、嵌套恢复和异常收尾，`process_command()` 只协调内建执行与动态路由。
+- Agent 默认 `mem` Provider 经 Gateway 调用 Memory Service，不创建本地库或运行第二套 Pipeline；完成轮次写回 Tier 1，服务不可用时显式降级。
+- Supervisor 的任务状态和 SelfLearning 结论先写治理事件，再发布本地投影；Supervisor 内部执行统一经过 `VoidCubeExecutionFacade -> Adapter`。
+- CLI 的 Gateway 地址统一来自服务配置；工具并行结果保持原调用顺序，Agent 中断覆盖实际工具 worker，含附件的中断输入保持 payload 与顺序。
 
-## 分阶段路线
+## 当前协作合同
 
-### 阶段 1：基线收敛
-
-- 统一 `/auto` 的代码、测试、CLI 文案与架构文档语义。
-- 删除已完成或失真的迁移计划、差距报告与重复架构段落。
-- 用自动化契约保护文档集合、内部链接和关键语义。
-
-### 阶段 2：主路径解耦
-
-- Agent 用户链路中的会话持久化、请求/响应、客户端、传输、流式装配、工具执行、单轮/attempt 状态、retry/compression recovery、response disposition、成功工具 turn 和 finalization 已有唯一所有者；CLI 流式状态、转换和输出协调也已收口。
-- M1 已完成整体验收：用户输入、命令、流式/非流式、工具循环、恢复、模型切换、持久化和中断均有直接测试证据；模型 picker 与 `/model` 共用 `_apply_model_switch_result()`。
-- M2 已完成 canonical layout、Memory/Supervisor/Body/治理日志一次性迁移、配置优先级、重启幂等和新安装仓库根零运行态验收；真实旧数据只在对应服务下次启动时迁移，不手工移动。
-- 每迁移一项职责，同轮删除原实现、旧参数和只服务旧路径的测试。
-
-### 阶段 3：Memory 服务收口
-
-- Tier 1 -> Tier 2 的候选、质量判断、归档和写事务由 `tier1_to_tier2_bridge.py` 唯一负责。
-- 时间衰减、质量审计、在线备份/验证恢复/导出与显式语义降级已有聚焦测试。
-- M3 已完成唯一 bridge、真实时间衰减、压缩质量门禁、迁移前快照、在线备份/验证恢复/导出、显式语义降级和物理伪向量列清理，并通过主仓、Mem、退役扫描和 wheel 验收。主干当前阶段为 M4 治理与执行闭环。
-
-### 阶段 4：运行态与发布
-
-- M4 已完成自主任务 Mem-first 写入、Store 重建和落后校正、管理清空截止点、停用中断收口、`awaiting_user_consent` 非终态以及正式身体 lineage 合同，并通过主仓、Mem、真实 Executor 链、退役扫描和 wheel 验收。
-- M5 已完成真实三服务生命周期、注册恢复、健康/trace、不可用降级和隔离安装验收。`M0 -> M5` 主干收敛完成，当前按真实调用边进入模块配合探索。
+- 跨进程服务调用经过 Gateway；Supervisor 同进程执行经过 Facade；两条路径落到同一 Adapter。
+- 长期记忆与治理历史由 Memory/MemAI 持有，Agent 会话和 Supervisor Store 只是各自用途下的工作状态或投影。
+- Tier 1 -> Tier 2、结构化维护、工具调度、终端审批、CLI busy 输入各有唯一所有者，不在调用方复制实现。
+- 运行态只写入 `VOIDCUBE_HOME` canonical layout；旧路径只允许一次性迁移器读取。
 
 ## 维护规则
 

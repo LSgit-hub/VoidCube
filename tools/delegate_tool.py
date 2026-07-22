@@ -771,6 +771,11 @@ def delegate_task(
             )
         })
 
+    try:
+        top_level_worktree = _resolve_declared_worktree_path(worktree_path)
+    except ValueError as exc:
+        return tool_error(str(exc))
+
     # Load config
     cfg = _load_config()
     default_max_iter = cfg.get("max_iterations", DEFAULT_MAX_ITERATIONS)
@@ -783,11 +788,6 @@ def delegate_task(
     # children inherit from the parent.
     try:
         creds = _resolve_delegation_credentials(cfg, parent_agent)
-    except ValueError as exc:
-        return tool_error(str(exc))
-
-    try:
-        top_level_worktree = _resolve_declared_worktree_path(worktree_path)
     except ValueError as exc:
         return tool_error(str(exc))
 

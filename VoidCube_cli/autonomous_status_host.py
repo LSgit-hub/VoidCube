@@ -4,6 +4,8 @@ import json
 import threading
 import time
 import urllib.request
+
+from VoidCube_cli.ops.executor import default_gateway_url
 from typing import Any, Dict
 
 from VoidCube_cli.autonomous_observation import format_supervisor_status_snapshot
@@ -116,7 +118,7 @@ def refresh_autonomous_gateway_status(host: Any) -> None:
 
     def _do_fetch() -> None:
         try:
-            req = urllib.request.Request("http://127.0.0.1:6000/admin/body/status")
+            req = urllib.request.Request(f"{default_gateway_url()}/admin/body/status")
             with urllib.request.urlopen(req, timeout=2) as resp:
                 host._autonomous_gateway_status_cache = json.loads(resp.read().decode("utf-8"))
         except Exception:
@@ -129,15 +131,7 @@ def refresh_autonomous_gateway_status(host: Any) -> None:
 
 
 def _fetch_gateway_autonomous_execute_snapshot_now(host: Any) -> Dict[str, Any]:
-    gateway_base = "http://127.0.0.1:6000"
-    try:
-        from VoidCube_cli.config import load_config
-
-        cfg = load_config()
-        gateway_cfg = cfg.get("gateway", {})
-        gateway_base = f"http://{gateway_cfg.get('host', '127.0.0.1')}:{gateway_cfg.get('port', 6000)}"
-    except Exception:
-        pass
+    gateway_base = default_gateway_url()
 
     try:
         activity = json.loads(urllib.request.urlopen(f"{gateway_base}/admin/activity", timeout=5).read())

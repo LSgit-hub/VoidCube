@@ -6,7 +6,6 @@ from typing import Iterable, List, Sequence
 
 AGENT_EVOLUTION_ALLOWED_PATHS: tuple[str, ...] = (
     "agent/",
-    "systems/agent/",
     "tools/",
     "skills/",
     "presets/",

@@ -12,6 +12,7 @@ from VoidCube_cli.autonomous_executor import (
     autonomous_task_label,
 )
 from VoidCube_cli.autonomous_presence import ensure_supervisor_task_session
+from VoidCube_cli.ops.executor import default_gateway_url
 from VoidCube_cli.autonomous_status_host import (
     preview_supervisor_status_lines,
 )
@@ -362,7 +363,7 @@ def force_quit_autonomous_gate(
     try:
         session_id = getattr(component_host, "session_id", "")
         if session_id:
-            gateway_base = "http://127.0.0.1:6000"
+            gateway_base = default_gateway_url()
             request = urllib.request.Request(
                 f"{gateway_base}/v1/sessions/{session_id}",
                 method="DELETE",

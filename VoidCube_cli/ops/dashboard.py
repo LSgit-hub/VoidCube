@@ -8,18 +8,23 @@ autonomous chain and what API-B is currently observing.
 from __future__ import annotations
 
 import json
-import os
 import time
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from VoidCube_cli.autonomous_observation import supervisor_api_a_execution_hint
+from VoidCube_cli.ops.executor import default_gateway_url
 
 
 # ── Configuration ──────────────────────────────────────────────────────
 SUPERVISOR_URL = "http://127.0.0.1:6002"
-GATEWAY_URL = os.environ.get("VOIDCUBE_GATEWAY_URL", "http://127.0.0.1:6000").rstrip("/")
+
+
+def _gateway_url() -> str:
+    return default_gateway_url().rstrip("/")
+
+
 REQUEST_TIMEOUT = 5  # seconds per HTTP call
 
 # Scene→human label and color hint (per baseline §8.1 reporter-scene mapping).
@@ -68,12 +73,12 @@ def fetch_supervisor_state() -> Dict[str, Any]:
 
 def fetch_gateway_scenes() -> Dict[str, Any]:
     """Return gateway scene projections."""
-    return _get_json(f"{GATEWAY_URL}/admin/scenes") or {}
+    return _get_json(f"{_gateway_url()}/admin/scenes") or {}
 
 
 def fetch_gateway_status() -> Dict[str, Any]:
     """Return gateway health / executor snapshot."""
-    return _get_json(f"{GATEWAY_URL}/") or {}
+    return _get_json(f"{_gateway_url()}/") or {}
 
 
 def _project_stage_card(

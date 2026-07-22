@@ -1,6 +1,6 @@
 # VoidCube 服务化系统架构基线
 
-更新日期：2026-07-21
+更新日期：2026-07-22
 
 ## 1. 文档定位
 
@@ -44,7 +44,7 @@ Gateway 是跨进程调用 Executor 的唯一标准入口；Supervisor 进程内
 `VoidCubeExecutionFacade` 调用同一组 Execution Adapter，不需要为了形式统一绕行 HTTP。
 两条入口必须收敛到同一实现，Supervisor 的判断逻辑不得直接修改身体或绕过 Adapter。
 
-Supervisor 进程启动不等于自主链路启动。基础健康检查、结构化记忆维护、服务注册恢复和身体观察可以继续运行，自主链路门控初始为关闭。
+Supervisor 进程启动不等于自主链路启动。基础健康检查、服务注册恢复和身体观察可以继续运行，自主链路门控初始为关闭。结构化记忆维护只由 Memory Service 生命周期持有。
 
 ## 4. 两条执行链路
 
@@ -54,7 +54,8 @@ Supervisor 进程启动不等于自主链路启动。基础健康检查、结构
 用户输入
   -> 主 CLI
   -> API-A 主 Agent（user_chat）
-  -> 工具 / Gateway / Mem
+  -> 工具 / Gateway
+  -> Gateway 转发到 Mem
   -> 用户输出
 ```
 
@@ -106,6 +107,8 @@ Memory Service 维护两层记忆：
 - Tier 1：SQLite 会话、完整轮次、时间轴和可追溯归档。
 - Tier 2：MemAI 的 Event、Scene、Arc、Epoch 结构化长期记忆。
 
+Agent 默认 `mem` Provider 只是 Gateway 客户端，负责预取、查询和完成轮次写回；它不创建本地记忆数据库，也不运行第二套压缩或维护 Pipeline。
+
 Tier 1 -> Tier 2 桥接使用 API-B 的 LLM 提取与 Scholar 能力。LLM 不可用时必须返回显式健康/降级状态；压缩、升级和清退不得通过低质量静默替代造成不可逆信息损失。
 
 治理在途 Store 由 Supervisor 持有，用于协调判断、认领、执行请求和回写投影；Mem 治理事件保存对应的追加式可恢复历史。每次任务变化先写 Mem，再发布 Store；启动时由较新的 Mem 投影校正 Store。管理清空写入截止事件而不删除历史。能够跨会话影响身份、判断或身体谱系的结果必须写回 Mem。
@@ -154,6 +157,7 @@ Tier 1 -> Tier 2 桥接使用 API-B 的 LLM 提取与 Scholar 能力。LLM 不�
 - 服务不可达时，CLI 可以关闭本地执行状态，但必须提示 Supervisor 状态可能陈旧。
 - 历史数据迁移只能是一次性、可验证操作；迁移完成后删除旧路径读取和长期双写。
 - 诊断读取不得偷偷修复身体布局或持久化状态。
+- 工具中断必须到达实际执行工具的线程或进程；并行工具 worker 与所属 Agent 隔离，不能用只返回 Future 超时但后台仍运行的方式伪装取消。
 
 ## 10. 文档所有权
 

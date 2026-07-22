@@ -148,6 +148,36 @@ except (ImportError, AttributeError):
 import threading
 import queue
 
+
+def _interrupt_text(payload: Any) -> str:
+    """Return the text sent to Agent.interrupt without discarding attachments."""
+    if isinstance(payload, tuple) and payload:
+        return str(payload[0] or "")
+    return str(payload or "")
+
+
+def _requeue_interrupted_payloads(
+    pending_queue: queue.Queue,
+    interrupt_queue: queue.Queue,
+    first_payload: Any,
+) -> list[Any]:
+    """Requeue interrupted input in order, preserving multimodal payloads."""
+    payloads = [first_payload]
+    while not interrupt_queue.empty():
+        try:
+            payload = interrupt_queue.get_nowait()
+        except queue.Empty:
+            break
+        if payload:
+            payloads.append(payload)
+
+    if all(isinstance(payload, str) for payload in payloads):
+        pending_queue.put("\n".join(payloads))
+    else:
+        for payload in payloads:
+            pending_queue.put(payload)
+    return payloads
+
 # Lazy import for agent.usage_pricing — defers ~180ms (openai + usage_pricing import chain)
 _usage_pricing_imported = False
 _CanonicalUsage = None
@@ -8141,19 +8171,7 @@ class VoidcubeCLI:
                             # Signal TTS to stop on interrupt
                             if stop_event is not None:
                                 stop_event.set()
-                            self.agent.interrupt(interrupt_msg)
-                            # Debug: log to file (stdout may be devnull from redirect_stdout)
-                            try:
-                                _dbg = _VoidCube_home / "interrupt_debug.log"
-                                with open(_dbg, "a") as _f:
-                                    import time as _t
-                                    _f.write(f"{_t.strftime('%H:%M:%S')} interrupt fired: msg={str(interrupt_msg)[:60]!r}, "
-                                             f"children={len(self.agent._active_children)}, "
-                                             f"parent._interrupt={self.agent._interrupt_requested}\n")
-                                    for _ci, _ch in enumerate(self.agent._active_children):
-                                        _f.write(f"  child[{_ci}]._interrupt={_ch._interrupt_requested}\n")
-                            except Exception:
-                                pass
+                            self.agent.interrupt(_interrupt_text(interrupt_msg))
                             break
                     except queue.Empty:
                         # Force prompt_toolkit to flush any pending stdout
@@ -8281,7 +8299,11 @@ class VoidcubeCLI:
             # Handle interrupt - check if we were interrupted
             pending_message = None
             if result and result.get("interrupted"):
-                pending_message = result.get("interrupt_message") or interrupt_msg
+                pending_message = (
+                    interrupt_msg
+                    if interrupt_msg is not None
+                    else result.get("interrupt_message")
+                )
                 # Add indicator that we were interrupted
                 if response and pending_message:
                     response = response + "\n\n---\n_[Interrupted - processing new message]_"
@@ -8372,22 +8394,17 @@ class VoidcubeCLI:
             # In "queue" mode Enter routes directly to _pending_input so this
             # block is never hit.
             if pending_message and hasattr(self, '_pending_input'):
-                all_parts = [pending_message]
-                while not self._interrupt_queue.empty():
-                    try:
-                        extra = self._interrupt_queue.get_nowait()
-                        if extra:
-                            all_parts.append(extra)
-                    except queue.Empty:
-                        break
-                combined = "\n".join(all_parts)
-                n = len(all_parts)
-                preview = combined[:50] + ("..." if len(combined) > 50 else "")
-                if n > 1:
-                    print(f"\n🔧 Sending {n} messages after interrupt: '{preview}'")
+                payloads = _requeue_interrupted_payloads(
+                    self._pending_input,
+                    self._interrupt_queue,
+                    pending_message,
+                )
+                preview_text = _interrupt_text(payloads[0])
+                preview = preview_text[:50] + ("..." if len(preview_text) > 50 else "")
+                if len(payloads) > 1:
+                    print(f"\n🔧 Sending {len(payloads)} messages after interrupt: '{preview}'")
                 else:
                     print(f"\n🔧 Sending after interrupt: '{preview}'")
-                self._pending_input.put(combined)
             
             return response
             
@@ -9026,15 +9043,6 @@ class VoidcubeCLI:
                         _cprint(f"  Queued for the next turn: {preview[:80]}{'...' if len(preview) > 80 else ''}")
                     else:
                         self._interrupt_queue.put(payload)
-                        # Debug: log to file when message enters interrupt queue
-                        try:
-                            _dbg = _VoidCube_home / "interrupt_debug.log"
-                            with open(_dbg, "a") as _f:
-                                import time as _t
-                                _f.write(f"{_t.strftime('%H:%M:%S')} ENTER: queued interrupt msg={str(payload)[:60]!r}, "
-                                         f"agent_running={self._agent_running}\n")
-                        except Exception:
-                            pass
                 else:
                     self._pending_input.put(payload)
                 event.app.current_buffer.reset(append_to_history=True)

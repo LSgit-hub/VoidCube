@@ -102,7 +102,9 @@ def _print_three_segment_scene_bar() -> None:
     import urllib.parse
     import urllib.request
 
-    gateway_base = os.environ.get("VOIDCUBE_GATEWAY_URL", "http://127.0.0.1:6000")
+    from VoidCube_cli.ops.executor import default_gateway_url
+
+    gateway_base = default_gateway_url()
     # /admin/scenes is a GET endpoint; pass refresh=true via the query string
     # so the gateway re-validates each reporter's scene before responding.
     url = f"{gateway_base}/admin/scenes?refresh=true"

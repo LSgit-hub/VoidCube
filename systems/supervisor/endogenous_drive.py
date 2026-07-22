@@ -59,7 +59,7 @@ _STATIC_GOVERNANCE_CANDIDATE_COOLDOWN_HOURS = 12
 TRUTHFULNESS_REVIEW_SIGNAL_THRESHOLD = 3
 
 _BODY_STRUCTURE_PATH_RE = re.compile(
-    r"(?<![\w.-])((?:(?:agent|tools|skills|presets|systems/agent)/"
+    r"(?<![\w.-])((?:(?:agent|tools|skills|presets)/"
     r"[A-Za-z0-9_.\-/]+|run_agent\.py))"
 )
 _BODY_STRUCTURE_DOMAIN_TARGETS: tuple[

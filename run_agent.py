@@ -408,6 +408,8 @@ class AIAgent:
         self._interrupt_requested = False
         self._interrupt_message = None  # Optional message that triggered interrupt
         self._execution_thread_id: int | None = None  # Set at run_conversation() start
+        self._tool_thread_ids: set[int] = set()
+        self._tool_thread_ids_lock = threading.Lock()
         
         # Subagent delegation state
         self._delegate_depth = 0        # 0 = top-level agent, incremented for children
@@ -1880,9 +1882,13 @@ class AIAgent:
         self._interrupt_requested = True
         self._interrupt_message = message
         # Signal all tools to abort any in-flight operations immediately.
-        # Scope the interrupt to this agent's execution thread so other
-        # agents running in the same process (gateway) are not affected.
-        _set_interrupt(True, self._execution_thread_id)
+        # Scope the interrupt to this agent's execution and tool worker threads
+        # so other agents running in the same process are not affected.
+        with self._tool_thread_ids_lock:
+            for thread_id in self._tool_thread_ids:
+                _set_interrupt(True, thread_id)
+        if self._execution_thread_id is not None:
+            _set_interrupt(True, self._execution_thread_id)
         # Propagate interrupt to any running child agents (subagent delegation)
         with self._active_children_lock:
             children_copy = list(self._active_children)
@@ -1898,7 +1904,26 @@ class AIAgent:
         """Clear any pending interrupt request and the per-thread tool interrupt signal."""
         self._interrupt_requested = False
         self._interrupt_message = None
-        _set_interrupt(False, self._execution_thread_id)
+        with self._tool_thread_ids_lock:
+            for thread_id in self._tool_thread_ids:
+                _set_interrupt(False, thread_id)
+        if self._execution_thread_id is not None:
+            _set_interrupt(False, self._execution_thread_id)
+
+    def _register_tool_thread(self) -> int:
+        """Register the actual invoking thread and inherit pending interrupt state."""
+        thread_id = threading.current_thread().ident
+        if thread_id is None:
+            raise RuntimeError("Tool execution thread has no identifier")
+        with self._tool_thread_ids_lock:
+            self._tool_thread_ids.add(thread_id)
+            _set_interrupt(self._interrupt_requested, thread_id)
+        return thread_id
+
+    def _unregister_tool_thread(self, thread_id: int) -> None:
+        with self._tool_thread_ids_lock:
+            self._tool_thread_ids.discard(thread_id)
+            _set_interrupt(False, thread_id)
 
     def _touch_activity(self, desc: str) -> None:
         """Update the last-activity timestamp and description (thread-safe)."""
@@ -3280,6 +3305,25 @@ class AIAgent:
             logger.debug("Tool checkpoint failed", exc_info=True)
 
     def _invoke_prepared_tool(
+        self,
+        call: PreparedToolCall,
+        *,
+        messages: list,
+        effective_task_id: str,
+        parallel: bool,
+    ) -> str:
+        thread_id = self._register_tool_thread()
+        try:
+            return self._invoke_prepared_tool_in_current_thread(
+                call,
+                messages=messages,
+                effective_task_id=effective_task_id,
+                parallel=parallel,
+            )
+        finally:
+            self._unregister_tool_thread(thread_id)
+
+    def _invoke_prepared_tool_in_current_thread(
         self,
         call: PreparedToolCall,
         *,

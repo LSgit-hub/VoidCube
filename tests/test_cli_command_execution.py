@@ -74,6 +74,39 @@ EXPECTED_BUILTINS = {
 }
 
 
+def test_interrupted_text_payloads_are_combined_for_the_next_turn() -> None:
+    pending = queue.Queue()
+    interrupts = queue.Queue()
+    interrupts.put("second")
+
+    payloads = cli_module._requeue_interrupted_payloads(
+        pending,
+        interrupts,
+        "first",
+    )
+
+    assert payloads == ["first", "second"]
+    assert pending.get_nowait() == "first\nsecond"
+
+
+def test_interrupted_multimodal_payload_keeps_attachments_and_order() -> None:
+    pending = queue.Queue()
+    interrupts = queue.Queue()
+    first = ("inspect this", ["screen.png"])
+    interrupts.put("then summarize")
+
+    payloads = cli_module._requeue_interrupted_payloads(
+        pending,
+        interrupts,
+        first,
+    )
+
+    assert cli_module._interrupt_text(first) == "inspect this"
+    assert payloads == [first, "then summarize"]
+    assert pending.get_nowait() == first
+    assert pending.get_nowait() == "then summarize"
+
+
 def test_builtin_table_is_complete_and_contains_no_removed_commands() -> None:
     assert set(BUILTIN_COMMAND_SPECS) == EXPECTED_BUILTINS
     assert "cron" not in BUILTIN_COMMAND_SPECS

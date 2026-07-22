@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +17,9 @@ from tools import delegate_tool
 def _build_minimal_agent(*, print_fn):
     agent = run_agent.AIAgent.__new__(run_agent.AIAgent)
     agent._interrupt_requested = False
+    agent._execution_thread_id = threading.current_thread().ident
+    agent._tool_thread_ids = set()
+    agent._tool_thread_ids_lock = threading.Lock()
     agent.quiet_mode = True
     agent.verbose_logging = False
     agent.log_prefix_chars = 80

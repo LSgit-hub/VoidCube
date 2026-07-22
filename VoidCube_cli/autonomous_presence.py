@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any, Dict
 
+from VoidCube_cli.ops.executor import default_gateway_url
+
 
 def current_cli_agent_role(host: Any) -> str:
     active_turn_role = str(getattr(host, "_active_chat_agent_role", "") or "").strip()
@@ -100,7 +102,7 @@ def push_cli_agent_scene(
             }
         ).encode()
         req = _req.Request(
-            "http://127.0.0.1:6000/admin/activity/touch",
+            f"{default_gateway_url()}/admin/activity/touch",
             data=payload,
             headers={"Content-Type": "application/json"},
             method="POST",
