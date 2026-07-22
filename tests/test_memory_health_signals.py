@@ -208,22 +208,6 @@ async def test_tier1_decay_depends_on_elapsed_time_not_run_frequency(tmp_path):
         )
     finally:
         conn.close()
-    backups = svc._backup_manager.list_backups()
-    assert len(backups) == 1
-    backup_conn = open_memory_sqlite(backups[0]["path"])
-    try:
-        backup_columns = {
-            row[1]
-            for row in backup_conn.execute(
-                "PRAGMA table_info(compressed_memories)"
-            ).fetchall()
-        }
-        stored_embedding = backup_conn.execute(
-            "SELECT embedding FROM compressed_memories "
-            "WHERE memory_id = 'cmem-keyword-fallback'"
-        ).fetchone()[0]
-    finally:
-        backup_conn.close()
 
     assert scores[first["turn_id"]] == pytest.approx(0.81)
     assert scores[second["turn_id"]] == pytest.approx(0.81)
@@ -598,6 +582,22 @@ async def test_semantic_search_is_explicit_keyword_fallback_without_embedding_pr
         }
     finally:
         conn.close()
+    backups = svc._backup_manager.list_backups()
+    assert len(backups) == 1
+    backup_conn = open_memory_sqlite(backups[0]["path"])
+    try:
+        backup_columns = {
+            row[1]
+            for row in backup_conn.execute(
+                "PRAGMA table_info(compressed_memories)"
+            ).fetchall()
+        }
+        stored_embedding = backup_conn.execute(
+            "SELECT embedding FROM compressed_memories "
+            "WHERE memory_id = 'cmem-keyword-fallback'"
+        ).fetchone()[0]
+    finally:
+        backup_conn.close()
 
     result = await svc.semantic_search(
         {"query": "Needle", "limit": 5, "min_similarity": 0.9}
@@ -878,9 +878,6 @@ async def test_compression_quality_gate_rejects_incomplete_turn_coverage_and_aud
     result = await svc.tier2_compress(
         Tier2CompressRequest(min_relevance=0.0, force_oldest=True)
     )
-    repeated = await svc.tier2_compress(
-        Tier2CompressRequest(min_relevance=0.0, force_oldest=True)
-    )
 
     conn = open_memory_sqlite(svc._db_path)
     try:
@@ -947,6 +944,9 @@ async def test_compression_quality_gate_passes_with_complete_reciprocal_backlink
 
     svc._build_compression_pipeline = lambda: _CompletePipeline()  # type: ignore[method-assign]
     result = await svc.tier2_compress(
+        Tier2CompressRequest(min_relevance=0.0, force_oldest=True)
+    )
+    repeated = await svc.tier2_compress(
         Tier2CompressRequest(min_relevance=0.0, force_oldest=True)
     )
 
