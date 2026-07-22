@@ -710,6 +710,11 @@ class BodyUpgradeExecutionAdapter:
                     evidence={
                         "git_lineage": git_lineage,
                         "runtime_task_profile": runtime_task_profile,
+                        "autonomous_task_link": {
+                            "task_id": execution_request.get("task_id"),
+                            "trace_id": trace_id,
+                            "decision_id": decision_id,
+                        },
                         **dict(request.get("switch_evidence") or {}),
                     },
                     constraints={
@@ -729,6 +734,7 @@ class BodyUpgradeExecutionAdapter:
                 "previous_active_slot": pre_switch_registry.active_slot,
                 "retired_slot": switch_review["registry"]["retired_slot"],
                 "requires_user_consent": True,
+                "execution_request": execution_request,
                 "prepared_slot": (
                     prepared_slot.model_dump(mode="json")
                     if prepared_slot is not None
@@ -766,9 +772,6 @@ class BodyUpgradeExecutionAdapter:
                 status_code=400,
                 detail="slot_id is required when no single slot is awaiting user consent.",
             )
-        if request.get("approved") is not True:
-            raise HTTPException(status_code=400, detail="approved=true is required to activate a body slot.")
-
         try:
             slot_meta = self.body_registry.load_slot_meta(slot_id)
             if slot_meta.body_state != "awaiting_user_consent":
@@ -778,6 +781,46 @@ class BodyUpgradeExecutionAdapter:
                 )
 
             consent_request = dict(slot_meta.switch_consent_request or {})
+            task_link = dict(consent_request.get("autonomous_task_link") or {})
+            if request.get("approved") is False:
+                rejection = self._execute_governor_request(
+                    GovernorRequest(
+                        request_id=request.get(
+                            "request_id", f"user-reject-switch-{uuid.uuid4()}"
+                        ),
+                        trace_id=request.get("trace_id") or task_link.get("trace_id"),
+                        task_type=str(request.get("task_type") or "self_evolution"),
+                        decision_id=(
+                            request.get("decision_id") or task_link.get("decision_id")
+                        ),
+                        event_type="switch_consent_rejection",
+                        body_id=slot_id,
+                        source_actor=str(request.get("source_actor") or "user_consent"),
+                        summary=str(
+                            request.get("summary")
+                            or "User rejected activating the probe-passed body slot."
+                        ),
+                        evidence={"user_consent_approved": False},
+                        constraints={"target_transition": "awaiting_user_consent_to_shell"},
+                    )
+                )
+                return self.attach_execution_route_hint(
+                    {
+                        "status": "body_switch_rejected",
+                        "slot_id": slot_id,
+                        "autonomous_task_link": task_link,
+                        "rejection": rejection,
+                        "registry": self.body_registry.load_registry().model_dump(
+                            mode="json"
+                        ),
+                    },
+                    "body.switch.consent",
+                )
+            if request.get("approved") is not True:
+                raise HTTPException(
+                    status_code=400,
+                    detail="approved must be explicitly true or false.",
+                )
             watch_window_seconds = int(
                 request.get("watch_window_seconds")
                 or consent_request.get("watch_window_seconds")
@@ -827,6 +870,7 @@ class BodyUpgradeExecutionAdapter:
                 {
                     "status": "body_switch_activated",
                     "slot_id": slot_id,
+                    "autonomous_task_link": task_link,
                     "switch_activation": switch_activation,
                     "registry": registry.model_dump(mode="json"),
                     "active_target": self.body_registry.load_active_body_pointer().model_dump(mode="json"),
@@ -875,7 +919,7 @@ class BodyUpgradeExecutionAdapter:
                 event_type=GovernanceEventType.EXECUTION_OUTCOME,
                 source_actor="executor",
                 decision=(
-                    GovernanceDecision.COMPLETED
+                    GovernanceDecision.RECORD_ONLY
                     if outcome.get("status") == "upgrade_awaiting_user_consent"
                     else GovernanceDecision.FAILED
                 ),
@@ -1316,122 +1360,38 @@ class MemoryMaintenanceExecutionAdapter:
         *,
         config: Any,
         attach_execution_route_hint: Callable[[Dict[str, Any], str], Dict[str, Any]],
-        mem_state_path: str | None = None,
     ) -> None:
         self.config = config
         self.attach_execution_route_hint = attach_execution_route_hint
-        if mem_state_path:
-            self._mem_state_path = Path(mem_state_path)
-        else:
-            from VoidCube_core.constants import get_VoidCube_home
-            self._mem_state_path = get_VoidCube_home() / "mem_state.json"
 
     async def trigger_memory_compression(self, request: dict | None = None) -> Dict[str, Any]:
         request = request or {}
-        result: Dict[str, Any] = {}
-
-        # ── Structured 4-layer maintenance (primary) ──
-        try:
-            structured = await self._run_structured_maintenance(request)
-            result["structured_maintenance"] = structured
-        except Exception as exc:
-            logger.warning("Structured memory maintenance failed: %s", exc)
-            result["structured_maintenance"] = {"status": "error", "error": str(exc)}
-
-        # ── Canonical memory-service rule compression ──
-        try:
-            rule_compression = await self._run_memory_rule_compression(request)
-            result["rule_compression"] = rule_compression
-        except Exception as exc:
-            logger.warning("Memory rule compression failed: %s", exc)
-            result["rule_compression"] = {"status": "error", "error": str(exc)}
-
+        result = {
+            "memory_service_maintenance": await self._run_memory_service_maintenance(
+                request
+            )
+        }
         return self.attach_execution_route_hint(result, "memory.compress")
 
-    # ── Structured maintenance helpers ──────────────────────────────
-
-    def _build_scholar_backend(self):
-        """Build LLMScholarBackend with HeuristicScholarBackend fallback."""
-        try:
-            from memai.model_config import resolve_mem_llm_client
-
-            client, _ = resolve_mem_llm_client(role="default")
-            if client is None:
-                logger.info("No LLM API key configured; using heuristic scholar backend")
-                from memai.scholar import HeuristicScholarBackend
-                return HeuristicScholarBackend()
-
-            from memai.scholar import LLMScholarBackend
-            return LLMScholarBackend(client)
-        except Exception as exc:
-            logger.warning("Failed to initialize LLM scholar backend: %s; falling back to heuristic", exc)
-            from memai.scholar import HeuristicScholarBackend
-            return HeuristicScholarBackend()
-
-    async def _run_structured_maintenance(self, request: dict) -> Dict[str, Any]:
-        """Load mem_state.json, run structured 4-layer maintenance, save."""
-        import sys
-        from pathlib import Path as _Path
-
-        mem_src = _Path(__file__).resolve().parents[2] / "Mem" / "src"
-        if str(mem_src) not in sys.path:
-            sys.path.insert(0, str(mem_src))
-
-        from memai.repository import MemoryStateRepository
-        from memai.pipeline import ChroniclePipeline
-
-        scholar = self._build_scholar_backend()
-        pipeline = ChroniclePipeline(scholar_backend=scholar)
-        repository = MemoryStateRepository(pipeline=pipeline)
-
-        state_path = self._mem_state_path
-        if not state_path.exists():
-            return {"status": "no_state", "message": f"No memory state file at {state_path}"}
-
-        state = repository.load(str(state_path))
-        execution = state.result.apply_maintenance()
-
-        # Update PipelineResult with compressed data
-        state.result.events = list(execution.events)
-        state.result.scenes = list(execution.scenes)
-        state.result.arcs = list(execution.arcs)
-        state.result.epochs = list(execution.epochs)
-
-        from VoidCube_core.utils import atomic_json_write
-        atomic_json_write(str(state_path), state.to_dict())
-
-        return {
-            "status": "structured_maintenance_complete",
-            "revision_count": len(execution.revision_records),
-            "compression_actions": [
-                action.to_dict() for action in execution.plan.compression_actions
-            ],
-            "dormant_arc_ids": execution.plan.dormant_arc_ids,
-            "policy_notes": execution.plan.policy_notes,
-            "revision_records": [
-                record.to_dict() for record in execution.revision_records
-            ],
-        }
-
-    async def _run_memory_rule_compression(self, _request: dict) -> Dict[str, Any]:
-        """Run full five-rule compression via the memory service."""
+    async def _run_memory_service_maintenance(self, _request: dict) -> Dict[str, Any]:
+        """Run the canonical maintenance rules owned by Memory Service."""
         try:
             import aiohttp
 
             async with aiohttp.ClientSession() as session:
-                url = f"{self.config.gateway_address}{self.config.memory_gateway_path}compressed/run-all-rules"
+                gateway = str(self.config.gateway_address).rstrip("/")
+                url = f"{gateway}/api/mem/compressed/run-all-rules"
                 async with session.post(url, json={}, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                     if resp.status == 200:
-                        result = await resp.json()
-                        logger.info("Five-rule compression: %s",
-                                    {k: type(v).__name__ for k, v in result.get("rules", {}).items()})
-                        return result
+                        return await resp.json()
                     return {
-                        "status": "rule_compression_error",
-                        "error": f"Memory rule compression endpoint returned HTTP {resp.status}",
+                        "status": "memory_service_maintenance_error",
+                        "error": f"Memory Service returned HTTP {resp.status}",
                     }
-            return {"status": "rule_compression_error", "error": "Memory rule compression endpoint unreachable"}
         except Exception as exc:
-            logger.warning("Memory compression failed: %s", exc)
-            return {"status": "rule_compression_error", "error": str(exc)}
+            logger.warning("Memory Service maintenance failed: %s", exc)
+            return {
+                "status": "memory_service_maintenance_error",
+                "error": str(exc),
+            }
 

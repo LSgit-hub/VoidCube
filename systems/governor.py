@@ -18,6 +18,7 @@ GovernorEventType = Literal[
     "improvement_rollback_request",
     "post_switch_review",
     "switch_suggestion",
+    "switch_consent_rejection",
 ]
 GovernorDecisionType = Literal[
     "approve",
@@ -115,6 +116,11 @@ class GovernorDecisionEngine:
             response = self._evaluate_post_switch_review(request, slot_meta=slot_meta)
         elif request.event_type == "switch_suggestion":
             response = self._evaluate_switch_suggestion(request, slot_meta=slot_meta)
+        elif request.event_type == "switch_consent_rejection":
+            response = self._evaluate_switch_consent_rejection(
+                request,
+                slot_meta=slot_meta,
+            )
         else:
             response = GovernorResponse(
                 decision="request_more_evidence",
@@ -355,14 +361,17 @@ class GovernorDecisionEngine:
                 "recommendation, but activation must wait for explicit user consent."
             ),
             required_actions=[
-                GovernorAction(
-                    action_type="await_user_consent",
-                    slot_id=request.body_id,
-                    payload={
+                    GovernorAction(
+                        action_type="await_user_consent",
+                        slot_id=request.body_id,
+                        payload={
                         "watch_window_seconds": watch_window_hint,
                         "requires_user_consent": True,
                         "reason": "governor_approved_pending_user_consent",
-                        "runtime_task_profile": self._runtime_task_profile(request),
+                            "runtime_task_profile": self._runtime_task_profile(request),
+                            "autonomous_task_link": dict(
+                                request.evidence.get("autonomous_task_link") or {}
+                            ),
                     },
                 )
             ],
@@ -375,6 +384,46 @@ class GovernorDecisionEngine:
                         {
                             "body_id": request.body_id,
                             "decision": "approved_pending_user_consent",
+                            "requires_user_consent": True,
+                        },
+                    ),
+                )
+            ],
+        )
+
+    def _evaluate_switch_consent_rejection(
+        self,
+        request: GovernorRequest,
+        *,
+        slot_meta: Optional[BodySlotMeta],
+    ) -> GovernorResponse:
+        if slot_meta and slot_meta.body_state != "awaiting_user_consent":
+            return self._reject(
+                f"Slot {slot_meta.slot_id} must be awaiting user consent before rejection."
+            )
+        return GovernorResponse(
+            decision="reject",
+            confidence=1.0,
+            risk_level="low",
+            reasoning_summary="The user explicitly declined the body activation.",
+            required_actions=[
+                GovernorAction(
+                    action_type="abandon_candidate",
+                    slot_id=request.body_id,
+                    payload={
+                        "reason": "user_rejected_switch",
+                        "runtime_task_profile": self._runtime_task_profile(request),
+                    },
+                )
+            ],
+            writeback_events=[
+                GovernorWritebackEvent(
+                    event_type="switch_result",
+                    payload=self._with_runtime_task_profile(
+                        request,
+                        {
+                            "body_id": request.body_id,
+                            "decision": "user_rejected",
                             "requires_user_consent": True,
                         },
                     ),

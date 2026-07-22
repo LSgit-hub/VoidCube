@@ -966,6 +966,22 @@ def test_gateway_replaces_previous_instance_for_routed_singleton_service(
     assert route["target_instance"] == f"{service_type}-new"
 
 
+@pytest.mark.parametrize(
+    ("service_type", "gateway_path", "upstream_path"),
+    [
+        ("memory", "mem/tier1/stats", "/tier1/stats"),
+        ("supervisor", "supervisor/runtime/activity", "/runtime/activity"),
+        ("executor", "executor/body/registry", "/executor/body/registry"),
+    ],
+)
+def test_gateway_maps_service_prefix_to_canonical_upstream_path(
+    service_type,
+    gateway_path,
+    upstream_path,
+):
+    assert InternalGateway._upstream_route_path(service_type, gateway_path) == upstream_path
+
+
 def test_gateway_memory_registration_invalidates_cached_address():
     gateway = InternalGateway(GatewayConfig())
     client = TestClient(gateway.app)

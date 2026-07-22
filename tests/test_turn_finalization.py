@@ -17,10 +17,12 @@ pytestmark = [pytest.mark.unit, pytest.mark.smoke]
 
 def _owner(events):
     memory = SimpleNamespace(
-        sync_all=lambda user, response: events.append(
-            ("memory_sync", user, response)
+        sync_all=lambda user, response, session_id="": events.append(
+            ("memory_sync", user, response, session_id)
         ),
-        queue_prefetch_all=lambda user: events.append(("memory_prefetch", user)),
+        queue_prefetch_all=lambda user, session_id="": events.append(
+            ("memory_prefetch", user, session_id)
+        ),
     )
     owner = SimpleNamespace(
         max_iterations=5,
@@ -148,6 +150,8 @@ def test_finalizer_runs_one_ordered_success_sequence():
         "hook",
     ]
     assert events[2][1] == "post_llm_call"
+    assert events[4] == ("memory_sync", "question", "answer", "session-1")
+    assert events[5] == ("memory_prefetch", "question", "session-1")
     assert events[-1][1] == "on_session_end"
     assert result["final_response"] == "answer"
     assert result["last_reasoning"] == "reason"

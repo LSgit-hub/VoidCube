@@ -1022,7 +1022,7 @@ class EndogenousDriveEngine:
                 bucket["completed"] += 1
             elif status in {"failed", "cancelled"}:
                 bucket["failed"] += 1
-            elif status in {"approved", "deferred", "paused", "awaiting_review", "retry"}:
+            elif status in {"approved", "deferred", "paused", "awaiting_review", "awaiting_user_consent", "retry"}:
                 bucket["dragging"] += 1
 
         def _family_success(families: List[str], default: float = 0.5) -> float:
@@ -1545,7 +1545,7 @@ class EndogenousDriveEngine:
             if family not in {"general_self_evolution", "self_evolution"}:
                 continue
             status = str(item.get("status") or "").strip().lower()
-            if status in {"approved", "deferred", "paused", "awaiting_review", "retry"}:
+            if status in {"approved", "deferred", "paused", "awaiting_review", "awaiting_user_consent", "retry"}:
                 dragging += 1
             if dragging >= 2:
                 return True
@@ -8349,7 +8349,7 @@ class EndogenousDriveEngine:
                 completed += 1
             elif status in {"failed", "cancelled"}:
                 failed += 1
-            elif status in {"approved", "deferred", "paused", "awaiting_review", "retry"}:
+            elif status in {"approved", "deferred", "paused", "awaiting_review", "awaiting_user_consent", "retry"}:
                 blocked += 1
         total = completed + failed + blocked
         success_ratio = completed / total if total > 0 else 0.5
@@ -8376,6 +8376,7 @@ class EndogenousDriveEngine:
                     "deferred",
                     "paused",
                     "awaiting_review",
+                    "awaiting_user_consent",
                     "retry",
                 }:
                     drag_count += 1
@@ -8768,7 +8769,7 @@ class EndogenousDriveEngine:
                 continue
             status = str(task.get("status") or "").strip().lower()
             if status not in {
-                "planned", "approved", "running", "paused", "deferred", "awaiting_review", "retry",
+                "planned", "approved", "running", "awaiting_user_consent", "paused", "deferred", "awaiting_review", "retry",
             }:
                 continue
             target_slot_id = str(task.get("constraints", {}).get("target_slot_id") or "").strip()

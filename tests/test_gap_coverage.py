@@ -250,7 +250,7 @@ class TestCLIExecutorCanonicalPath:
             from systems.supervisor.autonomous_chain_store import AutonomousChainExecutionRequest
             req = AutonomousChainExecutionRequest(
                 task_id="t1", kind="general_self_evolution",
-                git_lineage={"candidate_commit": "abc", "rollback_commit": "def", "changed_files": ["agent/x.py"]},
+                git_lineage={"source_commit": "def", "candidate_commit": "abc", "rollback_commit": "def", "changed_files": ["agent/x.py"]},
                 target_slot_id="slot-B",
             )
             result = await facade.execute_autonomous_chain_request(req.model_dump(mode="json"))
@@ -263,7 +263,7 @@ class TestCLIExecutorCanonicalPath:
 
             req3 = AutonomousChainExecutionRequest(
                 task_id="t3", kind="general_self_evolution",
-                git_lineage={"candidate_commit": "abc", "rollback_commit": "def", "changed_files": ["agent/x.py"]},
+                git_lineage={"source_commit": "def", "candidate_commit": "abc", "rollback_commit": "def", "changed_files": ["agent/x.py"]},
                 target_slot_id="slot-B",
             )
             result3 = await facade.execute_autonomous_chain_request(req3.model_dump(mode="json"))

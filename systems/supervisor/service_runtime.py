@@ -441,10 +441,10 @@ class ServiceRuntimeMixin:
         Idempotent — if the autonomous chain is not active this is a no-op.
         Does NOT stop the health-check loop.
         """
-        if not self._service_runtime.autonomous_chain_gate_active:
-            return
+        was_active = self._service_runtime.autonomous_chain_gate_active
         self._service_runtime.autonomous_chain_gate_active = False
-        await self._notify_gateway_autonomous_chain_gate(active=False)
+        if was_active:
+            await self._notify_gateway_autonomous_chain_gate(active=False)
 
         async def cancel_task(task: Optional[asyncio.Task[Any]]) -> None:
             if task is None:
@@ -465,6 +465,16 @@ class ServiceRuntimeMixin:
         await cancel_task(self._endogenous_drive_task)
         self._endogenous_drive_task = None
         self._service_runtime.next_drive_at = None
+
+        for task in self._autonomous_chain_store.list_api_a_running_tasks():
+            self._update_task_status(
+                task.task_id,
+                status="failed",
+                actor="supervisor_gate",
+                reason="Autonomous-chain execution was interrupted when the gate was deactivated.",
+                context={"failure_kind": "interrupted_by_gate_deactivation"},
+                event_type="gate_deactivation_interruption",
+            )
 
         logger.info("Autonomous chain stopped — baseline health-check loop still running")
 

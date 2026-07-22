@@ -206,6 +206,7 @@ def test_execution_service_accepts_only_autonomous_chain_execution_handoff():
             "source_actor": "mem_supervisor",
             "target_slot_id": "slot-B",
             "git_lineage": {
+                "source_commit": "aaa111",
                 "candidate_commit": "bbb222",
                 "rollback_commit": "aaa111",
                 "changed_files": ["agent/stream_handler.py"],

@@ -20,7 +20,10 @@ from systems.supervisor.supervisor import (
     SupervisorExecutionConfig,
     SupervisorServiceRuntimeConfig,
 )
-from systems.supervisor.autonomous_chain_store import AutonomousChainExecutionRequest
+from systems.supervisor.autonomous_chain_store import (
+    AutonomousChainExecutionRequest,
+    AutonomousChainStore,
+)
 from systems.supervisor.ui_runtime import UI_HTML
 from systems.self_learning import LearningRecommendation
 from systems.self_learning.conclusion_store import SelfLearningConclusionStore
@@ -781,6 +784,13 @@ async def test_supervisor_runtime_trace_normalizes_execution_request_drive_input
             "task_type": "self_evolution",
             "decision_id": "decision-trace-execution-1",
             "kind": "general_self_evolution",
+            "target_slot_id": "slot-B",
+            "git_lineage": {
+                "source_commit": "aaa111",
+                "candidate_commit": "bbb222",
+                "rollback_commit": "aaa111",
+                "changed_files": ["agent/runtime.py"],
+            },
             "drive_input_evidence": {
                 "user_chain_signal": {
                     "scope": "soft_signal_only",
@@ -2298,6 +2308,49 @@ async def test_supervisor_autonomous_chain_deactivate_stops_enabled_runtime(tmp_
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_supervisor_autonomous_chain_deactivate_closes_running_tasks(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    planned = await supervisor.plan_autonomous_chain_task(
+        {
+            "title": "Execution interrupted by gate deactivation",
+            "task_type": "self_learning",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+    await supervisor.decide_autonomous_chain_task(
+        task_id,
+        {"decision": "approved", "reason": "ready"},
+    )
+    await supervisor.decide_autonomous_chain_task(
+        task_id,
+        {
+            "decision": "running",
+            "actor": "cli_agent",
+            "session_id": "gate-stop-owner",
+            "reason": "claimed",
+        },
+    )
+
+    await supervisor.deactivate_autonomous_chain_gate({})
+
+    task = supervisor._autonomous_chain_store.get_task(task_id)
+    assert task.status == "failed"
+    assert task.decision_history[-1].context == {
+        "failure_kind": "interrupted_by_gate_deactivation"
+    }
+    recovered = AutonomousChainStore(tmp_path / "recovered-after-stop.json")
+    recovered.recover_from_governance_events(
+        supervisor._governor.governance_repository.list_events()
+    )
+    assert recovered.get_task(task_id).status == "failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_supervisor_autonomous_chain_review_cycle_hands_off_approved_formal_task(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._body_upgrade_executor.execute_body_upgrade = AsyncMock(  # type: ignore[method-assign]
@@ -2314,6 +2367,7 @@ async def test_supervisor_autonomous_chain_review_cycle_hands_off_approved_forma
             "evidence": {
                 "probe_report_ref": "probe-reports/slot-B/latest.json",
                 "git_lineage": {
+                    "source_commit": "aaa111",
                     "candidate_commit": "bbb222",
                     "rollback_commit": "aaa111",
                     "changed_files": ["agent/stream_handler.py"],
@@ -2350,7 +2404,7 @@ async def test_supervisor_autonomous_chain_review_cycle_hands_off_approved_forma
     task_snapshot = await supervisor.get_autonomous_chain_task(task_id)
     assert cycle["reviewed"] == 1
     assert cycle["handed_off"] == [{"task_id": task_id, "status": "autonomous_chain_execution_executed"}]
-    assert task_snapshot["status"] == "completed"
+    assert task_snapshot["status"] == "awaiting_user_consent"
     assert task_snapshot["metadata"]["execution_result"]["status"] == "autonomous_chain_execution_executed"
     supervisor._body_upgrade_executor.execute_body_upgrade.assert_awaited_once()  # type: ignore[attr-defined]
 
@@ -2376,6 +2430,7 @@ async def test_execution_handoff_unknown_executor_status_retries_instead_of_comp
             "evidence": {
                 "probe_report_ref": "probe-reports/slot-B/latest.json",
                 "git_lineage": {
+                    "source_commit": "aaa111",
                     "candidate_commit": "bbb222",
                     "rollback_commit": "aaa111",
                     "changed_files": ["agent/stream_handler.py"],

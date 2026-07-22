@@ -146,7 +146,6 @@ def assemble_supervisor_execution_runtime(supervisor: Any) -> None:
     supervisor._memory_maintenance_executor = MemoryMaintenanceExecutionAdapter(
         config=execution_config,
         attach_execution_route_hint=attach_execution_route_hint,
-        mem_state_path=None,  # auto-resolve ~/.VoidCube/mem_state.json
     )
     supervisor._governor_review_executor = GovernorReviewExecutionAdapter(
         body_registry=supervisor._body_registry,

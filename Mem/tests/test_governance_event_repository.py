@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import builtins
+import json
+
+import pytest
+
 from memai import (
     GovernanceBoundaryReport,
     GovernanceDecision,
@@ -34,6 +39,35 @@ def test_repository_append_is_idempotent_by_event_id(tmp_path) -> None:
     repository.append(event)
 
     assert len(repository.list_events()) == 1
+
+
+def test_repository_raises_when_primary_and_retry_writes_both_fail(tmp_path, monkeypatch) -> None:
+    repository = GovernanceEventRepository(tmp_path / "governance-events.jsonl")
+    event = _boundary_defer_event("task-1", "slot-B")
+    real_open = builtins.open
+
+    def failing_open(path, *args, **kwargs):
+        if str(path).endswith(("governance-events.jsonl", "governance-events.retry.jsonl")):
+            raise OSError("disk unavailable")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(repository.path), "open", lambda self, *args, **kwargs: failing_open(self, *args, **kwargs))
+
+    with pytest.raises(RuntimeError, match="could not be persisted"):
+        repository.append(event)
+
+
+def test_repository_reads_retry_events_as_authoritative_history(tmp_path) -> None:
+    repository = GovernanceEventRepository(tmp_path / "governance-events.jsonl")
+    primary = _boundary_defer_event("task-primary", "slot-B")
+    retried = _boundary_defer_event("task-retry", "slot-B")
+    repository.append(primary)
+    repository.retry_path.write_text(
+        json.dumps(retried.to_dict(), ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    assert [event.id for event in repository.list_events()] == [primary.id, retried.id]
 
 
 def test_repository_queries_governance_dimensions(tmp_path) -> None:

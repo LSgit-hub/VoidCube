@@ -88,7 +88,7 @@ class Supervisor(
         self._initialize_supervisor_ui_runtime()
         assemble_supervisor_execution_runtime(self)
         try:
-            self._recover_autonomous_chain_store_from_mem_governance(only_if_empty=True)
+            self._recover_autonomous_chain_store_from_mem_governance()
         except Exception:
             logger.debug("Autonomous-chain Mem governance recovery skipped", exc_info=True)
         # Proxy supervisor._watch_window_runtime → adapter._state

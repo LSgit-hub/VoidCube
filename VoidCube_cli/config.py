@@ -575,10 +575,9 @@ DEFAULT_CONFIG = {
         "provider": "mem",
         # Mem provider configuration
         "mem": {
-            # SQLite database path (default: VOIDCUBE_HOME/mem_state.json for JSON, SQLite auto-managed)
-            "db_path": None,
-            # Incremental update lookback days
-            "incremental_lookback_days": 14,
+            # Empty means use systems.config Agent gateway_address.
+            "gateway_address": "",
+            "request_timeout_seconds": 2.0,
             # Auto-sync conversations to Mem
             "auto_sync": True,
         },

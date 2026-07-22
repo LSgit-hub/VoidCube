@@ -1279,6 +1279,141 @@ class PlanningRuntimeMixin:
             "autonomous_chain_gate_active": bool(payload.get("autonomous_chain_gate_active")),
         }
 
+    def _record_autonomous_task_transition(
+        self,
+        task: AutonomousChainTask,
+        *,
+        transition_kind: str,
+    ) -> None:
+        from memai.governance import (
+            GovernanceDecision,
+            GovernanceEvent,
+            GovernanceEventType,
+            GovernanceGitLineage,
+        )
+
+        status = str(task.status or "").strip().lower()
+        decision = {
+            "approved": GovernanceDecision.APPROVE,
+            "deferred": GovernanceDecision.DEFER,
+            "paused": GovernanceDecision.PAUSE,
+            "cancelled": GovernanceDecision.CANCEL,
+            "completed": GovernanceDecision.COMPLETED,
+            "failed": GovernanceDecision.FAILED,
+        }.get(status, GovernanceDecision.RECORD_ONLY)
+        latest_decision = task.decision_history[-1] if task.decision_history else None
+        execution_request = task.execution_request
+        lineage_payload = (
+            execution_request.git_lineage.model_dump(mode="json")
+            if execution_request is not None
+            else dict(task.evidence.get("git_lineage") or {})
+        )
+        repository = self._governor.governance_repository
+        repository.append(
+            GovernanceEvent.create(
+                event_type=GovernanceEventType.AUTONOMOUS_TASK_TRANSITION,
+                source_actor=(
+                    str(latest_decision.actor)
+                    if latest_decision is not None
+                    else "supervisor"
+                ),
+                decision=decision,
+                reason=(
+                    str(latest_decision.reason or task.decision_reason)
+                    if latest_decision is not None
+                    else task.decision_reason or f"Task {transition_kind}: {status}"
+                ),
+                task_id=task.task_id,
+                body_id=str(
+                    (execution_request.target_slot_id if execution_request else None)
+                    or task.metadata.get("target_slot_id")
+                    or ""
+                ),
+                git_lineage=GovernanceGitLineage.from_dict(lineage_payload),
+                execution_result={
+                    "transition_kind": transition_kind,
+                    "autonomous_task_projection": task.model_dump(mode="json"),
+                    "runtime_task_profile": {
+                        "governance_task_type": task.governance_task_type,
+                        "task_family": task.task_family,
+                        "execution_kind": task.execution_kind,
+                    },
+                },
+            )
+        )
+
+    def _record_autonomous_task_clear(
+        self,
+        tasks: list[AutonomousChainTask],
+    ) -> None:
+        from memai.governance import (
+            GovernanceDecision,
+            GovernanceEvent,
+            GovernanceEventType,
+        )
+
+        self._governor.governance_repository.append(
+            GovernanceEvent.create(
+                event_type=GovernanceEventType.AUTONOMOUS_TASK_CLEAR,
+                source_actor="supervisor_admin",
+                decision=GovernanceDecision.RECORD_ONLY,
+                reason="Administrative autonomous-chain runtime clear.",
+                execution_result={
+                    "cleared_task_ids": [task.task_id for task in tasks],
+                    "cleared_task_count": len(tasks),
+                },
+            )
+        )
+
+    def _create_autonomous_chain_task(self, **kwargs: Any) -> AutonomousChainTask:
+        return self._autonomous_chain_store.create_task(
+            **kwargs,
+            before_commit=lambda task: self._record_autonomous_task_transition(
+                task,
+                transition_kind="created",
+            ),
+        )
+
+    def _update_task_metadata(
+        self,
+        task_id: str,
+        *,
+        metadata: Optional[Dict[str, Any]] = None,
+        execution_request: Optional[AutonomousChainExecutionRequest] = None,
+    ) -> AutonomousChainTask:
+        task = self._autonomous_chain_store.update_metadata(
+            task_id,
+            metadata=metadata,
+            execution_request=execution_request,
+            before_commit=lambda updated: self._record_autonomous_task_transition(
+                updated,
+                transition_kind="metadata",
+            ),
+        )
+        return task
+
+    def _update_task_priority(
+        self,
+        task_id: str,
+        *,
+        priority: str,
+        actor: str,
+        reason: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> AutonomousChainTask:
+        task = self._autonomous_chain_store.update_priority(
+            task_id,
+            priority=priority,
+            actor=actor,
+            reason=reason,
+            context=context,
+            before_commit=lambda updated: self._record_autonomous_task_transition(
+                updated,
+                transition_kind="priority",
+            ),
+        )
+        return task
+
     async def _resolve_runtime_drive_input_request(
         self,
         request: Dict[str, Any],
@@ -4226,7 +4361,15 @@ class PlanningRuntimeMixin:
             return "completed"
         if normalized in {"failed", "cancelled"}:
             return "failed"
-        if normalized in {"approved", "deferred", "paused", "awaiting_review", "retry", "running"}:
+        if normalized in {
+            "approved",
+            "deferred",
+            "paused",
+            "awaiting_review",
+            "awaiting_user_consent",
+            "retry",
+            "running",
+        }:
             return "dragging"
         return None
 
@@ -4716,7 +4859,12 @@ class PlanningRuntimeMixin:
             why_not_improvement.append(
                 f"在直接进行身体改进前，应优先处理 {focus} 治理。"
             )
-        if status in {"failed", "deferred", "awaiting_review"}:
+        if status in {
+            "failed",
+            "deferred",
+            "awaiting_review",
+            "awaiting_user_consent",
+        }:
             why_not_improvement.append(
                 f"最近结果状态为 {status}，在推进更大范围的自我改进前需要先复核。"
             )
@@ -6625,7 +6773,7 @@ class PlanningRuntimeMixin:
                     "owner_session_id 缺失，当前无法确认归属。",
                     task.task_id,
                 )
-                self._autonomous_chain_store.update_metadata(
+                self._update_task_metadata(
                     task.task_id,
                     metadata={
                         "owner_session_missing_seen_at": datetime.now(timezone.utc).isoformat(),
@@ -6667,7 +6815,7 @@ class PlanningRuntimeMixin:
                 },
                 event_type="recovery",
             )
-            self._autonomous_chain_store.update_metadata(
+            self._update_task_metadata(
                 task.task_id,
                 metadata={
                     "recovered_from_orphaned_running": True,
@@ -7243,14 +7391,15 @@ class PlanningRuntimeMixin:
             status = str(task.status)
             cleared_counts[status] = cleared_counts.get(status, 0) + 1
 
+        self._record_autonomous_task_clear(tasks)
         self._autonomous_chain_store.clear_tasks()
 
         if hasattr(self, "_clear_supervisor_ui_activity"):
             self._clear_supervisor_ui_activity()
 
         governor = getattr(self, "_governor", None)
-        if governor is not None and hasattr(governor, "clear_history"):
-            governor.clear_history()
+        if governor is not None and hasattr(governor, "clear_runtime_projection"):
+            governor.clear_runtime_projection()
         try:
             self._persist_endogenous_drive_history(self._endogenous_drive_history_default())
         except Exception:
@@ -7308,17 +7457,9 @@ class PlanningRuntimeMixin:
     def _recover_autonomous_chain_store_from_mem_governance(
         self,
         *,
-        only_if_empty: bool = False,
         replace: bool = False,
     ) -> Dict[str, Any]:
         existing_count = len(self._autonomous_chain_store.list_tasks())
-        if only_if_empty and existing_count > 0:
-            return {
-                "status": "skipped",
-                "reason": "runtime_store_not_empty",
-                "existing_task_count": existing_count,
-                "mem_governance_path": str(self._mem_governance_repository_path()),
-            }
         events = self._load_mem_governance_events()
         result = self._autonomous_chain_store.recover_from_governance_events(
             events,
@@ -7333,7 +7474,6 @@ class PlanningRuntimeMixin:
     async def recover_autonomous_chain_from_mem(self, request: dict | None = None):
         request = request or {}
         result = self._recover_autonomous_chain_store_from_mem_governance(
-            only_if_empty=bool(request.get("only_if_empty", False)),
             replace=bool(request.get("replace", False)),
         )
         if result.get("added_task_count") or result.get("updated_task_count"):
@@ -7358,7 +7498,7 @@ class PlanningRuntimeMixin:
                 if not title:
                     raise HTTPException(status_code=400, detail="Each task item must include a title.")
                 request_metadata = self._request_task_metadata(item)
-                task = self._autonomous_chain_store.create_task(
+                task = self._create_autonomous_chain_task(
                     title=title,
                     summary=str(item.get("summary", "")),
                     trace_id=str(item.get("trace_id") or uuid.uuid4()),
@@ -7376,7 +7516,7 @@ class PlanningRuntimeMixin:
                 raise HTTPException(status_code=400, detail="title is required")
             request_metadata = self._request_task_metadata(request)
             created.append(
-                self._autonomous_chain_store.create_task(
+                self._create_autonomous_chain_task(
                     title=title,
                     summary=str(request.get("summary", "")),
                     trace_id=str(request.get("trace_id") or uuid.uuid4()),
@@ -7523,7 +7663,7 @@ class PlanningRuntimeMixin:
             enriched_metadata.setdefault("execution_source", "cli_agent_pull")
             decision_metadata = enriched_metadata
         if isinstance(decision_metadata, dict) and decision_metadata:
-            self._autonomous_chain_store.update_metadata(task_id, metadata=decision_metadata)
+            self._update_task_metadata(task_id, metadata=decision_metadata)
 
         await self._touch_gateway_activity(
             self._planning_activity_kind_for_task(task.task_type),
@@ -7623,7 +7763,7 @@ class PlanningRuntimeMixin:
                     decision_context["supervisor_followup_suggestion"] = followup_suggestion
                 priority_recommendation = self._extract_supervisor_priority_recommendation(review_action)
                 if priority_recommendation is not None and priority_recommendation != str(task.priority):
-                    task = self._autonomous_chain_store.update_priority(
+                    task = self._update_task_priority(
                         task.task_id,
                         priority=priority_recommendation,
                         actor=str(request.get("actor", "supervisor")),
@@ -7855,7 +7995,7 @@ class PlanningRuntimeMixin:
                 "execution_kind": proposal.execution_kind,
                 "metadata": proposal_metadata,
             }
-            task = self._autonomous_chain_store.create_task(
+            task = self._create_autonomous_chain_task(
                 title=proposal.title,
                 summary=proposal.summary,
                 trace_id=str(submission.metadata.get("trace_id") or submission.conclusion_id or uuid.uuid4()),
@@ -7922,7 +8062,7 @@ class PlanningRuntimeMixin:
             reason="自主交接已开始",
             event_type="execution_handoff_started",
         )
-        self._autonomous_chain_store.update_metadata(
+        self._update_task_metadata(
             task.task_id,
             metadata={
                 "executed_at": datetime.now(timezone.utc).isoformat(),
@@ -7937,7 +8077,13 @@ class PlanningRuntimeMixin:
         # retried on the next cycle.  Only explicit success statuses close the
         # task; empty or unknown statuses mean the executor did not confirm
         # completion.
-        result_status = result.get("status") if isinstance(result, dict) else None
+        nested_result = (
+            dict(result.get("result") or {}) if isinstance(result, dict) else {}
+        )
+        result_status = (
+            nested_result.get("status")
+            or (result.get("status") if isinstance(result, dict) else None)
+        )
         normalized_result_status = (
             str(result_status).strip().lower() if result_status is not None else ""
         )
@@ -7951,7 +8097,6 @@ class PlanningRuntimeMixin:
                 "complete",
                 "compressed",
                 "already_compressed",
-                "upgrade_awaiting_user_consent",
                 "learn_only_completed",
                 "autonomous_chain_execution_executed",
                 "autonomous_chain_execution_recorded",
@@ -7961,6 +8106,24 @@ class PlanningRuntimeMixin:
             normalized_result_status in _ERROR_STATUSES
             or normalized_result_status not in _SUCCESS_STATUSES
         )
+        if normalized_result_status == "upgrade_awaiting_user_consent":
+            self._update_task_metadata(
+                task.task_id,
+                metadata={
+                    "execution_result": result,
+                    "awaiting_user_consent_since": datetime.now(
+                        timezone.utc
+                    ).isoformat(),
+                },
+            )
+            self._update_task_status(
+                task.task_id,
+                status="awaiting_user_consent",
+                actor="supervisor_executor",
+                reason="Body candidate passed probe and Governor review; waiting for explicit user consent.",
+                event_type="execution_awaiting_user_consent",
+            )
+            return result
         if is_failure:
             failure_count = int(task_metadata.get("execution_failure_count") or 0) + 1
             task_governance_type = self._task_governance_type(task)
@@ -7994,7 +8157,7 @@ class PlanningRuntimeMixin:
                         ),
                         event_type="execution_handoff_failed",
                     )
-                self._autonomous_chain_store.update_metadata(
+                self._update_task_metadata(
                     task.task_id,
                     metadata={
                         "execution_failed": True,
@@ -8012,7 +8175,7 @@ class PlanningRuntimeMixin:
                     reason=f"自主交接重试 {failure_count}/{max_retries}",
                     event_type="execution_handoff_retry",
                 )
-                self._autonomous_chain_store.update_metadata(
+                self._update_task_metadata(
                     task.task_id,
                     metadata={
                         "execution_failed": True,
@@ -8022,7 +8185,7 @@ class PlanningRuntimeMixin:
                 )
             else:
                 # Permanent failure — keep the failed lineage so it is not retried.
-                self._autonomous_chain_store.update_metadata(
+                self._update_task_metadata(
                     task.task_id,
                     metadata={
                         "execution_failed": True,
@@ -8067,7 +8230,7 @@ class PlanningRuntimeMixin:
             reason=completion_reason,
             event_type="execution_handoff_completed",
         )
-        self._autonomous_chain_store.update_metadata(
+        self._update_task_metadata(
             task.task_id,
             metadata={"execution_result": result},
         )
@@ -8091,6 +8254,38 @@ class PlanningRuntimeMixin:
             },
         )
         return result
+
+    def _reconcile_body_switch_consent_outcome(
+        self,
+        result: Dict[str, Any],
+    ) -> None:
+        task_link = dict(result.get("autonomous_task_link") or {})
+        task_id = str(task_link.get("task_id") or "").strip()
+        if not task_id:
+            return
+        task = self._autonomous_chain_store.get_task(task_id)
+        if task is None or str(task.status) != "awaiting_user_consent":
+            return
+        status = str(result.get("status") or "").strip().lower()
+        if status == "body_switch_activated":
+            target_status = "completed"
+            reason = "User approved the probe-passed body and activation completed."
+        elif status == "body_switch_rejected":
+            target_status = "cancelled"
+            reason = "User rejected the body activation; the candidate returned to shell."
+        else:
+            return
+        self._update_task_metadata(
+            task_id,
+            metadata={"body_switch_consent_result": dict(result)},
+        )
+        self._update_task_status(
+            task_id,
+            status=target_status,
+            actor="user_consent",
+            reason=reason,
+            event_type="body_switch_consent_outcome",
+        )
 
     async def _run_autonomous_chain_review_cycle(self) -> Dict[str, Any]:
         cycle_lock = self._get_autonomous_chain_cycle_lock()
@@ -8375,6 +8570,10 @@ class PlanningRuntimeMixin:
             reason=reason or f"Status updated to {status}",
             context=dict(context or {}),
             execution_request=execution_request,
+            before_commit=lambda updated: self._record_autonomous_task_transition(
+                updated,
+                transition_kind=event_type,
+            ),
         )
         self._record_endogenous_drive_outcome(task, event_type=event_type)
         return task

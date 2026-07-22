@@ -9,6 +9,8 @@ from .schema import _serialize, new_id, parse_datetime, utc_now
 
 
 class GovernanceEventType(str, Enum):
+    AUTONOMOUS_TASK_TRANSITION = "autonomous_task_transition"
+    AUTONOMOUS_TASK_CLEAR = "autonomous_task_clear"
     CANDIDATE_REVIEW = "candidate_review"
     PROBE_APPROVAL = "probe_approval"
     PROBE_FAILURE = "probe_failure"

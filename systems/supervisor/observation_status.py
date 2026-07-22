@@ -7,6 +7,7 @@ _OBSERVATION_STATUS_LABELS = {
     "awaiting_review": "待复核",
     "approved": "已转交",
     "running": "执行中",
+    "awaiting_user_consent": "待用户同意",
     "retry": "重试",
     "deferred": "已推迟",
     "paused": "已暂停",

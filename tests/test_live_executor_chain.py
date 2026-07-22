@@ -4,12 +4,16 @@ import asyncio
 from pathlib import Path
 import socket
 import subprocess
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 import uvicorn
 
 from systems.gateway.internal_gateway import GatewayConfig, InternalGateway
+from systems.memory.config import MemoryServiceConfig
+from systems.memory.memory_service import MemoryService
+from plugins.memory.mem import MemMemoryProvider
 from systems.supervisor.supervisor import (
     Supervisor,
     SupervisorConfig,
@@ -202,6 +206,132 @@ async def test_live_gateway_executor_propagates_body_integrity_degraded(tmp_path
             assert recovered["body_runtime"]["healthy"] is True
     finally:
         await _stop_uvicorn(supervisor_server, supervisor_task)
+        await _stop_uvicorn(gateway_server, gateway_task)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_live_three_service_lifespan_registration_recovery_and_shutdown(
+    tmp_path: Path,
+):
+    _create_git_repo(tmp_path)
+    gateway_port = _free_port()
+    memory_port = _free_port()
+    supervisor_port = _free_port()
+    gateway_url = f"http://127.0.0.1:{gateway_port}"
+
+    gateway = InternalGateway(GatewayConfig(host="127.0.0.1", port=gateway_port))
+    memory = MemoryService(
+        MemoryServiceConfig(
+            host="127.0.0.1",
+            port=memory_port,
+            db_path=str(tmp_path / "memory" / "memory.db"),
+            gateway_address=gateway_url,
+            gateway_registration_check_interval=1,
+            compression_interval=3600,
+        )
+    )
+    memory._check_llm_health = AsyncMock(return_value=None)  # type: ignore[method-assign]
+    supervisor = _create_supervisor(
+        tmp_path,
+        gateway_url=gateway_url,
+        port=supervisor_port,
+        health_check_interval=1,
+    )
+
+    gateway_server = gateway_task = None
+    memory_server = memory_task = None
+    supervisor_server = supervisor_task = None
+    try:
+        gateway_server, gateway_task = await _start_uvicorn(gateway.app, gateway_port)
+        memory_server, memory_task = await _start_uvicorn(memory.app, memory_port)
+        supervisor_server, supervisor_task = await _start_uvicorn(
+            supervisor.app,
+            supervisor_port,
+        )
+
+        services = await _wait_for_gateway_service_types(
+            gateway_url,
+            {"memory", "supervisor", "executor"},
+        )
+        memory_registration = next(
+            item for item in services["services"] if item["service_type"] == "memory"
+        )
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            proxied_health = (await client.get(f"{gateway_url}/api/mem/")).json()
+            assert proxied_health["service"] == "memory-service"
+            assert proxied_health["gateway_registration"]["healthy"] is True
+
+            trace_id = "live-three-service-trace"
+            touched = await client.post(
+                f"{gateway_url}/admin/activity/touch",
+                json={
+                    "activity_kind": "memory_task",
+                    "source_service": "memory",
+                    "metadata": {"trace_id": trace_id},
+                },
+            )
+            assert touched.status_code == 200
+            trace = (await client.get(f"{gateway_url}/admin/traces/{trace_id}")).json()
+            assert trace["trace_id"] == trace_id
+            assert trace["count"] == 1
+            assert trace["events"][0]["metadata"]["trace_id"] == trace_id
+
+            tier1_stats = await supervisor._fetch_tier1_stats()
+            assert tier1_stats.get("memory_unavailable") is not True
+
+            provider = MemMemoryProvider()
+            provider._initialized = True
+            provider._gateway_url = gateway_url
+            provider._request_timeout_seconds = 5.0
+            await asyncio.to_thread(
+                provider._write_turn_pair,
+                {
+                    "session_id": "live agent session",
+                    "user_content": "remember this question",
+                    "assistant_content": "remember this answer",
+                    "write_id": "live-write-1",
+                },
+            )
+            turns = (
+                await client.get(
+                    f"{gateway_url}/api/mem/sessions/live%20agent%20session/turns"
+                )
+            ).json()
+            assert [turn["speaker"] for turn in turns["turns"]] == ["user", "agent"]
+            assert [turn["text"] for turn in turns["turns"]] == [
+                "remember this question",
+                "remember this answer",
+            ]
+
+            removed = await client.delete(
+                f"{gateway_url}/admin/services/{memory_registration['service_id']}"
+            )
+            assert removed.status_code == 200
+
+        restored = await _wait_for_gateway_service_types(gateway_url, {"memory"})
+        restored_memory = next(
+            item for item in restored["services"] if item["service_type"] == "memory"
+        )
+        assert restored_memory["service_id"] != memory_registration["service_id"]
+        assert memory._gateway_service_id == restored_memory["service_id"]
+        assert memory._gateway_registration_healthy is True
+
+        await _stop_uvicorn(memory_server, memory_task)
+        memory_server = memory_task = None
+        assert memory._gateway_registration_task is not None
+        assert memory._gateway_registration_task.done()
+        assert memory._compression_task is not None
+        assert memory._compression_task.done()
+
+        unavailable = await supervisor._fetch_tier1_stats()
+        assert unavailable["memory_unavailable"] is True
+        assert unavailable["memory_active"] is False
+        assert unavailable["memory_unavailable_reason"] == "ClientConnectorError"
+    finally:
+        await _stop_uvicorn(supervisor_server, supervisor_task)
+        await _stop_uvicorn(memory_server, memory_task)
         await _stop_uvicorn(gateway_server, gateway_task)
 
 

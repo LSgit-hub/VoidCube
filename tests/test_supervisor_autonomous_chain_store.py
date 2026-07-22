@@ -26,7 +26,10 @@ from systems.supervisor.endogenous_drive import (
     DriveReflection,
     DriveWorldModel,
 )
-from systems.supervisor.autonomous_chain_store import AutonomousChainExecutionRequest
+from systems.supervisor.autonomous_chain_store import (
+    AutonomousChainExecutionRequest,
+    AutonomousChainStore,
+)
 from systems.config import load_config_from_env
 
 
@@ -50,6 +53,23 @@ def _make_supervisor(tmp_path: Path) -> Supervisor:
         return_value={}
     )
     return supervisor
+
+
+def _auditable_body_task_fields(seed: str = "1") -> dict:
+    source_commit = f"source-{seed}"
+    return {
+        "metadata": {
+            "target_slot_id": "slot-B",
+        },
+        "evidence": {
+            "git_lineage": {
+                "source_commit": source_commit,
+                "candidate_commit": f"candidate-{seed}",
+                "rollback_commit": source_commit,
+                "changed_files": ["agent/runtime.py"],
+            }
+        },
+    }
 
 
 def _seed_current_lm_reasoning_state(
@@ -378,7 +398,18 @@ async def _plan_and_write_back_endogenous_cycle(
             return evaluation
         assert candidates
 
-    planned = await supervisor.plan_autonomous_chain_task(candidates[0])
+    candidate = dict(candidates[0])
+    if str(candidate.get("governance_task_type") or "") == "self_evolution":
+        auditable = _auditable_body_task_fields(str(candidate.get("title") or "cycle"))
+        candidate["metadata"] = {
+            **dict(candidate.get("metadata") or {}),
+            **auditable["metadata"],
+        }
+        candidate["evidence"] = {
+            **dict(candidate.get("evidence") or {}),
+            **auditable["evidence"],
+        }
+    planned = await supervisor.plan_autonomous_chain_task(candidate)
     task_id = planned["tasks"][0]["task_id"]
 
     if outcome_status == "deferred":
@@ -16287,7 +16318,12 @@ async def test_endogenous_drive_schedule_allocator_skips_occupied_slots(tmp_path
 @pytest.mark.unit
 async def test_auto_decision_approves_task_when_drive_input_allows_execution(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task({"title": "Review body upgrade proposal"})
+    planned = await supervisor.plan_autonomous_chain_task(
+        {
+            "title": "Review body upgrade proposal",
+            **_auditable_body_task_fields("auto-1"),
+        }
+    )
     task_id = planned["tasks"][0]["task_id"]
 
     async def fake_snapshot():
@@ -16330,7 +16366,12 @@ async def test_auto_decision_approves_task_when_drive_input_allows_execution(tmp
 @pytest.mark.unit
 async def test_auto_decision_accepts_drive_input_request_without_guard_probe(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    planned = await supervisor.plan_autonomous_chain_task({"title": "Review body upgrade proposal"})
+    planned = await supervisor.plan_autonomous_chain_task(
+        {
+            "title": "Review body upgrade proposal",
+            **_auditable_body_task_fields("auto-2"),
+        }
+    )
     task_id = planned["tasks"][0]["task_id"]
     supervisor.evaluate_drive_input = AsyncMock(side_effect=AssertionError("should not probe guards"))  # type: ignore[method-assign]
 
@@ -16444,8 +16485,14 @@ async def test_batch_review_can_reapprove_deferred_tasks_on_later_cycle(tmp_path
     await supervisor.plan_autonomous_chain_task(
         {
             "items": [
-                {"title": "Revisit idle learning thread"},
-                {"title": "Revisit stale improvement evidence"},
+                {
+                    "title": "Revisit idle learning thread",
+                    **_auditable_body_task_fields("reapprove-1"),
+                },
+                {
+                    "title": "Revisit stale improvement evidence",
+                    **_auditable_body_task_fields("reapprove-2"),
+                },
             ]
         }
     )
@@ -16642,8 +16689,17 @@ async def test_batch_review_accepts_lm_governance_override(tmp_path, monkeypatch
     planned = await supervisor.plan_autonomous_chain_task(
         {
             "items": [
-                {"title": "Learn unresolved architecture issue"},
-                {"title": "Weak duplicate follow-up", "priority": "low"},
+                {
+                    "title": "Learn unresolved architecture issue",
+                    "task_family": "self_learning",
+                    "source": "self_learning",
+                },
+                {
+                    "title": "Weak duplicate follow-up",
+                    "priority": "low",
+                    "task_family": "self_learning",
+                    "source": "self_learning",
+                },
             ]
         }
     )
@@ -16678,7 +16734,7 @@ async def test_batch_review_accepts_lm_governance_override(tmp_path, monkeypatch
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
-            "drive_input": _formal_endogenous_drive_input_payload(self_evolution_execution=True),
+            "drive_input": _formal_endogenous_drive_input_payload(self_learning_execution=True),
         }
     )
 
@@ -17103,8 +17159,18 @@ async def test_batch_review_records_shadow_governance_actions_without_mutating_s
     planned = await supervisor.plan_autonomous_chain_task(
         {
             "items": [
-                {"title": "Duplicate learning branch", "priority": "normal"},
-                {"title": "Canonical learning branch", "priority": "high"},
+                {
+                    "title": "Duplicate learning branch",
+                    "priority": "normal",
+                    "task_family": "self_learning",
+                    "source": "self_learning",
+                },
+                {
+                    "title": "Canonical learning branch",
+                    "priority": "high",
+                    "task_family": "self_learning",
+                    "source": "self_learning",
+                },
             ]
         }
     )
@@ -17151,7 +17217,7 @@ async def test_batch_review_records_shadow_governance_actions_without_mutating_s
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
-            "drive_input": _formal_endogenous_drive_input_payload(self_evolution_execution=True),
+            "drive_input": _formal_endogenous_drive_input_payload(self_learning_execution=True),
         }
     )
 
@@ -17266,12 +17332,16 @@ async def test_batch_review_defers_second_task_when_scheduled_for_conflicts(tmp_
         {
             "title": "First scheduled task",
             "scheduled_for": "2026-06-28T01:00:00",
+            "task_family": "self_learning",
+            "source": "self_learning",
         }
     )
     await supervisor.plan_autonomous_chain_task(
         {
             "title": "Second scheduled task",
             "scheduled_for": "2026-06-28T01:00:00",
+            "task_family": "self_learning",
+            "source": "self_learning",
         }
     )
 
@@ -17290,7 +17360,7 @@ async def test_batch_review_defers_second_task_when_scheduled_for_conflicts(tmp_
 
     result = await supervisor.review_autonomous_chain_tasks(
         {
-            "drive_input": _formal_endogenous_drive_input_payload(self_evolution_execution=True),
+            "drive_input": _formal_endogenous_drive_input_payload(self_learning_execution=True),
         }
     )
 
@@ -17523,6 +17593,13 @@ def test_execution_request_ignores_legacy_activity_guard_evidence():
             "trace_id": "trace-1",
             "task_type": "self_evolution",
             "kind": "general_self_evolution",
+            "target_slot_id": "slot-B",
+            "git_lineage": {
+                "source_commit": "aaa111",
+                "candidate_commit": "bbb222",
+                "rollback_commit": "aaa111",
+                "changed_files": ["agent/runtime.py"],
+            },
             "activity_guard_evidence": {
                 "user_chain_signal": {
                     "scope": "soft_signal_only",
@@ -17544,6 +17621,13 @@ def test_execution_request_drive_input_evidence_stays_primary():
             "trace_id": "trace-2",
             "task_type": "self_evolution",
             "kind": "general_self_evolution",
+            "target_slot_id": "slot-B",
+            "git_lineage": {
+                "source_commit": "aaa111",
+                "candidate_commit": "bbb222",
+                "rollback_commit": "aaa111",
+                "changed_files": ["agent/runtime.py"],
+            },
             "drive_input_evidence": {
                 "user_chain_signal": {
                     "scope": "soft_signal_only",
@@ -17569,6 +17653,13 @@ async def test_serialized_task_execution_request_exposes_drive_input_evidence(tm
             "trace_id": planned["tasks"][0]["trace_id"],
             "task_type": "self_evolution",
             "kind": "general_self_evolution",
+            "target_slot_id": "slot-B",
+            "git_lineage": {
+                "source_commit": "aaa111",
+                "candidate_commit": "bbb222",
+                "rollback_commit": "aaa111",
+                "changed_files": ["agent/runtime.py"],
+            },
             "drive_input_evidence": {
                 "user_chain_signal": {
                     "scope": "soft_signal_only",
@@ -17690,7 +17781,6 @@ async def test_body_self_evolution_approval_rejects_mother_system_changes(tmp_pa
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-@pytest.mark.skip(reason="Body validation removed — AutonomousChainExecutionRequest no longer validates git_lineage")
 async def test_body_self_evolution_approval_requires_git_lineage_and_rollback(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     planned = await supervisor.plan_autonomous_chain_task(
@@ -17718,6 +17808,7 @@ async def test_body_self_evolution_approval_requires_git_lineage_and_rollback(tm
             },
         )
 
+    assert "git_lineage.source_commit" in str(exc_info.value)
     assert "git_lineage.rollback_commit" in str(exc_info.value)
     planned_task = await supervisor.get_autonomous_chain_task(task_id)
     assert planned_task["status"] == "planned"
@@ -17726,7 +17817,6 @@ async def test_body_self_evolution_approval_requires_git_lineage_and_rollback(tm
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-@pytest.mark.skip(reason="Body validation removed — AutonomousChainExecutionRequest no longer validates changed_files")
 async def test_body_self_evolution_approval_requires_changed_files(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     planned = await supervisor.plan_autonomous_chain_task(
@@ -17738,6 +17828,7 @@ async def test_body_self_evolution_approval_requires_changed_files(tmp_path):
             },
             "evidence": {
                 "git_lineage": {
+                    "source_commit": "aaa111",
                     "candidate_commit": "bbb222",
                     "rollback_commit": "aaa111",
                 },
@@ -18717,6 +18808,307 @@ def test_supervisor_boot_recovers_empty_autonomous_store_from_mem_governance(tmp
 
 
 @pytest.mark.asyncio
+async def test_autonomous_task_transitions_are_recoverable_from_mem_governance(tmp_path):
+    from memai.governance import GovernanceEventType
+
+    supervisor = _make_supervisor(tmp_path)
+    planned = await supervisor.plan_autonomous_chain_task(
+        {
+            "title": "Recover ordinary agent-pull task",
+            "task_type": "self_learning",
+            "source": "manual",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+    await supervisor.decide_autonomous_chain_task(
+        task_id,
+        {
+            "decision": "approved",
+            "actor": "supervisor",
+            "reason": "ready for agent pull",
+        },
+    )
+    await supervisor.decide_autonomous_chain_task(
+        task_id,
+        {
+            "decision": "running",
+            "actor": "cli_agent",
+            "session_id": "owner-session",
+            "reason": "claimed",
+        },
+    )
+    await supervisor.decide_autonomous_chain_task(
+        task_id,
+        {
+            "decision": "completed",
+            "actor": "cli_agent",
+            "session_id": "owner-session",
+            "reason": "completed",
+            "metadata": {"execution_result": {"status": "completed", "value": 7}},
+        },
+    )
+
+    events = [
+        event
+        for event in supervisor._governor.governance_repository.list_events()
+        if event.task_id == task_id
+        and event.event_type == GovernanceEventType.AUTONOMOUS_TASK_TRANSITION
+    ]
+    statuses = [
+        event.execution_result["autonomous_task_projection"]["status"]
+        for event in events
+    ]
+    assert list(dict.fromkeys(statuses)) == [
+        "planned",
+        "approved",
+        "running",
+        "completed",
+    ]
+    assert statuses[-1] == "completed"
+
+    recovered_store = AutonomousChainStore(tmp_path / "recovered-store.json")
+    result = recovered_store.recover_from_governance_events(events)
+    recovered = recovered_store.get_task(task_id)
+
+    assert result["added_task_count"] == 1
+    assert recovered is not None
+    assert recovered.status == "completed"
+    assert recovered.metadata["owner_session_id"] == "owner-session"
+    assert recovered.metadata["execution_result"] == {"status": "completed", "value": 7}
+    assert recovered.metadata["recovered_from_mem_governance"] is True
+
+
+def test_mem_governance_newer_projection_corrects_stale_nonempty_store(tmp_path):
+    from memai.governance import (
+        GovernanceDecision,
+        GovernanceEvent,
+        GovernanceEventType,
+    )
+
+    store = AutonomousChainStore(tmp_path / "store.json")
+    task = store.create_task(title="Stale running projection")
+    store.update_status(task.task_id, status="approved", reason="ready")
+    stale = store.update_status(task.task_id, status="running", reason="claimed")
+    stale.updated_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    snapshot = store._load_snapshot()
+    snapshot.tasks[0] = stale
+    store._write_snapshot(snapshot)
+
+    completed_projection = stale.model_copy(deep=True)
+    completed_projection.status = "completed"
+    completed_projection.updated_at = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    event = GovernanceEvent.create(
+        event_type=GovernanceEventType.AUTONOMOUS_TASK_TRANSITION,
+        source_actor="executor",
+        decision=GovernanceDecision.COMPLETED,
+        reason="authoritative completion",
+        task_id=task.task_id,
+        execution_result={
+            "autonomous_task_projection": completed_projection.model_dump(mode="json")
+        },
+    )
+    event.created_at = datetime(2026, 1, 2, tzinfo=timezone.utc)
+
+    first = store.recover_from_governance_events([event])
+    second = store.recover_from_governance_events([event])
+
+    assert first["updated_task_count"] == 1
+    assert second["updated_task_count"] == 0
+    assert store.get_task(task.task_id).status == "completed"
+    assert len(store.list_tasks()) == 1
+
+
+@pytest.mark.asyncio
+async def test_clear_runtime_records_mem_cutoff_and_tasks_do_not_reappear(tmp_path):
+    from memai.governance import GovernanceEventType
+
+    supervisor = _make_supervisor(tmp_path)
+    planned = await supervisor.plan_autonomous_chain_task(
+        {"title": "Cleared task must not be recovered"}
+    )
+    task_id = planned["tasks"][0]["task_id"]
+
+    result = await supervisor.clear_autonomous_chain_runtime({})
+
+    assert result["cleared_task_count"] == 1
+    assert supervisor._autonomous_chain_store.list_tasks() == []
+    events = supervisor._governor.governance_repository.list_events()
+    assert events[-1].event_type == GovernanceEventType.AUTONOMOUS_TASK_CLEAR
+    assert events[-1].execution_result["cleared_task_ids"] == [task_id]
+
+    recovered = AutonomousChainStore(tmp_path / "recovered-after-clear.json")
+    recovery = recovered.recover_from_governance_events(events)
+    assert recovery["added_task_count"] == 0
+    assert recovered.list_tasks() == []
+
+
+@pytest.mark.asyncio
+async def test_clear_runtime_keeps_store_when_mem_cutoff_cannot_be_persisted(
+    tmp_path,
+    monkeypatch,
+):
+    supervisor = _make_supervisor(tmp_path)
+    planned = await supervisor.plan_autonomous_chain_task(
+        {"title": "Clear requires durable cutoff"}
+    )
+    task_id = planned["tasks"][0]["task_id"]
+
+    def fail_append(event):
+        raise RuntimeError(f"cannot persist {event.id}")
+
+    monkeypatch.setattr(
+        supervisor._governor.governance_repository,
+        "append",
+        fail_append,
+    )
+
+    with pytest.raises(RuntimeError, match="cannot persist"):
+        await supervisor.clear_autonomous_chain_runtime({})
+
+    assert supervisor._autonomous_chain_store.get_task(task_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_governance_persistence_failure_prevents_store_transition(tmp_path, monkeypatch):
+    supervisor = _make_supervisor(tmp_path)
+    planned = await supervisor.plan_autonomous_chain_task(
+        {
+            "title": "Do not publish without governance truth",
+            "task_type": "self_learning",
+            "source": "self_learning",
+            "metadata": {
+                "governance_task_type": "self_learning",
+                "task_family": "self_learning",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+
+    def fail_append(event):
+        raise RuntimeError(f"cannot persist {event.id}")
+
+    monkeypatch.setattr(
+        supervisor._governor.governance_repository,
+        "append",
+        fail_append,
+    )
+
+    with pytest.raises(RuntimeError, match="cannot persist"):
+        await supervisor.decide_autonomous_chain_task(
+            task_id,
+            {"decision": "approved", "reason": "attempted approval"},
+        )
+
+    task = supervisor._autonomous_chain_store.get_task(task_id)
+    assert task.status == "planned"
+    assert task.decision_history == []
+
+
+@pytest.mark.asyncio
+async def test_body_handoff_waits_for_user_consent_before_terminal_completion(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    planned = await supervisor.plan_autonomous_chain_task(
+        {
+            "title": "Body candidate awaiting consent",
+            "metadata": {
+                "governance_task_type": "self_evolution",
+                "task_family": "body_switch",
+                "execution_kind": "body_switch",
+                "target_slot_id": "slot-B",
+            },
+        }
+    )
+    task_id = planned["tasks"][0]["task_id"]
+    request = AutonomousChainExecutionRequest.model_validate(
+        {
+            "task_id": task_id,
+            "trace_id": planned["tasks"][0]["trace_id"],
+            "kind": "general_self_evolution",
+            "target_slot_id": "slot-B",
+            "git_lineage": {
+                "source_commit": "aaa111",
+                "candidate_commit": "bbb222",
+                "rollback_commit": "aaa111",
+                "changed_files": ["agent/runtime.py"],
+            },
+        }
+    )
+    supervisor._autonomous_chain_store.update_status(
+        task_id,
+        status="approved",
+        execution_request=request,
+        reason="ready",
+    )
+    supervisor._execution_facade = type(
+        "_AwaitingConsentFacade",
+        (),
+        {
+            "execute_autonomous_chain_request": AsyncMock(
+                return_value={
+                    "status": "autonomous_chain_execution_executed",
+                    "result": {
+                        "status": "upgrade_awaiting_user_consent",
+                        "execution_request": request.model_dump(mode="json"),
+                    },
+                }
+            )
+        },
+    )()
+
+    result = await supervisor._handoff_autonomous_chain_execution_request(
+        supervisor._autonomous_chain_store.get_task(task_id)
+    )
+    waiting = supervisor._autonomous_chain_store.get_task(task_id)
+
+    assert result["result"]["status"] == "upgrade_awaiting_user_consent"
+    assert waiting.status == "awaiting_user_consent"
+    assert waiting.status not in {"completed", "failed", "cancelled"}
+
+    supervisor._reconcile_body_switch_consent_outcome(
+        {
+            "status": "body_switch_activated",
+            "autonomous_task_link": {"task_id": task_id},
+        }
+    )
+    assert supervisor._autonomous_chain_store.get_task(task_id).status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_body_handoff_user_rejection_cancels_original_task(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    planned = await supervisor.plan_autonomous_chain_task(
+        {"title": "Reject body candidate"}
+    )
+    task_id = planned["tasks"][0]["task_id"]
+    supervisor._autonomous_chain_store.update_status(
+        task_id, status="approved", reason="ready"
+    )
+    supervisor._autonomous_chain_store.update_status(
+        task_id, status="running", reason="handoff"
+    )
+    supervisor._autonomous_chain_store.update_status(
+        task_id,
+        status="awaiting_user_consent",
+        reason="waiting",
+    )
+
+    supervisor._reconcile_body_switch_consent_outcome(
+        {
+            "status": "body_switch_rejected",
+            "autonomous_task_link": {"task_id": task_id},
+        }
+    )
+
+    task = supervisor._autonomous_chain_store.get_task(task_id)
+    assert task.status == "cancelled"
+    assert task.decision_history[-1].actor == "user_consent"
+
+
+@pytest.mark.asyncio
 @pytest.mark.unit
 async def test_run_autonomous_chain_review_cycle_skips_when_cycle_already_running(tmp_path):
     supervisor = _make_supervisor(tmp_path)
@@ -18805,10 +19197,7 @@ async def test_run_autonomous_chain_review_cycle_limits_formal_execution_handoff
         planned = await supervisor.plan_autonomous_chain_task(
             {
                 "title": f"Autonomous-chain handoff budget task {idx}",
-                "metadata": {
-                    "execution_kind": "body_switch",
-                    "target_slot_id": f"slot-{idx}",
-                },
+                **_auditable_body_task_fields(f"budget-{idx}"),
             }
         )
         task_id = planned["tasks"][0]["task_id"]
@@ -18888,6 +19277,43 @@ async def test_fetch_tier1_stats_reports_memory_service_unavailable(tmp_path, mo
     assert stats["memory_unavailable"] is True
     assert stats["memory_unavailable_reason"] == "memory_service_not_registered"
     assert stats["memory_active"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_fetch_tier1_stats_uses_configured_gateway_address(tmp_path, monkeypatch):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.config.execution.gateway_address = "http://127.0.0.1:6123"
+    requested_urls = []
+
+    class _FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {"services": []}
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, timeout=None):
+            requested_urls.append(url)
+            return _FakeResponse()
+
+    monkeypatch.setattr("aiohttp.ClientSession", _FakeSession)
+
+    await supervisor._fetch_tier1_stats()
+
+    assert requested_urls == ["http://127.0.0.1:6123/admin/services"]
 
 
 @pytest.mark.asyncio

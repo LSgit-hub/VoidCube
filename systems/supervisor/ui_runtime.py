@@ -3168,6 +3168,7 @@ function statusLabel(s) {
     failed:'失败',
     cancelled:'已取消',
     awaiting_review:'待复核',
+    awaiting_user_consent:'待用户同意',
     retry:'重试',
   };
   return map[normalized] || normalized || '待定';
@@ -4336,7 +4337,7 @@ function buildObservationCard(task, options) {
   const badge = document.createElement('span');
   const rawStatus = normalizeObservationStatus(task.status);
   const badgeTone = (
-    ['planned', 'approved', 'running', 'completed', 'failed', 'deferred', 'paused'].includes(rawStatus)
+    ['planned', 'approved', 'running', 'awaiting_user_consent', 'completed', 'failed', 'deferred', 'paused'].includes(rawStatus)
       ? rawStatus
       : observationStateBadgeClass(rawStatus)
   );
@@ -5529,6 +5530,7 @@ class SupervisorUIMixin:
                 "failed": "失败",
                 "deferred": "推迟",
                 "awaiting_review": "待复核",
+                "awaiting_user_consent": "待用户同意",
             }.get(status, status or "未知")
             return f"近期结果为{status_label}，先复核再扩大自我改进"
         return str(value or "").strip()
@@ -6063,7 +6065,7 @@ class SupervisorUIMixin:
         status = self._observation_status_value(task)
         if status in {"active", "running"}:
             return 0
-        if status in {"approved", "retry"}:
+        if status in {"approved", "awaiting_user_consent", "retry"}:
             return 1
         if status == "candidate":
             return 2
@@ -6583,6 +6585,7 @@ class SupervisorUIMixin:
         preferred_statuses = (
             "active",
             "running",
+            "awaiting_user_consent",
             "ready",
             "approved",
             "candidate",
@@ -6620,6 +6623,7 @@ class SupervisorUIMixin:
             {
                 "ready",
                 "approved",
+                "awaiting_user_consent",
                 "candidate",
                 "retry",
                 "planned",
@@ -6870,6 +6874,7 @@ class SupervisorUIMixin:
             "deferred",
             "approved",
             "running",
+            "awaiting_user_consent",
             "paused",
             "awaiting_review",
             "retry",
@@ -7483,7 +7488,7 @@ class SupervisorUIMixin:
         """Fetch Tier 1 stats + memory_service rule execution status."""
         try:
             import aiohttp
-            gateway_url = "http://127.0.0.1:6000"
+            gateway_url = str(self.config.execution.gateway_address).rstrip("/")
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     f"{gateway_url}/admin/services", timeout=aiohttp.ClientTimeout(total=3)
@@ -7885,7 +7890,13 @@ class SupervisorUIMixin:
             if execution_kind != "body_improvement":
                 continue
             status = self._normalize_observation_status(task.get("status"))
-            if status not in {"planned", "approved", "retry", "running"}:
+            if status not in {
+                "planned",
+                "approved",
+                "retry",
+                "running",
+                "awaiting_user_consent",
+            }:
                 continue
             target_slot_id = self._body_upgrade_task_target_slot(task)
             if not target_slot_id:

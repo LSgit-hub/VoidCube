@@ -199,6 +199,7 @@ async def test_execution_facade_delegates_to_current_adapters():
             "source_actor": "mem_supervisor",
             "target_slot_id": "slot-B",
             "git_lineage": {
+                "source_commit": "aaa111",
                 "candidate_commit": "bbb222",
                 "rollback_commit": "aaa111",
                 "changed_files": ["agent/stream_handler.py"],
@@ -277,58 +278,13 @@ async def test_memory_maintenance_uses_canonical_rule_compression_endpoint(monke
             memory_gateway_path="/mem/",
         ),
         attach_execution_route_hint=_attach_route_hint,
-        mem_state_path="missing-state.json",
     )
-    adapter._run_structured_maintenance = AsyncMock(return_value={"status": "no_state"})  # type: ignore[method-assign]
 
     result = await adapter.trigger_memory_compression({"namespace": "default", "max_entries": 5})
 
-    assert captured_urls == ["http://gateway/mem/compressed/run-all-rules"]
-    assert result["structured_maintenance"] == {"status": "no_state"}
-    assert result["rule_compression"]["status"] == "rules_complete"
-    old_result_key = "flat" + "_compression"
-    assert old_result_key not in result
+    assert captured_urls == ["http://gateway/api/mem/compressed/run-all-rules"]
+    assert result["memory_service_maintenance"]["status"] == "rules_complete"
     assert result["execution_route_hint"]["interface_id"] == "memory.compress"
-
-
-@pytest.mark.unit
-def test_memory_maintenance_scholar_backend_uses_mem_model_resolver(monkeypatch):
-    fake_client = object()
-
-    class FakeLLMScholarBackend:
-        def __init__(self, client):
-            self.client = client
-
-    class FakeHeuristicScholarBackend:
-        pass
-
-    monkeypatch.setitem(
-        sys.modules,
-        "memai.model_config",
-        SimpleNamespace(resolve_mem_llm_client=lambda role="default": (fake_client, "deepseek-v4-flash")),
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "memai.scholar",
-        SimpleNamespace(
-            LLMScholarBackend=FakeLLMScholarBackend,
-            HeuristicScholarBackend=FakeHeuristicScholarBackend,
-        ),
-    )
-
-    adapter = MemoryMaintenanceExecutionAdapter(
-        config=SimpleNamespace(
-            gateway_address="http://gateway",
-            memory_gateway_path="/mem/",
-        ),
-        attach_execution_route_hint=_attach_route_hint,
-        mem_state_path="missing-state.json",
-    )
-
-    backend = adapter._build_scholar_backend()
-
-    assert isinstance(backend, FakeLLMScholarBackend)
-    assert backend.client is fake_client
 
 
 
@@ -631,6 +587,44 @@ async def test_body_upgrade_execution_adapter_persists_formal_git_lineage(tmp_pa
     assert pointer.slot_id == "slot-B"
     assert pointer.active_ref == "stable/v2"
     assert pointer.active_commit == "bbb222"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_body_switch_explicit_rejection_returns_candidate_to_shell(tmp_path: Path):
+    _seed_body_repo(tmp_path, probe_ready=True)
+    runtime = _make_body_upgrade_runtime(tmp_path)
+
+    upgrade = await runtime.adapter.execute_body_upgrade(
+        {
+            "body_version": "v2",
+            "execution_request": {
+                "task_id": "consent-task",
+                "trace_id": "consent-trace",
+                "decision_id": "consent-decision",
+                "git_lineage": {
+                    "source_commit": "aaa111",
+                    "candidate_commit": "bbb222",
+                    "rollback_commit": "aaa111",
+                    "changed_files": ["systems/execution/adapters.py"],
+                },
+            },
+        }
+    )
+    rejection = await runtime.adapter.confirm_body_switch(
+        {"slot_id": "slot-B", "approved": False}
+    )
+
+    assert upgrade["status"] == "upgrade_awaiting_user_consent"
+    assert rejection["status"] == "body_switch_rejected"
+    assert rejection["autonomous_task_link"] == {
+        "task_id": "consent-task",
+        "trace_id": "consent-trace",
+        "decision_id": "consent-decision",
+    }
+    assert rejection["rejection"]["governor_response"]["decision"] == "reject"
+    assert runtime.manager.load_slot_meta("slot-B").body_state == "shell"
+    assert runtime.manager.load_registry().active_slot == "slot-A"
 
 
 @pytest.mark.asyncio

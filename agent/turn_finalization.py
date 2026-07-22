@@ -260,8 +260,12 @@ def finalize_conversation_turn(
             owner._memory_manager.sync_all(
                 original_user_message,
                 state.final_response,
+                session_id=owner.session_id or "",
             )
-            owner._memory_manager.queue_prefetch_all(original_user_message)
+            owner._memory_manager.queue_prefetch_all(
+                original_user_message,
+                session_id=owner.session_id or "",
+            )
         except Exception:
             pass
 

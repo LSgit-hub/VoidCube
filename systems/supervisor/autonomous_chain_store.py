@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Literal, Optional
+from typing import Any, Callable, Dict, Iterable, List, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -16,7 +16,19 @@ from systems.runtime_task_profile import (
 
 # `approved` is a persisted historical enum name. In current chain semantics it
 # means "API-B has handed this item off; API-A may claim it", not "executed".
-AutonomousChainTaskStatus = Literal["planned", "deferred", "approved", "running", "paused", "cancelled", "completed", "failed", "awaiting_review", "retry"]
+AutonomousChainTaskStatus = Literal[
+    "planned",
+    "deferred",
+    "approved",
+    "running",
+    "awaiting_user_consent",
+    "paused",
+    "cancelled",
+    "completed",
+    "failed",
+    "awaiting_review",
+    "retry",
+]
 AutonomousChainExecutionRequestKind = Literal[
     "memory_maintenance",
     "general_self_evolution",
@@ -83,6 +95,39 @@ class AutonomousChainExecutionRequest(BaseModel):
         self.task_family = runtime_task_profile["task_family"]
         self.execution_kind = runtime_task_profile["execution_kind"]
         self.drive_input_evidence = dict(self.drive_input_evidence or {})
+        if self.kind == "general_self_evolution":
+            missing: list[str] = []
+            if not str(self.target_slot_id or "").strip():
+                missing.append("target_slot_id")
+            lineage = self.git_lineage
+            for field_name in (
+                "source_commit",
+                "candidate_commit",
+                "rollback_commit",
+            ):
+                if not str(getattr(lineage, field_name) or "").strip():
+                    missing.append(f"git_lineage.{field_name}")
+            changed_files = [
+                str(path).strip()
+                for path in lineage.changed_files
+                if str(path).strip()
+            ]
+            if not changed_files:
+                missing.append("git_lineage.changed_files")
+            if missing:
+                raise ValueError(
+                    "general_self_evolution execution requires auditable body lineage: "
+                    + ", ".join(missing)
+                )
+            lineage.changed_files = list(dict.fromkeys(changed_files))
+            if lineage.source_commit == lineage.candidate_commit:
+                raise ValueError(
+                    "git_lineage.candidate_commit must differ from source_commit"
+                )
+            if lineage.rollback_commit != lineage.source_commit:
+                raise ValueError(
+                    "git_lineage.rollback_commit must match source_commit"
+                )
         return self
 
 
@@ -183,6 +228,7 @@ class AutonomousChainStore:
             "deferred",
             "approved",
             "running",
+            "awaiting_user_consent",
             "paused",
             "awaiting_review",
             "retry",
@@ -200,6 +246,7 @@ class AutonomousChainStore:
         {
             "approved",
             "running",
+            "awaiting_user_consent",
             "retry",
         }
     )
@@ -341,6 +388,7 @@ class AutonomousChainStore:
         metadata: Optional[Dict[str, Any]] = None,
         evidence: Optional[Dict[str, Any]] = None,
         constraints: Optional[Dict[str, Any]] = None,
+        before_commit: Optional[Callable[[AutonomousChainTask], None]] = None,
     ) -> AutonomousChainTask:
         with self._lock:
             snapshot = self._load_snapshot()
@@ -356,6 +404,8 @@ class AutonomousChainStore:
                 constraints=dict(constraints or {}),
             )
             snapshot.tasks.append(task)
+            if before_commit is not None:
+                before_commit(task)
             self._write_snapshot(snapshot)
             return task
 
@@ -369,13 +419,22 @@ class AutonomousChainStore:
         reason: str = "",
         context: Optional[Dict[str, Any]] = None,
         execution_request: Optional[AutonomousChainExecutionRequest] = None,
+        before_commit: Optional[Callable[[AutonomousChainTask], None]] = None,
     ) -> AutonomousChainTask:
         # ── Validate state transition ──
         _LEGAL_TRANSITIONS: dict[str, set[str]] = {
             "planned": {"approved", "paused", "cancelled", "deferred", "awaiting_review"},
             "awaiting_review": {"approved", "planned", "deferred", "paused", "cancelled"},
             "approved": {"running", "cancelled", "deferred", "paused"},
-            "running": {"approved", "completed", "failed", "paused", "retry"},
+            "running": {
+                "approved",
+                "awaiting_user_consent",
+                "completed",
+                "failed",
+                "paused",
+                "retry",
+            },
+            "awaiting_user_consent": {"completed", "failed", "cancelled"},
             "paused": {"planned", "approved", "cancelled", "deferred"},
             "deferred": {"planned", "approved", "cancelled", "paused", "awaiting_review"},
             "retry": {"approved", "planned", "deferred", "paused", "cancelled"},
@@ -400,6 +459,8 @@ class AutonomousChainStore:
                         task.metadata.update({"last_decision_context": dict(context)})
                     task.updated_at = datetime.utcnow()
                     snapshot.tasks[index] = task
+                    if before_commit is not None:
+                        before_commit(task)
                     self._write_snapshot(snapshot)
                     return task
                 if current not in _LEGAL_TRANSITIONS:
@@ -432,6 +493,8 @@ class AutonomousChainStore:
                 if execution_request is not None:
                     task.execution_request = execution_request
                 snapshot.tasks[index] = task
+                if before_commit is not None:
+                    before_commit(task)
                 self._write_snapshot(snapshot)
                 return task
         raise KeyError(task_id)
@@ -442,6 +505,7 @@ class AutonomousChainStore:
         *,
         metadata: Optional[Dict[str, Any]] = None,
         execution_request: Optional[AutonomousChainExecutionRequest] = None,
+        before_commit: Optional[Callable[[AutonomousChainTask], None]] = None,
     ) -> AutonomousChainTask:
         with self._lock:
             snapshot = self._load_snapshot()
@@ -454,6 +518,8 @@ class AutonomousChainStore:
                     task.execution_request = execution_request
                 task.updated_at = datetime.utcnow()
                 snapshot.tasks[index] = task
+                if before_commit is not None:
+                    before_commit(task)
                 self._write_snapshot(snapshot)
                 return task
         raise KeyError(task_id)
@@ -466,6 +532,7 @@ class AutonomousChainStore:
         actor: str = "supervisor",
         reason: str = "",
         context: Optional[Dict[str, Any]] = None,
+        before_commit: Optional[Callable[[AutonomousChainTask], None]] = None,
     ) -> AutonomousChainTask:
         normalized_priority = str(priority or "").strip().lower() or "normal"
         with self._lock:
@@ -491,6 +558,8 @@ class AutonomousChainStore:
                     )
                 )
                 snapshot.tasks[index] = task
+                if before_commit is not None:
+                    before_commit(task)
                 self._write_snapshot(snapshot)
                 return task
         raise KeyError(task_id)
@@ -503,10 +572,10 @@ class AutonomousChainStore:
     ) -> Dict[str, Any]:
         """Merge task projections rebuilt from Mem governance events.
 
-        The JSON store is runtime coordination state. This replay keeps Mem's
-        append-only governance log authoritative after the runtime file is lost,
-        while preserving existing runtime tasks unless an explicit replacement
-        is requested.
+        The JSON store is runtime coordination state. Mem's append-only log is
+        authoritative: a newer recovered projection replaces an older runtime
+        projection with the same task id. ``replace`` additionally drops tasks
+        that have no recoverable governance history.
         """
         event_rows = sorted(
             (
@@ -516,6 +585,14 @@ class AutonomousChainStore:
             ),
             key=self._governance_event_sort_key,
         )
+        clear_indexes = [
+            index
+            for index, row in enumerate(event_rows)
+            if self._enum_value(row.get("event_type")).strip().lower()
+            == "autonomous_task_clear"
+        ]
+        if clear_indexes:
+            event_rows = event_rows[clear_indexes[-1] + 1 :]
         by_task_id: Dict[str, List[Dict[str, Any]]] = {}
         skipped_without_task_id = 0
         for row in event_rows:
@@ -535,21 +612,21 @@ class AutonomousChainStore:
 
         with self._lock:
             snapshot = AutonomousChainStoreSnapshot() if replace else self._load_snapshot()
-            existing_ids = {task.task_id for task in snapshot.tasks}
+            existing_indexes = {
+                task.task_id: index for index, task in enumerate(snapshot.tasks)
+            }
             added = 0
             updated = 0
             for task in recovered_tasks:
-                if task.task_id in existing_ids:
-                    if not replace:
-                        continue
-                    for index, existing in enumerate(snapshot.tasks):
-                        if existing.task_id == task.task_id:
-                            snapshot.tasks[index] = task
-                            updated += 1
-                            break
+                existing_index = existing_indexes.get(task.task_id)
+                if existing_index is not None:
+                    existing = snapshot.tasks[existing_index]
+                    if replace or self._task_is_newer(task, existing):
+                        snapshot.tasks[existing_index] = task
+                        updated += 1
                     continue
                 snapshot.tasks.append(task)
-                existing_ids.add(task.task_id)
+                existing_indexes[task.task_id] = len(snapshot.tasks) - 1
                 added += 1
             if added or updated or replace:
                 self._write_snapshot(snapshot)
@@ -563,6 +640,22 @@ class AutonomousChainStore:
             "skipped_without_task_id": skipped_without_task_id,
             "replace": replace,
         }
+
+    @classmethod
+    def _task_is_newer(
+        cls,
+        candidate: AutonomousChainTask,
+        existing: AutonomousChainTask,
+    ) -> bool:
+        return cls._comparable_datetime(candidate.updated_at) > cls._comparable_datetime(
+            existing.updated_at
+        )
+
+    @staticmethod
+    def _comparable_datetime(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
     def _load_snapshot(self) -> AutonomousChainStoreSnapshot:
         if not self.storage_path.exists():
@@ -664,6 +757,13 @@ class AutonomousChainStore:
         cls,
         event: Dict[str, Any],
     ) -> Optional[AutonomousChainTaskStatus]:
+        execution_result = cls._dict_value(event.get("execution_result"))
+        task_projection = cls._dict_value(
+            execution_result.get("autonomous_task_projection")
+        )
+        projected_status = str(task_projection.get("status") or "").strip().lower()
+        if projected_status in cls._all_task_statuses():
+            return projected_status  # type: ignore[return-value]
         decision = cls._enum_value(event.get("decision")).strip().lower()
         if decision in cls._GOVERNANCE_DECISION_TO_STATUS:
             return cls._GOVERNANCE_DECISION_TO_STATUS[decision]
@@ -677,6 +777,14 @@ class AutonomousChainStore:
         if event_type == "self_evolution_cancel":
             return "cancelled"
         return None
+
+    @classmethod
+    def _all_task_statuses(cls) -> frozenset[str]:
+        return frozenset(
+            cls._AUTONOMOUS_CHAIN_LIVE_STATUSES
+            | cls._WRITEBACK_HISTORY_STATUSES
+            | {"cancelled"}
+        )
 
     @classmethod
     def _task_from_governance_events(
@@ -696,6 +804,18 @@ class AutonomousChainStore:
             return None
 
         latest_execution_result = cls._dict_value(latest.get("execution_result"))
+        latest_task_projection = cls._dict_value(
+            latest_execution_result.get("autonomous_task_projection")
+        )
+        if latest_task_projection:
+            task = AutonomousChainTask.model_validate(latest_task_projection)
+            task.metadata = {
+                **dict(task.metadata or {}),
+                "recovered_from_mem_governance": True,
+                "latest_governance_event_id": str(latest.get("id") or ""),
+            }
+            return task
+
         recovery_projection = cls._coalesce_governance_event_mapping(
             concrete_rows,
             "execution_result",

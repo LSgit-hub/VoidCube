@@ -92,6 +92,11 @@ class InternalGateway:
         "supervisor": "/supervisor/",
         "executor": "/executor/",
     }
+    UPSTREAM_PREFIX_BY_SERVICE_TYPE = {
+        "memory": "/",
+        "supervisor": "/",
+        "executor": "/executor/",
+    }
     ROUTED_SINGLETON_SERVICE_TYPES = frozenset(ROUTE_PREFIX_BY_SERVICE_TYPE)
 
     def __init__(self, config: GatewayConfig = None):
@@ -1172,6 +1177,18 @@ class InternalGateway:
                     enabled=True
                 )
 
+    @classmethod
+    def _upstream_route_path(cls, service_type: str, gateway_path: str) -> str:
+        gateway_prefix = cls.ROUTE_PREFIX_BY_SERVICE_TYPE.get(service_type)
+        upstream_prefix = cls.UPSTREAM_PREFIX_BY_SERVICE_TYPE.get(service_type)
+        normalized_path = "/" + str(gateway_path or "").lstrip("/")
+        if not gateway_prefix or upstream_prefix is None:
+            return normalized_path
+        if not normalized_path.startswith(gateway_prefix):
+            return normalized_path
+        suffix = normalized_path[len(gateway_prefix) :]
+        return upstream_prefix.rstrip("/") + "/" + suffix
+
     def _invalidate_service_registration_cache(self, service_type: str) -> None:
         if service_type == "memory":
             self._memory_service_url = None
@@ -1515,7 +1532,11 @@ class InternalGateway:
             elif target_service.service_type == "executor":
                 self._touch_activity("autonomous_chain_execute", metadata=activity_metadata)
             
-            url = f"{target_service.address}/{path}"
+            upstream_path = self._upstream_route_path(
+                target_service.service_type,
+                path,
+            )
+            url = f"{target_service.address}{upstream_path}"
             logger.debug(f"Routing request {request_id}: {path} -> {url}")
             headers = dict(request.headers)
             

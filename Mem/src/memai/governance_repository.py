@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import json
 import logging
 from pathlib import Path
+import threading
 
 from .governance import (
     GovernanceDecision,
@@ -63,12 +64,7 @@ class GovernanceEventRepository:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.retry_path = self.path.with_suffix(".retry.jsonl")
-
-    def clear(self) -> None:
-        """Clear primary and retry state through the repository owner."""
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text("", encoding="utf-8")
-        self.retry_path.unlink(missing_ok=True)
+        self._lock = threading.RLock()
 
     def append(self, event: GovernanceEvent) -> GovernanceEvent:
         """Append with idempotency, write protection, and retry-log fallback.
@@ -76,32 +72,44 @@ class GovernanceEventRepository:
         On write failure the event is appended to ``<path>.retry.jsonl`` so
         no governance event is silently lost (M-06).
         """
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        if event.id in {item.id for item in self.list_events()}:
-            return event
-        try:
-            with self.path.open("a", encoding="utf-8", newline="\n") as handle:
-                handle.write(json.dumps(event.to_dict(), ensure_ascii=False) + "\n")
-        except Exception:
-            logger.warning(
-                "Failed to write governance event %s — writing to retry log", event.id
-            )
+        with self._lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            if event.id in {item.id for item in self.list_events()}:
+                return event
             try:
-                with self.retry_path.open("a", encoding="utf-8") as f:
-                    f.write(json.dumps(event.to_dict(), ensure_ascii=False) + "\n")
+                with self.path.open("a", encoding="utf-8", newline="\n") as handle:
+                    handle.write(json.dumps(event.to_dict(), ensure_ascii=False) + "\n")
             except Exception:
-                logger.error(
-                    "Failed to write governance event %s to retry log — event lost", event.id
+                logger.warning(
+                    "Failed to write governance event %s — writing to retry log", event.id
                 )
+                try:
+                    with self.retry_path.open("a", encoding="utf-8") as f:
+                        f.write(json.dumps(event.to_dict(), ensure_ascii=False) + "\n")
+                except Exception as retry_exc:
+                    logger.error(
+                        "Failed to write governance event %s to retry log — event lost", event.id
+                    )
+                    raise RuntimeError(
+                        f"Governance event {event.id} could not be persisted"
+                    ) from retry_exc
         return event
 
     def list_events(self, limit: int = 0) -> list[GovernanceEvent]:
-        if not self.path.exists():
-            return []
-        events: list[GovernanceEvent] = []
-        for line in self.path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                events.append(GovernanceEvent.from_dict(json.loads(line)))
+        with self._lock:
+            events: list[GovernanceEvent] = []
+            seen_ids: set[str] = set()
+            for path in (self.path, self.retry_path):
+                if not path.exists():
+                    continue
+                for line in path.read_text(encoding="utf-8").splitlines():
+                    if not line.strip():
+                        continue
+                    event = GovernanceEvent.from_dict(json.loads(line))
+                    if event.id in seen_ids:
+                        continue
+                    seen_ids.add(event.id)
+                    events.append(event)
         if limit > 0:
             return events[-limit:]
         return events

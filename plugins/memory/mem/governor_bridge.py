@@ -238,13 +238,13 @@ class MemGovernorBridge:
             return None
         return json.loads(self.latest_path.read_text(encoding="utf-8"))
 
-    def clear_history(self) -> None:
+    def clear_runtime_projection(self) -> None:
+        """Clear the legacy Governor projection without deleting Mem history."""
         with self._lock:
             if self.history_path.exists():
                 self.history_path.write_text("", encoding="utf-8")
             if self.latest_path.exists():
                 self.latest_path.unlink()
-        self._governance_repo.clear()
 
     def _extract_evolution_lineage(
         self,
