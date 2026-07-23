@@ -93,5 +93,5 @@ where = [".", "Mem/src"]
 include = ["agent*", "tools*", "VoidCube_cli*", "VoidCube_core*", "systems*", "plugins*", "memai*"]
 
 [tool.setuptools.package-data]
-memai = ["prompts/*/*.txt"]
+memai = ["prompts/*/*.txt", "identity/*.json", "identity/*.md"]
 VoidCube_cli = ["locales/*.json"]

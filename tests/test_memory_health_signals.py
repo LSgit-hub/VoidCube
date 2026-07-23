@@ -1200,7 +1200,9 @@ def test_compressed_memory_write_uses_stable_ids_for_duplicate_events(tmp_path):
         )
         conn.commit()
         rows = conn.execute(
-            "SELECT memory_id, memory_type, event_kind FROM compressed_memories ORDER BY memory_type"
+            "SELECT memory_id, memory_type, event_kind FROM compressed_memories "
+            "WHERE memory_id LIKE 'event\_%' ESCAPE '\\' "
+            "OR memory_id LIKE 'scene\_%' ESCAPE '\\' ORDER BY memory_type"
         ).fetchall()
     finally:
         conn.close()

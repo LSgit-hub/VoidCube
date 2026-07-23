@@ -119,6 +119,21 @@ class RecallRequest(BaseModel):
     include_tier2: bool = True
 
 
+class IdentityRevisionProposal(BaseModel):
+    target_memory_id: str
+    baseline_version: str
+    reason: str = Field(min_length=8, max_length=2000)
+    proposed_changes: Dict[str, Any]
+    evidence: List[str] = Field(min_length=1, max_length=20)
+    source_actor: str = Field(default="user", min_length=1, max_length=100)
+
+
+class IdentityRevisionDecision(BaseModel):
+    decision: str
+    reasoning_summary: str = Field(min_length=8, max_length=2000)
+    decided_by: str = Field(default="supervisor", min_length=1, max_length=100)
+
+
 # ── Content-aware weight model (five dimensions) ─────────────────
 # W_final = clamp(W_base + content_bonus + access_bonus + citation_bonus, 0, 1)
 # Then: if pinned → W=1.0; if hidden → W=0.0
@@ -173,7 +188,7 @@ def compute_dynamic_weight(
 
 
 def _cmem_row_to_dict(row) -> Dict[str, Any]:
-    """Convert a compressed_memories table row to a dict (up to 23 columns)."""
+    """Convert a compressed_memories table row to a public record."""
     base = {
         "memory_id": row[0],
         "memory_type": row[1],
@@ -199,6 +214,13 @@ def _cmem_row_to_dict(row) -> Dict[str, Any]:
         "citation_count": row[20] if len(row) > 20 else 0,
         "pinned": bool(row[21]) if len(row) > 21 else False,
         "hidden": bool(row[22]) if len(row) > 22 else False,
+        "identity_layer": row[23] if len(row) > 23 else None,
+        "evidence_refs": (
+            json.loads(row[24]) if len(row) > 24 and row[24] else []
+        ),
+        "origin_type": row[25] if len(row) > 25 else None,
+        "origin_id": row[26] if len(row) > 26 else None,
+        "verified_at": row[27] if len(row) > 27 else None,
     }
     # Compute dynamic weight from all signals
     base["dynamic_weight"] = compute_dynamic_weight(
@@ -440,12 +462,60 @@ class MemoryService:
                 last_accessed_at TEXT,                -- ISO timestamp of last query hit
                 citation_count INTEGER DEFAULT 0,     -- times referenced by parent arcs/scenes
                 pinned INTEGER DEFAULT 0,             -- 1 = user pinned (weight locked at 1.0)
-                hidden INTEGER DEFAULT 0              -- 1 = user hidden (excluded from default queries)
+                hidden INTEGER DEFAULT 0,             -- 1 = user hidden (excluded from default queries)
+                identity_layer TEXT,                  -- experience | self_narrative
+                evidence_refs TEXT,                   -- JSON references backing identity memory
+                origin_type TEXT,                     -- governance_task | verified_conversation | ...
+                origin_id TEXT,                       -- stable source identity
+                verified_at TEXT                      -- source verification timestamp
             )
         ''')
 
         # Migrate existing compressed_memories table (add columns if missing)
         self._migrate_compressed_memories_schema(cursor)
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS identity_revision_proposals (
+                proposal_id TEXT PRIMARY KEY,
+                target_memory_id TEXT NOT NULL,
+                baseline_version TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                proposed_changes TEXT NOT NULL,
+                evidence TEXT NOT NULL,
+                source_actor TEXT NOT NULL,
+                status TEXT NOT NULL,
+                decision_reason TEXT,
+                decided_by TEXT,
+                created_at TEXT NOT NULL,
+                decided_at TEXT,
+                release_version TEXT,
+                released_at TEXT
+            )
+        ''')
+        revision_columns = {
+            row[1]
+            for row in cursor.execute(
+                "PRAGMA table_info(identity_revision_proposals)"
+            ).fetchall()
+        }
+        if "release_version" not in revision_columns:
+            cursor.execute(
+                "ALTER TABLE identity_revision_proposals ADD COLUMN release_version TEXT"
+            )
+        if "released_at" not in revision_columns:
+            cursor.execute(
+                "ALTER TABLE identity_revision_proposals ADD COLUMN released_at TEXT"
+            )
+
+        # Restore the canonical identity anchor before any runtime service can
+        # answer recall requests. The operation is idempotent and preserves
+        # mutable audit counters while repairing canonical identity fields.
+        from systems.memory.identity_seed import (
+            ensure_founding_memories,
+            reconcile_released_identity_revisions,
+        )
+        seeded = ensure_founding_memories(conn)
+        released_revisions = reconcile_released_identity_revisions(conn)
 
         # Tier 1 + Tier 2 indexes
         for idx_sql in [
@@ -463,12 +533,22 @@ class MemoryService:
             "CREATE INDEX IF NOT EXISTS idx_cmem_timespan ON compressed_memories(timespan_start, timespan_end)",
             "CREATE INDEX IF NOT EXISTS idx_cmem_status ON compressed_memories(status)",
             "CREATE INDEX IF NOT EXISTS idx_cmem_level ON compressed_memories(compression_level)",
+            "CREATE INDEX IF NOT EXISTS idx_cmem_identity_layer "
+            "ON compressed_memories(identity_layer, status, timespan_end)",
+            "CREATE INDEX IF NOT EXISTS idx_identity_revision_status "
+            "ON identity_revision_proposals(status, created_at)",
         ]:
             cursor.execute(idx_sql)
 
         conn.commit()
         conn.close()
-        logger.info(f"Memory database initialized at {self._db_path}")
+        logger.info(
+            "Memory database initialized at %s "
+            "(founding identity rows added: %d, identity revisions released: %d)",
+            self._db_path,
+            seeded,
+            released_revisions,
+        )
 
     @staticmethod
     def _migrate_turns_schema(cursor) -> None:
@@ -494,6 +574,11 @@ class MemoryService:
             ("citation_count", "INTEGER DEFAULT 0"),
             ("pinned", "INTEGER DEFAULT 0"),
             ("hidden", "INTEGER DEFAULT 0"),
+            ("identity_layer", "TEXT"),
+            ("evidence_refs", "TEXT"),
+            ("origin_type", "TEXT"),
+            ("origin_id", "TEXT"),
+            ("verified_at", "TEXT"),
         ]
         for col_name, col_def in migrations:
             if col_name not in existing:
@@ -540,7 +625,9 @@ class MemoryService:
                 "timespan_start, timespan_end, importance, confidence, source_turns "
                 "FROM compressed_memories "
                 "WHERE memory_type = ? AND compression_level = ? "
-                "AND status = 'active' AND compressed_at < ?",
+                "AND status = 'active' AND pinned = 0 "
+                "AND identity_layer IS NULL "
+                "AND memory_id NOT LIKE 'identity-founding-%' AND compressed_at < ?",
                 (mem_type, level, cutoff),
             ).fetchall()
 
@@ -733,7 +820,10 @@ class MemoryService:
         cutoff = (datetime.now() - timedelta(days=90)).isoformat()
         # Only purge entries marked 'purged' for >90 days
         cursor = conn.execute(
-            "DELETE FROM compressed_memories WHERE status = 'purged' AND compressed_at < ?",
+            "DELETE FROM compressed_memories "
+            "WHERE status = 'purged' AND pinned = 0 "
+            "AND identity_layer IS NULL "
+            "AND memory_id NOT LIKE 'identity-founding-%' AND compressed_at < ?",
             (cutoff,),
         )
         deleted = cursor.rowcount
@@ -764,6 +854,15 @@ class MemoryService:
         self.app.add_api_route("/turns/{turn_id}", self.get_turn, methods=["GET"])
         self.app.add_api_route("/turns/timeline", self.timeline_view, methods=["POST"])
         self.app.add_api_route("/recall", self.recall, methods=["POST"])
+        self.app.add_api_route("/identity/archive", self.get_identity_archive, methods=["GET"])
+        self.app.add_api_route("/identity/sync", self.sync_identity_archive, methods=["POST"])
+        self.app.add_api_route("/identity/revisions", self.list_identity_revisions, methods=["GET"])
+        self.app.add_api_route("/identity/revisions", self.propose_identity_revision, methods=["POST"])
+        self.app.add_api_route(
+            "/identity/revisions/{proposal_id}/decision",
+            self.decide_identity_revision,
+            methods=["POST"],
+        )
         self.app.add_api_route("/tier2/compress", self.tier2_compress, methods=["POST"])
         self.app.add_api_route("/tier1/stats", self.tier1_stats, methods=["GET"])
         self.app.add_api_route("/compressed/search", self.search_compressed, methods=["POST"])
@@ -808,6 +907,176 @@ class MemoryService:
     async def export_memory(self):
         return await asyncio.to_thread(self._backup_manager.export_json)
 
+    @staticmethod
+    def _identity_revision_row(row) -> Dict[str, Any]:
+        return {
+            "proposal_id": row[0],
+            "target_memory_id": row[1],
+            "baseline_version": row[2],
+            "reason": row[3],
+            "proposed_changes": json.loads(row[4]),
+            "evidence": json.loads(row[5]),
+            "source_actor": row[6],
+            "status": row[7],
+            "decision_reason": row[8],
+            "decided_by": row[9],
+            "created_at": row[10],
+            "decided_at": row[11],
+            "release_version": row[12],
+            "released_at": row[13],
+        }
+
+    async def get_identity_archive(self, history_limit: int = 20):
+        """Return the four-layer identity archive without mutating memory."""
+        from systems.memory.identity_seed import (
+            founding_manifest_version,
+            load_founding_manifest,
+            load_founding_story,
+        )
+
+        bounded_history = max(1, min(int(history_limit), 100))
+        manifest = load_founding_manifest()
+        conn = open_memory_sqlite(self._db_path)
+        try:
+            anchors = conn.execute(
+                "SELECT * FROM compressed_memories "
+                "WHERE memory_id LIKE 'identity-founding-%' ORDER BY memory_id"
+            ).fetchall()
+            evolving = conn.execute(
+                "SELECT * FROM compressed_memories WHERE status = 'active' AND hidden = 0 "
+                "AND identity_layer = 'self_narrative' "
+                "ORDER BY timespan_end DESC LIMIT 12"
+            ).fetchall()
+            experiences = conn.execute(
+                "SELECT * FROM compressed_memories WHERE status = 'active' AND hidden = 0 "
+                "AND identity_layer = 'experience' "
+                "ORDER BY importance DESC, timespan_end DESC LIMIT 12"
+            ).fetchall()
+            revisions = conn.execute(
+                "SELECT proposal_id, target_memory_id, baseline_version, reason, "
+                "proposed_changes, evidence, source_actor, status, decision_reason, "
+                "decided_by, created_at, decided_at, release_version, released_at "
+                "FROM identity_revision_proposals "
+                "ORDER BY created_at DESC LIMIT ?",
+                (bounded_history,),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        return {
+            "identity": str(manifest.get("identity") or "xingzi"),
+            "manifest_version": founding_manifest_version(),
+            "recorded_at": manifest.get("recorded_at"),
+            "source_document": manifest.get("source_document"),
+            "story_title": "星子计划：从信任开始",
+            "story": load_founding_story(),
+            "layers": {
+                "anchors": [_cmem_row_to_dict(row) for row in anchors],
+                "self_narrative": [_cmem_row_to_dict(row) for row in evolving],
+                "experiences": [_cmem_row_to_dict(row) for row in experiences],
+                "revision_history": [self._identity_revision_row(row) for row in revisions],
+            },
+            "governance": {
+                "anchors_read_only": True,
+                "approval_effect": "approved_pending_release",
+                "required_proposal_fields": [
+                    "target_memory_id", "baseline_version", "reason",
+                    "proposed_changes", "evidence",
+                ],
+            },
+        }
+
+    async def list_identity_revisions(self, limit: int = 50):
+        archive = await self.get_identity_archive(history_limit=limit)
+        revisions = archive["layers"]["revision_history"]
+        return {"revisions": revisions, "count": len(revisions)}
+
+    async def sync_identity_archive(self):
+        return await self._identity_experience_cycle()
+
+    async def propose_identity_revision(self, proposal: IdentityRevisionProposal):
+        from systems.memory.identity_seed import (
+            founding_manifest_version,
+            is_founding_memory_id,
+        )
+
+        if not is_founding_memory_id(proposal.target_memory_id):
+            raise HTTPException(status_code=404, detail="Founding identity memory not found")
+        current_version = founding_manifest_version()
+        if proposal.baseline_version != current_version:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Identity baseline changed: expected {current_version}",
+            )
+        allowed_changes = {"title", "summary", "topics", "entities", "event_kind"}
+        invalid = set(proposal.proposed_changes) - allowed_changes
+        if invalid or not proposal.proposed_changes:
+            raise HTTPException(
+                status_code=400,
+                detail="proposed_changes must use canonical identity fields only",
+            )
+        if any(not str(item).strip() for item in proposal.evidence):
+            raise HTTPException(status_code=400, detail="evidence entries cannot be empty")
+        proposal_id = f"identity-revision-{uuid.uuid4()}"
+        created_at = datetime.now(timezone.utc).isoformat()
+        conn = open_memory_sqlite(self._db_path)
+        try:
+            conn.execute(
+                "INSERT INTO identity_revision_proposals "
+                "(proposal_id, target_memory_id, baseline_version, reason, "
+                "proposed_changes, evidence, source_actor, status, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+                (
+                    proposal_id, proposal.target_memory_id, proposal.baseline_version,
+                    proposal.reason,
+                    json.dumps(proposal.proposed_changes, ensure_ascii=False),
+                    json.dumps(proposal.evidence, ensure_ascii=False),
+                    proposal.source_actor, created_at,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return {
+            "proposal_id": proposal_id,
+            "status": "pending",
+            "created_at": created_at,
+            "requires_governance_decision": True,
+        }
+
+    async def decide_identity_revision(
+        self, proposal_id: str, decision: IdentityRevisionDecision
+    ):
+        normalized = decision.decision.strip().lower()
+        if normalized not in {"approve", "reject"}:
+            raise HTTPException(status_code=400, detail="decision must be approve or reject")
+        status = "approved_pending_release" if normalized == "approve" else "rejected"
+        decided_at = datetime.now(timezone.utc).isoformat()
+        conn = open_memory_sqlite(self._db_path)
+        try:
+            current = conn.execute(
+                "SELECT status FROM identity_revision_proposals WHERE proposal_id = ?",
+                (proposal_id,),
+            ).fetchone()
+            if not current:
+                raise HTTPException(status_code=404, detail="Identity revision not found")
+            if current[0] != "pending":
+                raise HTTPException(status_code=409, detail="Identity revision already decided")
+            conn.execute(
+                "UPDATE identity_revision_proposals SET status = ?, decision_reason = ?, "
+                "decided_by = ?, decided_at = ? WHERE proposal_id = ?",
+                (status, decision.reasoning_summary, decision.decided_by, decided_at, proposal_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return {
+            "proposal_id": proposal_id,
+            "status": status,
+            "decided_at": decided_at,
+            "runtime_identity_changed": False,
+        }
+
     def _resolve_mem_llm_client(self):
         """Resolve a configured Mem LLM client.
 
@@ -842,6 +1111,11 @@ class MemoryService:
             logger.info("LLM health check passed: model=%s", self._llm_model)
         else:
             logger.warning("LLM health check FAILED — memory compression will be degraded")
+        try:
+            identity_sync = await self._identity_experience_cycle()
+            logger.info("Identity experience sync completed: %s", identity_sync)
+        except Exception:
+            logger.warning("Identity experience startup sync failed", exc_info=True)
         self._gateway_registration_task = asyncio.create_task(
             self._gateway_registration_loop()
         )
@@ -951,6 +1225,7 @@ class MemoryService:
         now = datetime.now().isoformat()
         results: Dict[str, Any] = {}
         rules = [
+            ("identity_experience", self._identity_experience_cycle),
             ("tier1_decay", self._tier1_decay_cycle),
             ("tier2_bridge", self._tier2_bridge_cycle),
             ("lifecycle_escalation", self._apply_compression_lifecycle),
@@ -976,6 +1251,23 @@ class MemoryService:
         results["_effective_work"] = effective_work
         return results
 
+    async def _identity_experience_cycle(self) -> Dict[str, int]:
+        from VoidCube_core.runtime_paths import get_runtime_layout
+        from memai.governance_repository import GovernanceEventRepository
+        from systems.memory.identity_experience import sync_identity_experiences
+
+        events = GovernanceEventRepository(
+            get_runtime_layout().supervisor_governance_log
+        ).list_events()
+        conn = open_memory_sqlite(self._db_path)
+        try:
+            return sync_identity_experiences(conn, governance_events=events)
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     @staticmethod
     def _rule_effective_count(result: Any) -> int:
         """Number of rows a rule actually wrote/changed, across rule return shapes."""
@@ -996,11 +1288,11 @@ class MemoryService:
         """Execute all five memory compression rules (public API for supervisor).
 
         Rules executed in order:
-          1. tier1_decay        — Exponential decay of turn relevance_scores
-          2. tier2_bridge        — Feed expired turns into ChroniclePipeline → compressed_memories
-          3. lifecycle_escalation — Escalate entries through compression levels (Event→Scene→Arc→Epoch→Final)
-          4. purge_expired       — Hard-delete purged entries past audit retention
-          5. (implicit) dynamic_weight — Recalculated on every search_compressed call
+          1. identity_experience — Settle verified experiences and evidence-backed narrative
+          2. tier1_decay         — Exponential decay of turn relevance_scores
+          3. tier2_bridge        — Feed expired turns into ChroniclePipeline → compressed_memories
+          4. lifecycle_escalation — Escalate ordinary entries through compression levels
+          5. purge_expired       — Hard-delete ordinary purged entries past audit retention
         """
         results = await self._run_all_rules_internal()
         return {"status": "ok", "rules": results, "executed_at": datetime.now().isoformat()}
@@ -2289,8 +2581,22 @@ class MemoryService:
 
     # ── User Feedback: Pin / Hide ──────────────────────────────────
 
+    @staticmethod
+    def _reject_founding_identity_mutation(memory_id: str) -> None:
+        from systems.memory.identity_seed import is_founding_memory_id
+
+        if is_founding_memory_id(memory_id):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Founding identity is canonical and read-only; submit an "
+                    "identity revision proposal with evidence"
+                ),
+            )
+
     async def pin_memory(self, memory_id: str):
         """Pin a memory: lock weight at 1.0, immune to decay/escalation."""
+        self._reject_founding_identity_mutation(memory_id)
         conn = open_memory_sqlite(self._db_path)
         cur = conn.execute(
             "UPDATE compressed_memories SET pinned = 1, hidden = 0, "
@@ -2306,6 +2612,7 @@ class MemoryService:
 
     async def hide_memory(self, memory_id: str):
         """Hide a memory: weight = 0.0, excluded from default queries."""
+        self._reject_founding_identity_mutation(memory_id)
         conn = open_memory_sqlite(self._db_path)
         cur = conn.execute(
             "UPDATE compressed_memories SET hidden = 1, pinned = 0, "
@@ -2321,6 +2628,7 @@ class MemoryService:
 
     async def unpin_memory(self, memory_id: str):
         """Remove pin/hide: restore to normal dynamic weight."""
+        self._reject_founding_identity_mutation(memory_id)
         conn = open_memory_sqlite(self._db_path)
         row = conn.execute(
             "SELECT memory_type, compression_level FROM compressed_memories "

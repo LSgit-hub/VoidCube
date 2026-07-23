@@ -154,6 +154,7 @@ class BodyRegistryManager:
         *,
         state_root: str | Path,
         slot_ids: Iterable[str] = DEFAULT_SLOT_IDS,
+        mem_editable_site_packages: str | Path | None = None,
     ) -> None:
         self.source_root = Path(source_root).resolve()
         self.state_root = Path(state_root).resolve()
@@ -162,6 +163,11 @@ class BodyRegistryManager:
             raise ValueError("At least two body slots are required")
         self.slots_root = self.state_root / "slots"
         self.registry_path = self.state_root / "registry.json"
+        self.mem_editable_site_packages = (
+            Path(mem_editable_site_packages).resolve()
+            if mem_editable_site_packages is not None
+            else None
+        )
 
     def initialize_layout(self) -> BodyRegistry:
         """Create independent child-agent slot directories and a default registry."""
@@ -233,7 +239,32 @@ class BodyRegistryManager:
                 )
         if registry.active_slot:
             self.write_active_body_pointer(registry.active_slot)
+            self._sync_active_mem_binding(
+                registry.active_slot,
+                allow_source_fallback=True,
+            )
         return registry
+
+    def _sync_active_mem_binding(
+        self,
+        slot_id: str,
+        *,
+        allow_source_fallback: bool,
+    ) -> Optional[Dict[str, Any]]:
+        if self.mem_editable_site_packages is None:
+            return None
+        from systems.mem_editable_binding import sync_mem_editable_binding
+
+        meta = self.load_slot_meta(slot_id)
+        result = sync_mem_editable_binding(
+            slot_id=slot_id,
+            worktree_path=meta.worktree_path,
+            source_root=self.source_root,
+            site_packages=self.mem_editable_site_packages,
+            allow_source_fallback=allow_source_fallback,
+            audit_path=self.state_root / "mem-editable-binding.json",
+        )
+        return result.to_dict()
 
     def list_slots(self) -> dict[str, BodySlotMeta]:
         return {slot_id: self.load_slot_meta(slot_id) for slot_id in self.slot_ids}
@@ -511,6 +542,10 @@ class BodyRegistryManager:
                 f"Slot {slot_id} must be awaiting user consent or retired before activation; "
                 f"got {target.body_state!r}"
             )
+        if self.mem_editable_site_packages is not None:
+            from systems.mem_editable_binding import validate_mem_source
+
+            validate_mem_source(target.worktree_path)
 
         previous_active = registry.active_slot
         if previous_active and previous_active != slot_id:
@@ -577,6 +612,13 @@ class BodyRegistryManager:
                     registry.last_switch_result[key] = value
         self.save_registry(registry)
         self.write_active_body_pointer(slot_id)
+        binding = self._sync_active_mem_binding(
+            slot_id,
+            allow_source_fallback=False,
+        )
+        if binding is not None:
+            registry.last_switch_result["mem_editable_binding"] = binding
+            self.save_registry(registry)
         return registry
 
     def await_user_consent(

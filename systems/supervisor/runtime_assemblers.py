@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+import sysconfig
 from typing import Any
 
 from VoidCube_core.runtime_paths import (
@@ -22,6 +23,7 @@ from systems.execution import (
 )
 from systems.execution.service import VoidCubeExecutionService
 from systems.lifecycle import BodyLifecycleExecutor
+from systems.mem_editable_binding import MemEditableBindingError, validate_mem_source
 from systems.governor import GovernorDecisionEngine
 from systems.governance_runtime_migration import consolidate_governance_event_logs
 from systems.probe import ProbeExecutor, ProbeRunner
@@ -52,10 +54,23 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
                 body_result.files_verified,
                 body_result.linked_worktrees_repaired,
             )
+    mem_editable_site_packages = None
+    try:
+        validate_mem_source(execution_config.git_repo_path)
+    except MemEditableBindingError:
+        logger.debug(
+            "Mem editable binding disabled because the source repository has no "
+            "complete Mem package: %s",
+            execution_config.git_repo_path,
+        )
+    else:
+        mem_editable_site_packages = sysconfig.get_paths()["purelib"]
+
     supervisor._body_registry = BodyRegistryManager(
         execution_config.git_repo_path,
         state_root=body_state_root,
         slot_ids=(body_runtime_config.slot_a_name, body_runtime_config.slot_b_name),
+        mem_editable_site_packages=mem_editable_site_packages,
     )
     supervisor._body_registry.initialize_layout()
 

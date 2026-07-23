@@ -30,6 +30,11 @@ def _project_config() -> dict:
         return tomllib.load(handle)
 
 
+def _mem_project_config() -> dict:
+    with (ROOT / "Mem" / "pyproject.toml").open("rb") as handle:
+        return tomllib.load(handle)
+
+
 def _wheel_metadata(*, version: str = __version__) -> str:
     project = _project_config()["project"]
     return (
@@ -41,7 +46,7 @@ def _wheel_metadata(*, version: str = __version__) -> str:
 
 
 @pytest.mark.unit
-def test_distribution_includes_runtime_subpackages_and_mem_prompts():
+def test_distribution_includes_runtime_subpackages_and_mem_resources():
     config = _project_config()
     setuptools = config["tool"]["setuptools"]
     patterns = setuptools["packages"]["find"]["include"]
@@ -59,7 +64,18 @@ def test_distribution_includes_runtime_subpackages_and_mem_prompts():
         assert any(fnmatchcase(package, pattern) for pattern in patterns), package
 
     assert "prompts/*/*.txt" in setuptools["package-data"]["memai"]
+    assert "identity/*.json" in setuptools["package-data"]["memai"]
+    assert "identity/*.md" in setuptools["package-data"]["memai"]
     assert "locales/*.json" in setuptools["package-data"]["VoidCube_cli"]
+
+
+@pytest.mark.unit
+def test_standalone_mem_distribution_includes_identity_resources():
+    package_data = _mem_project_config()["tool"]["setuptools"]["package-data"]["memai"]
+
+    assert "prompts/*/*.txt" in package_data
+    assert "identity/*.json" in package_data
+    assert "identity/*.md" in package_data
 
 
 @pytest.mark.unit
@@ -268,3 +284,11 @@ def test_wheel_contract_tracks_cli_locale_resources():
 
     assert "VoidCube_cli/locales/zh_CN.json" in expected
     assert "VoidCube_cli/locales/en_US.json" in expected
+
+
+@pytest.mark.unit
+def test_wheel_contract_tracks_mem_identity_resources():
+    expected = expected_wheel_files(ROOT)
+
+    assert "memai/identity/founding_memory.json" in expected
+    assert "memai/identity/founding_story.md" in expected

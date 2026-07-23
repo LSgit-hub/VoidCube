@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional
 import uuid
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from VoidCube_core.utils import atomic_json_write
@@ -285,6 +285,14 @@ body[data-exec-window="false"] .floor {
   width: 280px; height: 360px;
   z-index: 3;
 }
+.shelf[data-drill] { cursor: pointer; }
+.shelf[data-drill]:hover .shelf-frame,
+.shelf[data-drill]:focus-visible .shelf-frame {
+  border-color: #70452d;
+  box-shadow: 0 24px 40px var(--shadow-deep), inset 0 0 30px rgba(0,0,0,.5),
+              0 0 0 3px rgba(226,176,74,.38);
+}
+.shelf[data-drill]:focus-visible { outline: none; }
 .shelf-frame {
   position: absolute; inset: 0;
   border: 18px solid #5a3320;
@@ -2602,6 +2610,25 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,.04);
 }
 .health-row .hr-val { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+.identity-anchor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 560px) { .identity-anchor-grid { grid-template-columns: 1fr; } }
+.identity-anchor {
+  padding: 10px; border-radius: 8px; background: rgba(255,255,255,.035);
+  border: 1px solid rgba(226,176,74,.16);
+}
+.identity-anchor-title { color: var(--text-primary); font-size: 11px; font-weight: 700; }
+.identity-anchor-summary { color: var(--text-secondary); font-size: 10px; line-height: 1.55; margin-top: 5px; }
+.identity-evidence { color: var(--text-muted); font-size: 9px; margin-top: 5px; }
+.identity-tag {
+  display: inline-block; margin: 6px 4px 0 0; padding: 2px 5px; border-radius: 4px;
+  background: rgba(111,198,160,.11); color: var(--mint); font-size: 8px;
+}
+.identity-story {
+  margin-top: 8px; padding: 8px 10px; border-radius: 8px;
+  background: rgba(0,0,0,.18); color: var(--text-secondary); font-size: 10px; line-height: 1.6;
+}
+.identity-story summary { cursor: pointer; color: var(--accent-yellow); font-weight: 700; }
+.identity-story pre { white-space: pre-wrap; font: inherit; margin: 8px 0 0; max-height: 260px; overflow: auto; }
 .body-integrity-violation {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -2747,7 +2774,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
     <div class="rug"></div>
 
     <!-- 书架(左墙) -->
-    <section class="shelf" aria-hidden="true">
+    <section class="shelf" role="button" tabindex="0" data-drill="identity" aria-label="身份档案" title="身份档案">
       <div class="shelf-frame"></div>
       <div class="shelf-board b1"></div>
       <div class="shelf-board b2"></div>
@@ -3292,14 +3319,17 @@ document.addEventListener('click', e => {
 /* ═══════════════════════════════════════════
    drill-down 详情抽屉
    ═══════════════════════════════════════════ */
-let drawerOpen = null;  // 当前抽屉类型: 'autonomous' | 'provenance' | 'health' | 'body_tree' | null
+let drawerOpen = null;
 let drawerContext = {};
+let identityArchive = null;
+let identityArchiveError = '';
 
 const DRAWER_META = {
   autonomous: { icon: '🚦', title: '链路详情' },
   provenance: { icon: '🔎', title: '判断依据' },
   health:     { icon: '💗', title: '替身与记忆' },
   body_tree:  { icon: '🌲', title: '替身结构图' },
+  identity:   { icon: '📚', title: '身份档案' },
 };
 
 function openDrawer(type, context) {
@@ -3310,6 +3340,7 @@ function openDrawer(type, context) {
   if (els.drawerTitle) els.drawerTitle.innerHTML = '<span>' + meta.icon + '</span>' + meta.title;
   renderDrawer();
   els.drawer.classList.add('open');
+  if (type === 'identity') loadIdentityArchive();
 }
 
 function closeDrawer() {
@@ -3325,6 +3356,20 @@ function renderDrawer() {
   else if (drawerOpen === 'provenance') renderProvenanceDrawer(state);
   else if (drawerOpen === 'health') renderHealthDrawer(state);
   else if (drawerOpen === 'body_tree') renderBodyTreeDrawer(state);
+  else if (drawerOpen === 'identity') renderIdentityDrawer();
+}
+
+async function loadIdentityArchive() {
+  identityArchiveError = '';
+  try {
+    const response = await fetch('/ui/identity/archive', {cache: 'no-store'});
+    if (!response.ok) throw new Error('status_' + response.status);
+    identityArchive = await response.json();
+  } catch (error) {
+    identityArchive = null;
+    identityArchiveError = String((error || {}).message || 'unavailable');
+  }
+  if (drawerOpen === 'identity') renderIdentityDrawer();
 }
 
 // 抽屉关闭交互
@@ -3359,6 +3404,12 @@ document.addEventListener('click', e => {
     context.bodySlot = String(trigger.dataset.bodySlot);
   }
   openDrawer(trigger.dataset.drill, context);
+});
+document.addEventListener('keydown', e => {
+  const trigger = e.target.closest('[data-drill][role="button"]');
+  if (!trigger || (e.key !== 'Enter' && e.key !== ' ')) return;
+  e.preventDefault();
+  trigger.click();
 });
 
 function drillButton(type, label) {
@@ -4217,6 +4268,61 @@ function renderHealthDrawer(state) {
     rows('💾 记忆 (API-B 侧)', memRows);
 }
 
+function renderIdentityDrawer() {
+  if (!els.drawerBody) return;
+  if (!identityArchive && !identityArchiveError) {
+    els.drawerBody.innerHTML = '<div class="drawer-sub">正在读取 Mem 身份档案...</div>';
+    return;
+  }
+  if (!identityArchive) {
+    els.drawerBody.innerHTML = '<div class="drawer-sub">身份档案暂时不可用 · ' +
+      esc(identityArchiveError || 'memory unavailable') + '</div>';
+    return;
+  }
+  const archive = identityArchive || {};
+  const layers = archive.layers || {};
+  const anchors = Array.isArray(layers.anchors) ? layers.anchors : [];
+  const narrative = Array.isArray(layers.self_narrative) ? layers.self_narrative : [];
+  const experiences = Array.isArray(layers.experiences) ? layers.experiences : [];
+  const revisions = Array.isArray(layers.revision_history) ? layers.revision_history : [];
+
+  const memoryCards = (items, emptyText) => items.length ?
+    '<div class="identity-anchor-grid">' + items.map(item => {
+      const topics = Array.isArray(item.topics) ? item.topics.slice(0, 5) : [];
+      const evidence = Array.isArray(item.evidence_refs) ? item.evidence_refs : [];
+      const evidenceMeta = (item.origin_type || evidence.length) ?
+        '<div class="identity-evidence">' +
+          esc(item.origin_type || 'evidence') + ' · ' + evidence.length + ' 条证据</div>' : '';
+      return '<article class="identity-anchor">' +
+        '<div class="identity-anchor-title">' + esc(item.title || '未命名记忆') + '</div>' +
+        '<div class="identity-anchor-summary">' + esc(item.summary || '') + '</div>' +
+        evidenceMeta +
+        topics.map(topic => '<span class="identity-tag">' + esc(topic) + '</span>').join('') +
+        '</article>';
+    }).join('') + '</div>' :
+    '<div class="drawer-sub" style="margin:0;">' + esc(emptyText) + '</div>';
+
+  const revisionRows = revisions.length ? revisions.map(item =>
+    '<div class="health-row"><span>' + esc(item.target_memory_id || '身份修订') +
+    '<br><small>' + esc(item.reason || '') + '</small></span>' +
+    '<span class="hr-val">' + esc(item.status || 'pending') + '</span></div>'
+  ).join('') : '<div class="drawer-sub" style="margin:0;">尚无身份修订记录。</div>';
+
+  els.drawerBody.innerHTML =
+    '<div class="drawer-sub">' + esc(archive.identity || 'xingzi') + ' · ' +
+      esc(archive.manifest_version || 'unknown') + ' · 起源锚点只读</div>' +
+    '<div class="drawer-section"><div class="drawer-section-label">起源锚点</div>' +
+      memoryCards(anchors, '尚未恢复起源锚点。') + '</div>' +
+    '<div class="drawer-section"><div class="drawer-section-label">演化自述</div>' +
+      memoryCards(narrative, '尚未形成新的演化自述。') + '</div>' +
+    '<div class="drawer-section"><div class="drawer-section-label">近期经历</div>' +
+      memoryCards(experiences, '尚无可展示的长期经历。') + '</div>' +
+    '<div class="drawer-section"><div class="drawer-section-label">修订历史</div>' +
+      revisionRows + '</div>' +
+    '<details class="identity-story"><summary>' + esc(archive.story_title || '起源记录') +
+      '</summary><pre>' + esc(archive.story || '') + '</pre></details>';
+}
+
 function bodySlotCards(state) {
   const cards = Array.isArray(((state || {}).body_status || {}).slot_cards)
     ? ((state || {}).body_status || {}).slot_cards
@@ -5026,6 +5132,54 @@ class SupervisorUIMixin:
 
     async def get_supervisor_ui(self) -> HTMLResponse:
         return HTMLResponse(UI_HTML)
+
+    async def get_supervisor_identity_archive(self) -> Dict[str, Any]:
+        """Proxy the canonical Mem archive without creating UI-owned identity state."""
+        try:
+            import aiohttp
+
+            gateway_url = str(self.config.execution.gateway_address).rstrip("/")
+            timeout = aiohttp.ClientTimeout(total=5)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(f"{gateway_url}/admin/services") as response:
+                    if response.status != 200:
+                        raise HTTPException(
+                            status_code=503, detail="Gateway service registry unavailable"
+                        )
+                    services_payload = (await response.json()).get("services", {})
+                services = (
+                    list(services_payload.values())
+                    if isinstance(services_payload, dict)
+                    else list(services_payload)
+                    if isinstance(services_payload, list)
+                    else []
+                )
+                memory_url = next(
+                    (
+                        str(service.get("address") or "").rstrip("/")
+                        for service in services
+                        if isinstance(service, dict)
+                        and service.get("service_type") == "memory"
+                        and service.get("address")
+                    ),
+                    "",
+                )
+                if not memory_url:
+                    raise HTTPException(
+                        status_code=503, detail="Memory Service is not registered"
+                    )
+                async with session.get(f"{memory_url}/identity/archive") as response:
+                    if response.status != 200:
+                        raise HTTPException(
+                            status_code=503, detail="Memory identity archive unavailable"
+                        )
+                    return await response.json()
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503, detail=f"Memory identity archive unavailable: {type(exc).__name__}"
+            ) from exc
 
     async def get_supervisor_ui_events(self, request: Request) -> StreamingResponse:
         async def event_stream():

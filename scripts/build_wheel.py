@@ -93,6 +93,11 @@ def expected_wheel_files(root: Path = ROOT) -> set[str]:
             for path in (mem_source / "prompts").rglob("*.txt")
             if path.is_file()
         )
+        expected.update(
+            path.relative_to(root / MEM_SOURCE_ROOT).as_posix()
+            for path in (mem_source / "identity").rglob("*")
+            if path.is_file() and path.suffix in {".json", ".md"}
+        )
 
     locales = root / "VoidCube_cli" / "locales"
     if locales.is_dir():
@@ -115,6 +120,9 @@ def wheel_contract_errors(wheel_path: Path, root: Path = ROOT) -> list[str]:
             for name in archive_names
             if name.endswith(".py") or (
                 name.startswith("memai/prompts/") and name.endswith(".txt")
+            ) or (
+                name.startswith("memai/identity/")
+                and Path(name).suffix in {".json", ".md"}
             ) or (
                 name.startswith("VoidCube_cli/locales/") and name.endswith(".json")
             )

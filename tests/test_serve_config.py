@@ -43,6 +43,11 @@ def test_start_all_starts_gateway_before_memory_and_waits_for_registration(monke
     calls = []
 
     monkeypatch.setattr(serve, "PID_DIR", tmp_path)
+    monkeypatch.setattr(
+        serve,
+        "_sync_active_mem_binding_before_start",
+        lambda: calls.append(("sync", "mem")),
+    )
     monkeypatch.setattr(serve, "start_service", lambda name, foreground=False: calls.append(("start", name)))
     monkeypatch.setattr(serve, "_wait_for_health", lambda name, port: calls.append(("wait", name)) or True)
     monkeypatch.setattr(serve, "_wait_for_gateway_service_type", lambda service_type, timeout=20.0: calls.append(("registered", service_type)) or True)
@@ -51,7 +56,8 @@ def test_start_all_starts_gateway_before_memory_and_waits_for_registration(monke
 
     serve.start_all(foreground=False)
 
-    assert calls[:9] == [
+    assert calls[:10] == [
+        ("sync", "mem"),
         ("start", "gateway"),
         ("wait", "gateway"),
         ("start", "memory"),
@@ -70,6 +76,7 @@ def test_ensure_running_restarts_healthy_unregistered_memory(monkeypatch, tmp_pa
     calls = []
 
     monkeypatch.setattr(serve, "PID_DIR", tmp_path)
+    monkeypatch.setattr(serve, "_sync_active_mem_binding_before_start", lambda: None)
     monkeypatch.setattr(serve, "_read_pid", lambda path: 123)
     monkeypatch.setattr(serve, "_pid_alive", lambda pid: True)
     monkeypatch.setattr(serve, "_health_check", lambda port: True)
@@ -97,6 +104,7 @@ def test_ensure_running_restarts_supervisor_when_executor_registration_is_missin
     calls = []
 
     monkeypatch.setattr(serve, "PID_DIR", tmp_path)
+    monkeypatch.setattr(serve, "_sync_active_mem_binding_before_start", lambda: None)
     monkeypatch.setattr(serve, "_read_pid", lambda path: 123)
     monkeypatch.setattr(serve, "_pid_alive", lambda pid: True)
     monkeypatch.setattr(serve, "_health_check", lambda port: True)

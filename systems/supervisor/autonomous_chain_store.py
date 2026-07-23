@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from VoidCube_core.utils import atomic_json_write
 from systems.runtime_task_profile import (
@@ -222,6 +223,9 @@ class AutonomousChainStoreSnapshot(BaseModel):
 
 
 class AutonomousChainStore:
+    _LEGACY_LINEAGE_MIGRATION_CODE = (
+        "legacy_execution_request_missing_auditable_lineage"
+    )
     _AUTONOMOUS_CHAIN_LIVE_STATUSES: frozenset[str] = frozenset(
         {
             "planned",
@@ -663,7 +667,119 @@ class AutonomousChainStore:
         raw = self.storage_path.read_text(encoding="utf-8").strip()
         if not raw:
             return AutonomousChainStoreSnapshot()
-        return AutonomousChainStoreSnapshot.model_validate_json(raw)
+        payload = json.loads(raw)
+        migrated_payload, migrated = self._migrate_legacy_execution_requests(payload)
+        snapshot = AutonomousChainStoreSnapshot.model_validate(migrated_payload)
+        if migrated:
+            self._write_snapshot(snapshot)
+        return snapshot
+
+    @classmethod
+    def _migrate_legacy_execution_requests(
+        cls,
+        payload: Any,
+    ) -> tuple[Any, bool]:
+        """Withdraw pre-lineage execution grants and persist current-schema state."""
+        if not isinstance(payload, dict) or not isinstance(payload.get("tasks"), list):
+            return payload, False
+
+        migrated = False
+        migrated_at = datetime.now(timezone.utc).isoformat()
+        for task_payload in payload["tasks"]:
+            if not isinstance(task_payload, dict):
+                continue
+            request_payload = task_payload.get("execution_request")
+            if not isinstance(request_payload, dict):
+                continue
+            if str(request_payload.get("kind") or "general_self_evolution") != (
+                "general_self_evolution"
+            ):
+                continue
+            try:
+                AutonomousChainExecutionRequest.model_validate(request_payload)
+            except ValidationError as exc:
+                if not cls._is_legacy_lineage_validation_error(exc):
+                    raise
+            else:
+                continue
+
+            missing_fields = cls._missing_execution_lineage_fields(request_payload)
+            previous_status = str(task_payload.get("status") or "planned")
+            request_id = str(request_payload.get("request_id") or "")
+            task_payload["execution_request"] = None
+
+            metadata = task_payload.setdefault("metadata", {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+                task_payload["metadata"] = metadata
+            metadata["snapshot_migration"] = {
+                "code": cls._LEGACY_LINEAGE_MIGRATION_CODE,
+                "migrated_at": migrated_at,
+                "previous_status": previous_status,
+                "removed_execution_request_id": request_id,
+                "missing_fields": missing_fields,
+                "review_required": previous_status in cls._API_A_EXECUTION_LANE_STATUSES,
+            }
+
+            if previous_status in cls._API_A_EXECUTION_LANE_STATUSES:
+                reason = (
+                    "Legacy execution authorization was withdrawn because its body "
+                    "lineage is not auditable; the task requires a new review."
+                )
+                task_payload["status"] = "awaiting_review"
+                task_payload["decision_reason"] = reason
+                history = task_payload.setdefault("decision_history", [])
+                if not isinstance(history, list):
+                    history = []
+                    task_payload["decision_history"] = history
+                history.append(
+                    {
+                        "decision_id": f"snapshot-migration:{request_id or task_payload.get('task_id', '')}",
+                        "status": "awaiting_review",
+                        "task_type": task_payload.get("task_type") or "self_evolution",
+                        "governance_task_type": task_payload.get("governance_task_type"),
+                        "task_family": task_payload.get("task_family"),
+                        "execution_kind": task_payload.get("execution_kind"),
+                        "trace_id": task_payload.get("trace_id") or str(uuid.uuid4()),
+                        "decided_at": migrated_at,
+                        "actor": "snapshot_migration",
+                        "reason": reason,
+                        "context": {
+                            "migration_code": cls._LEGACY_LINEAGE_MIGRATION_CODE,
+                            "missing_fields": missing_fields,
+                        },
+                    }
+                )
+            migrated = True
+
+        return payload, migrated
+
+    @staticmethod
+    def _is_legacy_lineage_validation_error(exc: ValidationError) -> bool:
+        errors = exc.errors()
+        marker = (
+            "general_self_evolution execution requires auditable body lineage"
+        )
+        return bool(errors) and all(
+            marker in str(error.get("msg") or "") for error in errors
+        )
+
+    @staticmethod
+    def _missing_execution_lineage_fields(request_payload: Dict[str, Any]) -> List[str]:
+        missing: List[str] = []
+        if not str(request_payload.get("target_slot_id") or "").strip():
+            missing.append("target_slot_id")
+        lineage = request_payload.get("git_lineage")
+        lineage = lineage if isinstance(lineage, dict) else {}
+        for field_name in ("source_commit", "candidate_commit", "rollback_commit"):
+            if not str(lineage.get(field_name) or "").strip():
+                missing.append(f"git_lineage.{field_name}")
+        changed_files = lineage.get("changed_files")
+        if not isinstance(changed_files, list) or not any(
+            str(path).strip() for path in changed_files
+        ):
+            missing.append("git_lineage.changed_files")
+        return missing
 
     def _write_snapshot(self, snapshot: AutonomousChainStoreSnapshot) -> None:
         atomic_json_write(

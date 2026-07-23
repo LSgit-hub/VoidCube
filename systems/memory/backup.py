@@ -74,6 +74,7 @@ class MemoryBackupManager:
         "turns_archive",
         "compressed_memories",
         "compression_quality_audit",
+        "identity_revision_proposals",
     )
 
     def __init__(self, db_path: str | Path, *, retention_count: int = 5) -> None:

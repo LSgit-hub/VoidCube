@@ -517,6 +517,7 @@ def test_supervisor_mounts_built_in_room_ui_when_enabled(tmp_path):
     assert "/ui" in route_paths
     assert "/ui/state" in route_paths
     assert "/ui/events" in route_paths
+    assert "/ui/identity/archive" in route_paths
     assert "/runtime/timeline" in route_paths
     assert "/runtime/traces" in route_paths
     assert "/runtime/traces/{trace_id}" in route_paths
@@ -532,11 +533,125 @@ def test_supervisor_mounts_built_in_room_ui_when_enabled(tmp_path):
     assert page.status_code == 200
     assert "VoidCube Supervisor Room" in page.text
     assert 'EventSource("/ui/events")' in page.text
+    assert 'data-drill="identity"' in page.text
+    assert "renderIdentityDrawer" in page.text
+    assert "identity-evidence" in page.text
+    assert "evidence.length" in page.text
     assert state.status_code == 200
     payload = state.json()
     assert payload["status"] == "ok"
     assert payload["scene"] in {"idle", "planning", "drive", "memory", "maintenance", "handoff"}
     assert "timeline" in payload
+
+
+@pytest.mark.unit
+def test_autonomous_chain_store_migrates_legacy_unauditable_execution_request(tmp_path):
+    storage_path = tmp_path / "autonomous-chain.json"
+    storage_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "tasks": [
+                    {
+                        "task_id": "legacy-approved",
+                        "trace_id": "trace-approved",
+                        "title": "Legacy approved task",
+                        "status": "approved",
+                        "execution_request": {
+                            "request_id": "request-approved",
+                            "task_id": "legacy-approved",
+                            "trace_id": "trace-approved",
+                            "kind": "general_self_evolution",
+                            "status": "approved_for_execution",
+                            "git_lineage": {},
+                        },
+                    },
+                    {
+                        "task_id": "legacy-completed",
+                        "trace_id": "trace-completed",
+                        "title": "Legacy completed task",
+                        "status": "completed",
+                        "execution_request": {
+                            "request_id": "request-completed",
+                            "task_id": "legacy-completed",
+                            "trace_id": "trace-completed",
+                            "kind": "general_self_evolution",
+                            "status": "approved_for_execution",
+                            "git_lineage": {},
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    store = AutonomousChainStore(storage_path)
+    tasks = {task.task_id: task for task in store.list_tasks()}
+
+    approved = tasks["legacy-approved"]
+    assert approved.status == "awaiting_review"
+    assert approved.execution_request is None
+    assert approved.metadata["snapshot_migration"]["review_required"] is True
+    assert approved.metadata["snapshot_migration"]["missing_fields"] == [
+        "target_slot_id",
+        "git_lineage.source_commit",
+        "git_lineage.candidate_commit",
+        "git_lineage.rollback_commit",
+        "git_lineage.changed_files",
+    ]
+    assert approved.decision_history[-1].actor == "snapshot_migration"
+
+    completed = tasks["legacy-completed"]
+    assert completed.status == "completed"
+    assert completed.execution_request is None
+    assert completed.metadata["snapshot_migration"]["review_required"] is False
+
+    persisted = json.loads(storage_path.read_text(encoding="utf-8"))
+    assert all(task["execution_request"] is None for task in persisted["tasks"])
+    first_migration = approved.metadata["snapshot_migration"]
+    reloaded = {task.task_id: task for task in store.list_tasks()}
+    assert reloaded["legacy-approved"].metadata["snapshot_migration"] == first_migration
+    assert len(reloaded["legacy-approved"].decision_history) == 1
+
+
+@pytest.mark.unit
+def test_supervisor_ui_state_migrates_legacy_autonomous_chain_snapshot(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._autonomous_chain_store.storage_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "tasks": [
+                    {
+                        "task_id": "legacy-ui-task",
+                        "trace_id": "legacy-ui-trace",
+                        "title": "Legacy UI task",
+                        "status": "failed",
+                        "execution_request": {
+                            "request_id": "legacy-ui-request",
+                            "task_id": "legacy-ui-task",
+                            "trace_id": "legacy-ui-trace",
+                            "kind": "general_self_evolution",
+                            "status": "approved_for_execution",
+                            "git_lineage": {},
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with TestClient(supervisor.app) as client:
+        response = client.get("/ui/state")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    migrated = supervisor._autonomous_chain_store.get_task("legacy-ui-task")
+    assert migrated is not None
+    assert migrated.status == "failed"
+    assert migrated.execution_request is None
 
 
 @pytest.mark.asyncio

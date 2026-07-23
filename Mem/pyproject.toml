@@ -27,4 +27,4 @@ testpaths = ["tests"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-memai = ["prompts/*/*.txt"]
+memai = ["prompts/*/*.txt", "identity/*.json", "identity/*.md"]
