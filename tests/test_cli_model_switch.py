@@ -15,6 +15,8 @@ pytestmark = [pytest.mark.unit, pytest.mark.smoke]
 
 def test_load_cli_config_uses_shared_loader_and_normalizes(monkeypatch) -> None:
     shared_config = {
+        "model": "retired-root-model",
+        "max_turns": 12,
         "runtime": {"active_provider": "primary"},
         "providers": {
             "primary": {
@@ -29,15 +31,32 @@ def test_load_cli_config_uses_shared_loader_and_normalizes(monkeypatch) -> None:
     loaded = cli_module.load_cli_config()
 
     assert loaded["runtime"]["active_provider"] == "primary"
-    assert loaded["model"] == {
-        "default": "test-model",
-        "model": "test-model",
-        "base_url": "https://example.test/v1",
-        "provider": "primary",
-        "api_key": "test-key",
-    }
+    assert loaded["providers"] == shared_config["providers"]
+    assert "model" not in loaded
+    assert "max_turns" not in loaded
     assert loaded["terminal"] == {}
     assert loaded["agent"] == {}
+
+
+def test_resolve_cli_provider_config_uses_unified_provider_map() -> None:
+    config = {
+        "runtime": {"active_provider": "primary"},
+        "providers": {
+            "primary": {"selected_model": "primary-model"},
+            "secondary": {"selected_model": "secondary-model"},
+        },
+    }
+
+    provider_key, provider_config = cli_module._resolve_cli_provider_config(config)
+    override_key, override_config = cli_module._resolve_cli_provider_config(
+        config,
+        "secondary",
+    )
+
+    assert provider_key == "primary"
+    assert provider_config == {"selected_model": "primary-model"}
+    assert override_key == "secondary"
+    assert override_config == {"selected_model": "secondary-model"}
 
 
 def test_load_cli_config_does_not_hide_shared_loader_errors(monkeypatch) -> None:

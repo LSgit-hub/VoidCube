@@ -30,7 +30,7 @@ def test_repository_body_config_is_generated_from_product_defaults():
 
 @pytest.mark.unit
 @pytest.mark.smoke
-def test_cli_has_no_project_level_config_fallback():
+def test_cli_has_no_retired_config_compatibility():
     root = Path(__file__).resolve().parents[1]
     cli_source = (root / "cli.py").read_text(encoding="utf-8")
 
@@ -40,5 +40,10 @@ def test_cli_has_no_project_level_config_fallback():
         "project config" + " - fallback",
         "Failed to load canonical" + " CLI config",
         "_file_has_terminal" + "_config",
+        'CLI_CONFIG.get("' + 'model"',
+        'CLI_CONFIG.get("' + 'max_turns"',
+        'CLI_CONFIG["' + 'model"]',
+        'CLI_CONFIG["' + 'max_turns"]',
+        'normalized["' + 'model"]',
     )
     assert all(marker not in cli_source for marker in stale_markers)

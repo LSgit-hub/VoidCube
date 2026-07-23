@@ -372,46 +372,14 @@ def _get_chrome_debug_candidates(system: str) -> list[str]:
 
 
 def _normalize_minimal_cli_config(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Ensure CLI config has the minimum shape required at startup.
-
-    Some transitional config loaders currently return sparse dicts. The CLI
-    startup path expects several top-level sections to exist, so normalize the
-    shape before use and let call sites rely on `.get(...)` defaults.
-    """
+    """Ensure mapping sections used by CLI startup are dictionaries."""
     normalized = dict(config or {})
-    try:
-        from VoidCube_cli.config import (
-            get_active_model_config,
-            get_active_provider_config,
-            get_active_provider_key,
-        )
-        active_provider = get_active_provider_key(normalized)
-        active_provider_cfg = get_active_provider_config(normalized)
-        active_model_cfg = get_active_model_config(normalized)
-    except Exception:
-        active_provider = ""
-        active_provider_cfg = {}
-        active_model_cfg = {}
-    runtime = normalized.get("runtime", {})
-    if isinstance(runtime, dict):
-        normalized["runtime"] = {
-            "active_provider": active_provider or runtime.get("active_provider", ""),
-            **runtime,
-        }
-    else:
-        normalized["runtime"] = {"active_provider": active_provider or ""}
-    if not isinstance(normalized.get("providers"), dict):
-        normalized["providers"] = {}
-    normalized["model"] = {
-        "default": str(active_model_cfg.get("default") or active_model_cfg.get("model") or ""),
-        "model": str(active_model_cfg.get("default") or active_model_cfg.get("model") or ""),
-        "base_url": str(active_model_cfg.get("base_url") or active_provider_cfg.get("base_url") or ""),
-        "provider": active_provider or str(active_model_cfg.get("provider") or ""),
-        "api_key": str(active_model_cfg.get("api_key") or active_provider_cfg.get("api_key") or ""),
-    }
+    normalized.pop("model", None)
+    normalized.pop("max_turns", None)
 
     for section in (
         "runtime",
+        "providers",
         "agent",
         "display",
         "terminal",
@@ -425,6 +393,18 @@ def _normalize_minimal_cli_config(config: Dict[str, Any]) -> Dict[str, Any]:
             normalized[section] = {}
 
     return normalized
+
+
+def _resolve_cli_provider_config(
+    config: Dict[str, Any],
+    requested_provider: Optional[str] = None,
+) -> tuple[str, Dict[str, Any]]:
+    """Resolve the active provider and its unified provider entry."""
+    runtime = config.get("runtime") if isinstance(config.get("runtime"), dict) else {}
+    providers = config.get("providers") if isinstance(config.get("providers"), dict) else {}
+    provider_key = str(requested_provider or runtime.get("active_provider") or "").strip()
+    provider_config = providers.get(provider_key)
+    return provider_key, dict(provider_config) if isinstance(provider_config, dict) else {}
 
 
 def load_cli_config() -> Dict[str, Any]:
@@ -1019,42 +999,21 @@ class VoidcubeCLI:
         )
         self._pending_edit_snapshots: Dict[str, Any] = {}
         
-        # Configuration - priority: CLI args > env vars > config file.
-        # The saved source of truth is runtime.active_provider + providers.*.
-        # CLI_CONFIG["model"] is only a synthesized compatibility view.
-        # LLM_MODEL/OPENAI_MODEL env vars are NOT checked.
-        _runtime_cfg = CLI_CONFIG.get("runtime") or {}
-        _providers_cfg = CLI_CONFIG.get("providers") or {}
-        _active_provider = (
-            provider
-            or _runtime_cfg.get("active_provider")
-            or ""
+        # Configuration priority: CLI args > active provider config.
+        _active_provider, _active_provider_cfg = _resolve_cli_provider_config(
+            CLI_CONFIG,
+            provider,
         )
-        _active_provider_cfg = _providers_cfg.get(_active_provider, {}) if isinstance(_providers_cfg, dict) else {}
-        _model_config = CLI_CONFIG.get("model", {})
-        _config_model = (
-            _active_provider_cfg.get("selected_model")
-            or ((_model_config.get("default") or _model_config.get("model") or "") if isinstance(_model_config, dict) else (_model_config or ""))
-        )
-        _DEFAULT_CONFIG_MODEL = ""
-        self.model = model or _config_model or _DEFAULT_CONFIG_MODEL
-        # Auto-detect model from local server if still on default
-        if self.model == _DEFAULT_CONFIG_MODEL:
+        _config_model = str(_active_provider_cfg.get("selected_model") or "").strip()
+        self.model = model or _config_model
+        if not self.model:
             _base_url = _active_provider_cfg.get("base_url", "")
             if "localhost" in _base_url or "127.0.0.1" in _base_url:
                 from VoidCube_cli.runtime_provider import _auto_detect_local_model
                 _detected = _auto_detect_local_model(_base_url)
                 if _detected:
                     self.model = _detected
-        # Track whether model was explicitly chosen by the user or fell back
-        # to the global default.  Provider-specific normalisation may override
-        # the default silently but should warn when overriding an explicit choice.
-        # A config model that matches the global fallback is NOT considered an
-        # explicit choice — the user just never changed it.  But a config model
-        # an explicitly configured model must be preserved.
-        self._model_is_default = not model and (
-            not _config_model or _config_model == _DEFAULT_CONFIG_MODEL
-        )
+        self._model_is_default = not model and not _config_model
 
         self._explicit_api_key = api_key
         self._explicit_base_url = base_url
@@ -1076,13 +1035,12 @@ class VoidcubeCLI:
             self.api_key = api_key
         else:
             self.api_key = ""
-        # Max turns priority: CLI arg > config file > env var > default
+        # Max turns priority: CLI arg > agent config > env var > default.
+        _configured_max_turns = CLI_CONFIG["agent"].get("max_turns")
         if max_turns is not None:  # CLI arg was explicitly set
             self.max_turns = max_turns
-        elif CLI_CONFIG["agent"].get("max_turns"):
-            self.max_turns = CLI_CONFIG["agent"]["max_turns"]
-        elif CLI_CONFIG.get("max_turns"):  # Backwards compat: root-level max_turns
-            self.max_turns = CLI_CONFIG["max_turns"]
+        elif _configured_max_turns:
+            self.max_turns = _configured_max_turns
         elif os.getenv("VOIDCUBE_MAX_ITERATIONS"):
             self.max_turns = int(os.getenv("VOIDCUBE_MAX_ITERATIONS"))
         else:
