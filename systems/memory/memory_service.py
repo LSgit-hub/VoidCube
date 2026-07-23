@@ -4,14 +4,20 @@ import hashlib
 import json
 import logging
 import os
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from systems.memory.backup import MemoryBackupManager, MemoryRestoreError
 from systems.memory.config import MemoryServiceConfig
+from systems.memory.recall import (
+    build_recall_plan,
+    format_recall_context,
+    recall_memories,
+)
 from systems.memory.runtime_migration import migrate_memory_database
 from systems.memory.tier1_to_tier2_bridge import (
     Tier1ToTier2Bridge,
@@ -97,6 +103,20 @@ class Tier2CompressRequest(BaseModel):
     min_relevance: float = 0.1
     dry_run: bool = False
     force_oldest: bool = False
+
+
+class RecallRequest(BaseModel):
+    query: str
+    memory_type: str | List[str] | None = None
+    topic: Optional[str] = None
+    timespan_start: Optional[str] = None
+    timespan_end: Optional[str] = None
+    limit: Optional[int] = Field(default=None, ge=1, le=50)
+    max_context_chars: Optional[int] = Field(default=None, ge=256, le=20000)
+    min_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    current_session_id: Optional[str] = None
+    include_tier1: bool = True
+    include_tier2: bool = True
 
 
 # ── Content-aware weight model (five dimensions) ─────────────────
@@ -234,6 +254,12 @@ class MemoryService:
         self._llm_model: str = ""
         self._llm_error: str = ""
         self._last_llm_health_check_at: Optional[str] = None
+        self._recall_requests = 0
+        self._recall_hits = 0
+        self._recall_failures = 0
+        self._last_recall_at: Optional[str] = None
+        self._last_recall_count = 0
+        self._last_recall_latency_ms = 0.0
         self._backup_manager = MemoryBackupManager(
             self._db_path,
             retention_count=self.config.backup_retention_count,
@@ -737,12 +763,12 @@ class MemoryService:
         self.app.add_api_route("/turns", self.query_turns, methods=["GET"])
         self.app.add_api_route("/turns/{turn_id}", self.get_turn, methods=["GET"])
         self.app.add_api_route("/turns/timeline", self.timeline_view, methods=["POST"])
+        self.app.add_api_route("/recall", self.recall, methods=["POST"])
         self.app.add_api_route("/tier2/compress", self.tier2_compress, methods=["POST"])
         self.app.add_api_route("/tier1/stats", self.tier1_stats, methods=["GET"])
         self.app.add_api_route("/compressed/search", self.search_compressed, methods=["POST"])
         self.app.add_api_route("/compressed/trace/{turn_id}", self.trace_compressed_by_turn, methods=["GET"])
         self.app.add_api_route("/compressed/lifecycle", self.trigger_lifecycle, methods=["POST"])
-        self.app.add_api_route("/compressed/semantic-search", self.semantic_search, methods=["POST"])
         self.app.add_api_route("/compressed/run-all-rules", self.run_all_rules, methods=["POST"])
         self.app.add_api_route("/compressed/rules-status", self.rules_status, methods=["GET"])
         self.app.add_api_route("/compressed/{memory_id}", self.get_compressed, methods=["GET"])
@@ -1137,6 +1163,19 @@ class MemoryService:
                 "healthy": self._gateway_registration_healthy,
                 "service_id": self._gateway_service_id,
                 "last_checked_at": self._last_gateway_registration_check_at,
+            },
+            "recall": {
+                "requests": self._recall_requests,
+                "hits": self._recall_hits,
+                "failures": self._recall_failures,
+                "hit_rate": (
+                    round(self._recall_hits / self._recall_requests, 4)
+                    if self._recall_requests
+                    else 0.0
+                ),
+                "last_recall_at": self._last_recall_at,
+                "last_result_count": self._last_recall_count,
+                "last_latency_ms": self._last_recall_latency_ms,
             },
         }
 
@@ -2156,6 +2195,63 @@ class MemoryService:
             "count": len(results),
         }
 
+    async def recall(self, request: RecallRequest):
+        """Recall a bounded mix of recent turns and durable Tier 2 memory."""
+        if not request.query.strip():
+            raise HTTPException(status_code=400, detail="query is required")
+        if not request.include_tier1 and not request.include_tier2:
+            raise HTTPException(
+                status_code=400,
+                detail="at least one memory tier must be enabled",
+            )
+
+        started = time.perf_counter()
+        self._recall_requests += 1
+        try:
+            plan = build_recall_plan(
+                request.query,
+                memory_type=request.memory_type,
+                topic=request.topic,
+                timespan_start=request.timespan_start,
+                timespan_end=request.timespan_end,
+            )
+            conn = open_memory_sqlite(self._db_path)
+            try:
+                payload = recall_memories(
+                    conn,
+                    plan,
+                    limit=request.limit or self.config.recall_default_limit,
+                    candidate_limit=self.config.recall_candidate_limit,
+                    max_context_chars=(
+                        request.max_context_chars
+                        or self.config.recall_max_context_chars
+                    ),
+                    min_score=(
+                        request.min_score
+                        if request.min_score is not None
+                        else self.config.recall_min_score
+                    ),
+                    current_session_id=request.current_session_id,
+                    include_tier1=request.include_tier1,
+                    include_tier2=request.include_tier2,
+                )
+            finally:
+                conn.close()
+            payload["context"] = format_recall_context(payload["results"])
+            self._last_recall_count = int(payload["count"])
+            if self._last_recall_count:
+                self._recall_hits += 1
+            return payload
+        except Exception:
+            self._recall_failures += 1
+            raise
+        finally:
+            self._last_recall_at = datetime.now().astimezone().isoformat()
+            self._last_recall_latency_ms = round(
+                (time.perf_counter() - started) * 1000,
+                3,
+            )
+
     async def get_compressed(self, memory_id: str):
         """Get a single compressed memory by ID."""
         conn = open_memory_sqlite(self._db_path)
@@ -2243,27 +2339,6 @@ class MemoryService:
         conn.commit()
         conn.close()
         return {"memory_id": memory_id, "pinned": False, "hidden": False, "base_weight": base_w, "status": "ok"}
-
-    # ── Semantic Search (Dimension 5) ─────────────────────────────
-
-    async def semantic_search(self, request: dict):
-        """Return a truthful keyword fallback until embedding protocol is defined."""
-        query_text = request.get("query", "")
-        limit = request.get("limit", 10)
-        min_similarity = request.get("min_similarity", 0.3)
-
-        if not query_text:
-            raise HTTPException(status_code=400, detail="query is required")
-
-        fallback = await self.search_compressed({"query": query_text, "limit": limit})
-        fallback["method"] = "keyword_fallback"
-        fallback["semantic_degraded"] = True
-        fallback["semantic_available"] = False
-        fallback["semantic_unavailable_reason"] = (
-            "embedding_protocol_not_configured"
-        )
-        fallback["ignored_min_similarity"] = min_similarity
-        return fallback
 
     async def register_with_gateway(self, *, max_retries: int = 5):
         url = f"{self.config.gateway_address}/register"

@@ -29,3 +29,7 @@ class MemoryServiceConfig(BaseModel):
     tier2_max_compression_ratio: float = Field(default=1.0, gt=0.0)
     tier2_max_degraded_fraction: float = Field(default=1.0, ge=0.0, le=1.0)
     backup_retention_count: int = Field(default=5, ge=1, le=100)
+    recall_default_limit: int = Field(default=5, ge=1, le=50)
+    recall_candidate_limit: int = Field(default=200, ge=10, le=2000)
+    recall_max_context_chars: int = Field(default=3500, ge=256, le=20000)
+    recall_min_score: float = Field(default=0.2, ge=0.0, le=1.0)

@@ -32,6 +32,7 @@ def test_mem_provider_search_and_prefetch_use_gateway_memory_route(monkeypatch):
                 {"title": "Current architecture", "summary": "Memory is canonical."}
             ],
             "count": 1,
+            "context": "Relevant recalled memory:\n- [tier2:event] Current architecture: Memory is canonical.",
         }
 
     monkeypatch.setattr(provider, "_request_json", fake_request)
@@ -43,10 +44,22 @@ def test_mem_provider_search_and_prefetch_use_gateway_memory_route(monkeypatch):
 
     assert tool_result["success"] is True
     assert tool_result["data"]["count"] == 1
-    assert context == "Relevant structured memory:\n- Current architecture: Memory is canonical."
+    assert context == (
+        "Relevant recalled memory:\n"
+        "- [tier2:event] Current architecture: Memory is canonical."
+    )
     assert calls == [
-        ("POST", "/compressed/search", {"query": "architecture", "limit": 3}),
-        ("POST", "/compressed/search", {"query": "architecture", "limit": 5}),
+        ("POST", "/recall", {"query": "architecture", "limit": 3}),
+        (
+            "POST",
+            "/recall",
+            {
+                "query": "architecture",
+                "limit": 5,
+                "max_context_chars": 3500,
+                "current_session_id": "session-1",
+            },
+        ),
     ]
 
 

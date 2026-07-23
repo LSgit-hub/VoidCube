@@ -9,11 +9,6 @@ being genuinely useful over being verbose unless otherwise directed below.
 Be targeted and efficient in your exploration and investigations.
 
 ## Configuration
-memory:
-  backend: "mem"
-  path: "~/.VoidCube/memories"
-  auto_save: true
-  save_interval: 6
 security:
   dangerous_commands: ["rm -rf", "mkfs", "dd", ":(){ :|:& };:", "chmod 777", "chown root", "iptables -F"]
   approval_mode: "ask"

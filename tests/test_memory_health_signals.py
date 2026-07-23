@@ -538,9 +538,8 @@ async def test_tier1_add_turn_auto_creates_missing_session_atomically(tmp_path):
     assert turns["turns"][0]["text"] == "hello from gateway"
 
 
-@pytest.mark.asyncio
 @pytest.mark.operational
-async def test_semantic_search_is_explicit_keyword_fallback_without_embedding_protocol(tmp_path):
+def test_obsolete_embedding_column_is_backed_up_then_removed(tmp_path):
     svc = _make_service(tmp_path)
     now = datetime.now(timezone.utc).isoformat()
     conn = open_memory_sqlite(svc._db_path)
@@ -570,9 +569,6 @@ async def test_semantic_search_is_explicit_keyword_fallback_without_embedding_pr
         conn.close()
 
     svc = _make_service(tmp_path)
-    svc._resolve_mem_llm_client = lambda: (_ for _ in ()).throw(  # type: ignore[method-assign]
-        AssertionError("semantic search must not call Chat Completions")
-    )
     conn = open_memory_sqlite(svc._db_path)
     try:
         columns = {
@@ -600,30 +596,9 @@ async def test_semantic_search_is_explicit_keyword_fallback_without_embedding_pr
     finally:
         backup_conn.close()
 
-    result = await svc.semantic_search(
-        {"query": "Needle", "limit": 5, "min_similarity": 0.9}
-    )
-
-    assert result["method"] == "keyword_fallback"
-    assert result["semantic_degraded"] is True
-    assert result["semantic_available"] is False
-    assert result["semantic_unavailable_reason"] == "embedding_protocol_not_configured"
-    assert result["ignored_min_similarity"] == 0.9
-    assert result["count"] == 1
     assert "embedding" not in columns
     assert "embedding" in backup_columns
     assert json.loads(stored_embedding) == [1.0, 0.0]
-
-
-@pytest.mark.asyncio
-async def test_semantic_search_requires_nonempty_query(tmp_path):
-    svc = _make_service(tmp_path)
-
-    with pytest.raises(HTTPException) as exc_info:
-        await svc.semantic_search({"query": ""})
-
-    assert exc_info.value.status_code == 400
-    assert exc_info.value.detail == "query is required"
 
 
 @pytest.mark.asyncio

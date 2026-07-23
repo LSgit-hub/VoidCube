@@ -34,14 +34,13 @@ from pathlib import Path
 from VoidCube_core.constants import get_VoidCube_home
 from typing import Dict, Any, List, Optional
 
-# Windows compatibility for fcntl
+# Cross-process file locking uses the platform-native standard library.
 if sys.platform == 'win32':
-    try:
-        import fcntl
-    except ImportError:
-        fcntl = None
+    import msvcrt
+    fcntl = None
 else:
     import fcntl
+    msvcrt = None
 
 logger = logging.getLogger(__name__)
 
@@ -52,11 +51,6 @@ logger = logging.getLogger(__name__)
 def get_memory_dir() -> Path:
     """Return the profile-scoped memories directory."""
     return get_VoidCube_home() / "memories"
-
-# Backward-compatible alias — gateway/run.py imports this at runtime inside
-# a function body, so it gets the correct snapshot for that process.  New code
-# should prefer get_memory_dir().
-MEMORY_DIR = get_memory_dir()
 
 ENTRY_DELIMITER = "\n§\n"
 
@@ -153,18 +147,29 @@ class MemoryStore:
         """
         lock_path = path.with_suffix(path.suffix + ".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        fd = open(lock_path, "w")
+        fd = open(lock_path, "a+b")
+        locked = False
         try:
             if fcntl is not None:
                 fcntl.flock(fd, fcntl.LOCK_EX)
             else:
-                # Windows fallback: no file locking, just proceed
-                pass
+                fd.seek(0, os.SEEK_END)
+                if fd.tell() == 0:
+                    fd.write(b"\0")
+                fd.flush()
+                fd.seek(0)
+                msvcrt.locking(fd.fileno(), msvcrt.LK_LOCK, 1)
+            locked = True
             yield
         finally:
-            if fcntl is not None:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-            fd.close()
+            try:
+                if locked and fcntl is not None:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                elif locked:
+                    fd.seek(0)
+                    msvcrt.locking(fd.fileno(), msvcrt.LK_UNLCK, 1)
+            finally:
+                fd.close()
 
     @staticmethod
     def _path_for(target: str) -> Path:
@@ -568,7 +573,5 @@ registry.register(
     check_fn=check_memory_requirements,
     emoji="🧠",
 )
-
-
 
 

@@ -30,6 +30,8 @@ class MemMemoryProvider(MemoryProvider):
         self._gateway_url = "http://127.0.0.1:6000"
         self._request_timeout_seconds = 2.0
         self._auto_sync = True
+        self._prefetch_limit = 5
+        self._prefetch_max_context_chars = 3500
         self._sync_queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
         self._sync_thread: threading.Thread | None = None
 
@@ -60,6 +62,17 @@ class MemMemoryProvider(MemoryProvider):
             float(provider_config.get("request_timeout_seconds", 2.0)),
         )
         self._auto_sync = bool(provider_config.get("auto_sync", True))
+        self._prefetch_limit = max(
+            1,
+            min(50, int(provider_config.get("prefetch_limit", 5))),
+        )
+        self._prefetch_max_context_chars = max(
+            256,
+            min(
+                20000,
+                int(provider_config.get("prefetch_max_context_chars", 3500)),
+            ),
+        )
         self._initialized = True
         if self._auto_sync:
             self._sync_thread = threading.Thread(
@@ -71,16 +84,21 @@ class MemMemoryProvider(MemoryProvider):
 
     def system_prompt_block(self) -> str:
         return (
-            "Use mem_search for relevant structured long-term memory and "
-            "mem_timeline for dated Tier 1 conversation history. Treat empty "
-            "or unavailable results as an explicit lack of recalled evidence."
+            "Use mem_search when the user refers to prior decisions, preferences, "
+            "people, projects, or events. It recalls a bounded mix of recent "
+            "conversation turns and structured long-term memory. Use mem_timeline "
+            "for an exact dated chronology. Treat empty or unavailable results as "
+            "an explicit lack of recalled evidence."
         )
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         return [
             {
                 "name": "mem_search",
-                "description": "Search canonical structured long-term memory.",
+                "description": (
+                    "Recall relevant recent and long-term memory. Use a concise "
+                    "conceptual query instead of repeating the full user message."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -93,6 +111,12 @@ class MemMemoryProvider(MemoryProvider):
                         "timespan_start": {"type": "string", "format": "date-time"},
                         "timespan_end": {"type": "string", "format": "date-time"},
                         "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                        "min_score": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Optional stricter relevance threshold.",
+                        },
                     },
                 },
             },
@@ -134,10 +158,11 @@ class MemMemoryProvider(MemoryProvider):
                         "timespan_start",
                         "timespan_end",
                         "limit",
+                        "min_score",
                     )
                     if args.get(key) not in (None, "")
                 }
-                result = self._request_json("POST", "/compressed/search", payload)
+                result = self._request_json("POST", "/recall", payload)
             elif tool_name == "mem_timeline":
                 params = {
                     "date": args.get("date"),
@@ -162,30 +187,25 @@ class MemMemoryProvider(MemoryProvider):
             )
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
-        del session_id
         normalized_query = str(query or "").strip()
         if not self._initialized or not normalized_query:
             return ""
         try:
             result = self._request_json(
                 "POST",
-                "/compressed/search",
-                {"query": normalized_query, "limit": 5},
+                "/recall",
+                {
+                    "query": normalized_query,
+                    "limit": self._prefetch_limit,
+                    "max_context_chars": self._prefetch_max_context_chars,
+                    "current_session_id": session_id or self._session_id,
+                },
             )
         except Exception as exc:
             logger.debug("Memory Service prefetch unavailable: %s", exc)
             return ""
 
-        rows = list(result.get("results") or [])
-        lines: list[str] = []
-        for row in rows[:5]:
-            if not isinstance(row, dict):
-                continue
-            title = str(row.get("title") or row.get("memory_type") or "Memory").strip()
-            summary = str(row.get("summary") or "").strip()
-            if summary:
-                lines.append(f"- {title}: {summary}")
-        return "Relevant structured memory:\n" + "\n".join(lines) if lines else ""
+        return str(result.get("context") or "").strip()
 
     def sync_turn(
         self,

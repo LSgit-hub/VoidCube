@@ -161,3 +161,19 @@ def test_memory_db_environment_override_wins_over_canonical_default(
     config = load_config_from_env()
 
     assert config.memory.db_path == str(custom)
+
+
+def test_memory_recall_environment_overrides_are_loaded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MEMORY_RECALL_LIMIT", "7")
+    monkeypatch.setenv("MEMORY_RECALL_CANDIDATE_LIMIT", "321")
+    monkeypatch.setenv("MEMORY_RECALL_MAX_CONTEXT_CHARS", "4096")
+    monkeypatch.setenv("MEMORY_RECALL_MIN_SCORE", "0.35")
+
+    config = load_config_from_env()
+
+    assert config.memory.recall_default_limit == 7
+    assert config.memory.recall_candidate_limit == 321
+    assert config.memory.recall_max_context_chars == 4096
+    assert config.memory.recall_min_score == pytest.approx(0.35)

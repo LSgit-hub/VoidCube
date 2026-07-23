@@ -212,6 +212,8 @@ memory:
     gateway_address: ""
     request_timeout_seconds: 2.0
     auto_sync: true
+    prefetch_limit: 5
+    prefetch_max_context_chars: 3500
 
 # 委托配置
 delegation:

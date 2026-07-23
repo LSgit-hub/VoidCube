@@ -6914,9 +6914,8 @@ class VoidcubeCLI:
             # updated tools list (self.agent.tools was refreshed above).
             if self.agent is not None:
                 try:
-                    self.agent._persist_session(
-                        self.conversation_history,
-                        self.conversation_history,
+                    self.agent._session_persistence.persist(
+                        self.conversation_history
                     )
                 except Exception:
                     pass  # Best-effort

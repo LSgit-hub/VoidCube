@@ -1,17 +1,17 @@
 """Abstract base class for pluggable memory providers.
 
-Memory providers give the agent persistent recall across sessions. One
-external provider is active at a time alongside the always-on built-in
+Memory providers give the agent service-backed recall across sessions. One
+provider is active at a time alongside the separately owned bounded curated
 memory (MEMORY.md / USER.md). The MemoryManager enforces this limit.
 
-Built-in memory is always active as the first provider and cannot be removed.
-External providers (Hindsight, etc.) are additive — they never
-disable the built-in store. Only one external provider runs at a time to
-prevent tool schema bloat and conflicting memory backends.
+The curated file store remains active outside this interface. Only one
+service provider runs at a time to prevent tool schema bloat and conflicting
+long-term recall backends.
 
 Registration:
-  1. Built-in: BuiltinMemoryProvider — always present, not removable.
-  2. Plugins: Ship in plugins/memory/<name>/, activated by memory.provider config.
+  1. Curated files: owned by MemoryStore, outside this provider interface.
+  2. Service providers: ship in plugins/memory/<name>/ and are selected by
+     memory.provider config.
 
 Lifecycle (called by MemoryManager, wired in run_agent.py):
   initialize()          — connect, create resources, warm up

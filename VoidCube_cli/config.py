@@ -580,6 +580,9 @@ DEFAULT_CONFIG = {
             "request_timeout_seconds": 2.0,
             # Auto-sync conversations to Mem
             "auto_sync": True,
+            # Automatic recall is bounded before it is injected into a turn.
+            "prefetch_limit": 5,
+            "prefetch_max_context_chars": 3500,
         },
         # Mem-side LLM configuration. CLI is the user-facing configuration
         # entry; Mem interprets this block when it needs a model.

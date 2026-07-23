@@ -13,12 +13,6 @@ from VoidCube_core.constants import get_VoidCube_home
 
 # Default SOUL configuration values
 DEFAULT_SOUL_CONFIG = {
-    "memory": {
-        "backend": "mem",
-        "path": "~/.VoidCube/memories",
-        "auto_save": True,
-        "save_interval": 6
-    },
     "security": {
         "dangerous_commands": ["rm -rf", "mkfs", "dd", ":(){ :|:& };:", "chmod 777", "chown root", "iptables -F"],
         "approval_mode": "ask"

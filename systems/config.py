@@ -87,6 +87,26 @@ def load_config_from_env() -> SystemConfig:
         )
     )
     config.memory.decay_interval_hours = int(os.getenv("MEMORY_DECAY_INTERVAL", config.memory.decay_interval_hours))
+    config.memory.recall_default_limit = int(
+        os.getenv("MEMORY_RECALL_LIMIT", config.memory.recall_default_limit)
+    )
+    config.memory.recall_candidate_limit = int(
+        os.getenv(
+            "MEMORY_RECALL_CANDIDATE_LIMIT",
+            config.memory.recall_candidate_limit,
+        )
+    )
+    config.memory.recall_max_context_chars = int(
+        os.getenv(
+            "MEMORY_RECALL_MAX_CONTEXT_CHARS",
+            config.memory.recall_max_context_chars,
+        )
+    )
+    _apply_float_override(
+        config.memory,
+        "MEMORY_RECALL_MIN_SCORE",
+        "recall_min_score",
+    )
     
     config.supervisor.host = os.getenv("SUPERVISOR_HOST", config.supervisor.host)
     config.supervisor.port = int(os.getenv("SUPERVISOR_PORT", config.supervisor.port))

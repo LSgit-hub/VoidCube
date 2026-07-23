@@ -26,10 +26,14 @@ source backlink completeness, compression ratio, and degraded fraction pass the
 configured gate. A rejected batch stays active in Tier 1 and its evidence is
 written to `compression_quality_audit`.
 
-The semantic-search route currently reports an explicit keyword fallback.
-There is no embedding column or chat-model-generated pseudo-vector path. A real
-semantic index requires a separate protocol decision covering model/version,
-write, backfill, and invalidation behavior.
+VoidCube exposes one bounded `/recall` path across active Tier 1 turns and
+structured Tier 2 memory. It performs multilingual concept-term planning,
+time/topic filtering, mixed relevance/recency/importance ranking, near-duplicate
+suppression, per-session diversity, and a strict context budget. Every result
+retains source-turn and score evidence. This is intentionally described as
+hybrid recall rather than vector semantic search: there is no embedding column
+or chat-model-generated pseudo-vector path. A future embedding index still
+requires a protocol covering model/version, write, backfill, and invalidation.
 
 The first implementation pass in this repository focuses on a `Chronicle Scholar LM` design:
 - structured memory objects: `Event`, `Scene`, `Arc`, `Epoch`
