@@ -130,6 +130,16 @@ class Supervisor(
                 self.get_supervisor_identity_archive,
                 methods=["GET"],
             )
+            self.app.add_api_route(
+                "/ui/identity/turns",
+                self.get_supervisor_identity_turns,
+                methods=["GET"],
+            )
+            self.app.add_api_route(
+                "/ui/identity/experiences/verify",
+                self.verify_supervisor_identity_experience,
+                methods=["POST"],
+            )
         self.app.add_api_route("/runtime/activity", self.get_runtime_activity, methods=["GET"])
         self.app.add_api_route("/runtime/observation-input", self.get_runtime_observation_input, methods=["GET"])
         self.app.add_api_route("/runtime/timeline", self.get_runtime_timeline, methods=["GET"])

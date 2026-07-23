@@ -134,6 +134,16 @@ class IdentityRevisionDecision(BaseModel):
     decided_by: str = Field(default="supervisor", min_length=1, max_length=100)
 
 
+class IdentityExperienceVerification(BaseModel):
+    """Explicit human verification of a conversation turn as identity history."""
+
+    turn_id: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=300)
+    summary: str = Field(min_length=1, max_length=4000)
+    evidence_refs: List[str] = Field(min_length=1, max_length=50)
+    verified_by: str = Field(default="anchor", min_length=1, max_length=100)
+
+
 # ── Content-aware weight model (five dimensions) ─────────────────
 # W_final = clamp(W_base + content_bonus + access_bonus + citation_bonus, 0, 1)
 # Then: if pinned → W=1.0; if hidden → W=0.0
@@ -856,6 +866,11 @@ class MemoryService:
         self.app.add_api_route("/recall", self.recall, methods=["POST"])
         self.app.add_api_route("/identity/archive", self.get_identity_archive, methods=["GET"])
         self.app.add_api_route("/identity/sync", self.sync_identity_archive, methods=["POST"])
+        self.app.add_api_route(
+            "/identity/experiences/verify",
+            self.verify_identity_experience,
+            methods=["POST"],
+        )
         self.app.add_api_route("/identity/revisions", self.list_identity_revisions, methods=["GET"])
         self.app.add_api_route("/identity/revisions", self.propose_identity_revision, methods=["POST"])
         self.app.add_api_route(
@@ -993,6 +1008,80 @@ class MemoryService:
 
     async def sync_identity_archive(self):
         return await self._identity_experience_cycle()
+
+    async def verify_identity_experience(self, request: IdentityExperienceVerification):
+        """Mark one existing Tier 1 turn as a verified identity experience."""
+        evidence_refs = list(
+            dict.fromkeys(str(item).strip() for item in request.evidence_refs)
+        )
+        if not evidence_refs or any(not item for item in evidence_refs):
+            raise HTTPException(status_code=400, detail="evidence_refs cannot be empty")
+
+        conn = open_memory_sqlite(self._db_path)
+        try:
+            row = conn.execute(
+                "SELECT metadata FROM turns WHERE turn_id = ?",
+                (request.turn_id.strip(),),
+            ).fetchone()
+            if not row:
+                archived = conn.execute(
+                    "SELECT turn_id FROM turns_archive WHERE turn_id = ?",
+                    (request.turn_id.strip(),),
+                ).fetchone()
+                if archived:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Archived turns cannot be verified as identity experiences",
+                    )
+                raise HTTPException(status_code=404, detail="Turn not found")
+
+            try:
+                metadata = json.loads(row[0] or "{}")
+            except (TypeError, ValueError):
+                metadata = {}
+            verified_fields = {
+                "identity_experience": True,
+                "verified": True,
+                "identity_title": request.title.strip(),
+                "identity_summary": request.summary.strip(),
+                "evidence_refs": evidence_refs,
+                "verified_by": request.verified_by.strip(),
+            }
+            verification_changed = any(
+                metadata.get(key) != value for key, value in verified_fields.items()
+            )
+            metadata.update(verified_fields)
+            if verification_changed or not metadata.get("verified_at"):
+                metadata["verified_at"] = datetime.now(timezone.utc).isoformat()
+            conn.execute(
+                "UPDATE turns SET metadata = ? WHERE turn_id = ?",
+                (json.dumps(metadata, ensure_ascii=False), request.turn_id.strip()),
+            )
+            conn.commit()
+        except HTTPException:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+        sync_result = await self._identity_experience_cycle()
+        digest = hashlib.sha256(request.turn_id.strip().encode("utf-8")).hexdigest()[:20]
+        memory_id = f"identity-experience-turn-{digest}"
+        conn = open_memory_sqlite(self._db_path)
+        try:
+            experience_row = conn.execute(
+                "SELECT * FROM compressed_memories WHERE memory_id = ?",
+                (memory_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        experience = _cmem_row_to_dict(experience_row) if experience_row else None
+        return {
+            "status": "verified",
+            "turn_id": request.turn_id.strip(),
+            "experience": experience,
+            "sync": sync_result,
+        }
 
     async def propose_identity_revision(self, proposal: IdentityRevisionProposal):
         from systems.memory.identity_seed import (
@@ -2113,6 +2202,7 @@ class MemoryService:
     async def query_turns(
         self, start: str = None, end: str = None, speaker: str = None,
         session_id: str = None, limit: int = 100, offset: int = 0,
+        newest_first: bool = False,
     ):
         """Query turns by time range, speaker, or session."""
         conn = open_memory_sqlite(self._db_path)
@@ -2131,7 +2221,7 @@ class MemoryService:
         if session_id:
             sql += " AND session_id = ?"
             params.append(session_id)
-        sql += " ORDER BY timestamp ASC LIMIT ? OFFSET ?"
+        sql += f" ORDER BY timestamp {'DESC' if newest_first else 'ASC'} LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         rows = conn.execute(sql, params).fetchall()
         conn.close()

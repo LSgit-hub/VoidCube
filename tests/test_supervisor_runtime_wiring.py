@@ -518,6 +518,8 @@ def test_supervisor_mounts_built_in_room_ui_when_enabled(tmp_path):
     assert "/ui/state" in route_paths
     assert "/ui/events" in route_paths
     assert "/ui/identity/archive" in route_paths
+    assert "/ui/identity/turns" in route_paths
+    assert "/ui/identity/experiences/verify" in route_paths
     assert "/runtime/timeline" in route_paths
     assert "/runtime/traces" in route_paths
     assert "/runtime/traces/{trace_id}" in route_paths
@@ -537,6 +539,8 @@ def test_supervisor_mounts_built_in_room_ui_when_enabled(tmp_path):
     assert "renderIdentityDrawer" in page.text
     assert "identity-evidence" in page.text
     assert "evidence.length" in page.text
+    assert "verifyIdentityTurn" in page.text
+    assert "data-identity-verify-turn" in page.text
     assert state.status_code == 200
     payload = state.json()
     assert payload["status"] == "ok"

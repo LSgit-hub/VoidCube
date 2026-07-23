@@ -235,6 +235,73 @@ def test_identity_archive_http_route_is_readable_and_exports_revision_table(tmp_
     assert payload["governance"]["anchors_read_only"] is True
 
 
+def test_identity_experience_verification_is_explicit_and_idempotent(tmp_path) -> None:
+    service = MemoryService(
+        MemoryServiceConfig(db_path=str(tmp_path / "memory.db"))
+    )
+    with TestClient(service.app) as client:
+        session = client.post("/sessions", json={"session_id": "identity-web"})
+        assert session.status_code == 200
+        turn = client.post(
+            "/sessions/identity-web/turns",
+            json={"speaker": "user", "text": "确认这段共同经历。"},
+        ).json()
+        request = {
+            "turn_id": turn["turn_id"],
+            "title": "锚点确认共同经历",
+            "summary": "这段对话经锚点明确确认，进入星子的身份经历层。",
+            "evidence_refs": ["conversation:identity-web"],
+            "verified_by": "anchor",
+        }
+
+        first = client.post("/identity/experiences/verify", json=request)
+        first_stored_turn = client.get(f"/turns/{turn['turn_id']}").json()
+        second = client.post("/identity/experiences/verify", json=request)
+        stored_turn = client.get(f"/turns/{turn['turn_id']}").json()
+
+    assert first.status_code == 200
+    assert first.json()["experience"]["origin_id"] == f"turn:{turn['turn_id']}"
+    assert first.json()["sync"]["conversation_experiences"] == 1
+    assert second.status_code == 200
+    assert second.json()["experience"]["memory_id"] == first.json()["experience"]["memory_id"]
+    assert second.json()["sync"]["updated_count"] == 0
+    assert stored_turn["metadata"]["identity_experience"] is True
+    assert stored_turn["metadata"]["verified"] is True
+    assert stored_turn["metadata"]["verified_by"] == "anchor"
+    assert stored_turn["metadata"]["verified_at"] == (
+        first_stored_turn["metadata"]["verified_at"]
+    )
+
+
+def test_identity_experience_verification_rejects_missing_turn_and_empty_evidence(
+    tmp_path,
+) -> None:
+    service = MemoryService(
+        MemoryServiceConfig(db_path=str(tmp_path / "memory.db"))
+    )
+    base = {
+        "turn_id": "missing-turn",
+        "title": "Missing",
+        "summary": "This turn does not exist.",
+        "evidence_refs": ["evidence:test"],
+        "verified_by": "anchor",
+    }
+    with TestClient(service.app) as client:
+        missing = client.post("/identity/experiences/verify", json=base)
+        empty = client.post(
+            "/identity/experiences/verify",
+            json={**base, "evidence_refs": []},
+        )
+        blank = client.post(
+            "/identity/experiences/verify",
+            json={**base, "evidence_refs": ["  "]},
+        )
+
+    assert missing.status_code == 404
+    assert empty.status_code == 422
+    assert blank.status_code == 400
+
+
 def test_manifest_release_evidence_finalizes_approved_identity_revision(tmp_path) -> None:
     service = MemoryService(
         MemoryServiceConfig(db_path=str(tmp_path / "memory.db"))

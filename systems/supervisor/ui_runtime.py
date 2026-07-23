@@ -2619,6 +2619,26 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 .identity-anchor-title { color: var(--text-primary); font-size: 11px; font-weight: 700; }
 .identity-anchor-summary { color: var(--text-secondary); font-size: 10px; line-height: 1.55; margin-top: 5px; }
 .identity-evidence { color: var(--text-muted); font-size: 9px; margin-top: 5px; }
+.identity-turn-list { display: grid; gap: 7px; }
+.identity-turn {
+  padding: 9px; border-radius: 8px; background: rgba(0,0,0,.16);
+  border: 1px solid rgba(255,255,255,.06);
+}
+.identity-turn-head {
+  display: flex; justify-content: space-between; gap: 8px;
+  color: var(--text-muted); font-size: 9px;
+}
+.identity-turn-text {
+  color: var(--text-secondary); font-size: 10px; line-height: 1.55; margin-top: 5px;
+  overflow-wrap: anywhere;
+}
+.identity-verify-button {
+  margin-top: 7px; padding: 5px 8px; border-radius: 6px;
+  border: 1px solid rgba(111,198,160,.35); background: rgba(111,198,160,.11);
+  color: var(--mint); font: inherit; font-size: 9px; cursor: pointer;
+}
+.identity-verify-button:hover { background: rgba(111,198,160,.2); }
+.identity-verify-button:disabled { opacity: .55; cursor: default; }
 .identity-tag {
   display: inline-block; margin: 6px 4px 0 0; padding: 2px 5px; border-radius: 4px;
   background: rgba(111,198,160,.11); color: var(--mint); font-size: 8px;
@@ -3323,6 +3343,9 @@ let drawerOpen = null;
 let drawerContext = {};
 let identityArchive = null;
 let identityArchiveError = '';
+let identityTurns = null;
+let identityTurnsError = '';
+let identityVerificationBusy = '';
 
 const DRAWER_META = {
   autonomous: { icon: '🚦', title: '链路详情' },
@@ -3340,7 +3363,10 @@ function openDrawer(type, context) {
   if (els.drawerTitle) els.drawerTitle.innerHTML = '<span>' + meta.icon + '</span>' + meta.title;
   renderDrawer();
   els.drawer.classList.add('open');
-  if (type === 'identity') loadIdentityArchive();
+  if (type === 'identity') {
+    loadIdentityArchive();
+    loadIdentityTurns();
+  }
 }
 
 function closeDrawer() {
@@ -3372,6 +3398,52 @@ async function loadIdentityArchive() {
   if (drawerOpen === 'identity') renderIdentityDrawer();
 }
 
+async function loadIdentityTurns() {
+  identityTurnsError = '';
+  try {
+    const response = await fetch('/ui/identity/turns?limit=20', {cache: 'no-store'});
+    if (!response.ok) throw new Error('status_' + response.status);
+    const payload = await response.json();
+    identityTurns = Array.isArray(payload.turns) ? payload.turns : [];
+  } catch (error) {
+    identityTurns = null;
+    identityTurnsError = String((error || {}).message || 'unavailable');
+  }
+  if (drawerOpen === 'identity') renderIdentityDrawer();
+}
+
+async function verifyIdentityTurn(turnId) {
+  const turn = (identityTurns || []).find(item => String(item.turn_id || '') === String(turnId || ''));
+  if (!turn || identityVerificationBusy) return;
+  const title = window.prompt('这段经历的标题', '关键对话 · ' + String(turn.speaker || 'conversation'));
+  if (title == null || !String(title).trim()) return;
+  const summary = window.prompt('这段经历对星子身份意味着什么', String(turn.text || '').substring(0, 1000));
+  if (summary == null || !String(summary).trim()) return;
+  identityVerificationBusy = String(turn.turn_id || '');
+  renderIdentityDrawer();
+  try {
+    const response = await fetch('/ui/identity/experiences/verify', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        turn_id: turn.turn_id,
+        title: String(title).trim(),
+        summary: String(summary).trim(),
+        evidence_refs: ['turn:' + turn.turn_id],
+        verified_by: 'anchor',
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(String(payload.detail || ('status_' + response.status)));
+    await Promise.all([loadIdentityArchive(), loadIdentityTurns()]);
+  } catch (error) {
+    window.alert('确认失败：' + String((error || {}).message || 'unknown error'));
+  } finally {
+    identityVerificationBusy = '';
+    if (drawerOpen === 'identity') renderIdentityDrawer();
+  }
+}
+
 // 抽屉关闭交互
 if (els.drawerClose) els.drawerClose.addEventListener('click', closeDrawer);
 if (els.drawer) {
@@ -3388,6 +3460,12 @@ document.addEventListener('keydown', e => {
 });
 // 入口点击(事件委托): 任意带 data-drill 的元素
 document.addEventListener('click', e => {
+  const identityVerify = e.target.closest('[data-identity-verify-turn]');
+  if (identityVerify) {
+    e.stopPropagation();
+    verifyIdentityTurn(identityVerify.dataset.identityVerifyTurn);
+    return;
+  }
   const trigger = e.target.closest('[data-drill]');
   if (!trigger) return;
   e.stopPropagation();
@@ -4285,6 +4363,7 @@ function renderIdentityDrawer() {
   const narrative = Array.isArray(layers.self_narrative) ? layers.self_narrative : [];
   const experiences = Array.isArray(layers.experiences) ? layers.experiences : [];
   const revisions = Array.isArray(layers.revision_history) ? layers.revision_history : [];
+  const recentTurns = Array.isArray(identityTurns) ? identityTurns : [];
 
   const memoryCards = (items, emptyText) => items.length ?
     '<div class="identity-anchor-grid">' + items.map(item => {
@@ -4308,6 +4387,28 @@ function renderIdentityDrawer() {
     '<span class="hr-val">' + esc(item.status || 'pending') + '</span></div>'
   ).join('') : '<div class="drawer-sub" style="margin:0;">尚无身份修订记录。</div>';
 
+  let recentTurnRows = '<div class="drawer-sub" style="margin:0;">正在读取最近对话...</div>';
+  if (identityTurnsError) {
+    recentTurnRows = '<div class="drawer-sub" style="margin:0;">最近对话暂时不可用 · ' +
+      esc(identityTurnsError) + '</div>';
+  } else if (identityTurns) {
+    recentTurnRows = recentTurns.length ? '<div class="identity-turn-list">' + recentTurns.map(turn => {
+      const metadata = turn.metadata || {};
+      const verified = metadata.identity_experience === true && metadata.verified === true;
+      const busy = identityVerificationBusy === String(turn.turn_id || '');
+      return '<article class="identity-turn">' +
+        '<div class="identity-turn-head"><span>' + esc(turn.speaker || 'unknown') + '</span><span>' +
+          esc(shortClock(turn.timestamp)) + '</span></div>' +
+        '<div class="identity-turn-text">' + esc(String(turn.text || '').substring(0, 280)) + '</div>' +
+        (verified
+          ? '<div class="identity-evidence">已确认为身份经历</div>'
+          : '<button class="identity-verify-button" type="button" data-identity-verify-turn="' +
+            esc(turn.turn_id || '') + '" title="将这段对话写入星子的经历层"' +
+            (busy ? ' disabled' : '') + '>' + (busy ? '正在确认...' : '确认为身份经历') + '</button>') +
+        '</article>';
+    }).join('') + '</div>' : '<div class="drawer-sub" style="margin:0;">尚无可确认的最近对话。</div>';
+  }
+
   els.drawerBody.innerHTML =
     '<div class="drawer-sub">' + esc(archive.identity || 'xingzi') + ' · ' +
       esc(archive.manifest_version || 'unknown') + ' · 起源锚点只读</div>' +
@@ -4317,6 +4418,8 @@ function renderIdentityDrawer() {
       memoryCards(narrative, '尚未形成新的演化自述。') + '</div>' +
     '<div class="drawer-section"><div class="drawer-section-label">近期经历</div>' +
       memoryCards(experiences, '尚无可展示的长期经历。') + '</div>' +
+    '<div class="drawer-section"><div class="drawer-section-label">最近对话</div>' +
+      recentTurnRows + '</div>' +
     '<div class="drawer-section"><div class="drawer-section-label">修订历史</div>' +
       revisionRows + '</div>' +
     '<details class="identity-story"><summary>' + esc(archive.story_title || '起源记录') +
@@ -5141,33 +5244,9 @@ class SupervisorUIMixin:
             gateway_url = str(self.config.execution.gateway_address).rstrip("/")
             timeout = aiohttp.ClientTimeout(total=5)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(f"{gateway_url}/admin/services") as response:
-                    if response.status != 200:
-                        raise HTTPException(
-                            status_code=503, detail="Gateway service registry unavailable"
-                        )
-                    services_payload = (await response.json()).get("services", {})
-                services = (
-                    list(services_payload.values())
-                    if isinstance(services_payload, dict)
-                    else list(services_payload)
-                    if isinstance(services_payload, list)
-                    else []
+                memory_url = await self._resolve_ui_memory_service_url(
+                    session, gateway_url
                 )
-                memory_url = next(
-                    (
-                        str(service.get("address") or "").rstrip("/")
-                        for service in services
-                        if isinstance(service, dict)
-                        and service.get("service_type") == "memory"
-                        and service.get("address")
-                    ),
-                    "",
-                )
-                if not memory_url:
-                    raise HTTPException(
-                        status_code=503, detail="Memory Service is not registered"
-                    )
                 async with session.get(f"{memory_url}/identity/archive") as response:
                     if response.status != 200:
                         raise HTTPException(
@@ -5180,6 +5259,105 @@ class SupervisorUIMixin:
             raise HTTPException(
                 status_code=503, detail=f"Memory identity archive unavailable: {type(exc).__name__}"
             ) from exc
+
+    async def get_supervisor_identity_turns(self, limit: int = 20) -> Dict[str, Any]:
+        """Return recent Tier 1 turns for explicit identity verification in the room UI."""
+        try:
+            import aiohttp
+
+            bounded_limit = max(1, min(int(limit), 50))
+            gateway_url = str(self.config.execution.gateway_address).rstrip("/")
+            timeout = aiohttp.ClientTimeout(total=5)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                memory_url = await self._resolve_ui_memory_service_url(
+                    session, gateway_url
+                )
+                async with session.get(
+                    f"{memory_url}/turns",
+                    params={"limit": bounded_limit, "newest_first": "true"},
+                ) as response:
+                    if response.status != 200:
+                        raise HTTPException(
+                            status_code=503, detail="Memory turns unavailable"
+                        )
+                    payload = await response.json()
+                    turns = list(payload.get("turns") or [])
+                    return {"turns": turns, "count": len(turns)}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503, detail=f"Memory turns unavailable: {type(exc).__name__}"
+            ) from exc
+
+    async def verify_supervisor_identity_experience(
+        self, request: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Proxy an explicit identity-experience decision to canonical Mem."""
+        try:
+            import aiohttp
+
+            from systems.memory.memory_service import IdentityExperienceVerification
+
+            payload = IdentityExperienceVerification.model_validate(request).model_dump()
+            gateway_url = str(self.config.execution.gateway_address).rstrip("/")
+            timeout = aiohttp.ClientTimeout(total=8)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                memory_url = await self._resolve_ui_memory_service_url(
+                    session, gateway_url
+                )
+                async with session.post(
+                    f"{memory_url}/identity/experiences/verify",
+                    json=payload,
+                ) as response:
+                    response_payload = await response.json()
+                    if response.status != 200:
+                        detail = response_payload.get("detail") if isinstance(response_payload, dict) else None
+                        raise HTTPException(
+                            status_code=response.status,
+                            detail=detail or "Identity experience verification failed",
+                        )
+                    return response_payload
+        except HTTPException:
+            raise
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Identity experience verification unavailable: {type(exc).__name__}",
+            ) from exc
+
+    @staticmethod
+    async def _resolve_ui_memory_service_url(session: Any, gateway_url: str) -> str:
+        async with session.get(f"{gateway_url}/admin/services") as response:
+            if response.status != 200:
+                raise HTTPException(
+                    status_code=503, detail="Gateway service registry unavailable"
+                )
+            services_payload = (await response.json()).get("services", {})
+        services = (
+            list(services_payload.values())
+            if isinstance(services_payload, dict)
+            else list(services_payload)
+            if isinstance(services_payload, list)
+            else []
+        )
+        memory_url = next(
+            (
+                str(service.get("address") or "").rstrip("/")
+                for service in services
+                if isinstance(service, dict)
+                and service.get("service_type") == "memory"
+                and service.get("address")
+            ),
+            "",
+        )
+        if not memory_url:
+            raise HTTPException(
+                status_code=503, detail="Memory Service is not registered"
+            )
+        return memory_url
 
     async def get_supervisor_ui_events(self, request: Request) -> StreamingResponse:
         async def event_stream():
