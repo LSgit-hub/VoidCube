@@ -50,8 +50,6 @@ class TurnFinalizationPort(Protocol):
         self,
         *,
         messages_snapshot: list[dict[str, Any]],
-        review_memory: bool,
-        review_skills: bool,
     ) -> None: ...
 
 
@@ -169,7 +167,6 @@ def finalize_conversation_turn(
     conversation_history: list[dict[str, Any]] | None,
     task_id: str,
     original_user_message: Any,
-    review_memory: bool,
     invoke_hook: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     """Run the one canonical post-loop finalization sequence."""
@@ -262,23 +259,17 @@ def finalize_conversation_turn(
                 state.final_response,
                 session_id=owner.session_id or "",
             )
-            owner._memory_manager.queue_prefetch_all(
-                original_user_message,
-                session_id=owner.session_id or "",
-            )
         except Exception:
             pass
 
     if (
         state.final_response
         and not state.interrupted
-        and (review_memory or review_skills)
+        and review_skills
     ):
         try:
             owner._spawn_background_review(
                 messages_snapshot=list(messages),
-                review_memory=review_memory,
-                review_skills=review_skills,
             )
         except Exception:
             pass

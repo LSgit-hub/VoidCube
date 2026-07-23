@@ -20,9 +20,6 @@ def _owner(events):
         sync_all=lambda user, response, session_id="": events.append(
             ("memory_sync", user, response, session_id)
         ),
-        queue_prefetch_all=lambda user, session_id="": events.append(
-            ("memory_prefetch", user, session_id)
-        ),
     )
     owner = SimpleNamespace(
         max_iterations=5,
@@ -135,7 +132,6 @@ def test_finalizer_runs_one_ordered_success_sequence():
         conversation_history=None,
         task_id="task-1",
         original_user_message="question",
-        review_memory=True,
         invoke_hook=hook,
     )
 
@@ -145,13 +141,11 @@ def test_finalizer_runs_one_ordered_success_sequence():
         "hook",
         "clear_interrupt",
         "memory_sync",
-        "memory_prefetch",
         "background",
         "hook",
     ]
     assert events[2][1] == "post_llm_call"
     assert events[4] == ("memory_sync", "question", "answer", "session-1")
-    assert events[5] == ("memory_prefetch", "question", "session-1")
     assert events[-1][1] == "on_session_end"
     assert result["final_response"] == "answer"
     assert result["last_reasoning"] == "reason"
@@ -181,7 +175,6 @@ def test_interrupted_finalization_skips_success_side_effects():
         conversation_history=None,
         task_id="task-1",
         original_user_message="question",
-        review_memory=True,
         invoke_hook=lambda name, **kwargs: events.append(("hook", name, kwargs)),
     )
 

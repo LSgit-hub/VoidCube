@@ -148,7 +148,6 @@ def _discover_tools():
         "tools.skill_manager_tool",
         "tools.browser_tool",
         "tools.todo_tool",
-        "tools.memory_tool",
         "tools.session_search_tool",
         "tools.clarify_tool",
         "tools.code_execution_tool",
@@ -349,7 +348,7 @@ def get_tool_definitions(
 # =============================================================================
 
 # Tools whose execution is intercepted by the agent loop (run_agent.py)
-# because they need agent-level state (TodoStore, MemoryStore, etc.).
+# because they need agent-level state (for example TodoStore).
 # The registry still holds their schemas; dispatch just returns a stub error
 # so if something slips through, the LLM sees a sensible message.
 _AGENT_LOOP_TOOLS = {"todo", "memory", "session_search", "delegate_task"}

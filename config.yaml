@@ -122,13 +122,6 @@ auxiliary:
     base_url: ""
     api_key: ""
     timeout: 30
-  flush_memories:
-    provider: auto
-    model: ""
-    base_url: ""
-    api_key: ""
-    timeout: 30
-
 # 显示设置
 display:
   compact: false
@@ -203,11 +196,6 @@ context:
 
 # 记忆配置
 memory:
-  memory_enabled: true
-  user_profile_enabled: true
-  memory_char_limit: 2200
-  user_char_limit: 1375
-  provider: mem
   mem:
     gateway_address: ""
     request_timeout_seconds: 2.0

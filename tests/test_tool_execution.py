@@ -42,13 +42,11 @@ def _agent() -> AIAgent:
     agent._tool_thread_ids_lock = threading.Lock()
     agent._active_children = []
     agent._active_children_lock = threading.Lock()
-    agent._turns_since_memory = 2
     agent._iters_since_skill = 2
     agent._current_tool = None
     agent._delegate_spinner = None
     agent._context_engine_tool_names = set()
     agent._memory_manager = None
-    agent._memory_store = None
     agent._session_db = None
     agent._todo_store = None
     agent._checkpoint_mgr = SimpleNamespace(enabled=False)
@@ -314,44 +312,6 @@ def test_agent_parallel_path_writes_results_in_assistant_order(monkeypatch):
         "call-2",
     ]
     assert [message["content"] for message in messages] == ["a.txt", "b.txt"]
-
-
-def test_agent_memory_write_uses_the_single_route_and_notifies_provider(monkeypatch):
-    import run_agent
-    from tools import memory_tool
-
-    writes: list[tuple[str, str, str]] = []
-    agent = _agent()
-    agent._memory_manager = SimpleNamespace(
-        on_memory_write=lambda action, target, content: writes.append(
-            (action, target, content)
-        ),
-        has_tool=lambda _name: False,
-    )
-    monkeypatch.setattr(memory_tool, "memory_tool", lambda **_kwargs: "stored")
-    monkeypatch.setattr(
-        run_agent,
-        "maybe_persist_tool_result",
-        lambda **kwargs: kwargs["content"],
-    )
-    monkeypatch.setattr(run_agent, "get_active_env", lambda _task_id: None)
-    monkeypatch.setattr(run_agent, "enforce_turn_budget", lambda *_args, **_kwargs: None)
-    assistant = SimpleNamespace(
-        tool_calls=[
-            _tool_call(
-                "call-memory",
-                "memory",
-                {"action": "add", "target": "memory", "content": "fact"},
-            )
-        ]
-    )
-    messages: list[dict] = []
-
-    agent._execute_tool_calls(assistant, messages, "task-memory")
-
-    assert writes == [("add", "memory", "fact")]
-    assert messages[0]["content"] == "stored"
-    assert agent._turns_since_memory == 0
 
 
 def test_agent_interrupt_still_completes_every_tool_protocol_slot(monkeypatch):

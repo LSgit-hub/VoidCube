@@ -271,46 +271,20 @@ def _build_service_app(name: str, port: int):
     raise ValueError(f"Unknown service: {name}")
 
 
-def _sync_active_mem_binding_before_start() -> Dict[str, Any] | None:
-    """Repair memai import binding before the Memory process imports it."""
+def _sync_canonical_mem_binding_before_start() -> Dict[str, str]:
+    """Bind memai to the shared repository source, independent of Body slots."""
     import sysconfig
 
     from systems.config import get_config
-    from systems.mem_editable_binding import (
-        MemEditableBindingError,
-        sync_mem_editable_binding,
-        validate_mem_source,
-    )
+    from systems.mem_source_binding import sync_canonical_mem_binding
+    from VoidCube_core.runtime_paths import get_runtime_layout
 
     config = get_config()
     source_root = Path(config.supervisor.execution.git_repo_path).resolve()
-    try:
-        validate_mem_source(source_root)
-    except MemEditableBindingError:
-        return None
-
-    state_root = Path(config.supervisor.body_runtime.state_root).resolve()
-    registry_path = state_root / "registry.json"
-    if not registry_path.is_file():
-        return None
-    registry = json.loads(registry_path.read_text(encoding="utf-8"))
-    slot_id = str(registry.get("active_slot") or "").strip()
-    if not slot_id:
-        return None
-    meta_path = state_root / "slots" / slot_id / "meta.json"
-    if not meta_path.is_file():
-        return None
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    worktree_path = str(meta.get("worktree_path") or "").strip()
-    if not worktree_path:
-        return None
-    result = sync_mem_editable_binding(
-        slot_id=slot_id,
-        worktree_path=worktree_path,
+    result = sync_canonical_mem_binding(
         source_root=source_root,
         site_packages=sysconfig.get_paths()["purelib"],
-        allow_source_fallback=True,
-        audit_path=state_root / "mem-editable-binding.json",
+        audit_path=get_runtime_layout().memory_root / "mem-source-binding.json",
     )
     return result.to_dict()
 
@@ -318,31 +292,26 @@ def _sync_active_mem_binding_before_start() -> Dict[str, Any] | None:
 def _service_python_path_entries() -> list[str]:
     """Return repo-local import roots required by service subprocesses."""
     repo_root = Path(__file__).resolve().parents[2]
-    return [str(repo_root)]
+    return [str(repo_root), str(repo_root / "Mem" / "src")]
 
 
-def _verify_active_mem_import_source() -> Dict[str, str] | None:
-    """Fail startup when Python resolved memai outside the audited binding."""
+def _verify_canonical_mem_import_source() -> Dict[str, str]:
+    """Fail startup when Python resolves memai outside the shared source."""
     from systems.config import get_config
+    from systems.mem_source_binding import validate_canonical_mem_source
 
     config = get_config()
-    state_root = Path(config.supervisor.body_runtime.state_root).resolve()
-    audit_path = state_root / "mem-editable-binding.json"
-    if not audit_path.is_file():
-        return None
-
-    binding = json.loads(audit_path.read_text(encoding="utf-8"))
-    source_path = Path(str(binding.get("source_path") or "")).resolve()
+    source_path = validate_canonical_mem_source(
+        config.supervisor.execution.git_repo_path
+    )
     expected = source_path / "memai" / "model_config.py"
-    if not expected.is_file():
-        raise RuntimeError(f"Audited Mem source is incomplete: {expected}")
 
     from memai import model_config
 
     actual = Path(model_config.__file__).resolve()
     if actual != expected:
         raise RuntimeError(
-            "memai import source does not match the active Body binding: "
+            "memai import source does not match the canonical shared binding: "
             f"expected {expected}, loaded {actual}"
         )
     return {"expected": str(expected), "loaded": str(actual)}
@@ -353,7 +322,8 @@ def _run_service_in_thread(name: str, port: int) -> None:
     import asyncio
     import uvicorn
 
-    _verify_active_mem_import_source()
+    _sync_canonical_mem_binding_before_start()
+    _verify_canonical_mem_import_source()
     app = _build_service_app(name, port)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -426,8 +396,8 @@ os.chdir({json.dumps(str(Path.cwd()))})
 from VoidCube_cli.env_loader import load_VoidCube_dotenv
 load_VoidCube_dotenv(project_env={project_env_path}, force_reload=True)
 import uvicorn
-from VoidCube_cli.ops.serve import _build_service_app, _verify_active_mem_import_source
-_verify_active_mem_import_source()
+from VoidCube_cli.ops.serve import _build_service_app, _verify_canonical_mem_import_source
+_verify_canonical_mem_import_source()
 app = _build_service_app({json.dumps(name)}, {svc.port})
 uvicorn.run(app, host='127.0.0.1', port={svc.port}, log_level='info')
 """
@@ -545,7 +515,7 @@ def start_all(foreground: bool = False) -> None:
     """
     PID_DIR.mkdir(parents=True, exist_ok=True)
     _safe_print("\n  Starting VoidCube services...\n")
-    _sync_active_mem_binding_before_start()
+    _sync_canonical_mem_binding_before_start()
 
     # 1. Gateway (nerve centre — routes all internal traffic)
     start_service("gateway", foreground=foreground)
@@ -672,7 +642,7 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
     """
     PID_DIR.mkdir(parents=True, exist_ok=True)
     result: Dict[str, Any] = {}
-    _sync_active_mem_binding_before_start()
+    _sync_canonical_mem_binding_before_start()
 
     # Default stable path: Gateway → Mem → Supervisor.
     # The live CLI session is the canonical API-A runtime; body/agent

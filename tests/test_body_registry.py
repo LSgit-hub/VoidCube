@@ -10,24 +10,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from systems.body_registry import BodyRegistryManager
-from systems.mem_editable_binding import MemEditableBindingError
 
 
 def _await_user_consent(manager: BodyRegistryManager, slot_id: str = "slot-B"):
     return manager.await_user_consent(slot_id, request_payload={"watch_window_seconds": 120})
-
-
-def _seed_mem_package(root: Path) -> None:
-    package = root / "Mem" / "src" / "memai"
-    identity = package / "identity"
-    identity.mkdir(parents=True, exist_ok=True)
-    (package / "__init__.py").write_text("", encoding="utf-8")
-    (package / "model_config.py").write_text(
-        "def resolve_mem_llm_client(): pass\ndef _resolve_mem_api_key(): pass\n",
-        encoding="utf-8",
-    )
-    (identity / "founding_memory.json").write_text("{}\n", encoding="utf-8")
-    (identity / "founding_story.md").write_text("# story\n", encoding="utf-8")
 
 
 @pytest.mark.unit
@@ -223,70 +209,39 @@ def test_activate_slot_records_active_ref_and_commit(tmp_path):
 
 
 @pytest.mark.unit
-def test_mem_editable_binding_follows_active_body_switch(tmp_path):
+def test_body_switch_does_not_bind_or_validate_mem(tmp_path):
     source_root = tmp_path / "source"
     source_root.mkdir()
     (source_root / "run_agent.py").write_text("print('ok')\n", encoding="utf-8")
-    _seed_mem_package(source_root)
-    site_packages = tmp_path / "site-packages"
     manager = BodyRegistryManager(
         source_root,
         state_root=tmp_path / "state",
-        mem_editable_site_packages=site_packages,
     )
     manager.initialize_layout()
-
-    pth = site_packages / "__editable__.memai-0.1.0.pth"
-    slot_a = manager.load_slot_meta("slot-A")
-    assert pth.read_text(encoding="utf-8").strip() == str(
-        Path(slot_a.worktree_path) / "Mem" / "src"
-    )
 
     manager.mark_candidate("slot-B", body_version="v2")
     manager.start_probe("slot-B")
     _await_user_consent(manager)
     registry = manager.activate_slot("slot-B")
-    slot_b = manager.load_slot_meta("slot-B")
-
-    assert pth.read_text(encoding="utf-8").strip() == str(
-        Path(slot_b.worktree_path) / "Mem" / "src"
-    )
-    assert registry.last_switch_result["mem_editable_binding"]["slot_id"] == "slot-B"
-    assert registry.last_switch_result["mem_editable_binding"]["fallback"] is False
+    assert registry.active_slot == "slot-B"
+    assert "mem_editable_binding" not in registry.last_switch_result
 
 
 @pytest.mark.unit
-def test_body_switch_rejects_candidate_with_incomplete_mem_before_state_change(tmp_path):
+def test_body_switch_accepts_candidate_without_a_body_mem_package(tmp_path):
     source_root = tmp_path / "source"
     source_root.mkdir()
     (source_root / "run_agent.py").write_text("print('ok')\n", encoding="utf-8")
-    _seed_mem_package(source_root)
     manager = BodyRegistryManager(
         source_root,
         state_root=tmp_path / "state",
-        mem_editable_site_packages=tmp_path / "site-packages",
     )
     manager.initialize_layout()
     manager.mark_candidate("slot-B")
     manager.start_probe("slot-B")
     _await_user_consent(manager)
-    slot_b = manager.load_slot_meta("slot-B")
-    (
-        Path(slot_b.worktree_path)
-        / "Mem"
-        / "src"
-        / "memai"
-        / "identity"
-        / "founding_story.md"
-    ).unlink()
-
-    with pytest.raises(MemEditableBindingError, match="Body Mem package is incomplete"):
-        manager.activate_slot("slot-B")
-
-    registry = manager.load_registry()
-    assert registry.active_slot == "slot-A"
-    assert manager.load_slot_meta("slot-A").body_state == "active"
-    assert manager.load_slot_meta("slot-B").body_state == "awaiting_user_consent"
+    registry = manager.activate_slot("slot-B")
+    assert registry.active_slot == "slot-B"
 
 
 @pytest.mark.unit

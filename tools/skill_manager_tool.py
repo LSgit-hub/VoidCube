@@ -8,7 +8,7 @@ approaches into reusable procedural knowledge. New skills are created in
 can be modified or deleted wherever they live.
 
 Skills are the agent's procedural memory: they capture *how to do a specific
-type of task* based on proven experience. General memory (MEMORY.md, USER.md) is
+type of task* based on proven experience. General memory in canonical Mem is
 broad and declarative. Skills are narrow and actionable.
 
 Actions:

@@ -2302,7 +2302,7 @@ class VoidcubeCLI:
             config = self._cached_load_config()
             memory_config = config.get("memory", {})
             mem_llm = memory_config.get("llm", {})
-            mem_model = mem_llm.get("model", None) or memory_config.get("model", None)
+            mem_model = mem_llm.get("model", None)
             if mem_model:
                 mem_short = mem_model.split("/")[-1] if "/" in mem_model else mem_model
                 if mem_short.endswith(".gguf"):
@@ -2310,7 +2310,7 @@ class VoidcubeCLI:
                 if len(mem_short) > 20:
                     mem_short = mem_short[:17] + "..."
             else:
-                mem_provider = mem_llm.get("provider", "") or memory_config.get("provider", "") or "mem"
+                mem_provider = mem_llm.get("provider", "") or "Mem"
                 mem_short = mem_provider if len(mem_provider) <= 12 else mem_provider[:9] + "..."
 
             icon = "[M]" if ascii_mode else "🧠"
@@ -4185,10 +4185,6 @@ class VoidcubeCLI:
     def new_session(self, silent=False):
         """Start a fresh session with a new session ID and cleared agent state."""
         if self.agent and self.conversation_history:
-            try:
-                self.agent.flush_memories(self.conversation_history)
-            except (Exception, KeyboardInterrupt):
-                pass
             self._notify_session_boundary("on_session_finalize")
         elif self.agent:
             # First session or empty history — still finalize the old session
@@ -4888,151 +4884,14 @@ class VoidcubeCLI:
         print("    /model <name> --provider <provider-name> — switch provider and model")
 
     def _handle_memory_switch(self, cmd_original: str):
-        """处理 /memory 命令 — 配置记忆系统。
+        """显示不可切换的统一 Mem 状态。"""
+        del cmd_original
+        from VoidCube_core.runtime_paths import get_runtime_layout
 
-        支持:
-          /memory                     — 显示当前记忆系统 + 列出选项
-          /memory list                — 列出可用的记忆系统
-          /memory builtin             — 仅使用内置记忆系统
-          /memory mem                 — 使用内置 + Mem 时间序列记忆系统
-          /memory mem --global        — 使用 Mem 并持久化到 config.yaml
-        """
-        from VoidCube_cli.config import load_config, save_config
-
-        parts = cmd_original.split(None, 1)
-        raw_args = parts[1].strip() if len(parts) > 1 else ""
-
-        persist_global = False
-        mem_input = raw_args
-
-        if mem_input.endswith(" --global"):
-            persist_global = True
-            mem_input = mem_input[:-8].strip()
-        elif " --global " in mem_input:
-            idx = mem_input.find(" --global ")
-            mem_input = mem_input[:idx].strip()
-            persist_global = True
-
-        # 加载当前配置
-        try:
-            cfg = load_config()
-            current_provider = cfg.get("memory", {}).get("provider", "")
-        except Exception:
-            cfg = {}
-            current_provider = ""
-
-        # 可用选项 - 动态加载所有可用的记忆提供者
-        memory_options = {
-            "": {
-                "name": "builtin",
-                "label": "仅使用内置记忆",
-                "description": "仅使用内置的 MEMORY.md 和 USER.md 文件",
-                "tools": ["memory_write", "user_profile_write"],
-                "available": True,
-            },
-        }
-        
-        # 动态加载外部记忆提供者
-        try:
-            from plugins.memory import load_memory_provider
-            
-            # 支持的外部提供者列表
-            external_providers = ["mem", "hindsight"]
-            
-            for provider_name in external_providers:
-                try:
-                    provider = load_memory_provider(provider_name)
-                    if provider:
-                        is_available = provider.is_available()
-                        tools = [t["name"] for t in provider.get_tool_schemas()] if is_available else []
-                        
-                        if provider_name == "mem":
-                            memory_options["mem"] = {
-                                "name": "mem",
-                                "label": "Mem 时间序列记忆系统",
-                                "description": "内置 + Mem 系统，包含时间序列、故事弧、人物档案",
-                                "tools": ["memory_write", "user_profile_write"] + tools,
-                                "available": is_available,
-                            }
-                        elif provider_name == "hindsight":
-                            memory_options["hindsight"] = {
-                                "name": "hindsight",
-                                "label": "Hindsight 知识图谱记忆",
-                                "description": "内置 + Hindsight 知识图谱，支持 retain/recall/reflect 操作",
-                                "tools": ["memory_write", "user_profile_write"] + tools,
-                                "available": is_available,
-                            }
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-        if mem_input and mem_input in ["list", "builtin", "mem", "hindsight"]:
-            if mem_input == "list":
-                # 仅列出选项
-                self._display_memory_options(current_provider, memory_options)
-                return
-
-            if mem_input == "builtin":
-                target_provider = ""
-            else:
-                target_provider = mem_input
-
-            # 更新配置
-            if "memory" not in cfg:
-                cfg["memory"] = {}
-            cfg["memory"]["provider"] = target_provider
-
-            if persist_global:
-                try:
-                    save_config(cfg)
-                    target_label = memory_options.get(target_provider, {}).get("label", target_provider)
-                    _cprint(f"  ✓ 记忆系统已切换到: {target_label}")
-                    _cprint("    已保存到 config.yaml (--global)")
-                    _cprint("    重启 VoidCube 以让更改生效")
-                except Exception as e:
-                    _cprint(f"  ✗ 保存配置失败: {e}")
-            else:
-                target_label = memory_options.get(target_provider, {}).get("label", target_provider)
-                _cprint(f"  ✓ 记忆系统已切换到: {target_label}")
-                _cprint("    (仅本次会话 — 添加 --global 以持久化)")
-                _cprint("    重启 VoidCube 以让更改生效")
-
-            return
-
-        # 没有输入 — 显示当前状态和选项
-        self._display_memory_options(current_provider, memory_options)
-
-    def _display_memory_options(self, current_provider: str, memory_options: dict):
-        """显示可用的记忆系统选项。"""
-        print("\n  可用的记忆系统:\n")
-
-        for option_key, option_info in memory_options.items():
-            is_active = current_provider == option_key
-            is_available = option_info.get("available", True)
-            marker = " ← 当前使用" if is_active else ""
-            status_char = "✓" if is_active else " "
-            
-            availability_note = ""
-            if not is_available:
-                availability_note = " (未安装)"
-            
-            print(f"  [{option_info['name']}] {status_char} {option_info['label']}{availability_note}{marker}")
-            print(f"      {option_info['description']}")
-            if is_available:
-                print(f"      工具: {', '.join(option_info['tools'])}")
-            else:
-                print(f"      状态: 需要安装依赖")
-            print()
-
-        print("  使用方法:")
-        print("    /memory                       — 显示此菜单")
-        print("    /memory list                  — 列出记忆系统")
-        print("    /memory builtin               — 仅使用内置记忆")
-        print("    /memory mem                   — 使用 Mem 时间序列记忆系统")
-        print("    /memory hindsight             — 使用 Hindsight 知识图谱记忆")
-        print("    /memory <provider> --global   — 使用指定记忆系统并保存到配置")
-        print()
+        print("\n  统一记忆系统: Mem（始终启用）")
+        print(f"  数据库: {get_runtime_layout().memory_db}")
+        print("  工具: mem_search, mem_timeline, mem_remember")
+        print("  审计: Memory Service /recall/traces\n")
 
 
     
@@ -10352,12 +10211,6 @@ class VoidcubeCLI:
                 try:
                     self.agent.interrupt()
                 except Exception:
-                    pass
-            # Flush memories before exit (only for substantial conversations)
-            if self.agent and self.conversation_history:
-                try:
-                    self.agent.flush_memories(self.conversation_history)
-                except (Exception, KeyboardInterrupt):
                     pass
             # Shut down voice recorder (release persistent audio stream)
             if hasattr(self, '_voice_recorder') and self._voice_recorder:

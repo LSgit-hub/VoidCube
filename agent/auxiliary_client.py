@@ -1784,7 +1784,7 @@ def call_llm(
 
     Args:
         task: Auxiliary task name ("compression", "vision", "web_extract",
-              "session_search", "skills_hub", "mcp", "flush_memories").
+              "session_search", "skills_hub", or "mcp").
               Reads provider:model from config/env. Ignored if provider is set.
         provider: Explicit provider override.
         model: Explicit model override.

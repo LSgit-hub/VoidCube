@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -11,7 +10,7 @@ from systems.config import SystemConfig
 from VoidCube_cli.ops.serve import (
     _build_service_config,
     _service_python_path_entries,
-    _verify_active_mem_import_source,
+    _verify_canonical_mem_import_source,
 )
 
 
@@ -41,28 +40,38 @@ def test_supervisor_lm_task_generation_is_enabled_by_default():
     assert config.service_runtime.endogenous_drive_lm_task_generation_enabled is True
 
 
-def test_service_subprocess_python_path_uses_only_repo_root():
+def test_service_subprocess_python_path_includes_canonical_mem_source():
     entries = _service_python_path_entries()
 
-    assert len(entries) == 1
-    assert not entries[0].endswith("Mem\\src")
-    assert not entries[0].endswith("Mem/src")
+    assert len(entries) == 2
+    assert entries[1].endswith("Mem\\src") or entries[1].endswith("Mem/src")
 
 
-def test_active_mem_import_source_matches_audited_binding(tmp_path, monkeypatch):
-    source = tmp_path / "slot-B" / "Mem" / "src"
+def test_canonical_mem_import_source_matches_repository_source(tmp_path, monkeypatch):
+    source = tmp_path / "Mem" / "src"
     expected = source / "memai" / "model_config.py"
     expected.parent.mkdir(parents=True)
-    expected.write_text("# active Mem\n", encoding="utf-8")
-    (tmp_path / "mem-editable-binding.json").write_text(
-        json.dumps({"source_path": str(source)}),
+    expected.write_text(
+        "def resolve_mem_llm_client(): pass\n"
+        "def _resolve_mem_api_key(): pass\n",
         encoding="utf-8",
     )
+    for required in (
+        source / "memai" / "__init__.py",
+        source / "memai" / "identity" / "founding_memory.json",
+        source / "memai" / "identity" / "founding_story.md",
+    ):
+        required.parent.mkdir(parents=True, exist_ok=True)
+        required.write_text(
+            "def resolve_mem_llm_client(): pass\ndef _resolve_mem_api_key(): pass\n"
+            if required.name == "model_config.py" else "{}\n",
+            encoding="utf-8",
+        )
     monkeypatch.setattr(
         "systems.config.get_config",
         lambda: SimpleNamespace(
             supervisor=SimpleNamespace(
-                body_runtime=SimpleNamespace(state_root=str(tmp_path))
+                execution=SimpleNamespace(git_repo_path=str(tmp_path))
             )
         ),
     )
@@ -73,25 +82,36 @@ def test_active_mem_import_source_matches_audited_binding(tmp_path, monkeypatch)
     monkeypatch.setitem(sys.modules, "memai", memai)
     monkeypatch.setitem(sys.modules, "memai.model_config", model_config)
 
-    result = _verify_active_mem_import_source()
+    result = _verify_canonical_mem_import_source()
 
     assert result == {"expected": str(expected), "loaded": str(expected)}
 
 
-def test_active_mem_import_source_rejects_shadowed_package(tmp_path, monkeypatch):
-    source = tmp_path / "slot-B" / "Mem" / "src"
+def test_canonical_mem_import_source_rejects_shadowed_package(tmp_path, monkeypatch):
+    source = tmp_path / "Mem" / "src"
     expected = source / "memai" / "model_config.py"
     expected.parent.mkdir(parents=True)
-    expected.write_text("# active Mem\n", encoding="utf-8")
-    (tmp_path / "mem-editable-binding.json").write_text(
-        json.dumps({"source_path": str(source)}),
+    expected.write_text(
+        "def resolve_mem_llm_client(): pass\n"
+        "def _resolve_mem_api_key(): pass\n",
         encoding="utf-8",
     )
+    for required in (
+        source / "memai" / "__init__.py",
+        source / "memai" / "identity" / "founding_memory.json",
+        source / "memai" / "identity" / "founding_story.md",
+    ):
+        required.parent.mkdir(parents=True, exist_ok=True)
+        required.write_text(
+            "def resolve_mem_llm_client(): pass\ndef _resolve_mem_api_key(): pass\n"
+            if required.name == "model_config.py" else "{}\n",
+            encoding="utf-8",
+        )
     monkeypatch.setattr(
         "systems.config.get_config",
         lambda: SimpleNamespace(
             supervisor=SimpleNamespace(
-                body_runtime=SimpleNamespace(state_root=str(tmp_path))
+                execution=SimpleNamespace(git_repo_path=str(tmp_path))
             )
         ),
     )
@@ -102,8 +122,8 @@ def test_active_mem_import_source_rejects_shadowed_package(tmp_path, monkeypatch
     monkeypatch.setitem(sys.modules, "memai", memai)
     monkeypatch.setitem(sys.modules, "memai.model_config", model_config)
 
-    with pytest.raises(RuntimeError, match="does not match the active Body binding"):
-        _verify_active_mem_import_source()
+    with pytest.raises(RuntimeError, match="does not match the canonical shared binding"):
+        _verify_canonical_mem_import_source()
 
 
 def test_start_all_starts_gateway_before_memory_and_waits_for_registration(monkeypatch, tmp_path):
@@ -114,7 +134,7 @@ def test_start_all_starts_gateway_before_memory_and_waits_for_registration(monke
     monkeypatch.setattr(serve, "PID_DIR", tmp_path)
     monkeypatch.setattr(
         serve,
-        "_sync_active_mem_binding_before_start",
+        "_sync_canonical_mem_binding_before_start",
         lambda: calls.append(("sync", "mem")),
     )
     monkeypatch.setattr(serve, "start_service", lambda name, foreground=False: calls.append(("start", name)))
@@ -145,7 +165,7 @@ def test_ensure_running_restarts_healthy_unregistered_memory(monkeypatch, tmp_pa
     calls = []
 
     monkeypatch.setattr(serve, "PID_DIR", tmp_path)
-    monkeypatch.setattr(serve, "_sync_active_mem_binding_before_start", lambda: None)
+    monkeypatch.setattr(serve, "_sync_canonical_mem_binding_before_start", lambda: None)
     monkeypatch.setattr(serve, "_read_pid", lambda path: 123)
     monkeypatch.setattr(serve, "_pid_alive", lambda pid: True)
     monkeypatch.setattr(serve, "_health_check", lambda port: True)
@@ -173,7 +193,7 @@ def test_ensure_running_restarts_supervisor_when_executor_registration_is_missin
     calls = []
 
     monkeypatch.setattr(serve, "PID_DIR", tmp_path)
-    monkeypatch.setattr(serve, "_sync_active_mem_binding_before_start", lambda: None)
+    monkeypatch.setattr(serve, "_sync_canonical_mem_binding_before_start", lambda: None)
     monkeypatch.setattr(serve, "_read_pid", lambda path: 123)
     monkeypatch.setattr(serve, "_pid_alive", lambda pid: True)
     monkeypatch.setattr(serve, "_health_check", lambda port: True)

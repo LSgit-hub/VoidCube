@@ -23,6 +23,9 @@ _CJK_RUN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
 _RECENCY_MARKERS = (
     "最近",
     "上次",
+    "刚才",
+    "刚刚",
+    "方才",
     "之前",
     "过去",
     "先前",
@@ -30,6 +33,25 @@ _RECENCY_MARKERS = (
     "previous",
     "last time",
     "earlier",
+)
+_RECENT_CONVERSATION_PATTERNS = (
+    "聊了什么",
+    "讨论了什么",
+    "谈了什么",
+    "说了什么",
+    "做了什么",
+    "聊过什么",
+    "讨论过什么",
+    "what did we discuss",
+    "what did we talk",
+    "what were we discussing",
+)
+_CONCEPT_GROUPS = (
+    ("失效", "故障", "失败", "不可用", "不工作", "坏了", "异常"),
+    ("讨论", "聊到", "聊过", "聊天", "谈到", "提到"),
+    ("记忆", "回忆", "历史"),
+    ("保存", "记录", "记住", "沉淀"),
+    ("原因", "根因", "为什么", "为何", "怎么回事"),
 )
 _LATIN_STOP_WORDS = {
     "a",
@@ -64,6 +86,9 @@ _LATIN_STOP_WORDS = {
     "you",
 }
 _CJK_STOP_TERMS = {
+    "为什么",
+    "怎么回事",
+    "为何",
     "一个",
     "一下",
     "之前",
@@ -83,8 +108,16 @@ _CJK_STOP_TERMS = {
     "过去",
     "先前",
     "上次",
+    "刚才",
+    "刚刚",
+    "方才",
     "这个",
     "那个",
+    "的",
+    "是",
+    "了",
+    "吗",
+    "呢",
 }
 
 
@@ -93,22 +126,30 @@ class RecallPlan:
     query: str
     normalized_query: str
     terms: tuple[str, ...]
+    concept_terms: tuple[str, ...]
     timespan_start: str | None
     timespan_end: str | None
     memory_types: tuple[str, ...]
     topic: str | None
     recency_intent: bool
+    intent: str
+
+    @property
+    def search_terms(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys((*self.terms, *self.concept_terms)))
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "query": self.query,
             "terms": list(self.terms),
+            "concept_terms": list(self.concept_terms),
             "timespan_start": self.timespan_start,
             "timespan_end": self.timespan_end,
             "memory_types": list(self.memory_types),
             "topic": self.topic,
             "recency_intent": self.recency_intent,
-            "method": "multilingual_hybrid",
+            "intent": self.intent,
+            "method": "lexical_concept_hybrid",
         }
 
 
@@ -153,15 +194,25 @@ def build_recall_plan(
         if candidate in {"event", "scene", "arc", "epoch"} and candidate not in types:
             types.append(candidate)
 
+    terms = tuple(_extract_terms(normalized, topic=topic))
+    recency_intent = any(marker in normalized for marker in _RECENCY_MARKERS)
+    intent_query = normalized.rstrip(" ?？。.!！")
+    intent = (
+        "recent_conversation"
+        if any(intent_query.endswith(pattern) for pattern in _RECENT_CONVERSATION_PATTERNS)
+        else "specific_memory"
+    )
     return RecallPlan(
         query=raw_query,
         normalized_query=normalized,
-        terms=tuple(_extract_terms(normalized, topic=topic)),
+        terms=terms,
+        concept_terms=tuple(_expand_concepts(normalized, terms)),
         timespan_start=start,
         timespan_end=end,
         memory_types=tuple(types),
         topic=_optional_text(topic),
-        recency_intent=any(marker in normalized for marker in _RECENCY_MARKERS),
+        recency_intent=recency_intent,
+        intent=intent,
     )
 
 
@@ -191,7 +242,7 @@ def recall_memories(
     reference = _aware_datetime(now or datetime.now().astimezone())
 
     candidates: list[dict[str, Any]] = []
-    if include_tier2:
+    if include_tier2 and plan.intent != "recent_conversation":
         candidates.extend(
             _tier2_candidates(conn, plan, bounded_candidates, reference)
         )
@@ -213,6 +264,7 @@ def recall_memories(
             if float(candidate.get("score") or 0.0) >= bounded_min_score
         ],
         limit=bounded_limit,
+        per_session_limit=(bounded_limit if plan.intent == "recent_conversation" else 2),
     )
     selected, used_chars, budget_truncated = _apply_context_budget(
         ranked,
@@ -246,9 +298,21 @@ def format_recall_context(results: Sequence[dict[str, Any]]) -> str:
         )[:10]
         title = str(result.get("title") or "Memory").strip()
         summary = str(result.get("summary") or "").strip()
+        memory_id = str(result.get("id") or "unknown")
+        score = float(result.get("score") or 0.0)
+        matched = ",".join(str(item) for item in result.get("matched_terms") or [])
+        evidence = result.get("evidence_refs") or result.get("source_turns") or []
+        evidence_text = ",".join(str(item) for item in list(evidence)[:3])
         label = ":".join(part for part in (tier, kind) if part)
         date_suffix = f" {timestamp}" if timestamp else ""
-        lines.append(f"- [{label}{date_suffix}] {title}: {summary}")
+        attributes = [f"id={memory_id}", f"score={score:.3f}"]
+        if matched:
+            attributes.append(f"matched={matched}")
+        if evidence_text:
+            attributes.append(f"evidence={evidence_text}")
+        lines.append(
+            f"- [{label}{date_suffix} {' '.join(attributes)}] {title}: {summary}"
+        )
     if not lines:
         return ""
     return "Relevant recalled memory:\n" + "\n".join(lines)
@@ -270,7 +334,7 @@ def _extract_terms(normalized_query: str, *, topic: str | None) -> list[str]:
         for stop_term in sorted(_CJK_STOP_TERMS, key=len, reverse=True):
             conceptual = conceptual.replace(stop_term, " ")
         for segment in conceptual.split():
-            if len(segment) <= 8:
+            if len(segment) <= 4:
                 add(segment, len(segment) + 8)
             for size, base_weight in ((4, 8), (3, 6), (2, 4)):
                 if len(segment) < size:
@@ -285,6 +349,19 @@ def _extract_terms(normalized_query: str, *, topic: str | None) -> list[str]:
     return ordered[:16]
 
 
+def _expand_concepts(normalized_query: str, terms: Sequence[str]) -> list[str]:
+    exact = set(terms)
+    expanded: list[str] = []
+    for group in _CONCEPT_GROUPS:
+        if not any(alias in normalized_query for alias in group):
+            continue
+        for alias in group:
+            normalized = normalize_text(alias)
+            if normalized not in exact and normalized not in expanded:
+                expanded.append(normalized)
+    return expanded[:16]
+
+
 def _tier2_candidates(
     conn: sqlite3.Connection,
     plan: RecallPlan,
@@ -294,7 +371,7 @@ def _tier2_candidates(
     clauses = ["status = 'active'", "hidden = 0"]
     params: list[Any] = []
     searchable = ("title", "summary", "topics", "entities")
-    _append_term_predicates(clauses, params, searchable, plan.terms)
+    _append_term_predicates(clauses, params, searchable, plan.search_terms)
     if plan.memory_types:
         placeholders = ",".join("?" for _ in plan.memory_types)
         clauses.append(f"memory_type IN ({placeholders})")
@@ -312,25 +389,13 @@ def _tier2_candidates(
     rows = conn.execute(
         "SELECT memory_id, memory_type, title, summary, timespan_start, "
         "timespan_end, importance, confidence, topics, entities, source_turns, "
-        "event_kind, access_count, citation_count, pinned, weight "
+        "event_kind, access_count, citation_count, pinned, weight, "
+        "identity_layer, evidence_refs "
         "FROM compressed_memories WHERE "
         + " AND ".join(clauses)
         + " ORDER BY pinned DESC, timespan_end DESC LIMIT ?",
         params,
     ).fetchall()
-    if not rows and plan.recency_intent and plan.terms:
-        fallback_plan = RecallPlan(
-            query=plan.query,
-            normalized_query=plan.normalized_query,
-            terms=(),
-            timespan_start=plan.timespan_start,
-            timespan_end=plan.timespan_end,
-            memory_types=plan.memory_types,
-            topic=plan.topic,
-            recency_intent=True,
-        )
-        return _tier2_candidates(conn, fallback_plan, candidate_limit, now)
-
     results: list[dict[str, Any]] = []
     for row in rows:
         topics = _json_list(row[8])
@@ -364,6 +429,8 @@ def _tier2_candidates(
                 "topics": topics,
                 "entities": entities,
                 "source_turns": _json_list(row[10]),
+                "identity_layer": row[16],
+                "evidence_refs": _json_list(row[17]),
                 "score": round(min(score, 1.0), 6),
                 "matched_terms": matched,
                 "signals": {
@@ -387,7 +454,13 @@ def _tier1_candidates(
 ) -> list[dict[str, Any]]:
     clauses = ["compressed_to_tier2 = 0"]
     params: list[Any] = []
-    _append_term_predicates(clauses, params, ("text", "tags"), plan.terms)
+    if plan.intent != "recent_conversation":
+        _append_term_predicates(
+            clauses,
+            params,
+            ("text", "tags"),
+            plan.search_terms,
+        )
     if plan.timespan_start:
         clauses.append("timestamp >= ?")
         params.append(plan.timespan_start)
@@ -402,38 +475,22 @@ def _tier1_candidates(
         + " ORDER BY timestamp DESC LIMIT ?",
         params,
     ).fetchall()
-    if not rows and plan.recency_intent and plan.terms:
-        fallback_plan = RecallPlan(
-            query=plan.query,
-            normalized_query=plan.normalized_query,
-            terms=(),
-            timespan_start=plan.timespan_start,
-            timespan_end=plan.timespan_end,
-            memory_types=plan.memory_types,
-            topic=plan.topic,
-            recency_intent=True,
-        )
-        return _tier1_candidates(
-            conn,
-            fallback_plan,
-            candidate_limit,
-            now,
-            current_session_id=current_session_id,
-        )
-
     results: list[dict[str, Any]] = []
     for row in rows:
         lexical, matched = _lexical_score(plan, f"{row[3]} {' '.join(_json_list(row[6]))}")
-        if lexical <= 0 and plan.terms:
+        if lexical <= 0 and plan.intent != "recent_conversation":
             continue
         recency = _recency_score(row[4], now)
-        score = 0.76 * lexical + 0.12 * float(row[5] or 0.0) + 0.12 * recency
-        if current_session_id and str(row[1]) == current_session_id:
-            # Same-session content is usually already in the active transcript.
-            score *= 0.82
-            same_session_penalty = 0.82
+        same_session = bool(current_session_id and str(row[1]) == current_session_id)
+        if plan.intent == "recent_conversation":
+            score = (
+                0.68
+                + 0.20 * recency
+                + 0.07 * float(row[5] or 0.0)
+                + (0.05 if same_session else 0.0)
+            )
         else:
-            same_session_penalty = 1.0
+            score = 0.76 * lexical + 0.12 * float(row[5] or 0.0) + 0.12 * recency
         results.append(
             {
                 "id": row[0],
@@ -450,7 +507,7 @@ def _tier1_candidates(
                     "lexical": round(lexical, 6),
                     "relevance": round(float(row[5] or 0.0), 6),
                     "recency": round(recency, 6),
-                    "same_session_factor": same_session_penalty,
+                    "same_session": same_session,
                 },
             }
         )
@@ -477,11 +534,18 @@ def _lexical_score(plan: RecallPlan, value: object) -> tuple[float, list[str]]:
     haystack = normalize_text(value)
     if not haystack:
         return 0.0, []
-    matched = [term for term in plan.terms if term in haystack]
-    if not plan.terms:
+    salient_terms = _maximal_terms(plan.terms)
+    exact_matched = [term for term in salient_terms if term in haystack]
+    concept_matched = _concept_matches(plan, haystack)
+    matched = [*exact_matched, *concept_matched]
+    if plan.intent == "recent_conversation":
+        return 0.25, matched
+    if not plan.search_terms:
         return (0.25 if plan.recency_intent else 0.0), []
-    total_weight = sum(max(2, min(len(term), 8)) for term in plan.terms)
-    matched_weight = sum(max(2, min(len(term), 8)) for term in matched)
+    total_weight = sum(max(2, min(len(term), 8)) for term in salient_terms)
+    exact_weight = sum(max(2, min(len(term), 8)) for term in exact_matched)
+    concept_weight = len(concept_matched) * 0.9
+    matched_weight = exact_weight + concept_weight
     coverage = matched_weight / max(total_weight, 1)
     phrase_bonus = 0.0
     if (
@@ -493,10 +557,50 @@ def _lexical_score(plan: RecallPlan, value: object) -> tuple[float, list[str]]:
     return min(1.0, coverage + phrase_bonus), matched
 
 
+def _maximal_terms(terms: Sequence[str]) -> list[str]:
+    """Collapse overlapping CJK n-grams for scoring, not candidate lookup."""
+    ordered = sorted(dict.fromkeys(terms), key=lambda item: (-len(item), item))
+    return [
+        term
+        for term in ordered
+        if not any(term != other and term in other for other in ordered)
+    ]
+
+
+def _concept_matches(plan: RecallPlan, haystack: str) -> list[str]:
+    """Return at most one synonymous match per concept group."""
+    matched: list[str] = []
+    for group in _CONCEPT_GROUPS:
+        if "为什么" in group:
+            continue
+        query_aliases = [
+            normalize_text(alias)
+            for alias in group
+            if normalize_text(alias) in plan.normalized_query
+        ]
+        if not query_aliases:
+            continue
+        if any(alias in haystack for alias in query_aliases):
+            continue
+        alternatives = sorted(
+            (
+                normalize_text(alias)
+                for alias in group
+                if normalize_text(alias) not in query_aliases
+                and normalize_text(alias) in haystack
+            ),
+            key=lambda item: (-len(item), item),
+        )
+        if alternatives:
+            matched.append(alternatives[0])
+    return matched
+
+
 def _deduplicate_and_rank(
     candidates: Sequence[dict[str, Any]],
     *,
     limit: int,
+    per_session_limit: int,
 ) -> tuple[list[dict[str, Any]], bool]:
     ranked = sorted(
         candidates,
@@ -519,7 +623,7 @@ def _deduplicate_and_rank(
         if any(_jaccard(shingles, previous) >= 0.88 for previous in seen_shingles):
             continue
         session_id = str(item.get("session_id") or "")
-        if session_id and per_session.get(session_id, 0) >= 2:
+        if session_id and per_session.get(session_id, 0) >= per_session_limit:
             continue
         seen.add(fingerprint)
         seen_shingles.append(shingles)

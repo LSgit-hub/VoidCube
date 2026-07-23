@@ -1786,34 +1786,19 @@ Examples:
     # =========================================================================
     memory_parser = subparsers.add_parser(
         "memory",
-        help="Configure external memory provider",
+        help="Show or initialize canonical Mem",
         description=(
-            "Set up and manage external memory provider plugins.\n\n"
-            "Available providers: honcho, openviking, mem0, hindsight,\n"
-            "holographic, retaindb, byterover.\n\n"
-            "Only one external provider can be active at a time.\n"
-            "Built-in memory (MEMORY.md/USER.md) is always active."
+            "VoidCube uses one shared Mem service for recall, durable memory, "
+            "identity experiences, and self-narrative."
         ),
     )
     memory_sub = memory_parser.add_subparsers(dest="memory_command")
-    memory_sub.add_parser("setup", help="Interactive provider selection and configuration")
-    memory_sub.add_parser("status", help="Show current memory provider config")
-    memory_sub.add_parser("off", help="Disable external provider (built-in only)")
+    memory_sub.add_parser("setup", help="Initialize and show canonical Mem")
+    memory_sub.add_parser("status", help="Show canonical Mem status")
 
     def cmd_memory(args):
-        sub = getattr(args, "memory_command", None)
-        if sub == "off":
-            from VoidCube_cli.config import load_config, save_config
-            config = load_config()
-            if not isinstance(config.get("memory"), dict):
-                config["memory"] = {}
-            config["memory"]["provider"] = ""
-            save_config(config)
-            print("\n  ✓ Memory provider: built-in only")
-            print("  Saved to config.yaml\n")
-        else:
-            from VoidCube_cli.memory_setup import memory_command
-            memory_command(args)
+        from VoidCube_cli.memory_setup import memory_command
+        memory_command(args)
 
     memory_parser.set_defaults(func=cmd_memory)
 

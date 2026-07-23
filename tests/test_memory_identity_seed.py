@@ -16,7 +16,13 @@ from systems.memory.identity_seed import (
     reconcile_released_identity_revisions,
 )
 from systems.memory.identity_experience import sync_identity_experiences
-from systems.memory.memory_service import MemoryService, RecallRequest
+from systems.memory.memory_service import (
+    InteractionExperienceSettlement,
+    MemoryService,
+    RecallRequest,
+    SessionCreate,
+    TurnCreate,
+)
 from systems.memory.tier1_to_tier2_bridge import open_memory_sqlite
 
 
@@ -300,6 +306,61 @@ def test_identity_experience_verification_rejects_missing_turn_and_empty_evidenc
     assert missing.status_code == 404
     assert empty.status_code == 422
     assert blank.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_explicit_user_memory_signal_settles_interaction_automatically(
+    tmp_path,
+) -> None:
+    service = MemoryService(
+        MemoryServiceConfig(db_path=str(tmp_path / "memory.db"))
+    )
+    await service.create_session(SessionCreate(session_id="explicit-memory"))
+    user_turn = await service.add_turn(
+        "explicit-memory",
+        TurnCreate(
+            speaker="user",
+            text="我希望你可以永远记录这个故事，这是我做这个项目的目的。",
+        ),
+    )
+    agent_turn = await service.add_turn(
+        "explicit-memory",
+        TurnCreate(speaker="agent", text="已确认并写入统一 Mem。"),
+    )
+    payload = await service.settle_interaction_experience(
+        InteractionExperienceSettlement(
+            user_turn_id=user_turn["turn_id"],
+            agent_turn_id=agent_turn["turn_id"],
+        )
+    )
+    stored = await service.get_turn(user_turn["turn_id"])
+
+    assert payload["status"] == "settled"
+    assert payload["classification"] == "explicit_memory"
+    assert payload["experience"]["identity_layer"] == "experience"
+    assert payload["experience"]["event_kind"] == "decision"
+    assert f"turn:{agent_turn['turn_id']}" in payload["experience"]["evidence_refs"]
+    assert stored["metadata"]["verified_by"] == "user_explicit_signal"
+
+
+@pytest.mark.asyncio
+async def test_unmarked_conversation_is_not_promoted_to_identity_experience(
+    tmp_path,
+) -> None:
+    service = MemoryService(
+        MemoryServiceConfig(db_path=str(tmp_path / "memory.db"))
+    )
+    await service.create_session(SessionCreate(session_id="ordinary-chat"))
+    user_turn = await service.add_turn(
+        "ordinary-chat",
+        TurnCreate(speaker="user", text="帮我查看今天的测试结果。"),
+    )
+    ignored = await service.settle_interaction_experience(
+        InteractionExperienceSettlement(user_turn_id=user_turn["turn_id"])
+    )
+
+    assert ignored["status"] == "ignored"
+    assert ignored["reason"] == "no_explicit_experience_signal"
 
 
 def test_manifest_release_evidence_finalizes_approved_identity_revision(tmp_path) -> None:

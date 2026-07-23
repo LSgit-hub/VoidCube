@@ -144,15 +144,15 @@ def test_auxiliary_request_rejects_retired_model_before_transport():
 
 @pytest.mark.unit
 def test_auxiliary_request_reuses_shared_tools_tokens_and_extra_body():
-    memory_tool = {"type": "function", "function": {"name": "memory"}}
+    remember_tool = {"type": "function", "function": {"name": "mem_remember"}}
 
     kwargs = _build_call_kwargs(
         "custom",
         "gpt-5",
-        [{"role": "user", "content": "flush"}],
+        [{"role": "user", "content": "remember"}],
         temperature=0.3,
         max_tokens=5120,
-        tools=[memory_tool],
+        tools=[remember_tool],
         timeout=45.0,
         extra_body={"tags": ["purpose=memory"]},
         base_url="https://api.openai.com/v1",
@@ -163,7 +163,7 @@ def test_auxiliary_request_reuses_shared_tools_tokens_and_extra_body():
     assert kwargs["timeout"] == 45.0
     assert kwargs["extra_body"] == {"tags": ["purpose=memory"]}
     assert len(kwargs["tools"]) == 1
-    assert kwargs["tools"][0]["function"]["name"] == "memory"
+    assert kwargs["tools"][0]["function"]["name"] == "mem_remember"
     assert "reasoning" not in kwargs["extra_body"]
 
 

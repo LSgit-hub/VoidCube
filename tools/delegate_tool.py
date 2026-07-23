@@ -33,7 +33,7 @@ from tools.toolsets import TOOLSETS
 DELEGATE_BLOCKED_TOOLS = frozenset([
     "delegate_task",   # no recursive delegation
     "clarify",         # no user interaction
-    "memory",          # no writes to shared MEMORY.md
+    "mem_remember",    # no durable writes from delegated agents
     "send_message",    # no cross-platform side effects
     "execute_code",    # children should reason step-by-step, not write scripts
 ])

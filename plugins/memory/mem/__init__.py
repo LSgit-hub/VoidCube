@@ -87,8 +87,12 @@ class MemMemoryProvider(MemoryProvider):
             "Use mem_search when the user refers to prior decisions, preferences, "
             "people, projects, or events. It recalls a bounded mix of recent "
             "conversation turns and structured long-term memory. Use mem_timeline "
-            "for an exact dated chronology. Treat empty or unavailable results as "
-            "an explicit lack of recalled evidence."
+            "for an exact dated chronology. Recalled items include stable IDs, "
+            "scores, matched concepts, and evidence references; use those fields "
+            "when explaining why a memory was recalled. Use mem_remember for an "
+            "explicit durable fact, preference, decision, or verified outcome. "
+            "Treat empty or unavailable results as an explicit lack of recalled "
+            "evidence."
         )
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
@@ -118,6 +122,7 @@ class MemMemoryProvider(MemoryProvider):
                             "description": "Optional stricter relevance threshold.",
                         },
                     },
+                    "required": ["query"],
                 },
             },
             {
@@ -132,6 +137,41 @@ class MemMemoryProvider(MemoryProvider):
                         "limit": {"type": "integer", "minimum": 1, "maximum": 200},
                     },
                     "required": ["date"],
+                },
+            },
+            {
+                "name": "mem_remember",
+                "description": (
+                    "Persist one concise durable memory in canonical Mem. Use only "
+                    "for stable preferences, explicit remember requests, decisions, "
+                    "milestones, or verified outcomes; include evidence references."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "summary": {"type": "string"},
+                        "topics": {"type": "array", "items": {"type": "string"}},
+                        "entities": {"type": "array", "items": {"type": "string"}},
+                        "evidence_refs": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "event_kind": {
+                            "type": "string",
+                            "enum": [
+                                "decision",
+                                "progress",
+                                "blocker",
+                                "shift",
+                                "completion",
+                                "conflict",
+                                "correction",
+                            ],
+                        },
+                        "importance": {"type": "number", "minimum": 0, "maximum": 1},
+                    },
+                    "required": ["title", "summary", "evidence_refs"],
                 },
             },
         ]
@@ -162,6 +202,8 @@ class MemMemoryProvider(MemoryProvider):
                     )
                     if args.get(key) not in (None, "")
                 }
+                payload["current_session_id"] = self._session_id
+                payload["request_source"] = "tool"
                 result = self._request_json("POST", "/recall", payload)
             elif tool_name == "mem_timeline":
                 params = {
@@ -171,6 +213,26 @@ class MemMemoryProvider(MemoryProvider):
                     "limit": args.get("limit", 100),
                 }
                 result = self._request_json("POST", "/turns/timeline", params)
+            elif tool_name == "mem_remember":
+                payload = {
+                    key: args[key]
+                    for key in (
+                        "title",
+                        "summary",
+                        "topics",
+                        "entities",
+                        "evidence_refs",
+                        "event_kind",
+                        "importance",
+                    )
+                    if args.get(key) not in (None, "")
+                }
+                evidence_refs = list(payload.get("evidence_refs") or [])
+                if self._session_id:
+                    evidence_refs.append(f"session:{self._session_id}")
+                payload["evidence_refs"] = list(dict.fromkeys(evidence_refs))
+                payload["source_actor"] = "agent"
+                result = self._request_json("POST", "/remember", payload)
             else:
                 return json.dumps(
                     {"success": False, "error": f"Unknown memory tool: {tool_name}"}
@@ -199,13 +261,24 @@ class MemMemoryProvider(MemoryProvider):
                     "limit": self._prefetch_limit,
                     "max_context_chars": self._prefetch_max_context_chars,
                     "current_session_id": session_id or self._session_id,
+                    "request_source": "auto_prefetch",
                 },
             )
         except Exception as exc:
-            logger.debug("Memory Service prefetch unavailable: %s", exc)
-            return ""
+            logger.warning("Memory Service prefetch unavailable: %s", exc)
+            return (
+                "Memory recall status: unavailable for this turn "
+                f"(error={type(exc).__name__}). Do not assume that prior "
+                "decisions, preferences, or events were recalled."
+            )
 
-        return str(result.get("context") or "").strip()
+        trace_id = str(result.get("trace_id") or "unknown")
+        status = str(result.get("recall_status") or "empty")
+        context = str(result.get("context") or "").strip()
+        status_line = f"Memory recall status: {status} (trace_id={trace_id})."
+        if not context:
+            return status_line + " No recalled evidence matched this turn."
+        return status_line + "\n" + context
 
     def sync_turn(
         self,
@@ -261,6 +334,7 @@ class MemMemoryProvider(MemoryProvider):
                 "metadata": {"source": "agent_memory_provider"},
             },
         )
+        turn_ids: dict[str, str] = {}
         for speaker, content in (
             ("user", item.get("user_content")),
             ("agent", item.get("assistant_content")),
@@ -268,7 +342,7 @@ class MemMemoryProvider(MemoryProvider):
             text = str(content or "").strip()
             if not text:
                 continue
-            self._request_json(
+            response = self._request_json(
                 "POST",
                 f"/sessions/{encoded_session}/turns",
                 {
@@ -278,6 +352,19 @@ class MemMemoryProvider(MemoryProvider):
                         "source": "agent_memory_provider",
                         "turn_dedup_key": f"{item['write_id']}:{speaker}",
                     },
+                },
+            )
+            turn_id = str(response.get("turn_id") or "").strip()
+            if turn_id:
+                turn_ids[speaker] = turn_id
+        if turn_ids.get("user"):
+            self._request_json(
+                "POST",
+                "/identity/experiences/settle-interaction",
+                {
+                    "user_turn_id": turn_ids["user"],
+                    "agent_turn_id": turn_ids.get("agent"),
+                    "verified_by": "user_explicit_signal",
                 },
             )
 

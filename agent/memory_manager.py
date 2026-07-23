@@ -1,11 +1,10 @@
-"""MemoryManager — orchestrates the configured external memory provider.
+"""MemoryManager — orchestrates canonical Mem integration.
 
 Single integration point in run_agent.py. Replaces scattered per-backend
 code with one manager that delegates to registered providers.
 
-Bounded curated ``MEMORY.md`` / ``USER.md`` state is owned separately by
-``MemoryStore``.  Only one service-backed provider is registered here, which
-prevents tool schema bloat and conflicting long-term recall backends.
+Only one canonical service-backed provider is registered here, which prevents
+tool schema bloat and conflicting long-term recall backends.
 
 Usage in run_agent.py:
     self._memory_manager = MemoryManager()
@@ -19,7 +18,6 @@ Usage in run_agent.py:
 
     # Post-turn
     self._memory_manager.sync_all(user_msg, assistant_response)
-    self._memory_manager.queue_prefetch_all(user_msg)
 """
 
 from __future__ import annotations
@@ -66,42 +64,23 @@ def build_memory_context_block(raw_context: str) -> str:
 
 
 class MemoryManager:
-    """Orchestrates the built-in provider plus at most one external provider.
-
-    The builtin provider is always first. Only one non-builtin (external)
-    provider is allowed.  Failures in one provider never block the other.
-    """
+    """Orchestrate the single canonical memory provider."""
 
     def __init__(self) -> None:
         self._providers: List[MemoryProvider] = []
         self._tool_to_provider: Dict[str, MemoryProvider] = {}
-        self._has_external: bool = False  # True once a non-builtin provider is added
 
     # -- Registration --------------------------------------------------------
 
     def add_provider(self, provider: MemoryProvider) -> None:
-        """Register a memory provider.
-
-        Built-in provider (name ``"builtin"``) is always accepted.
-        Only **one** external (non-builtin) provider is allowed — a second
-        attempt is rejected with a warning.
-        """
-        is_builtin = provider.name == "builtin"
-
-        if not is_builtin:
-            if self._has_external:
-                existing = next(
-                    (p.name for p in self._providers if p.name != "builtin"), "unknown"
-                )
-                logger.warning(
-                    "Rejected memory provider '%s' — external provider '%s' is "
-                    "already registered. Only one external memory provider is "
-                    "allowed at a time. Configure which one via memory.provider "
-                    "in config.yaml.",
-                    provider.name, existing,
-                )
-                return
-            self._has_external = True
+        """Register the canonical provider and reject conflicting backends."""
+        if self._providers:
+            logger.warning(
+                "Rejected memory provider '%s'; canonical provider '%s' is active",
+                provider.name,
+                self._providers[0].name,
+            )
+            return
 
         self._providers.append(provider)
 
@@ -178,17 +157,6 @@ class MemoryManager:
                     provider.name, e,
                 )
         return "\n\n".join(parts)
-
-    def queue_prefetch_all(self, query: str, *, session_id: str = "") -> None:
-        """Queue background prefetch on all providers for the next turn."""
-        for provider in self._providers:
-            try:
-                provider.queue_prefetch(query, session_id=session_id)
-            except Exception as e:
-                logger.debug(
-                    "Memory provider '%s' queue_prefetch failed (non-fatal): %s",
-                    provider.name, e,
-                )
 
     # -- Sync ----------------------------------------------------------------
 
@@ -296,22 +264,6 @@ class MemoryManager:
                     provider.name, e,
                 )
         return "\n\n".join(parts)
-
-    def on_memory_write(self, action: str, target: str, content: str) -> None:
-        """Notify external providers when the built-in memory tool writes.
-
-        Skips the builtin provider itself (it's the source of the write).
-        """
-        for provider in self._providers:
-            if provider.name == "builtin":
-                continue
-            try:
-                provider.on_memory_write(action, target, content)
-            except Exception as e:
-                logger.debug(
-                    "Memory provider '%s' on_memory_write failed: %s",
-                    provider.name, e,
-                )
 
     def on_delegation(self, task: str, result: str, *,
                       child_session_id: str = "", **kwargs) -> None:

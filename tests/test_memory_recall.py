@@ -7,7 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from systems.memory.config import MemoryServiceConfig
-from systems.memory.memory_service import MemoryService, RecallRequest
+from systems.memory.memory_service import DurableMemoryCreate, MemoryService, RecallRequest
 from systems.memory.recall import build_recall_plan, normalize_text
 from systems.memory.tier1_to_tier2_bridge import open_memory_sqlite
 
@@ -162,8 +162,12 @@ async def test_recall_mixes_recent_tier1_and_durable_tier2(tmp_path):
     assert "event-migration" in {item["id"] for item in result["results"]}
     assert "turn-preference" in {item["id"] for item in result["results"]}
     assert "turn-unrelated" not in {item["id"] for item in result["results"]}
-    assert result["query_plan"]["method"] == "multilingual_hybrid"
+    assert result["query_plan"]["method"] == "lexical_concept_hybrid"
+    assert result["query_plan"]["intent"] == "specific_memory"
     assert "Relevant recalled memory:" in result["context"]
+    assert "id=event-migration" in result["context"]
+    assert "score=" in result["context"]
+    assert result["trace_id"]
     health = await service.health_check()
     assert health["recall"]["requests"] == 1
     assert health["recall"]["hits"] == 1
@@ -196,6 +200,184 @@ async def test_recency_intent_falls_back_to_latest_tier1_turns(tmp_path):
 
     assert result["count"] == 1
     assert result["results"][0]["id"] == "turn-latest"
+    assert result["query_plan"]["intent"] == "recent_conversation"
+
+
+@pytest.mark.asyncio
+async def test_recent_conversation_does_not_compete_with_identity_tier2(tmp_path):
+    service = _service(tmp_path)
+    now = datetime.now(timezone.utc)
+    _insert_turn(
+        service,
+        turn_id="turn-latest",
+        session_id="current-session",
+        text="我们刚刚确认先修复真实对话召回。",
+        timestamp=now - timedelta(minutes=5),
+    )
+    _insert_compressed(
+        service,
+        memory_id="identity-anchor",
+        title="高权重身份锚点",
+        summary="这是长期身份信息，不是最近一次对话。",
+        timestamp=now,
+        importance=1.0,
+    )
+
+    result = await service.recall(
+        RecallRequest(
+            query="我们上次讨论了什么？",
+            current_session_id="current-session",
+            limit=5,
+        )
+    )
+
+    assert [item["id"] for item in result["results"]] == ["turn-latest"]
+    assert {item["tier"] for item in result["results"]} == {"tier1"}
+
+
+@pytest.mark.asyncio
+async def test_specific_recall_keeps_best_same_session_result(tmp_path):
+    service = _service(tmp_path)
+    now = datetime.now(timezone.utc)
+    _insert_turn(
+        service,
+        turn_id="correct-current",
+        session_id="current-session",
+        text="记忆系统失效的根因是 memai 包版本冲突。",
+        timestamp=now,
+    )
+    _insert_turn(
+        service,
+        turn_id="older-other",
+        session_id="older-session",
+        text="旧分析认为记忆系统失效是因为压缩从未运行。",
+        timestamp=now - timedelta(days=1),
+    )
+
+    result = await service.recall(
+        RecallRequest(
+            query="之前记忆系统为什么失效",
+            current_session_id="current-session",
+            include_tier2=False,
+            limit=1,
+        )
+    )
+
+    assert result["results"][0]["id"] == "correct-current"
+    assert result["results"][0]["signals"]["same_session"] is True
+
+
+@pytest.mark.asyncio
+async def test_concept_expansion_recalls_synonymous_failure_wording(tmp_path):
+    service = _service(tmp_path)
+    now = datetime.now(timezone.utc)
+    _insert_turn(
+        service,
+        turn_id="failure-root-cause",
+        session_id="session-1",
+        text="记忆服务失效源于包版本冲突。",
+        timestamp=now,
+    )
+    _insert_turn(
+        service,
+        turn_id="story-distractor",
+        session_id="session-2",
+        text="这是关于记忆、工作、历史、原因和长期成长的完整故事。",
+        timestamp=now + timedelta(minutes=1),
+    )
+
+    result = await service.recall(
+        RecallRequest(
+            query="记忆为什么不工作",
+            include_tier2=False,
+            limit=3,
+        )
+    )
+
+    assert result["results"][0]["id"] == "failure-root-cause"
+    assert "失效" in result["results"][0]["matched_terms"]
+
+
+@pytest.mark.asyncio
+async def test_failure_cause_terms_outrank_generic_memory_analysis(tmp_path):
+    service = _service(tmp_path)
+    now = datetime.now(timezone.utc)
+    _insert_turn(
+        service,
+        turn_id="generic-analysis",
+        session_id="older-session",
+        text="记忆系统有很多历史失败和不可用问题，需要继续分析原因。",
+        timestamp=now,
+    )
+    _insert_turn(
+        service,
+        turn_id="exact-root-cause",
+        session_id="root-cause-session",
+        text="记忆系统失效的根因是 memai 包版本冲突。",
+        timestamp=now - timedelta(days=1),
+    )
+
+    result = await service.recall(
+        RecallRequest(
+            query="之前记忆系统为什么失效",
+            include_tier2=False,
+            limit=2,
+        )
+    )
+
+    assert result["results"][0]["id"] == "exact-root-cause"
+
+
+@pytest.mark.asyncio
+async def test_recall_trace_is_persisted_with_selected_evidence(tmp_path):
+    service = _service(tmp_path)
+    now = datetime.now(timezone.utc)
+    _insert_turn(
+        service,
+        turn_id="trace-turn",
+        session_id="trace-session",
+        text="数据库迁移必须保留回滚证据。",
+        timestamp=now,
+    )
+
+    result = await service.recall(
+        RecallRequest(
+            query="数据库迁移证据",
+            current_session_id="trace-session",
+            request_source="auto_prefetch",
+        )
+    )
+    traces = await service.list_recall_traces(session_id="trace-session")
+
+    assert traces["count"] == 1
+    trace = traces["traces"][0]
+    assert trace["trace_id"] == result["trace_id"]
+    assert trace["request_source"] == "auto_prefetch"
+    assert trace["status"] == "hit"
+    assert trace["selected_results"][0]["id"] == "trace-turn"
+
+
+@pytest.mark.asyncio
+async def test_explicit_durable_memory_is_idempotent_and_recallable(tmp_path):
+    service = _service(tmp_path)
+    request = DurableMemoryCreate(
+        title="Deployment rollback decision",
+        summary="Always create a verified backup before database migration.",
+        topics=["database", "migration"],
+        evidence_refs=["turn:turn-decision"],
+        event_kind="decision",
+        importance=0.95,
+    )
+
+    first = await service.remember(request)
+    second = await service.remember(request)
+    recalled = await service.recall(
+        RecallRequest(query="database migration backup", include_tier1=False)
+    )
+
+    assert first["memory"]["memory_id"] == second["memory"]["memory_id"]
+    assert recalled["results"][0]["id"] == first["memory"]["memory_id"]
+    assert recalled["results"][0]["evidence_refs"] == ["turn:turn-decision"]
 
 
 @pytest.mark.asyncio

@@ -46,7 +46,6 @@ _AUXILIARY_TASK_KEYS = (
     "skills_hub",
     "approval",
     "mcp",
-    "flush_memories",
 )
 _AUXILIARY_ROUTE_FIELDS = ("provider", "model", "base_url", "api_key")
 _RETIRED_AUXILIARY_ENV_VARS = tuple(
@@ -462,13 +461,6 @@ DEFAULT_CONFIG = {
             "api_key": "",
             "timeout": 30,
         },
-        "flush_memories": {
-            "provider": "auto",
-            "model": "",
-            "base_url": "",
-            "api_key": "",
-            "timeout": 30,
-        },
     },
     
     "display": {
@@ -561,18 +553,8 @@ DEFAULT_CONFIG = {
         "engine": "compressor",
     },
 
-    # Persistent memory -- bounded curated memory injected into system prompt
+    # Canonical Memory Service integration.
     "memory": {
-        "memory_enabled": True,
-        "user_profile_enabled": True,
-        "memory_char_limit": 2200,   # ~800 tokens at 2.75 chars/token
-        "user_char_limit": 1375,     # ~500 tokens at 2.75 chars/token
-        # External memory provider plugin.
-        # Default is "mem" for Mem time-series memory system.
-        # Set to "" for built-in only.
-        # Available providers: mem, hindsight, openviking, holographic, retaindb, byterover.
-        # Only ONE external provider is allowed at a time.
-        "provider": "mem",
         # Mem provider configuration
         "mem": {
             # Empty means use systems.config Agent gateway_address.

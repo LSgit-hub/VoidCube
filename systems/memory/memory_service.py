@@ -117,6 +117,10 @@ class RecallRequest(BaseModel):
     current_session_id: Optional[str] = None
     include_tier1: bool = True
     include_tier2: bool = True
+    request_source: str = Field(
+        default="api",
+        pattern=r"^(api|auto_prefetch|tool)$",
+    )
 
 
 class IdentityRevisionProposal(BaseModel):
@@ -142,6 +146,31 @@ class IdentityExperienceVerification(BaseModel):
     summary: str = Field(min_length=1, max_length=4000)
     evidence_refs: List[str] = Field(min_length=1, max_length=50)
     verified_by: str = Field(default="anchor", min_length=1, max_length=100)
+    topics: List[str] = Field(default_factory=list, max_length=20)
+    entities: List[str] = Field(default_factory=list, max_length=20)
+    event_kind: str = Field(default="decision", min_length=1, max_length=50)
+    importance: float = Field(default=0.9, ge=0.0, le=1.0)
+
+
+class InteractionExperienceSettlement(BaseModel):
+    user_turn_id: str = Field(min_length=1, max_length=200)
+    agent_turn_id: Optional[str] = Field(default=None, max_length=200)
+    verified_by: str = Field(
+        default="user_explicit_signal",
+        min_length=1,
+        max_length=100,
+    )
+
+
+class DurableMemoryCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    summary: str = Field(min_length=1, max_length=4000)
+    topics: List[str] = Field(default_factory=list, max_length=30)
+    entities: List[str] = Field(default_factory=list, max_length=30)
+    evidence_refs: List[str] = Field(default_factory=list, max_length=50)
+    event_kind: str = Field(default="decision", min_length=1, max_length=50)
+    importance: float = Field(default=0.8, ge=0.0, le=1.0)
+    source_actor: str = Field(default="agent", min_length=1, max_length=100)
 
 
 # ── Content-aware weight model (five dimensions) ─────────────────
@@ -292,6 +321,8 @@ class MemoryService:
         self._last_recall_at: Optional[str] = None
         self._last_recall_count = 0
         self._last_recall_latency_ms = 0.0
+        self._last_recall_trace_id: Optional[str] = None
+        self._last_recall_status: str = "idle"
         self._backup_manager = MemoryBackupManager(
             self._db_path,
             retention_count=self.config.backup_retention_count,
@@ -443,6 +474,27 @@ class MemoryService:
             )
         ''')
 
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS recall_traces (
+                trace_id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                completed_at TEXT NOT NULL,
+                request_source TEXT NOT NULL,
+                session_id TEXT,
+                query TEXT NOT NULL,
+                status TEXT NOT NULL,
+                intent TEXT,
+                query_plan TEXT,
+                candidate_count INTEGER NOT NULL DEFAULT 0,
+                result_count INTEGER NOT NULL DEFAULT 0,
+                selected_results TEXT NOT NULL DEFAULT '[]',
+                context_chars INTEGER NOT NULL DEFAULT 0,
+                latency_ms REAL NOT NULL DEFAULT 0.0,
+                error_type TEXT,
+                error_detail TEXT
+            )
+        ''')
+
         # Tier 2 compressed memories table (structured Event/Scene/Arc summaries)
         # Lifecycle: Event(level=0) → Scene(level=1) → Arc(level=2) → Epoch(level=3) → purged
         # Five-dimensional weight model (see §3.4.2 in architecture baseline):
@@ -539,6 +591,10 @@ class MemoryService:
             "CREATE INDEX IF NOT EXISTS idx_archive_session ON turns_archive(session_id)",
             "CREATE INDEX IF NOT EXISTS idx_compression_quality_evaluated "
             "ON compression_quality_audit(evaluated_at)",
+            "CREATE INDEX IF NOT EXISTS idx_recall_traces_created "
+            "ON recall_traces(created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_recall_traces_session "
+            "ON recall_traces(session_id, created_at DESC)",
             "CREATE INDEX IF NOT EXISTS idx_cmem_type ON compressed_memories(memory_type)",
             "CREATE INDEX IF NOT EXISTS idx_cmem_timespan ON compressed_memories(timespan_start, timespan_end)",
             "CREATE INDEX IF NOT EXISTS idx_cmem_status ON compressed_memories(status)",
@@ -864,11 +920,18 @@ class MemoryService:
         self.app.add_api_route("/turns/{turn_id}", self.get_turn, methods=["GET"])
         self.app.add_api_route("/turns/timeline", self.timeline_view, methods=["POST"])
         self.app.add_api_route("/recall", self.recall, methods=["POST"])
+        self.app.add_api_route("/recall/traces", self.list_recall_traces, methods=["GET"])
+        self.app.add_api_route("/remember", self.remember, methods=["POST"])
         self.app.add_api_route("/identity/archive", self.get_identity_archive, methods=["GET"])
         self.app.add_api_route("/identity/sync", self.sync_identity_archive, methods=["POST"])
         self.app.add_api_route(
             "/identity/experiences/verify",
             self.verify_identity_experience,
+            methods=["POST"],
+        )
+        self.app.add_api_route(
+            "/identity/experiences/settle-interaction",
+            self.settle_interaction_experience,
             methods=["POST"],
         )
         self.app.add_api_route("/identity/revisions", self.list_identity_revisions, methods=["GET"])
@@ -1046,6 +1109,10 @@ class MemoryService:
                 "identity_summary": request.summary.strip(),
                 "evidence_refs": evidence_refs,
                 "verified_by": request.verified_by.strip(),
+                "topics": list(dict.fromkeys(request.topics)),
+                "entities": list(dict.fromkeys(request.entities)),
+                "event_kind": request.event_kind.strip(),
+                "importance": request.importance,
             }
             verification_changed = any(
                 metadata.get(key) != value for key, value in verified_fields.items()
@@ -1081,6 +1148,77 @@ class MemoryService:
             "turn_id": request.turn_id.strip(),
             "experience": experience,
             "sync": sync_result,
+        }
+
+    async def settle_interaction_experience(
+        self,
+        request: InteractionExperienceSettlement,
+    ):
+        """Settle a dialogue only when the user supplied an explicit signal."""
+        from systems.memory.identity_experience import (
+            classify_explicit_conversation_experience,
+        )
+
+        conn = open_memory_sqlite(self._db_path)
+        try:
+            user_row = conn.execute(
+                "SELECT session_id, speaker, text FROM turns WHERE turn_id = ?",
+                (request.user_turn_id.strip(),),
+            ).fetchone()
+            agent_row = None
+            if request.agent_turn_id:
+                agent_row = conn.execute(
+                    "SELECT session_id, speaker, text FROM turns WHERE turn_id = ?",
+                    (request.agent_turn_id.strip(),),
+                ).fetchone()
+        finally:
+            conn.close()
+        if not user_row:
+            raise HTTPException(status_code=404, detail="User turn not found")
+        if str(user_row[1]) != "user":
+            raise HTTPException(status_code=409, detail="user_turn_id is not a user turn")
+        if agent_row and (
+            str(agent_row[0]) != str(user_row[0]) or str(agent_row[1]) != "agent"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="agent_turn_id is not a paired agent turn",
+            )
+
+        classification = classify_explicit_conversation_experience(str(user_row[2]))
+        if classification is None:
+            return {
+                "status": "ignored",
+                "reason": "no_explicit_experience_signal",
+                "user_turn_id": request.user_turn_id.strip(),
+            }
+
+        user_text = str(user_row[2]).strip()
+        agent_text = str(agent_row[2]).strip() if agent_row else ""
+        title_excerpt = " ".join(user_text.split())[:120]
+        summary = f"用户确认：{user_text}"
+        if agent_text:
+            summary += f"\n处理结果：{agent_text}"
+        evidence_refs = [f"turn:{request.user_turn_id.strip()}"]
+        if request.agent_turn_id:
+            evidence_refs.append(f"turn:{request.agent_turn_id.strip()}")
+        result = await self.verify_identity_experience(
+            IdentityExperienceVerification(
+                turn_id=request.user_turn_id.strip(),
+                title=f"{classification['title_prefix']}：{title_excerpt}"[:300],
+                summary=summary[:4000],
+                evidence_refs=evidence_refs,
+                verified_by=request.verified_by.strip(),
+                topics=list(classification["topics"]),
+                entities=["锚点", "星子", "Mem"],
+                event_kind=str(classification["event_kind"]),
+                importance=float(classification["importance"]),
+            )
+        )
+        return {
+            **result,
+            "status": "settled",
+            "classification": classification["kind"],
         }
 
     async def propose_identity_revision(self, proposal: IdentityRevisionProposal):
@@ -1557,6 +1695,8 @@ class MemoryService:
                 "last_recall_at": self._last_recall_at,
                 "last_result_count": self._last_recall_count,
                 "last_latency_ms": self._last_recall_latency_ms,
+                "last_trace_id": self._last_recall_trace_id,
+                "last_status": self._last_recall_status,
             },
         }
 
@@ -2587,8 +2727,13 @@ class MemoryService:
                 detail="at least one memory tier must be enabled",
             )
 
+        trace_id = str(uuid.uuid4())
+        created_at = datetime.now().astimezone().isoformat()
         started = time.perf_counter()
         self._recall_requests += 1
+        plan = None
+        payload: Dict[str, Any] | None = None
+        failure: Exception | None = None
         try:
             plan = build_recall_plan(
                 request.query,
@@ -2620,11 +2765,15 @@ class MemoryService:
             finally:
                 conn.close()
             payload["context"] = format_recall_context(payload["results"])
+            payload["trace_id"] = trace_id
+            payload["recall_status"] = "hit" if payload["count"] else "empty"
+            payload["request_source"] = request.request_source
             self._last_recall_count = int(payload["count"])
             if self._last_recall_count:
                 self._recall_hits += 1
             return payload
-        except Exception:
+        except Exception as exc:
+            failure = exc
             self._recall_failures += 1
             raise
         finally:
@@ -2633,6 +2782,207 @@ class MemoryService:
                 (time.perf_counter() - started) * 1000,
                 3,
             )
+            self._last_recall_trace_id = trace_id
+            self._last_recall_status = (
+                "failure"
+                if failure is not None
+                else ("hit" if payload and payload.get("count") else "empty")
+            )
+            self._persist_recall_trace(
+                trace_id=trace_id,
+                created_at=created_at,
+                request=request,
+                plan=plan.as_dict() if plan is not None else None,
+                payload=payload,
+                latency_ms=self._last_recall_latency_ms,
+                failure=failure,
+            )
+
+    def _persist_recall_trace(
+        self,
+        *,
+        trace_id: str,
+        created_at: str,
+        request: RecallRequest,
+        plan: Dict[str, Any] | None,
+        payload: Dict[str, Any] | None,
+        latency_ms: float,
+        failure: Exception | None,
+    ) -> None:
+        selected = []
+        for item in list((payload or {}).get("results") or []):
+            selected.append(
+                {
+                    "id": item.get("id"),
+                    "tier": item.get("tier"),
+                    "score": item.get("score"),
+                    "matched_terms": item.get("matched_terms") or [],
+                    "source_turns": item.get("source_turns") or [],
+                    "evidence_refs": item.get("evidence_refs") or [],
+                }
+            )
+        status = (
+            "failure"
+            if failure is not None
+            else ("hit" if payload and payload.get("count") else "empty")
+        )
+        conn = open_memory_sqlite(self._db_path)
+        try:
+            conn.execute(
+                "INSERT INTO recall_traces "
+                "(trace_id, created_at, completed_at, request_source, session_id, "
+                "query, status, intent, query_plan, candidate_count, result_count, "
+                "selected_results, context_chars, latency_ms, error_type, error_detail) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    trace_id,
+                    created_at,
+                    datetime.now().astimezone().isoformat(),
+                    request.request_source,
+                    request.current_session_id,
+                    request.query,
+                    status,
+                    (plan or {}).get("intent"),
+                    json.dumps(plan or {}, ensure_ascii=False),
+                    int((payload or {}).get("candidate_count") or 0),
+                    int((payload or {}).get("count") or 0),
+                    json.dumps(selected, ensure_ascii=False),
+                    int((payload or {}).get("context_chars") or 0),
+                    latency_ms,
+                    type(failure).__name__ if failure is not None else None,
+                    str(failure)[:500] if failure is not None else None,
+                ),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            logger.warning("Failed to persist recall trace %s", trace_id, exc_info=True)
+        finally:
+            conn.close()
+
+    async def list_recall_traces(
+        self,
+        limit: int = 50,
+        session_id: Optional[str] = None,
+        status: Optional[str] = None,
+    ):
+        bounded_limit = max(1, min(int(limit), 500))
+        clauses = ["1=1"]
+        params: list[Any] = []
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        params.append(bounded_limit)
+        conn = open_memory_sqlite(self._db_path)
+        try:
+            rows = conn.execute(
+                "SELECT trace_id, created_at, completed_at, request_source, "
+                "session_id, query, status, intent, query_plan, candidate_count, "
+                "result_count, selected_results, context_chars, latency_ms, "
+                "error_type, error_detail FROM recall_traces WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY created_at DESC LIMIT ?",
+                params,
+            ).fetchall()
+        finally:
+            conn.close()
+        traces = []
+        for row in rows:
+            traces.append(
+                {
+                    "trace_id": row[0],
+                    "created_at": row[1],
+                    "completed_at": row[2],
+                    "request_source": row[3],
+                    "session_id": row[4],
+                    "query": row[5],
+                    "status": row[6],
+                    "intent": row[7],
+                    "query_plan": json.loads(row[8] or "{}"),
+                    "candidate_count": row[9],
+                    "result_count": row[10],
+                    "selected_results": json.loads(row[11] or "[]"),
+                    "context_chars": row[12],
+                    "latency_ms": row[13],
+                    "error_type": row[14],
+                    "error_detail": row[15],
+                }
+            )
+        return {"traces": traces, "count": len(traces)}
+
+    async def remember(self, request: DurableMemoryCreate):
+        """Persist an explicit durable memory in the canonical Mem store."""
+        title = request.title.strip()
+        summary = request.summary.strip()
+        evidence_refs = list(
+            dict.fromkeys(str(item).strip() for item in request.evidence_refs)
+        )
+        evidence_refs = [item for item in evidence_refs if item]
+        identity = json.dumps(
+            {
+                "title": title,
+                "summary": summary,
+                "evidence_refs": evidence_refs,
+                "source_actor": request.source_actor.strip(),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        memory_id = "durable-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+        now = datetime.now(timezone.utc).isoformat()
+        source_turns = [
+            ref.removeprefix("turn:")
+            for ref in evidence_refs
+            if ref.startswith("turn:") and ref.removeprefix("turn:")
+        ]
+        conn = open_memory_sqlite(self._db_path)
+        try:
+            conn.execute(
+                "INSERT INTO compressed_memories "
+                "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
+                "importance, confidence, topics, entities, source_turns, compressed_at, "
+                "compression_level, status, weight, event_kind, pinned, hidden, "
+                "evidence_refs, origin_type, origin_id, verified_at) "
+                "VALUES (?, 'event', ?, ?, ?, ?, ?, 0.9, ?, ?, ?, ?, 0, 'active', "
+                "0.8, ?, 0, 0, ?, 'agent_explicit_memory', ?, ?) "
+                "ON CONFLICT(memory_id) DO UPDATE SET "
+                "title = excluded.title, summary = excluded.summary, "
+                "importance = excluded.importance, topics = excluded.topics, "
+                "entities = excluded.entities, source_turns = excluded.source_turns, "
+                "event_kind = excluded.event_kind, evidence_refs = excluded.evidence_refs, "
+                "status = 'active', hidden = 0",
+                (
+                    memory_id,
+                    title,
+                    summary,
+                    now,
+                    now,
+                    request.importance,
+                    json.dumps(list(dict.fromkeys(request.topics)), ensure_ascii=False),
+                    json.dumps(list(dict.fromkeys(request.entities)), ensure_ascii=False),
+                    json.dumps(source_turns, ensure_ascii=False),
+                    now,
+                    request.event_kind.strip(),
+                    json.dumps(evidence_refs, ensure_ascii=False),
+                    f"{request.source_actor.strip()}:{memory_id}",
+                    now,
+                ),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM compressed_memories WHERE memory_id = ?",
+                (memory_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        return {
+            "status": "remembered",
+            "memory": _cmem_row_to_dict(row),
+        }
 
     async def get_compressed(self, memory_id: str):
         """Get a single compressed memory by ID."""

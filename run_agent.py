@@ -731,74 +731,37 @@ class AIAgent:
         except Exception:
             _agent_cfg = {}
 
-        # Persistent memory (MEMORY.md + USER.md) -- loaded from disk
-        self._memory_store = None
-        self._memory_enabled = False
-        self._user_profile_enabled = False
-        self._memory_nudge_interval = 10
-        self._memory_flush_min_turns = 6
-        self._turns_since_memory = 0
         self._iters_since_skill = 0
-        if not skip_memory:
-            try:
-                mem_config = _agent_cfg.get("memory", {})
-                self._memory_enabled = mem_config.get("memory_enabled", False)
-                self._user_profile_enabled = mem_config.get("user_profile_enabled", False)
-                self._memory_nudge_interval = int(mem_config.get("nudge_interval", 10))
-                self._memory_flush_min_turns = int(mem_config.get("flush_min_turns", 6))
-                if self._memory_enabled or self._user_profile_enabled:
-                    from tools.memory_tool import MemoryStore
-                    self._memory_store = MemoryStore(
-                        memory_char_limit=mem_config.get("memory_char_limit", 2200),
-                        user_char_limit=mem_config.get("user_char_limit", 1375),
-                    )
-                    self._memory_store.load_from_disk()
-            except Exception:
-                pass  # Memory is optional -- don't break agent init
-        
 
-
-        # Memory provider plugin (external — one at a time, alongside built-in)
-        # Reads memory.provider from config to select which plugin to activate.
-        # Default is "mem" for Mem time-series memory system.
+        # Canonical Memory Service provider.
         self._memory_manager = None
         if not skip_memory:
             try:
-                _mem_provider_name = mem_config.get("provider", "mem") if mem_config else "mem"
+                from agent.memory_manager import MemoryManager as _MemoryManager
+                from plugins.memory.mem import MemMemoryProvider
 
-                if _mem_provider_name:
-                    from agent.memory_manager import MemoryManager as _MemoryManager
-                    from plugins.memory import load_memory_provider as _load_mem
-                    self._memory_manager = _MemoryManager()
-                    _mp = _load_mem(_mem_provider_name)
-                    if _mp and _mp.is_available():
-                        self._memory_manager.add_provider(_mp)
-                    if self._memory_manager.providers:
-                        from VoidCube_core.constants import get_VoidCube_home as _ghh
-                        _init_kwargs = {
-                            "session_id": self.session_id,
-                            "platform": platform or "cli",
-                            "VoidCube_home": str(_ghh()),
-                            "agent_context": "primary",
-                        }
-                        # Thread gateway user identity for per-user memory scoping
-                        if self._user_id:
-                            _init_kwargs["user_id"] = self._user_id
-                        # Profile identity for per-profile provider scoping
-                        try:
-                            from VoidCube_cli.profiles import get_active_profile_name
-                            _profile = get_active_profile_name()
-                            _init_kwargs["agent_identity"] = _profile
-                            _init_kwargs["agent_workspace"] = "VoidCube"
-                        except Exception:
-                            pass
-                        self._memory_manager.initialize_all(**_init_kwargs)
-                        logger.info("Memory provider '%s' activated", _mem_provider_name)
-                    else:
-                        logger.debug("Memory provider '%s' not found or not available", _mem_provider_name)
-                        self._memory_manager = None
+                self._memory_manager = _MemoryManager()
+                self._memory_manager.add_provider(MemMemoryProvider())
+                from VoidCube_core.constants import get_VoidCube_home as _ghh
+                _init_kwargs = {
+                    "session_id": self.session_id,
+                    "platform": platform or "cli",
+                    "VoidCube_home": str(_ghh()),
+                    "agent_context": "primary",
+                }
+                if self._user_id:
+                    _init_kwargs["user_id"] = self._user_id
+                try:
+                    from VoidCube_cli.profiles import get_active_profile_name
+                    _profile = get_active_profile_name()
+                    _init_kwargs["agent_identity"] = _profile
+                    _init_kwargs["agent_workspace"] = "VoidCube"
+                except Exception:
+                    pass
+                self._memory_manager.initialize_all(**_init_kwargs)
+                logger.info("Canonical Mem provider activated")
             except Exception as _mpe:
-                logger.warning("Memory provider plugin init failed: %s", _mpe)
+                logger.warning("Canonical Mem provider init failed: %s", _mpe)
                 self._memory_manager = None
 
         # Inject memory provider tool schemas into the tool surface
@@ -969,8 +932,6 @@ class AIAgent:
         self._subdirectory_hints = SubdirectoryHintTracker(
             working_dir=os.getenv("TERMINAL_CWD") or None,
         )
-        self._user_turn_count = 0
-
         # Cumulative token usage for the session
         self.session_prompt_tokens = 0
         self.session_completion_tokens = 0
@@ -1077,9 +1038,6 @@ class AIAgent:
         self.session_cost_status = "unknown"
         self.session_cost_source = "none"
         
-        # Turn counter (added after reset_session_state was first written — #2635)
-        self._user_turn_count = 0
-
         # Context engine reset (works for both built-in compressor and plugins)
         if hasattr(self, "context_compressor") and self.context_compressor:
             self.context_compressor.on_session_reset()
@@ -1424,19 +1382,8 @@ class AIAgent:
                 logging.warning(f"Failed to cleanup browser for task {task_id}: {e}")
 
     # ------------------------------------------------------------------
-    # Background memory/skill review
+    # Background skill review
     # ------------------------------------------------------------------
-
-    _MEMORY_REVIEW_PROMPT = (
-        "Review the conversation above and consider saving to memory if appropriate.\n\n"
-        "Focus on:\n"
-        "1. Has the user revealed things about themselves — their persona, desires, "
-        "preferences, or personal details worth remembering?\n"
-        "2. Has the user expressed expectations about how you should behave, their work "
-        "style, or ways they want you to operate?\n\n"
-        "If something stands out, save it using the memory tool. "
-        "If nothing is worth saving, just say 'Nothing to save.' and stop."
-    )
 
     _SKILL_REVIEW_PROMPT = (
         "Review the conversation above and consider saving or updating a skill if appropriate.\n\n"
@@ -1448,42 +1395,19 @@ class AIAgent:
         "If nothing is worth saving, just say 'Nothing to save.' and stop."
     )
 
-    _COMBINED_REVIEW_PROMPT = (
-        "Review the conversation above and consider two things:\n\n"
-        "**Memory**: Has the user revealed things about themselves — their persona, "
-        "desires, preferences, or personal details? Has the user expressed expectations "
-        "about how you should behave, their work style, or ways they want you to operate? "
-        "If so, save using the memory tool.\n\n"
-        "**Skills**: Was a non-trivial approach used to complete a task that required trial "
-        "and error, or changing course due to experiential findings along the way, or did "
-        "the user expect or desire a different method or outcome? If a relevant skill "
-        "already exists, update it. Otherwise, create a new one if the approach is reusable.\n\n"
-        "Only act if there's something genuinely worth saving. "
-        "If nothing stands out, just say 'Nothing to save.' and stop."
-    )
-
     def _spawn_background_review(
         self,
         messages_snapshot: List[Dict],
-        review_memory: bool = False,
-        review_skills: bool = False,
     ) -> None:
-        """Spawn a background thread to review the conversation for memory/skill saves.
+        """Spawn a background thread to review the conversation for skill saves.
 
         Creates a full AIAgent fork with the same model, tools, and context as the
         main session. The review prompt is appended as the next user turn in the
-        forked conversation. Writes directly to the shared memory/skill stores.
+        forked conversation. Writes directly to the shared skill store.
         Never modifies the main conversation history or produces user-visible output.
         """
         import threading
-
-        # Pick the right prompt based on which triggers fired
-        if review_memory and review_skills:
-            prompt = self._COMBINED_REVIEW_PROMPT
-        elif review_memory:
-            prompt = self._MEMORY_REVIEW_PROMPT
-        else:
-            prompt = self._SKILL_REVIEW_PROMPT
+        prompt = self._SKILL_REVIEW_PROMPT
 
         def _run_review():
             import contextlib, os as _os
@@ -1499,10 +1423,6 @@ class AIAgent:
                         platform=self.platform,
                         provider=self.provider,
                     )
-                    review_agent._memory_store = self._memory_store
-                    review_agent._memory_enabled = self._memory_enabled
-                    review_agent._user_profile_enabled = self._user_profile_enabled
-                    review_agent._memory_nudge_interval = 0
                     review_agent._skill_nudge_interval = 0
 
                     review_agent.run_conversation(
@@ -1523,20 +1443,14 @@ class AIAgent:
                     if not data.get("success"):
                         continue
                     message = data.get("message", "")
-                    target = data.get("target", "")
                     if "created" in message.lower():
                         actions.append(message)
                     elif "updated" in message.lower():
                         actions.append(message)
-                    elif "added" in message.lower() or (target and "add" in message.lower()):
-                        label = "Memory" if target == "memory" else "User profile" if target == "user" else target
-                        actions.append(f"{label} updated")
-                    elif "Entry added" in message:
-                        label = "Memory" if target == "memory" else "User profile" if target == "user" else target
-                        actions.append(f"{label} updated")
+                    elif "added" in message.lower():
+                        actions.append(message)
                     elif "removed" in message.lower() or "replaced" in message.lower():
-                        label = "Memory" if target == "memory" else "User profile" if target == "user" else target
-                        actions.append(f"{label} updated")
+                        actions.append(message)
 
                 if actions:
                     summary = " · ".join(dict.fromkeys(actions))
@@ -1549,7 +1463,7 @@ class AIAgent:
                             pass
 
             except Exception as e:
-                logger.debug("Background memory/skill review failed: %s", e)
+                logger.debug("Background skill review failed: %s", e)
             finally:
                 # Close all resources (httpx client, subprocesses, etc.) so
                 # GC doesn't try to clean them up on a dead asyncio event
@@ -2182,18 +2096,7 @@ class AIAgent:
         if system_message is not None:
             prompt_parts.append(system_message)
 
-        if self._memory_store:
-            if self._memory_enabled:
-                mem_block = self._memory_store.format_for_system_prompt("memory")
-                if mem_block:
-                    prompt_parts.append(mem_block)
-            # USER.md is always included when enabled.
-            if self._user_profile_enabled:
-                user_block = self._memory_store.format_for_system_prompt("user")
-                if user_block:
-                    prompt_parts.append(user_block)
-
-        # External memory provider system prompt block (additive to built-in)
+        # Canonical Mem provider system prompt block.
         if self._memory_manager:
             try:
                 _ext_mem_block = self._memory_manager.build_system_prompt()
@@ -2351,12 +2254,9 @@ class AIAgent:
         """
         Invalidate the cached system prompt, forcing a rebuild on the next turn.
         
-        Called after context compression events. Also reloads memory from disk
-        so the rebuilt prompt captures any writes from this session.
+        Called after context compression events.
         """
         self._cached_system_prompt = None
-        if self._memory_store:
-            self._memory_store.load_from_disk()
 
     def _try_refresh_nous_client_credentials(self, *, force: bool = True) -> bool:
         if self.provider != "nous":
@@ -2899,126 +2799,6 @@ class AIAgent:
                     pass
         return msg
 
-    def flush_memories(self, messages: list = None, min_turns: int = None):
-        """Give the model one turn to persist memories before context is lost.
-
-        Called before compression, session reset, or CLI exit. Injects a flush
-        message, makes one API call, executes any memory tool calls, then
-        strips all flush artifacts from the message list.
-
-        Args:
-            messages: The current conversation messages. If None, uses
-                      the session persistence buffer (last run_conversation state).
-            min_turns: Minimum user turns required to trigger the flush.
-                       None = use config value (flush_min_turns).
-                       0 = always flush (used for compression).
-        """
-        if self._memory_flush_min_turns == 0 and min_turns is None:
-            return
-        if "memory" not in self.valid_tool_names or not self._memory_store:
-            return
-        effective_min = min_turns if min_turns is not None else self._memory_flush_min_turns
-        if self._user_turn_count < effective_min:
-            return
-
-        if messages is None:
-            messages = self._session_persistence.messages
-        if not messages or len(messages) < 3:
-            return
-
-        flush_content = (
-            "[System: The session is being compressed. "
-            "Save anything worth remembering — prioritize user preferences, "
-            "corrections, and recurring patterns over task-specific details.]"
-        )
-        _sentinel = f"__flush_{id(self)}_{time.monotonic()}"
-        flush_msg = {"role": "user", "content": flush_content, "_flush_sentinel": _sentinel}
-        messages.append(flush_msg)
-
-        try:
-            api_messages = prepare_chat_messages(
-                messages,
-                system_prompt=self._cached_system_prompt or "",
-            )
-
-            # Make one API call with only the memory tool available
-            memory_tool_def = None
-            for t in (self.tools or []):
-                if t.get("function", {}).get("name") == "memory":
-                    memory_tool_def = t
-                    break
-
-            if not memory_tool_def:
-                return
-
-            # Use the auxiliary client for the flush call when available.
-            from agent.auxiliary_client import call_llm as _call_llm
-            _aux_available = True
-            try:
-                response = _call_llm(
-                    task="flush_memories",
-                    messages=api_messages,
-                    tools=[memory_tool_def],
-                    temperature=0.3,
-                    max_tokens=5120,
-                    # timeout resolved from auxiliary.flush_memories.timeout config
-                )
-            except RuntimeError:
-                _aux_available = False
-                response = None
-
-            if not _aux_available:
-                from agent.auxiliary_client import _get_task_timeout
-                flush_config = replace(
-                    self._chat_request_config(),
-                    tools=(memory_tool_def,),
-                    max_tokens=5120,
-                    request_overrides={"temperature": 0.3},
-                    timeout=_get_task_timeout("flush_memories"),
-                )
-                api_kwargs = build_chat_completion_kwargs(
-                    flush_config,
-                    api_messages,
-                )
-                response = self._chat_transport.complete(api_kwargs)
-
-            # Extract tool calls from the chat-completions response.
-            tool_calls = []
-            response_inspection = inspect_chat_response(response)
-            if response_inspection.valid:
-                assistant_message = response_inspection.message
-                if assistant_message.tool_calls:
-                    tool_calls = assistant_message.tool_calls
-
-            for tc in tool_calls:
-                if tc.function.name == "memory":
-                    try:
-                        args = json.loads(tc.function.arguments)
-                        flush_target = args.get("target", "memory")
-                        from tools.memory_tool import memory_tool as _memory_tool
-                        _memory_tool(
-                            action=args.get("action"),
-                            target=flush_target,
-                            content=args.get("content"),
-                            old_text=args.get("old_text"),
-                            store=self._memory_store,
-                        )
-                        if not self.quiet_mode:
-                            print(f"  🧠 Memory flush: saved to {args.get('target', 'memory')}")
-                    except Exception as e:
-                        logger.debug("Memory flush tool call failed: %s", e)
-        except Exception as e:
-            logger.debug("Memory flush API call failed: %s", e)
-        finally:
-            # Strip flush artifacts: remove everything from the flush message onward.
-            # Use sentinel marker instead of identity check for robustness.
-            while messages and messages[-1].get("_flush_sentinel") != _sentinel:
-                messages.pop()
-                if not messages:
-                    break
-            if messages and messages[-1].get("_flush_sentinel") == _sentinel:
-                messages.pop()
-
     def _compress_context(self, messages: list, system_message: str, *, approx_tokens: int = None, task_id: str = "default", focus_topic: str = None) -> tuple:
         """Compress conversation context and split the session in SQLite.
 
@@ -3037,10 +2817,7 @@ class AIAgent:
             f"{approx_tokens:,}" if approx_tokens else "unknown", self.model,
             focus_topic,
         )
-        # Pre-compression memory flush: let the model save memories before they're lost
-        self.flush_memories(messages, min_turns=0)
-
-        # Notify external memory provider before compression discards context
+        # Notify canonical Mem before compression discards context.
         if self._memory_manager:
             try:
                 self._memory_manager.on_pre_compress(messages)
@@ -3236,9 +3013,7 @@ class AIAgent:
         *,
         parallel: bool,
     ) -> None:
-        if call.name == "memory":
-            self._turns_since_memory = 0
-        elif call.name == "skill_manage":
+        if call.name == "skill_manage":
             self._iters_since_skill = 0
 
         self._checkpoint_tool_call(call)
@@ -3415,27 +3190,6 @@ class AIAgent:
                 db=self._session_db,
                 current_session_id=self.session_id,
             )
-        elif function_name == "memory":
-            target = function_args.get("target", "memory")
-            from tools.memory_tool import memory_tool as _memory_tool
-            result = _memory_tool(
-                action=function_args.get("action"),
-                target=target,
-                content=function_args.get("content"),
-                old_text=function_args.get("old_text"),
-                store=self._memory_store,
-            )
-            # Bridge: notify external memory provider of built-in memory writes
-            if self._memory_manager and function_args.get("action") in ("add", "replace"):
-                try:
-                    self._memory_manager.on_memory_write(
-                        function_args.get("action", ""),
-                        target,
-                        function_args.get("content", ""),
-                    )
-                except Exception:
-                    pass
-            return result
         elif (
             self._context_engine_tool_names
             and function_name in self._context_engine_tool_names
@@ -3887,9 +3641,7 @@ class AIAgent:
             self._replay_compression_warning()
             self._compression_warning = None  # send once
 
-        # NOTE: _turns_since_memory and _iters_since_skill are NOT reset here.
-        # They are initialized in __init__ and must persist across run_conversation
-        # calls so that nudge logic accumulates correctly in CLI mode.
+        # Skill review cadence persists across run_conversation calls in CLI mode.
         self.iteration_budget = IterationBudget(self.max_iterations)
 
         # Log conversation turn start for debugging/observability
@@ -3916,23 +3668,8 @@ class AIAgent:
         # be saved to session DB, session logs, or batch trajectories, but they're
         # automatically re-applied on every API call (including session continuations).
         
-        # Track user turns for memory flush and periodic nudge logic
-        self._user_turn_count += 1
-
         # Preserve the original user message (no nudge injection).
         original_user_message = persist_user_message if persist_user_message is not None else user_message
-
-        # Track memory nudge trigger (turn-based, checked here).
-        # Skill trigger is checked AFTER the agent loop completes, based on
-        # how many tool iterations THIS turn used.
-        _should_review_memory = False
-        if (self._memory_nudge_interval > 0
-                and "memory" in self.valid_tool_names
-                and self._memory_store):
-            self._turns_since_memory += 1
-            if self._turns_since_memory >= self._memory_nudge_interval:
-                _should_review_memory = True
-                self._turns_since_memory = 0
 
         # Add user message
         user_msg = {"role": "user", "content": user_message}
@@ -4099,7 +3836,7 @@ class AIAgent:
         # Clear any stale interrupt state at start
         self.clear_interrupt()
 
-        # External memory provider: prefetch once before the tool loop.
+        # Canonical Mem: prefetch once before the tool loop.
         # Reuse the cached result on every iteration to avoid re-calling
         # prefetch_all() on each tool call (10 tool calls = 10x latency + cost).
         # Use original_user_message (clean input) — user_message may contain
@@ -5459,7 +5196,6 @@ class AIAgent:
             conversation_history=conversation_history,
             task_id=effective_task_id,
             original_user_message=original_user_message,
-            review_memory=_should_review_memory,
         )
 
     def chat(self, message: str, stream_callback: Optional[callable] = None) -> str:

@@ -279,17 +279,17 @@ def test_scoped_memory_request_replaces_tools_limits_overrides_and_timeout():
         model="gpt-5",
         base_url="https://api.openai.com/v1",
         tools=(
-            {"type": "function", "function": {"name": "memory"}},
+            {"type": "function", "function": {"name": "mem_remember"}},
             {"type": "function", "function": {"name": "terminal"}},
         ),
         max_tokens=1024,
         request_overrides={"service_tier": "priority"},
         timeout=1800.0,
     )
-    memory_tool = {"type": "function", "function": {"name": "memory"}}
+    remember_tool = {"type": "function", "function": {"name": "mem_remember"}}
     scoped = replace(
         original,
-        tools=(memory_tool,),
+        tools=(remember_tool,),
         max_tokens=5120,
         request_overrides={"temperature": 0.3},
         timeout=45.0,
@@ -297,11 +297,11 @@ def test_scoped_memory_request_replaces_tools_limits_overrides_and_timeout():
 
     kwargs = build_chat_completion_kwargs(
         scoped,
-        [{"role": "user", "content": "flush"}],
+        [{"role": "user", "content": "remember"}],
     )
 
     assert len(kwargs["tools"]) == 1
-    assert kwargs["tools"][0]["function"]["name"] == "memory"
+    assert kwargs["tools"][0]["function"]["name"] == "mem_remember"
     assert kwargs["max_completion_tokens"] == 5120
     assert kwargs["temperature"] == 0.3
     assert kwargs["timeout"] == 45.0

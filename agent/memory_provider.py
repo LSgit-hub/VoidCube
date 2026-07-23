@@ -1,22 +1,16 @@
-"""Abstract base class for pluggable memory providers.
+"""Abstract interface for canonical service-backed memory.
 
-Memory providers give the agent service-backed recall across sessions. One
-provider is active at a time alongside the separately owned bounded curated
-memory (MEMORY.md / USER.md). The MemoryManager enforces this limit.
-
-The curated file store remains active outside this interface. Only one
-service provider runs at a time to prevent tool schema bloat and conflicting
-long-term recall backends.
+Memory providers give the agent canonical service-backed recall and durable
+memory across sessions. The MemoryManager permits one provider at a time to
+prevent tool schema bloat and conflicting long-term backends.
 
 Registration:
-  1. Curated files: owned by MemoryStore, outside this provider interface.
-  2. Service providers: ship in plugins/memory/<name>/ and are selected by
-     memory.provider config.
+The active implementation is ``plugins.memory.mem.MemMemoryProvider``.
 
 Lifecycle (called by MemoryManager, wired in run_agent.py):
   initialize()          — connect, create resources, warm up
   system_prompt_block()  — static text for the system prompt
-  prefetch(query)        — background recall before each turn
+  prefetch(query)        — synchronous recall before each turn
   sync_turn(user, asst)  — async write after each turn
   get_tool_schemas()     — tool schemas to expose to the model
   handle_tool_call()     — dispatch a tool call
@@ -26,7 +20,6 @@ Optional hooks (override to opt in):
   on_turn_start(turn, message, **kwargs) — per-turn tick with runtime context
   on_session_end(messages)               — end-of-session extraction
   on_pre_compress(messages) -> str       — extract before context compression
-  on_memory_write(action, target, content) — mirror built-in memory writes
   on_delegation(task, result, **kwargs)  — parent-side observation of subagent work
 """
 
@@ -45,7 +38,7 @@ class MemoryProvider(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
-        """Short identifier for this provider (e.g. 'builtin', 'hindsight')."""
+        """Short identifier for this provider (currently ``mem``)."""
 
     # -- Core lifecycle (implement these) ------------------------------------
 
@@ -92,24 +85,14 @@ class MemoryProvider(ABC):
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         """Recall relevant context for the upcoming turn.
 
-        Called before each API call. Return formatted text to inject as
-        context, or empty string if nothing relevant. Implementations
-        should be fast — use background threads for the actual recall
-        and return cached results here.
+        Called once before the first API call of each turn. Return formatted
+        text to inject as context, or empty string if nothing relevant.
 
         session_id is provided for providers serving concurrent sessions
         (gateway group chats, cached agents). Providers that don't need
         per-session scoping can ignore it.
         """
         return ""
-
-    def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
-        """Queue a background recall for the NEXT turn.
-
-        Called after each turn completes. The result will be consumed
-        by prefetch() on the next turn. Default is no-op — providers
-        that do background prefetching should override this.
-        """
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "") -> None:
         """Persist a completed turn to the backend.
@@ -218,14 +201,4 @@ class MemoryProvider(ABC):
         - save_config() for native config file formats, OR
         - use only env vars (in which case get_config_schema() fields
           should all have ``env_var`` set and this method stays no-op).
-        """
-
-    def on_memory_write(self, action: str, target: str, content: str) -> None:
-        """Called when the built-in memory tool writes an entry.
-
-        action: 'add', 'replace', or 'remove'
-        target: 'memory' or 'user'
-        content: the entry content
-
-        Use to mirror built-in memory writes to your backend.
         """

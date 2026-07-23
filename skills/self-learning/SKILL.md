@@ -303,7 +303,7 @@ tech_eval = {
 | `web_search_tool` | 网络搜索最新技术 |
 | `web_extract_tool` | 提取网页内容 |
 | `github_search_repos` | GitHub 仓库搜索 |
-| `memory_tool` | 记忆管理（可选） |
+| `mem_search` / `mem_remember` | 统一 Mem 召回与持久化（可选） |
 | `file_read` / `file_write` | 笔记文件操作 |
 | `skill_view` | 查看本技能参考文件 |
 

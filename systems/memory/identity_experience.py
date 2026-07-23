@@ -15,6 +15,64 @@ _IMPORTANT_TASK_FAMILIES = {
     "memory_maintenance",
 }
 
+_IDENTITY_CORRECTION_SIGNALS = (
+    "纠正一个身份历史",
+    "纠正身份历史",
+    "身份历史修订",
+    "身份语义更新",
+    "旧语义",
+)
+_EXPLICIT_MEMORY_SIGNALS = (
+    "请记住",
+    "要记住",
+    "不要忘",
+    "永远记录",
+    "永久记录",
+    "永久保存",
+    "长期记忆",
+    "长期记录",
+    "这是项目的目的",
+    "这是我做这个项目的目的",
+)
+_MILESTONE_SIGNALS = (
+    "项目里程碑",
+    "作为里程碑",
+    "正式完成",
+    "阶段完成",
+)
+
+
+def classify_explicit_conversation_experience(text: str) -> dict[str, Any] | None:
+    """Classify only user-explicit, evidence-worthy experience signals."""
+    normalized = "".join(str(text or "").split()).casefold()
+    if not normalized:
+        return None
+    if any(signal in normalized for signal in _IDENTITY_CORRECTION_SIGNALS):
+        return {
+            "kind": "identity_correction",
+            "title_prefix": "身份历史修订",
+            "event_kind": "correction",
+            "importance": 1.0,
+            "topics": ["身份历史", "语义修订"],
+        }
+    if any(signal in normalized for signal in _MILESTONE_SIGNALS):
+        return {
+            "kind": "milestone",
+            "title_prefix": "项目里程碑",
+            "event_kind": "completion",
+            "importance": 1.0,
+            "topics": ["项目", "里程碑"],
+        }
+    if any(signal in normalized for signal in _EXPLICIT_MEMORY_SIGNALS):
+        return {
+            "kind": "explicit_memory",
+            "title_prefix": "关键对话",
+            "event_kind": "decision",
+            "importance": 0.95,
+            "topics": ["关键对话", "长期记忆"],
+        }
+    return None
+
 
 def sync_identity_experiences(
     conn,
