@@ -1539,11 +1539,18 @@ class InternalGateway:
             url = f"{target_service.address}{upstream_path}"
             logger.debug(f"Routing request {request_id}: {path} -> {url}")
             headers = dict(request.headers)
+            query_params = list(request.query_params.multi_items())
             
             async with asyncio.timeout(30):
                 async with aiohttp.ClientSession() as session:
                     method = request.method
-                    async with session.request(method, url, data=body, headers=headers) as response:
+                    async with session.request(
+                        method,
+                        url,
+                        params=query_params or None,
+                        data=body,
+                        headers=headers,
+                    ) as response:
                         response_body = await response.read()
                         response_headers = dict(response.headers)
                         

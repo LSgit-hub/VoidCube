@@ -329,6 +329,43 @@ async def test_failure_cause_terms_outrank_generic_memory_analysis(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_immediate_specific_recall_prefers_recent_synonym_over_old_exact_word(
+    tmp_path,
+):
+    service = _service(tmp_path)
+    now = datetime.now(timezone.utc)
+    _insert_turn(
+        service,
+        turn_id="old-exact-fault",
+        session_id="old-session",
+        text="旧审查曾记录一个无关故障。",
+        timestamp=now - timedelta(days=14),
+    )
+    _insert_turn(
+        service,
+        turn_id="recent-synonym",
+        session_id="recent-session",
+        text="记忆系统失效的根因是 memai 包版本冲突。",
+        timestamp=now - timedelta(hours=8),
+    )
+    _insert_compressed(
+        service,
+        memory_id="tier2-exact-fault",
+        title="长期故障",
+        summary="这是一个长期故障，不是刚才的对话。",
+        timestamp=now,
+    )
+
+    result = await service.recall(
+        RecallRequest(query="我们刚才谈到的故障是什么", limit=3)
+    )
+
+    assert result["results"][0]["id"] == "recent-synonym"
+    assert result["query_plan"]["immediate_recency"] is True
+    assert {item["tier"] for item in result["results"]} == {"tier1"}
+
+
+@pytest.mark.asyncio
 async def test_recall_trace_is_persisted_with_selected_evidence(tmp_path):
     service = _service(tmp_path)
     now = datetime.now(timezone.utc)

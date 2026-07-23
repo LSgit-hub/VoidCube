@@ -34,6 +34,7 @@ _RECENCY_MARKERS = (
     "last time",
     "earlier",
 )
+_IMMEDIATE_RECENCY_MARKERS = ("刚才", "刚刚", "方才")
 _RECENT_CONVERSATION_PATTERNS = (
     "聊了什么",
     "讨论了什么",
@@ -113,6 +114,7 @@ _CJK_STOP_TERMS = {
     "方才",
     "这个",
     "那个",
+    "和",
     "的",
     "是",
     "了",
@@ -132,6 +134,7 @@ class RecallPlan:
     memory_types: tuple[str, ...]
     topic: str | None
     recency_intent: bool
+    immediate_recency: bool
     intent: str
 
     @property
@@ -148,6 +151,7 @@ class RecallPlan:
             "memory_types": list(self.memory_types),
             "topic": self.topic,
             "recency_intent": self.recency_intent,
+            "immediate_recency": self.immediate_recency,
             "intent": self.intent,
             "method": "lexical_concept_hybrid",
         }
@@ -212,6 +216,9 @@ def build_recall_plan(
         memory_types=tuple(types),
         topic=_optional_text(topic),
         recency_intent=recency_intent,
+        immediate_recency=any(
+            marker in normalized for marker in _IMMEDIATE_RECENCY_MARKERS
+        ),
         intent=intent,
     )
 
@@ -242,7 +249,11 @@ def recall_memories(
     reference = _aware_datetime(now or datetime.now().astimezone())
 
     candidates: list[dict[str, Any]] = []
-    if include_tier2 and plan.intent != "recent_conversation":
+    if (
+        include_tier2
+        and plan.intent != "recent_conversation"
+        and not plan.immediate_recency
+    ):
         candidates.extend(
             _tier2_candidates(conn, plan, bounded_candidates, reference)
         )
@@ -480,13 +491,24 @@ def _tier1_candidates(
         lexical, matched = _lexical_score(plan, f"{row[3]} {' '.join(_json_list(row[6]))}")
         if lexical <= 0 and plan.intent != "recent_conversation":
             continue
-        recency = _recency_score(row[4], now)
+        recency = _recency_score(
+            row[4],
+            now,
+            decay_days=(2.0 if plan.immediate_recency else 90.0),
+        )
         same_session = bool(current_session_id and str(row[1]) == current_session_id)
         if plan.intent == "recent_conversation":
             score = (
                 0.68
                 + 0.20 * recency
                 + 0.07 * float(row[5] or 0.0)
+                + (0.05 if same_session else 0.0)
+            )
+        elif plan.immediate_recency:
+            score = (
+                0.50 * lexical
+                + 0.42 * recency
+                + 0.08 * float(row[5] or 0.0)
                 + (0.05 if same_session else 0.0)
             )
         else:
@@ -534,19 +556,27 @@ def _lexical_score(plan: RecallPlan, value: object) -> tuple[float, list[str]]:
     haystack = normalize_text(value)
     if not haystack:
         return 0.0, []
-    salient_terms = _maximal_terms(plan.terms)
-    exact_matched = [term for term in salient_terms if term in haystack]
+    exact_matched = _filter_negated_subterms(
+        plan,
+        haystack,
+        [term for term in plan.terms if term in haystack],
+    )
     concept_matched = _concept_matches(plan, haystack)
-    matched = [*exact_matched, *concept_matched]
+    matched = [*_maximal_terms(exact_matched), *concept_matched]
     if plan.intent == "recent_conversation":
         return 0.25, matched
     if not plan.search_terms:
         return (0.25 if plan.recency_intent else 0.0), []
-    total_weight = sum(max(2, min(len(term), 8)) for term in salient_terms)
-    exact_weight = sum(max(2, min(len(term), 8)) for term in exact_matched)
-    concept_weight = len(concept_matched) * 0.9
-    matched_weight = exact_weight + concept_weight
-    coverage = matched_weight / max(total_weight, 1)
+    cjk_query = _meaningful_cjk_query(plan.normalized_query)
+    if cjk_query:
+        exact_coverage = _covered_cjk_chars(cjk_query, exact_matched)
+        concept_coverage = _concept_coverage_chars(plan, concept_matched)
+        coverage = (exact_coverage + concept_coverage) / max(len(cjk_query), 1)
+    else:
+        total_weight = sum(max(2, min(len(term), 8)) for term in plan.terms)
+        exact_weight = sum(max(2, min(len(term), 8)) for term in exact_matched)
+        concept_weight = len(concept_matched) * 0.9
+        coverage = (exact_weight + concept_weight) / max(total_weight, 1)
     phrase_bonus = 0.0
     if (
         plan.normalized_query
@@ -565,6 +595,67 @@ def _maximal_terms(terms: Sequence[str]) -> list[str]:
         for term in ordered
         if not any(term != other and term in other for other in ordered)
     ]
+
+
+def _filter_negated_subterms(
+    plan: RecallPlan,
+    haystack: str,
+    matched: Sequence[str],
+) -> list[str]:
+    negated = [
+        term
+        for term in plan.terms
+        if len(term) >= 2
+        and term.startswith(("不", "未", "无", "没"))
+        and term not in haystack
+    ]
+    return [
+        term
+        for term in matched
+        if not any(term != phrase and term in phrase for phrase in negated)
+    ]
+
+
+def _meaningful_cjk_query(normalized_query: str) -> str:
+    value = normalized_query
+    for stop_term in sorted(_CJK_STOP_TERMS, key=len, reverse=True):
+        value = value.replace(stop_term, "")
+    return "".join(_CJK_RUN_RE.findall(value))
+
+
+def _covered_cjk_chars(query: str, matched_terms: Sequence[str]) -> float:
+    covered: set[int] = set()
+    for term in matched_terms:
+        if not _CJK_RUN_RE.fullmatch(term):
+            continue
+        start = 0
+        while True:
+            index = query.find(term, start)
+            if index < 0:
+                break
+            covered.update(range(index, index + len(term)))
+            start = index + 1
+    return float(len(covered))
+
+
+def _concept_coverage_chars(
+    plan: RecallPlan,
+    concept_matched: Sequence[str],
+) -> float:
+    covered = 0.0
+    for matched in concept_matched:
+        group = next(
+            (group for group in _CONCEPT_GROUPS if matched in group),
+            (),
+        )
+        query_aliases = [
+            normalize_text(alias)
+            for alias in group
+            if normalize_text(alias) in plan.normalized_query
+        ]
+        if query_aliases:
+            covered += max(len(alias) for alias in query_aliases) * 0.65
+    return covered
 
 
 def _concept_matches(plan: RecallPlan, haystack: str) -> list[str]:
@@ -725,12 +816,17 @@ def _dynamic_weight(
     return max(0.0, min(1.0, base_weight + content_bonus + access_bonus + citation_bonus))
 
 
-def _recency_score(value: object, now: datetime) -> float:
+def _recency_score(
+    value: object,
+    now: datetime,
+    *,
+    decay_days: float = 90.0,
+) -> float:
     parsed = _parse_datetime(value)
     if parsed is None:
         return 0.0
     age_days = max(0.0, (now - parsed).total_seconds() / 86400.0)
-    return math.exp(-age_days / 90.0)
+    return math.exp(-age_days / max(decay_days, 0.01))
 
 
 def _parse_datetime(value: object) -> datetime | None:

@@ -683,6 +683,62 @@ def test_gateway_memory_search_route_does_not_update_memory_activity_when_upstre
     assert activity["counts"]["memory_task_count"] == 0
 
 
+def test_gateway_memory_proxy_preserves_query_parameters(monkeypatch):
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+    register_response = client.post(
+        "/register",
+        json={
+            "service_name": "memory-service",
+            "service_type": "memory",
+            "address": "http://memory-service",
+        },
+    )
+    assert register_response.status_code == 201
+    captured = {}
+
+    class _FakeResponse:
+        status = 200
+        headers = {"content-type": "application/json"}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def read(self):
+            return b'{"traces": [], "count": 0}'
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def request(self, method, url, **kwargs):
+            captured.update(method=method, url=url, params=kwargs.get("params"))
+            return _FakeResponse()
+
+    monkeypatch.setattr(
+        "systems.gateway.internal_gateway.aiohttp.ClientSession",
+        _FakeSession,
+    )
+
+    response = client.get(
+        "/api/mem/recall/traces?session_id=session-1&status=hit&limit=3"
+    )
+
+    assert response.status_code == 200
+    assert captured["url"] == "http://memory-service/recall/traces"
+    assert captured["params"] == [
+        ("session_id", "session-1"),
+        ("status", "hit"),
+        ("limit", "3"),
+    ]
+
+
 def test_gateway_memory_write_route_updates_memory_activity_even_when_upstream_fails():
     gateway = InternalGateway(GatewayConfig())
     client = TestClient(gateway.app)
