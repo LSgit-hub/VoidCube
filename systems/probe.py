@@ -308,7 +308,7 @@ class ProbeExecutor:
         repo_root = Path(context.worktree_path)
         expected = [
             repo_root / "tools" / "__init__.py",
-            repo_root / "model_tools.py",
+            repo_root / "tools" / "model_tools.py",
         ]
         missing = [str(path) for path in expected if not path.exists()]
         return ProbeCheckResult(

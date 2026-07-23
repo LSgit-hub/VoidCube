@@ -55,7 +55,7 @@ def _make_probe_ready_supervisor(tmp_path: Path) -> Supervisor:
     tools_dir = tmp_path / "tools"
     tools_dir.mkdir(exist_ok=True)
     (tools_dir / "__init__.py").write_text("", encoding="utf-8")
-    (tmp_path / "model_tools.py").write_text("# probe smoke\n", encoding="utf-8")
+    (tools_dir / "model_tools.py").write_text("# probe smoke\n", encoding="utf-8")
     return _make_supervisor(tmp_path)
 
 

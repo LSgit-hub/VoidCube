@@ -168,7 +168,7 @@ def test_probe_executor_runs_real_minimal_checks(tmp_path):
     tools_dir = tmp_path / "tools"
     tools_dir.mkdir()
     (tools_dir / "__init__.py").write_text("", encoding="utf-8")
-    (tmp_path / "model_tools.py").write_text("# probe smoke\n", encoding="utf-8")
+    (tools_dir / "model_tools.py").write_text("# probe smoke\n", encoding="utf-8")
     soul_dir = tmp_path / ".soul-runtime"
     soul_dir.mkdir()
 

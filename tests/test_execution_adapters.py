@@ -56,7 +56,7 @@ def _seed_body_repo(tmp_path: Path, *, probe_ready: bool) -> None:
     tools_dir = tmp_path / "tools"
     tools_dir.mkdir(exist_ok=True)
     (tools_dir / "__init__.py").write_text("", encoding="utf-8")
-    (tmp_path / "model_tools.py").write_text("# probe smoke\n", encoding="utf-8")
+    (tools_dir / "model_tools.py").write_text("# probe smoke\n", encoding="utf-8")
 
 
 def _make_body_upgrade_runtime(tmp_path: Path) -> SimpleNamespace:
