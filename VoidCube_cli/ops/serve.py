@@ -318,11 +318,34 @@ def _sync_active_mem_binding_before_start() -> Dict[str, Any] | None:
 def _service_python_path_entries() -> list[str]:
     """Return repo-local import roots required by service subprocesses."""
     repo_root = Path(__file__).resolve().parents[2]
-    entries = [str(repo_root)]
-    mem_src = repo_root / "Mem" / "src"
-    if mem_src.exists():
-        entries.append(str(mem_src))
-    return entries
+    return [str(repo_root)]
+
+
+def _verify_active_mem_import_source() -> Dict[str, str] | None:
+    """Fail startup when Python resolved memai outside the audited binding."""
+    from systems.config import get_config
+
+    config = get_config()
+    state_root = Path(config.supervisor.body_runtime.state_root).resolve()
+    audit_path = state_root / "mem-editable-binding.json"
+    if not audit_path.is_file():
+        return None
+
+    binding = json.loads(audit_path.read_text(encoding="utf-8"))
+    source_path = Path(str(binding.get("source_path") or "")).resolve()
+    expected = source_path / "memai" / "model_config.py"
+    if not expected.is_file():
+        raise RuntimeError(f"Audited Mem source is incomplete: {expected}")
+
+    from memai import model_config
+
+    actual = Path(model_config.__file__).resolve()
+    if actual != expected:
+        raise RuntimeError(
+            "memai import source does not match the active Body binding: "
+            f"expected {expected}, loaded {actual}"
+        )
+    return {"expected": str(expected), "loaded": str(actual)}
 
 
 def _run_service_in_thread(name: str, port: int) -> None:
@@ -330,6 +353,7 @@ def _run_service_in_thread(name: str, port: int) -> None:
     import asyncio
     import uvicorn
 
+    _verify_active_mem_import_source()
     app = _build_service_app(name, port)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -402,7 +426,8 @@ os.chdir({json.dumps(str(Path.cwd()))})
 from VoidCube_cli.env_loader import load_VoidCube_dotenv
 load_VoidCube_dotenv(project_env={project_env_path}, force_reload=True)
 import uvicorn
-from VoidCube_cli.ops.serve import _build_service_app
+from VoidCube_cli.ops.serve import _build_service_app, _verify_active_mem_import_source
+_verify_active_mem_import_source()
 app = _build_service_app({json.dumps(name)}, {svc.port})
 uvicorn.run(app, host='127.0.0.1', port={svc.port}, log_level='info')
 """

@@ -1,8 +1,18 @@
 from __future__ import annotations
 
+import json
+import sys
+from types import ModuleType, SimpleNamespace
+
+import pytest
+
 from systems.config import SystemConfig
 
-from VoidCube_cli.ops.serve import _build_service_config, _service_python_path_entries
+from VoidCube_cli.ops.serve import (
+    _build_service_config,
+    _service_python_path_entries,
+    _verify_active_mem_import_source,
+)
 
 
 def test_serve_supervisor_config_honors_lm_generation_env(monkeypatch):
@@ -31,10 +41,69 @@ def test_supervisor_lm_task_generation_is_enabled_by_default():
     assert config.service_runtime.endogenous_drive_lm_task_generation_enabled is True
 
 
-def test_service_subprocess_python_path_includes_mem_src():
+def test_service_subprocess_python_path_uses_only_repo_root():
     entries = _service_python_path_entries()
 
-    assert any(entry.endswith("Mem\\src") or entry.endswith("Mem/src") for entry in entries)
+    assert len(entries) == 1
+    assert not entries[0].endswith("Mem\\src")
+    assert not entries[0].endswith("Mem/src")
+
+
+def test_active_mem_import_source_matches_audited_binding(tmp_path, monkeypatch):
+    source = tmp_path / "slot-B" / "Mem" / "src"
+    expected = source / "memai" / "model_config.py"
+    expected.parent.mkdir(parents=True)
+    expected.write_text("# active Mem\n", encoding="utf-8")
+    (tmp_path / "mem-editable-binding.json").write_text(
+        json.dumps({"source_path": str(source)}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "systems.config.get_config",
+        lambda: SimpleNamespace(
+            supervisor=SimpleNamespace(
+                body_runtime=SimpleNamespace(state_root=str(tmp_path))
+            )
+        ),
+    )
+    model_config = ModuleType("memai.model_config")
+    model_config.__file__ = str(expected)
+    memai = ModuleType("memai")
+    memai.model_config = model_config
+    monkeypatch.setitem(sys.modules, "memai", memai)
+    monkeypatch.setitem(sys.modules, "memai.model_config", model_config)
+
+    result = _verify_active_mem_import_source()
+
+    assert result == {"expected": str(expected), "loaded": str(expected)}
+
+
+def test_active_mem_import_source_rejects_shadowed_package(tmp_path, monkeypatch):
+    source = tmp_path / "slot-B" / "Mem" / "src"
+    expected = source / "memai" / "model_config.py"
+    expected.parent.mkdir(parents=True)
+    expected.write_text("# active Mem\n", encoding="utf-8")
+    (tmp_path / "mem-editable-binding.json").write_text(
+        json.dumps({"source_path": str(source)}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "systems.config.get_config",
+        lambda: SimpleNamespace(
+            supervisor=SimpleNamespace(
+                body_runtime=SimpleNamespace(state_root=str(tmp_path))
+            )
+        ),
+    )
+    model_config = ModuleType("memai.model_config")
+    model_config.__file__ = str(tmp_path / "shadow" / "memai" / "model_config.py")
+    memai = ModuleType("memai")
+    memai.model_config = model_config
+    monkeypatch.setitem(sys.modules, "memai", memai)
+    monkeypatch.setitem(sys.modules, "memai.model_config", model_config)
+
+    with pytest.raises(RuntimeError, match="does not match the active Body binding"):
+        _verify_active_mem_import_source()
 
 
 def test_start_all_starts_gateway_before_memory_and_waits_for_registration(monkeypatch, tmp_path):
