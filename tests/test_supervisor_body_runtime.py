@@ -263,6 +263,7 @@ async def test_body_improvement_report_verifies_commit_and_executes_switch_sugge
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+@pytest.mark.operational
 async def test_body_improvement_rollback_restores_commit_probes_and_writes_governance(tmp_path):
     stable_commit = _seed_probe_ready_git_repo(tmp_path)
     supervisor = Supervisor(_make_supervisor_config(tmp_path))
@@ -864,6 +865,7 @@ async def test_supervisor_watch_window_path_uses_governor_review_executor_direct
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+@pytest.mark.operational
 async def test_supervisor_watch_window_failure_triggers_rollback(tmp_path):
     supervisor = _make_probe_ready_supervisor(tmp_path)
 

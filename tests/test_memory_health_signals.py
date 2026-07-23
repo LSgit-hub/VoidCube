@@ -539,6 +539,7 @@ async def test_tier1_add_turn_auto_creates_missing_session_atomically(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.operational
 async def test_semantic_search_is_explicit_keyword_fallback_without_embedding_protocol(tmp_path):
     svc = _make_service(tmp_path)
     now = datetime.now(timezone.utc).isoformat()
@@ -836,6 +837,7 @@ async def test_standalone_bridge_keeps_turns_uncompressed_when_no_events_generat
 
 
 @pytest.mark.asyncio
+@pytest.mark.operational
 async def test_compression_quality_gate_rejects_incomplete_turn_coverage_and_audits(tmp_path):
     svc = _make_service(tmp_path)
     await svc.create_session(SessionCreate(session_id="quality-reject", metadata={}))
@@ -904,6 +906,7 @@ async def test_compression_quality_gate_rejects_incomplete_turn_coverage_and_aud
 
 
 @pytest.mark.asyncio
+@pytest.mark.operational
 async def test_compression_quality_gate_passes_with_complete_reciprocal_backlinks(tmp_path):
     svc = _make_service(tmp_path)
     await svc.create_session(SessionCreate(session_id="quality-pass", metadata={}))

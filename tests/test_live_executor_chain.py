@@ -211,6 +211,7 @@ async def test_live_gateway_executor_propagates_body_integrity_degraded(tmp_path
 
 @pytest.mark.asyncio
 @pytest.mark.integration
+@pytest.mark.operational
 async def test_live_three_service_lifespan_registration_recovery_and_shutdown(
     tmp_path: Path,
 ):
@@ -337,6 +338,7 @@ async def test_live_three_service_lifespan_registration_recovery_and_shutdown(
 
 @pytest.mark.asyncio
 @pytest.mark.integration
+@pytest.mark.operational
 async def test_live_supervisor_reregisters_executor_after_gateway_restart(tmp_path: Path):
     _create_git_repo(tmp_path)
     gateway_port = _free_port()

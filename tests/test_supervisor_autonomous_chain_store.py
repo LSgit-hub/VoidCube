@@ -18125,6 +18125,7 @@ async def test_list_autonomous_chain_tasks_reads_chain_projection_views_instead_
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+@pytest.mark.operational
 async def test_run_autonomous_chain_review_cycle_recovers_orphaned_agent_pull_running_task(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 
@@ -18197,6 +18198,7 @@ async def test_run_autonomous_chain_review_cycle_recovers_orphaned_agent_pull_ru
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+@pytest.mark.operational
 async def test_recovery_skipped_when_gateway_owner_session_fetch_fails(tmp_path):
     # P0-3 恢复保守化: when the active CLI executor cannot be determined (gateway
     # unreachable / 5xx), recovery must be a conservative no-op rather than
@@ -18808,6 +18810,7 @@ def test_supervisor_boot_recovers_empty_autonomous_store_from_mem_governance(tmp
 
 
 @pytest.mark.asyncio
+@pytest.mark.operational
 async def test_autonomous_task_transitions_are_recoverable_from_mem_governance(tmp_path):
     from memai.governance import GovernanceEventType
 
