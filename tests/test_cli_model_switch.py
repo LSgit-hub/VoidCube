@@ -13,6 +13,43 @@ from VoidCube_cli.model_switch import ModelSwitchResult
 pytestmark = [pytest.mark.unit, pytest.mark.smoke]
 
 
+def test_load_cli_config_uses_shared_loader_and_normalizes(monkeypatch) -> None:
+    shared_config = {
+        "runtime": {"active_provider": "primary"},
+        "providers": {
+            "primary": {
+                "base_url": "https://example.test/v1",
+                "api_key": "test-key",
+                "selected_model": "test-model",
+            }
+        },
+    }
+    monkeypatch.setattr("VoidCube_cli.config.load_config", lambda: shared_config)
+
+    loaded = cli_module.load_cli_config()
+
+    assert loaded["runtime"]["active_provider"] == "primary"
+    assert loaded["model"] == {
+        "default": "test-model",
+        "model": "test-model",
+        "base_url": "https://example.test/v1",
+        "provider": "primary",
+        "api_key": "test-key",
+    }
+    assert loaded["terminal"] == {}
+    assert loaded["agent"] == {}
+
+
+def test_load_cli_config_does_not_hide_shared_loader_errors(monkeypatch) -> None:
+    def fail_load_config():
+        raise RuntimeError("shared config failed")
+
+    monkeypatch.setattr("VoidCube_cli.config.load_config", fail_load_config)
+
+    with pytest.raises(RuntimeError, match="shared config failed"):
+        cli_module.load_cli_config()
+
+
 def test_execution_table_routes_model_command_with_original_arguments() -> None:
     app = VoidcubeCLI.__new__(VoidcubeCLI)
     app._command_running = False

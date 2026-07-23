@@ -1841,7 +1841,7 @@ def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, A
             pass
 
     # ── Version 13 → 14: migrate legacy flat stt.model to provider section ──
-    # Old configs (and cli-config.yaml.example) had a flat `stt.model` key
+    # Old configs had a flat `stt.model` key
     # that was provider-agnostic.  When the provider was "local" this caused
     # OpenAI model names (e.g. "whisper-1") to be fed to faster-whisper,
     # crashing with "Invalid model size".  Move the value into the correct

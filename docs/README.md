@@ -1,6 +1,6 @@
 # VoidCube 文档导航
 
-更新日期：2026-07-22
+更新日期：2026-07-23
 
 本目录只保留现役架构、工程说明和仍在使用的专项设计。已完成的改造计划、阶段差距报告和迁移流水不留在主干；需要追溯时使用 Git 历史。
 
@@ -34,6 +34,8 @@
 - CLI slash/path 判定、中央 alias 规范化、慢命令状态以及 quick/plugin/skill/前缀优先级由 `VoidCube_cli/command_router.py` 统一负责；失效的 `/cron`、`/insights` 兼容入口已删除。
 - CLI 内建命令由 `VoidCube_cli/command_execution.py` 的不可变 spec 表分发；同一模块统一管理 busy 状态、嵌套恢复和异常收尾，`process_command()` 只协调内建执行与动态路由。
 - Agent 默认 `mem` Provider 经 Gateway 调用 Memory Service，不创建本地库或运行第二套 Pipeline；完成轮次写回 Tier 1，服务不可用时显式降级。
+- MemAI 的运行导入源固定为仓库共享 `Mem/src`，不跟随 Body 槽位切换；服务启动会校验导入路径并写入 `runtime/memory/mem-source-binding.json` 审计。
+- Gateway 代理会原样转发重复查询参数；统一 recall 对“刚才/刚刚/方才”类请求只检索近期 Tier 1，并提高同义概念与新近度权重。
 - Supervisor 的任务状态和 SelfLearning 结论先写治理事件，再发布本地投影；Supervisor 内部执行统一经过 `VoidCubeExecutionFacade -> Adapter`。
 - CLI 的 Gateway 地址统一来自服务配置；工具并行结果保持原调用顺序，Agent 中断覆盖实际工具 worker，含附件的中断输入保持 payload 与顺序。
 

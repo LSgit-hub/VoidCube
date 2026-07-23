@@ -65,8 +65,9 @@ API-B provider 由 `memory.llm.provider` 决定，key 环境变量由 `memory.ll
 - `custom_providers`
 - `memory.model`
 - 把 plugin 级 `memory.provider` 当 LLM provider
+- `.env` 中的 `LLM_MODEL`、`LLM_BASE_URL` 和 `OPENAI_MODEL`
 
-加载配置时这些旧字段只会被丢弃或忽略，不做迁移兼容。
+加载配置时这些旧字段只会被丢弃或忽略，不做迁移兼容。活动 API-A 模型必须由 `runtime.active_provider + providers.<provider>.selected_model` 表达，API-B 模型必须由 `memory.llm.*` 表达；`.env.example` 只列凭据和可选端点覆盖，不再提供第二套模型选择入口。
 
 ## 4. 校验入口
 

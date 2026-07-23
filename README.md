@@ -1,51 +1,46 @@
-# VoidCube CLI
+# VoidCube
 
- **大模型是智力，记忆是灵魂，Agent是躯体** —— VoidCube 三元架构理论
+大模型是智力，记忆是灵魂，Agent 是躯体。
 
-***
+VoidCube 是面向本地开发与服务器运维的 Python Agent 系统。它以 CLI 为用户入口，使用 Gateway 连接 Memory、Supervisor 和 Execution，把用户对话、工具执行、长期记忆、自主治理与身体升级拆成明确边界。
 
-## 项目简介
+当前模型请求统一使用 OpenAI-compatible Chat Completions。Provider 配置只描述模型、Base URL、凭据和明确支持的调用选项，不进行消息协议探测或隐式协议切换。
 
-### 三元架构模型
+## 当前架构
 
-| 层次 | 组成 | 功能 | 特性 |
-|------|------|------|------|
-| **智力层（大脑）** | 大语言模型 | 推理、理解、生成、规划 | 可替换，不影响个体性 |
-| **记忆层（灵魂）** | MemAI 持久化记忆系统 | 经验、知识、目标的持久化存储 | 跨会话、跨模型持久化 |
-| **代理层（躯体）** | Agent 运行环境 + 双槽身体 | 工具执行、用户交互、自主任务、替身改进 | 可轮换与自进化 |
-| **治理层（母体）** | Gateway / Supervisor / Execution | 内生驱动、任务治理、双泳道观测、身体切换执行 | 基础服务常驻，自主链路按需启停 |
+| 层 | 现役组件 | 职责 |
+| --- | --- | --- |
+| 智力 | API-A / API-B 模型槽 | API-A 服务用户与自主任务执行；API-B 服务记忆抽取与治理判断 |
+| 灵魂 | Memory Service + MemAI | Tier 1 原始轮次、Tier 2 结构化长期记忆、身份经历和治理历史 |
+| 躯体 | Agent + Tools + Body runtime | 对话编排、工具调用、候选身体、probe、切换和回滚 |
+| 母体 | Gateway + Supervisor + Execution | 服务路由、双泳道观测、内生驱动、治理与受控副作用 |
 
-### 核心特性
+两条主要链路为：
 
-- **标准 Python 安装** — 基础安装包含 CLI 与默认守护服务所需依赖，可选能力通过 extras 安装
-- **快速配置** — 一行命令启动，配置 API Key 即可使用，预设模板一键部署
-- **友好交互** — 基于 prompt_toolkit 的 REPL，支持历史补全、内置命令，自然语言操作
-- **云端智能** — 调用 100+ 云端 LLM（GPT-4o / DeepSeek / Qwen / Gemini 等），能力强劲无需本地算力
-- **多环境执行** — Local / Docker / SSH / Modal / Singularity / Daytona
-- **运维工具集** — 50+ 运维原语：服务管理、包管理、Docker、防火墙、日志、端口扫描、用户管理
-- **安全优先** — 危险命令审批机制、敏感信息脱敏、路径安全校验、OSV 漏洞检查
-- **多提供商** — 支持 100+ 云端 LLM 提供商，一键切换模型
-- **记忆持久化** — MemAI 系统支持跨会话记忆，重启后自动恢复上下文
-- **自进化能力** — `/auto` 启用内生驱动与治理复核，Agent 通过自主任务通道拉取学习/改造任务
-- **双槽隔离** — 主 CLI 用户交互走 `user_chat` 泳道，自主任务走 `supervisor_task` 泳道；`/auto` 当前只是临时启停门控，不接管主 CLI
-- **身体治理** — 双身体槽位、替身改进、probe、观察窗口与可回滚切换；真正 activate 新替身需用户同意（目标语义）
+```text
+用户 -> CLI -> API-A Agent -> Tools -> 用户结果
 
-模型请求统一走 OpenAI-compatible `POST /chat/completions`。Provider 配置只描述模型、Base URL 和凭据，不再自动切换其他消息协议。
+Supervisor -> API-B 判断 -> 治理转交
+  -> API-A 自主执行组件 -> Mem 回写 -> Supervisor 后续复核
+```
 
-### 适用场景
+Gateway 使用两个互不覆盖的活动泳道：
 
-- 自动化部署 Web 应用（LNMP、Docker、Node.js 等）
-- 服务器安全加固与基线配置
-- Docker 容器编排与管理
-- 系统监控与日志分析
-- Kubernetes 集群节点管理
-- 定时任务与运维脚本编写
+- `user_chat`：主 CLI 的用户会话与工具调用。
+- `supervisor_task`：Supervisor 已转交给 API-A 自主执行组件的任务。
 
-***
+自主链路门控默认关闭。`/auto` 临时启用内生驱动、治理复核和当前 CLI 内嵌的自主执行组件；`/auto-q` 停用这些周期任务并中断当前自主任务。Gateway、Memory、Supervisor 和用户主 CLI 不随门控停用。
+
+## 环境要求
+
+- Python 3.11 或更高版本
+- pip
+- 可用的 OpenAI-compatible 推理端点，或受支持的本地模型端点
+- 对应工具后端的本地依赖，例如 Docker、SSH 或 Podman（仅在选择该后端时需要）
 
 ## 安装
 
-### 从源码安装（Windows / Linux / macOS）
+从源码安装：
 
 ```bash
 git clone https://gitee.com/LSgit-hub/voidcub-CLI.git
@@ -57,447 +52,163 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[all]"
 ```
 
-### 安装选项
+发行包安装选项：
 
-| 安装命令 | 说明 |
-|---------|------|
-| `pip install voidcube-agent` | 仅安装核心依赖 |
-| `pip install voidcube-agent[all]` | 安装全部功能（推荐） |
-| `pip install voidcube-agent[local]` | 核心 + 本地 LLM 支持 |
-| `pip install voidcube-agent[image]` | 核心 + 图像生成 |
-| `pip install voidcube-agent[voice]` | 核心 + 语音合成 |
-| `pip install voidcube-agent[web]` | 核心 + Web 工具 |
+| 命令 | 内容 |
+| --- | --- |
+| `pip install voidcube-agent` | CLI、Agent 和默认守护服务依赖 |
+| `pip install "voidcube-agent[local]"` | 增加本地 Web 解析依赖 |
+| `pip install "voidcube-agent[image]"` | 增加图像处理依赖 |
+| `pip install "voidcube-agent[voice]"` | 增加语音合成依赖 |
+| `pip install "voidcube-agent[web]"` | 增加 Web 服务依赖 |
+| `pip install "voidcube-agent[all]"` | 安装全部可选能力 |
 
-### 开发环境与验证
+## 配置
 
-```bash
-python -m pip install -e ".[all,dev]"
-python scripts/verify_clean_install.py
-python -m pytest -m smoke -q
-python -m pytest -q
-python scripts/build_wheel.py
-```
-
-构建脚本会先清理可能保留已删除模块的 setuptools 中间目录，并验证 wheel
-中的代码与当前源码完全对应。生成的 wheel 位于 `dist/`。离线部署时，应在联网环境预下载该 wheel
-及其依赖，再使用 `pip install --no-index --find-links <wheelhouse>` 安装。
-测试分层、模块回归和安装验收见 [`docs/开发与验证.md`](docs/开发与验证.md)。
-
----
-
-## 系统配置详情
-
-### Windows 系统
-
-#### 前置要求
-
-- Python 3.11 或更高版本
-- pip 包管理器
-- 推荐使用 [Python 官网](https://www.python.org/downloads/) 安装，确保勾选 "Add Python to PATH"
-
-#### 2. 配置 API Key
-
-VoidCube 需要配置云端 LLM 的 API Key 才能工作。
-
-```powershell
-# 方式一：在用户目录创建配置（推荐）
-mkdir $env:USERPROFILE\.VoidCube
-
-# 复制示例配置文件
-# 从项目目录复制 .env.example 到 $env:USERPROFILE\.VoidCube\.env
-# 然后编辑填入你的 API Key
-
-# 方式二：直接在项目目录创建 .env
-# 复制项目中的 .env.example 为 .env，然后编辑
-```
-
-配置文件示例（参考项目中的 `.env.example`）：
-
-```env
-# 推荐: OpenRouter (聚合多模型平台)
-LLM_BASE_URL=https://openrouter.ai/api/v1
-LLM_MODEL=deepseek/deepseek-chat
-OPENROUTER_API_KEY=sk-or-your-key-here
-
-# 或使用 DeepSeek
-# LLM_BASE_URL=https://api.deepseek.com/v1
-# LLM_MODEL=deepseek-chat
-# DEEPSEEK_API_KEY=sk-your-key-here
-
-# 或使用 通义千问
-# LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-# LLM_MODEL=qwen-plus
-# DASHSCOPE_API_KEY=sk-your-key-here
-
-# 终端配置
-TERMINAL_ENV=local
-TERMINAL_CWD=.
-TERMINAL_TIMEOUT=120
-
-# 调试模式
-DEBUG=false
-```
-
-#### 3. 启动 VoidCube
-
-```powershell
-# 启动交互式对话
-voidcube
-
-# 或使用简写
-vc
-```
-
-### Windows 常用配置
-
-```env
-# OpenRouter（推荐）
-OPENROUTER_API_KEY=your-key
-LLM_BASE_URL=https://openrouter.ai/api/v1
-LLM_MODEL=qwen/qwen3.6-plus
-
-# DeepSeek
-DEEPSEEK_API_KEY=sk-your-key-here
-LLM_BASE_URL=https://api.deepseek.com/v1
-LLM_MODEL=deepseek-chat
-
-# 本地执行
-TERMINAL_ENV=local
-```
-
-### Windows 注意事项
-
-- Windows 默认使用 `local` 执行环境
-- 首次运行可能需要允许 Python 通过防火墙
-- 中文路径支持良好
-- **重要**：`.env` 文件包含 API 密钥，不要提交到 Git！
-
-***
-
-## Linux 系统安装配置
-
-### 前置要求
-
-- Python 3.11 或更高版本
-- pip 包管理器
-- 推荐使用系统包管理器安装 Python（如 `apt install python3 python3-pip`）
-
-### 安装步骤
-
-#### 1. 安装 VoidCube
+运行交互式配置向导，创建 API-A Provider 并将其设为活动 Provider：
 
 ```bash
-# 方式一：从 Gitee 直接安装（推荐）
-pip install git+https://gitee.com/LSgit-hub/voidcub-CLI.git
-
-# 方式二：从源码安装
-git clone https://gitee.com/LSgit-hub/voidcub-CLI
-cd voidcub-CLI
-pip install -e .
+voidcube api
 ```
 
-#### 2. 配置 API Key
+需要为 Memory 和 Supervisor 单独配置 API-B 时，在向导中选择“记忆系统模型配置”。API-A 与 API-B 可以指向同一供应商，但配置归属和运行语义保持分离。
+
+配置和凭据的 canonical 位置为：
+
+```text
+VOIDCUBE_HOME/config.yaml   Provider、模型、工具和运行设置
+VOIDCUBE_HOME/.env          API Key 等 secret
+```
+
+未设置 `VOIDCUBE_HOME` 时，默认目录是用户目录下的 `.VoidCube`。项目根 `.env` 只作为源码开发回退；不要提交真实密钥。`.env.example` 仅列出现役凭据和环境设置，不负责选择活动模型。
+
+常用配置命令：
 
 ```bash
-# 方式一：在用户目录创建配置（推荐）
-mkdir -p ~/.VoidCube
-cp .env.example ~/.VoidCube/.env
-nano ~/.VoidCube/.env
-
-# 方式二：直接在项目目录创建
-cp .env.example .env
-nano .env
+voidcube api             # 新增或修改 API-A/API-B 配置
+voidcube model           # 在已配置 Provider 中切换模型
+voidcube config          # 查看配置
+voidcube config edit     # 编辑 canonical config.yaml
+voidcube doctor          # 检查配置、Provider 与运行态
 ```
 
-配置文件参考项目中的 `.env.example`。
-
-#### 3. 启动 VoidCube
-
-```bash
-# 启动交互式对话
-voidcube
-
-# 或使用简写
-vc
-```
-
-### Linux 常用配置
-
-```env
-# OpenRouter（推荐）
-OPENROUTER_API_KEY=your-key
-LLM_BASE_URL=https://openrouter.ai/api/v1
-LLM_MODEL=qwen/qwen3.6-plus
-
-# DeepSeek
-DEEPSEEK_API_KEY=sk-your-key-here
-LLM_BASE_URL=https://api.deepseek.com/v1
-LLM_MODEL=deepseek-chat
-
-# 远程 SSH 执行
-TERMINAL_ENV=ssh
-TERMINAL_SSH_HOST=your-server-ip
-TERMINAL_SSH_USER=username
-
-# Docker 执行
-TERMINAL_ENV=docker
-TERMINAL_DOCKER_IMAGE=nikolaik/python-nodejs:python3.11-nodejs20
-```
-
-### Linux 高级配置
-
-```bash
-# Docker 环境配置
-export TERMINAL_ENV=docker
-export TERMINAL_DOCKER_IMAGE=nikolaik/python-nodejs:python3.11-nodejs20
-export TERMINAL_DOCKER_FORWARD_ENV='["OPENAI_API_KEY", "OPENROUTER_API_KEY"]'
-
-# SSH 密钥认证
-export TERMINAL_SSH_HOST=your-server.com
-export TERMINAL_SSH_USER=admin
-export TERMINAL_SSH_KEY=~/.ssh/id_rsa
-
-# Modal 云函数
-export TERMINAL_ENV=modal
-export TERMINAL_MODAL_IMAGE=python:3.11
-```
-
-### Linux 注意事项
-
-- Linux 默认使用 `local` 执行环境
-- 如需远程操作服务器，可配置 `ssh` 模式
-- Docker 模式需要本地安装 Docker
-- 建议使用 tmux/screen 保持会话
-- **重要**：`.env` 文件包含 API 密钥，不要提交到 Git！
-
-***
-
-## 可选功能扩展
-
-```bash
-# 本地 Web 搜索（BeautifulSoup）
-pip install "voidcube-agent[local]"
-
-# 图像生成
-pip install "voidcube-agent[image]"
-
-# 语音合成（Edge TTS，免费）
-pip install "voidcube-agent[voice]"
-
-# 全部可选功能
-pip install "voidcube-agent[full]"
-```
-
-***
-
-## 快速开始
-
-### 1. 启动 VoidCube
+## 启动与服务
 
 ```bash
 voidcube
-# 或简写
+# 或
 vc
 ```
 
-启动后，Gateway、Memory 和 Supervisor 基础服务保持运行，自主链路门控默认关闭。使用 `/auto` 临时启用内生驱动、治理复核和 API-A 自主执行组件，使用 `/auto-q` 停用；无论门控状态如何，主 CLI 都继续服务用户交互。
+交互启动器会按 `Gateway -> Memory -> Supervisor` 确保基础服务可用，然后进入完整 CLI。Execution 不单独启动 daemon，而是挂载在 Supervisor 进程中并注册到 Gateway。
 
-### 2. 开始对话
+生命周期命令：
 
-```
-> 帮我部署 LNMP 环境
-> 查看磁盘使用情况和运行中的服务
-> 安装 Docker 并跑一个 nginx 容器
-> 给服务器做安全基线加固
-```
-
-***
-
-## 内置命令
-
-| 命令        | 说明                  |
-| --------- | ------------------- |
-| `/help`   | 显示帮助信息              |
-| `/model`  | 交互式切换模型（选供应商 → 选模型） |
-| `/setup`  | 配置 API Key（首次使用）    |
-| `/tools`  | 列出可用工具              |
-| `/config` | 查看/修改配置             |
-| `/clear`  | 清空会话历史              |
-| `/quit`   | 退出                  |
-
-***
-
-## 运维工具集
-
-VoidCube 内置 50+ 运维原语，覆盖日常运维全流程：
-
-### 系统监控
-
-| 工具               | 说明               |
-| ---------------- | ---------------- |
-| `system_info`    | 系统基本信息（OS、内核、架构） |
-| `cpu_stats`      | CPU 使用率与负载       |
-| `memory_stats`   | 内存使用统计           |
-| `disk_usage`     | 磁盘空间占用           |
-| `service_status` | 服务运行状态           |
-
-### 服务与包管理
-
-| 工具                                        | 说明       |
-| ----------------------------------------- | -------- |
-| `service_start / stop / restart`          | 服务生命周期管理 |
-| `pkg_install / update / upgrade / remove` | 软件包管理    |
-
-### 网络与安全
-
-| 工具                               | 说明       |
-| -------------------------------- | -------- |
-| `ping`                           | 网络连通性测试  |
-| `check_port / scan_ports`        | 端口检测与扫描  |
-| `dns_lookup`                     | DNS 解析   |
-| `firewall_status / allow / deny` | 防火墙规则管理  |
-| `ssh_keygen`                     | SSH 密钥生成 |
-
-### Docker
-
-| 工具                                 | 说明         |
-| ---------------------------------- | ---------- |
-| `docker_ps / images`               | 容器与镜像列表    |
-| `docker_run / stop / rm`           | 容器生命周期     |
-| `docker_logs / exec`               | 日志查看与命令执行  |
-| `docker_compose_up / compose_down` | Compose 编排 |
-
-### 日志与用户
-
-| 工具                                   | 说明           |
-| ------------------------------------ | ------------ |
-| `read_log`                           | 日志文件读取       |
-| `journalctl`                         | systemd 日志查询 |
-| `list_users / user_add / user_del`   | 用户管理         |
-| `file_permissions / set_permissions` | 文件权限管理       |
-
-***
-
-## 预设部署模板
-
-一行命令完成环境搭建，预设位于 `presets/` 目录：
-
-| 预设                   | 说明            | 包含组件                                                 |
-| -------------------- | ------------- | ---------------------------------------------------- |
-| `lnmp`               | LNMP Web 环境   | Nginx + MySQL + PHP-FPM，开放 80/443                    |
-| `docker-web`         | Docker 开发环境   | Docker Compose + 开发工具，开放 80/443/8080                 |
-| `security-baseline`  | 安全基线加固        | fail2ban + ufw，允许 22/80/443，拒绝 23/3389               |
-| `python-datascience` | Python 数据科学   | Jupyter + Pandas + NumPy + Matplotlib + Scikit-learn |
-| `k8s-node`           | Kubernetes 节点 | kubeadm + kubelet + containerd，开放 K8s 端口             |
-| `monitoring-stack`   | 监控体系          | Prometheus + Grafana + Node Exporter                 |
-| `hardened-ssh`       | SSH 加固        | ed25519 密钥 + fail2ban，禁用密码认证                         |
-
-使用示例：
-
-```
-> 用 lnmp 预设部署服务器环境
-> 应用 security-baseline 预设加固这台机器
-> 部署 monitoring-stack 监控体系
+```bash
+voidcube status
+voidcube status --full
+voidcube serve start
+voidcube serve stop
 ```
 
-***
+无需守护服务的单次查询可使用：
 
-## 执行环境
+```bash
+voidcube chat -q "检查当前目录的项目结构"
+```
 
-VoidCube 支持多种命令执行后端，通过 `TERMINAL_ENV` 环境变量切换：
+## 常用命令
 
-| 环境            | 说明             | 配置                         |
-| ------------- | -------------- | -------------------------- |
-| `local`       | 本机执行（默认）       | `TERMINAL_ENV=local`       |
-| `docker`      | Docker 容器内执行   | `TERMINAL_ENV=docker`      |
-| `ssh`         | 远程 SSH 执行      | `TERMINAL_ENV=ssh`         |
-| `modal`       | Modal 云函数      | `TERMINAL_ENV=modal`       |
-| `singularity` | Singularity 容器 | `TERMINAL_ENV=singularity` |
-| `daytona`     | Daytona 开发环境   | `TERMINAL_ENV=daytona`     |
+顶层命令以 `voidcube --help` 为准：
 
-***
+| 命令 | 用途 |
+| --- | --- |
+| `voidcube api` | 配置推理 Provider 和 API-A/API-B |
+| `voidcube model` | 切换已配置的 Provider/模型 |
+| `voidcube status` | 查看服务状态 |
+| `voidcube doctor` | 运行配置与运行态诊断 |
+| `voidcube memory setup\|status` | 初始化或查看 canonical Mem |
+| `voidcube body ...` | 通过 Gateway Executor 管理身体生命周期 |
+| `voidcube sessions ...` | 管理会话历史 |
+| `voidcube tools` / `voidcube mcp` | 管理工具和 MCP 服务 |
+| `voidcube logs` | 查看运行日志 |
 
-## 常见问题
+交互会话中的核心 slash 命令包括：
 
-### Q: 推荐什么云端模型？
+| 命令 | 用途 |
+| --- | --- |
+| `/help` | 显示当前会话命令 |
+| `/api` / `/model` | 配置或切换模型 |
+| `/tools` / `/config` | 查看工具或配置 |
+| `/auto` / `/auto-q` | 临时启用或停用自主链路 |
+| `/clear` / `/quit` | 清理当前显示或退出 |
 
-| 场景   | 推荐模型                          | 提供商        |
-| ---- | ----------------------------- | ---------- |
-| 日常运维 | `qwen/qwen3.6-plus`           | OpenRouter |
-| 复杂推理 | `openai/o3-mini`              | OpenRouter |
-| 性价比  | `deepseek/deepseek-chat`      | DeepSeek   |
-| 中文优化 | `qwen/qwen-plus`              | DashScope  |
+## 执行后端
 
-### Q: 如何切换模型？
+默认后端是 `local`。推荐在 `VOIDCUBE_HOME/config.yaml` 中设置 `terminal.backend`，也可用 `TERMINAL_ENV` 做进程级覆盖。
 
-在对话中使用 `/model` 命令，或修改配置文件中的 `LLM_MODEL` 后重启。
+| 后端 | 说明 |
+| --- | --- |
+| `local` | 在本机执行（默认） |
+| `docker` / `podman` | 在容器环境执行 |
+| `ssh` | 在远程 SSH 主机执行 |
+| `modal` | 在 Modal 环境执行 |
+| `singularity` | 在 Singularity 容器执行 |
+| `daytona` | 在 Daytona 环境执行 |
 
-### Q: API Key 从哪里获取？
+高风险命令仍受 terminal guard 和 approval 约束。后端切换不会绕过审批、路径检查或身体治理。
 
-- **OpenRouter**：[openrouter.ai/keys](https://openrouter.ai/keys) - 推荐，支持 100+ 模型
-- **DeepSeek**：[platform.deepseek.com](https://platform.deepseek.com) - DeepSeek 系列
-- **通义千问**：[dashscope.console.aliyun.com](https://dashscope.console.aliyun.com) - Qwen 系列
+## 记忆与身体
 
-### Q: 如何防止 API Key 被提交到 Git？
+Agent 的默认 `mem` Provider 只通过 Gateway 调用 canonical Memory Service，不创建第二套本地记忆库。完成轮次异步写入 Tier 1；统一 `/recall` 同时查询近期 Tier 1 与活跃 Tier 2，并按相关性、时间、去重和字符预算返回证据。“刚才/刚刚/方才”类即时回忆会优先近期 Tier 1，并避免旧长期摘要压过本轮上下文。
 
-项目已经配置了 `.gitignore`，会自动忽略：
-- `.env`
-- `.env.local`
-- `.env.*`（除了 `.env.example`）
-- `.VoidCube/` 目录
+MemAI 始终绑定到仓库共享的 `Mem/src`，不跟随活动身体槽切换。服务启动会验证实际导入源，并把绑定审计写入 `VOIDCUBE_HOME/runtime/memory/mem-source-binding.json`。
 
-请确保：
-1. 永远不要编辑 `.env.example` 中的真实 API Key
-2. 使用 `.env` 或 `.env.local` 来存储真实配置
-3. 提交前用 `git status` 检查是否有意外的配置文件
-
-***
+身体升级必须经过：候选物化、probe、Governor 审查、用户明确同意、激活和观察窗口。自主改进不能直接覆盖活动身体，失败时按已验证 Git lineage 回滚。
 
 ## 项目结构
 
-文档总入口见 [`docs/README.md`](docs/README.md)，文件结构详见
-[`docs/项目文件架构说明.md`](docs/项目文件架构说明.md)。
-
-```
+```text
 VoidCube/
-├── voidcube.py             # 统一入口；自动拉起守护服务后委托完整 CLI
-├── cli.py                  # 交互式终端会话入口
-├── run_agent.py            # AIAgent 主编排器
-├── pyproject.toml          # 打包配置，暴露 voidcube / vc 命令
-├── config.yaml             # 项目默认配置
-├── docs/                   # 架构与改造文档
-│   ├── README.md           # 文档优先级、阅读路径与分阶段路线
-│   ├── voidcube架构基线.md
-│   ├── 全链路问题清单.md
-│   ├── 内生驱动核心设计.md
-│   ├── CLI展示与gateway双槽设计.md
-│   ├── API配置双槽与模型调用点.md
-│   ├── 开发与验证.md
-│   └── 项目文件架构说明.md
-├── VoidCube_core/          # 底层共享能力：常量、日志、状态、时间与通用工具
-├── VoidCube_cli/           # CLI 子系统：命令分发、配置、Provider、UI、ops
-├── agent/                  # Agent 内部能力：prompt、压缩、记忆、调度、展示
-├── tools/                  # 工具层：注册、终端、文件、Web、浏览器、MCP、delegate
-├── systems/                # 服务化母体：gateway、memory、supervisor、execution
-├── Mem/                    # 独立长期记忆子项目（src/tests/docs/benchmarks）
-├── plugins/                # 插件入口，当前以 memory 插件为主
-├── presets/                # 运维预设模板
-├── skills/                 # 技能包与引用资料
-├── tests/                  # 主仓测试
-├── containers/             # 容器相关文件
-└── cache/logs/sessions/... # 运行态目录
+├─ voidcube.py          统一安装入口与守护服务引导
+├─ cli.py               交互会话协调
+├─ run_agent.py         API-A Agent 主编排器
+├─ config.yaml          从 DEFAULT_CONFIG 生成的 Body/probe 基线
+├─ VoidCube_cli/        CLI、配置、Provider、认证和 UI
+├─ agent/               请求、响应、上下文、记忆接入和工具调度
+├─ tools/               工具注册、安全边界和执行后端
+├─ systems/             Gateway、Memory、Supervisor、Execution
+├─ Mem/                 独立 MemAI 领域包
+├─ plugins/             运行时插件入口
+├─ skills/              可加载技能
+├─ presets/             运维预设
+├─ tests/               主仓测试
+├─ scripts/             构建与隔离安装验证
+└─ docs/                现役架构与工程文档
 ```
 
-当前架构的关键路径是：`CLI -> Agent -> Tools` 服务用户任务；`Supervisor -> API-B 判断与转交 -> Agent 自主执行面 -> Mem -> Supervisor 再读取` 服务学习与替身改进；`Gateway` 负责服务注册、活动事实与 `user_chat/supervisor_task` 双泳道观测。
+仓库根 `config.yaml` 不参与用户配置加载；它仅供身体物化和 probe 使用，并由 `python scripts/sync_repo_config.py` 生成。用户设置始终写入 `VOIDCUBE_HOME/config.yaml`。
 
-***
+文档入口见 [docs/README.md](docs/README.md)，稳定系统边界见 [docs/voidcube架构基线.md](docs/voidcube架构基线.md)，开发与发布检查见 [docs/开发与验证.md](docs/开发与验证.md)。
 
-## 许可证
+## 开发与验证
 
-MIT License
+```bash
+python -m pip install -e ".[all,dev]"
+python -m pytest -m smoke -q
+python -m pytest -q
+python -m pytest Mem/tests -q
+python scripts/build_wheel.py
+```
 
-## 贡献
+涉及模型、鉴权、请求协议、技能或打包时，还必须运行：
 
-欢迎提交 Issue 和 Pull Request！
+```bash
+python -m pytest tests/test_integration_policy.py tests/test_packaging_contract.py -q
+```
 
-项目地址：https://gitee.com/LSgit-hub/voidcub-CLI
+构建入口会清理根目录的 setuptools 中间产物，核对 wheel 与当前源码，并拒绝已退役集成重新进入源码、技能或发行包。完整分层见 [docs/开发与验证.md](docs/开发与验证.md)。
+
+## License
+
+MIT

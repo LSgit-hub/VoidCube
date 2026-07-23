@@ -1,6 +1,6 @@
 # VoidCube 服务化系统架构基线
 
-更新日期：2026-07-22
+更新日期：2026-07-23
 
 ## 1. 文档定位
 
@@ -109,7 +109,9 @@ Memory Service 维护两层记忆：
 
 Agent 默认 `mem` Provider 只是 Gateway 客户端，负责预取、查询和完成轮次写回；它不创建本地记忆数据库，也不运行第二套压缩或维护 Pipeline。
 
-动态召回必须通过 Memory Service 的统一 `/recall` 入口，同时考虑未压缩 Tier 1 和活跃 Tier 2。召回结果必须经过最低相关性、近重复、单会话占比、Top-N 与完整上下文字符预算约束，并保留 source turns 和评分信号。Agent 每个用户回合最多自动预取一次，召回上下文只作为本轮临时上下文，不得写回会话形成自我污染。
+Memory Service 与 MemAI 是共享灵魂层，不属于任何 Body 槽位。服务启动前必须把 `memai` 导入绑定到仓库 canonical `Mem/src`，启动后校验实际加载文件；绑定审计只写入 `VOIDCUBE_HOME/runtime/memory/mem-source-binding.json`。活动身体切换不得改变 MemAI 代码来源，也不得恢复按槽位维护 editable binding 的旧路径。
+
+动态召回必须通过 Memory Service 的统一 `/recall` 入口，同时考虑未压缩 Tier 1 和活跃 Tier 2。召回结果必须经过最低相关性、近重复、单会话占比、Top-N 与完整上下文字符预算约束，并保留 source turns 和评分信号。查询计划使用词项与概念同义扩展；当请求包含“刚才/刚刚/方才”时，召回限定为 Tier 1，并用更短时间衰减提高近期同义表达的优先级，避免旧 Tier 2 精确词覆盖即时上下文。Agent 每个用户回合最多自动预取一次，召回上下文只作为本轮临时上下文，不得写回会话形成自我污染。
 
 Tier 1 -> Tier 2 桥接使用 API-B 的 LLM 提取与 Scholar 能力。LLM 不可用时必须返回显式健康/降级状态；压缩、升级和清退不得通过低质量静默替代造成不可逆信息损失。
 
@@ -149,6 +151,7 @@ Tier 1 -> Tier 2 桥接使用 API-B 的 LLM 提取与 Scholar 能力。LLM 不�
 - 所有现役模型调用统一构建 OpenAI-compatible `chat.completions` 请求。
 - 在该协议边界改变前，通用聊天模型输出的浮点数组不构成正式 embedding 能力；真正语义检索必须先明确独立协议、模型版本、写入和回填规则。
 - Provider 配置只描述模型、Base URL、凭据和明确支持的调用选项，不进行协议探测或消息协议切换。
+- Gateway 服务代理必须保留原请求的查询参数及重复键；路径前缀改写不能丢失筛选、分页和 trace 查询条件。
 - 主 Agent、辅助模型、Memory 和工具侧模型调用共享退役集成策略，不能各自保留隐藏回退。
 - 可加载技能、运行态配置、源码、测试夹具和 wheel 都属于退役扫描表面。
 
