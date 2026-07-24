@@ -12,13 +12,11 @@ from typing import Any
 API_A_ENV_VAR_MAP = {
     "openai": "OPENAI_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
-    "gemini": "GEMINI_API_KEY",
 }
 
 API_A_PROVIDER_LABELS = {
     "openai": "OpenAI",
     "deepseek": "DeepSeek",
-    "gemini": "Gemini",
     "openrouter": "OpenRouter",
     "ollama": "Ollama",
 }
@@ -537,10 +535,26 @@ def test_api_connection(provider: str, api_key: str, base_url: str = "") -> bool
         return False
 
 
-def get_provider_models_from_api(provider: str) -> list[tuple[str, str]]:
-    """从API获取provider的模型列表"""
+def get_provider_models_from_api(
+    provider: str,
+    *,
+    api_key: str = "",
+    base_url: str = "",
+) -> list[tuple[str, str]]:
+    """从 Provider API 获取模型列表，不使用静态回退。"""
     try:
-        from VoidCube_cli.models import curated_models_for_provider
+        from VoidCube_cli.auth import PROVIDER_REGISTRY
+        from VoidCube_cli.models import curated_models_for_provider, fetch_api_models
+
+        if api_key or base_url:
+            provider_config = PROVIDER_REGISTRY.get(provider)
+            endpoint = base_url.strip()
+            if not endpoint and provider_config is not None:
+                endpoint = str(provider_config.get("inference_base_url") or "").strip()
+            if not endpoint:
+                return []
+            model_ids = fetch_api_models(api_key.strip(), endpoint) or []
+            return [(model_id, "") for model_id in model_ids]
         return curated_models_for_provider(provider)
     except Exception:
         return []
@@ -1259,12 +1273,8 @@ def run_api_config_wizard(console=None):
                 models_with_labels = get_provider_models_from_api("openrouter")
                 
                 if not models_with_labels:
-                    # 回退到静态列表
-                    try:
-                        from VoidCube_cli.models import OPENROUTER_MODELS
-                        models_with_labels = list(OPENROUTER_MODELS)
-                    except Exception:
-                        models_with_labels = [("gpt-4o", "推荐"), ("gpt-4o-mini", "免费")]
+                    pe("无法从 API 获取模型列表，请稍后重试")
+                    continue
                 
                 p(f"\n可用模型 (共 {len(models_with_labels)} 个)：")
                 for i, (model_id, desc) in enumerate(models_with_labels[:20], 1):
@@ -1345,7 +1355,6 @@ def run_api_config_wizard(console=None):
                 providers = [
                     ("openai", "OpenAI (GPT)"),
                     ("deepseek", "DeepSeek"),
-                    ("gemini", "Google Gemini"),
                     ("ollama", "Ollama (本地)"),
                     ("custom", "自定义 Provider"),
                 ]
@@ -1398,7 +1407,11 @@ def run_api_config_wizard(console=None):
                     
                     # 从API获取模型列表
                     p("\n📦 正在获取可用模型...")
-                    models_with_labels = get_provider_models_from_api(selected_provider)
+                    models_with_labels = get_provider_models_from_api(
+                        selected_provider,
+                        api_key=api_key,
+                        base_url=base_url,
+                    )
                     
                     if models_with_labels:
                         p(f"\n{selected_provider.title()} 可用模型 (共 {len(models_with_labels)} 个)：")

@@ -53,9 +53,6 @@ logger = logging.getLogger(__name__)
 _stale_base_url_warned = False
 
 _PROVIDER_ALIASES = {
-    "google": "gemini",
-    "google-gemini": "gemini",
-    "google-ai-studio": "gemini",
     "glm": "zai",
     "z-ai": "zai",
     "z.ai": "zai",
@@ -76,33 +73,12 @@ def _normalize_aux_provider(provider: Optional[str], *, for_vision: bool = False
         normalized = suffix if not for_vision else "custom"
     if normalized == "main":
         # Resolve to the user's actual main provider so named custom providers
-        # and non-aggregator providers (DeepSeek, Alibaba, etc.) work correctly.
+        # and direct providers such as DeepSeek work correctly.
         main_prov = _read_main_provider()
         if main_prov and main_prov not in ("auto", "main", ""):
             return main_prov
         return "custom"
     return _PROVIDER_ALIASES.get(normalized, normalized)
-
-# Default auxiliary models for direct API-key providers (cheap/fast for side tasks)
-_API_KEY_PROVIDER_AUX_MODELS: Dict[str, str] = {
-    "gemini": "gemini-3-flash-preview",
-    "zai": "glm-4.5-flash",
-    "kimi-coding": "kimi-k2-turbo-preview",
-    "minimax": "MiniMax-M2.7",
-    "minimax-cn": "MiniMax-M2.7",
-    "ai-gateway": "google/gemini-3-flash",
-    "opencode-zen": "gemini-3-flash",
-    "opencode-go": "glm-5",
-    "kilocode": "google/gemini-3-flash-preview",
-}
-
-# Vision-specific model overrides for direct providers.
-# When the user's main provider has a dedicated vision/multimodal model that
-# differs from their main chat model, map it here.  The vision auto-detect
-# "exotic provider" branch checks this before falling back to the main model.
-_PROVIDER_VISION_MODELS: Dict[str, str] = {
-    "xiaomi": "mimo-v2-omni",
-}
 
 # OpenRouter app attribution headers
 _OR_HEADERS = {
@@ -111,11 +87,6 @@ _OR_HEADERS = {
     "X-OpenRouter-Categories": "productivity,cli-agent",
 }
 
-# Default auxiliary models per provider
-_OPENROUTER_MODEL = "google/gemini-3-flash-preview"
-_NOUS_MODEL = "google/gemini-3-flash-preview"
-_NOUS_FREE_TIER_VISION_MODEL = "xiaomi/mimo-v2-omni"
-_NOUS_FREE_TIER_AUX_MODEL = "xiaomi/mimo-v2-pro"
 _NOUS_DEFAULT_BASE_URL = "https://inference-api.nousresearch.com/v1"
 _AUTH_JSON_PATH = get_VoidCube_home() / "auth.json"
 
@@ -123,6 +94,17 @@ _AUTH_JSON_PATH = get_VoidCube_home() / "auth.json"
 def _to_openai_base_url(base_url: str) -> str:
     """Normalize an OpenAI-compatible base URL."""
     return str(base_url or "").strip().rstrip("/")
+
+
+def _first_live_model(api_key: str, base_url: str) -> Optional[str]:
+    """Return the first model currently reported by an OpenAI-compatible API."""
+    try:
+        from VoidCube_cli.models import fetch_api_models
+
+        models = fetch_api_models(api_key, base_url)
+    except Exception:
+        return None
+    return models[0] if models else None
 
 
 def _select_pool_entry(provider: str) -> Tuple[bool, Optional[Any]]:
@@ -236,17 +218,13 @@ def _resolve_api_key_provider() -> Tuple[Optional[OpenAI], Optional[str]]:
             base_url = _to_openai_base_url(
                 _pool_runtime_base_url(entry, pconfig.inference_base_url) or pconfig.inference_base_url
             )
-            model = _API_KEY_PROVIDER_AUX_MODELS.get(provider_id)
-            if model is None:
-                continue  # skip provider if we don't know a valid aux model
+            model = _first_live_model(api_key, base_url)
+            if not model:
+                continue
             logger.debug("Auxiliary text client: %s (%s) via pool", pconfig.name, model)
             extra = {}
             if "api.kimi.com" in base_url.lower():
                 extra["default_headers"] = {"User-Agent": "KimiCLI/1.30.0"}
-            elif "api.githubcopilot.com" in base_url.lower():
-                from VoidCube_cli.models import copilot_default_headers
-
-                extra["default_headers"] = copilot_default_headers()
             return OpenAI(api_key=api_key, base_url=base_url, **extra), model
 
         creds = resolve_api_key_provider_credentials(provider_id)
@@ -257,17 +235,13 @@ def _resolve_api_key_provider() -> Tuple[Optional[OpenAI], Optional[str]]:
         base_url = _to_openai_base_url(
             str(creds.get("base_url", "")).strip().rstrip("/") or pconfig.inference_base_url
         )
-        model = _API_KEY_PROVIDER_AUX_MODELS.get(provider_id)
-        if model is None:
-            continue  # skip provider if we don't know a valid aux model
+        model = _first_live_model(api_key, base_url)
+        if not model:
+            continue
         logger.debug("Auxiliary text client: %s (%s)", pconfig.name, model)
         extra = {}
         if "api.kimi.com" in base_url.lower():
             extra["default_headers"] = {"User-Agent": "KimiCLI/1.30.0"}
-        elif "api.githubcopilot.com" in base_url.lower():
-            from VoidCube_cli.models import copilot_default_headers
-
-            extra["default_headers"] = copilot_default_headers()
         return OpenAI(api_key=api_key, base_url=base_url, **extra), model
 
     return None, None
@@ -282,41 +256,37 @@ def _try_openrouter() -> Tuple[Optional[OpenAI], Optional[str]]:
         if not or_key:
             return None, None
         base_url = _pool_runtime_base_url(entry, OPENROUTER_BASE_URL) or OPENROUTER_BASE_URL
+        model = _first_live_model(or_key, base_url)
+        if not model:
+            return None, None
         logger.debug("Auxiliary client: OpenRouter via pool")
         return OpenAI(api_key=or_key, base_url=base_url,
-                       default_headers=_OR_HEADERS), _OPENROUTER_MODEL
+                       default_headers=_OR_HEADERS), model
 
     or_key = os.getenv("OPENROUTER_API_KEY")
     if not or_key:
         return None, None
+    model = _first_live_model(or_key, OPENROUTER_BASE_URL)
+    if not model:
+        return None, None
     logger.debug("Auxiliary client: OpenRouter")
     return OpenAI(api_key=or_key, base_url=OPENROUTER_BASE_URL,
-                   default_headers=_OR_HEADERS), _OPENROUTER_MODEL
+                   default_headers=_OR_HEADERS), model
 
 
 def _try_nous(vision: bool = False) -> Tuple[Optional[OpenAI], Optional[str]]:
     nous = _read_nous_auth()
     if not nous:
         return None, None
+    base_url = str(nous.get("inference_base_url") or _nous_base_url()).rstrip("/")
+    model = _first_live_model(_nous_api_key(nous), base_url)
+    if not model:
+        return None, None
     logger.debug("Auxiliary client: Nous Portal")
-    if nous.get("source") == "pool":
-        model = "gemini-3-flash"
-    else:
-        model = _NOUS_MODEL
-    # Free-tier users can't use paid auxiliary models — use the free
-    # models instead: mimo-v2-omni for vision, mimo-v2-pro for text tasks.
-    try:
-        from VoidCube_cli.models import check_nous_free_tier
-        if check_nous_free_tier():
-            model = _NOUS_FREE_TIER_VISION_MODEL if vision else _NOUS_FREE_TIER_AUX_MODEL
-            logger.debug("Free-tier Nous account — using %s for auxiliary/%s",
-                         model, "vision" if vision else "text")
-    except Exception:
-        pass
     return (
         OpenAI(
             api_key=_nous_api_key(nous),
-            base_url=str(nous.get("inference_base_url") or _nous_base_url()).rstrip("/"),
+            base_url=base_url,
         ),
         model,
     )
@@ -417,7 +387,9 @@ def _try_custom_endpoint() -> Tuple[Optional[OpenAI], Optional[str]]:
         custom_base, custom_key, custom_mode = runtime
     if not custom_base or not custom_key:
         return None, None
-    model = _read_main_model() or "gpt-4o-mini"
+    model = _read_main_model() or _first_live_model(custom_key, custom_base)
+    if not model:
+        return None, None
     logger.debug("Auxiliary client: custom endpoint (%s)", model)
     return OpenAI(api_key=custom_key, base_url=custom_base), model
 
@@ -567,7 +539,7 @@ def _resolve_auto(main_runtime: Optional[Dict[str, Any]] = None) -> Tuple[Option
     Priority:
       1. If the user's main provider is NOT an aggregator (OpenRouter / Nous),
          use their main provider + main model directly.  This ensures users on
-         Alibaba, DeepSeek, ZAI, etc. get auxiliary tasks handled by the same
+         DeepSeek, ZAI, etc. get auxiliary tasks handled by the same
          provider they already have credentials for — no OpenRouter key needed.
       2. OpenRouter → Nous → custom → API-key providers.
     """
@@ -662,10 +634,6 @@ def _to_async_client(sync_client, model: str):
     base_lower = str(sync_client.base_url).lower()
     if "openrouter" in base_lower:
         async_kwargs["default_headers"] = dict(_OR_HEADERS)
-    elif "api.githubcopilot.com" in base_lower:
-        from VoidCube_cli.models import copilot_default_headers
-
-        async_kwargs["default_headers"] = copilot_default_headers()
     elif "api.kimi.com" in base_lower:
         async_kwargs["default_headers"] = {"User-Agent": "KimiCLI/1.30.0"}
     return AsyncOpenAI(**async_kwargs), model
@@ -716,10 +684,8 @@ def resolve_provider_client(
         client, resolved = _resolve_auto(main_runtime=main_runtime)
         if client is None:
             return None, None
-        # When auto-detection lands on a non-OpenRouter provider (e.g. a
-        # local server), an OpenRouter-formatted model override like
-        # "google/gemini-3-flash-preview" won't work.  Drop it and use
-        # the provider's own default model instead.
+        # A vendor-prefixed override may not belong to a local endpoint. Drop
+        # it only when the live endpoint returned a bare model ID.
         if model and "/" in model and resolved and "/" not in resolved:
             logger.debug(
                 "Dropping OpenRouter-format model %r for non-OpenRouter "
@@ -766,15 +732,19 @@ def resolve_provider_client(
                 )
                 return None, None
             final_model = _normalize_resolved_model(
-                model or _read_main_model() or "gpt-4o-mini",
+                model
+                or _read_main_model()
+                or _first_live_model(custom_key, custom_base),
                 provider,
             )
+            if not final_model:
+                logger.warning(
+                    "resolve_provider_client: custom endpoint did not return any models"
+                )
+                return None, None
             extra = {}
             if "api.kimi.com" in custom_base.lower():
                 extra["default_headers"] = {"User-Agent": "KimiCLI/1.30.0"}
-            elif "api.githubcopilot.com" in custom_base.lower():
-                from VoidCube_cli.models import copilot_default_headers
-                extra["default_headers"] = copilot_default_headers()
             client = OpenAI(api_key=custom_key, base_url=custom_base, **extra)
             return (_to_async_client(client, final_model) if async_mode
                     else (client, final_model))
@@ -797,9 +767,17 @@ def resolve_provider_client(
             custom_key = custom_entry.get("api_key", "").strip() or "no-key-required"
             if custom_base:
                 final_model = _normalize_resolved_model(
-                    model or _read_main_model() or "gpt-4o-mini",
+                    model
+                    or _read_main_model()
+                    or _first_live_model(custom_key, custom_base),
                     provider,
                 )
+                if not final_model:
+                    logger.warning(
+                        "resolve_provider_client: named custom provider %r did not return any models",
+                        provider,
+                    )
+                    return None, None
                 client = OpenAI(api_key=custom_key, base_url=custom_base)
                 logger.debug(
                     "resolve_provider_client: named custom provider %r (%s)",
@@ -830,8 +808,6 @@ def resolve_provider_client(
         api_key = str(creds.get("api_key", "")).strip()
         if not api_key:
             tried_sources = list(pconfig.api_key_env_vars)
-            if provider == "copilot":
-                tried_sources.append("gh auth token")
             logger.debug("resolve_provider_client: provider %s has no API "
                          "key configured (tried: %s)",
                          provider, ", ".join(tried_sources))
@@ -841,18 +817,19 @@ def resolve_provider_client(
             str(creds.get("base_url", "")).strip().rstrip("/") or pconfig.inference_base_url
         )
 
-        default_model = _API_KEY_PROVIDER_AUX_MODELS.get(provider, "")
+        default_model = _first_live_model(api_key, base_url)
+        if not model and not default_model:
+            logger.warning(
+                "resolve_provider_client: provider %s did not return any models",
+                provider,
+            )
+            return None, None
         final_model = _normalize_resolved_model(model or default_model, provider)
 
         # Provider-specific headers
         headers = {}
         if "api.kimi.com" in base_url.lower():
             headers["User-Agent"] = "KimiCLI/1.30.0"
-        elif "api.githubcopilot.com" in base_url.lower():
-            from VoidCube_cli.models import copilot_default_headers
-
-            headers.update(copilot_default_headers())
-
         client = OpenAI(api_key=api_key, base_url=base_url,
                         **({"default_headers": headers} if headers else {}))
 
@@ -1023,9 +1000,8 @@ def resolve_vision_provider_client(
                 if sync_client is not None:
                     return _finalize(main_provider, sync_client, default_model)
             else:
-                # Exotic provider (DeepSeek, Alibaba, Xiaomi, named custom, etc.)
-                # Use provider-specific vision model if available, otherwise main model.
-                vision_model = _PROVIDER_VISION_MODELS.get(main_provider, main_model)
+                # Direct and named custom providers use their selected main model.
+                vision_model = main_model
                 rpc_client, rpc_model = resolve_provider_client(
                     main_provider, vision_model)
                 if rpc_client is not None:

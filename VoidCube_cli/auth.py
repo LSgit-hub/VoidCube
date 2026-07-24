@@ -63,7 +63,51 @@ PROVIDER_REGISTRY = {
         "auth_type": "api_key",
         "inference_base_url": "https://openrouter.ai/api/v1",
     }),
+    "zai": ProviderConfig({
+        "name": "Z.AI / GLM",
+        "base_url": "https://api.zai.com/v1",
+        "api_key_env_vars": ["GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY"],
+        "base_url_env_var": "GLM_BASE_URL",
+        "auth_type": "api_key",
+        "inference_base_url": "https://api.zai.com/v1",
+    }),
+    "kimi-coding": ProviderConfig({
+        "name": "Kimi / Moonshot",
+        "base_url": "https://api.kimi.moonshot.cn/v1",
+        "api_key_env_vars": ["KIMI_API_KEY"],
+        "base_url_env_var": "KIMI_BASE_URL",
+        "auth_type": "api_key",
+        "inference_base_url": "https://api.kimi.moonshot.cn/v1",
+    }),
+    "minimax": ProviderConfig({
+        "name": "MiniMax",
+        "base_url": "https://api.minimax.io/v1",
+        "api_key_env_vars": ["MINIMAX_API_KEY"],
+        "base_url_env_var": "MINIMAX_BASE_URL",
+        "auth_type": "api_key",
+        "inference_base_url": "https://api.minimax.io/v1",
+    }),
+    "minimax-cn": ProviderConfig({
+        "name": "MiniMax (China)",
+        "base_url": "https://api.minimaxi.com/v1",
+        "api_key_env_vars": ["MINIMAX_CN_API_KEY"],
+        "base_url_env_var": "MINIMAX_CN_BASE_URL",
+        "auth_type": "api_key",
+        "inference_base_url": "https://api.minimaxi.com/v1",
+    }),
 }
+
+SPECIAL_RUNTIME_PROVIDER_IDS = frozenset({
+    "nous",
+    "qwen-oauth",
+    "copilot-acp",
+    "custom",
+})
+RUNTIME_PROVIDER_IDS = frozenset(
+    provider
+    for provider, config in PROVIDER_REGISTRY.items()
+    if config.get("auth_type") == "api_key"
+) | SPECIAL_RUNTIME_PROVIDER_IDS
 
 # 认证相关常量
 DEFAULT_AGENT_KEY_MIN_TTL_SECONDS = 3600
@@ -237,8 +281,12 @@ def resolve_api_key_provider_credentials(provider: str) -> Optional[Dict[str, An
                     api_key = candidate
                     break
     
-    # 获取base_url
-    base_url = pconfig.get("base_url", "")
+    base_url_env_var = str(pconfig.get("base_url_env_var") or "").strip()
+    base_url = (
+        os.getenv(base_url_env_var, "").strip()
+        if base_url_env_var
+        else ""
+    ) or pconfig.get("base_url", "")
     
     return {
         "api_key": api_key or "",

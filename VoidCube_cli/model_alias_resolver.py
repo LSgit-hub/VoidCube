@@ -47,41 +47,6 @@ class ModelAliasEntry:
     preferred_provider: str = ""
 
 
-_BUILTIN_ALIASES: Dict[str, ModelIdentity] = {
-    "gpt5": ModelIdentity("openai", "gpt-5"),
-    "gpt": ModelIdentity("openai", "gpt"),
-    "o3": ModelIdentity("openai", "o3"),
-    "o4": ModelIdentity("openai", "o4"),
-    "gemini": ModelIdentity("google", "gemini"),
-    "deepseek": ModelIdentity("deepseek", "deepseek-chat"),
-    "grok": ModelIdentity("x-ai", "grok"),
-    "llama": ModelIdentity("meta-llama", "llama"),
-    "qwen": ModelIdentity("qwen", "qwen"),
-    "minimax": ModelIdentity("minimax", "minimax"),
-    "nemotron": ModelIdentity("nvidia", "nemotron"),
-    "kimi": ModelIdentity("moonshotai", "kimi"),
-    "glm": ModelIdentity("z-ai", "glm"),
-    "step": ModelIdentity("stepfun", "step"),
-    "mimo": ModelIdentity("xiaomi", "mimo"),
-    "trinity": ModelIdentity("arcee-ai", "trinity"),
-}
-
-_VENDOR_TO_PROVIDER: Dict[str, str] = {
-    "openai": "openai",
-    "google": "gemini",
-    "deepseek": "deepseek",
-    "x-ai": "xai",
-    "meta-llama": "openrouter",
-    "qwen": "alibaba",
-    "minimax": "minimax",
-    "nvidia": "openrouter",
-    "moonshotai": "kimi-coding",
-    "z-ai": "zai",
-    "stepfun": "openrouter",
-    "xiaomi": "xiaomi",
-    "arcee-ai": "openrouter",
-}
-
 _RECENT_MODELS_MAX = 5
 _RECENT_MODELS_FILE = "recent_models.json"
 
@@ -92,7 +57,7 @@ class ModelAliasResolver:
     _recent: List[str]
 
     def __init__(self) -> None:
-        self._aliases = dict(_BUILTIN_ALIASES)
+        self._aliases = {}
         self._recent: List[str] = []
 
     @classmethod
@@ -109,7 +74,7 @@ class ModelAliasResolver:
     def resolve(self, model_input: str, preferred_provider: str = "") -> ModelResolution:
         alias_match = self._aliases.get(model_input.lower())
         if alias_match:
-            provider_id = preferred_provider or _VENDOR_TO_PROVIDER.get(alias_match.vendor, alias_match.vendor)
+            provider_id = preferred_provider or alias_match.vendor
             model_id = alias_match.family
             return ModelResolution(
                 model_id=model_id,
@@ -143,45 +108,24 @@ class ModelAliasResolver:
         )
 
     def _detect_provider_for_model(self, model_id: str) -> str:
-        from VoidCube_cli.models import _PROVIDER_MODELS
-        for provider_id, models in _PROVIDER_MODELS.items():
-            for m in models:
-                if isinstance(m, str) and m == model_id:
-                    return provider_id
-                if isinstance(m, dict) and m.get("id") == model_id:
-                    return provider_id
-        lower = model_id.lower()
-        if "gpt" in lower or "o3" in lower or "o4" in lower:
-            return "openai"
-        if "gemini" in lower:
-            return "gemini"
-        if "deepseek" in lower:
-            return "deepseek"
-        if "glm" in lower:
-            return "zai"
-        if "kimi" in lower:
-            return "kimi-coding"
+        # A bare model name cannot be attributed safely without querying a
+        # configured provider. Callers should supply a provider or use the
+        # live picker instead of relying on stale name heuristics.
         return ""
 
     def list_models_for_provider(self, provider_id: str) -> List[ModelResolution]:
         try:
-            from VoidCube_cli.models import _PROVIDER_MODELS
-            models = _PROVIDER_MODELS.get(provider_id, [])
-            result = []
-            for m in models:
-                if isinstance(m, str):
-                    result.append(ModelResolution(
-                        model_id=m, provider_id=provider_id,
-                        is_available=self.check_availability(provider_id),
-                    ))
-                elif isinstance(m, dict):
-                    mid = m.get("id", "")
-                    if mid:
-                        result.append(ModelResolution(
-                            model_id=mid, provider_id=provider_id,
-                            is_available=self.check_availability(provider_id),
-                        ))
-            return result
+            from VoidCube_cli.models import provider_model_ids
+
+            available = self.check_availability(provider_id)
+            return [
+                ModelResolution(
+                    model_id=model_id,
+                    provider_id=provider_id,
+                    is_available=available,
+                )
+                for model_id in provider_model_ids(provider_id)
+            ]
         except Exception as e:
             logger.debug(f"Failed to list models for {provider_id}: {e}")
             return []

@@ -20,6 +20,8 @@
 
 API-A 不写 `memory.llm.*`。
 
+API-A 的模型列表只来自当前 Provider 的实时 `/models` 响应。仓库不维护静态模型目录、过期名称映射或网络失败兜底列表；接口不可用时模型列表为空，用户只能保留已保存模型或手动输入，并由实际请求结果确认可用性。`copilot-acp` 是外部进程 Provider，不提供模型目录。
+
 ### API-B：Mem / Supervisor 自主链路
 
 - 保存位置：`memory.llm.*`

@@ -3,9 +3,8 @@ Single source of truth for provider identity in Voidcube Agent.
 
 Two data sources, merged at runtime:
 
-1. **models.dev catalog** — 109+ providers with base URLs, env vars, display
-   names, and full model metadata (context, cost, capabilities).  This is
-   the primary database.
+1. **Active runtime providers** — the runtime allowlist limits which
+   models.dev entries can become built-in providers.
 
 2. **Voidcube overlays** — auth patterns, aggregator flags,
    and additional env vars that models.dev doesn't track.  Small dict,
@@ -22,6 +21,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
+
+from VoidCube_cli.auth import RUNTIME_PROVIDER_IDS
 
 logger = logging.getLogger(__name__)
 
@@ -65,15 +66,11 @@ VOIDCUBE_OVERLAYS: Dict[str, VoidcubeOverlay] = {
         base_url_override="acp://copilot",
         base_url_env_var="COPILOT_ACP_BASE_URL",
     ),
-    "github-copilot": VoidcubeOverlay(
-        extra_env_vars=("COPILOT_GITHUB_TOKEN", "GH_TOKEN"),
-    ),
-
     "zai": VoidcubeOverlay(
         extra_env_vars=("GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY"),
         base_url_env_var="GLM_BASE_URL",
     ),
-    "kimi-for-coding": VoidcubeOverlay(
+    "kimi-coding": VoidcubeOverlay(
         base_url_env_var="KIMI_BASE_URL",
     ),
     "minimax": VoidcubeOverlay(
@@ -84,35 +81,6 @@ VOIDCUBE_OVERLAYS: Dict[str, VoidcubeOverlay] = {
     ),
     "deepseek": VoidcubeOverlay(
         base_url_env_var="DEEPSEEK_BASE_URL",
-    ),
-    "alibaba": VoidcubeOverlay(
-        base_url_env_var="DASHSCOPE_BASE_URL",
-    ),
-    "vercel": VoidcubeOverlay(
-        is_aggregator=True,
-    ),
-    "opencode": VoidcubeOverlay(
-        is_aggregator=True,
-        base_url_env_var="OPENCODE_ZEN_BASE_URL",
-    ),
-    "opencode-go": VoidcubeOverlay(
-        is_aggregator=True,
-        base_url_env_var="OPENCODE_GO_BASE_URL",
-    ),
-    "kilo": VoidcubeOverlay(
-        is_aggregator=True,
-        base_url_env_var="KILOCODE_BASE_URL",
-    ),
-    "huggingface": VoidcubeOverlay(
-        is_aggregator=True,
-        base_url_env_var="HF_BASE_URL",
-    ),
-    "xai": VoidcubeOverlay(
-        base_url_override="https://api.x.ai/v1",
-        base_url_env_var="XAI_BASE_URL",
-    ),
-    "xiaomi": VoidcubeOverlay(
-        base_url_env_var="XIAOMI_BASE_URL",
     ),
 }
 
@@ -141,22 +109,15 @@ class ProviderDef:
 
 ALIASES: Dict[str, str] = {
     # openrouter
-    "openai": "openrouter",     # bare "openai" → route through aggregator
-
     # zai
     "glm": "zai",
     "z-ai": "zai",
     "z.ai": "zai",
     "zhipu": "zai",
 
-    # xai
-    "x-ai": "xai",
-    "x.ai": "xai",
-
     # kimi-for-coding (models.dev ID)
-    "kimi": "kimi-for-coding",
-    "kimi-coding": "kimi-for-coding",
-    "moonshot": "kimi-for-coding",
+    "kimi": "kimi-coding",
+    "moonshot": "kimi-coding",
 
     # minimax-cn
     "minimax-china": "minimax-cn",
@@ -164,46 +125,10 @@ ALIASES: Dict[str, str] = {
 
 
 
-    # github-copilot (models.dev ID)
-    "copilot": "github-copilot",
-    "github": "github-copilot",
     "github-copilot-acp": "copilot-acp",
-
-    # vercel (models.dev ID for AI Gateway)
-    "ai-gateway": "vercel",
-    "aigateway": "vercel",
-    "vercel-ai-gateway": "vercel",
-
-    # opencode (models.dev ID for OpenCode Zen)
-    "opencode-zen": "opencode",
-    "zen": "opencode",
-
-    # opencode-go
-    "go": "opencode-go",
-    "opencode-go-sub": "opencode-go",
-
-    # kilo (models.dev ID for KiloCode)
-    "kilocode": "kilo",
-    "kilo-code": "kilo",
-    "kilo-gateway": "kilo",
 
     # deepseek
     "deep-seek": "deepseek",
-
-    # alibaba
-    "dashscope": "alibaba",
-    "aliyun": "alibaba",
-    "qwen": "alibaba",
-    "alibaba-cloud": "alibaba",
-
-    # huggingface
-    "hf": "huggingface",
-    "hugging-face": "huggingface",
-    "huggingface-hub": "huggingface",
-
-    # xiaomi
-    "mimo": "xiaomi",
-    "xiaomi-mimo": "xiaomi",
 
     # Local server aliases → virtual "local" concept (resolved via user config)
     "lmstudio": "lmstudio",
@@ -224,7 +149,6 @@ ALIASES: Dict[str, str] = {
 _LABEL_OVERRIDES: Dict[str, str] = {
     "nous": "Nous Portal",
     "copilot-acp": "GitHub Copilot ACP",
-    "xiaomi": "Xiaomi MiMo",
     "local": "Local endpoint",
 }
 
@@ -252,6 +176,8 @@ def get_provider(name: str) -> Optional[ProviderDef]:
     Returns a fully-resolved ProviderDef or None.
     """
     canonical = normalize_provider(name)
+    if canonical not in RUNTIME_PROVIDER_IDS:
+        return None
 
     # Try to get models.dev data
     try:
@@ -399,20 +325,5 @@ def resolve_provider_full(
         user_pdef = resolve_user_provider(name.strip().lower(), user_providers)
         if user_pdef is not None:
             return user_pdef
-
-    # 3. Try models.dev directly (for providers not in our ALIASES)
-    try:
-        from agent.models_dev import get_provider_info as _mdev_provider
-        mdev_info = _mdev_provider(canonical)
-        if mdev_info is not None:
-            return ProviderDef(
-                id=canonical,
-                name=mdev_info.name,
-                api_key_env_vars=mdev_info.env,
-                base_url=mdev_info.api,
-                source="models.dev",
-            )
-    except Exception:
-        pass
 
     return None

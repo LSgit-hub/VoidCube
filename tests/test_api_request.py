@@ -209,22 +209,6 @@ def test_local_request_only_adds_configured_context_option():
     assert kwargs["extra_body"] == {"options": {"num_ctx": 32768}}
 
 
-def test_github_reasoning_effort_is_clamped_to_supported_level(monkeypatch):
-    monkeypatch.setattr(
-        "VoidCube_cli.models.github_model_reasoning_efforts",
-        lambda _model: ["low", "medium", "high"],
-    )
-    config = ChatRequestConfig(
-        model="gpt-5",
-        base_url="https://models.github.ai/inference",
-        reasoning_config={"enabled": True, "effort": "xhigh"},
-    )
-
-    kwargs = build_chat_completion_kwargs(config, [{"role": "user", "content": "hi"}])
-
-    assert kwargs["extra_body"]["reasoning"] == {"effort": "high"}
-
-
 def test_summary_request_can_exclude_tools_and_turn_overrides():
     config = ChatRequestConfig(
         model="qwen/qwen3.6-plus",

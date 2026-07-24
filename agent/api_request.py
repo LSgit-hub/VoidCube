@@ -89,13 +89,6 @@ def supports_reasoning_extra_body(base_url: str, model: str) -> bool:
     base_url_lower = (base_url or "").lower()
     if "nousresearch" in base_url_lower or "ai-gateway.vercel.sh" in base_url_lower:
         return True
-    if "models.github.ai" in base_url_lower or "api.githubcopilot.com" in base_url_lower:
-        try:
-            from VoidCube_cli.models import github_model_reasoning_efforts
-
-            return bool(github_model_reasoning_efforts(model))
-        except Exception:
-            return False
     if "openrouter" not in base_url_lower or "api.mistral.ai" in base_url_lower:
         return False
 
@@ -108,34 +101,6 @@ def supports_reasoning_extra_body(base_url: str, model: str) -> bool:
         "qwen/qwen3",
     )
     return any(model_lower.startswith(prefix) for prefix in reasoning_model_prefixes)
-
-
-def _github_reasoning_payload(
-    model: str,
-    reasoning_config: dict[str, Any] | None,
-) -> dict[str, str] | None:
-    try:
-        from VoidCube_cli.models import github_model_reasoning_efforts
-    except Exception:
-        return None
-
-    supported_efforts = github_model_reasoning_efforts(model)
-    if not supported_efforts:
-        return None
-    if reasoning_config and reasoning_config.get("enabled") is False:
-        return None
-
-    requested = str((reasoning_config or {}).get("effort", "medium")).strip().lower()
-    if requested == "xhigh" and "high" in supported_efforts:
-        requested = "high"
-    elif requested not in supported_efforts:
-        if requested == "minimal" and "low" in supported_efforts:
-            requested = "low"
-        elif "medium" in supported_efforts:
-            requested = "medium"
-        else:
-            requested = supported_efforts[0]
-    return {"effort": requested}
 
 
 def _provider_preferences(config: ChatRequestConfig) -> dict[str, Any]:
@@ -347,10 +312,6 @@ def build_chat_completion_kwargs(
 
     base_url_lower = (config.base_url or "").lower()
     is_openrouter = "openrouter" in base_url_lower
-    is_github_models = (
-        "models.github.ai" in base_url_lower
-        or "api.githubcopilot.com" in base_url_lower
-    )
     is_nous = "nousresearch" in base_url_lower
     extra_body: dict[str, Any] = {}
     preferences = _provider_preferences(config)
@@ -361,11 +322,7 @@ def build_chat_completion_kwargs(
         config.base_url,
         config.model,
     ):
-        if is_github_models:
-            github_reasoning = _github_reasoning_payload(config.model, config.reasoning_config)
-            if github_reasoning is not None:
-                extra_body["reasoning"] = github_reasoning
-        elif config.reasoning_config is not None:
+        if config.reasoning_config is not None:
             reasoning = dict(config.reasoning_config)
             if not (is_nous and reasoning.get("enabled") is False):
                 extra_body["reasoning"] = reasoning

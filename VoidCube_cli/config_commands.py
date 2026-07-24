@@ -354,7 +354,7 @@ def config_command(args) -> None:
             print("Usage: VoidCube config set <key> <value>")
             print()
             print("Examples:")
-            print("  VoidCube config set model deepseek/deepseek-chat")
+            print("  VoidCube config set model <provider-model-id>")
             print("  VoidCube config set terminal.backend docker")
             print("  VoidCube config set terminal.backend podman")
             print("  VoidCube config set OPENROUTER_API_KEY sk-or-...")

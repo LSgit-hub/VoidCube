@@ -23,19 +23,9 @@ logger = logging.getLogger(__name__)
 # Only these are stripped — Ollama-style "model:tag" colons (e.g. "qwen3.5:27b")
 # are preserved so the full model name reaches cache lookups and server queries.
 _PROVIDER_PREFIXES: frozenset[str] = frozenset({
-    "openrouter", "nous", "copilot", "copilot-acp",
-    "gemini", "zai", "kimi-coding", "minimax", "minimax-cn", "deepseek",
-    "opencode-zen", "opencode-go", "ai-gateway", "kilocode", "alibaba",
-    "qwen-oauth",
-    "xiaomi",
+    "openrouter", "nous", "copilot-acp", "openai", "zai", "kimi-coding",
+    "minimax", "minimax-cn", "deepseek", "qwen-oauth",
     "custom", "local",
-    # Common aliases
-    "google", "google-gemini", "google-ai-studio",
-    "glm", "z-ai", "z.ai", "zhipu", "github", "github-copilot",
-    "github-models", "kimi", "moonshot", "deep-seek",
-    "opencode", "zen", "go", "vercel", "kilo", "dashscope", "aliyun", "qwen",
-    "mimo", "xiaomi-mimo",
-    "qwen-portal",
 })
 
 
@@ -90,68 +80,6 @@ DEFAULT_FALLBACK_CONTEXT = CONTEXT_PROBE_TIERS[0]
 # Sessions, model switches, and cron jobs should reject models below this.
 MINIMUM_CONTEXT_LENGTH = 64_000
 
-# Thin fallback defaults — only broad model family patterns.
-# These fire only when provider is unknown AND models.dev/OpenRouter all miss.
-# Replaced the previous 80+ entry dict.
-# For provider-specific context lengths, models.dev is the primary source.
-DEFAULT_CONTEXT_LENGTHS = {
-    # OpenAI
-    "gpt-4.1": 1047576,
-    "gpt-5": 128000,
-    "gpt-4": 128000,
-    # Google
-    "gemini": 1048576,
-    # Gemma (open models served via AI Studio)
-    "gemma-4-31b": 256000,
-    "gemma-4-26b": 256000,
-    "gemma-3": 131072,
-    "gemma": 8192,  # fallback for older gemma models
-    # DeepSeek
-    "deepseek": 128000,
-    # Meta
-    "llama": 131072,
-    # Qwen — specific model families before the catch-all.
-    # Official docs: https://help.aliyun.com/zh/model-studio/developer-reference/
-    "qwen3-coder-plus": 1000000,  # 1M context
-    "qwen3-coder": 262144,        # 256K context
-    "qwen": 131072,
-    # MiniMax — official docs: 204,800 context for all models
-    "minimax": 204800,
-    # GLM
-    "glm": 202752,
-    # xAI Grok — xAI /v1/models does not return context_length metadata,
-    # so these hardcoded fallbacks prevent Voidcube from probing-down to
-    # the default 128k when the user points at https://api.x.ai/v1
-    # via a custom provider. Values sourced from models.dev (2026-04).
-    # Keys use substring matching (longest-first), so e.g. "grok-4.20"
-    # matches "grok-4.20-0309-reasoning" / "-non-reasoning" / "-multi-agent-0309".
-    "grok-code-fast": 256000,   # grok-code-fast-1
-    "grok-4-1-fast": 2000000,   # grok-4-1-fast-(non-)reasoning
-    "grok-2-vision": 8192,      # grok-2-vision, -1212, -latest
-    "grok-4-fast": 2000000,     # grok-4-fast-(non-)reasoning
-    "grok-4.20": 2000000,       # grok-4.20-0309-(non-)reasoning, -multi-agent-0309
-    "grok-4": 256000,           # grok-4, grok-4-0709
-    "grok-3": 131072,           # grok-3, grok-3-mini, grok-3-fast, grok-3-mini-fast
-    "grok-2": 131072,           # grok-2, grok-2-1212, grok-2-latest
-    "grok": 131072,             # catch-all (grok-beta, unknown grok-*)
-    # Kimi
-    "kimi": 262144,
-    # Arcee
-    "trinity": 262144,
-    # Hugging Face Inference Providers — model IDs use org/name format
-    "Qwen/Qwen3.5-397B-A17B": 131072,
-    "Qwen/Qwen3.5-35B-A3B": 131072,
-    "deepseek-ai/DeepSeek-V3.2": 65536,
-    "moonshotai/Kimi-K2.5": 262144,
-    "moonshotai/Kimi-K2-Thinking": 262144,
-    "MiniMaxAI/MiniMax-M2.5": 204800,
-    "XiaomiMiMo/MiMo-V2-Flash": 256000,
-    "mimo-v2-pro": 1000000,
-    "mimo-v2-omni": 256000,
-    "mimo-v2-flash": 256000,
-    "zai-org/GLM-5": 202752,
-}
-
 _CONTEXT_LENGTH_KEYS = (
     "context_length",
     "context_window",
@@ -192,52 +120,6 @@ def _is_openrouter_base_url(base_url: str) -> bool:
 def _is_custom_endpoint(base_url: str) -> bool:
     normalized = _normalize_base_url(base_url)
     return bool(normalized) and not _is_openrouter_base_url(normalized)
-
-
-_URL_TO_PROVIDER: Dict[str, str] = {
-    "api.openai.com": "openai",
-    "chatgpt.com": "openai",
-    "api.z.ai": "zai",
-    "api.moonshot.ai": "kimi-coding",
-    "api.kimi.com": "kimi-coding",
-    "api.minimax": "minimax",
-    "dashscope.aliyuncs.com": "alibaba",
-    "dashscope-intl.aliyuncs.com": "alibaba",
-    "portal.qwen.ai": "qwen-oauth",
-    "openrouter.ai": "openrouter",
-    "generativelanguage.googleapis.com": "gemini",
-    "inference-api.nousresearch.com": "nous",
-    "api.deepseek.com": "deepseek",
-    "api.githubcopilot.com": "copilot",
-    "models.github.ai": "copilot",
-    "api.fireworks.ai": "fireworks",
-    "opencode.ai": "opencode-go",
-    "api.x.ai": "xai",
-    "api.xiaomimimo.com": "xiaomi",
-    "xiaomimimo.com": "xiaomi",
-}
-
-
-def _infer_provider_from_url(base_url: str) -> Optional[str]:
-    """Infer the models.dev provider name from a base URL.
-
-    This allows context length resolution via models.dev for custom endpoints
-    like DashScope (Alibaba), Z.AI, Kimi, etc. without requiring the user to
-    explicitly set the provider name in config.
-    """
-    normalized = _normalize_base_url(base_url)
-    if not normalized:
-        return None
-    parsed = urlparse(normalized if "://" in normalized else f"https://{normalized}")
-    host = parsed.netloc.lower() or parsed.path.lower()
-    for url_part, provider in _URL_TO_PROVIDER.items():
-        if url_part in host:
-            return provider
-    return None
-
-
-def _is_known_provider_base_url(base_url: str) -> bool:
-    return _infer_provider_from_url(base_url) is not None
 
 
 def is_local_endpoint(base_url: str) -> bool:
@@ -883,13 +765,11 @@ def get_model_context_length(
     Resolution order:
     0. Explicit config override (model.context_length or providers.<name> per-model)
     1. Persistent cache (previously discovered via probing)
-    2. Active endpoint metadata (/models for explicit custom endpoints)
+    2. Active endpoint metadata (/models)
     3. Local server query (for local endpoints)
     4. OpenRouter live API metadata
     5. Nous suffix-match via OpenRouter cache
-    6. models.dev registry lookup (provider-aware)
-    7. Thin hardcoded defaults (broad family patterns)
-    8. Default fallback (128K)
+    6. Default fallback (128K)
     """
     # 0. Explicit config override — user knows best
     if config_context_length is not None and isinstance(config_context_length, int) and config_context_length > 0:
@@ -906,12 +786,8 @@ def get_model_context_length(
         if cached is not None:
             return cached
 
-    # 2. Active endpoint metadata for truly custom/unknown endpoints.
-    # Known providers (Copilot, OpenAI, etc.) skip this — their
-    # /models endpoint may report a provider-imposed limit (e.g. Copilot
-    # returns 128k) instead of the model's full context (400k).  models.dev
-    # has the correct per-provider values and is checked at step 5+.
-    if _is_custom_endpoint(base_url) and not _is_known_provider_base_url(base_url):
+    # 2. Active endpoint metadata is authoritative when available.
+    if _is_custom_endpoint(base_url):
         endpoint_metadata = fetch_endpoint_model_metadata(base_url, api_key=api_key)
         matched = endpoint_metadata.get(model)
         if not matched:
@@ -928,39 +804,18 @@ def get_model_context_length(
             context_length = matched.get("context_length")
             if isinstance(context_length, int):
                 return context_length
-        if not _is_known_provider_base_url(base_url):
-            # 3. Try querying local server directly
-            if is_local_endpoint(base_url):
-                local_ctx = _query_local_context_length(model, base_url)
-                if local_ctx and local_ctx > 0:
-                    save_context_length(model, base_url, local_ctx)
-                    return local_ctx
-            logger.info(
-                "Could not detect context length for model %r at %s — "
-                "defaulting to %s tokens (probe-down). Set model.context_length "
-                "in config.yaml to override.",
-                model, base_url, f"{DEFAULT_FALLBACK_CONTEXT:,}",
-            )
-            return DEFAULT_FALLBACK_CONTEXT
+        # 3. Try querying a local server directly when /models omits metadata.
+        if is_local_endpoint(base_url):
+            local_ctx = _query_local_context_length(model, base_url)
+            if local_ctx and local_ctx > 0:
+                save_context_length(model, base_url, local_ctx)
+                return local_ctx
 
     # 4. Provider-aware lookups (before generic OpenRouter cache)
     # These are provider-specific and take priority over the generic OR cache,
     # since the same model can have different context limits per provider.
-    # If provider is generic (openrouter/custom/empty), try to infer from URL.
-    effective_provider = provider
-    if not effective_provider or effective_provider in ("openrouter", "custom"):
-        if base_url:
-            inferred = _infer_provider_from_url(base_url)
-            if inferred:
-                effective_provider = inferred
-
-    if effective_provider == "nous":
+    if provider == "nous":
         ctx = _resolve_nous_context_length(model)
-        if ctx:
-            return ctx
-    if effective_provider:
-        from agent.models_dev import lookup_models_dev_context
-        ctx = lookup_models_dev_context(effective_provider, model)
         if ctx:
             return ctx
 
@@ -969,25 +824,14 @@ def get_model_context_length(
     if model in metadata:
         return metadata[model].get("context_length", 128000)
 
-    # 8. Hardcoded defaults (fuzzy match — longest key first for specificity)
-    # Only check `default_model in model` (is the key a substring of the input).
-    # The reverse (`model in default_model`) causes shorter names like
-    # Sort by length to avoid partial matches (e.g. shorter names matching longer ones)
-    model_lower = model.lower()
-    for default_model, length in sorted(
-        DEFAULT_CONTEXT_LENGTHS.items(), key=lambda x: len(x[0]), reverse=True
-    ):
-        if default_model in model_lower:
-            return length
-
-    # 9. Query local server as last resort
+    # 8. Query local server as last resort
     if base_url and is_local_endpoint(base_url):
         local_ctx = _query_local_context_length(model, base_url)
         if local_ctx and local_ctx > 0:
             save_context_length(model, base_url, local_ctx)
             return local_ctx
 
-    # 10. Default fallback — 128K
+    # 9. Default fallback — 128K
     return DEFAULT_FALLBACK_CONTEXT
 
 

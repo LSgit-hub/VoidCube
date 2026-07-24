@@ -15,6 +15,7 @@ from VoidCube_cli.auth import (
     AuthError,
     DEFAULT_QWEN_BASE_URL,
     PROVIDER_REGISTRY,
+    RUNTIME_PROVIDER_IDS,
     _agent_key_is_usable,
     format_auth_error,
     resolve_provider,
@@ -436,6 +437,11 @@ def resolve_runtime_provider(
         explicit_api_key=explicit_api_key,
         explicit_base_url=explicit_base_url,
     )
+    if provider != "auto" and provider not in RUNTIME_PROVIDER_IDS:
+        raise AuthError(
+            f"Provider '{requested_provider}' is not supported by the active runtime. "
+            "Configure it as a custom OpenAI-compatible endpoint or choose a listed provider."
+        )
     model_cfg = _get_model_config()
     explicit_runtime = _resolve_explicit_runtime(
         provider=provider,

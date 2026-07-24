@@ -35,7 +35,6 @@ _EXTRA_ENV_KEYS = frozenset({
     "OPENAI_API_KEY", "OPENAI_BASE_URL",
     "OPENROUTER_API_KEY",
     "DEEPSEEK_API_KEY",
-    "DASHSCOPE_API_KEY",
     "TERMINAL_ENV", "TERMINAL_SSH_KEY", "TERMINAL_SSH_PORT",
     "LLM_MODEL", "LLM_BASE_URL", "OPENAI_MODEL",
 })
@@ -104,6 +103,15 @@ _RETIRED_MESSAGING_ENV_VARS = (
     "WEBHOOK_PORT",
     "WEBHOOK_SECRET",
     "MESSAGING_CWD",
+)
+_RETIRED_PREFILL_ENV_VAR = "VOIDCUBE_PREFILL_" + "MESSAGES_FILE"
+_RETIRED_UNUSED_CONFIG_ENV_VARS = (
+    "GEMINI_BASE_URL",
+    "DASHSCOPE_API_KEY",
+    "OPENCODE_ZEN_API_KEY",
+    "OPENCODE_GO_API_KEY",
+    "HF_TOKEN",
+    "XIAOMI_API_KEY",
 )
 import yaml
 
@@ -458,7 +466,7 @@ DEFAULT_CONFIG = {
     "auxiliary": {
         "vision": {
             "provider": "auto",    # auto | openrouter | nous | custom
-            "model": "",           # e.g. "google/gemini-2.5-flash", "gpt-4o"
+            "model": "",           # exact model ID returned by the provider API
             "base_url": "",        # direct OpenAI-compatible endpoint (takes precedence over provider)
             "api_key": "",         # optional task-specific key for the direct endpoint
             "timeout": 120,        # seconds — LLM API call timeout; vision payloads need generous timeout
@@ -643,7 +651,7 @@ DEFAULT_CONFIG = {
     # Uses the same runtime provider resolution as CLI/gateway startup, so all
     # configured providers (OpenRouter, Nous, Z.ai, Kimi, etc.) are supported.
     "delegation": {
-        "model": "",       # e.g. "google/gemini-3-flash-preview" (empty = inherit parent model)
+        "model": "",       # exact provider model ID (empty = inherit parent model)
         "provider": "",    # e.g. "openrouter" (empty = inherit parent provider + credentials)
         "base_url": "",    # direct OpenAI-compatible endpoint for subagents
         "api_key": "",     # API key for delegation.base_url (falls back to OPENAI_API_KEY)
@@ -806,14 +814,6 @@ OPTIONAL_ENV_VARS = {
         "category": "provider",
         "advanced": True,
     },
-    "GEMINI_BASE_URL": {
-        "description": "Google AI Studio base URL override",
-        "prompt": "Gemini base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
     "GLM_API_KEY": {
         "description": "Z.AI / GLM API key (also recognized as ZAI_API_KEY / Z_AI_API_KEY)",
         "prompt": "Z.AI / GLM API key",
@@ -908,13 +908,6 @@ OPTIONAL_ENV_VARS = {
         "password": False,
         "category": "provider",
     },
-    "DASHSCOPE_API_KEY": {
-        "description": "Alibaba Cloud DashScope API key (Qwen + multi-provider models)",
-        "prompt": "DashScope API Key",
-        "url": "https://modelstudio.console.alibabacloud.com/",
-        "password": True,
-        "category": "provider",
-    },
     "DASHSCOPE_BASE_URL": {
         "description": "Custom DashScope base URL (default: coding-intl OpenAI-compat endpoint)",
         "prompt": "DashScope Base URL",
@@ -931,27 +924,11 @@ OPTIONAL_ENV_VARS = {
         "category": "provider",
         "advanced": True,
     },
-    "OPENCODE_ZEN_API_KEY": {
-        "description": "OpenCode Zen API key (pay-as-you-go access to curated models)",
-        "prompt": "OpenCode Zen API key",
-        "url": "https://opencode.ai/auth",
-        "password": True,
-        "category": "provider",
-        "advanced": True,
-    },
     "OPENCODE_ZEN_BASE_URL": {
         "description": "OpenCode Zen base URL override",
         "prompt": "OpenCode Zen base URL (leave empty for default)",
         "url": None,
         "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "OPENCODE_GO_API_KEY": {
-        "description": "OpenCode Go API key ($10/month subscription for open models)",
-        "prompt": "OpenCode Go API key",
-        "url": "https://opencode.ai/auth",
-        "password": True,
         "category": "provider",
         "advanced": True,
     },
@@ -963,13 +940,6 @@ OPTIONAL_ENV_VARS = {
         "category": "provider",
         "advanced": True,
     },
-    "HF_TOKEN": {
-        "description": "Hugging Face token for Inference Providers (20+ open models via router.huggingface.co)",
-        "prompt": "Hugging Face Token",
-        "url": "https://huggingface.co/settings/tokens",
-        "password": True,
-        "category": "provider",
-    },
     "HF_BASE_URL": {
         "description": "Hugging Face Inference Providers base URL override",
         "prompt": "HF base URL (leave empty for default)",
@@ -977,13 +947,6 @@ OPTIONAL_ENV_VARS = {
         "password": False,
         "category": "provider",
         "advanced": True,
-    },
-    "XIAOMI_API_KEY": {
-        "description": "Xiaomi MiMo API key for MiMo models (mimo-v2-pro, mimo-v2-omni, mimo-v2-flash)",
-        "prompt": "Xiaomi MiMo API Key",
-        "url": "https://platform.xiaomimimo.com",
-        "password": True,
-        "category": "provider",
     },
     "XIAOMI_BASE_URL": {
         "description": "Xiaomi MiMo base URL override (default: https://api.xiaomimimo.com/v1)",
@@ -1175,13 +1138,6 @@ OPTIONAL_ENV_VARS = {
         "password": False,
         "category": "setting",
     },
-    "VOIDCUBE_PREFILL_MESSAGES_FILE": {
-        "description": "Path to JSON file with ephemeral prefill messages for few-shot priming",
-        "prompt": "Prefill messages file path",
-        "url": None,
-        "password": False,
-        "category": "setting",
-    },
     "VOIDCUBE_EPHEMERAL_SYSTEM_PROMPT": {
         "description": "Ephemeral system prompt injected at API-call time (never persisted to sessions)",
         "prompt": "Ephemeral system prompt",
@@ -1366,7 +1322,7 @@ def validate_config_structure(config: Optional[Dict[str, Any]] = None) -> List["
                 "Change to:\n"
                 "  fallback_model:\n"
                 "    provider: openrouter\n"
-                "    model: deepseek/deepseek-chat",
+                "    model: <provider-model-id>",
             ))
         elif fb:
             if not fb.get("provider"):
@@ -1379,7 +1335,7 @@ def validate_config_structure(config: Optional[Dict[str, Any]] = None) -> List["
                 issues.append(ConfigWarning(
                     "warning",
                     "fallback_model is missing 'model' field — fallback will be disabled",
-                    "Add: model: deepseek/deepseek-chat (or another model)",
+                    "Add the exact model ID returned by the provider API",
                 ))
 
     # ── Root-level keys that look misplaced ──────────────────────────────
@@ -1531,16 +1487,36 @@ def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, A
         except Exception:
             pass
 
-    # Messaging adapters are no longer part of the CLI-only product surface.
-    # Remove values previously managed by the setup and platform commands.
+    # Remove settings previously managed by retired platform commands or
+    # registered without any runtime consumer.
     configured_env_names = set(load_env()) | set(os.environ)
-    retired_messaging_vars = (
-        configured_env_names.intersection(_RETIRED_MESSAGING_ENV_VARS)
+    retired_config_vars = configured_env_names.intersection(
+        (*_RETIRED_MESSAGING_ENV_VARS, *_RETIRED_UNUSED_CONFIG_ENV_VARS)
     )
-    for retired_var in sorted(retired_messaging_vars):
+    for retired_var in sorted(retired_config_vars):
         try:
             if remove_env_value(retired_var) and not quiet:
-                print(f"  ✓ Removed {retired_var} from .env (retired messaging setting)")
+                print(f"  ✓ Removed {retired_var} from .env (retired setting)")
+        except Exception:
+            pass
+
+    old_prefill_path = get_env_value(_RETIRED_PREFILL_ENV_VAR)
+    if old_prefill_path is not None:
+        config = read_raw_config()
+        raw_agent = config.get("agent")
+        agent_config = dict(raw_agent) if isinstance(raw_agent, dict) else {}
+        if "prefill_messages_file" not in agent_config and old_prefill_path.strip():
+            agent_config["prefill_messages_file"] = old_prefill_path.strip()
+            config["agent"] = agent_config
+            save_config(config)
+            results["config_added"].append(
+                "agent.prefill_messages_file (from retired environment setting)"
+            )
+            if not quiet:
+                print("  ✓ Migrated prefill messages file path to config.yaml")
+        try:
+            if remove_env_value(_RETIRED_PREFILL_ENV_VAR) and not quiet:
+                print("  ✓ Removed retired prefill messages environment setting")
         except Exception:
             pass
     
@@ -2302,7 +2278,7 @@ _FALLBACK_COMMENT = """
 #
 # fallback_model:
 #   provider: openrouter
-#   model: deepseek/deepseek-chat
+#   model: <provider-model-id>
 #
 # ── Smart Model Routing ────────────────────────────────────────────────
 # Optional cheap-vs-strong routing for simple turns.
@@ -2315,7 +2291,7 @@ _FALLBACK_COMMENT = """
 #   max_simple_words: 28
 #   cheap_model:
 #     provider: openrouter
-#     model: google/gemini-2.5-flash
+#     model: <provider-model-id>
 """
 
 
@@ -2344,7 +2320,7 @@ _COMMENTED_SECTIONS = """
 #
 # fallback_model:
 #   provider: openrouter
-#   model: deepseek/deepseek-chat
+#   model: <provider-model-id>
 #
 # ── Smart Model Routing ────────────────────────────────────────────────
 # Optional cheap-vs-strong routing for simple turns.
@@ -2357,7 +2333,7 @@ _COMMENTED_SECTIONS = """
 #   max_simple_words: 28
 #   cheap_model:
 #     provider: openrouter
-#     model: google/gemini-2.5-flash
+#     model: <provider-model-id>
 """
 
 
@@ -2429,6 +2405,8 @@ def _sanitize_env_lines(lines: list) -> list:
         | _EXTRA_ENV_KEYS
         | set(_RETIRED_TOOL_PROGRESS_ENV_VARS)
         | set(_RETIRED_MESSAGING_ENV_VARS)
+        | {_RETIRED_PREFILL_ENV_VAR}
+        | set(_RETIRED_UNUSED_CONFIG_ENV_VARS)
     )
 
     sanitized: list[str] = []

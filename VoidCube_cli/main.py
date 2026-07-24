@@ -1177,7 +1177,7 @@ For more help on a command:
     )
     chat_parser.add_argument(
         "-m", "--model",
-        help="Model to use (e.g., deepseek/deepseek-chat)"
+        help="Exact model ID returned by the selected provider API"
     )
     chat_parser.add_argument(
         "-t", "--toolsets",
@@ -1191,9 +1191,9 @@ For more help on a command:
     )
     chat_parser.add_argument(
         "--provider",
-        choices=["auto", "openrouter", "nous", "copilot-acp", "copilot", "gemini", "huggingface", "zai", "kimi-coding", "minimax", "minimax-cn", "kilocode", "xiaomi"],
         default=None,
-        help="Inference provider (default: auto)"
+        metavar="PROVIDER",
+        help="Inference provider ID or configured custom provider (default: auto)"
     )
     chat_parser.add_argument(
         "-v", "--verbose",
@@ -1409,9 +1409,9 @@ For more help on a command:
     autonomous_parser.add_argument("-m", "--model", help="Model override for the autonomous API-A executor")
     autonomous_parser.add_argument(
         "--provider",
-        choices=["auto", "openrouter", "nous", "copilot-acp", "copilot", "gemini", "huggingface", "zai", "kimi-coding", "minimax", "minimax-cn", "kilocode", "xiaomi"],
         default=None,
-        help="Inference provider for the autonomous API-A executor",
+        metavar="PROVIDER",
+        help="Inference provider ID or configured custom provider for the autonomous API-A executor",
     )
     autonomous_parser.set_defaults(func=cmd_autonomous)
 

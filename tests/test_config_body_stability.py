@@ -50,3 +50,19 @@ def test_cli_has_no_retired_config_compatibility():
         "_normalize_minimal_cli" + "_config",
     )
     assert all(marker not in cli_source for marker in stale_markers)
+
+
+@pytest.mark.unit
+@pytest.mark.smoke
+def test_cli_only_product_has_no_retired_messaging_entrypoints():
+    root = Path(__file__).resolve().parents[1]
+    main_source = (root / "VoidCube_cli" / "main.py").read_text(encoding="utf-8")
+    config_commands_source = (
+        root / "VoidCube_cli" / "config_commands.py"
+    ).read_text(encoding="utf-8")
+    status_source = (root / "VoidCube_cli" / "status.py").read_text(encoding="utf-8")
+
+    assert ("cmd_" + "whatsapp") not in main_source
+    assert ("Set up " + "WhatsApp integration") not in main_source
+    assert ("Messaging " + "Platforms") not in config_commands_source
+    assert ("Messaging " + "Platforms") not in status_source

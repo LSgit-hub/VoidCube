@@ -227,6 +227,171 @@ def test_retired_tool_progress_env_is_not_configurable():
     assert retired_names.isdisjoint(OPTIONAL_ENV_VARS)
 
 
+def test_retired_messaging_env_is_removed_without_rewriting_config(
+    tmp_path,
+    monkeypatch,
+):
+    home = tmp_path / ".VoidCube"
+    home.mkdir()
+    original_config = "_config_version: 20\n"
+    (home / "config.yaml").write_text(original_config, encoding="utf-8")
+    retired_values = {
+        "TELEGRAM_BOT_TOKEN": "telegram-secret",
+        "WHATSAPP_ENABLED": "true",
+        "MATRIX_ACCESS_TOKEN": "matrix-secret",
+        "API_SERVER_ENABLED": "true",
+        "WEBHOOK_SECRET": "webhook-secret",
+        "MESSAGING_CWD": "/old/workspace",
+    }
+    (home / ".env").write_text(
+        "".join(f"{key}={value}\n" for key, value in retired_values.items())
+        + "KEEP_ME=value\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VOIDCUBE_HOME", str(home))
+    for key in retired_values:
+        monkeypatch.delenv(key, raising=False)
+
+    import VoidCube_cli.config as config_module
+
+    assert set(config_module._RETIRED_MESSAGING_ENV_VARS).isdisjoint(
+        config_module.OPTIONAL_ENV_VARS
+    )
+    assert all(
+        metadata.get("category") != "messaging"
+        for metadata in config_module.OPTIONAL_ENV_VARS.values()
+    )
+    monkeypatch.setattr(
+        config_module,
+        "save_config",
+        lambda config: pytest.fail("retired env cleanup rewrote config.yaml"),
+    )
+
+    config_module.migrate_config(interactive=False, quiet=True)
+
+    assert (home / "config.yaml").read_text(encoding="utf-8") == original_config
+    assert (home / ".env").read_text(encoding="utf-8") == "KEEP_ME=value\n"
+    assert all(key not in os.environ for key in retired_values)
+
+
+def test_unused_optional_env_registrations_are_removed(tmp_path, monkeypatch):
+    home = tmp_path / ".VoidCube"
+    home.mkdir()
+    original_config = "_config_version: 20\n"
+    (home / "config.yaml").write_text(original_config, encoding="utf-8")
+    (home / ".env").write_text(
+        "GEMINI_BASE_URL=https://unused.example/v1\n"
+        "DASHSCOPE_API_KEY=unused-secret\n"
+        "OPENCODE_ZEN_API_KEY=unused-secret\n"
+        "OPENCODE_GO_API_KEY=unused-secret\n"
+        "HF_TOKEN=unused-secret\n"
+        "XIAOMI_API_KEY=unused-secret\n"
+        "KEEP_ME=value\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VOIDCUBE_HOME", str(home))
+
+    import VoidCube_cli.config as config_module
+
+    retired_names = set(config_module._RETIRED_UNUSED_CONFIG_ENV_VARS)
+    for key in retired_names:
+        monkeypatch.delenv(key, raising=False)
+    assert retired_names.isdisjoint(config_module.OPTIONAL_ENV_VARS)
+    monkeypatch.setattr(
+        config_module,
+        "save_config",
+        lambda config: pytest.fail("retired env cleanup rewrote config.yaml"),
+    )
+
+    config_module.migrate_config(interactive=False, quiet=True)
+
+    assert (home / "config.yaml").read_text(encoding="utf-8") == original_config
+    assert (home / ".env").read_text(encoding="utf-8") == "KEEP_ME=value\n"
+    assert all(key not in os.environ for key in retired_names)
+
+
+def test_tool_config_platforms_ignore_retired_messaging_env(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "legacy-token")
+    monkeypatch.setenv("WHATSAPP_ENABLED", "true")
+
+    from VoidCube_cli.tools_config import _get_enabled_platforms
+
+    assert _get_enabled_platforms() == ["cli"]
+
+
+def test_retired_prefill_env_migrates_once_to_agent_config(tmp_path, monkeypatch):
+    home = tmp_path / ".VoidCube"
+    home.mkdir()
+    retired_key = "VOIDCUBE_PREFILL_" + "MESSAGES_FILE"
+    (home / "config.yaml").write_text("_config_version: 20\n", encoding="utf-8")
+    (home / ".env").write_text(
+        f"{retired_key}=C:/prompts/prefill.json\nKEEP_ME=value\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VOIDCUBE_HOME", str(home))
+    monkeypatch.delenv(retired_key, raising=False)
+
+    import VoidCube_cli.config as config_module
+
+    assert retired_key not in config_module.OPTIONAL_ENV_VARS
+    first_result = config_module.migrate_config(interactive=False, quiet=True)
+
+    saved_text = (home / "config.yaml").read_text(encoding="utf-8")
+    saved = yaml.safe_load(saved_text)
+    assert saved["agent"]["prefill_messages_file"] == "C:/prompts/prefill.json"
+    assert (home / ".env").read_text(encoding="utf-8") == "KEEP_ME=value\n"
+    assert any(
+        "agent.prefill_messages_file" in item
+        for item in first_result["config_added"]
+    )
+
+    monkeypatch.setattr(
+        config_module,
+        "save_config",
+        lambda config: pytest.fail("second prefill migration rewrote config.yaml"),
+    )
+    second_result = config_module.migrate_config(interactive=False, quiet=True)
+
+    assert (home / "config.yaml").read_text(encoding="utf-8") == saved_text
+    assert not any(
+        "agent.prefill_messages_file" in item
+        for item in second_result["config_added"]
+    )
+
+
+def test_retired_prefill_env_does_not_override_explicit_config(
+    tmp_path,
+    monkeypatch,
+):
+    home = tmp_path / ".VoidCube"
+    home.mkdir()
+    retired_key = "VOIDCUBE_PREFILL_" + "MESSAGES_FILE"
+    original_config = (
+        "_config_version: 20\n"
+        "agent:\n"
+        "  prefill_messages_file: C:/prompts/current.json\n"
+    )
+    (home / "config.yaml").write_text(original_config, encoding="utf-8")
+    (home / ".env").write_text(
+        f"{retired_key}=C:/prompts/old.json\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VOIDCUBE_HOME", str(home))
+    monkeypatch.delenv(retired_key, raising=False)
+
+    import VoidCube_cli.config as config_module
+
+    monkeypatch.setattr(
+        config_module,
+        "save_config",
+        lambda config: pytest.fail("explicit prefill config should not be rewritten"),
+    )
+    config_module.migrate_config(interactive=False, quiet=True)
+
+    assert (home / "config.yaml").read_text(encoding="utf-8") == original_config
+    assert (home / ".env").read_text(encoding="utf-8") == ""
+
+
 def test_voidcube_dotenv_placeholder_does_not_override_real_env(tmp_path, monkeypatch):
     home = tmp_path / ".VoidCube"
     home.mkdir()

@@ -506,10 +506,6 @@ class AIAgent:
                     "X-OpenRouter-Title": "Voidcube Agent",
                     "X-OpenRouter-Categories": "productivity,cli-agent",
                 }
-            elif "api.githubcopilot.com" in effective_base.lower():
-                from VoidCube_cli.models import copilot_default_headers
-
-                client_kwargs["default_headers"] = copilot_default_headers()
             elif "api.kimi.com" in effective_base.lower():
                 client_kwargs["default_headers"] = {
                     "User-Agent": "KimiCLI/1.30.0",
@@ -2300,10 +2296,6 @@ class AIAgent:
         normalized = (base_url or "").lower()
         if "openrouter" in normalized:
             client_kwargs["default_headers"] = dict(_OR_HEADERS)
-        elif "api.githubcopilot.com" in normalized:
-            from VoidCube_cli.models import copilot_default_headers
-
-            client_kwargs["default_headers"] = copilot_default_headers()
         elif "api.kimi.com" in normalized:
             client_kwargs["default_headers"] = {"User-Agent": "KimiCLI/1.30.0"}
         elif "portal.qwen.ai" in normalized:

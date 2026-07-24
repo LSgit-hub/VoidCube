@@ -2303,42 +2303,6 @@ class VoidcubeCLI:
         except Exception:
             pass
 
-        if resolved_provider == "copilot":
-            try:
-                from VoidCube_cli.models import normalize_copilot_model_id
-
-                canonical = normalize_copilot_model_id(current_model, api_key=self.api_key)
-                if canonical and canonical != current_model:
-                    if not self._model_is_default:
-                        self.console.print(
-                            f"[yellow]⚠️  Normalized Copilot model '{current_model}' to '{canonical}'.[/]"
-                        )
-                    self.model = canonical
-                    current_model = canonical
-                    changed = True
-
-            except Exception:
-                pass
-            return changed
-
-        if resolved_provider in {"opencode-zen", "opencode-go"}:
-            try:
-                from VoidCube_cli.models import normalize_opencode_model_id
-
-                canonical = normalize_opencode_model_id(resolved_provider, current_model)
-                if canonical and canonical != current_model:
-                    if not self._model_is_default:
-                        self.console.print(
-                            f"[yellow]⚠️  Stripped provider prefix from '{current_model}'; using '{canonical}' for {resolved_provider}.[/]"
-                        )
-                    self.model = canonical
-                    current_model = canonical
-                    changed = True
-
-            except Exception:
-                pass
-            return changed
-
         return changed
 
     def _on_thinking(self, text: str) -> None:
