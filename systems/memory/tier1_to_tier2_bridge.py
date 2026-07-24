@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import hashlib
 from dataclasses import dataclass
@@ -21,7 +22,60 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
+from systems.memory.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID
+
 logger = logging.getLogger(__name__)
+
+_LATIN_QUALITY_TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9_.:/-]{2,}", re.IGNORECASE)
+_CJK_QUALITY_RUN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
+_IDENTIFIER_RE = re.compile(
+    r"(?<![\w])(?:https?://[^\s]+|[a-z][a-z0-9._:/-]*\d[a-z0-9._:/-]*|"
+    r"\d+(?:\.\d+)+(?:[a-z0-9._-]*)?|\d{2,})(?![\w])",
+    re.IGNORECASE,
+)
+_QUALITY_STOP_WORDS = {
+    "about", "after", "also", "and", "are", "been", "before", "being",
+    "from", "into", "that", "the", "then", "this", "was", "were", "with",
+}
+_NEGATION_MARKERS = (
+    "must not", "do not", "does not", "did not", "should not", "cannot",
+    "can't", "never", "forbid", "forbidden", "prohibit", "prohibited", "avoid",
+    "不得", "不要", "不能", "不允许", "禁止", "严禁", "从未", "没有", "未能",
+)
+
+
+def _quality_tokens(value: object) -> set[str]:
+    text = str(value or "").lower()
+    tokens = {
+        token for token in _LATIN_QUALITY_TOKEN_RE.findall(text)
+        if token not in _QUALITY_STOP_WORDS
+    }
+    for run in _CJK_QUALITY_RUN_RE.findall(text):
+        if len(run) == 1:
+            tokens.add(run)
+            continue
+        tokens.update(run[index:index + 2] for index in range(len(run) - 1))
+    return tokens
+
+
+def _source_support(summary: str, source_text: str) -> float:
+    summary_tokens = _quality_tokens(summary)
+    if not summary_tokens:
+        return 0.0
+    source_tokens = _quality_tokens(source_text)
+    return len(summary_tokens & source_tokens) / len(summary_tokens)
+
+
+def _identifiers(value: object) -> set[str]:
+    return {
+        match.rstrip(".,;:!?)]}").lower()
+        for match in _IDENTIFIER_RE.findall(str(value or ""))
+    }
+
+
+def _has_explicit_negation(value: object) -> bool:
+    normalized = " ".join(str(value or "").lower().split())
+    return any(marker in normalized for marker in _NEGATION_MARKERS)
 
 
 def open_memory_sqlite(db_path: str | Path, *, timeout: float = 30.0) -> sqlite3.Connection:
@@ -89,12 +143,13 @@ def _build_stable_cmem_ids(pipeline_result) -> Dict[str, str]:
 
 
 def _write_compressed_memories_to_db(conn, pipeline_result, now: str) -> int:
-    """Write Event/Scene/Arc/Epoch from PipelineResult into compressed_memories table.
+    """Write the complete pipeline result into the canonical scoped tables.
 
     Lifecycle: Event(L0,w=1.0) → Scene(L1,w=0.7) → Arc(L2,w=0.4) → Epoch(L3,w=0.2).
     """
     written = 0
     stable_ids = _build_stable_cmem_ids(pipeline_result)
+    owner_id, workspace_id = _pipeline_scope(conn, pipeline_result)
     for event in pipeline_result.events:
         parent_id = stable_ids.get(event.parent_ids[0], event.parent_ids[0]) if event.parent_ids else None
         ek = event.event_kind.value if hasattr(event.event_kind, 'value') else str(event.event_kind)
@@ -102,15 +157,16 @@ def _write_compressed_memories_to_db(conn, pipeline_result, now: str) -> int:
             "INSERT OR REPLACE INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
-            "parent_id, compressed_at, compression_level, status, weight, event_kind) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "parent_id, compressed_at, compression_level, status, weight, event_kind, "
+            "owner_id, workspace_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 stable_ids.get(event.id, event.id), "event", event.title, event.summary,
                 event.timespan_start.isoformat(), event.timespan_end.isoformat(),
                 event.importance, event.confidence,
                 json.dumps(event.topics), json.dumps(event.entities),
                 json.dumps(event.source_turns), parent_id, now,
-                0, "active", 1.0, ek,
+                0, "active", 1.0, ek, owner_id, workspace_id,
             ),
         )
         written += 1
@@ -127,15 +183,16 @@ def _write_compressed_memories_to_db(conn, pipeline_result, now: str) -> int:
             "INSERT OR REPLACE INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
-            "parent_id, compressed_at, compression_level, status, weight, event_kind) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "parent_id, compressed_at, compression_level, status, weight, event_kind, "
+            "owner_id, workspace_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 stable_ids.get(scene.id, scene.id), "scene", scene.title, scene.summary,
                 scene.timespan_start.isoformat(), scene.timespan_end.isoformat(),
                 scene.importance, scene.confidence,
                 json.dumps(scene.topics), json.dumps(scene.entities),
                 json.dumps(scene.evidence_refs), parent_id, now,
-                1, "active", 0.7, scene_kind,
+                1, "active", 0.7, scene_kind, owner_id, workspace_id,
             ),
         )
         written += 1
@@ -145,15 +202,16 @@ def _write_compressed_memories_to_db(conn, pipeline_result, now: str) -> int:
             "INSERT OR REPLACE INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
-            "parent_id, compressed_at, compression_level, status, weight, event_kind) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "parent_id, compressed_at, compression_level, status, weight, event_kind, "
+            "owner_id, workspace_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 stable_ids.get(arc.id, arc.id), "arc", arc.title, arc.summary,
                 arc.timespan_start.isoformat(), arc.timespan_end.isoformat(),
                 arc.importance, arc.confidence,
                 json.dumps(arc.topics), json.dumps(arc.entities),
                 json.dumps(arc.evidence_refs), parent_id, now,
-                2, "active", 0.4, None,
+                2, "active", 0.4, None, owner_id, workspace_id,
             ),
         )
         written += 1
@@ -162,19 +220,119 @@ def _write_compressed_memories_to_db(conn, pipeline_result, now: str) -> int:
             "INSERT OR REPLACE INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
-            "parent_id, compressed_at, compression_level, status, weight, event_kind) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "parent_id, compressed_at, compression_level, status, weight, event_kind, "
+            "owner_id, workspace_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 stable_ids.get(epoch.id, epoch.id), "epoch", epoch.title, epoch.summary,
                 epoch.timespan_start.isoformat(), epoch.timespan_end.isoformat(),
                 epoch.importance, epoch.confidence,
                 json.dumps(epoch.topics), json.dumps(epoch.entities),
                 json.dumps(epoch.evidence_refs), None, now,
-                3, "active", 0.2, None,
+                3, "active", 0.2, None, owner_id, workspace_id,
             ),
         )
         written += 1
+    for profile in getattr(pipeline_result, "profile_memories", []) or []:
+        written += _upsert_profile_memory(
+            conn,
+            profile,
+            owner_id=owner_id,
+            workspace_id=workspace_id,
+            now=now,
+        )
     return written
+
+
+def _pipeline_scope(conn, pipeline_result) -> tuple[str, str]:
+    source_turn_ids: list[str] = []
+    for collection_name in ("events", "profile_memories"):
+        for item in getattr(pipeline_result, collection_name, []) or []:
+            source_turn_ids.extend(
+                str(value)
+                for value in getattr(item, "source_turns", []) or []
+                if str(value)
+            )
+    for turn_id in dict.fromkeys(source_turn_ids):
+        row = conn.execute(
+            "SELECT owner_id, workspace_id FROM turns WHERE turn_id = ?",
+            (turn_id,),
+        ).fetchone()
+        if row:
+            return str(row[0]), str(row[1])
+    return DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID
+
+
+def _enum_value(value: Any) -> str:
+    return str(getattr(value, "value", value))
+
+
+def _upsert_profile_memory(
+    conn,
+    profile,
+    *,
+    owner_id: str,
+    workspace_id: str,
+    now: str,
+) -> int:
+    existing = conn.execute(
+        "SELECT memory_id, value FROM profile_memories "
+        "WHERE owner_id = ? AND workspace_id = ? AND subject = ? AND predicate = ? "
+        "AND status = 'active' ORDER BY valid_from DESC LIMIT 1",
+        (owner_id, workspace_id, profile.subject, profile.predicate),
+    ).fetchone()
+    supersedes = list(getattr(profile, "supersedes", []) or [])
+    if existing and str(existing[1]) != str(profile.value):
+        conn.execute(
+            "UPDATE profile_memories SET status = 'superseded', valid_to = ?, "
+            "updated_at = ? WHERE memory_id = ?",
+            (profile.valid_from.isoformat(), now, existing[0]),
+        )
+        supersedes.append(str(existing[0]))
+    elif existing:
+        conn.execute(
+            "UPDATE profile_memories SET summary = ?, confidence = ?, evidence_refs = ?, "
+            "source_turns = ?, updated_at = ? WHERE memory_id = ?",
+            (
+                profile.summary,
+                profile.confidence,
+                json.dumps(list(profile.evidence_refs), ensure_ascii=False),
+                json.dumps(list(profile.source_turns), ensure_ascii=False),
+                now,
+                existing[0],
+            ),
+        )
+        return 0
+
+    conn.execute(
+        "INSERT OR REPLACE INTO profile_memories "
+        "(memory_id, memory_kind, subject, predicate, value, summary, confidence, "
+        "certainty_state, status, valid_from, valid_to, evidence_refs, source_turns, "
+        "supersedes, conflict_refs, created_at, updated_at, owner_id, workspace_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            profile.id,
+            _enum_value(profile.memory_kind),
+            profile.subject,
+            profile.predicate,
+            profile.value,
+            profile.summary,
+            profile.confidence,
+            _enum_value(profile.certainty_state),
+            _enum_value(profile.status),
+            profile.valid_from.isoformat(),
+            profile.valid_to.isoformat() if profile.valid_to else None,
+            json.dumps(list(profile.evidence_refs), ensure_ascii=False),
+            json.dumps(list(profile.source_turns), ensure_ascii=False),
+            json.dumps(list(dict.fromkeys(supersedes)), ensure_ascii=False),
+            json.dumps(list(profile.conflict_refs), ensure_ascii=False),
+            profile.created_at.isoformat(),
+            now,
+            owner_id,
+            workspace_id,
+        ),
+    )
+    return 1
 
 
 @dataclass
@@ -193,6 +351,8 @@ class BridgeResult:
     cutoff: str = ""
     force_oldest: bool = False
     low_relevance_fallback: bool = False
+    owner_id: str = DEFAULT_OWNER_ID
+    workspace_id: str = DEFAULT_WORKSPACE_ID
     sample_turn_ids: List[str] = None
     errors: List[str] = None
     quality_evidence: Dict[str, Any] | None = None
@@ -217,6 +377,8 @@ class BridgeResult:
             "cutoff": self.cutoff,
             "force_oldest": self.force_oldest,
             "low_relevance_fallback": self.low_relevance_fallback,
+            "owner_id": self.owner_id,
+            "workspace_id": self.workspace_id,
             "sample_turn_ids": self.sample_turn_ids,
             "errors": self.errors,
             "quality_evidence": self.quality_evidence,
@@ -229,6 +391,8 @@ class CandidateBatch:
     cutoff: str
     force_oldest: bool
     low_relevance_fallback: bool
+    owner_id: str
+    workspace_id: str
 
 
 class Tier1ToTier2Bridge:
@@ -255,7 +419,10 @@ class Tier1ToTier2Bridge:
         min_event_coverage: float = 0.8,
         min_backlink_completeness: float = 1.0,
         max_compression_ratio: float = 1.0,
-        max_degraded_fraction: float = 1.0,
+        max_degraded_fraction: float = 0.0,
+        min_source_support: float = 0.35,
+        min_identifier_fidelity: float = 1.0,
+        min_polarity_consistency: float = 1.0,
     ) -> None:
         self.db_path = Path(db_path)
         self.retention_days = retention_days
@@ -270,6 +437,9 @@ class Tier1ToTier2Bridge:
             "min_backlink_completeness": min_backlink_completeness,
             "max_compression_ratio": max_compression_ratio,
             "max_degraded_fraction": max_degraded_fraction,
+            "min_source_support": min_source_support,
+            "min_identifier_fidelity": min_identifier_fidelity,
+            "min_polarity_consistency": min_polarity_consistency,
         }
 
     # ── Query candidates ──────────────────────────────────────────
@@ -285,7 +455,8 @@ class Tier1ToTier2Bridge:
             else (cutoff, self.min_relevance, self.batch_size)
         )
         rows = conn.execute(
-            "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score "
+            "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
+            "owner_id, workspace_id "
             f"FROM turns WHERE {time_clause}compressed_to_tier2 = 0 "
             "AND relevance_score >= ? ORDER BY timestamp ASC LIMIT ?",
             params,
@@ -298,12 +469,20 @@ class Tier1ToTier2Bridge:
                 else (cutoff, self.batch_size)
             )
             rows = conn.execute(
-                "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score "
+                "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
+                "owner_id, workspace_id "
                 f"FROM turns WHERE {time_clause}compressed_to_tier2 = 0 "
                 "ORDER BY timestamp ASC LIMIT ?",
                 fallback_params,
             ).fetchall()
             low_relevance_fallback = bool(rows)
+        owner_id = str(rows[0][6]) if rows else DEFAULT_OWNER_ID
+        workspace_id = str(rows[0][7]) if rows else DEFAULT_WORKSPACE_ID
+        rows = [
+            row
+            for row in rows
+            if str(row[6]) == owner_id and str(row[7]) == workspace_id
+        ]
         conn.close()
         turns = [
             {
@@ -313,6 +492,8 @@ class Tier1ToTier2Bridge:
                 "text": r[3],
                 "timestamp": r[4],
                 "relevance_score": r[5],
+                "owner_id": r[6],
+                "workspace_id": r[7],
             }
             for r in rows
         ]
@@ -321,6 +502,8 @@ class Tier1ToTier2Bridge:
             cutoff=cutoff,
             force_oldest=force_oldest,
             low_relevance_fallback=low_relevance_fallback,
+            owner_id=owner_id,
+            workspace_id=workspace_id,
         )
 
     def find_candidate_turns(self) -> List[Dict[str, Any]]:
@@ -471,6 +654,11 @@ class Tier1ToTier2Bridge:
         covered_turn_ids: set[str] = set()
         backlinked_events = 0
         event_summary_chars = 0
+        source_support_scores: list[float] = []
+        identifier_fidelity_scores: list[float] = []
+        polarity_consistency_scores: list[float] = []
+        unsupported_identifiers: set[str] = set()
+        turn_index = {str(turn["turn_id"]): turn for turn in turns}
 
         for event in events:
             source_turns = {
@@ -482,7 +670,41 @@ class Tier1ToTier2Bridge:
             covered_turn_ids.update(valid_source_turns)
             if source_turns and source_turns <= candidate_ids:
                 backlinked_events += 1
-            event_summary_chars += len(str(getattr(event, "summary", "") or "").strip())
+            summary_text = str(getattr(event, "summary", "") or "").strip()
+            summary = " ".join(
+                part
+                for part in (
+                    str(getattr(event, "title", "") or "").strip(),
+                    summary_text,
+                )
+                if part
+            )
+            event_summary_chars += len(summary_text)
+            source_records = [turn_index[turn_id] for turn_id in valid_source_turns]
+            source_text = "\n".join(
+                str(turn.get("text", "") or "") for turn in source_records
+            )
+            source_support_scores.append(_source_support(summary, source_text))
+            summary_identifiers = _identifiers(summary)
+            source_identifiers = _identifiers(source_text)
+            unsupported = summary_identifiers - source_identifiers
+            unsupported_identifiers.update(unsupported)
+            identifier_fidelity_scores.append(
+                1.0
+                if not summary_identifiers
+                else len(summary_identifiers & source_identifiers)
+                / len(summary_identifiers)
+            )
+            source_polarities = {
+                _has_explicit_negation(turn.get("text", ""))
+                for turn in source_records
+            }
+            polarity_consistency_scores.append(
+                1.0
+                if len(source_polarities) != 1
+                or _has_explicit_negation(summary) in source_polarities
+                else 0.0
+            )
 
         candidate_count = len(turns)
         event_count = len(events)
@@ -494,6 +716,13 @@ class Tier1ToTier2Bridge:
             event_count if tier2_output.get("_compression_degraded") else 0
         )
         degraded_fraction = degraded_event_count / event_count if event_count else 0.0
+        source_support = min(source_support_scores, default=0.0)
+        identifier_fidelity = min(identifier_fidelity_scores, default=0.0)
+        polarity_consistency = min(polarity_consistency_scores, default=0.0)
+        source_supported_event_count = sum(
+            score >= self.quality_thresholds["min_source_support"]
+            for score in source_support_scores
+        )
 
         failed_checks: list[str] = []
         if event_coverage < self.quality_thresholds["min_event_coverage"]:
@@ -504,6 +733,12 @@ class Tier1ToTier2Bridge:
             failed_checks.append("compression_ratio")
         if degraded_fraction > self.quality_thresholds["max_degraded_fraction"]:
             failed_checks.append("degraded_fraction")
+        if source_support < self.quality_thresholds["min_source_support"]:
+            failed_checks.append("source_support")
+        if identifier_fidelity < self.quality_thresholds["min_identifier_fidelity"]:
+            failed_checks.append("identifier_fidelity")
+        if polarity_consistency < self.quality_thresholds["min_polarity_consistency"]:
+            failed_checks.append("polarity_consistency")
 
         evaluated_at = datetime.now(timezone.utc).isoformat()
         audit_payload = {
@@ -519,6 +754,11 @@ class Tier1ToTier2Bridge:
             "compression_ratio": round(compression_ratio, 6),
             "degraded_event_count": degraded_event_count,
             "degraded_fraction": round(degraded_fraction, 6),
+            "source_supported_event_count": source_supported_event_count,
+            "source_support": round(source_support, 6),
+            "identifier_fidelity": round(identifier_fidelity, 6),
+            "polarity_consistency": round(polarity_consistency, 6),
+            "unsupported_identifiers": sorted(unsupported_identifiers),
             "thresholds": dict(self.quality_thresholds),
             "failed_checks": failed_checks,
             "sample_turn_ids": [turn["turn_id"] for turn in turns[:5]],
@@ -542,8 +782,10 @@ class Tier1ToTier2Bridge:
             "covered_turn_count, event_coverage, backlinked_event_count, "
             "backlink_completeness, source_chars, event_summary_chars, "
             "compression_ratio, degraded_event_count, degraded_fraction, "
-            "thresholds, failed_checks, sample_turn_ids) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "source_supported_event_count, source_support, identifier_fidelity, "
+            "polarity_consistency, unsupported_identifiers, thresholds, failed_checks, "
+            "sample_turn_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+            "?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 quality_evidence["audit_id"],
                 quality_evidence["evaluated_at"],
@@ -559,6 +801,11 @@ class Tier1ToTier2Bridge:
                 quality_evidence["compression_ratio"],
                 quality_evidence["degraded_event_count"],
                 quality_evidence["degraded_fraction"],
+                quality_evidence["source_supported_event_count"],
+                quality_evidence["source_support"],
+                quality_evidence["identifier_fidelity"],
+                quality_evidence["polarity_consistency"],
+                json.dumps(quality_evidence["unsupported_identifiers"]),
                 json.dumps(quality_evidence["thresholds"], sort_keys=True),
                 json.dumps(quality_evidence["failed_checks"]),
                 json.dumps(quality_evidence["sample_turn_ids"]),
@@ -628,13 +875,14 @@ class Tier1ToTier2Bridge:
                     conn.execute(
                         "INSERT OR REPLACE INTO turns_archive "
                         "(turn_id, session_id, speaker, text_summary, original_text, "
-                        "timestamp, compressed_at, event_ids, scene_ids) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "timestamp, compressed_at, event_ids, scene_ids, owner_id, workspace_id) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             turn_id, t["session_id"], t["speaker"],
                             text_summary, original_text,
                             t["timestamp"], now,
                             json.dumps(event_ids), json.dumps(scene_ids),
+                            t["owner_id"], t["workspace_id"],
                         ),
                     )
                     conn.execute(
@@ -673,6 +921,8 @@ class Tier1ToTier2Bridge:
             "force_oldest": batch.force_oldest,
             "low_relevance_fallback": batch.low_relevance_fallback,
             "sample_turn_ids": [item["turn_id"] for item in candidates[:5]],
+            "owner_id": batch.owner_id,
+            "workspace_id": batch.workspace_id,
         }
         if not candidates:
             return BridgeResult(

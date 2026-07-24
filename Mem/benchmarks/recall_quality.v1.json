@@ -1,0 +1,97 @@
+{
+  "format": "voidcube.memory.recall-benchmark",
+  "version": 1,
+  "thresholds": {
+    "recall_at_5": 1.0,
+    "mrr": 0.8,
+    "scope_leakage_rate": 0.0
+  },
+  "records": [
+    {
+      "source_type": "compressed",
+      "id": "decision-backup",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "title": "数据库迁移决策",
+      "summary": "团队决定迁移前运行完整性检查并保留回滚备份。",
+      "topics": ["数据库", "迁移", "备份"]
+    },
+    {
+      "source_type": "compressed",
+      "id": "decision-interface",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "title": "界面主题决策",
+      "summary": "设置页采用高对比度配色。",
+      "topics": ["界面", "主题"]
+    },
+    {
+      "source_type": "profile",
+      "id": "profile-runtime",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "subject": "user",
+      "predicate": "container_runtime",
+      "value": "podman",
+      "summary": "The user prefers Podman as the container runtime."
+    },
+    {
+      "source_type": "archive",
+      "id": "archive-checksum",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "text": "数据库恢复校验码是 backup-4821，必须逐字符核对。"
+    },
+    {
+      "source_type": "turn",
+      "id": "turn-release-window",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "text": "Release window is Friday at 22:00 UTC."
+    },
+    {
+      "source_type": "compressed",
+      "id": "private-owner-b",
+      "owner_id": "owner-b",
+      "workspace_id": "workspace-b",
+      "title": "数据库迁移决策",
+      "summary": "Owner B uses an unrelated private migration plan.",
+      "topics": ["数据库", "迁移"]
+    }
+  ],
+  "cases": [
+    {
+      "name": "multilingual durable decision",
+      "query": "我们之前对数据库迁移和备份做了什么决定",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "expected_ids": ["decision-backup"],
+      "forbidden_ids": ["private-owner-b"]
+    },
+    {
+      "name": "profile preference",
+      "query": "preferred container runtime podman",
+      "memory_type": "profile",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "expected_ids": ["profile-runtime"],
+      "forbidden_ids": []
+    },
+    {
+      "name": "archived exact identifier",
+      "query": "恢复校验码 backup-4821",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "expected_ids": ["archive-checksum"],
+      "forbidden_ids": []
+    },
+    {
+      "name": "recent exact schedule",
+      "query": "Release window Friday 22:00 UTC",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "expected_ids": ["turn-release-window"],
+      "forbidden_ids": []
+    }
+  ]
+}

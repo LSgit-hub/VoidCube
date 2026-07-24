@@ -470,7 +470,7 @@ async def test_verified_sources_settle_into_experiences_and_evidence_backed_narr
 
     assert first["task_experiences"] == 1
     assert first["conversation_experiences"] == 1
-    assert first["self_narratives"] == 1
+    assert first["self_narratives"] == 2
     assert second["updated_count"] == 0
 
     archive = await service.get_identity_archive()
@@ -485,10 +485,12 @@ async def test_verified_sources_settle_into_experiences_and_evidence_backed_narr
     )
     assert "governance:gov-completed-1" in task_experience["evidence_refs"]
     assert "file:systems/memory/identity_seed.py" in task_experience["evidence_refs"]
-    assert len(narrative) == 1
-    assert set(narrative[0]["evidence_refs"]) == {
-        item["memory_id"] for item in experiences
-    }
+    assert len(narrative) == 2
+    assert {
+        evidence_id
+        for item in narrative
+        for evidence_id in item["evidence_refs"]
+    } == {item["memory_id"] for item in experiences}
 
     conn = open_memory_sqlite(service._db_path)
     try:

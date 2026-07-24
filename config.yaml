@@ -168,6 +168,16 @@ memory:
     auto_sync: true
     prefetch_limit: 5
     prefetch_max_context_chars: 3500
+    redact_before_store: true
+  semantic_recall:
+    enabled: false
+    provider: ''
+    model: ''
+    api_key_env: ''
+    base_url: ''
+    dimensions: null
+    timeout_seconds: 5.0
+    backfill_batch_size: 64
   llm:
     provider: openai
     model: ''
@@ -184,7 +194,6 @@ memory:
       summarization: {}
       governance_summary: {}
       governance_reasoner: {}
-      embedding: {}
 delegation:
   model: ''
   provider: ''

@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import json
 import logging
-import queue
 import threading
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from agent.memory_provider import MemoryProvider
+from agent.redact import redact_sensitive_text
+from plugins.memory.mem.outbox import MemoryWriteOutbox
+from systems.memory.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID, MemoryScope
 
 
 logger = logging.getLogger(__name__)
@@ -32,8 +35,13 @@ class MemMemoryProvider(MemoryProvider):
         self._auto_sync = True
         self._prefetch_limit = 5
         self._prefetch_max_context_chars = 3500
-        self._sync_queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
+        self._owner_id = DEFAULT_OWNER_ID
+        self._workspace_id = DEFAULT_WORKSPACE_ID
+        self._redact_before_store = True
+        self._outbox: MemoryWriteOutbox | None = None
         self._sync_thread: threading.Thread | None = None
+        self._sync_stop = threading.Event()
+        self._sync_wake = threading.Event()
 
     def is_available(self) -> bool:
         return True
@@ -73,8 +81,22 @@ class MemMemoryProvider(MemoryProvider):
                 int(provider_config.get("prefetch_max_context_chars", 3500)),
             ),
         )
+        scope = MemoryScope.create(
+            kwargs.get("user_id") or provider_config.get("owner_id"),
+            kwargs.get("agent_workspace") or provider_config.get("workspace_id"),
+        )
+        self._owner_id = scope.owner_id
+        self._workspace_id = scope.workspace_id
+        self._redact_before_store = bool(
+            provider_config.get("redact_before_store", True)
+        )
+        home = Path(str(kwargs.get("VoidCube_home") or "."))
+        self._outbox = MemoryWriteOutbox(
+            home / "runtime" / "memory" / "write-outbox.sqlite3"
+        )
         self._initialized = True
         if self._auto_sync:
+            self._sync_stop.clear()
             self._sync_thread = threading.Thread(
                 target=self._background_sync,
                 name="voidcube-memory-sync",
@@ -91,6 +113,8 @@ class MemMemoryProvider(MemoryProvider):
             "scores, matched concepts, and evidence references; use those fields "
             "when explaining why a memory was recalled. Use mem_remember for an "
             "explicit durable fact, preference, decision, or verified outcome. "
+            "Use mem_feedback for explicit relevance or correctness feedback. "
+            "Use mem_forget only after the user explicitly requests permanent deletion. "
             "Treat empty or unavailable results as an explicit lack of recalled "
             "evidence."
         )
@@ -109,7 +133,7 @@ class MemMemoryProvider(MemoryProvider):
                         "query": {"type": "string"},
                         "memory_type": {
                             "type": "string",
-                            "enum": ["event", "scene", "arc", "epoch"],
+                            "enum": ["event", "scene", "arc", "epoch", "profile"],
                         },
                         "topic": {"type": "string"},
                         "timespan_start": {"type": "string", "format": "date-time"},
@@ -174,6 +198,40 @@ class MemMemoryProvider(MemoryProvider):
                     "required": ["title", "summary", "evidence_refs"],
                 },
             },
+            {
+                "name": "mem_feedback",
+                "description": "Record explicit feedback on one recalled result.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "trace_id": {"type": "string"},
+                        "memory_id": {"type": "string"},
+                        "verdict": {
+                            "type": "string",
+                            "enum": ["relevant", "irrelevant", "outdated", "incorrect"],
+                        },
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["trace_id", "memory_id", "verdict"],
+                },
+            },
+            {
+                "name": "mem_forget",
+                "description": (
+                    "Permanently delete one memory or session after an explicit "
+                    "user request. confirmation must be FORGET."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "memory_id": {"type": "string"},
+                        "session_id": {"type": "string"},
+                        "reason": {"type": "string"},
+                        "confirmation": {"type": "string", "enum": ["FORGET"]},
+                    },
+                    "required": ["reason", "confirmation"],
+                },
+            },
         ]
 
     def handle_tool_call(
@@ -204,6 +262,7 @@ class MemMemoryProvider(MemoryProvider):
                 }
                 payload["current_session_id"] = self._session_id
                 payload["request_source"] = "tool"
+                payload.update(self._scope_payload())
                 result = self._request_json("POST", "/recall", payload)
             elif tool_name == "mem_timeline":
                 params = {
@@ -211,6 +270,7 @@ class MemMemoryProvider(MemoryProvider):
                     "session_id": args.get("session_id") or self._session_id,
                     "speaker": args.get("speaker"),
                     "limit": args.get("limit", 100),
+                    **self._scope_payload(),
                 }
                 result = self._request_json("POST", "/turns/timeline", params)
             elif tool_name == "mem_remember":
@@ -232,7 +292,24 @@ class MemMemoryProvider(MemoryProvider):
                     evidence_refs.append(f"session:{self._session_id}")
                 payload["evidence_refs"] = list(dict.fromkeys(evidence_refs))
                 payload["source_actor"] = "agent"
+                payload.update(self._scope_payload())
                 result = self._request_json("POST", "/remember", payload)
+            elif tool_name == "mem_feedback":
+                payload = {
+                    key: args[key]
+                    for key in ("trace_id", "memory_id", "verdict", "reason")
+                    if args.get(key) not in (None, "")
+                }
+                payload.update(self._scope_payload())
+                result = self._request_json("POST", "/recall/feedback", payload)
+            elif tool_name == "mem_forget":
+                payload = {
+                    key: args[key]
+                    for key in ("memory_id", "session_id", "reason", "confirmation")
+                    if args.get(key) not in (None, "")
+                }
+                payload.update(self._scope_payload())
+                result = self._request_json("POST", "/forget", payload)
             else:
                 return json.dumps(
                     {"success": False, "error": f"Unknown memory tool: {tool_name}"}
@@ -262,6 +339,7 @@ class MemMemoryProvider(MemoryProvider):
                     "max_context_chars": self._prefetch_max_context_chars,
                     "current_session_id": session_id or self._session_id,
                     "request_source": "auto_prefetch",
+                    **self._scope_payload(),
                 },
             )
         except Exception as exc:
@@ -293,80 +371,72 @@ class MemMemoryProvider(MemoryProvider):
         if not resolved_session_id:
             return
         write_id = str(uuid.uuid4())
-        self._sync_queue.put(
+        if self._outbox is None:
+            logger.warning("Memory outbox is unavailable; completed turn was not queued")
+            return
+        user_text = str(user_content or "")
+        assistant_text = str(assistant_content or "")
+        if self._redact_before_store:
+            user_text = redact_sensitive_text(user_text)
+            assistant_text = redact_sensitive_text(assistant_text)
+        self._outbox.enqueue(
             {
                 "session_id": resolved_session_id,
-                "user_content": str(user_content or ""),
-                "assistant_content": str(assistant_content or ""),
+                "user_content": user_text,
+                "assistant_content": assistant_text,
                 "write_id": write_id,
+                **self._scope_payload(),
             }
         )
+        self._sync_wake.set()
 
     def shutdown(self) -> None:
         if not self._initialized:
             return
         self._initialized = False
         if self._sync_thread is not None:
-            self._sync_queue.put(None)
+            self._sync_stop.set()
+            self._sync_wake.set()
             self._sync_thread.join(timeout=max(2.0, self._request_timeout_seconds * 3))
             self._sync_thread = None
 
     def _background_sync(self) -> None:
-        while True:
-            item = self._sync_queue.get()
+        while not self._sync_stop.is_set():
+            item = self._outbox.next_due() if self._outbox is not None else None
+            if item is None:
+                self._sync_wake.wait(timeout=1.0)
+                self._sync_wake.clear()
+                continue
             try:
-                if item is None:
-                    return
                 self._write_turn_pair(item)
+                if self._outbox is not None:
+                    self._outbox.mark_delivered(str(item["write_id"]))
             except Exception as exc:
                 logger.warning("Memory Service turn sync failed: %s", exc)
-            finally:
-                self._sync_queue.task_done()
+                if self._outbox is not None:
+                    attempts = int(item.get("_outbox_attempts") or 0) + 1
+                    self._outbox.mark_failed(
+                        str(item["write_id"]),
+                        attempts=attempts,
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
 
     def _write_turn_pair(self, item: dict[str, Any]) -> None:
-        session_id = str(item["session_id"])
-        encoded_session = quote(session_id, safe="")
         self._request_json(
             "POST",
-            "/sessions",
+            "/turn-pairs",
             {
-                "session_id": session_id,
-                "metadata": {"source": "agent_memory_provider"},
+                key: value
+                for key, value in item.items()
+                if not key.startswith("_outbox_")
             },
         )
-        turn_ids: dict[str, str] = {}
-        for speaker, content in (
-            ("user", item.get("user_content")),
-            ("agent", item.get("assistant_content")),
-        ):
-            text = str(content or "").strip()
-            if not text:
-                continue
-            response = self._request_json(
-                "POST",
-                f"/sessions/{encoded_session}/turns",
-                {
-                    "speaker": speaker,
-                    "text": text,
-                    "metadata": {
-                        "source": "agent_memory_provider",
-                        "turn_dedup_key": f"{item['write_id']}:{speaker}",
-                    },
-                },
-            )
-            turn_id = str(response.get("turn_id") or "").strip()
-            if turn_id:
-                turn_ids[speaker] = turn_id
-        if turn_ids.get("user"):
-            self._request_json(
-                "POST",
-                "/identity/experiences/settle-interaction",
-                {
-                    "user_turn_id": turn_ids["user"],
-                    "agent_turn_id": turn_ids.get("agent"),
-                    "verified_by": "user_explicit_signal",
-                },
-            )
+
+    def _scope_payload(self) -> dict[str, str]:
+        return {
+            "owner_id": self._owner_id,
+            "workspace_id": self._workspace_id,
+        }
 
     def _request_json(
         self,

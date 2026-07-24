@@ -661,7 +661,7 @@ def test_gateway_task_decision_forwards_metadata_to_supervisor(monkeypatch):
     assert captured["json"]["metadata"]["execution_source"] == "cli_agent_pull"
 
 
-def test_gateway_memory_search_route_does_not_update_memory_activity_when_upstream_fails():
+def test_gateway_memory_recall_does_not_update_memory_activity_when_upstream_fails():
     gateway = InternalGateway(GatewayConfig())
     client = TestClient(gateway.app)
 
@@ -675,7 +675,7 @@ def test_gateway_memory_search_route_does_not_update_memory_activity_when_upstre
     )
     assert register_response.status_code == 201
 
-    response = client.post("/api/mem/memories/search", json={"query": "hello"})
+    response = client.post("/api/mem/recall", json={"query": "hello"})
     assert response.status_code in {500, 504}
 
     activity = client.get("/admin/activity").json()
@@ -739,7 +739,7 @@ def test_gateway_memory_proxy_preserves_query_parameters(monkeypatch):
     ]
 
 
-def test_gateway_memory_write_route_updates_memory_activity_even_when_upstream_fails():
+def test_gateway_remember_route_updates_memory_activity_even_when_upstream_fails():
     gateway = InternalGateway(GatewayConfig())
     client = TestClient(gateway.app)
 
@@ -754,8 +754,8 @@ def test_gateway_memory_write_route_updates_memory_activity_even_when_upstream_f
     assert register_response.status_code == 201
 
     response = client.post(
-        "/api/mem/memories/write",
-        json={"namespace": "default", "content": "hello"},
+        "/api/mem/remember",
+        json={"title": "Greeting", "summary": "hello"},
     )
     assert response.status_code in {500, 504}
 

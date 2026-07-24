@@ -34,7 +34,6 @@ MEM_MODEL_ROLES = frozenset(
         "summarization",
         "governance_summary",
         "governance_reasoner",
-        "embedding",
     }
 )
 

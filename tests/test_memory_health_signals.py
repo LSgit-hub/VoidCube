@@ -56,72 +56,6 @@ def test_memory_sqlite_connections_use_busy_timeout_and_wal(tmp_path):
     assert str(journal_mode).lower() == "wal"
 
 
-@pytest.mark.asyncio
-async def test_summarize_memory_marks_truncation_fallback_as_degraded(tmp_path):
-    svc = _make_service(tmp_path)
-    svc._resolve_mem_llm_client = lambda: (None, "none")  # type: ignore[method-assign]
-    await svc.write_memory(
-        {
-            "memory_id": "m-summary",
-            "namespace": "default",
-            "content": "Important memory content. " * 40,
-        }
-    )
-
-    result = await svc.summarize_memory("m-summary")
-
-    conn = open_memory_sqlite(svc._db_path)
-    try:
-        metadata_json = conn.execute(
-            "SELECT metadata FROM memories WHERE memory_id = ?",
-            ("m-summary",),
-        ).fetchone()[0]
-    finally:
-        conn.close()
-    metadata = json.loads(metadata_json)
-
-    assert result["status"] == "summarized"
-    assert result["summary_degraded"] is True
-    assert result["summary_method"] == "truncation_fallback"
-    assert metadata["summary_degraded"] is True
-    assert metadata["summary_method"] == "truncation_fallback"
-
-
-@pytest.mark.asyncio
-async def test_compress_memories_marks_truncation_fallback_as_degraded(tmp_path):
-    svc = _make_service(tmp_path)
-    svc._resolve_mem_llm_client = lambda: (None, "none")  # type: ignore[method-assign]
-    for idx in range(2):
-        await svc.write_memory(
-            {
-                "memory_id": f"m-compress-{idx}",
-                "namespace": "compress-src",
-                "content": f"Compressible memory {idx}. " * 40,
-                "relevance_score": 1.0 - idx * 0.1,
-            }
-        )
-
-    result = await svc.compress_memories(
-        {"namespace": "compress-src", "max_entries": 2, "target_size": 10}
-    )
-
-    conn = open_memory_sqlite(svc._db_path)
-    try:
-        metadata_json = conn.execute(
-            "SELECT metadata FROM memories WHERE namespace = ?",
-            ("compress-src_compressed",),
-        ).fetchone()[0]
-    finally:
-        conn.close()
-    metadata = json.loads(metadata_json)
-
-    assert result["status"] == "compressed"
-    assert result["summary_degraded"] is True
-    assert result["summary_method"] == "truncation_fallback"
-    assert metadata["summary_degraded"] is True
-    assert metadata["summary_method"] == "truncation_fallback"
-
-
 # ── 4-6.1: memory_active must reflect real write work, not "a rule ran" ──
 
 def test_rule_effective_count_across_return_shapes():
@@ -815,6 +749,7 @@ async def test_standalone_bridge_keeps_turns_uncompressed_when_no_events_generat
 @pytest.mark.operational
 async def test_compression_quality_gate_rejects_incomplete_turn_coverage_and_audits(tmp_path):
     svc = _make_service(tmp_path)
+    svc._llm_healthy = True
     await svc.create_session(SessionCreate(session_id="quality-reject", metadata={}))
     first = await svc.add_turn(
         "quality-reject",
@@ -884,6 +819,7 @@ async def test_compression_quality_gate_rejects_incomplete_turn_coverage_and_aud
 @pytest.mark.operational
 async def test_compression_quality_gate_passes_with_complete_reciprocal_backlinks(tmp_path):
     svc = _make_service(tmp_path)
+    svc._llm_healthy = True
     await svc.create_session(SessionCreate(session_id="quality-pass", metadata={}))
     first = await svc.add_turn(
         "quality-pass",
@@ -951,6 +887,79 @@ async def test_compression_quality_gate_passes_with_complete_reciprocal_backlink
 
 
 @pytest.mark.asyncio
+@pytest.mark.operational
+async def test_compression_quality_gate_rejects_semantically_unsupported_summary(tmp_path):
+    svc = MemoryService(
+        MemoryServiceConfig(
+            db_path=str(tmp_path / "semantic-quality.db"),
+            tier2_max_compression_ratio=10.0,
+        )
+    )
+    svc._llm_healthy = True
+    await svc.create_session(SessionCreate(session_id="quality-semantic", metadata={}))
+    turn = await svc.add_turn(
+        "quality-semantic",
+        TurnCreate(
+            speaker="user",
+            text="Deployment must not use SQLite build 2024.",
+            metadata={},
+        ),
+    )
+    now_dt = datetime(2026, 7, 2, tzinfo=timezone.utc)
+    event = SimpleNamespace(
+        id="event-fabricated",
+        parent_ids=[],
+        event_kind="decision",
+        title="Lunar orchard outcome",
+        summary="The lunar orchard approved PostgreSQL release 9999.",
+        timespan_start=now_dt,
+        timespan_end=now_dt,
+        importance=0.8,
+        confidence=0.9,
+        topics=["fabricated"],
+        entities=["PostgreSQL"],
+        source_turns=[turn["turn_id"]],
+    )
+    event.to_dict = lambda: {
+        "id": event.id,
+        "summary": event.summary,
+        "source_turns": list(event.source_turns),
+    }
+
+    class _FabricatedPipeline:
+        def ingest(self, turns):
+            return SimpleNamespace(
+                events=[event], scenes=[], arcs=[], epochs=[], profile_memories=[]
+            )
+
+    svc._build_compression_pipeline = lambda: _FabricatedPipeline()  # type: ignore[method-assign]
+    result = await svc.tier2_compress(
+        Tier2CompressRequest(min_relevance=0.0, force_oldest=True)
+    )
+
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        audit = conn.execute(
+            "SELECT status, source_support, identifier_fidelity, "
+            "polarity_consistency, unsupported_identifiers "
+            "FROM compression_quality_audit"
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert result["status"] == "quality_rejected"
+    assert result["quality_evidence"]["failed_checks"] == [
+        "source_support",
+        "identifier_fidelity",
+        "polarity_consistency",
+    ]
+    assert audit[0] == "rejected"
+    assert audit[1] < svc.config.tier2_min_source_support
+    assert audit[2:4] == (0.0, 0.0)
+    assert json.loads(audit[4]) == ["9999"]
+
+
+@pytest.mark.asyncio
 async def test_compression_quality_gate_can_reject_degraded_pipeline(tmp_path):
     cfg = MemoryServiceConfig(
         db_path=str(tmp_path / "mem.db"),
@@ -1002,6 +1011,7 @@ async def test_compression_quality_gate_can_reject_degraded_pipeline(tmp_path):
 @pytest.mark.asyncio
 async def test_tier2_compress_rolls_back_archive_when_compressed_write_fails(tmp_path, monkeypatch):
     svc = _make_service(tmp_path)
+    svc._llm_healthy = True
     await svc.create_session(SessionCreate(session_id="rollback", metadata={}))
     await svc.add_turn(
         "rollback",

@@ -1255,55 +1255,6 @@ class BodyLifecycleExecutionAdapter:
 
 
 
-    async def trigger_memory_decay(self, request: dict | None = None) -> Dict[str, Any]:
-        """Apply memory decay to a namespace (E-03)."""
-        request = request or {}
-        namespace = request.get("namespace", "default")
-        try:
-            import aiohttp
-            async with aiohttp.ClientSession() as session:
-                url = f"{str(self.config.gateway_address).rstrip('/')}/api/mem/memories/decay"
-                async with session.post(url, json={
-                    "namespace": namespace,
-                    "decay_factor": request.get("decay_factor", 0.1),
-                }) as resp:
-                    if resp.status == 200:
-                        return await resp.json()
-            return {"status": "decay_failed", "namespace": namespace}
-        except Exception as exc:
-            logger.warning("Memory decay failed for %s: %s", namespace, exc)
-            return {"status": "decay_error", "error": str(exc)}
-
-    async def trigger_memory_cleanup(self, request: dict | None = None) -> Dict[str, Any]:
-        """Remove stale/low-relevance entries from a namespace (E-03)."""
-        request = request or {}
-        namespace = request.get("namespace", "default")
-        min_score = float(request.get("min_score", 0.01))
-        try:
-            import aiohttp
-            async with aiohttp.ClientSession() as session:
-                gateway = str(self.config.gateway_address).rstrip("/")
-                url = f"{gateway}/api/mem/memories/namespace/{namespace}"
-                async with session.get(url) as resp:
-                    if resp.status != 200:
-                        return {"status": "cleanup_failed"}
-                    data = await resp.json()
-                entries = data.get("memories", [])
-                removed = 0
-                for entry in entries:
-                    score = float(entry.get("relevance_score", 0))
-                    memory_id = entry.get("memory_id")
-                    if score < min_score and memory_id:
-                        async with session.delete(
-                            f"{gateway}/api/mem/memories/{memory_id}"
-                        ) as del_resp:
-                            if del_resp.status == 200:
-                                removed += 1
-                return {"status": "cleanup_complete", "removed": removed, "namespace": namespace}
-        except Exception as exc:
-            logger.warning("Memory cleanup failed for %s: %s", namespace, exc)
-            return {"status": "cleanup_error", "error": str(exc)}
-
 class MemoryMaintenanceExecutionAdapter:
     def __init__(
         self,

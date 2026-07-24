@@ -7,6 +7,12 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
+from systems.memory.scope import (
+    DEFAULT_OWNER_ID,
+    DEFAULT_WORKSPACE_ID,
+    GLOBAL_SCOPE_ID,
+)
+
 
 _IMPORTANT_TASK_FAMILIES = {
     "body_switch",
@@ -161,6 +167,8 @@ def _ingest_completed_tasks(conn, events: Iterable[Any], now: datetime) -> int:
             importance=_task_importance(projection),
             confidence=1.0,
             now=now,
+            owner_id=GLOBAL_SCOPE_ID,
+            workspace_id=GLOBAL_SCOPE_ID,
         )
     return written
 
@@ -198,17 +206,19 @@ def _ingest_released_revisions(conn, now: datetime) -> int:
             importance=1.0,
             confidence=1.0,
             now=now,
+            owner_id=GLOBAL_SCOPE_ID,
+            workspace_id=GLOBAL_SCOPE_ID,
         )
     return written
 
 
 def _ingest_verified_conversations(conn, now: datetime) -> int:
     rows = conn.execute(
-        "SELECT turn_id, speaker, text, timestamp, metadata FROM turns "
+        "SELECT turn_id, speaker, text, timestamp, metadata, owner_id, workspace_id FROM turns "
         "WHERE metadata LIKE '%identity_experience%'"
     ).fetchall()
     written = 0
-    for turn_id, speaker, text, timestamp, metadata_raw in rows:
+    for turn_id, speaker, text, timestamp, metadata_raw, owner_id, workspace_id in rows:
         try:
             metadata = json.loads(metadata_raw or "{}")
         except (TypeError, ValueError):
@@ -235,6 +245,8 @@ def _ingest_verified_conversations(conn, now: datetime) -> int:
             importance=float(metadata.get("importance") or 0.9),
             confidence=1.0,
             now=now,
+            owner_id=str(owner_id or DEFAULT_OWNER_ID),
+            workspace_id=str(workspace_id or DEFAULT_WORKSPACE_ID),
         )
     return written
 
@@ -242,7 +254,8 @@ def _ingest_verified_conversations(conn, now: datetime) -> int:
 def _synthesize_weekly_narrative(conn, now: datetime) -> int:
     start = now - timedelta(days=7)
     rows = conn.execute(
-        "SELECT memory_id, title, summary, timespan_end FROM compressed_memories "
+        "SELECT memory_id, title, summary, timespan_end, owner_id, workspace_id "
+        "FROM compressed_memories "
         "WHERE identity_layer = 'experience' AND status = 'active' "
         "AND timespan_end >= ? ORDER BY timespan_end ASC, memory_id ASC",
         (start.isoformat(),),
@@ -251,33 +264,43 @@ def _synthesize_weekly_narrative(conn, now: datetime) -> int:
         return 0
     year, week, _ = now.isocalendar()
     bucket = f"{year}-W{week:02d}"
-    titles = [str(row[1]).strip() for row in rows if str(row[1]).strip()]
-    evidence_refs = [str(row[0]) for row in rows]
-    highlights = "；".join(titles[:6])
-    if len(titles) > 6:
-        highlights += f"；以及另外 {len(titles) - 6} 项经历"
-    summary = (
-        f"在 {bucket} 的认知周期里，我沉淀了 {len(rows)} 项经过验证的经历："
-        f"{highlights}。这份自述只概括可追溯证据，不替代原始经历。"
-    )
-    narrative_at = str(rows[-1][3] or now.isoformat())
-    return _upsert_identity_memory(
-        conn,
-        memory_id=f"identity-self-narrative-{bucket}",
-        identity_layer="self_narrative",
-        origin_type="experience_synthesis",
-        origin_id=f"self-narrative:{bucket}",
-        title=f"星子自述 · {bucket}",
-        summary=summary,
-        occurred_at=narrative_at,
-        topics=["身份", "自我叙事", "经历回顾"],
-        entities=["星子", "Mem"],
-        evidence_refs=evidence_refs,
-        event_kind="progress",
-        importance=0.9,
-        confidence=1.0,
-        now=now,
-    )
+    grouped: dict[tuple[str, str], list[Any]] = {}
+    for row in rows:
+        grouped.setdefault((str(row[4]), str(row[5])), []).append(row)
+    written = 0
+    for (owner_id, workspace_id), scoped_rows in grouped.items():
+        titles = [str(row[1]).strip() for row in scoped_rows if str(row[1]).strip()]
+        evidence_refs = [str(row[0]) for row in scoped_rows]
+        highlights = "；".join(titles[:6])
+        if len(titles) > 6:
+            highlights += f"；以及另外 {len(titles) - 6} 项经历"
+        summary = (
+            f"在 {bucket} 的认知周期里，我沉淀了 {len(scoped_rows)} 项经过验证的经历："
+            f"{highlights}。这份自述只概括可追溯证据，不替代原始经历。"
+        )
+        scope_digest = hashlib.sha1(
+            f"{owner_id}\0{workspace_id}".encode("utf-8")
+        ).hexdigest()[:12]
+        written += _upsert_identity_memory(
+            conn,
+            memory_id=f"identity-self-narrative-{bucket}-{scope_digest}",
+            identity_layer="self_narrative",
+            origin_type="experience_synthesis",
+            origin_id=f"self-narrative:{bucket}:{scope_digest}",
+            title=f"星子自述 · {bucket}",
+            summary=summary,
+            occurred_at=str(scoped_rows[-1][3] or now.isoformat()),
+            topics=["身份", "自我叙事", "经历回顾"],
+            entities=["星子", "Mem"],
+            evidence_refs=evidence_refs,
+            event_kind="progress",
+            importance=0.9,
+            confidence=1.0,
+            now=now,
+            owner_id=owner_id,
+            workspace_id=workspace_id,
+        )
+    return written
 
 
 def _upsert_identity_memory(
@@ -297,6 +320,8 @@ def _upsert_identity_memory(
     importance: float,
     confidence: float,
     now: datetime,
+    owner_id: str = GLOBAL_SCOPE_ID,
+    workspace_id: str = GLOBAL_SCOPE_ID,
 ) -> int:
     normalized = {
         "title": title.strip()[:300],
@@ -311,7 +336,8 @@ def _upsert_identity_memory(
     existing = conn.execute(
         "SELECT title, summary, timespan_start, timespan_end, importance, confidence, "
         "topics, entities, source_turns, event_kind, identity_layer, evidence_refs, "
-        "origin_type, origin_id FROM compressed_memories WHERE memory_id = ?",
+        "origin_type, origin_id, owner_id, workspace_id "
+        "FROM compressed_memories WHERE memory_id = ?",
         (memory_id,),
     ).fetchone()
     expected = (
@@ -319,7 +345,7 @@ def _upsert_identity_memory(
         normalized["importance"], normalized["confidence"],
         normalized["topics"], normalized["entities"],
         normalized["evidence_refs"], event_kind, identity_layer,
-        normalized["evidence_refs"], origin_type, origin_id,
+        normalized["evidence_refs"], origin_type, origin_id, owner_id, workspace_id,
     )
     if existing is not None and tuple(existing) == expected:
         return 0
@@ -330,9 +356,9 @@ def _upsert_identity_memory(
             importance, confidence, topics, entities, source_turns, parent_id,
             compressed_at, compression_level, status, superseded_by, weight,
             event_kind, pinned, hidden, identity_layer, evidence_refs,
-            origin_type, origin_id, verified_at
+            origin_type, origin_id, verified_at, owner_id, workspace_id
         ) VALUES (?, 'event', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 0, 'active',
-                  NULL, 1.0, ?, 0, 0, ?, ?, ?, ?, ?)
+                  NULL, 1.0, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(memory_id) DO UPDATE SET
             title = excluded.title, summary = excluded.summary,
             timespan_start = excluded.timespan_start, timespan_end = excluded.timespan_end,
@@ -342,7 +368,8 @@ def _upsert_identity_memory(
             status = 'active', superseded_by = NULL, hidden = 0,
             identity_layer = excluded.identity_layer, evidence_refs = excluded.evidence_refs,
             origin_type = excluded.origin_type, origin_id = excluded.origin_id,
-            verified_at = excluded.verified_at
+            verified_at = excluded.verified_at,
+            owner_id = excluded.owner_id, workspace_id = excluded.workspace_id
         """,
         (
             memory_id, normalized["title"], normalized["summary"], occurred_at,
@@ -351,7 +378,7 @@ def _upsert_identity_memory(
             normalized["evidence_refs"],
             now.isoformat(), event_kind, identity_layer,
             normalized["evidence_refs"], origin_type, origin_id,
-            now.isoformat(),
+            now.isoformat(), owner_id, workspace_id,
         ),
     )
     return 1

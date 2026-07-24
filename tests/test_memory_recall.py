@@ -2,14 +2,28 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
 from systems.memory.config import MemoryServiceConfig
-from systems.memory.memory_service import DurableMemoryCreate, MemoryService, RecallRequest
+from systems.memory.memory_service import (
+    DurableMemoryCreate,
+    ForgetRequest,
+    IdentityExperienceVerification,
+    MemoryService,
+    RecallFeedbackCreate,
+    RecallRequest,
+    SessionCreate,
+    TurnCreate,
+    TurnPairCreate,
+)
 from systems.memory.recall import build_recall_plan, normalize_text
-from systems.memory.tier1_to_tier2_bridge import open_memory_sqlite
+from systems.memory.tier1_to_tier2_bridge import (
+    _write_compressed_memories_to_db,
+    open_memory_sqlite,
+)
 
 
 pytestmark = [pytest.mark.unit]
@@ -34,20 +48,23 @@ def _insert_turn(
     text: str,
     timestamp: datetime,
     speaker: str = "user",
+    owner_id: str = "local-user",
+    workspace_id: str = "default",
 ) -> None:
     conn = open_memory_sqlite(service._db_path)
     try:
         stamp = timestamp.isoformat()
         conn.execute(
             "INSERT OR IGNORE INTO sessions "
-            "(session_id, created_at, updated_at, metadata) VALUES (?, ?, ?, ?)",
-            (session_id, stamp, stamp, "{}"),
+            "(session_id, owner_id, workspace_id, created_at, updated_at, metadata) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (session_id, owner_id, workspace_id, stamp, stamp, "{}"),
         )
         conn.execute(
             "INSERT INTO turns "
             "(turn_id, session_id, speaker, text, timestamp, relevance_score, "
-            "decay_factor, tags, metadata, compressed_to_tier2) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+            "decay_factor, tags, metadata, compressed_to_tier2, owner_id, workspace_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
             (
                 turn_id,
                 session_id,
@@ -58,6 +75,8 @@ def _insert_turn(
                 0.01,
                 "[]",
                 "{}",
+                owner_id,
+                workspace_id,
             ),
         )
         conn.commit()
@@ -74,6 +93,8 @@ def _insert_compressed(
     timestamp: datetime,
     importance: float = 0.8,
     topics: list[str] | None = None,
+    owner_id: str = "local-user",
+    workspace_id: str = "default",
 ) -> None:
     conn = open_memory_sqlite(service._db_path)
     try:
@@ -82,9 +103,9 @@ def _insert_compressed(
             "INSERT INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, compressed_at, "
-            "status, weight, event_kind) "
+            "status, weight, event_kind, owner_id, workspace_id) "
             "VALUES (?, 'event', ?, ?, ?, ?, ?, 0.9, ?, '[]', '[]', ?, "
-            "'active', 0.8, 'decision')",
+            "'active', 0.8, 'decision', ?, ?)",
             (
                 memory_id,
                 title,
@@ -94,6 +115,8 @@ def _insert_compressed(
                 importance,
                 json.dumps(topics or [], ensure_ascii=False),
                 stamp,
+                owner_id,
+                workspace_id,
             ),
         )
         conn.commit()
@@ -497,4 +520,504 @@ async def test_recall_rejects_empty_query_and_disabled_tiers(tmp_path):
     with pytest.raises(HTTPException, match="at least one memory tier"):
         await service.recall(
             RecallRequest(query="memory", include_tier1=False, include_tier2=False)
+        )
+
+
+@pytest.mark.asyncio
+async def test_recall_enforces_owner_and_workspace_scope(tmp_path):
+    service = _service(tmp_path)
+    now = datetime.now(timezone.utc)
+    _insert_turn(
+        service,
+        turn_id="owner-a-turn",
+        session_id="owner-a-session",
+        text="数据库迁移必须保留私有备份。",
+        timestamp=now,
+        owner_id="owner-a",
+        workspace_id="workspace-a",
+    )
+    _insert_turn(
+        service,
+        turn_id="owner-b-turn",
+        session_id="owner-b-session",
+        text="数据库迁移使用另一个私有方案。",
+        timestamp=now,
+        owner_id="owner-b",
+        workspace_id="workspace-b",
+    )
+
+    result = await service.recall(
+        RecallRequest(
+            query="数据库迁移私有方案",
+            include_tier2=False,
+            owner_id="owner-a",
+            workspace_id="workspace-a",
+        )
+    )
+
+    assert {item["id"] for item in result["results"]} == {"owner-a-turn"}
+
+
+@pytest.mark.asyncio
+async def test_recall_uses_archived_original_as_evidence_fallback(tmp_path):
+    service = _service(tmp_path)
+    stamp = datetime.now(timezone.utc).isoformat()
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "INSERT INTO turns_archive "
+            "(turn_id, session_id, speaker, text_summary, original_text, timestamp, "
+            "compressed_at, event_ids, scene_ids, owner_id, workspace_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, '[]', '[]', ?, ?)",
+            (
+                "archived-detail",
+                "archive-session",
+                "user",
+                "迁移细节",
+                "数据库迁移使用校验码 backup-4821 作为恢复证据。",
+                stamp,
+                stamp,
+                "owner-a",
+                "workspace-a",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = await service.recall(
+        RecallRequest(
+            query="数据库迁移校验码 backup-4821",
+            owner_id="owner-a",
+            workspace_id="workspace-a",
+            include_tier2=False,
+        )
+    )
+
+    assert result["results"][0]["id"] == "archived-detail"
+    assert result["results"][0]["tier"] == "archive"
+    assert result["results"][0]["signals"]["archive_fallback"] is True
+
+
+@pytest.mark.asyncio
+async def test_turn_pair_write_is_atomic_scoped_and_idempotent(tmp_path):
+    service = _service(tmp_path)
+    request = TurnPairCreate(
+        session_id="pair-session",
+        user_content="请记住部署前备份。",
+        assistant_content="已确认。",
+        write_id="write-pair-1",
+        owner_id="owner-a",
+        workspace_id="workspace-a",
+    )
+
+    first = await service.add_turn_pair(request)
+    repeated = await service.add_turn_pair(request)
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        rows = conn.execute(
+            "SELECT speaker, owner_id, workspace_id FROM turns "
+            "WHERE session_id = ? ORDER BY speaker",
+            ("pair-session",),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert first["turn_ids"] == repeated["turn_ids"]
+    assert rows == [
+        ("agent", "owner-a", "workspace-a"),
+        ("user", "owner-a", "workspace-a"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_profile_memory_is_persisted_recalled_and_superseded(tmp_path):
+    service = _service(tmp_path)
+    now = datetime.now(timezone.utc)
+    _insert_turn(
+        service,
+        turn_id="profile-source",
+        session_id="profile-session",
+        text="我偏好使用 Podman。",
+        timestamp=now,
+        owner_id="owner-a",
+        workspace_id="workspace-a",
+    )
+
+    def profile(memory_id: str, value: str, summary: str):
+        return SimpleNamespace(
+            id=memory_id,
+            memory_kind="preference",
+            subject="user",
+            predicate="container_runtime",
+            value=value,
+            summary=summary,
+            confidence=0.95,
+            certainty_state="confirmed",
+            status="active",
+            valid_from=now,
+            valid_to=None,
+            evidence_refs=["turn:profile-source"],
+            source_turns=["profile-source"],
+            supersedes=[],
+            conflict_refs=[],
+            created_at=now,
+        )
+
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        _write_compressed_memories_to_db(
+            conn,
+            SimpleNamespace(
+                events=[], scenes=[], arcs=[], epochs=[],
+                profile_memories=[profile("profile-1", "docker", "用户偏好 Docker。")],
+            ),
+            now.isoformat(),
+        )
+        _write_compressed_memories_to_db(
+            conn,
+            SimpleNamespace(
+                events=[], scenes=[], arcs=[], epochs=[],
+                profile_memories=[profile("profile-2", "podman", "用户改为偏好 Podman。")],
+            ),
+            now.isoformat(),
+        )
+        conn.commit()
+        statuses = conn.execute(
+            "SELECT memory_id, status FROM profile_memories ORDER BY memory_id"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    result = await service.recall(
+        RecallRequest(
+            query="用户偏好什么容器运行时 Podman",
+            memory_type="profile",
+            include_tier1=False,
+            owner_id="owner-a",
+            workspace_id="workspace-a",
+        )
+    )
+
+    assert statuses == [("profile-1", "superseded"), ("profile-2", "active")]
+    assert [item["id"] for item in result["results"]] == ["profile-2"]
+
+
+@pytest.mark.asyncio
+async def test_explicit_recall_feedback_changes_future_ranking(tmp_path):
+    service = _service(tmp_path)
+    now = datetime.now(timezone.utc)
+    _insert_turn(
+        service,
+        turn_id="feedback-target",
+        session_id="feedback-session",
+        text="数据库迁移备份方案使用旧脚本。",
+        timestamp=now,
+    )
+    first = await service.recall(
+        RecallRequest(query="数据库迁移备份旧脚本", include_tier2=False)
+    )
+    await service.record_recall_feedback(
+        RecallFeedbackCreate(
+            trace_id=first["trace_id"],
+            memory_id="feedback-target",
+            verdict="incorrect",
+            reason="用户确认这条方案已经错误。",
+        )
+    )
+
+    second = await service.recall(
+        RecallRequest(
+            query="数据库迁移备份旧脚本",
+            include_tier2=False,
+            min_score=0.0,
+        )
+    )
+
+    assert second["results"][0]["signals"]["feedback_delta"] == -0.5
+    assert second["results"][0]["score"] < first["results"][0]["score"]
+
+
+@pytest.mark.asyncio
+async def test_forget_session_hard_deletes_only_requested_scope(tmp_path):
+    service = _service(tmp_path)
+    now = datetime.now(timezone.utc)
+    _insert_turn(
+        service,
+        turn_id="forget-owner-a",
+        session_id="forget-session-a",
+        text="私有部署口令提示 alpha。",
+        timestamp=now,
+        owner_id="owner-a",
+        workspace_id="workspace-a",
+    )
+    _insert_turn(
+        service,
+        turn_id="keep-owner-b",
+        session_id="forget-session-b",
+        text="私有部署口令提示 beta。",
+        timestamp=now,
+        owner_id="owner-b",
+        workspace_id="workspace-b",
+    )
+    trace = await service.recall(
+        RecallRequest(
+            query="私有部署口令提示 alpha",
+            current_session_id="forget-session-a",
+            include_tier2=False,
+            owner_id="owner-a",
+            workspace_id="workspace-a",
+        )
+    )
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "INSERT INTO memory_embeddings "
+            "(source_type, memory_id, owner_id, workspace_id, content_hash, model, "
+            "provider, dimensions, vector, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "turn",
+                "forget-owner-a",
+                "owner-a",
+                "workspace-a",
+                "hash-a",
+                "test-model",
+                "test-provider",
+                2,
+                "[1.0,0.0]",
+                now.isoformat(),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    forgotten = await service.forget_memory(
+        ForgetRequest(
+            session_id="forget-session-a",
+            reason="用户明确要求删除该会话",
+            confirmation="FORGET",
+            owner_id="owner-a",
+            workspace_id="workspace-a",
+        )
+    )
+    owner_a = await service.recall(
+        RecallRequest(
+            query="私有部署口令提示",
+            include_tier2=False,
+            owner_id="owner-a",
+            workspace_id="workspace-a",
+        )
+    )
+    owner_b = await service.recall(
+        RecallRequest(
+            query="私有部署口令提示",
+            include_tier2=False,
+            owner_id="owner-b",
+            workspace_id="workspace-b",
+        )
+    )
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        derived_counts = {
+            "fts": conn.execute(
+                "SELECT COUNT(*) FROM memory_fts WHERE memory_id = 'forget-owner-a'"
+            ).fetchone()[0],
+            "embeddings": conn.execute(
+                "SELECT COUNT(*) FROM memory_embeddings "
+                "WHERE memory_id = 'forget-owner-a'"
+            ).fetchone()[0],
+            "traces": conn.execute(
+                "SELECT COUNT(*) FROM recall_traces WHERE trace_id = ?",
+                (trace["trace_id"],),
+            ).fetchone()[0],
+        }
+    finally:
+        conn.close()
+
+    assert forgotten["deleted_counts"]["turns"] == 1
+    assert forgotten["deleted_counts"]["memory_embeddings"] == 1
+    assert forgotten["deleted_counts"]["recall_traces"] == 1
+    assert derived_counts == {"fts": 0, "embeddings": 0, "traces": 0}
+    assert owner_a["results"] == []
+    assert [item["id"] for item in owner_b["results"]] == ["keep-owner-b"]
+
+
+@pytest.mark.asyncio
+async def test_memory_service_force_redacts_all_durable_write_paths(tmp_path):
+    service = _service(tmp_path)
+    secret = "sk-1234567890abcdefghijklmnop"
+    await service.create_session(
+        SessionCreate(
+            session_id="redaction-session",
+            metadata={"token": secret},
+        )
+    )
+    await service.add_turn(
+        "redaction-session",
+        TurnCreate(
+            speaker="user",
+            text=f"credential={secret}",
+            metadata={"api_key": secret},
+        ),
+    )
+    await service.remember(
+        DurableMemoryCreate(
+            title=f"Credential {secret}",
+            summary=f"Never persist {secret} in full.",
+            topics=[secret],
+        )
+    )
+    await service.recall(
+        RecallRequest(
+            query=f"find leaked credential {secret}",
+            current_session_id="redaction-session",
+        )
+    )
+
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        stored_values = [
+            conn.execute(
+                "SELECT metadata FROM sessions WHERE session_id = 'redaction-session'"
+            ).fetchone()[0],
+            *conn.execute(
+                "SELECT text, metadata FROM turns WHERE session_id = 'redaction-session'"
+            ).fetchone(),
+            *conn.execute(
+                "SELECT title, summary, topics FROM compressed_memories "
+                "WHERE origin_type = 'agent_explicit_memory'"
+            ).fetchone(),
+            *conn.execute(
+                "SELECT query, query_plan FROM recall_traces "
+                "WHERE session_id = 'redaction-session'"
+            ).fetchone(),
+        ]
+    finally:
+        conn.close()
+
+    assert all(secret not in str(value) for value in stored_values)
+    assert any("..." in str(value) for value in stored_values)
+
+
+@pytest.mark.asyncio
+async def test_all_direct_memory_reads_and_mutations_enforce_scope(tmp_path):
+    service = _service(tmp_path)
+    now = datetime.now(timezone.utc)
+    _insert_turn(
+        service,
+        turn_id="direct-owner-a",
+        session_id="direct-session-a",
+        text="owner A private turn",
+        timestamp=now,
+        owner_id="owner-a",
+        workspace_id="workspace-a",
+    )
+    _insert_turn(
+        service,
+        turn_id="direct-owner-b",
+        session_id="direct-session-b",
+        text="owner B private turn",
+        timestamp=now,
+        owner_id="owner-b",
+        workspace_id="workspace-b",
+    )
+    _insert_compressed(
+        service,
+        memory_id="compressed-owner-a",
+        title="Owner A memory",
+        summary="owner A private compressed memory",
+        timestamp=now,
+        owner_id="owner-a",
+        workspace_id="workspace-a",
+    )
+    _insert_compressed(
+        service,
+        memory_id="compressed-owner-b",
+        title="Owner B memory",
+        summary="owner B private compressed memory",
+        timestamp=now,
+        owner_id="owner-b",
+        workspace_id="workspace-b",
+    )
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "UPDATE compressed_memories SET source_turns = ? WHERE memory_id = ?",
+            (json.dumps(["direct-owner-a"]), "compressed-owner-a"),
+        )
+        conn.execute(
+            "UPDATE compressed_memories SET source_turns = ? WHERE memory_id = ?",
+            (json.dumps(["direct-owner-b"]), "compressed-owner-b"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    sessions = await service.list_sessions(
+        owner_id="owner-a", workspace_id="workspace-a"
+    )
+    turns = await service.query_turns(
+        owner_id="owner-a", workspace_id="workspace-a"
+    )
+    compressed = await service.search_compressed(
+        {"owner_id": "owner-a", "workspace_id": "workspace-a"}
+    )
+    trace = await service.trace_compressed_by_turn(
+        "direct-owner-b",
+        owner_id="owner-a",
+        workspace_id="workspace-a",
+    )
+    stats = await service.tier1_stats(
+        owner_id="owner-a", workspace_id="workspace-a"
+    )
+
+    assert [item["session_id"] for item in sessions["sessions"]] == [
+        "direct-session-a"
+    ]
+    assert [item["turn_id"] for item in turns["turns"]] == ["direct-owner-a"]
+    assert "compressed-owner-a" in {
+        item["memory_id"] for item in compressed["results"]
+    }
+    assert "compressed-owner-b" not in {
+        item["memory_id"] for item in compressed["results"]
+    }
+    assert trace["compressed_memories"] == []
+    assert stats["tier1"]["total_turns"] == 1
+
+    with pytest.raises(HTTPException, match="Session not found"):
+        await service.get_session(
+            "direct-session-b",
+            owner_id="owner-a",
+            workspace_id="workspace-a",
+        )
+    with pytest.raises(HTTPException, match="Turn not found"):
+        await service.get_turn(
+            "direct-owner-b",
+            owner_id="owner-a",
+            workspace_id="workspace-a",
+        )
+    with pytest.raises(HTTPException, match="Compressed memory not found"):
+        await service.get_compressed(
+            "compressed-owner-b",
+            owner_id="owner-a",
+            workspace_id="workspace-a",
+        )
+    with pytest.raises(HTTPException, match="Memory not found"):
+        await service.pin_memory(
+            "compressed-owner-b",
+            owner_id="owner-a",
+            workspace_id="workspace-a",
+        )
+    with pytest.raises(HTTPException, match="Turn not found"):
+        await service.verify_identity_experience(
+            IdentityExperienceVerification(
+                turn_id="direct-owner-b",
+                title="Cross-scope attempt",
+                summary="This must not be accepted.",
+                evidence_refs=["turn:direct-owner-b"],
+                owner_id="owner-a",
+                workspace_id="workspace-a",
+            )
         )

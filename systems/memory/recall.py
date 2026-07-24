@@ -17,6 +17,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Sequence
 
+from systems.memory.lexical_index import search_memory_fts
+from systems.memory.scope import (
+    DEFAULT_OWNER_ID,
+    DEFAULT_WORKSPACE_ID,
+    GLOBAL_SCOPE_ID,
+)
+
 
 _LATIN_TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9_.-]*", re.IGNORECASE)
 _CJK_RUN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
@@ -195,7 +202,7 @@ def build_recall_plan(
         raw_types = memory_type or ()
     for value in raw_types:
         candidate = normalize_text(value)
-        if candidate in {"event", "scene", "arc", "epoch"} and candidate not in types:
+        if candidate in {"event", "scene", "arc", "epoch", "profile"} and candidate not in types:
             types.append(candidate)
 
     terms = tuple(_extract_terms(normalized, topic=topic))
@@ -234,6 +241,9 @@ def recall_memories(
     current_session_id: str | None = None,
     include_tier1: bool = True,
     include_tier2: bool = True,
+    owner_id: str = DEFAULT_OWNER_ID,
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
+    semantic_matches: dict[tuple[str, str], float] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Return a small, ranked, traceable recall set.
@@ -247,6 +257,14 @@ def recall_memories(
     bounded_chars = max(256, min(int(max_context_chars), 20000))
     bounded_min_score = max(0.0, min(float(min_score), 1.0))
     reference = _aware_datetime(now or datetime.now().astimezone())
+    semantic_matches = dict(semantic_matches or {})
+    lexical_matches = search_memory_fts(
+        conn,
+        plan.search_terms,
+        owner_id=owner_id,
+        workspace_id=workspace_id,
+        limit=bounded_candidates * 4,
+    )
 
     candidates: list[dict[str, Any]] = []
     if (
@@ -255,7 +273,28 @@ def recall_memories(
         and not plan.immediate_recency
     ):
         candidates.extend(
-            _tier2_candidates(conn, plan, bounded_candidates, reference)
+            _tier2_candidates(
+                conn,
+                plan,
+                bounded_candidates,
+                reference,
+                owner_id=owner_id,
+                workspace_id=workspace_id,
+                lexical_matches=lexical_matches,
+                semantic_matches=semantic_matches,
+            )
+        )
+        candidates.extend(
+            _profile_candidates(
+                conn,
+                plan,
+                bounded_candidates,
+                reference,
+                owner_id=owner_id,
+                workspace_id=workspace_id,
+                lexical_matches=lexical_matches,
+                semantic_matches=semantic_matches,
+            )
         )
     if include_tier1:
         candidates.extend(
@@ -265,9 +304,32 @@ def recall_memories(
                 bounded_candidates,
                 reference,
                 current_session_id=_optional_text(current_session_id),
+                owner_id=owner_id,
+                workspace_id=workspace_id,
+                lexical_matches=lexical_matches,
+                semantic_matches=semantic_matches,
             )
         )
+        if not plan.immediate_recency and plan.intent != "recent_conversation":
+            candidates.extend(
+                _archive_candidates(
+                    conn,
+                    plan,
+                    bounded_candidates,
+                    reference,
+                    owner_id=owner_id,
+                    workspace_id=workspace_id,
+                    lexical_matches=lexical_matches,
+                    semantic_matches=semantic_matches,
+                )
+            )
 
+    candidates = _apply_feedback_scores(
+        conn,
+        candidates,
+        owner_id=owner_id,
+        workspace_id=workspace_id,
+    )
     ranked, dedup_truncated = _deduplicate_and_rank(
         [
             candidate
@@ -378,15 +440,40 @@ def _tier2_candidates(
     plan: RecallPlan,
     candidate_limit: int,
     now: datetime,
+    *,
+    owner_id: str,
+    workspace_id: str,
+    lexical_matches: dict[str, tuple[str, ...]],
+    semantic_matches: dict[tuple[str, str], float],
 ) -> list[dict[str, Any]]:
-    clauses = ["status = 'active'", "hidden = 0"]
-    params: list[Any] = []
-    searchable = ("title", "summary", "topics", "entities")
-    _append_term_predicates(clauses, params, searchable, plan.search_terms)
-    if plan.memory_types:
-        placeholders = ",".join("?" for _ in plan.memory_types)
+    clauses = [
+        "status = 'active'",
+        "hidden = 0",
+        "((owner_id = ? AND workspace_id = ?) OR "
+        "(owner_id = ? AND workspace_id = ?))",
+    ]
+    params: list[Any] = [
+        owner_id,
+        workspace_id,
+        GLOBAL_SCOPE_ID,
+        GLOBAL_SCOPE_ID,
+    ]
+    lexical_ids = lexical_matches.get("compressed", ())
+    semantic_ids = _semantic_ids(semantic_matches, "compressed")
+    _append_search_predicates(
+        clauses,
+        params,
+        id_column="memory_id",
+        lexical_ids=lexical_ids,
+        semantic_ids=semantic_ids,
+    )
+    tier2_types = tuple(item for item in plan.memory_types if item != "profile")
+    if plan.memory_types and not tier2_types:
+        return []
+    if tier2_types:
+        placeholders = ",".join("?" for _ in tier2_types)
         clauses.append(f"memory_type IN ({placeholders})")
-        params.extend(plan.memory_types)
+        params.extend(tier2_types)
     if plan.topic:
         clauses.append("topics LIKE ?")
         params.append(f"%{plan.topic}%")
@@ -415,7 +502,8 @@ def _tier2_candidates(
             [str(row[2] or ""), str(row[3] or ""), *topics, *entities]
         )
         lexical, matched = _lexical_score(plan, searchable_text)
-        if lexical <= 0 and plan.terms:
+        semantic = float(semantic_matches.get(("compressed", str(row[0])), 0.0))
+        if lexical <= 0 and plan.terms and semantic < 0.35:
             continue
         dynamic_weight = _dynamic_weight(
             float(row[15] or 0.0),
@@ -425,9 +513,18 @@ def _tier2_candidates(
             pinned=bool(row[14]),
         )
         recency = _recency_score(row[5], now)
-        score = 0.62 * lexical + 0.18 * dynamic_weight + 0.12 * float(
-            row[6] or 0.0
-        ) + 0.08 * recency
+        score = (
+            0.42 * lexical
+            + 0.30 * semantic
+            + 0.12 * dynamic_weight
+            + 0.10 * float(row[6] or 0.0)
+            + 0.06 * recency
+            if semantic > 0
+            else 0.62 * lexical
+            + 0.18 * dynamic_weight
+            + 0.12 * float(row[6] or 0.0)
+            + 0.08 * recency
+        )
         results.append(
             {
                 "id": row[0],
@@ -449,6 +546,174 @@ def _tier2_candidates(
                     "dynamic_weight": round(dynamic_weight, 6),
                     "importance": round(float(row[6] or 0.0), 6),
                     "recency": round(recency, 6),
+                    "semantic": round(semantic, 6),
+                },
+            }
+        )
+    return results
+
+
+def _profile_candidates(
+    conn: sqlite3.Connection,
+    plan: RecallPlan,
+    candidate_limit: int,
+    now: datetime,
+    *,
+    owner_id: str,
+    workspace_id: str,
+    lexical_matches: dict[str, tuple[str, ...]],
+    semantic_matches: dict[tuple[str, str], float],
+) -> list[dict[str, Any]]:
+    if plan.memory_types and "profile" not in plan.memory_types:
+        return []
+    clauses = [
+        "status = 'active'",
+        "owner_id = ?",
+        "workspace_id = ?",
+    ]
+    params: list[Any] = [owner_id, workspace_id]
+    lexical_ids = lexical_matches.get("profile", ())
+    semantic_ids = _semantic_ids(semantic_matches, "profile")
+    _append_search_predicates(
+        clauses,
+        params,
+        id_column="memory_id",
+        lexical_ids=lexical_ids,
+        semantic_ids=semantic_ids,
+    )
+    if plan.timespan_start:
+        clauses.append("COALESCE(valid_to, valid_from) >= ?")
+        params.append(plan.timespan_start)
+    if plan.timespan_end:
+        clauses.append("valid_from <= ?")
+        params.append(plan.timespan_end)
+    params.append(candidate_limit)
+    rows = conn.execute(
+        "SELECT memory_id, memory_kind, subject, predicate, value, summary, "
+        "confidence, certainty_state, valid_from, valid_to, evidence_refs, "
+        "source_turns FROM profile_memories WHERE "
+        + " AND ".join(clauses)
+        + " ORDER BY confidence DESC, valid_from DESC LIMIT ?",
+        params,
+    ).fetchall()
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        searchable_text = " ".join(str(value or "") for value in row[2:6])
+        lexical, matched = _lexical_score(plan, searchable_text)
+        semantic = float(semantic_matches.get(("profile", str(row[0])), 0.0))
+        if lexical <= 0 and plan.terms and semantic < 0.35:
+            continue
+        recency = _recency_score(row[8], now, decay_days=365.0)
+        score = (
+            0.46 * lexical
+            + 0.32 * semantic
+            + 0.16 * float(row[6] or 0.0)
+            + 0.06 * recency
+            if semantic > 0
+            else 0.70 * lexical
+            + 0.22 * float(row[6] or 0.0)
+            + 0.08 * recency
+        )
+        results.append(
+            {
+                "id": row[0],
+                "tier": "profile",
+                "memory_type": "profile",
+                "profile_kind": row[1],
+                "title": f"{row[2]} {row[3]}",
+                "summary": row[5] or f"{row[2]} {row[3]} {row[4]}",
+                "subject": row[2],
+                "predicate": row[3],
+                "value": row[4],
+                "certainty_state": row[7],
+                "timespan_start": row[8],
+                "timespan_end": row[9],
+                "evidence_refs": _json_list(row[10]),
+                "source_turns": _json_list(row[11]),
+                "score": round(min(score, 1.0), 6),
+                "matched_terms": matched,
+                "signals": {
+                    "lexical": round(lexical, 6),
+                    "confidence": round(float(row[6] or 0.0), 6),
+                    "recency": round(recency, 6),
+                    "semantic": round(semantic, 6),
+                },
+            }
+        )
+    return results
+
+
+def _archive_candidates(
+    conn: sqlite3.Connection,
+    plan: RecallPlan,
+    candidate_limit: int,
+    now: datetime,
+    *,
+    owner_id: str,
+    workspace_id: str,
+    lexical_matches: dict[str, tuple[str, ...]],
+    semantic_matches: dict[tuple[str, str], float],
+) -> list[dict[str, Any]]:
+    clauses = [
+        "owner_id = ?",
+        "workspace_id = ?",
+        "original_text IS NOT NULL",
+    ]
+    params: list[Any] = [owner_id, workspace_id]
+    lexical_ids = lexical_matches.get("archive", ())
+    semantic_ids = _semantic_ids(semantic_matches, "archive")
+    _append_search_predicates(
+        clauses,
+        params,
+        id_column="turn_id",
+        lexical_ids=lexical_ids,
+        semantic_ids=semantic_ids,
+    )
+    if plan.timespan_start:
+        clauses.append("timestamp >= ?")
+        params.append(plan.timespan_start)
+    if plan.timespan_end:
+        clauses.append("timestamp <= ?")
+        params.append(plan.timespan_end)
+    params.append(candidate_limit)
+    rows = conn.execute(
+        "SELECT turn_id, session_id, speaker, original_text, text_summary, "
+        "timestamp, event_ids, scene_ids FROM turns_archive WHERE "
+        + " AND ".join(clauses)
+        + " ORDER BY timestamp DESC LIMIT ?",
+        params,
+    ).fetchall()
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        text = str(row[3] or row[4] or "")
+        lexical, matched = _lexical_score(plan, text)
+        semantic = float(semantic_matches.get(("archive", str(row[0])), 0.0))
+        if lexical <= 0 and plan.terms and semantic < 0.35:
+            continue
+        recency = _recency_score(row[5], now, decay_days=180.0)
+        score = (
+            0.48 * lexical + 0.34 * semantic + 0.06 + 0.12 * recency
+            if semantic > 0
+            else 0.72 * lexical + 0.08 + 0.20 * recency
+        )
+        results.append(
+            {
+                "id": row[0],
+                "tier": "archive",
+                "speaker": row[2],
+                "title": f"Archived conversation turn from {str(row[5])[:10]}",
+                "summary": text,
+                "timestamp": row[5],
+                "session_id": row[1],
+                "source_turns": [row[0]],
+                "evidence_refs": [*_json_list(row[6]), *_json_list(row[7])],
+                "score": round(min(score, 1.0), 6),
+                "matched_terms": matched,
+                "signals": {
+                    "lexical": round(lexical, 6),
+                    "recency": round(recency, 6),
+                    "archive_fallback": True,
+                    "semantic": round(semantic, 6),
                 },
             }
         )
@@ -462,15 +727,26 @@ def _tier1_candidates(
     now: datetime,
     *,
     current_session_id: str | None,
+    owner_id: str,
+    workspace_id: str,
+    lexical_matches: dict[str, tuple[str, ...]],
+    semantic_matches: dict[tuple[str, str], float],
 ) -> list[dict[str, Any]]:
-    clauses = ["compressed_to_tier2 = 0"]
-    params: list[Any] = []
+    clauses = [
+        "compressed_to_tier2 = 0",
+        "owner_id = ?",
+        "workspace_id = ?",
+    ]
+    params: list[Any] = [owner_id, workspace_id]
     if plan.intent != "recent_conversation":
-        _append_term_predicates(
+        lexical_ids = lexical_matches.get("turn", ())
+        semantic_ids = _semantic_ids(semantic_matches, "turn")
+        _append_search_predicates(
             clauses,
             params,
-            ("text", "tags"),
-            plan.search_terms,
+            id_column="turn_id",
+            lexical_ids=lexical_ids,
+            semantic_ids=semantic_ids,
         )
     if plan.timespan_start:
         clauses.append("timestamp >= ?")
@@ -489,7 +765,12 @@ def _tier1_candidates(
     results: list[dict[str, Any]] = []
     for row in rows:
         lexical, matched = _lexical_score(plan, f"{row[3]} {' '.join(_json_list(row[6]))}")
-        if lexical <= 0 and plan.intent != "recent_conversation":
+        semantic = float(semantic_matches.get(("turn", str(row[0])), 0.0))
+        if (
+            lexical <= 0
+            and plan.intent != "recent_conversation"
+            and semantic < 0.35
+        ):
             continue
         recency = _recency_score(
             row[4],
@@ -512,7 +793,16 @@ def _tier1_candidates(
                 + (0.05 if same_session else 0.0)
             )
         else:
-            score = 0.76 * lexical + 0.12 * float(row[5] or 0.0) + 0.12 * recency
+            score = (
+                0.50 * lexical
+                + 0.34 * semantic
+                + 0.08 * float(row[5] or 0.0)
+                + 0.08 * recency
+                if semantic > 0
+                else 0.76 * lexical
+                + 0.12 * float(row[5] or 0.0)
+                + 0.12 * recency
+            )
         results.append(
             {
                 "id": row[0],
@@ -530,26 +820,39 @@ def _tier1_candidates(
                     "relevance": round(float(row[5] or 0.0), 6),
                     "recency": round(recency, 6),
                     "same_session": same_session,
+                    "semantic": round(semantic, 6),
                 },
             }
         )
     return results
 
 
-def _append_term_predicates(
+def _semantic_ids(
+    semantic_matches: dict[tuple[str, str], float],
+    source_type: str,
+    *,
+    min_similarity: float = 0.35,
+) -> tuple[str, ...]:
+    return tuple(
+        memory_id
+        for (candidate_type, memory_id), similarity in semantic_matches.items()
+        if candidate_type == source_type and float(similarity) >= min_similarity
+    )
+
+
+def _append_search_predicates(
     clauses: list[str],
     params: list[Any],
-    columns: Sequence[str],
-    terms: Sequence[str],
+    *,
+    id_column: str,
+    lexical_ids: Sequence[str],
+    semantic_ids: Sequence[str],
 ) -> None:
-    if not terms:
+    candidate_ids = tuple(dict.fromkeys([*lexical_ids, *semantic_ids]))
+    if not candidate_ids:
         return
-    predicates: list[str] = []
-    for term in terms:
-        for column in columns:
-            predicates.append(f"LOWER({column}) LIKE ?")
-            params.append(f"%{term}%")
-    clauses.append("(" + " OR ".join(predicates) + ")")
+    clauses.append(f"{id_column} IN ({','.join('?' for _ in candidate_ids)})")
+    params.extend(candidate_ids)
 
 
 def _lexical_score(plan: RecallPlan, value: object) -> tuple[float, list[str]]:
@@ -792,6 +1095,50 @@ def _record_tier2_accesses(
         conn.rollback()
 
 
+def _apply_feedback_scores(
+    conn: sqlite3.Connection,
+    candidates: Sequence[dict[str, Any]],
+    *,
+    owner_id: str,
+    workspace_id: str,
+) -> list[dict[str, Any]]:
+    ids = [str(item.get("id") or "") for item in candidates if item.get("id")]
+    if not ids:
+        return list(candidates)
+    placeholders = ",".join("?" for _ in ids)
+    rows = conn.execute(
+        "SELECT memory_id, verdict, COUNT(*) FROM recall_feedback "
+        f"WHERE owner_id = ? AND workspace_id = ? AND memory_id IN ({placeholders}) "
+        "GROUP BY memory_id, verdict",
+        [owner_id, workspace_id, *ids],
+    ).fetchall()
+    counts: dict[str, dict[str, int]] = {}
+    for memory_id, verdict, count in rows:
+        counts.setdefault(str(memory_id), {})[str(verdict)] = int(count)
+    adjusted: list[dict[str, Any]] = []
+    verdict_weights = {
+        "relevant": 0.08,
+        "irrelevant": -0.25,
+        "outdated": -0.35,
+        "incorrect": -0.50,
+    }
+    for source in candidates:
+        item = dict(source)
+        feedback = counts.get(str(item.get("id") or ""), {})
+        delta = sum(verdict_weights.get(verdict, 0.0) * count for verdict, count in feedback.items())
+        delta = max(-0.65, min(0.20, delta))
+        item["score"] = round(
+            max(0.0, min(1.0, float(item.get("score") or 0.0) + delta)),
+            6,
+        )
+        signals = dict(item.get("signals") or {})
+        signals["feedback_delta"] = round(delta, 6)
+        signals["feedback_counts"] = feedback
+        item["signals"] = signals
+        adjusted.append(item)
+    return adjusted
+
+
 def _dynamic_weight(
     base_weight: float,
     *,
@@ -811,9 +1158,11 @@ def _dynamic_weight(
         "blocker": 0.06,
         "progress": 0.04,
     }.get(str(event_kind or ""), 0.0)
-    access_bonus = min(math.log(access_count + 1) / math.log(101), 1.0) * 0.10
     citation_bonus = min(citation_count / 5.0, 1.0) * 0.10
-    return max(0.0, min(1.0, base_weight + content_bonus + access_bonus + citation_bonus))
+    # Retrieval count is observability, not relevance feedback. Boosting on
+    # access alone creates a self-reinforcing ranking loop.
+    del access_count
+    return max(0.0, min(1.0, base_weight + content_bonus + citation_bonus))
 
 
 def _recency_score(

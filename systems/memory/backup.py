@@ -68,12 +68,16 @@ class MemoryBackupManager:
     _EXPORT_PREFIX = "memory-export-"
     _EXPORT_SUFFIX = ".json"
     _EXPORT_TABLES = (
-        "memories",
         "sessions",
         "turns",
         "turns_archive",
         "compressed_memories",
+        "profile_memories",
         "compression_quality_audit",
+        "recall_traces",
+        "recall_feedback",
+        "memory_deletion_audit",
+        "memory_embeddings",
         "identity_revision_proposals",
     )
 

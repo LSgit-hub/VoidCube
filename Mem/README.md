@@ -22,18 +22,18 @@ VoidCube stores Memory runtime data under
 
 Tier 1 relevance decay is based on elapsed time and a persisted
 `last_decay_at` anchor. Compression is accepted only after event coverage,
-source backlink completeness, compression ratio, and degraded fraction pass the
-configured gate. A rejected batch stays active in Tier 1 and its evidence is
-written to `compression_quality_audit`.
+source backlink completeness, compression ratio, degraded fraction, source
+support, identifier fidelity, and polarity consistency pass the configured
+gate. A rejected batch stays active in Tier 1 and its evidence is written to
+`compression_quality_audit`.
 
-VoidCube exposes one bounded `/recall` path across active Tier 1 turns and
-structured Tier 2 memory. It performs multilingual concept-term planning,
-time/topic filtering, mixed relevance/recency/importance ranking, near-duplicate
-suppression, per-session diversity, and a strict context budget. Every result
-retains source-turn and score evidence. This is intentionally described as
-hybrid recall rather than vector semantic search: there is no embedding column
-or chat-model-generated pseudo-vector path. A future embedding index still
-requires a protocol covering model/version, write, backfill, and invalidation.
+VoidCube exposes one bounded `/recall` path across active Tier 1 turns, archived
+original evidence, profile facts, and structured Tier 2 memory. FTS5 supplies
+the default bounded lexical candidate set. An optional independent `/embeddings`
+protocol adds versioned semantic candidates with provider, model, dimensions,
+content hashes, incremental backfill, and invalidation; chat models are never
+used as embedding models. Ranking, scope filtering, evidence, deduplication, and
+the strict context budget remain owned by the unified recall path.
 
 The first implementation pass in this repository focuses on a `Chronicle Scholar LM` design:
 - structured memory objects: `Event`, `Scene`, `Arc`, `Epoch`
@@ -48,6 +48,7 @@ The first implementation pass in this repository focuses on a `Chronicle Scholar
 - `src/memai/`: implementation code
 - `tests/`: smoke tests for core behavior
 - `examples/`: runnable example
+- `benchmarks/recall_quality.v1.json`: versioned recall ground truth and thresholds
 - `benchmarks/fixtures/`: starter benchmark fixtures
 - `benchmarks/provider_contracts/`: transport-level provider compatibility fixtures
 

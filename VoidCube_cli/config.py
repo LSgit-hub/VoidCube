@@ -620,6 +620,20 @@ DEFAULT_CONFIG = {
             # Automatic recall is bounded before it is injected into a turn.
             "prefetch_limit": 5,
             "prefetch_max_context_chars": 3500,
+            # Raw conversation is redacted before entering the durable outbox.
+            "redact_before_store": True,
+        },
+        # Optional true semantic retrieval. This is deliberately independent
+        # from memory.llm: a chat model is never treated as an embedding model.
+        "semantic_recall": {
+            "enabled": False,
+            "provider": "",
+            "model": "",
+            "api_key_env": "",
+            "base_url": "",
+            "dimensions": None,
+            "timeout_seconds": 5.0,
+            "backfill_batch_size": 64,
         },
         # Mem-side LLM configuration. CLI is the user-facing configuration
         # entry; Mem interprets this block when it needs a model.
@@ -641,7 +655,6 @@ DEFAULT_CONFIG = {
                 "summarization": {},
                 "governance_summary": {},
                 "governance_reasoner": {},
-                "embedding": {},
             },
         },
     },

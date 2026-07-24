@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from plugins.memory.mem import MemMemoryProvider
+from plugins.memory.mem.outbox import MemoryWriteOutbox
 
 
 @pytest.mark.unit
@@ -16,6 +17,8 @@ def test_mem_provider_exposes_only_canonical_service_tools():
         "mem_search",
         "mem_timeline",
         "mem_remember",
+        "mem_feedback",
+        "mem_forget",
     ]
 
 
@@ -55,6 +58,8 @@ def test_mem_provider_remember_uses_canonical_service(monkeypatch):
                 "evidence_refs": ["turn:turn-1", "session:session-1"],
                 "event_kind": "decision",
                 "source_actor": "agent",
+                "owner_id": "local-user",
+                "workspace_id": "default",
             },
         )
     ]
@@ -102,6 +107,8 @@ def test_mem_provider_search_and_prefetch_use_gateway_memory_route(monkeypatch):
                 "limit": 3,
                 "current_session_id": "",
                 "request_source": "tool",
+                "owner_id": "local-user",
+                "workspace_id": "default",
             },
         ),
         (
@@ -113,6 +120,8 @@ def test_mem_provider_search_and_prefetch_use_gateway_memory_route(monkeypatch):
                 "max_context_chars": 3500,
                 "current_session_id": "session-1",
                 "request_source": "auto_prefetch",
+                "owner_id": "local-user",
+                "workspace_id": "default",
             },
         ),
     ]
@@ -138,31 +147,29 @@ def test_mem_provider_writes_explicit_session_and_deduplicated_turn_pair(monkeyp
         }
     )
 
-    assert calls[0] == (
-        "POST",
-        "/sessions",
-        {
-            "session_id": "session with space",
-            "metadata": {"source": "agent_memory_provider"},
-        },
-    )
-    assert calls[1][1] == "/sessions/session%20with%20space/turns"
-    assert calls[1][2]["metadata"]["turn_dedup_key"] == "write-1:user"
-    assert calls[2][2]["speaker"] == "agent"
-    assert calls[2][2]["metadata"]["turn_dedup_key"] == "write-1:agent"
+    assert calls == [
+        (
+            "POST",
+            "/turn-pairs",
+            {
+                "session_id": "session with space",
+                "user_content": "question",
+                "assistant_content": "answer",
+                "write_id": "write-1",
+            },
+        )
+    ]
 
 
 @pytest.mark.unit
-def test_mem_provider_settles_written_pair_for_experience_detection(monkeypatch):
+def test_mem_provider_delegates_experience_settlement_to_atomic_service_endpoint(monkeypatch):
     provider = MemMemoryProvider()
     provider._initialized = True
     calls = []
 
     def fake_request(method, path, payload=None):
         calls.append((method, path, payload))
-        if path.endswith("/turns"):
-            return {"turn_id": f"turn-{payload['speaker']}"}
-        return {}
+        return {"status": "stored"}
 
     monkeypatch.setattr(provider, "_request_json", fake_request)
 
@@ -175,15 +182,16 @@ def test_mem_provider_settles_written_pair_for_experience_detection(monkeypatch)
         }
     )
 
-    assert calls[-1] == (
+    assert calls == [(
         "POST",
-        "/identity/experiences/settle-interaction",
+        "/turn-pairs",
         {
-            "user_turn_id": "turn-user",
-            "agent_turn_id": "turn-agent",
-            "verified_by": "user_explicit_signal",
+            "session_id": "session-1",
+            "user_content": "请永远记录这个故事。",
+            "assistant_content": "已记录。",
+            "write_id": "write-1",
         },
-    )
+    )]
 
 
 @pytest.mark.unit
@@ -230,3 +238,46 @@ def test_mem_provider_makes_empty_recall_explicit(monkeypatch):
         "Memory recall status: empty (trace_id=trace-empty). "
         "No recalled evidence matched this turn."
     )
+
+
+@pytest.mark.unit
+def test_mem_provider_redacts_before_durable_outbox(monkeypatch, tmp_path):
+    provider = MemMemoryProvider()
+    provider._initialized = True
+    provider._auto_sync = True
+    provider._session_id = "session-1"
+    provider._outbox = MemoryWriteOutbox(tmp_path / "outbox.sqlite3")
+    monkeypatch.setattr(
+        "plugins.memory.mem.redact_sensitive_text",
+        lambda value: value.replace("secret-value", "<redacted>"),
+    )
+
+    provider.sync_turn("api_key=secret-value", "stored secret-value")
+    pending = provider._outbox.next_due()
+
+    assert pending is not None
+    assert pending["user_content"] == "api_key=<redacted>"
+    assert pending["assistant_content"] == "stored <redacted>"
+    assert pending["owner_id"] == "local-user"
+    assert pending["workspace_id"] == "default"
+
+
+@pytest.mark.unit
+def test_memory_outbox_survives_reopen_until_delivery(tmp_path):
+    path = tmp_path / "outbox.sqlite3"
+    first = MemoryWriteOutbox(path)
+    first.enqueue(
+        {
+            "write_id": "write-1",
+            "session_id": "session-1",
+            "user_content": "question",
+            "assistant_content": "answer",
+        }
+    )
+
+    reopened = MemoryWriteOutbox(path)
+    assert reopened.pending_count() == 1
+    assert reopened.next_due()["write_id"] == "write-1"
+
+    reopened.mark_delivered("write-1")
+    assert MemoryWriteOutbox(path).pending_count() == 0

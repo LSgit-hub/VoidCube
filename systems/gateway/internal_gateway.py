@@ -962,6 +962,7 @@ class InternalGateway:
 
         normalized_path = "/" + str(path or "").strip("/").lower()
         read_suffixes = (
+            "/recall",
             "/search",
             "/query",
             "/timeline",

@@ -388,6 +388,7 @@ Use role-specific model configuration in more Mem subsystems:
 - scholar / summarization should resolve `summarization`
 - governance evidence summary should resolve `governance_summary`
 - optional model-assisted governance should resolve `governance_reasoner`
-- future embedding / similarity search should resolve `embedding`
+- embedding / similarity search uses `memory.semantic_recall.*` and the independent
+  `/embeddings` protocol; it must not resolve through a chat-model role
 
 Provider profiles and prompt packs already exist, but they are not yet a complete model configuration system.
