@@ -13,10 +13,8 @@ from VoidCube_cli.model_switch import ModelSwitchResult
 pytestmark = [pytest.mark.unit, pytest.mark.smoke]
 
 
-def test_load_cli_config_uses_shared_loader_and_normalizes(monkeypatch) -> None:
+def test_load_cli_config_returns_shared_loader_result(monkeypatch) -> None:
     shared_config = {
-        "model": "retired-root-model",
-        "max_turns": 12,
         "runtime": {"active_provider": "primary"},
         "providers": {
             "primary": {
@@ -30,12 +28,7 @@ def test_load_cli_config_uses_shared_loader_and_normalizes(monkeypatch) -> None:
 
     loaded = cli_module.load_cli_config()
 
-    assert loaded["runtime"]["active_provider"] == "primary"
-    assert loaded["providers"] == shared_config["providers"]
-    assert "model" not in loaded
-    assert "max_turns" not in loaded
-    assert loaded["terminal"] == {}
-    assert loaded["agent"] == {}
+    assert loaded is shared_config
 
 
 def test_resolve_cli_provider_config_uses_unified_provider_map() -> None:

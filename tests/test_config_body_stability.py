@@ -26,6 +26,8 @@ def test_body_stability_config_can_be_loaded_from_env(monkeypatch):
 @pytest.mark.smoke
 def test_repository_body_config_is_generated_from_product_defaults():
     assert REPO_CONFIG_PATH.read_text(encoding="utf-8") == render_repo_config()
+    assert ("tool_progress_" + "overrides") not in render_repo_config()
+    assert ("tool_progress_" + "command") not in render_repo_config()
 
 
 @pytest.mark.unit
@@ -45,5 +47,6 @@ def test_cli_has_no_retired_config_compatibility():
         'CLI_CONFIG["' + 'model"]',
         'CLI_CONFIG["' + 'max_turns"]',
         'normalized["' + 'model"]',
+        "_normalize_minimal_cli" + "_config",
     )
     assert all(marker not in cli_source for marker in stale_markers)

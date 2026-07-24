@@ -115,10 +115,10 @@ display:
   show_cost: false
   skin: default
   interim_assistant_messages: true
-  tool_progress_command: false
-  tool_progress_overrides: {}
   tool_preview_length: 0
   platforms: {}
+clarify:
+  timeout: 120
 privacy:
   redact_pii: false
 tts:

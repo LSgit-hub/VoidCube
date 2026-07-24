@@ -183,19 +183,6 @@ def show_config() -> None:
                     parts.append(f"model={model}")
                 print(f"  {label:12s}  {', '.join(parts)}")
 
-    print()
-    print(color("◆ Messaging Platforms", Colors.CYAN, Colors.BOLD))
-    telegram_token = get_env_value("TELEGRAM_BOT_TOKEN")
-    discord_token = get_env_value("DISCORD_BOT_TOKEN")
-    print(
-        "  Telegram:     "
-        f"{'configured' if telegram_token else color('not configured', Colors.DIM)}"
-    )
-    print(
-        "  Discord:      "
-        f"{'configured' if discord_token else color('not configured', Colors.DIM)}"
-    )
-
     try:
         from agent.skill_utils import discover_all_skill_config_vars, resolve_skill_config_values
 
@@ -285,14 +272,10 @@ def set_config_value(key: str, value: str) -> None:
         "BROWSERBASE_PROJECT_ID",
         "BROWSER_USE_API_KEY",
         "FAL_KEY",
-        "TELEGRAM_BOT_TOKEN",
-        "DISCORD_BOT_TOKEN",
         "TERMINAL_SSH_HOST",
         "TERMINAL_SSH_USER",
         "TERMINAL_SSH_KEY",
         "SUDO_PASSWORD",
-        "SLACK_BOT_TOKEN",
-        "SLACK_APP_TOKEN",
         "GITHUB_TOKEN",
         "WANDB_API_KEY",
         "TINKER_API_KEY",

@@ -12,6 +12,7 @@ This module provides:
 - VoidCube config wizard   - Re-run setup wizard
 """
 
+import copy
 import os
 import platform
 import re
@@ -59,6 +60,50 @@ _RETIRED_MODEL_ENV_VARS = (
     "LLM_BASE_URL",
     "OPENAI_MODEL",
     *_RETIRED_AUXILIARY_ENV_VARS,
+)
+_RETIRED_TOOL_PROGRESS_ENV_VARS = (
+    "VOIDCUBE_TOOL_" + "PROGRESS",
+    "VOIDCUBE_TOOL_" + "PROGRESS_MODE",
+)
+_RETIRED_MESSAGING_ENV_VARS = (
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_ALLOWED_USERS",
+    "DISCORD_BOT_TOKEN",
+    "DISCORD_ALLOWED_USERS",
+    "DISCORD_REPLY_TO_MODE",
+    "SLACK_BOT_TOKEN",
+    "SLACK_APP_TOKEN",
+    "SLACK_ALLOWED_USERS",
+    "WHATSAPP_ENABLED",
+    "WHATSAPP_MODE",
+    "WHATSAPP_ALLOWED_USERS",
+    "MATTERMOST_URL",
+    "MATTERMOST_TOKEN",
+    "MATTERMOST_ALLOWED_USERS",
+    "MATTERMOST_REQUIRE_MENTION",
+    "MATTERMOST_FREE_RESPONSE_CHANNELS",
+    "MATRIX_HOMESERVER",
+    "MATRIX_ACCESS_TOKEN",
+    "MATRIX_USER_ID",
+    "MATRIX_ALLOWED_USERS",
+    "MATRIX_REQUIRE_MENTION",
+    "MATRIX_FREE_RESPONSE_ROOMS",
+    "MATRIX_AUTO_THREAD",
+    "MATRIX_DEVICE_ID",
+    "MATRIX_RECOVERY_KEY",
+    "BLUEBUBBLES_SERVER_URL",
+    "BLUEBUBBLES_PASSWORD",
+    "BLUEBUBBLES_ALLOWED_USERS",
+    "GATEWAY_ALLOW_ALL_USERS",
+    "API_SERVER_ENABLED",
+    "API_SERVER_KEY",
+    "API_SERVER_PORT",
+    "API_SERVER_HOST",
+    "API_SERVER_MODEL_NAME",
+    "WEBHOOK_ENABLED",
+    "WEBHOOK_PORT",
+    "WEBHOOK_SECRET",
+    "MESSAGING_CWD",
 )
 import yaml
 
@@ -475,10 +520,12 @@ DEFAULT_CONFIG = {
         "show_cost": False,       # Show $ cost in the status bar (off by default)
         "skin": "default",
         "interim_assistant_messages": True,  # Gateway: show natural mid-turn assistant status messages
-        "tool_progress_command": False,  # Enable /verbose command in messaging gateway
-        "tool_progress_overrides": {},  # DEPRECATED — use display.platforms instead
         "tool_preview_length": 0,  # Max chars for tool call previews (0 = no limit, show full paths/commands)
         "platforms": {},  # Per-platform display overrides: {"telegram": {"tool_progress": "all"}, "slack": {"tool_progress": "off"}}
+    },
+
+    "clarify": {
+        "timeout": 120,
     },
 
     # Privacy settings
@@ -706,8 +753,6 @@ DEFAULT_CONFIG = {
 ENV_VARS_BY_VERSION: Dict[int, List[str]] = {
     3: ["FIRECRAWL_API_KEY", "BROWSERBASE_API_KEY", "BROWSERBASE_PROJECT_ID", "FAL_KEY"],
     4: ["VOICE_TOOLS_OPENAI_KEY", "ELEVENLABS_API_KEY"],
-    5: ["WHATSAPP_ENABLED", "WHATSAPP_MODE", "WHATSAPP_ALLOWED_USERS",
-        "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_ALLOWED_USERS"],
     10: ["TAVILY_API_KEY"],
     11: ["TERMINAL_MODAL_MODE"],
 }
@@ -1115,262 +1160,7 @@ OPTIONAL_ENV_VARS = {
         "category": "tool",
     },
 
-    # ── Messaging platforms ──
-    "TELEGRAM_BOT_TOKEN": {
-        "description": "Telegram bot token from @BotFather",
-        "prompt": "Telegram bot token",
-        "url": "https://t.me/BotFather",
-        "password": True,
-        "category": "messaging",
-    },
-    "TELEGRAM_ALLOWED_USERS": {
-        "description": "Comma-separated Telegram user IDs allowed to use the bot (get ID from @userinfobot)",
-        "prompt": "Allowed Telegram user IDs (comma-separated)",
-        "url": "https://t.me/userinfobot",
-        "password": False,
-        "category": "messaging",
-    },
-    "DISCORD_BOT_TOKEN": {
-        "description": "Discord bot token from Developer Portal",
-        "prompt": "Discord bot token",
-        "url": "https://discord.com/developers/applications",
-        "password": True,
-        "category": "messaging",
-    },
-    "DISCORD_ALLOWED_USERS": {
-        "description": "Comma-separated Discord user IDs allowed to use the bot",
-        "prompt": "Allowed Discord user IDs (comma-separated)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-    },
-    "DISCORD_REPLY_TO_MODE": {
-        "description": "Discord reply threading mode: 'off' (no reply references), 'first' (reply on first message only, default), 'all' (reply on every chunk)",
-        "prompt": "Discord reply mode (off/first/all)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-    },
-    "SLACK_BOT_TOKEN": {
-        "description": "Slack bot token (xoxb-). Get from OAuth & Permissions after installing your app. "
-                       "Required scopes: chat:write, app_mentions:read, channels:history, groups:history, "
-                       "im:history, im:read, im:write, users:read, files:write",
-        "prompt": "Slack Bot Token (xoxb-...)",
-        "url": "https://api.slack.com/apps",
-        "password": True,
-        "category": "messaging",
-    },
-    "SLACK_APP_TOKEN": {
-        "description": "Slack app-level token (xapp-) for Socket Mode. Get from Basic Information → "
-                       "App-Level Tokens. Also ensure Event Subscriptions include: message.im, "
-                       "message.channels, message.groups, app_mention",
-        "prompt": "Slack App Token (xapp-...)",
-        "url": "https://api.slack.com/apps",
-        "password": True,
-        "category": "messaging",
-    },
-    "MATTERMOST_URL": {
-        "description": "Mattermost server URL (e.g. https://mm.example.com)",
-        "prompt": "Mattermost server URL",
-        "url": "https://mattermost.com/deploy/",
-        "password": False,
-        "category": "messaging",
-    },
-    "MATTERMOST_TOKEN": {
-        "description": "Mattermost bot token or personal access token",
-        "prompt": "Mattermost bot token",
-        "url": None,
-        "password": True,
-        "category": "messaging",
-    },
-    "MATTERMOST_ALLOWED_USERS": {
-        "description": "Comma-separated Mattermost user IDs allowed to use the bot",
-        "prompt": "Allowed Mattermost user IDs (comma-separated)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-    },
-    "MATTERMOST_REQUIRE_MENTION": {
-        "description": "Require @mention in Mattermost channels (default: true). Set to false to respond to all messages.",
-        "prompt": "Require @mention in channels",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-    },
-    "MATTERMOST_FREE_RESPONSE_CHANNELS": {
-        "description": "Comma-separated Mattermost channel IDs where bot responds without @mention",
-        "prompt": "Free-response channel IDs (comma-separated)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-    },
-    "MATRIX_HOMESERVER": {
-        "description": "Matrix homeserver URL (e.g. https://matrix.example.org)",
-        "prompt": "Matrix homeserver URL",
-        "url": "https://matrix.org/ecosystem/servers/",
-        "password": False,
-        "category": "messaging",
-    },
-    "MATRIX_ACCESS_TOKEN": {
-        "description": "Matrix access token (preferred over password login)",
-        "prompt": "Matrix access token",
-        "url": None,
-        "password": True,
-        "category": "messaging",
-    },
-    "MATRIX_USER_ID": {
-        "description": "Matrix user ID (e.g. @VoidCube:example.org)",
-        "prompt": "Matrix user ID (@user:server)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-    },
-    "MATRIX_ALLOWED_USERS": {
-        "description": "Comma-separated Matrix user IDs allowed to use the bot (@user:server format)",
-        "prompt": "Allowed Matrix user IDs (comma-separated)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-    },
-    "MATRIX_REQUIRE_MENTION": {
-        "description": "Require @mention in Matrix rooms (default: true). Set to false to respond to all messages.",
-        "prompt": "Require @mention in rooms (true/false)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "MATRIX_FREE_RESPONSE_ROOMS": {
-        "description": "Comma-separated Matrix room IDs where bot responds without @mention",
-        "prompt": "Free-response room IDs (comma-separated)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "MATRIX_AUTO_THREAD": {
-        "description": "Auto-create threads for messages in Matrix rooms (default: true)",
-        "prompt": "Auto-create threads in rooms (true/false)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "MATRIX_DEVICE_ID": {
-        "description": "Stable Matrix device ID for E2EE persistence across restarts (e.g. VOIDCUBE_BOT)",
-        "prompt": "Matrix device ID (stable across restarts)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "MATRIX_RECOVERY_KEY": {
-        "description": "Matrix recovery key for cross-signing verification after device key rotation (from Element: Settings → Security → Recovery Key)",
-        "prompt": "Matrix recovery key",
-        "url": None,
-        "password": True,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "BLUEBUBBLES_SERVER_URL": {
-        "description": "BlueBubbles server URL for iMessage integration (e.g. http://192.168.1.10:1234)",
-        "prompt": "BlueBubbles server URL",
-        "url": "https://bluebubbles.app/",
-        "password": False,
-        "category": "messaging",
-    },
-    "BLUEBUBBLES_PASSWORD": {
-        "description": "BlueBubbles server password (from BlueBubbles Server → Settings → API)",
-        "prompt": "BlueBubbles server password",
-        "url": None,
-        "password": True,
-        "category": "messaging",
-    },
-    "BLUEBUBBLES_ALLOWED_USERS": {
-        "description": "Comma-separated iMessage addresses (email or phone) allowed to use the bot",
-        "prompt": "Allowed iMessage addresses (comma-separated)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-    },
-    "GATEWAY_ALLOW_ALL_USERS": {
-        "description": "Allow all users to interact with messaging bots (true/false). Default: false.",
-        "prompt": "Allow all users (true/false)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "API_SERVER_ENABLED": {
-        "description": "Enable the OpenAI-compatible API server (true/false). Allows frontends like Open WebUI, LobeChat, etc. to connect.",
-        "prompt": "Enable API server (true/false)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "API_SERVER_KEY": {
-        "description": "Bearer token for API server authentication. Required for non-loopback binding; server refuses to start without it. On loopback (127.0.0.1), all requests are allowed if empty.",
-        "prompt": "API server auth key (required for network access)",
-        "url": None,
-        "password": True,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "API_SERVER_PORT": {
-        "description": "Port for the API server (default: 8642).",
-        "prompt": "API server port",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "API_SERVER_HOST": {
-        "description": "Host/bind address for the API server (default: 127.0.0.1). Use 0.0.0.0 for network access — server refuses to start without API_SERVER_KEY.",
-        "prompt": "API server host",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "API_SERVER_MODEL_NAME": {
-        "description": "Model name advertised on /v1/models. Defaults to the profile name (or 'VoidCube-agent' for the default profile). Useful for multi-user setups with OpenWebUI.",
-        "prompt": "API server model name",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-        "advanced": True,
-    },
-    "WEBHOOK_ENABLED": {
-        "description": "Enable the webhook platform adapter for receiving events from GitHub, GitLab, etc.",
-        "prompt": "Enable webhooks (true/false)",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-    },
-    "WEBHOOK_PORT": {
-        "description": "Port for the webhook HTTP server (default: 8644).",
-        "prompt": "Webhook port",
-        "url": None,
-        "password": False,
-        "category": "messaging",
-    },
-    "WEBHOOK_SECRET": {
-        "description": "Global HMAC secret for webhook signature validation (overridable per route in config.yaml).",
-        "prompt": "Webhook secret",
-        "url": None,
-        "password": True,
-        "category": "messaging",
-    },
-
     # ── Agent settings ──
-    "MESSAGING_CWD": {
-        "description": "Working directory for terminal commands via messaging",
-        "prompt": "Messaging working directory (default: home)",
-        "url": None,
-        "password": False,
-        "category": "setting",
-    },
     "SUDO_PASSWORD": {
         "description": "Sudo password for terminal commands requiring root access; set to an explicit empty string to try empty without prompting",
         "prompt": "Sudo password",
@@ -1381,23 +1171,6 @@ OPTIONAL_ENV_VARS = {
     "VOIDCUBE_MAX_ITERATIONS": {
         "description": "Maximum tool-calling iterations per conversation (default: 90)",
         "prompt": "Max iterations",
-        "url": None,
-        "password": False,
-        "category": "setting",
-    },
-    # VOIDCUBE_TOOL_PROGRESS and VOIDCUBE_TOOL_PROGRESS_MODE are deprecated —
-    # now configured via display.tool_progress in config.yaml (off|new|all|verbose).
-    # Gateway falls back to these env vars for backward compatibility.
-    "VOIDCUBE_TOOL_PROGRESS": {
-        "description": "(deprecated) Use display.tool_progress in config.yaml instead",
-        "prompt": "Tool progress (deprecated — use config.yaml)",
-        "url": None,
-        "password": False,
-        "category": "setting",
-    },
-    "VOIDCUBE_TOOL_PROGRESS_MODE": {
-        "description": "(deprecated) Use display.tool_progress in config.yaml instead",
-        "prompt": "Progress mode (deprecated — use config.yaml)",
         "url": None,
         "password": False,
         "category": "setting",
@@ -1550,7 +1323,7 @@ def check_config_version() -> Tuple[int, int]:
 _KNOWN_ROOT_KEYS = {
     "_config_version", "model", "runtime", "providers", "fallback_model",
     "fallback_providers", "credential_pool_strategies", "toolsets",
-    "agent", "terminal", "display", "compression", "delegation",
+    "agent", "terminal", "display", "clarify", "compression", "delegation",
     "auxiliary", "context", "memory", "gateway",
 }
 
@@ -1722,28 +1495,54 @@ def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, A
     # Check config version
     current_ver, latest_ver = check_config_version()
     
-    # ── Version 3 → 4: migrate tool progress from .env to config.yaml ──
-    if current_ver < 4:
-        config = load_config()
-        display = config.get("display", {})
-        if not isinstance(display, dict):
-            display = {}
+    # Retired tool-progress env settings are migrated regardless of the
+    # recorded config version, then removed so config.yaml is the only source.
+    old_progress_values = {
+        name: get_env_value(name) for name in _RETIRED_TOOL_PROGRESS_ENV_VARS
+    }
+    if any(value is not None for value in old_progress_values.values()):
+        config = read_raw_config()
+        raw_display = config.get("display")
+        display = dict(raw_display) if isinstance(raw_display, dict) else {}
         if "tool_progress" not in display:
-            old_enabled = get_env_value("VOIDCUBE_TOOL_PROGRESS")
-            old_mode = get_env_value("VOIDCUBE_TOOL_PROGRESS_MODE")
-            if old_enabled and old_enabled.lower() in ("false", "0", "no"):
-                display["tool_progress"] = "off"
-                results["config_added"].append("display.tool_progress=off (from VOIDCUBE_TOOL_PROGRESS=false)")
-            elif old_mode and old_mode.lower() in ("new", "all"):
-                display["tool_progress"] = old_mode.lower()
-                results["config_added"].append(f"display.tool_progress={old_mode.lower()} (from VOIDCUBE_TOOL_PROGRESS_MODE)")
+            old_enabled = old_progress_values[_RETIRED_TOOL_PROGRESS_ENV_VARS[0]]
+            old_mode = old_progress_values[_RETIRED_TOOL_PROGRESS_ENV_VARS[1]]
+            enabled = str(old_enabled or "").strip().casefold()
+            mode = str(old_mode or "").strip().casefold()
+            if enabled in ("false", "0", "no", "off"):
+                migrated_mode = "off"
+            elif mode in ("off", "new", "all", "verbose"):
+                migrated_mode = mode
             else:
-                display["tool_progress"] = "all"
-                results["config_added"].append("display.tool_progress=all (default)")
+                migrated_mode = "all"
+            display["tool_progress"] = migrated_mode
             config["display"] = display
             save_config(config)
+            results["config_added"].append(
+                f"display.tool_progress={migrated_mode} (from retired environment setting)"
+            )
             if not quiet:
-                print(f"  ✓ Migrated tool progress to config.yaml: {display['tool_progress']}")
+                print(f"  ✓ Migrated tool progress to config.yaml: {migrated_mode}")
+
+    for retired_var in _RETIRED_TOOL_PROGRESS_ENV_VARS:
+        try:
+            if remove_env_value(retired_var) and not quiet:
+                print(f"  ✓ Removed {retired_var} from .env (retired)")
+        except Exception:
+            pass
+
+    # Messaging adapters are no longer part of the CLI-only product surface.
+    # Remove values previously managed by the setup and platform commands.
+    configured_env_names = set(load_env()) | set(os.environ)
+    retired_messaging_vars = (
+        configured_env_names.intersection(_RETIRED_MESSAGING_ENV_VARS)
+    )
+    for retired_var in sorted(retired_messaging_vars):
+        try:
+            if remove_env_value(retired_var) and not quiet:
+                print(f"  ✓ Removed {retired_var} from .env (retired messaging setting)")
+        except Exception:
+            pass
     
     # ── Version 4 → 5: add timezone field ──
     if current_ver < 5:
@@ -1904,29 +1703,30 @@ def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, A
             if not quiet:
                 print("  ✓ Added display.interim_assistant_messages=true")
 
-    # ── Version 15 → 16: migrate tool_progress_overrides into display.platforms ──
-    if current_ver < 16:
-        config = read_raw_config()
-        display = config.get("display", {})
-        if not isinstance(display, dict):
-            display = {}
-        old_overrides = display.get("tool_progress_overrides")
-        if isinstance(old_overrides, dict) and old_overrides:
-            platforms = display.get("platforms", {})
-            if not isinstance(platforms, dict):
-                platforms = {}
-            for plat, mode in old_overrides.items():
-                if plat not in platforms:
-                    platforms[plat] = {}
-                if "tool_progress" not in platforms[plat]:
-                    platforms[plat]["tool_progress"] = mode
-            display["platforms"] = platforms
-            config["display"] = display
-            save_config(config)
+    # Retired display overrides are migrated idempotently regardless of the
+    # recorded config version, then removed from the saved configuration.
+    (
+        config,
+        migrated_overrides,
+        removed_override_key,
+        removed_command_key,
+    ) = _migrate_retired_display_config(read_raw_config())
+    if removed_override_key or removed_command_key:
+        save_config(config)
+        if removed_override_key and not quiet:
+            migrated = ", ".join(f"{p}={m}" for p, m in migrated_overrides.items())
+            detail = f": {migrated}" if migrated else ""
+            print(f"  ✓ Migrated retired display overrides → display.platforms{detail}")
+        if removed_override_key:
+            results["config_added"].append(
+                "display.platforms (migrated from retired display overrides)"
+            )
+        if removed_command_key:
             if not quiet:
-                migrated = ", ".join(f"{p}={m}" for p, m in old_overrides.items())
-                print(f"  ✓ Migrated tool_progress_overrides → display.platforms: {migrated}")
-            results["config_added"].append("display.platforms (migrated from tool_progress_overrides)")
+                print("  ✓ Removed unused display progress command flag")
+            results["config_added"].append(
+                "removed unused display progress command flag"
+            )
 
     if current_ver < latest_ver and not quiet:
         print(f"Config version: {current_ver} → {latest_ver}")
@@ -2118,6 +1918,63 @@ def _expand_env_vars(obj):
     if isinstance(obj, list):
         return [_expand_env_vars(item) for item in obj]
     return obj
+
+
+_RUNTIME_MAPPING_SECTIONS = (
+    "runtime",
+    "providers",
+    "agent",
+    "display",
+    "terminal",
+    "checkpoints",
+    "compression",
+    "delegation",
+    "auxiliary",
+    "clarify",
+)
+_RETIRED_DISPLAY_OVERRIDE_KEY = "tool_progress_" + "overrides"
+_UNUSED_DISPLAY_COMMAND_KEY = "tool_progress_" + "command"
+
+
+def _normalize_runtime_mapping_sections(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Restore required mapping sections when user YAML gives them another type."""
+    normalized = dict(config or {})
+    for section in _RUNTIME_MAPPING_SECTIONS:
+        if isinstance(normalized.get(section), dict):
+            continue
+        default = DEFAULT_CONFIG.get(section)
+        normalized[section] = copy.deepcopy(default) if isinstance(default, dict) else {}
+    return normalized
+
+
+def _migrate_retired_display_config(
+    config: Dict[str, Any],
+) -> Tuple[Dict[str, Any], Dict[str, Any], bool, bool]:
+    """Move the retired per-platform progress map into display.platforms."""
+    normalized = dict(config or {})
+    display = normalized.get("display")
+    if not isinstance(display, dict):
+        return normalized, {}, False, False
+
+    display = dict(display)
+    removed_override_key = _RETIRED_DISPLAY_OVERRIDE_KEY in display
+    removed_command_key = _UNUSED_DISPLAY_COMMAND_KEY in display
+    retired_overrides = display.pop(_RETIRED_DISPLAY_OVERRIDE_KEY, None)
+    display.pop(_UNUSED_DISPLAY_COMMAND_KEY, None)
+    migrated_overrides = retired_overrides if isinstance(retired_overrides, dict) else {}
+
+    if migrated_overrides:
+        raw_platforms = display.get("platforms")
+        platforms = dict(raw_platforms) if isinstance(raw_platforms, dict) else {}
+        for platform, mode in migrated_overrides.items():
+            platform_config = platforms.get(platform)
+            platform_config = dict(platform_config) if isinstance(platform_config, dict) else {}
+            platform_config.setdefault("tool_progress", mode)
+            platforms[platform] = platform_config
+        display["platforms"] = platforms
+
+    normalized["display"] = display
+    return normalized, migrated_overrides, removed_override_key, removed_command_key
 
 
 def _drop_root_model_keys(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -2378,7 +2235,6 @@ def read_raw_config() -> Dict[str, Any]:
 
 def load_config() -> Dict[str, Any]:
     """Load configuration from ~/.VoidCube/config.yaml."""
-    import copy
     ensure_VoidCube_home()
     config_path = get_config_path()
     
@@ -2390,7 +2246,12 @@ def load_config() -> Dict[str, Any]:
                 user_config = yaml.safe_load(f) or {}
 
             if "max_turns" in user_config:
-                agent_user_config = dict(user_config.get("agent") or {})
+                raw_agent_config = user_config.get("agent")
+                agent_user_config = (
+                    dict(raw_agent_config)
+                    if isinstance(raw_agent_config, dict)
+                    else {}
+                )
                 if agent_user_config.get("max_turns") is None:
                     agent_user_config["max_turns"] = user_config["max_turns"]
                 user_config["agent"] = agent_user_config
@@ -2400,7 +2261,9 @@ def load_config() -> Dict[str, Any]:
         except Exception as e:
             print(f"Warning: Failed to load config: {e}")
 
-    normalized = _drop_root_model_keys(_normalize_max_turns_config(config))
+    normalized = _normalize_runtime_mapping_sections(config)
+    normalized, _, _, _ = _migrate_retired_display_config(normalized)
+    normalized = _drop_root_model_keys(_normalize_max_turns_config(normalized))
     normalized = _normalize_provider_runtime_config(normalized)
     return _expand_env_vars(normalized)
 
@@ -2507,7 +2370,9 @@ def save_config(config: Dict[str, Any]):
 
     ensure_VoidCube_home()
     config_path = get_config_path()
-    normalized = _drop_root_model_keys(_normalize_max_turns_config(config))
+    normalized = _normalize_runtime_mapping_sections(config)
+    normalized, _, _, _ = _migrate_retired_display_config(normalized)
+    normalized = _drop_root_model_keys(_normalize_max_turns_config(normalized))
     normalized = _normalize_provider_runtime_config(normalized)
 
     # Build optional commented-out sections for features that are off by
@@ -2559,7 +2424,12 @@ def _sanitize_env_lines(lines: list) -> list:
     """
     # Build the known keys set lazily from OPTIONAL_ENV_VARS + extras.
     # Done inside the function so OPTIONAL_ENV_VARS is guaranteed to be defined.
-    known_keys = set(OPTIONAL_ENV_VARS.keys()) | _EXTRA_ENV_KEYS
+    known_keys = (
+        set(OPTIONAL_ENV_VARS.keys())
+        | _EXTRA_ENV_KEYS
+        | set(_RETIRED_TOOL_PROGRESS_ENV_VARS)
+        | set(_RETIRED_MESSAGING_ENV_VARS)
+    )
 
     sanitized: list[str] = []
     for line in lines:

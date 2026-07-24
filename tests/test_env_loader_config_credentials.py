@@ -4,10 +4,227 @@ import json
 import os
 from types import SimpleNamespace
 
+import pytest
 import yaml
 
 from VoidCube_cli.env_loader import load_VoidCube_dotenv
 from VoidCube_cli.auth import get_auth_status, read_credential_pool, write_credential_pool
+
+
+def test_load_config_normalizes_required_mapping_sections(tmp_path, monkeypatch):
+    home = tmp_path / ".VoidCube"
+    home.mkdir()
+    (home / "config.yaml").write_text(
+        """runtime: invalid
+providers: []
+agent: invalid
+display: false
+terminal: null
+checkpoints: disabled
+compression: []
+delegation: false
+auxiliary: invalid
+clarify: invalid
+max_turns: 17
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VOIDCUBE_HOME", str(home))
+
+    from VoidCube_cli.config import load_config
+
+    config = load_config()
+
+    for section in (
+        "runtime",
+        "providers",
+        "agent",
+        "display",
+        "terminal",
+        "checkpoints",
+        "compression",
+        "delegation",
+        "auxiliary",
+        "clarify",
+    ):
+        assert isinstance(config[section], dict)
+    assert config["agent"]["max_turns"] == 17
+    assert config["clarify"]["timeout"] == 120
+
+
+def test_retired_display_settings_migrate_once_to_platforms(tmp_path, monkeypatch):
+    home = tmp_path / ".VoidCube"
+    home.mkdir()
+    retired_key = "tool_progress_" + "overrides"
+    unused_key = "tool_progress_" + "command"
+    (home / "config.yaml").write_text(
+        f"""_config_version: 20
+display:
+  {unused_key}: true
+  {retired_key}:
+    telegram: all
+    slack: verbose
+  platforms:
+    telegram:
+      tool_progress: 'off'
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VOIDCUBE_HOME", str(home))
+
+    from VoidCube_cli.config import load_config, migrate_config
+
+    loaded = load_config()
+
+    assert retired_key not in loaded["display"]
+    assert unused_key not in loaded["display"]
+    assert loaded["display"]["platforms"]["telegram"]["tool_progress"] == "off"
+    assert loaded["display"]["platforms"]["slack"]["tool_progress"] == "verbose"
+
+    first_result = migrate_config(interactive=False, quiet=True)
+
+    saved_text = (home / "config.yaml").read_text(encoding="utf-8")
+    saved = yaml.safe_load(saved_text)
+    assert retired_key not in saved["display"]
+    assert unused_key not in saved["display"]
+    assert saved["display"]["platforms"] == loaded["display"]["platforms"]
+    assert any("retired display overrides" in item for item in first_result["config_added"])
+    assert "removed unused display progress command flag" in first_result["config_added"]
+
+    second_result = migrate_config(interactive=False, quiet=True)
+
+    assert (home / "config.yaml").read_text(encoding="utf-8") == saved_text
+    assert not any(
+        "retired display overrides" in item
+        for item in second_result["config_added"]
+    )
+    assert "removed unused display progress command flag" not in second_result["config_added"]
+
+
+def test_retired_tool_progress_env_migrates_once_on_current_config(
+    tmp_path,
+    monkeypatch,
+):
+    home = tmp_path / ".VoidCube"
+    home.mkdir()
+    enabled_key = "VOIDCUBE_TOOL_" + "PROGRESS"
+    mode_key = "VOIDCUBE_TOOL_" + "PROGRESS_MODE"
+    (home / "config.yaml").write_text("_config_version: 20\n", encoding="utf-8")
+    (home / ".env").write_text(
+        f"{enabled_key}=false\n"
+        f"{mode_key}=verbose\n"
+        "DEEPSEEK_API_KEY=sk-real-deepseek-token-123456789\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VOIDCUBE_HOME", str(home))
+    monkeypatch.delenv(enabled_key, raising=False)
+    monkeypatch.delenv(mode_key, raising=False)
+
+    import VoidCube_cli.config as config_module
+
+    first_result = config_module.migrate_config(interactive=False, quiet=True)
+
+    saved_text = (home / "config.yaml").read_text(encoding="utf-8")
+    saved = yaml.safe_load(saved_text)
+    assert saved["display"]["tool_progress"] == "off"
+    assert "display.tool_progress=off" in first_result["config_added"][0]
+    env_text = (home / ".env").read_text(encoding="utf-8")
+    assert enabled_key not in env_text
+    assert mode_key not in env_text
+    assert "DEEPSEEK_API_KEY=sk-real-deepseek-token-123456789" in env_text
+
+    monkeypatch.setattr(
+        config_module,
+        "save_config",
+        lambda config: pytest.fail("second migration rewrote config.yaml"),
+    )
+    second_result = config_module.migrate_config(interactive=False, quiet=True)
+
+    assert (home / "config.yaml").read_text(encoding="utf-8") == saved_text
+    assert not any(
+        "retired environment setting" in item
+        for item in second_result["config_added"]
+    )
+
+
+def test_retired_tool_progress_env_does_not_override_explicit_config(
+    tmp_path,
+    monkeypatch,
+):
+    home = tmp_path / ".VoidCube"
+    home.mkdir()
+    enabled_key = "VOIDCUBE_TOOL_" + "PROGRESS"
+    mode_key = "VOIDCUBE_TOOL_" + "PROGRESS_MODE"
+    original_config = "_config_version: 20\ndisplay:\n  tool_progress: new\n"
+    (home / "config.yaml").write_text(original_config, encoding="utf-8")
+    (home / ".env").write_text(
+        f"{enabled_key}=false\n{mode_key}=verbose\nKEEP_ME=value\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VOIDCUBE_HOME", str(home))
+    monkeypatch.delenv(enabled_key, raising=False)
+    monkeypatch.delenv(mode_key, raising=False)
+
+    import VoidCube_cli.config as config_module
+
+    monkeypatch.setattr(
+        config_module,
+        "save_config",
+        lambda config: pytest.fail("explicit tool progress should not be rewritten"),
+    )
+    result = config_module.migrate_config(interactive=False, quiet=True)
+
+    assert (home / "config.yaml").read_text(encoding="utf-8") == original_config
+    assert (home / ".env").read_text(encoding="utf-8") == "KEEP_ME=value\n"
+    assert not any("retired environment setting" in item for item in result["config_added"])
+
+
+@pytest.mark.parametrize(
+    ("enabled", "mode", "expected"),
+    (
+        ("false", "verbose", "off"),
+        ("true", "verbose", "verbose"),
+        ("yes", "new", "new"),
+        ("1", "all", "all"),
+        ("true", "unexpected", "all"),
+    ),
+)
+def test_retired_tool_progress_env_mode_mapping(
+    tmp_path,
+    monkeypatch,
+    enabled,
+    mode,
+    expected,
+):
+    home = tmp_path / ".VoidCube"
+    home.mkdir()
+    enabled_key = "VOIDCUBE_TOOL_" + "PROGRESS"
+    mode_key = "VOIDCUBE_TOOL_" + "PROGRESS_MODE"
+    (home / "config.yaml").write_text("_config_version: 20\n", encoding="utf-8")
+    (home / ".env").write_text(
+        f"{enabled_key}={enabled}\n{mode_key}={mode}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VOIDCUBE_HOME", str(home))
+    monkeypatch.delenv(enabled_key, raising=False)
+    monkeypatch.delenv(mode_key, raising=False)
+
+    from VoidCube_cli.config import migrate_config
+
+    migrate_config(interactive=False, quiet=True)
+
+    saved = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+    assert saved["display"]["tool_progress"] == expected
+
+
+def test_retired_tool_progress_env_is_not_configurable():
+    from VoidCube_cli.config import OPTIONAL_ENV_VARS
+
+    retired_names = {
+        "VOIDCUBE_TOOL_" + "PROGRESS",
+        "VOIDCUBE_TOOL_" + "PROGRESS_MODE",
+    }
+    assert retired_names.isdisjoint(OPTIONAL_ENV_VARS)
 
 
 def test_voidcube_dotenv_placeholder_does_not_override_real_env(tmp_path, monkeypatch):

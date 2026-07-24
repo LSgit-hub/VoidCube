@@ -403,25 +403,15 @@ def _run_post_setup(post_setup_key: str):
 # ─── Platform / Toolset Helpers ───────────────────────────────────────────────
 
 def _get_enabled_platforms() -> List[str]:
-    """Return platform keys that are configured (have tokens or are CLI)."""
-    enabled = ["cli"]
-    if get_env_value("TELEGRAM_BOT_TOKEN"):
-        enabled.append("telegram")
-    if get_env_value("DISCORD_BOT_TOKEN"):
-        enabled.append("discord")
-    if get_env_value("SLACK_BOT_TOKEN"):
-        enabled.append("slack")
-    if get_env_value("WHATSAPP_ENABLED"):
-        enabled.append("whatsapp")
-    return enabled
+    """Return the active platform keys from the canonical CLI-only registry."""
+    return list(PLATFORMS)
 
 
 def _platform_toolset_summary(config: dict, platforms: Optional[List[str]] = None) -> Dict[str, Set[str]]:
     """Return a summary of enabled toolsets per platform.
 
-    When ``platforms`` is None, this uses ``_get_enabled_platforms`` to
-    auto-detect platforms. Tests can pass an explicit list to avoid relying
-    on environment variables.
+    When ``platforms`` is None, this uses the canonical platform registry.
+    Tests can pass an explicit list to inspect stored legacy configurations.
     """
     if platforms is None:
         platforms = _get_enabled_platforms()

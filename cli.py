@@ -371,30 +371,6 @@ def _get_chrome_debug_candidates(system: str) -> list[str]:
     return candidates
 
 
-def _normalize_minimal_cli_config(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Ensure mapping sections used by CLI startup are dictionaries."""
-    normalized = dict(config or {})
-    normalized.pop("model", None)
-    normalized.pop("max_turns", None)
-
-    for section in (
-        "runtime",
-        "providers",
-        "agent",
-        "display",
-        "terminal",
-        "checkpoints",
-        "compression",
-        "delegation",
-        "auxiliary",
-        "clarify",
-    ):
-        if not isinstance(normalized.get(section), dict):
-            normalized[section] = {}
-
-    return normalized
-
-
 def _resolve_cli_provider_config(
     config: Dict[str, Any],
     requested_provider: Optional[str] = None,
@@ -408,10 +384,10 @@ def _resolve_cli_provider_config(
 
 
 def load_cli_config() -> Dict[str, Any]:
-    """Load and normalize the canonical user configuration."""
+    """Load the canonical user configuration."""
     from VoidCube_cli.config import load_config
 
-    return _normalize_minimal_cli_config(load_config())
+    return load_config()
 
 # Lazy-loaded configuration — defers ~62ms (VoidCube_cli.config import chain)
 # until first access.
