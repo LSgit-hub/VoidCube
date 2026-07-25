@@ -258,41 +258,57 @@ class SemanticMemoryIndex:
     def _pending_records(self, limit: int) -> list[tuple[str, str, str, str, str]]:
         conn = open_memory_sqlite(self.db_path)
         try:
+            conn.create_function(
+                "memory_content_hash",
+                1,
+                _content_hash,
+                deterministic=True,
+            )
+            dimension_clause = ""
+            params: list[Any] = [self.config.provider, self.config.model]
+            if self.config.dimensions is not None:
+                dimension_clause = " OR embedding.dimensions != ?"
+                params.append(self.config.dimensions)
+            params.append(max(1, int(limit)))
             rows = conn.execute(
-                "SELECT 'turn' AS source_type, turn_id AS memory_id, owner_id, workspace_id, "
-                "text AS content FROM turns WHERE compressed_to_tier2 = 0 "
+                "WITH source_records(source_type, memory_id, owner_id, workspace_id, content) AS ("
+                "SELECT 'turn', turn_id, owner_id, workspace_id, COALESCE(text, '') "
+                "FROM turns WHERE compressed_to_tier2 = 0 "
                 "UNION ALL SELECT 'archive', turn_id, owner_id, workspace_id, "
-                "COALESCE(original_text, text_summary) FROM turns_archive "
+                "COALESCE(original_text, text_summary, '') FROM turns_archive "
                 "UNION ALL SELECT 'compressed', memory_id, owner_id, workspace_id, "
-                "title || ' ' || summary || ' ' || COALESCE(topics, '') || ' ' || COALESCE(entities, '') "
+                "COALESCE(title, '') || ' ' || COALESCE(summary, '') || ' ' || "
+                "COALESCE(topics, '') || ' ' || COALESCE(entities, '') "
                 "FROM compressed_memories WHERE status = 'active' AND hidden = 0 "
                 "UNION ALL SELECT 'profile', memory_id, owner_id, workspace_id, "
-                "subject || ' ' || predicate || ' ' || value || ' ' || summary "
-                "FROM profile_memories WHERE status = 'active' LIMIT ?",
-                (max(1, min(int(limit) * 4, 4000)),),
+                "COALESCE(subject, '') || ' ' || COALESCE(predicate, '') || ' ' || "
+                "COALESCE(value, '') || ' ' || COALESCE(summary, '') "
+                "FROM profile_memories WHERE status = 'active') "
+                "SELECT source.source_type, source.memory_id, source.owner_id, "
+                "source.workspace_id, source.content FROM source_records AS source "
+                "LEFT JOIN memory_embeddings AS embedding ON "
+                "embedding.source_type = source.source_type AND "
+                "embedding.memory_id = source.memory_id AND embedding.provider = ? AND "
+                "embedding.model = ? WHERE embedding.memory_id IS NULL OR "
+                "embedding.content_hash != memory_content_hash(source.content) OR "
+                "embedding.owner_id != source.owner_id OR "
+                "embedding.workspace_id != source.workspace_id"
+                + dimension_clause
+                + " ORDER BY source.source_type, source.memory_id LIMIT ?",
+                params,
             ).fetchall()
         finally:
             conn.close()
-        pending: list[tuple[str, str, str, str, str]] = []
-        conn = open_memory_sqlite(self.db_path)
-        try:
-            for row in rows:
-                record = tuple(str(value or "") for value in row)
-                current = conn.execute(
-                    "SELECT content_hash FROM memory_embeddings "
-                    "WHERE source_type = ? AND memory_id = ? AND provider = ? AND model = ?",
-                    (
-                        record[0],
-                        record[1],
-                        self.config.provider,
-                        self.config.model,
-                    ),
-                ).fetchone()
-                if not current or str(current[0]) != _content_hash(record[4]):
-                    pending.append(record)  # type: ignore[arg-type]
-        finally:
-            conn.close()
-        return pending[:limit]
+        return [
+            (
+                str(row[0] or ""),
+                str(row[1] or ""),
+                str(row[2] or ""),
+                str(row[3] or ""),
+                str(row[4] or ""),
+            )
+            for row in rows
+        ]
 
     def _embed(self, texts: Sequence[str]) -> list[list[float]]:
         if self._transport is not None:

@@ -871,15 +871,21 @@ def _lexical_score(plan: RecallPlan, value: object) -> tuple[float, list[str]]:
     if not plan.search_terms:
         return (0.25 if plan.recency_intent else 0.0), []
     cjk_query = _meaningful_cjk_query(plan.normalized_query)
-    if cjk_query:
-        exact_coverage = _covered_cjk_chars(cjk_query, exact_matched)
-        concept_coverage = _concept_coverage_chars(plan, concept_matched)
-        coverage = (exact_coverage + concept_coverage) / max(len(cjk_query), 1)
-    else:
-        total_weight = sum(max(2, min(len(term), 8)) for term in plan.terms)
-        exact_weight = sum(max(2, min(len(term), 8)) for term in exact_matched)
-        concept_weight = len(concept_matched) * 0.9
-        coverage = (exact_weight + concept_weight) / max(total_weight, 1)
+    non_cjk_terms = [
+        term for term in plan.terms if not _CJK_RUN_RE.fullmatch(term)
+    ]
+    non_cjk_matches = [
+        term for term in exact_matched if not _CJK_RUN_RE.fullmatch(term)
+    ]
+    cjk_coverage = _covered_cjk_chars(cjk_query, exact_matched)
+    concept_coverage = _concept_coverage_chars(plan, concept_matched)
+    non_cjk_total = sum(max(2, min(len(term), 8)) for term in non_cjk_terms)
+    non_cjk_coverage = sum(
+        max(2, min(len(term), 8)) for term in non_cjk_matches
+    )
+    total_weight = len(cjk_query) + non_cjk_total
+    matched_weight = cjk_coverage + concept_coverage + non_cjk_coverage
+    coverage = matched_weight / max(total_weight, 1)
     phrase_bonus = 0.0
     if (
         plan.normalized_query

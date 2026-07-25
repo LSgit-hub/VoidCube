@@ -1,0 +1,25 @@
+version: '1.0'
+name: voidcube-ci
+displayName: VoidCube CI
+stages:
+  - stage:
+    name: test
+    displayName: Python 3.14 full test gate
+    steps:
+      - step: build@python
+        name: full_test_gate
+        displayName: Install and test
+        pythonVersion: '3.14'
+        commands:
+          - python3 -m pip install --upgrade pip
+          - python3 -m pip install -e ".[all,dev]"
+          - python3 scripts/run_ci_tests.py
+triggers:
+  push:
+    branches:
+      include:
+        - master
+  pr:
+    branches:
+      include:
+        - master

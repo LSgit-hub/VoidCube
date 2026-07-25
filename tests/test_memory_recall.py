@@ -199,6 +199,25 @@ async def test_recall_mixes_recent_tier1_and_durable_tier2(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_mixed_language_query_scores_latin_and_numeric_matches(tmp_path):
+    service = _service(tmp_path)
+    _insert_compressed(
+        service,
+        memory_id="event-api-retry",
+        title="API 429 retry 策略",
+        summary="API 429 retry 采用指数退避，最多三次。",
+        timestamp=datetime.now(timezone.utc),
+        topics=["API", "429", "retry"],
+    )
+
+    result = await service.recall(RecallRequest(query="API 429 retry几次"))
+
+    assert result["results"][0]["id"] == "event-api-retry"
+    assert result["results"][0]["signals"]["lexical"] > 0.8
+    assert set(result["results"][0]["matched_terms"]) >= {"api", "429", "retry"}
+
+
+@pytest.mark.asyncio
 async def test_recency_intent_falls_back_to_latest_tier1_turns(tmp_path):
     service = _service(tmp_path)
     now = datetime.now(timezone.utc)

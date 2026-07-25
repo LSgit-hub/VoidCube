@@ -7,7 +7,7 @@ name = "voidcube-agent"
 dynamic = ["version"]
 description = "轻量安装·快速配置·友好交互 — 服务器运维与部署智能体"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.14,<3.15"
 license = "MIT"
 keywords = ["ai", "agent", "ops", "devops", "deploy", "cli", "assistant", "local", "shell"]
 classifiers = [
@@ -16,8 +16,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development",
     "Topic :: System :: Systems Administration",
 ]
@@ -45,11 +44,11 @@ dependencies = [
 # 本地 LLM 支持
 local = [
     "beautifulsoup4>=4.12.0,<5",
-    "lxml>=5.0.0,<6",
+    "lxml>=6.0.0,<7",
 ]
 # 图像生成 (可选)
 image = [
-    "pillow>=10.0.0,<11",
+    "pillow>=12.0.0,<13",
 ]
 # 语音 (可选)
 voice = [

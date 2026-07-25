@@ -33,7 +33,7 @@ Gateway 使用两个互不覆盖的活动泳道：
 
 ## 环境要求
 
-- Python 3.11 或更高版本
+- Python 3.14.x
 - pip
 - 可用的 OpenAI-compatible 推理端点，或受支持的本地模型端点
 - 对应工具后端的本地依赖，例如 Docker、SSH 或 Podman（仅在选择该后端时需要）
@@ -198,8 +198,11 @@ python -m pip install -e ".[all,dev]"
 python -m pytest -m smoke -q
 python -m pytest -q
 python -m pytest Mem/tests -q
+python scripts/run_ci_tests.py
 python scripts/build_wheel.py
 ```
+
+Gitee Go 使用 `.workflow/voidcube-ci.yml` 在 master push 和 PR 上运行 Python 3.14，安装 `.[all,dev]` 后调用 `python3 scripts/run_ci_tests.py` 作为全仓门禁。该入口默认同时运行主仓 `tests` 和子项目 `Mem/tests`，并强制至少保留 30 分钟；超时返回退出码 `124`，具体测试参数可直接追加到命令后。
 
 涉及模型、鉴权、请求协议、技能或打包时，还必须运行：
 

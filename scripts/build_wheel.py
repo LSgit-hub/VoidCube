@@ -11,6 +11,8 @@ import tomllib
 from pathlib import Path
 from zipfile import ZipFile
 
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
+
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -168,10 +170,18 @@ def wheel_contract_errors(wheel_path: Path, root: Path = ROOT) -> list[str]:
                 "wheel version does not match VoidCube_cli.__version__: "
                 f"{wheel_metadata.get('Version')!r} != {__version__!r}"
             )
-        if wheel_metadata.get("Requires-Python") != requires_python:
+        packaged_requires_python = wheel_metadata.get("Requires-Python")
+        try:
+            python_range_matches = (
+                packaged_requires_python is not None
+                and SpecifierSet(packaged_requires_python) == SpecifierSet(requires_python)
+            )
+        except InvalidSpecifier:
+            python_range_matches = False
+        if not python_range_matches:
             errors.append(
                 "wheel Requires-Python does not match pyproject.toml: "
-                f"{wheel_metadata.get('Requires-Python')!r} != {requires_python!r}"
+                f"{packaged_requires_python!r} != {requires_python!r}"
             )
     return errors
 

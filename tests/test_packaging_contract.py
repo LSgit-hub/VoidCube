@@ -35,13 +35,17 @@ def _mem_project_config() -> dict:
         return tomllib.load(handle)
 
 
-def _wheel_metadata(*, version: str = __version__) -> str:
+def _wheel_metadata(
+    *,
+    version: str = __version__,
+    requires_python: str | None = None,
+) -> str:
     project = _project_config()["project"]
     return (
         "Metadata-Version: 2.4\n"
         f"Name: {project['name']}\n"
         f"Version: {version}\n"
-        f"Requires-Python: {project['requires-python']}\n\n"
+        f"Requires-Python: {requires_python or project['requires-python']}\n\n"
     )
 
 
@@ -120,17 +124,27 @@ def test_python_baseline_matches_metadata_docs_and_runtime_images():
     development_guide = (ROOT / "docs" / "开发与验证.md").read_text(encoding="utf-8")
     terminal = DEFAULT_CONFIG["terminal"]
 
-    assert project["requires-python"] == ">=3.11"
-    assert "Programming Language :: Python :: 3.11" in classifiers
-    assert "Python 3.11 或更高版本" in development_guide
-    for field in (
-        "docker_image",
-        "podman_image",
-        "singularity_image",
-        "modal_image",
-        "daytona_image",
-    ):
-        assert "python3.11" in terminal[field]
+    assert project["requires-python"] == ">=3.14,<3.15"
+    assert "Programming Language :: Python :: 3.14" in classifiers
+    assert not any(
+        value.startswith("Programming Language :: Python :: 3.")
+        and value != "Programming Language :: Python :: 3.14"
+        for value in classifiers
+    )
+    assert "项目固定使用 Python 3.14.x" in development_guide
+    assert terminal["docker_image"]
+
+
+@pytest.mark.unit
+def test_optional_dependency_ranges_support_python_314_wheels():
+    extras = _project_config()["project"]["optional-dependencies"]
+    local = {Requirement(value).name: Requirement(value) for value in extras["local"]}
+    image = {Requirement(value).name: Requirement(value) for value in extras["image"]}
+
+    assert Version("6.1.1") in local["lxml"].specifier
+    assert Version("5.4.0") not in local["lxml"].specifier
+    assert Version("12.2.0") in image["pillow"].specifier
+    assert Version("10.4.0") not in image["pillow"].specifier
 
 
 @pytest.mark.unit
@@ -275,6 +289,39 @@ def test_wheel_contract_rejects_distribution_metadata_drift(tmp_path):
     assert errors == [
         "wheel version does not match VoidCube_cli.__version__: "
         f"'9.9.9' != {__version__!r}"
+    ]
+
+
+@pytest.mark.unit
+def test_wheel_contract_accepts_normalized_python_specifier_order(tmp_path):
+    wheel = tmp_path / "normalized-python-range.whl"
+    expected = expected_wheel_files(ROOT)
+    with ZipFile(wheel, "w") as archive:
+        for name in expected:
+            archive.writestr(name, "")
+        archive.writestr(
+            f"voidcube_agent-{__version__}.dist-info/METADATA",
+            _wheel_metadata(requires_python="<3.15,>=3.14"),
+        )
+
+    assert wheel_contract_errors(wheel, ROOT) == []
+
+
+@pytest.mark.unit
+def test_wheel_contract_rejects_python_range_drift(tmp_path):
+    wheel = tmp_path / "python-range-drift.whl"
+    expected = expected_wheel_files(ROOT)
+    with ZipFile(wheel, "w") as archive:
+        for name in expected:
+            archive.writestr(name, "")
+        archive.writestr(
+            f"voidcube_agent-{__version__}.dist-info/METADATA",
+            _wheel_metadata(requires_python=">=3.13,<3.15"),
+        )
+
+    assert wheel_contract_errors(wheel, ROOT) == [
+        "wheel Requires-Python does not match pyproject.toml: "
+        "'>=3.13,<3.15' != '>=3.14,<3.15'"
     ]
 
 

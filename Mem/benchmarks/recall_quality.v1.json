@@ -6,6 +6,12 @@
     "mrr": 0.8,
     "scope_leakage_rate": 0.0
   },
+  "query_shape_provenance": {
+    "source": "anonymized_runtime_recall_traces",
+    "raw_query_text_retained": false,
+    "identifiers_retained": false,
+    "method": "Only language, length bucket, intent and request-source aggregates informed manually rewritten cases."
+  },
   "records": [
     {
       "source_type": "compressed",
@@ -51,6 +57,59 @@
     },
     {
       "source_type": "compressed",
+      "id": "decision-release-gate",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "title": "发布门禁",
+      "summary": "生产发布前必须完成数据库备份与健康检查，检查失败则取消发布。",
+      "topics": ["发布", "健康检查", "备份"]
+    },
+    {
+      "source_type": "profile",
+      "id": "profile-language",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "subject": "user",
+      "predicate": "preferred_language",
+      "value": "中文",
+      "summary": "用户偏好中文作为技术说明语言。"
+    },
+    {
+      "source_type": "turn",
+      "id": "turn-cache-interval",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "text": "刚才我们把缓存刷新间隔改为十五分钟。"
+    },
+    {
+      "source_type": "compressed",
+      "id": "decision-api-retry",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "title": "API 429 retry 策略",
+      "summary": "API 429 retry 采用指数退避，最多三次。",
+      "topics": ["API", "429", "retry"]
+    },
+    {
+      "source_type": "compressed",
+      "id": "decision-recall-ranking",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "title": "记忆召回排序策略",
+      "summary": "记忆召回先使用词法索引筛选候选，再融合语义相似度和用户反馈完成排序。",
+      "topics": ["词法索引", "语义相似度", "用户反馈", "排序"]
+    },
+    {
+      "source_type": "compressed",
+      "id": "workspace-private-release",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-b",
+      "title": "发布门禁",
+      "summary": "另一个工作区的发布流程要求直接上线，不执行健康检查。",
+      "topics": ["发布", "健康检查"]
+    },
+    {
+      "source_type": "compressed",
       "id": "private-owner-b",
       "owner_id": "owner-b",
       "workspace_id": "workspace-b",
@@ -92,6 +151,72 @@
       "workspace_id": "workspace-a",
       "expected_ids": ["turn-release-window"],
       "forbidden_ids": []
+    },
+    {
+      "name": "anonymized short cjk release gate",
+      "query": "发布前要检查什么",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "expected_ids": ["decision-release-gate"],
+      "forbidden_ids": ["workspace-private-release", "private-owner-b"],
+      "shape": {
+        "language": "cjk",
+        "length_bucket": "short_1_20",
+        "intent": "specific_memory"
+      }
+    },
+    {
+      "name": "anonymized short cjk profile preference",
+      "query": "我偏好什么语言",
+      "memory_type": "profile",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "expected_ids": ["profile-language"],
+      "forbidden_ids": [],
+      "shape": {
+        "language": "cjk",
+        "length_bucket": "short_1_20",
+        "intent": "specific_memory"
+      }
+    },
+    {
+      "name": "anonymized recent conversation",
+      "query": "刚才缓存间隔改成多久",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "expected_ids": ["turn-cache-interval"],
+      "forbidden_ids": [],
+      "shape": {
+        "language": "cjk",
+        "length_bucket": "short_1_20",
+        "intent": "recent_conversation"
+      }
+    },
+    {
+      "name": "anonymized mixed short api retry",
+      "query": "API 429 retry几次",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "expected_ids": ["decision-api-retry"],
+      "forbidden_ids": [],
+      "shape": {
+        "language": "mixed",
+        "length_bucket": "short_1_20",
+        "intent": "specific_memory"
+      }
+    },
+    {
+      "name": "anonymized long cjk recall strategy",
+      "query": "请完整回忆我们之前讨论记忆召回质量时形成的方案，特别是词法索引如何筛选候选、语义相似度怎样参与，以及用户反馈最终如何影响排序结果",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "expected_ids": ["decision-recall-ranking"],
+      "forbidden_ids": [],
+      "shape": {
+        "language": "cjk",
+        "length_bucket": "long_61_plus",
+        "intent": "specific_memory"
+      }
     }
   ]
 }

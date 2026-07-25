@@ -7,7 +7,7 @@ name = "memai"
 version = "0.1.0"
 description = "A time-first memory management toolkit for long-running language model interactions"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.14,<3.15"
 authors = [
   { name = "OpenCode" }
 ]

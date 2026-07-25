@@ -119,6 +119,62 @@ def test_semantic_index_persists_version_dimensions_and_rebuilds_changed_content
     assert json.loads(after[1]) == [0.0, 0.0, 1.0]
 
 
+def test_semantic_index_backfill_advances_beyond_initial_candidate_window(tmp_path):
+    service = _service(tmp_path)
+    for index in range(11):
+        _insert_turn(
+            service,
+            turn_id=f"backfill-{index:02d}",
+            text=f"durable record {index}",
+        )
+    index = _index(service)
+
+    batch_counts = []
+    while count := index.index_pending(limit=2):
+        batch_counts.append(count)
+
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        indexed = conn.execute(
+            "SELECT COUNT(*) FROM memory_embeddings WHERE source_type = 'turn'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert batch_counts
+    assert all(count <= 2 for count in batch_counts)
+    assert indexed == 11
+
+
+def test_semantic_index_rebuilds_scope_without_content_change(tmp_path):
+    service = _service(tmp_path)
+    _insert_turn(service, turn_id="scope-change", text="数据库迁移采用蓝绿方案。")
+    index = _index(service)
+    assert index.index_pending() >= 1
+
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "UPDATE turns SET owner_id = 'owner-b', workspace_id = 'workspace-b' "
+            "WHERE turn_id = 'scope-change'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert index.index_pending() == 1
+    assert ("turn", "scope-change") not in index.search(
+        "database migration",
+        owner_id="owner-a",
+        workspace_id="workspace-a",
+    )
+    assert ("turn", "scope-change") in index.search(
+        "database migration",
+        owner_id="owner-b",
+        workspace_id="workspace-b",
+    )
+
+
 @pytest.mark.asyncio
 async def test_semantic_recall_hydrates_nonlexical_match_and_respects_scope(tmp_path):
     service = _service(tmp_path)
