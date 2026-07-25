@@ -35,6 +35,7 @@ def test_benchmark_covers_anonymized_runtime_query_shapes():
     assert {case["shape"]["intent"] for case in shaped_cases} >= {
         "recent_conversation",
         "specific_memory",
+        "identity",
     }
     assert any(
         "workspace-private-release" in case["forbidden_ids"]

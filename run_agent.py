@@ -137,7 +137,7 @@ from agent.turn_finalization import finalize_conversation_turn
 from agent.conversation_turn import ConversationTurnState
 from agent.iteration_control import IterationBudget
 from agent.subdirectory_hints import SubdirectoryHintTracker
-from agent.prompt_builder import build_skills_system_prompt, build_context_files_prompt, build_environment_hints, load_soul_md, TOOL_USE_ENFORCEMENT_GUIDANCE, TOOL_USE_ENFORCEMENT_MODELS, GOOGLE_MODEL_OPERATIONAL_GUIDANCE, OPENAI_MODEL_EXECUTION_GUIDANCE
+from agent.prompt_builder import build_skills_system_prompt, build_context_files_prompt, build_environment_hints, ensure_persistent_identity_guidance, has_canonical_memory_tools, load_soul_md, TOOL_USE_ENFORCEMENT_GUIDANCE, TOOL_USE_ENFORCEMENT_MODELS, GOOGLE_MODEL_OPERATIONAL_GUIDANCE, OPENAI_MODEL_EXECUTION_GUIDANCE
 from agent.api_request import (
     ChatRequestConfig,
     build_chat_completion_kwargs,
@@ -2020,7 +2020,7 @@ class AIAgent:
         # Layers (in order):
         #   1. Agent identity — SOUL.md when available, else DEFAULT_AGENT_IDENTITY
         #   2. User / gateway system prompt (if provided)
-        #   3. Persistent memory (frozen snapshot)
+        #   3. Tool-aware behavior guidance
         #   4. Skills guidance (if skills tools are loaded)
         #   5. Context files (AGENTS.md, .cursorrules — SOUL.md excluded here when used as identity)
         #   6. Current date & time (frozen at build time)
@@ -2031,16 +2031,16 @@ class AIAgent:
         if not self.skip_context_files:
             _soul_content = load_soul_md()
             if _soul_content:
-                prompt_parts = [_soul_content]
+                prompt_parts = [ensure_persistent_identity_guidance(_soul_content)]
                 _soul_loaded = True
 
         if not _soul_loaded:
             # Fallback to hardcoded identity
-            prompt_parts = [DEFAULT_AGENT_IDENTITY]
+            prompt_parts = [ensure_persistent_identity_guidance(DEFAULT_AGENT_IDENTITY)]
 
         # Tool-aware behavioral guidance: only inject when the tools are loaded
         tool_guidance = []
-        if "memory" in self.valid_tool_names:
+        if has_canonical_memory_tools(self.valid_tool_names):
             tool_guidance.append(MEMORY_GUIDANCE)
         if "session_search" in self.valid_tool_names:
             tool_guidance.append(SESSION_SEARCH_GUIDANCE)

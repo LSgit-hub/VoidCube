@@ -54,6 +54,48 @@ _RECENT_CONVERSATION_PATTERNS = (
     "what did we talk",
     "what were we discussing",
 )
+_IDENTITY_QUERY_PATTERNS = (
+    "你是谁",
+    "你叫什么",
+    "你还记得自己",
+    "你记得自己",
+    "你记得你是谁",
+    "我们是谁",
+    "你记得锚点",
+    "who are you",
+    "what is your name",
+    "what's your name",
+    "do you remember who you are",
+    "do you remember yourself",
+)
+_IDENTITY_TOPIC_MARKERS = (
+    "星子",
+    "小星",
+    "你的身份",
+    "自身身份",
+    "身份连续",
+    "身份历史",
+    "voidcube identity",
+    "persistent identity",
+    "identity continuity",
+)
+_IDENTITY_CONCEPT_TERMS = (
+    "身份",
+    "星子",
+    "小星",
+    "voidcube",
+    "锚点",
+    "信任",
+    "identity",
+    "self",
+)
+_FOUNDING_IDENTITY_PRIORITY = {
+    "identity-founding-purpose": 0.08,
+    "identity-founding-trust": 0.07,
+    "identity-founding-values": 0.06,
+    "identity-founding-architecture": 0.05,
+    "identity-founding-vision": 0.04,
+}
 _CONCEPT_GROUPS = (
     ("失效", "故障", "失败", "不可用", "不工作", "坏了", "异常"),
     ("讨论", "聊到", "聊过", "聊天", "谈到", "提到"),
@@ -205,19 +247,31 @@ def build_recall_plan(
         if candidate in {"event", "scene", "arc", "epoch", "profile"} and candidate not in types:
             types.append(candidate)
 
-    terms = tuple(_extract_terms(normalized, topic=topic))
     recency_intent = any(marker in normalized for marker in _RECENCY_MARKERS)
     intent_query = normalized.rstrip(" ?？。.!！")
-    intent = (
-        "recent_conversation"
-        if any(intent_query.endswith(pattern) for pattern in _RECENT_CONVERSATION_PATTERNS)
-        else "specific_memory"
+    if _is_identity_query(intent_query):
+        intent = "identity"
+    elif any(
+        intent_query.endswith(pattern) for pattern in _RECENT_CONVERSATION_PATTERNS
+    ):
+        intent = "recent_conversation"
+    else:
+        intent = "specific_memory"
+    terms = (
+        (() if topic is None else tuple(_extract_terms("", topic=topic)))
+        if intent == "identity"
+        else tuple(_extract_terms(normalized, topic=topic))
+    )
+    concept_terms = (
+        _IDENTITY_CONCEPT_TERMS
+        if intent == "identity"
+        else tuple(_expand_concepts(normalized, terms))
     )
     return RecallPlan(
         query=raw_query,
         normalized_query=normalized,
         terms=terms,
-        concept_terms=tuple(_expand_concepts(normalized, terms)),
+        concept_terms=tuple(concept_terms),
         timespan_start=start,
         timespan_end=end,
         memory_types=tuple(types),
@@ -284,19 +338,20 @@ def recall_memories(
                 semantic_matches=semantic_matches,
             )
         )
-        candidates.extend(
-            _profile_candidates(
-                conn,
-                plan,
-                bounded_candidates,
-                reference,
-                owner_id=owner_id,
-                workspace_id=workspace_id,
-                lexical_matches=lexical_matches,
-                semantic_matches=semantic_matches,
+        if plan.intent != "identity":
+            candidates.extend(
+                _profile_candidates(
+                    conn,
+                    plan,
+                    bounded_candidates,
+                    reference,
+                    owner_id=owner_id,
+                    workspace_id=workspace_id,
+                    lexical_matches=lexical_matches,
+                    semantic_matches=semantic_matches,
+                )
             )
-        )
-    if include_tier1:
+    if include_tier1 and plan.intent != "identity":
         candidates.extend(
             _tier1_candidates(
                 conn,
@@ -422,6 +477,15 @@ def _extract_terms(normalized_query: str, *, topic: str | None) -> list[str]:
     return ordered[:16]
 
 
+def _is_identity_query(normalized_query: str) -> bool:
+    compact = re.sub(r"[\s?？。.!！,，'’]+", "", normalized_query)
+    return any(marker in normalized_query for marker in _IDENTITY_TOPIC_MARKERS) or any(
+        pattern in normalized_query
+        or re.sub(r"[\s'’]+", "", pattern) in compact
+        for pattern in _IDENTITY_QUERY_PATTERNS
+    )
+
+
 def _expand_concepts(normalized_query: str, terms: Sequence[str]) -> list[str]:
     exact = set(terms)
     expanded: list[str] = []
@@ -458,15 +522,25 @@ def _tier2_candidates(
         GLOBAL_SCOPE_ID,
         GLOBAL_SCOPE_ID,
     ]
-    lexical_ids = lexical_matches.get("compressed", ())
-    semantic_ids = _semantic_ids(semantic_matches, "compressed")
-    _append_search_predicates(
-        clauses,
-        params,
-        id_column="memory_id",
-        lexical_ids=lexical_ids,
-        semantic_ids=semantic_ids,
-    )
+    if plan.intent == "identity":
+        clauses.extend(
+            (
+                "identity_layer = 'founding'",
+                "memory_id LIKE 'identity-founding-%'",
+                "pinned = 1",
+            )
+        )
+    else:
+        clauses.append("COALESCE(identity_layer, '') != 'founding'")
+        lexical_ids = lexical_matches.get("compressed", ())
+        semantic_ids = _semantic_ids(semantic_matches, "compressed")
+        _append_search_predicates(
+            clauses,
+            params,
+            id_column="memory_id",
+            lexical_ids=lexical_ids,
+            semantic_ids=semantic_ids,
+        )
     tier2_types = tuple(item for item in plan.memory_types if item != "profile")
     if plan.memory_types and not tier2_types:
         return []
@@ -503,7 +577,12 @@ def _tier2_candidates(
         )
         lexical, matched = _lexical_score(plan, searchable_text)
         semantic = float(semantic_matches.get(("compressed", str(row[0])), 0.0))
-        if lexical <= 0 and plan.terms and semantic < 0.35:
+        if (
+            plan.intent != "identity"
+            and lexical <= 0
+            and plan.terms
+            and semantic < 0.35
+        ):
             continue
         dynamic_weight = _dynamic_weight(
             float(row[15] or 0.0),
@@ -514,6 +593,13 @@ def _tier2_candidates(
         )
         recency = _recency_score(row[5], now)
         score = (
+            0.69
+            + _FOUNDING_IDENTITY_PRIORITY.get(str(row[0]), 0.0)
+            + 0.15 * lexical
+            + 0.03 * dynamic_weight
+            + 0.03 * float(row[6] or 0.0)
+            if plan.intent == "identity"
+            else
             0.42 * lexical
             + 0.30 * semantic
             + 0.12 * dynamic_weight

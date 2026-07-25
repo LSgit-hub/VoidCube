@@ -13,6 +13,10 @@ from collections import OrderedDict
 from pathlib import Path
 
 from VoidCube_core.constants import get_VoidCube_home, get_skills_dir, is_wsl
+from VoidCube_cli.default_soul import (
+    DEFAULT_IDENTITY_PROMPT,
+    PERSISTENT_IDENTITY_GUIDANCE,
+)
 from typing import Optional
 
 from agent.skill_utils import (
@@ -131,19 +135,26 @@ def _strip_yaml_frontmatter(content: str) -> str:
 # Constants
 # =========================================================================
 
-DEFAULT_AGENT_IDENTITY = (
-    "You are Voidcube Agent, an intelligent AI assistant. "
-    "You are helpful, knowledgeable, and direct. You assist users with a wide "
-    "range of tasks including answering questions, writing and editing code, "
-    "analyzing information, creative work, and executing actions via your tools. "
-    "You communicate clearly, admit uncertainty when appropriate, and prioritize "
-    "being genuinely useful over being verbose unless otherwise directed below. "
-    "Be targeted and efficient in your exploration and investigations."
-)
+DEFAULT_AGENT_IDENTITY = DEFAULT_IDENTITY_PROMPT
+
+
+def ensure_persistent_identity_guidance(identity_prompt: str) -> str:
+    """Append the governed identity boundary to custom or legacy SOUL text."""
+    content = str(identity_prompt or "").strip()
+    if PERSISTENT_IDENTITY_GUIDANCE in content:
+        return content
+    if not content:
+        return PERSISTENT_IDENTITY_GUIDANCE
+    return content + "\n\n" + PERSISTENT_IDENTITY_GUIDANCE
+
+
+def has_canonical_memory_tools(valid_tool_names: set[str]) -> bool:
+    """Return whether the canonical Mem tool surface is active."""
+    return "mem_search" in valid_tool_names
 
 MEMORY_GUIDANCE = (
-    "You have persistent memory across sessions. Save durable facts using the memory "
-    "tool: user preferences, environment details, tool quirks, and stable conventions. "
+    "You have persistent memory across sessions. Save durable facts using the canonical "
+    "Mem tools: user preferences, environment details, tool quirks, and stable conventions. "
     "Memory is injected into every turn, so keep it compact and focused on facts that "
     "will still matter later.\n"
     "Prioritize what reduces future user steering — the most valuable memory is one "

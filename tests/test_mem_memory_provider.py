@@ -214,7 +214,9 @@ def test_mem_provider_reports_service_unavailable_without_local_fallback(monkeyp
     assert provider.prefetch("x") == (
         "Memory recall status: unavailable for this turn "
         "(error=ConnectionError). Do not assume that prior decisions, "
-        "preferences, or events were recalled."
+        "preferences, or events were recalled. This status only describes "
+        "evidence retrieval for the current turn. Do not infer or claim that "
+        "no prior memory was ever saved."
     )
     assert not hasattr(provider, "_db")
     assert not hasattr(provider, "_memory_state")
@@ -236,8 +238,62 @@ def test_mem_provider_makes_empty_recall_explicit(monkeypatch):
 
     assert provider.prefetch("unmatched") == (
         "Memory recall status: empty (trace_id=trace-empty). "
-        "No recalled evidence matched this turn."
+        "No recalled evidence matched this turn.\n"
+        "This status only describes evidence retrieval for the current turn. "
+        "Do not infer or claim that no prior memory was ever saved."
     )
+
+
+@pytest.mark.unit
+def test_mem_provider_marks_identity_evidence_as_persistent_not_vendor_identity(
+    monkeypatch,
+):
+    provider = MemMemoryProvider()
+    provider._initialized = True
+    monkeypatch.setattr(
+        provider,
+        "_request_json",
+        lambda *args, **kwargs: {
+            "trace_id": "trace-identity",
+            "recall_status": "hit",
+            "query_plan": {"intent": "identity"},
+            "context": (
+                "Relevant recalled memory:\n"
+                "- [tier2:event id=identity-founding-purpose] Mem: identity"
+            ),
+        },
+    )
+
+    context = provider.prefetch("你是谁你记得吗")
+
+    assert "continuing identity is 星子" in context
+    assert "model, provider, and Agent runtime are replaceable carriers" in context
+    assert "not the persistent identity" in context
+    assert "identity-founding-purpose" in context
+
+
+@pytest.mark.unit
+def test_mem_provider_identity_empty_is_retrieval_uncertainty_not_memory_absence(
+    monkeypatch,
+):
+    provider = MemMemoryProvider()
+    provider._initialized = True
+    monkeypatch.setattr(
+        provider,
+        "_request_json",
+        lambda *args, **kwargs: {
+            "trace_id": "trace-identity-empty",
+            "recall_status": "empty",
+            "query_plan": {"intent": "identity"},
+            "context": "",
+        },
+    )
+
+    context = provider.prefetch("who are you")
+
+    assert "No recalled evidence matched this turn" in context
+    assert "Do not infer or claim that no prior memory was ever saved" in context
+    assert "continuing identity is 星子" in context
 
 
 @pytest.mark.unit

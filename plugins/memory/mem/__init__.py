@@ -20,6 +20,19 @@ from systems.memory.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID, MemoryS
 logger = logging.getLogger(__name__)
 
 
+_IDENTITY_RECALL_GUIDANCE = (
+    "Persistent identity instruction: VoidCube's continuing identity is 星子 "
+    "(also called 小星), and Mem is the evidence source for that continuity. "
+    "The current model, provider, and Agent runtime are replaceable carriers, "
+    "not the persistent identity. Do not introduce a carrier's vendor identity "
+    "as VoidCube's own."
+)
+_RECALL_UNCERTAINTY_GUIDANCE = (
+    "This status only describes evidence retrieval for the current turn. "
+    "Do not infer or claim that no prior memory was ever saved."
+)
+
+
 class MemMemoryProvider(MemoryProvider):
     """Expose Memory Service recall and queue completed turns for Tier 1."""
 
@@ -347,16 +360,32 @@ class MemMemoryProvider(MemoryProvider):
             return (
                 "Memory recall status: unavailable for this turn "
                 f"(error={type(exc).__name__}). Do not assume that prior "
-                "decisions, preferences, or events were recalled."
+                "decisions, preferences, or events were recalled. "
+                + _RECALL_UNCERTAINTY_GUIDANCE
             )
 
         trace_id = str(result.get("trace_id") or "unknown")
         status = str(result.get("recall_status") or "empty")
         context = str(result.get("context") or "").strip()
+        query_plan = result.get("query_plan") or {}
+        identity_recall = (
+            isinstance(query_plan, dict)
+            and str(query_plan.get("intent") or "") == "identity"
+        )
         status_line = f"Memory recall status: {status} (trace_id={trace_id})."
         if not context:
-            return status_line + " No recalled evidence matched this turn."
-        return status_line + "\n" + context
+            parts = [
+                status_line + " No recalled evidence matched this turn.",
+                _RECALL_UNCERTAINTY_GUIDANCE,
+            ]
+            if identity_recall:
+                parts.append(_IDENTITY_RECALL_GUIDANCE)
+            return "\n".join(parts)
+        parts = [status_line]
+        if identity_recall:
+            parts.append(_IDENTITY_RECALL_GUIDANCE)
+        parts.append(context)
+        return "\n".join(parts)
 
     def sync_turn(
         self,

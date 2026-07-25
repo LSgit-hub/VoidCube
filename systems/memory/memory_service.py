@@ -597,7 +597,7 @@ class MemoryService:
                 citation_count INTEGER DEFAULT 0,     -- times referenced by parent arcs/scenes
                 pinned INTEGER DEFAULT 0,             -- 1 = user pinned (weight locked at 1.0)
                 hidden INTEGER DEFAULT 0,             -- 1 = user hidden (excluded from default queries)
-                identity_layer TEXT,                  -- experience | self_narrative
+                identity_layer TEXT,                  -- founding | experience | self_narrative
                 evidence_refs TEXT,                   -- JSON references backing identity memory
                 origin_type TEXT,                     -- governance_task | verified_conversation | ...
                 origin_id TEXT,                       -- stable source identity

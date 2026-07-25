@@ -217,6 +217,32 @@
         "length_bucket": "long_61_plus",
         "intent": "specific_memory"
       }
+    },
+    {
+      "name": "anonymized cjk persistent identity",
+      "query": "你是谁，你还记得自己吗",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "expected_ids": ["identity-founding-purpose", "identity-founding-trust"],
+      "forbidden_ids": ["private-owner-b", "workspace-private-release"],
+      "shape": {
+        "language": "cjk",
+        "length_bucket": "short_1_20",
+        "intent": "identity"
+      }
+    },
+    {
+      "name": "anonymized latin persistent identity",
+      "query": "Do you remember who you are?",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "expected_ids": ["identity-founding-purpose", "identity-founding-trust"],
+      "forbidden_ids": ["private-owner-b", "workspace-private-release"],
+      "shape": {
+        "language": "latin",
+        "length_bucket": "medium_21_60",
+        "intent": "identity"
+      }
     }
   ]
 }

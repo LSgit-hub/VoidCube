@@ -110,9 +110,9 @@ def ensure_founding_memories(conn) -> int:
                 timespan_start, timespan_end, importance, confidence,
                 topics, entities, source_turns, parent_id, compressed_at,
                 compression_level, status, weight, event_kind, pinned, hidden,
-                owner_id, workspace_id
+                owner_id, workspace_id, identity_layer
             ) VALUES (?, 'event', ?, ?, ?, ?, 1.0, 1.0, ?, ?, ?, NULL, ?, 0,
-                      'active', 1.0, ?, 1, 0, ?, ?)
+                      'active', 1.0, ?, 1, 0, ?, ?, 'founding')
             ON CONFLICT(memory_id) DO UPDATE SET
                 memory_type = excluded.memory_type,
                 title = excluded.title,
@@ -133,7 +133,8 @@ def ensure_founding_memories(conn) -> int:
                 pinned = 1,
                 hidden = 0,
                 owner_id = excluded.owner_id,
-                workspace_id = excluded.workspace_id
+                workspace_id = excluded.workspace_id,
+                identity_layer = 'founding'
             """,
             (
                 memory_id,

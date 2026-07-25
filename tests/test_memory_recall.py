@@ -134,6 +134,31 @@ def test_multilingual_plan_extracts_concepts_instead_of_only_the_whole_sentence(
     assert normalize_text(plan.query) == plan.normalized_query
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "你是谁你记得吗",
+        "你叫什么？",
+        "你还记得自己吗",
+        "我们是谁？",
+        "你记得锚点吗",
+        "你的身份是什么？",
+        "Who are you?",
+        "What is the VoidCube identity?",
+        "Do you remember who you are?",
+    ],
+)
+def test_identity_queries_have_a_first_class_plan_without_noise_terms(query):
+    plan = build_recall_plan(query)
+
+    assert plan.intent == "identity"
+    assert plan.terms == ()
+    assert {"身份", "星子", "小星", "voidcube", "锚点"} <= set(
+        plan.concept_terms
+    )
+    assert "谁你" not in plan.search_terms
+
+
 def test_today_uses_the_callers_local_calendar_day_in_utc_boundaries():
     local_now = datetime(2026, 7, 23, 9, 30, tzinfo=timezone(timedelta(hours=8)))
 

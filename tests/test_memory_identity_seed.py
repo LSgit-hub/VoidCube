@@ -72,7 +72,7 @@ def test_memory_service_seeds_pinned_identity_rows_idempotently(tmp_path) -> Non
     conn = open_memory_sqlite(service._db_path)
     try:
         rows = conn.execute(
-            "SELECT memory_id, pinned, hidden, importance, confidence "
+            "SELECT memory_id, pinned, hidden, importance, confidence, identity_layer "
             "FROM compressed_memories WHERE memory_id LIKE 'identity-founding-%'"
         ).fetchall()
         trust = conn.execute(
@@ -83,7 +83,7 @@ def test_memory_service_seeds_pinned_identity_rows_idempotently(tmp_path) -> Non
         conn.close()
 
     assert len(rows) == len(load_founding_memories())
-    assert all(row[1:] == (1, 0, 1.0, 1.0) for row in rows)
+    assert all(row[1:] == (1, 0, 1.0, 1.0, "founding") for row in rows)
     assert trust == ("信任就此开始", 1, 0, 4)
 
 
@@ -119,6 +119,62 @@ async def test_identity_is_recalled_without_a_live_session(tmp_path) -> None:
         item["id"] for item in purpose_result["results"]
     }
     assert "Mem" in purpose_result["context"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query",
+    ["你是谁你记得吗", "Who are you?", "Do you remember who you are?"],
+)
+async def test_identity_intent_recalls_global_founding_identity_across_workspaces(
+    tmp_path, query
+) -> None:
+    service = MemoryService(
+        MemoryServiceConfig(
+            db_path=str(tmp_path / "memory.db"),
+            recall_default_limit=5,
+            recall_candidate_limit=100,
+        )
+    )
+
+    result = await service.recall(
+        RecallRequest(
+            query=query,
+            owner_id="another-user",
+            workspace_id="another-workspace",
+            limit=5,
+        )
+    )
+
+    returned = [item["id"] for item in result["results"]]
+    assert result["query_plan"]["intent"] == "identity"
+    assert result["query_plan"]["terms"] == []
+    assert returned[:3] == [
+        "identity-founding-purpose",
+        "identity-founding-trust",
+        "identity-founding-values",
+    ]
+    assert all(item["identity_layer"] == "founding" for item in result["results"])
+    assert "id=identity-founding-purpose" in result["context"]
+
+
+@pytest.mark.asyncio
+async def test_non_identity_query_does_not_unconditionally_inject_founding_rows(
+    tmp_path,
+) -> None:
+    service = MemoryService(
+        MemoryServiceConfig(db_path=str(tmp_path / "memory.db"))
+    )
+
+    result = await service.recall(
+        RecallRequest(query="普通的界面配色问题", limit=5)
+    )
+
+    assert result["query_plan"]["intent"] == "specific_memory"
+    assert not any(
+        item["id"].startswith("identity-founding-")
+        for item in result["results"]
+    )
 
 
 @pytest.mark.asyncio
