@@ -15,6 +15,14 @@ from agent.redact import redact_sensitive_text
 from systems.memory.backup import MemoryBackupManager, MemoryRestoreError
 from systems.memory.config import MemoryServiceConfig
 from systems.memory.lexical_index import setup_memory_fts
+from systems.memory.profile_capture import (
+    ALL_PROFILE_PREDICATES,
+    capture_explicit_user_profile,
+)
+from systems.memory.profile_store import (
+    revoke_profile_predicates,
+    upsert_profile_memory,
+)
 from systems.memory.recall import (
     build_recall_plan,
     format_recall_context,
@@ -567,6 +575,31 @@ class MemoryService:
             )
         ''')
 
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS profile_memory_tombstones (
+                owner_id TEXT NOT NULL,
+                workspace_id TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                predicate TEXT NOT NULL,
+                revoked_at TEXT NOT NULL,
+                source_turn_id TEXT NOT NULL,
+                evidence_turns TEXT NOT NULL DEFAULT '[]',
+                reason_hash TEXT NOT NULL,
+                PRIMARY KEY(owner_id, workspace_id, subject, predicate)
+            )
+        ''')
+        tombstone_columns = {
+            row[1]
+            for row in cursor.execute(
+                "PRAGMA table_info(profile_memory_tombstones)"
+            ).fetchall()
+        }
+        if "evidence_turns" not in tombstone_columns:
+            cursor.execute(
+                "ALTER TABLE profile_memory_tombstones "
+                "ADD COLUMN evidence_turns TEXT NOT NULL DEFAULT '[]'"
+            )
+
         # Tier 2 compressed memories table (structured Event/Scene/Arc summaries)
         # Lifecycle: Event(level=0) → Scene(level=1) → Arc(level=2) → Epoch(level=3) → purged
         # Five-dimensional weight model (see §3.4.2 in architecture baseline):
@@ -702,6 +735,8 @@ class MemoryService:
             "ON recall_feedback(owner_id, workspace_id, memory_id, created_at)",
             "CREATE INDEX IF NOT EXISTS idx_memory_deletion_audit_scope "
             "ON memory_deletion_audit(owner_id, workspace_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_profile_tombstones_scope "
+            "ON profile_memory_tombstones(owner_id, workspace_id, revoked_at)",
             "CREATE INDEX IF NOT EXISTS idx_cmem_type ON compressed_memories(memory_type)",
             "CREATE INDEX IF NOT EXISTS idx_cmem_timespan ON compressed_memories(timespan_start, timespan_end)",
             "CREATE INDEX IF NOT EXISTS idx_cmem_status ON compressed_memories(status)",
@@ -2145,6 +2180,7 @@ class MemoryService:
         now = datetime.now().astimezone().isoformat()
         conn = open_memory_sqlite(self._db_path)
         turn_ids: dict[str, str] = {}
+        profile_settlement: dict[str, Any] = {"action": "none"}
         try:
             existing_session = conn.execute(
                 "SELECT owner_id, workspace_id FROM sessions WHERE session_id = ?",
@@ -2213,6 +2249,61 @@ class MemoryService:
                     ),
                 )
                 turn_ids[speaker] = turn_id
+            if turn_ids.get("user"):
+                user_turn = conn.execute(
+                    "SELECT text, timestamp FROM turns WHERE turn_id = ? "
+                    "AND owner_id = ? AND workspace_id = ?",
+                    (turn_ids["user"], scope.owner_id, scope.workspace_id),
+                ).fetchone()
+                if user_turn:
+                    capture = capture_explicit_user_profile(
+                        str(user_turn[0]),
+                        turn_id=turn_ids["user"],
+                        timestamp=datetime.fromisoformat(str(user_turn[1])),
+                    )
+                    predicates = capture.revoke_predicates
+                    if predicates == ("*",):
+                        active_predicates = (
+                            str(row[0])
+                            for row in conn.execute(
+                                "SELECT DISTINCT predicate FROM profile_memories "
+                                "WHERE owner_id = ? AND workspace_id = ? "
+                                "AND subject = 'user' AND status = 'active'",
+                                (scope.owner_id, scope.workspace_id),
+                            ).fetchall()
+                        )
+                        predicates = tuple(
+                            dict.fromkeys(
+                                (*ALL_PROFILE_PREDICATES, *active_predicates)
+                            )
+                        )
+                    if predicates:
+                        profile_settlement = revoke_profile_predicates(
+                            conn,
+                            predicates,
+                            owner_id=scope.owner_id,
+                            workspace_id=scope.workspace_id,
+                            turn_id=turn_ids["user"],
+                            now=now,
+                        )
+                    elif capture.profiles:
+                        inserted = sum(
+                            upsert_profile_memory(
+                                conn,
+                                profile,
+                                owner_id=scope.owner_id,
+                                workspace_id=scope.workspace_id,
+                                now=now,
+                            )
+                            for profile in capture.profiles
+                        )
+                        profile_settlement = {
+                            "action": "upserted",
+                            "predicates": [
+                                profile.predicate for profile in capture.profiles
+                            ],
+                            "inserted": inserted,
+                        }
             conn.execute(
                 "UPDATE sessions SET updated_at = ? WHERE session_id = ?",
                 (now, session_id),
@@ -2226,7 +2317,7 @@ class MemoryService:
 
         self._semantic_wake.set()
         settlement = None
-        if turn_ids.get("user"):
+        if turn_ids.get("user") and profile_settlement["action"] == "none":
             settlement = await self.settle_interaction_experience(
                 InteractionExperienceSettlement(
                     user_turn_id=turn_ids["user"],
@@ -2241,6 +2332,7 @@ class MemoryService:
             "write_id": request.write_id,
             "turn_ids": turn_ids,
             "identity_settlement": settlement,
+            "profile_settlement": profile_settlement,
             **scope.as_dict(),
         }
 

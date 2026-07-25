@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from systems.memory.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID
+from systems.memory.profile_store import upsert_profile_memory
 
 logger = logging.getLogger(__name__)
 
@@ -234,7 +235,7 @@ def _write_compressed_memories_to_db(conn, pipeline_result, now: str) -> int:
         )
         written += 1
     for profile in getattr(pipeline_result, "profile_memories", []) or []:
-        written += _upsert_profile_memory(
+        written += upsert_profile_memory(
             conn,
             profile,
             owner_id=owner_id,
@@ -261,78 +262,6 @@ def _pipeline_scope(conn, pipeline_result) -> tuple[str, str]:
         if row:
             return str(row[0]), str(row[1])
     return DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID
-
-
-def _enum_value(value: Any) -> str:
-    return str(getattr(value, "value", value))
-
-
-def _upsert_profile_memory(
-    conn,
-    profile,
-    *,
-    owner_id: str,
-    workspace_id: str,
-    now: str,
-) -> int:
-    existing = conn.execute(
-        "SELECT memory_id, value FROM profile_memories "
-        "WHERE owner_id = ? AND workspace_id = ? AND subject = ? AND predicate = ? "
-        "AND status = 'active' ORDER BY valid_from DESC LIMIT 1",
-        (owner_id, workspace_id, profile.subject, profile.predicate),
-    ).fetchone()
-    supersedes = list(getattr(profile, "supersedes", []) or [])
-    if existing and str(existing[1]) != str(profile.value):
-        conn.execute(
-            "UPDATE profile_memories SET status = 'superseded', valid_to = ?, "
-            "updated_at = ? WHERE memory_id = ?",
-            (profile.valid_from.isoformat(), now, existing[0]),
-        )
-        supersedes.append(str(existing[0]))
-    elif existing:
-        conn.execute(
-            "UPDATE profile_memories SET summary = ?, confidence = ?, evidence_refs = ?, "
-            "source_turns = ?, updated_at = ? WHERE memory_id = ?",
-            (
-                profile.summary,
-                profile.confidence,
-                json.dumps(list(profile.evidence_refs), ensure_ascii=False),
-                json.dumps(list(profile.source_turns), ensure_ascii=False),
-                now,
-                existing[0],
-            ),
-        )
-        return 0
-
-    conn.execute(
-        "INSERT OR REPLACE INTO profile_memories "
-        "(memory_id, memory_kind, subject, predicate, value, summary, confidence, "
-        "certainty_state, status, valid_from, valid_to, evidence_refs, source_turns, "
-        "supersedes, conflict_refs, created_at, updated_at, owner_id, workspace_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            profile.id,
-            _enum_value(profile.memory_kind),
-            profile.subject,
-            profile.predicate,
-            profile.value,
-            profile.summary,
-            profile.confidence,
-            _enum_value(profile.certainty_state),
-            _enum_value(profile.status),
-            profile.valid_from.isoformat(),
-            profile.valid_to.isoformat() if profile.valid_to else None,
-            json.dumps(list(profile.evidence_refs), ensure_ascii=False),
-            json.dumps(list(profile.source_turns), ensure_ascii=False),
-            json.dumps(list(dict.fromkeys(supersedes)), ensure_ascii=False),
-            json.dumps(list(profile.conflict_refs), ensure_ascii=False),
-            profile.created_at.isoformat(),
-            now,
-            owner_id,
-            workspace_id,
-        ),
-    )
-    return 1
 
 
 @dataclass

@@ -75,6 +75,26 @@
       "summary": "用户偏好中文作为技术说明语言。"
     },
     {
+      "source_type": "profile",
+      "id": "profile-name",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "subject": "user",
+      "predicate": "preferred_name",
+      "value": "River",
+      "summary": "用户明确要求称呼为 River。"
+    },
+    {
+      "source_type": "profile",
+      "id": "workspace-private-name",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-b",
+      "subject": "user",
+      "predicate": "preferred_name",
+      "value": "PrivateName",
+      "summary": "另一个工作区的用户称呼为 PrivateName。"
+    },
+    {
       "source_type": "turn",
       "id": "turn-cache-interval",
       "owner_id": "owner-a",
@@ -190,6 +210,20 @@
         "language": "cjk",
         "length_bucket": "short_1_20",
         "intent": "recent_conversation"
+      }
+    },
+    {
+      "name": "anonymized short cjk preferred name",
+      "query": "我叫什么名字",
+      "memory_type": "profile",
+      "owner_id": "owner-a",
+      "workspace_id": "workspace-a",
+      "expected_ids": ["profile-name"],
+      "forbidden_ids": ["workspace-private-name"],
+      "shape": {
+        "language": "cjk",
+        "length_bucket": "short_1_20",
+        "intent": "specific_memory"
       }
     },
     {

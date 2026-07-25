@@ -136,4 +136,5 @@ async def test_explicit_json_export_is_consistent_and_scoped(tmp_path):
     assert result["table_counts"]["turns"] == 1
     assert "memories" not in payload["tables"]
     assert "profile_memories" in payload["tables"]
+    assert "profile_memory_tombstones" in payload["tables"]
     assert "identity_revision_proposals" in payload["tables"]

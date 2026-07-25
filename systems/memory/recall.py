@@ -102,6 +102,8 @@ _CONCEPT_GROUPS = (
     ("记忆", "回忆", "历史"),
     ("保存", "记录", "记住", "沉淀"),
     ("原因", "根因", "为什么", "为何", "怎么回事"),
+    ("名字", "姓名", "称呼", "叫什么", "name", "called"),
+    ("偏好", "喜欢", "首选", "prefer", "preference"),
 )
 _LATIN_STOP_WORDS = {
     "a",
@@ -744,6 +746,11 @@ def _archive_candidates(
         "owner_id = ?",
         "workspace_id = ?",
         "original_text IS NOT NULL",
+        "NOT EXISTS (SELECT 1 FROM profile_memory_tombstones tombstone, "
+        "json_each(tombstone.evidence_turns) evidence "
+        "WHERE tombstone.owner_id = turns_archive.owner_id "
+        "AND tombstone.workspace_id = turns_archive.workspace_id "
+        "AND evidence.value = turns_archive.turn_id)",
     ]
     params: list[Any] = [owner_id, workspace_id]
     lexical_ids = lexical_matches.get("archive", ())

@@ -160,7 +160,7 @@ voidcube chat -q "检查当前目录的项目结构"
 
 ## 记忆与身体
 
-Agent 的默认 `mem` Provider 只通过 Gateway 调用 canonical Memory Service，不创建第二套本地记忆库。完成轮次异步写入 Tier 1；统一 `/recall` 同时查询近期 Tier 1 与活跃 Tier 2，并按相关性、时间、去重和字符预算返回证据。“刚才/刚刚/方才”类即时回忆会优先近期 Tier 1，并避免旧长期摘要压过本轮上下文。
+Agent 的默认 `mem` Provider 只通过 Gateway 调用 canonical Memory Service，不创建第二套本地记忆库。完成轮次异步写入 Tier 1；启用 `memory.mem.auto_sync` 时，同一原子写入还会保守提取用户明确声明的稳定 Profile（称呼、语言、工具偏好、回答风格及少量白名单事实），不从助手回答或不确定、临时、敏感文本中推测用户画像。Profile 修订保留证据与 supersedes 链；明确撤销会删除当前事实、清理派生召回引用并用 tombstone 阻止旧对话压缩后复活。统一 `/recall` 同时查询近期 Tier 1 与活跃 Tier 2，并按相关性、时间、去重和字符预算返回证据。“刚才/刚刚/方才”类即时回忆会优先近期 Tier 1，并避免旧长期摘要压过本轮上下文。
 
 MemAI 始终绑定到仓库共享的 `Mem/src`，不跟随活动身体槽切换。服务启动会验证实际导入源，并把绑定审计写入 `VOIDCUBE_HOME/runtime/memory/mem-source-binding.json`。
 

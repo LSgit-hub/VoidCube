@@ -73,6 +73,7 @@ class MemoryBackupManager:
         "turns_archive",
         "compressed_memories",
         "profile_memories",
+        "profile_memory_tombstones",
         "compression_quality_audit",
         "recall_traces",
         "recall_feedback",
