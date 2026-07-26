@@ -151,14 +151,14 @@ def main():
 
 ```python
 # 带pip的基础镜像
-image = modal.Image.debian_slim(python_version="3.11").pip_install(
+image = modal.Image.debian_slim(python_version="3.14").pip_install(
     "torch==2.1.0", "transformers==4.36.0", "accelerate"
 )
 
 # 从CUDA基础镜像构建
 image = modal.Image.from_registry(
     "nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04",
-    add_python="3.11"
+    add_python="3.14"
 ).pip_install("torch", "transformers")
 
 # 带系统包

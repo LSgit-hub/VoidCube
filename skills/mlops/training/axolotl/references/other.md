@@ -143,7 +143,7 @@ fsdp_config:
 
 问：vLLM 无法与 Axolotl 一起工作
 
-答：我们目前推荐 torch 2.6.0 用于 vllm。请确保使用正确的版本。对于 Docker，请使用 main-py3.11-cu124-2.6.0 标签。
+答：我们目前推荐 torch 2.6.0 用于 vllm。请确保使用正确的版本。对于 Docker，请使用 main-py3.14-cu124-2.6.0 标签。
 
 问：FA2 2.8.0 在 CUDA 12.4 上出现 undefined symbol 运行时错误
 
@@ -281,7 +281,7 @@ uv 是一个用 Rust 构建的快速、可靠的 Python 包安装器和解析器
 
 对于使用 Docker 进行开发：
 
-对于 Blackwell GPU，请使用 axolotlai/axolotl:main-py3.11-cu128-2.7.0 或云变体 axolotlai/axolotl-cloud:main-py3.11-cu128-2.7.0。
+对于 Blackwell GPU，请使用 axolotlai/axolotl:main-py3.14-cu128-2.7.0 或云变体 axolotlai/axolotl-cloud:main-py3.14-cu128-2.7.0。
 
 请参阅 Docker 文档了解可用的不同 Docker 镜像的更多信息。
 

@@ -29,7 +29,7 @@ export MODAL_TOKEN_SECRET=as-...
 pip install --upgrade pip
 
 # 使用特定 Python 版本安装
-python3.11 -m pip install modal
+python3.14 -m pip install modal
 
 # 从 wheel 安装
 pip install modal --prefer-binary
@@ -53,7 +53,7 @@ image = modal.Image.debian_slim().pip_install(
 # 使用兼容的 CUDA 版本
 image = modal.Image.from_registry(
     "nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04",  # 匹配 PyTorch CUDA
-    add_python="3.11"
+    add_python="3.14"
 )
 ```
 
@@ -107,7 +107,7 @@ def my_function():
 # 检查镜像中的 CUDA 兼容性
 image = modal.Image.from_registry(
     "nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04",
-    add_python="3.11"
+    add_python="3.14"
 ).pip_install(
     "torch",
     index_url="https://download.pytorch.org/whl/cu121"  # 匹配 CUDA

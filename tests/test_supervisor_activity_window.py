@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 import pytest
 
@@ -298,6 +299,96 @@ async def test_supervisor_activity_guard_exposes_body_switch_family_without_coll
     }
     assert result["governance_task_type_decisions"]["self_evolution"] == result["decisions"]
     assert result["task_family_decisions"]["body_switch"] == result["decisions"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_auto_drive_input_excludes_live_user_activity(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._service_runtime.autonomous_chain_gate_active = True
+    supervisor._service_runtime.auto_evidence_packet = {
+        "packet_id": "auto-evidence-test",
+        "source_domains": ["evolution"],
+        "frozen": True,
+    }
+
+    async def fake_snapshot():
+        return {
+            "last_user_request_at": "2026-05-25T00:14:59",
+            "active_sessions": 7,
+            "counts": {"error_count": 9, "uncertainty_high_count": 4},
+            "recent_metadata": {
+                "user_request": {
+                    "text": "PRIVATE_USER_GOAL",
+                    "session_id": "private-session",
+                }
+            },
+            "last_memory_task_at": "2026-05-25T00:00:00",
+            "last_autonomous_chain_activity_at": "2026-05-25T00:00:00",
+            "active_cli_executor": {
+                "agent_lane": "user_chat",
+                "session_id": "private-session",
+                "prompt_preview": "PRIVATE_PROMPT",
+            },
+        }
+
+    supervisor._fetch_gateway_activity_snapshot = fake_snapshot  # type: ignore[method-assign]
+
+    result = await supervisor.evaluate_drive_input(
+        {"now": "2026-05-25T00:15:00"}
+    )
+
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert "PRIVATE_USER_GOAL" not in serialized
+    assert "PRIVATE_PROMPT" not in serialized
+    assert "private-session" not in serialized
+    assert result["perception_scope"] == "autonomous_only"
+    assert result["activity"]["recent_metadata"] == {}
+    assert result["activity"]["active_sessions"] == 0
+    assert result["user_chain_signal"]["scope"] == "excluded_in_auto"
+    assert result["user_chain_signal"]["observed"] is False
+    assert result["governance_task_type_decisions"]["user"] == {
+        "eligible_for_planning": False,
+        "eligible_for_execution": False,
+    }
+    assert result["evidence_packet"]["packet_id"] == "auto-evidence-test"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_auto_endogenous_input_rejects_injected_user_context(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._service_runtime.autonomous_chain_gate_active = True
+    supervisor._service_runtime.auto_evidence_packet = {
+        "packet_id": "auto-evidence-injected",
+        "source_domains": ["evolution"],
+        "frozen": True,
+    }
+
+    result = await supervisor._resolve_runtime_drive_input_request(
+        {
+            "drive_input": {
+                "activity": {
+                    "active_sessions": 3,
+                    "recent_metadata": {
+                        "user_request": {"text": "INJECTED_USER_CONTEXT"}
+                    },
+                },
+                "user_chain_signal": {
+                    "scope": "soft_signal_only",
+                    "active_sessions": 3,
+                },
+                "correction_signals": 8,
+            }
+        },
+        include_gate_default=True,
+    )
+
+    assert "INJECTED_USER_CONTEXT" not in json.dumps(result, ensure_ascii=False)
+    assert result["perception_scope"] == "autonomous_only"
+    assert result["correction_signals"] == 0
+    assert result["user_chain_signal"]["scope"] == "excluded_in_auto"
+    assert result["evidence_packet"]["packet_id"] == "auto-evidence-injected"
 
 
 

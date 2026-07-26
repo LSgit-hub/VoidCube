@@ -2410,6 +2410,11 @@ async def test_supervisor_autonomous_chain_deactivate_stops_enabled_runtime(tmp_
     assert companion_task is not None and companion_task.cancelled()
     assert supervisor._service_runtime.stellar_mode is StellarMode.AUTO_EVOLUTION
     assert supervisor._companion_observation_task is None
+    packet = supervisor._service_runtime.auto_evidence_packet
+    assert packet["mode"] == "auto_evolution"
+    assert packet["source_domains"] == ["evolution"]
+    assert packet["frozen"] is True
+    assert "live_user_activity" in packet["excluded_signals"]
 
     stopped = await supervisor.deactivate_autonomous_chain_gate({})
     assert stopped["autonomous_chain_gate_active"] is False
@@ -2418,6 +2423,7 @@ async def test_supervisor_autonomous_chain_deactivate_stops_enabled_runtime(tmp_
     assert "autonomous_chain_runtime_mode" not in stopped
     assert supervisor._autonomous_chain_review_task is None
     assert supervisor._endogenous_drive_task is None
+    assert supervisor._service_runtime.auto_evidence_packet == {}
     await supervisor._stop_periodic_tasks()
 
 

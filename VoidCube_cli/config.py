@@ -386,8 +386,8 @@ DEFAULT_CONFIG = {
         # (terminal and execute_code).  Skill-declared required_environment_variables
         # are passed through automatically; this list is for non-skill use cases.
         "env_passthrough": [],
-        "docker_image": "nikolaik/python-nodejs:python3.11-nodejs20",
-        "podman_image": "nikolaik/python-nodejs:python3.11-nodejs20",
+        "docker_image": "nikolaik/python-nodejs:python3.14-nodejs20",
+        "podman_image": "nikolaik/python-nodejs:python3.14-nodejs20",
         "docker_forward_env": [],
         # Explicit environment variables to set inside Docker containers.
         # Unlike docker_forward_env (which reads values from the host process),
@@ -395,9 +395,9 @@ DEFAULT_CONFIG = {
         # runs as a systemd service without access to the user's shell environment.
         # Example: {"SSH_AUTH_SOCK": "/run/user/1000/ssh-agent.sock"}
         "docker_env": {},
-        "singularity_image": "docker://nikolaik/python-nodejs:python3.11-nodejs20",
-        "modal_image": "nikolaik/python-nodejs:python3.11-nodejs20",
-        "daytona_image": "nikolaik/python-nodejs:python3.11-nodejs20",
+        "singularity_image": "docker://nikolaik/python-nodejs:python3.14-nodejs20",
+        "modal_image": "nikolaik/python-nodejs:python3.14-nodejs20",
+        "daytona_image": "nikolaik/python-nodejs:python3.14-nodejs20",
         # Container resource limits (docker, singularity, modal, daytona — ignored for local/ssh)
         "container_cpu": 1,
         "container_memory": 5120,       # MB (default 5GB)

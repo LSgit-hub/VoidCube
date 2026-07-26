@@ -45,7 +45,7 @@ python -m pytest -q
 python -m pytest Mem/tests -q
 ```
 
-语音能力是可选依赖：`edge-tts`、`numpy`、`sounddevice`；STT 需要配置 OpenAI-compatible 音频转写端点，播放需要本机提供 `ffplay`。原始音频默认不保留。
+语音能力是可选依赖：`edge-tts`、`numpy`、`sounddevice`；支持单轮会话和显式启停的持续监听，默认唤醒词为“星子”。STT 需要配置 OpenAI-compatible 音频转写端点，播放需要本机提供 `ffplay`。原始音频默认不保留。
 
 模型、鉴权、协议、技能或打包相关改动还必须运行：
 

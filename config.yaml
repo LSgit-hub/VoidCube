@@ -24,13 +24,13 @@ terminal:
   cwd: .
   timeout: 180
   env_passthrough: []
-  docker_image: nikolaik/python-nodejs:python3.11-nodejs20
-  podman_image: nikolaik/python-nodejs:python3.11-nodejs20
+  docker_image: nikolaik/python-nodejs:python3.14-nodejs20
+  podman_image: nikolaik/python-nodejs:python3.14-nodejs20
   docker_forward_env: []
   docker_env: {}
-  singularity_image: docker://nikolaik/python-nodejs:python3.11-nodejs20
-  modal_image: nikolaik/python-nodejs:python3.11-nodejs20
-  daytona_image: nikolaik/python-nodejs:python3.11-nodejs20
+  singularity_image: docker://nikolaik/python-nodejs:python3.14-nodejs20
+  modal_image: nikolaik/python-nodejs:python3.14-nodejs20
+  daytona_image: nikolaik/python-nodejs:python3.14-nodejs20
   container_cpu: 1
   container_memory: 5120
   container_disk: 51200

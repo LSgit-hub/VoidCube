@@ -41,7 +41,7 @@ OpenAI的多语言语音识别模型。
 ### 安装
 
 ```bash
-# 需要Python 3.8-3.11
+# 需要Python 3.8-3.14
 pip install -U openai-whisper
 
 # 需要ffmpeg

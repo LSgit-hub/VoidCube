@@ -1512,7 +1512,7 @@ Unsloth supports Radeon RX, MI300X's (192GB) GPUs 和 more.
 {% code overflow="wrap" %}
 
 ```bash
-apt install python3.10-venv python3.11-venv python3.12-venv python3.13-venv -y
+apt install python3.10-venv python3.14-venv python3.12-venv python3.13-venv -y
 
 python -m venv unsloth_env
 source unsloth_env/bin/activate
@@ -1626,11 +1626,11 @@ AMD GPUs also need the bitsandbytes `blocksize` to be 128 and not 64 - this also
 Only use Conda if you have it. If not, use [Pip](https://docs.unsloth.ai/get-started/install-and-update/pip-install).
 {% endhint %}
 
-Select either `pytorch-cuda=11.8,12.1` 用于 CUDA 11.8 或 CUDA 12.1. We support `python=3.10,3.11,3.12`.
+Select either `pytorch-cuda=11.8,12.1` 用于 CUDA 11.8 或 CUDA 12.1. We support `python=3.10,3.14,3.12`.
 
 ```bash
 conda create --name unsloth_env \
-    python=3.11 \
+    python=3.14 \
     pytorch-cuda=12.1 \
     pytorch cudatoolkit xformers -c pytorch -c nvidia -c xformers \
     -y

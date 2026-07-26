@@ -33,6 +33,7 @@ class ServiceRuntimeState:
     latest_companion_observation: Dict[str, Any] = field(default_factory=dict)
     last_companion_evidence_key: str = ""
     latest_companion_dialogue: Dict[str, Any] = field(default_factory=dict)
+    auto_evidence_packet: Dict[str, Any] = field(default_factory=dict)
     last_review_at: Optional[datetime] = None
     next_review_at: Optional[datetime] = None
     last_drive_at: Optional[datetime] = None
@@ -725,16 +726,49 @@ class ServiceRuntimeMixin:
             voice_manager = getattr(self, "_voice_manager", None)
             if voice_manager is not None:
                 voice_manager.interrupt()
+                await voice_manager.stop_continuous()
             if self._service_runtime.autonomous_chain_gate_active:
                 await self._stop_daily_companion_worker()
                 self._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
+                if not self._service_runtime.auto_evidence_packet:
+                    self._service_runtime.auto_evidence_packet = self._new_auto_evidence_packet()
                 await self._notify_gateway_autonomous_chain_gate(active=True)
                 return
             await self._stop_daily_companion_worker()
             self._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
             self._service_runtime.autonomous_chain_gate_active = True
+            self._service_runtime.auto_evidence_packet = self._new_auto_evidence_packet()
             await self._notify_gateway_autonomous_chain_gate(active=True)
             await self._start_autonomous_chain_workers()
+
+    @staticmethod
+    def _new_auto_evidence_packet() -> Dict[str, Any]:
+        """Create the immutable policy packet used by an Auto session.
+
+        Auto may observe its own governance, memory-maintenance and execution
+        state, but it must not turn live user activity into companion context.
+        The packet records that boundary so every drive cycle can carry the
+        same auditable contract.
+        """
+        return {
+            "packet_id": f"auto-evidence-{uuid.uuid4()}",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "mode": StellarMode.AUTO_EVOLUTION.value,
+            "source_domains": ["evolution"],
+            "allowed_signals": [
+                "governance_events",
+                "memory_maintenance",
+                "autonomous_chain",
+                "body_runtime",
+            ],
+            "excluded_signals": [
+                "user_chat",
+                "companion_dialogue",
+                "live_user_activity",
+                "desktop_environment",
+            ],
+            "frozen": True,
+        }
 
     async def _start_autonomous_chain_workers(self) -> None:
         runtime_config = self.config.service_runtime
@@ -799,6 +833,7 @@ class ServiceRuntimeMixin:
         async with self._service_runtime.mode_transition_lock:
             await self._stop_autonomous_chain_workers()
             self._service_runtime.stellar_mode = StellarMode.DAILY_COMPANION
+            self._service_runtime.auto_evidence_packet = {}
             if restore_companion and self._service_runtime.started:
                 await self._start_daily_companion_worker()
 
@@ -858,6 +893,7 @@ class ServiceRuntimeMixin:
             ),
             "latest_companion_observation": dict(runtime.latest_companion_observation),
             "latest_companion_dialogue": dict(runtime.latest_companion_dialogue),
+            "auto_evidence_packet": dict(runtime.auto_evidence_packet),
         }
 
     def _autonomous_chain_gate_status(self) -> Dict[str, Any]:
@@ -909,6 +945,11 @@ class ServiceRuntimeMixin:
                 logger.warning(f"Periodic runtime task exited with error during shutdown: {exc}")
 
         await self._stop_autonomous_chain_gate(restore_companion=False)
+
+        voice_manager = getattr(self, "_voice_manager", None)
+        if voice_manager is not None:
+            voice_manager.interrupt()
+            await voice_manager.stop_continuous()
 
         await cancel_task(self._companion_observation_task)
         self._companion_observation_task = None

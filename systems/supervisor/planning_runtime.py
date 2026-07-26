@@ -1421,7 +1421,7 @@ class PlanningRuntimeMixin:
         default_task_family: Optional[str] = None,
         default_execution_kind: Optional[str] = None,
         include_gate_default: bool = False,
-    ) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         request = dict(request or {})
         if "activity_guards" in request:
             raise HTTPException(
@@ -1437,6 +1437,15 @@ class PlanningRuntimeMixin:
             default_governance_task_type = self._normalize_runtime_task_type(
                 default_execution_kind
             )
+        runtime = getattr(self, "_service_runtime", None)
+        gate_active = bool(
+            getattr(runtime, "autonomous_chain_gate_active", False)
+        )
+        evidence_packet = dict(
+            request.get("evidence_packet")
+            or getattr(runtime, "auto_evidence_packet", {})
+            or {}
+        )
         requested_drive_input = dict(request.get("drive_input") or {})
         if requested_drive_input:
             drive_input = dict(requested_drive_input)
@@ -1452,11 +1461,12 @@ class PlanningRuntimeMixin:
             if include_gate_default:
                 drive_input.setdefault(
                     "autonomous_chain_gate_active",
-                    getattr(
-                        getattr(self, "_service_runtime", None),
-                        "autonomous_chain_gate_active",
-                        False,
-                    ),
+                    gate_active,
+                )
+            if include_gate_default and gate_active:
+                drive_input = self._enforce_auto_drive_input_boundary(
+                    drive_input,
+                    evidence_packet=evidence_packet,
                 )
             return drive_input
 
@@ -1473,12 +1483,11 @@ class PlanningRuntimeMixin:
         if include_gate_default:
             drive_input_request.setdefault(
                 "autonomous_chain_gate_active",
-                getattr(
-                    getattr(self, "_service_runtime", None),
-                    "autonomous_chain_gate_active",
-                    False,
-                ),
+                gate_active,
             )
+            if gate_active:
+                drive_input_request["perception_scope"] = "autonomous_only"
+                drive_input_request["evidence_packet"] = evidence_packet
         drive_input = await self.evaluate_drive_input(drive_input_request)
         return self._project_drive_input_snapshot(drive_input)
 
@@ -5580,6 +5589,94 @@ class PlanningRuntimeMixin:
             "snapshot_source": str(snapshot_source or "live").strip() or "live",
         }
 
+    @staticmethod
+    def _project_auto_activity_snapshot(source: Dict[str, Any] | None) -> Dict[str, Any]:
+        """Keep only Supervisor-owned signals for an Auto drive cycle.
+
+        Gateway activity is a shared fact source, so the Auto loop may still
+        use its own memory/governance/execution timestamps for concurrency and
+        recovery. User-chat timestamps, session counts, recent metadata and
+        generic error counters are deliberately excluded from the cognition
+        payload.
+        """
+        source = dict(source or {})
+        allowed_timestamps = (
+            "last_memory_task_at",
+            "last_self_learning_activity_at",
+            "last_autonomous_chain_plan_at",
+            "last_autonomous_chain_execute_at",
+            "last_autonomous_chain_activity_at",
+        )
+        projected = {
+            key: source.get(key)
+            for key in allowed_timestamps
+            if source.get(key) is not None
+        }
+        executor = dict(source.get("active_cli_executor") or {})
+        if str(executor.get("agent_lane") or "").strip().lower() == "supervisor_task":
+            projected["active_cli_executor"] = {
+                key: executor.get(key)
+                for key in (
+                    "agent_lane",
+                    "lease_status",
+                    "idle_seconds",
+                    "is_stale",
+                    "stale_after_seconds",
+                )
+                if key in executor
+            }
+        projected.update(
+            {
+                "active_sessions": 0,
+                "counts": {},
+                "recent_metadata": {},
+                "perception_scope": "autonomous_only",
+            }
+        )
+        return projected
+
+    def _enforce_auto_drive_input_boundary(
+        self,
+        source: Dict[str, Any] | None,
+        *,
+        evidence_packet: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        """Remove user-facing signals from a drive input crossing into Auto."""
+        payload = dict(source or {})
+        payload["activity"] = self._project_auto_activity_snapshot(payload.get("activity"))
+        payload["perception_scope"] = "autonomous_only"
+        payload["evidence_packet"] = dict(evidence_packet or {})
+        payload["active_sessions"] = 0
+        payload["correction_signals"] = 0
+        payload["error_count"] = 0
+        payload["uncertainty_high_count"] = 0
+        payload["user_chain_signal"] = {
+            "scope": "excluded_in_auto",
+            "observed": False,
+            "active_sessions": 0,
+            "is_quiet": True,
+            "recent_user_idle_seconds": None,
+            "quiet_after_seconds": payload.get("thresholds", {}).get("user_idle_seconds", 600),
+        }
+        idle_seconds = dict(payload.get("idle_seconds") or {})
+        idle_seconds["user"] = None
+        payload["idle_seconds"] = idle_seconds
+        decisions = dict(payload.get("governance_task_type_decisions") or {})
+        if "user" in decisions:
+            decisions["user"] = {
+                "eligible_for_planning": False,
+                "eligible_for_execution": False,
+            }
+            payload["governance_task_type_decisions"] = decisions
+        task_decisions = dict(payload.get("task_family_decisions") or {})
+        if "user" in task_decisions:
+            task_decisions["user"] = {
+                "eligible_for_planning": False,
+                "eligible_for_execution": False,
+            }
+            payload["task_family_decisions"] = task_decisions
+        return payload
+
     async def get_runtime_observation_input(self):
         payload = await self.evaluate_drive_input({})
         observation_input = self._project_runtime_observation_input(
@@ -5594,7 +5691,28 @@ class PlanningRuntimeMixin:
 
     async def evaluate_drive_input(self, request: dict | None = None):
         request = request or {}
+        requested_scope = str(request.get("perception_scope") or "").strip().lower()
+        gate_active = bool(
+            request.get("autonomous_chain_gate_active")
+            or getattr(
+                getattr(self, "_service_runtime", None),
+                "autonomous_chain_gate_active",
+                False,
+            )
+        )
+        perception_scope = "autonomous_only" if gate_active else (requested_scope or "full")
+        effective_evidence_packet = dict(
+            request.get("evidence_packet")
+            or getattr(
+                getattr(self, "_service_runtime", None),
+                "auto_evidence_packet",
+                {},
+            )
+            or {}
+        )
         snapshot = await self._fetch_gateway_activity_snapshot()
+        if perception_scope == "autonomous_only":
+            snapshot = self._project_auto_activity_snapshot(snapshot)
 
         now_override = request.get("now")
         if isinstance(now_override, str):
@@ -5765,17 +5883,27 @@ class PlanningRuntimeMixin:
         # anti-self-collision concurrency guards — they are NOT "wait for the
         # user" gates.
         active_sessions = int(snapshot.get("active_sessions") or 0)
-        user_chain_signal = {
-            "scope": "soft_signal_only",
-            "active_sessions": active_sessions,
-            "is_quiet": bool(user_chain_quiet and active_sessions <= 0),
-            "recent_user_idle_seconds": user_idle_seconds,
-            "quiet_after_seconds": user_idle_threshold,
-        }
+        if perception_scope == "autonomous_only":
+            user_chain_signal = {
+                "scope": "excluded_in_auto",
+                "observed": False,
+                "active_sessions": 0,
+                "is_quiet": True,
+                "recent_user_idle_seconds": None,
+                "quiet_after_seconds": user_idle_threshold,
+            }
+        else:
+            user_chain_signal = {
+                "scope": "soft_signal_only",
+                "active_sessions": active_sessions,
+                "is_quiet": bool(user_chain_quiet and active_sessions <= 0),
+                "recent_user_idle_seconds": user_idle_seconds,
+                "quiet_after_seconds": user_idle_threshold,
+            }
         governance_task_type_decisions = {
             "user": {
-                "eligible_for_planning": True,
-                "eligible_for_execution": True,
+                "eligible_for_planning": perception_scope != "autonomous_only",
+                "eligible_for_execution": perception_scope != "autonomous_only",
             },
             "self_learning": {
                 "eligible_for_planning": True,
@@ -5873,6 +6001,17 @@ class PlanningRuntimeMixin:
             "governance_task_type_decisions": governance_task_type_decisions,
             "task_family_decisions": task_family_decisions,
             "autonomous_chain_gate_active": autonomous_chain_gate_active,
+            "perception_scope": perception_scope,
+            "evidence_packet": (
+                effective_evidence_packet
+                if perception_scope == "autonomous_only"
+                else {}
+            ),
+            "input_policy": {
+                "scope": perception_scope,
+                "user_activity_observed": perception_scope != "autonomous_only",
+                "desktop_environment_observed": False,
+            },
             "decisions": {
                 "eligible_for_planning": selected_task_decisions["eligible_for_planning"],
                 "eligible_for_execution": selected_task_decisions["eligible_for_execution"],

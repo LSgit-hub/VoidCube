@@ -362,13 +362,13 @@ def show_status(args):
         print(f"  SSH Host:     {ssh_host or '(not set)'}")
         print(f"  SSH User:     {ssh_user or '(not set)'}")
     elif terminal_env == "docker":
-        docker_image = os.getenv("TERMINAL_DOCKER_IMAGE", "python:3.11-slim")
+        docker_image = os.getenv("TERMINAL_DOCKER_IMAGE", "python:3.14-slim")
         print(f"  Docker Image: {docker_image}")
     elif terminal_env == "podman":
-        podman_image = os.getenv("TERMINAL_PODMAN_IMAGE", "python:3.11-slim")
+        podman_image = os.getenv("TERMINAL_PODMAN_IMAGE", "python:3.14-slim")
         print(f"  Podman Image: {podman_image}")
     elif terminal_env == "daytona":
-        daytona_image = os.getenv("TERMINAL_DAYTONA_IMAGE", "nikolaik/python-nodejs:python3.11-nodejs20")
+        daytona_image = os.getenv("TERMINAL_DAYTONA_IMAGE", "nikolaik/python-nodejs:python3.14-nodejs20")
         print(f"  Daytona Image: {daytona_image}")
     
     sudo_password = os.getenv("SUDO_PASSWORD", "")

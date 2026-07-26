@@ -94,6 +94,62 @@ async def test_voice_session_authenticates_transcribes_calls_companion_and_clean
     assert not (tmp_path / "reply.mp3").exists()
 
 
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_continuous_voice_discards_non_wake_segments_and_stops_cleanly(tmp_path):
+    config = VoiceConfig(
+        enabled=True,
+        fingerprint_path=tmp_path / "fingerprint.json",
+        retain_raw_audio=False,
+        continuous_segment_seconds=0.5,
+        wake_word="星子",
+        wake_word_required=True,
+        wake_window_seconds=2.0,
+    )
+    callbacks: list[str] = []
+    transcriptions = iter(["只是背景声音", "星子", "请告诉我当前任务"])
+    replied = asyncio.Event()
+
+    async def companion_for_continuous(*, text: str, session_id: str):
+        callbacks.append(text)
+        replied.set()
+        return {"status": "ok", "reply_text": "当前正在处理记忆隔离。"}
+
+    manager = VoiceSessionManager(config, companion_callback=companion_for_continuous)
+    manager.recorder.record = fake_record  # type: ignore[method-assign]
+    manager.fingerprint.verify = lambda path: {"authenticated": True, "similarity": 1.0}  # type: ignore[method-assign]
+
+    async def transcribe_sequence(path):
+        try:
+            return next(transcriptions)
+        except StopIteration:
+            await asyncio.sleep(10)
+            return ""
+
+    manager.stt.transcribe = transcribe_sequence  # type: ignore[method-assign]
+    manager.tts.synthesize = fake_synthesize  # type: ignore[method-assign]
+    manager.player.play = fake_play  # type: ignore[method-assign]
+    manager._temporary_audio_path = (  # type: ignore[method-assign]
+        lambda prefix, suffix=".wav": tmp_path / f"{prefix}-{len(callbacks)}{suffix}"
+    )
+
+    started = manager.start_continuous(session_id="continuous-test")
+    assert started["status"] == "started"
+    await asyncio.wait_for(replied.wait(), timeout=2)
+
+    stopped = await manager.stop_continuous()
+
+    assert callbacks == ["请告诉我当前任务"]
+    assert stopped["status"] == "stopped"
+    assert stopped["continuous_active"] is False
+    assert stopped["wake_state"] == "idle"
+    assert stopped["wake_word_hits"] == 1
+    assert stopped["last_transcript"] == "请告诉我当前任务"
+    assert "背景" not in stopped["last_transcript"]
+    assert not list(tmp_path.glob("*.wav"))
+    assert not list(tmp_path.glob("*.mp3"))
+
+
 async def companion(*, text: str, session_id: str):
     assert text == "当前任务是什么"
     assert session_id == "voice-test"

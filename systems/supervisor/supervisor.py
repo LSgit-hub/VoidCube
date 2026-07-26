@@ -76,6 +76,10 @@ class VoiceCaptureRequest(BaseModel):
     duration_seconds: float = Field(default=8.0, ge=1.0, le=30.0)
 
 
+class VoiceContinuousRequest(BaseModel):
+    session_id: str = ""
+
+
 
 class Supervisor(
     PlanningRuntimeMixin,
@@ -228,6 +232,8 @@ class Supervisor(
         self.app.add_api_route("/voice/enroll", self.enroll_voice_fingerprint, methods=["POST"])
         self.app.add_api_route("/voice/session/start", self.start_voice_session, methods=["POST"])
         self.app.add_api_route("/voice/session/interrupt", self.interrupt_voice_session, methods=["POST"])
+        self.app.add_api_route("/voice/continuous/start", self.start_continuous_voice, methods=["POST"])
+        self.app.add_api_route("/voice/continuous/stop", self.stop_continuous_voice, methods=["POST"])
 
     async def activate_autonomous_chain_gate(self, request: dict | None = None) -> Dict[str, Any]:
         """Ensure the autonomous chain runtime is active."""
@@ -258,7 +264,10 @@ class Supervisor(
         return self._voice_manager.status()
 
     async def set_voice_microphone(self, request: VoiceToggleRequest) -> Dict[str, Any]:
-        return self._voice_manager.set_enabled(request.enabled)
+        self._voice_manager.set_enabled(request.enabled)
+        if not request.enabled:
+            await self._voice_manager.stop_continuous()
+        return self._voice_manager.status()
 
     async def enroll_voice_fingerprint(
         self,
@@ -283,7 +292,24 @@ class Supervisor(
         )
 
     async def interrupt_voice_session(self) -> Dict[str, Any]:
-        return self._voice_manager.interrupt()
+        self._voice_manager.interrupt()
+        if self._voice_manager.status().get("continuous_task_running"):
+            return await self._voice_manager.stop_continuous()
+        return self._voice_manager.status()
+
+    async def start_continuous_voice(
+        self,
+        request: VoiceContinuousRequest,
+    ) -> Dict[str, Any]:
+        if self._service_runtime.stellar_mode.value != "daily_companion":
+            return {
+                "status": "unavailable",
+                "reason": "stellar_auto_evolution_active",
+            }
+        return self._voice_manager.start_continuous(session_id=request.session_id)
+
+    async def stop_continuous_voice(self) -> Dict[str, Any]:
+        return await self._voice_manager.stop_continuous()
 
     async def get_body_registry(self) -> Dict[str, Any]:
         return self._execution_facade.get_body_registry()

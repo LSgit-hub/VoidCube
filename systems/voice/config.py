@@ -18,6 +18,10 @@ class VoiceConfig:
     sample_rate: int = 16000
     channels: int = 1
     max_record_seconds: float = 12.0
+    continuous_segment_seconds: float = 3.0
+    wake_word: str = "星子"
+    wake_word_required: bool = True
+    wake_window_seconds: float = 8.0
     fingerprint_threshold: float = 0.86
     fingerprint_path: Path = Path("runtime/voice/fingerprint.json")
     stt_base_url: str = ""
@@ -38,6 +42,19 @@ class VoiceConfig:
             channels=1,
             max_record_seconds=max(
                 1.0, float(os.getenv("VOIDCUBE_VOICE_MAX_RECORD_SECONDS", "12"))
+            ),
+            continuous_segment_seconds=max(
+                0.5,
+                min(
+                    10.0,
+                    float(os.getenv("VOIDCUBE_VOICE_CONTINUOUS_SEGMENT_SECONDS", "3")),
+                ),
+            ),
+            wake_word=str(os.getenv("VOIDCUBE_VOICE_WAKE_WORD", "星子")).strip() or "星子",
+            wake_word_required=_env_bool("VOIDCUBE_VOICE_WAKE_WORD_REQUIRED", True),
+            wake_window_seconds=max(
+                1.0,
+                min(30.0, float(os.getenv("VOIDCUBE_VOICE_WAKE_WINDOW_SECONDS", "8"))),
             ),
             fingerprint_threshold=max(
                 0.0,

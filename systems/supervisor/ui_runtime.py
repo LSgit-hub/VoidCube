@@ -3040,6 +3040,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
     <div class="voice-controls" id="voiceControls">
       <button type="button" id="voiceEnroll" title="注册声纹">◎</button>
       <button type="button" id="voiceMicToggle" title="麦克风开关" aria-pressed="false">🎙</button>
+      <button type="button" id="voiceListen" title="持续监听" aria-pressed="false">◉</button>
       <button type="button" id="voiceTalk" title="开始语音会话">●</button>
     </div>
 
@@ -3200,6 +3201,7 @@ const els = {
   voiceControls: $('#voiceControls'),
   voiceEnroll: $('#voiceEnroll'),
   voiceMicToggle: $('#voiceMicToggle'),
+  voiceListen: $('#voiceListen'),
   voiceTalk: $('#voiceTalk'),
   /* dock char strip */
   dcsName: $('#dcsName'),
@@ -3226,6 +3228,7 @@ if (els.stellarModeControl) {
 }
 if (els.voiceEnroll) els.voiceEnroll.addEventListener('click', () => enrollVoice());
 if (els.voiceMicToggle) els.voiceMicToggle.addEventListener('click', () => toggleVoice());
+if (els.voiceListen) els.voiceListen.addEventListener('click', () => toggleContinuousVoice());
 if (els.voiceTalk) els.voiceTalk.addEventListener('click', () => runVoiceSession());
 
 /* ── 场景 → 动作自动映射 ── */
@@ -5065,6 +5068,14 @@ function updateSceneMiniTitle(state) {
   if (els.voiceMicToggle) {
     els.voiceMicToggle.setAttribute('aria-pressed', String(Boolean(voice.enabled)));
   }
+  if (els.voiceListen) {
+    const listening = Boolean(voice.continuous_active || voice.continuous_task_running);
+    els.voiceListen.setAttribute('aria-pressed', String(listening));
+    els.voiceListen.textContent = listening ? '■' : '◉';
+    els.voiceListen.title = listening
+      ? '停止持续监听'
+      : '持续监听，唤醒词：' + String(voice.wake_word || '星子');
+  }
   if (els.voiceTalk) {
     els.voiceTalk.textContent = voice.active ? '■' : '●';
     els.voiceTalk.title = voice.active ? '中断语音会话' : '开始语音会话';
@@ -5113,6 +5124,16 @@ async function enrollVoice() {
 async function toggleVoice() {
   const enabled = !Boolean(((lastState || {}).voice || {}).enabled);
   await postVoice('/voice/microphone', {enabled});
+}
+
+async function toggleContinuousVoice() {
+  const voice = ((lastState || {}).voice || {});
+  if (voice.continuous_active || voice.continuous_task_running) {
+    await postVoice('/voice/continuous/stop', {});
+    return;
+  }
+  if (!voice.enabled) await postVoice('/voice/microphone', {enabled: true});
+  await postVoice('/voice/continuous/start', {});
 }
 
 async function runVoiceSession() {

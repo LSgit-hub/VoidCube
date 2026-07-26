@@ -97,22 +97,22 @@ def show_config() -> None:
     if terminal.get("backend") == "docker":
         print(
             "  Docker image: "
-            f"{terminal.get('docker_image', 'nikolaik/python-nodejs:python3.11-nodejs20')}"
+            f"{terminal.get('docker_image', 'nikolaik/python-nodejs:python3.14-nodejs20')}"
         )
     elif terminal.get("backend") == "podman":
         print(
             "  Podman image: "
-            f"{terminal.get('podman_image', 'nikolaik/python-nodejs:python3.11-nodejs20')}"
+            f"{terminal.get('podman_image', 'nikolaik/python-nodejs:python3.14-nodejs20')}"
         )
     elif terminal.get("backend") == "singularity":
         print(
             "  Image:        "
-            f"{terminal.get('singularity_image', 'docker://nikolaik/python-nodejs:python3.11-nodejs20')}"
+            f"{terminal.get('singularity_image', 'docker://nikolaik/python-nodejs:python3.14-nodejs20')}"
         )
     elif terminal.get("backend") == "modal":
         print(
             "  Modal image:  "
-            f"{terminal.get('modal_image', 'nikolaik/python-nodejs:python3.11-nodejs20')}"
+            f"{terminal.get('modal_image', 'nikolaik/python-nodejs:python3.14-nodejs20')}"
         )
         print(
             "  Modal token:  "
@@ -121,7 +121,7 @@ def show_config() -> None:
     elif terminal.get("backend") == "daytona":
         print(
             "  Daytona image: "
-            f"{terminal.get('daytona_image', 'nikolaik/python-nodejs:python3.11-nodejs20')}"
+            f"{terminal.get('daytona_image', 'nikolaik/python-nodejs:python3.14-nodejs20')}"
         )
         print(
             "  API key:      "
