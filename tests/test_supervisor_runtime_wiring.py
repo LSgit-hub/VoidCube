@@ -24,6 +24,7 @@ from systems.supervisor.autonomous_chain_store import (
     AutonomousChainExecutionRequest,
     AutonomousChainStore,
 )
+from systems.supervisor.service_runtime import StellarMode
 from systems.supervisor.ui_runtime import UI_HTML
 from systems.self_learning import LearningRecommendation
 from systems.self_learning.conclusion_store import SelfLearningConclusionStore
@@ -2386,6 +2387,8 @@ async def test_supervisor_periodic_runtime_does_not_start_autonomous_chain(tmp_p
     await supervisor._start_periodic_tasks()
 
     assert supervisor._service_runtime.autonomous_chain_gate_active is False
+    assert supervisor._service_runtime.stellar_mode is StellarMode.DAILY_COMPANION
+    assert supervisor._companion_observation_task is not None
     assert supervisor._autonomous_chain_review_task is None
     assert supervisor._endogenous_drive_task is None
     await supervisor._stop_periodic_tasks()
@@ -2401,13 +2404,161 @@ async def test_supervisor_autonomous_chain_deactivate_stops_enabled_runtime(tmp_
     supervisor._run_endogenous_drive_cycle = AsyncMock(return_value={"planned": 0})  # type: ignore[method-assign]
 
     await supervisor._start_periodic_tasks()
+    companion_task = supervisor._companion_observation_task
     await supervisor._start_autonomous_chain_gate()
+
+    assert companion_task is not None and companion_task.cancelled()
+    assert supervisor._service_runtime.stellar_mode is StellarMode.AUTO_EVOLUTION
+    assert supervisor._companion_observation_task is None
 
     stopped = await supervisor.deactivate_autonomous_chain_gate({})
     assert stopped["autonomous_chain_gate_active"] is False
+    assert stopped["mode"] == "daily_companion"
+    assert stopped["companion_loop_running"] is True
     assert "autonomous_chain_runtime_mode" not in stopped
     assert supervisor._autonomous_chain_review_task is None
     assert supervisor._endogenous_drive_task is None
+    await supervisor._stop_periodic_tasks()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_daily_companion_cycle_defaults_to_silence_without_intent(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.get_runtime_observation_input = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "status": "ok",
+            "observation_input": {
+                "activity": {"active_sessions": 1},
+                "user_chain_signal": {"is_quiet": False},
+            },
+        }
+    )
+
+    snapshot = await supervisor._run_daily_companion_observation_cycle()
+
+    assert snapshot["mode"] == "daily_companion"
+    assert snapshot["source"] == "voidcube_internal_events"
+    assert snapshot["intent_state"] == "unknown"
+    assert snapshot["disposition"] == "silent"
+    assert snapshot["reason"] == "insufficient_user_intent_evidence"
+    assert supervisor._service_runtime.latest_companion_observation == snapshot
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_daily_companion_calls_api_b_only_for_changed_complete_evidence(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.get_runtime_observation_input = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "status": "ok",
+            "observation_input": {
+                "activity": {
+                    "active_sessions": 1,
+                    "counts": {"error_count": 1},
+                    "recent_metadata": {
+                        "user_request": {
+                            "text": "修复记忆隔离问题",
+                            "request_id": "request-1",
+                        },
+                        "agent_work": {
+                            "summary": "正在修改无关的 UI 动画",
+                            "trace_id": "trace-1",
+                        },
+                    },
+                }
+            },
+        }
+    )
+    supervisor._recall_companion_context = AsyncMock(return_value="memory context")  # type: ignore[method-assign]
+    supervisor._call_companion_model = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "inferred_goal": "修复记忆隔离问题",
+            "goal_confidence": 0.95,
+            "deviation_summary": "API-A 当前工作偏离用户目标",
+            "deviation_confidence": 0.9,
+            "help_value": 0.85,
+            "interruption_cost": 0.2,
+            "disposition": "remind",
+            "reason": "目标与当前活动不一致",
+            "reminder_text": "当前工作似乎偏离了记忆隔离目标。",
+            "evidence_refs": ["gateway:user_request:request-1", "gateway:agent_work:trace-1"],
+        }
+    )
+
+    first = await supervisor._run_daily_companion_observation_cycle()
+    second = await supervisor._run_daily_companion_observation_cycle()
+
+    assert first["intent_state"] == "understood"
+    assert first["disposition"] == "remind"
+    assert first["judgement"]["reminder_text"]
+    assert second["disposition"] == "silent"
+    assert second["reason"] == "internal_activity_unchanged"
+    supervisor._call_companion_model.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_daily_companion_rejects_low_confidence_reminder(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    normalized = supervisor._normalize_companion_judgement(
+        {
+            "inferred_goal": "可能的目标",
+            "goal_confidence": 0.4,
+            "deviation_confidence": 0.9,
+            "help_value": 0.9,
+            "interruption_cost": 0.1,
+            "disposition": "remind",
+            "reminder_text": "不应发出的提醒",
+            "evidence_refs": ["gateway:user_request:request-1"],
+        },
+        {"evidence_refs": ["gateway:user_request:request-1"]},
+    )
+
+    assert normalized["intent_state"] == "uncertain"
+    assert normalized["disposition"] == "silent"
+    assert normalized["judgement"]["reminder_text"] == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_companion_text_message_reuses_daily_mode_and_companion_memory(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._recall_companion_context = AsyncMock(return_value="API-A memory")  # type: ignore[method-assign]
+    supervisor._call_companion_model = AsyncMock(  # type: ignore[method-assign]
+        return_value={"reply_text": "我看到了当前任务上下文。", "reason": "direct_user_request"}
+    )
+    supervisor._persist_companion_turn_pair = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+    result = await supervisor.handle_companion_message(
+        text="星子，我现在在做什么？",
+        session_id="voice-session-1",
+    )
+
+    assert result["status"] == "ok"
+    assert result["disposition"] == "respond_to_user"
+    assert result["memory_persisted"] is True
+    supervisor._persist_companion_turn_pair.assert_awaited_once_with(
+        session_id="voice-session-1",
+        user_text="星子，我现在在做什么？",
+        assistant_text="我看到了当前任务上下文。",
+    )
+
+    supervisor._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
+    unavailable = await supervisor.handle_companion_message(text="还在吗？")
+    assert unavailable["status"] == "unavailable"
+    assert unavailable["reason"] == "stellar_auto_evolution_active"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_stellar_mode_status_route_exposes_canonical_default(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    payload = await supervisor.get_stellar_mode_status()
+
+    assert payload["mode"] == "daily_companion"
+    assert payload["autonomous_chain_gate_active"] is False
     await supervisor._stop_periodic_tasks()
 
 

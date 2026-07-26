@@ -60,6 +60,8 @@ def test_mem_provider_remember_uses_canonical_service(monkeypatch):
                 "source_actor": "agent",
                 "owner_id": "local-user",
                 "workspace_id": "default",
+                "memory_actor": "api_a",
+                "memory_domain": "agent_interaction",
             },
         )
     ]
@@ -109,6 +111,8 @@ def test_mem_provider_search_and_prefetch_use_gateway_memory_route(monkeypatch):
                 "request_source": "tool",
                 "owner_id": "local-user",
                 "workspace_id": "default",
+                "memory_actor": "api_a",
+                "memory_domain": "agent_interaction",
             },
         ),
         (
@@ -122,6 +126,8 @@ def test_mem_provider_search_and_prefetch_use_gateway_memory_route(monkeypatch):
                 "request_source": "auto_prefetch",
                 "owner_id": "local-user",
                 "workspace_id": "default",
+                "memory_actor": "api_a",
+                "memory_domain": "agent_interaction",
             },
         ),
     ]

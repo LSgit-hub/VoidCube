@@ -299,6 +299,7 @@ def recall_memories(
     include_tier2: bool = True,
     owner_id: str = DEFAULT_OWNER_ID,
     workspace_id: str = DEFAULT_WORKSPACE_ID,
+    source_domains: Sequence[str] = ("agent_interaction",),
     semantic_matches: dict[tuple[str, str], float] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
@@ -319,6 +320,7 @@ def recall_memories(
         plan.search_terms,
         owner_id=owner_id,
         workspace_id=workspace_id,
+        source_domains=source_domains,
         limit=bounded_candidates * 4,
     )
 
@@ -336,6 +338,7 @@ def recall_memories(
                 reference,
                 owner_id=owner_id,
                 workspace_id=workspace_id,
+                source_domains=source_domains,
                 lexical_matches=lexical_matches,
                 semantic_matches=semantic_matches,
             )
@@ -349,6 +352,7 @@ def recall_memories(
                     reference,
                     owner_id=owner_id,
                     workspace_id=workspace_id,
+                    source_domains=source_domains,
                     lexical_matches=lexical_matches,
                     semantic_matches=semantic_matches,
                 )
@@ -363,6 +367,7 @@ def recall_memories(
                 current_session_id=_optional_text(current_session_id),
                 owner_id=owner_id,
                 workspace_id=workspace_id,
+                source_domains=source_domains,
                 lexical_matches=lexical_matches,
                 semantic_matches=semantic_matches,
             )
@@ -376,6 +381,7 @@ def recall_memories(
                     reference,
                     owner_id=owner_id,
                     workspace_id=workspace_id,
+                    source_domains=source_domains,
                     lexical_matches=lexical_matches,
                     semantic_matches=semantic_matches,
                 )
@@ -386,6 +392,7 @@ def recall_memories(
         candidates,
         owner_id=owner_id,
         workspace_id=workspace_id,
+        source_domains=source_domains,
     )
     ranked, dedup_truncated = _deduplicate_and_rank(
         [
@@ -509,6 +516,7 @@ def _tier2_candidates(
     *,
     owner_id: str,
     workspace_id: str,
+    source_domains: Sequence[str],
     lexical_matches: dict[str, tuple[str, ...]],
     semantic_matches: dict[tuple[str, str], float],
 ) -> list[dict[str, Any]]:
@@ -524,6 +532,9 @@ def _tier2_candidates(
         GLOBAL_SCOPE_ID,
         GLOBAL_SCOPE_ID,
     ]
+    domain_placeholders = ",".join("?" for _ in source_domains)
+    clauses.append(f"memory_domain IN ({domain_placeholders})")
+    params.extend(source_domains)
     if plan.intent == "identity":
         clauses.extend(
             (
@@ -564,7 +575,7 @@ def _tier2_candidates(
         "SELECT memory_id, memory_type, title, summary, timespan_start, "
         "timespan_end, importance, confidence, topics, entities, source_turns, "
         "event_kind, access_count, citation_count, pinned, weight, "
-        "identity_layer, evidence_refs "
+        "identity_layer, evidence_refs, memory_domain "
         "FROM compressed_memories WHERE "
         + " AND ".join(clauses)
         + " ORDER BY pinned DESC, timespan_end DESC LIMIT ?",
@@ -627,6 +638,7 @@ def _tier2_candidates(
                 "source_turns": _json_list(row[10]),
                 "identity_layer": row[16],
                 "evidence_refs": _json_list(row[17]),
+                "memory_domain": row[18],
                 "score": round(min(score, 1.0), 6),
                 "matched_terms": matched,
                 "signals": {
@@ -649,6 +661,7 @@ def _profile_candidates(
     *,
     owner_id: str,
     workspace_id: str,
+    source_domains: Sequence[str],
     lexical_matches: dict[str, tuple[str, ...]],
     semantic_matches: dict[tuple[str, str], float],
 ) -> list[dict[str, Any]]:
@@ -660,6 +673,9 @@ def _profile_candidates(
         "workspace_id = ?",
     ]
     params: list[Any] = [owner_id, workspace_id]
+    domain_placeholders = ",".join("?" for _ in source_domains)
+    clauses.append(f"memory_domain IN ({domain_placeholders})")
+    params.extend(source_domains)
     lexical_ids = lexical_matches.get("profile", ())
     semantic_ids = _semantic_ids(semantic_matches, "profile")
     _append_search_predicates(
@@ -679,7 +695,7 @@ def _profile_candidates(
     rows = conn.execute(
         "SELECT memory_id, memory_kind, subject, predicate, value, summary, "
         "confidence, certainty_state, valid_from, valid_to, evidence_refs, "
-        "source_turns FROM profile_memories WHERE "
+        "source_turns, memory_domain FROM profile_memories WHERE "
         + " AND ".join(clauses)
         + " ORDER BY confidence DESC, valid_from DESC LIMIT ?",
         params,
@@ -718,6 +734,7 @@ def _profile_candidates(
                 "timespan_end": row[9],
                 "evidence_refs": _json_list(row[10]),
                 "source_turns": _json_list(row[11]),
+                "memory_domain": row[12],
                 "score": round(min(score, 1.0), 6),
                 "matched_terms": matched,
                 "signals": {
@@ -739,6 +756,7 @@ def _archive_candidates(
     *,
     owner_id: str,
     workspace_id: str,
+    source_domains: Sequence[str],
     lexical_matches: dict[str, tuple[str, ...]],
     semantic_matches: dict[tuple[str, str], float],
 ) -> list[dict[str, Any]]:
@@ -750,9 +768,13 @@ def _archive_candidates(
         "json_each(tombstone.evidence_turns) evidence "
         "WHERE tombstone.owner_id = turns_archive.owner_id "
         "AND tombstone.workspace_id = turns_archive.workspace_id "
+        "AND tombstone.memory_domain = turns_archive.memory_domain "
         "AND evidence.value = turns_archive.turn_id)",
     ]
     params: list[Any] = [owner_id, workspace_id]
+    domain_placeholders = ",".join("?" for _ in source_domains)
+    clauses.append(f"memory_domain IN ({domain_placeholders})")
+    params.extend(source_domains)
     lexical_ids = lexical_matches.get("archive", ())
     semantic_ids = _semantic_ids(semantic_matches, "archive")
     _append_search_predicates(
@@ -771,7 +793,7 @@ def _archive_candidates(
     params.append(candidate_limit)
     rows = conn.execute(
         "SELECT turn_id, session_id, speaker, original_text, text_summary, "
-        "timestamp, event_ids, scene_ids FROM turns_archive WHERE "
+        "timestamp, event_ids, scene_ids, memory_domain FROM turns_archive WHERE "
         + " AND ".join(clauses)
         + " ORDER BY timestamp DESC LIMIT ?",
         params,
@@ -800,6 +822,7 @@ def _archive_candidates(
                 "session_id": row[1],
                 "source_turns": [row[0]],
                 "evidence_refs": [*_json_list(row[6]), *_json_list(row[7])],
+                "memory_domain": row[8],
                 "score": round(min(score, 1.0), 6),
                 "matched_terms": matched,
                 "signals": {
@@ -822,6 +845,7 @@ def _tier1_candidates(
     current_session_id: str | None,
     owner_id: str,
     workspace_id: str,
+    source_domains: Sequence[str],
     lexical_matches: dict[str, tuple[str, ...]],
     semantic_matches: dict[tuple[str, str], float],
 ) -> list[dict[str, Any]]:
@@ -831,6 +855,9 @@ def _tier1_candidates(
         "workspace_id = ?",
     ]
     params: list[Any] = [owner_id, workspace_id]
+    domain_placeholders = ",".join("?" for _ in source_domains)
+    clauses.append(f"memory_domain IN ({domain_placeholders})")
+    params.extend(source_domains)
     if plan.intent != "recent_conversation":
         lexical_ids = lexical_matches.get("turn", ())
         semantic_ids = _semantic_ids(semantic_matches, "turn")
@@ -849,7 +876,7 @@ def _tier1_candidates(
         params.append(plan.timespan_end)
     params.append(candidate_limit)
     rows = conn.execute(
-        "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, tags "
+        "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, tags, memory_domain "
         "FROM turns WHERE "
         + " AND ".join(clauses)
         + " ORDER BY timestamp DESC LIMIT ?",
@@ -906,6 +933,7 @@ def _tier1_candidates(
                 "timestamp": row[4],
                 "session_id": row[1],
                 "source_turns": [row[0]],
+                "memory_domain": row[7],
                 "score": round(min(score, 1.0), 6),
                 "matched_terms": matched,
                 "signals": {
@@ -1200,16 +1228,19 @@ def _apply_feedback_scores(
     *,
     owner_id: str,
     workspace_id: str,
+    source_domains: Sequence[str],
 ) -> list[dict[str, Any]]:
     ids = [str(item.get("id") or "") for item in candidates if item.get("id")]
     if not ids:
         return list(candidates)
     placeholders = ",".join("?" for _ in ids)
+    domain_placeholders = ",".join("?" for _ in source_domains)
     rows = conn.execute(
         "SELECT memory_id, verdict, COUNT(*) FROM recall_feedback "
-        f"WHERE owner_id = ? AND workspace_id = ? AND memory_id IN ({placeholders}) "
+        f"WHERE owner_id = ? AND workspace_id = ? AND memory_domain IN ({domain_placeholders}) "
+        f"AND memory_id IN ({placeholders}) "
         "GROUP BY memory_id, verdict",
-        [owner_id, workspace_id, *ids],
+        [owner_id, workspace_id, *source_domains, *ids],
     ).fetchall()
     counts: dict[str, dict[str, int]] = {}
     for memory_id, verdict, count in rows:

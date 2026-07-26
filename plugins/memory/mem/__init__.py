@@ -465,6 +465,8 @@ class MemMemoryProvider(MemoryProvider):
         return {
             "owner_id": self._owner_id,
             "workspace_id": self._workspace_id,
+            "memory_actor": "api_a",
+            "memory_domain": "agent_interaction",
         }
 
     def _request_json(

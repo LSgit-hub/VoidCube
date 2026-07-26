@@ -150,7 +150,7 @@ def _write_compressed_memories_to_db(conn, pipeline_result, now: str) -> int:
     """
     written = 0
     stable_ids = _build_stable_cmem_ids(pipeline_result)
-    owner_id, workspace_id = _pipeline_scope(conn, pipeline_result)
+    owner_id, workspace_id, memory_domain = _pipeline_scope(conn, pipeline_result)
     for event in pipeline_result.events:
         parent_id = stable_ids.get(event.parent_ids[0], event.parent_ids[0]) if event.parent_ids else None
         ek = event.event_kind.value if hasattr(event.event_kind, 'value') else str(event.event_kind)
@@ -159,15 +159,15 @@ def _write_compressed_memories_to_db(conn, pipeline_result, now: str) -> int:
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
             "parent_id, compressed_at, compression_level, status, weight, event_kind, "
-            "owner_id, workspace_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "owner_id, workspace_id, memory_domain) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 stable_ids.get(event.id, event.id), "event", event.title, event.summary,
                 event.timespan_start.isoformat(), event.timespan_end.isoformat(),
                 event.importance, event.confidence,
                 json.dumps(event.topics), json.dumps(event.entities),
                 json.dumps(event.source_turns), parent_id, now,
-                0, "active", 1.0, ek, owner_id, workspace_id,
+                0, "active", 1.0, ek, owner_id, workspace_id, memory_domain,
             ),
         )
         written += 1
@@ -185,15 +185,15 @@ def _write_compressed_memories_to_db(conn, pipeline_result, now: str) -> int:
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
             "parent_id, compressed_at, compression_level, status, weight, event_kind, "
-            "owner_id, workspace_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "owner_id, workspace_id, memory_domain) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 stable_ids.get(scene.id, scene.id), "scene", scene.title, scene.summary,
                 scene.timespan_start.isoformat(), scene.timespan_end.isoformat(),
                 scene.importance, scene.confidence,
                 json.dumps(scene.topics), json.dumps(scene.entities),
                 json.dumps(scene.evidence_refs), parent_id, now,
-                1, "active", 0.7, scene_kind, owner_id, workspace_id,
+                1, "active", 0.7, scene_kind, owner_id, workspace_id, memory_domain,
             ),
         )
         written += 1
@@ -204,15 +204,15 @@ def _write_compressed_memories_to_db(conn, pipeline_result, now: str) -> int:
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
             "parent_id, compressed_at, compression_level, status, weight, event_kind, "
-            "owner_id, workspace_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "owner_id, workspace_id, memory_domain) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 stable_ids.get(arc.id, arc.id), "arc", arc.title, arc.summary,
                 arc.timespan_start.isoformat(), arc.timespan_end.isoformat(),
                 arc.importance, arc.confidence,
                 json.dumps(arc.topics), json.dumps(arc.entities),
                 json.dumps(arc.evidence_refs), parent_id, now,
-                2, "active", 0.4, None, owner_id, workspace_id,
+                2, "active", 0.4, None, owner_id, workspace_id, memory_domain,
             ),
         )
         written += 1
@@ -222,15 +222,15 @@ def _write_compressed_memories_to_db(conn, pipeline_result, now: str) -> int:
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
             "parent_id, compressed_at, compression_level, status, weight, event_kind, "
-            "owner_id, workspace_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "owner_id, workspace_id, memory_domain) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 stable_ids.get(epoch.id, epoch.id), "epoch", epoch.title, epoch.summary,
                 epoch.timespan_start.isoformat(), epoch.timespan_end.isoformat(),
                 epoch.importance, epoch.confidence,
                 json.dumps(epoch.topics), json.dumps(epoch.entities),
                 json.dumps(epoch.evidence_refs), None, now,
-                3, "active", 0.2, None, owner_id, workspace_id,
+                3, "active", 0.2, None, owner_id, workspace_id, memory_domain,
             ),
         )
         written += 1
@@ -240,12 +240,13 @@ def _write_compressed_memories_to_db(conn, pipeline_result, now: str) -> int:
             profile,
             owner_id=owner_id,
             workspace_id=workspace_id,
+            memory_domain=memory_domain,
             now=now,
         )
     return written
 
 
-def _pipeline_scope(conn, pipeline_result) -> tuple[str, str]:
+def _pipeline_scope(conn, pipeline_result) -> tuple[str, str, str]:
     source_turn_ids: list[str] = []
     for collection_name in ("events", "profile_memories"):
         for item in getattr(pipeline_result, collection_name, []) or []:
@@ -256,12 +257,12 @@ def _pipeline_scope(conn, pipeline_result) -> tuple[str, str]:
             )
     for turn_id in dict.fromkeys(source_turn_ids):
         row = conn.execute(
-            "SELECT owner_id, workspace_id FROM turns WHERE turn_id = ?",
+            "SELECT owner_id, workspace_id, memory_domain FROM turns WHERE turn_id = ?",
             (turn_id,),
         ).fetchone()
         if row:
-            return str(row[0]), str(row[1])
-    return DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID
+            return str(row[0]), str(row[1]), str(row[2])
+    return DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID, "agent_interaction"
 
 
 @dataclass
@@ -282,6 +283,7 @@ class BridgeResult:
     low_relevance_fallback: bool = False
     owner_id: str = DEFAULT_OWNER_ID
     workspace_id: str = DEFAULT_WORKSPACE_ID
+    memory_domain: str = "agent_interaction"
     sample_turn_ids: List[str] = None
     errors: List[str] = None
     quality_evidence: Dict[str, Any] | None = None
@@ -308,6 +310,7 @@ class BridgeResult:
             "low_relevance_fallback": self.low_relevance_fallback,
             "owner_id": self.owner_id,
             "workspace_id": self.workspace_id,
+            "memory_domain": self.memory_domain,
             "sample_turn_ids": self.sample_turn_ids,
             "errors": self.errors,
             "quality_evidence": self.quality_evidence,
@@ -322,6 +325,7 @@ class CandidateBatch:
     low_relevance_fallback: bool
     owner_id: str
     workspace_id: str
+    memory_domain: str
 
 
 class Tier1ToTier2Bridge:
@@ -352,6 +356,7 @@ class Tier1ToTier2Bridge:
         min_source_support: float = 0.35,
         min_identifier_fidelity: float = 1.0,
         min_polarity_consistency: float = 1.0,
+        memory_domain: str = "agent_interaction",
     ) -> None:
         self.db_path = Path(db_path)
         self.retention_days = retention_days
@@ -359,6 +364,7 @@ class Tier1ToTier2Bridge:
         self.min_relevance = min_relevance
         self.archive_keep_original = archive_keep_original
         self.max_turns = max_turns
+        self.memory_domain = str(memory_domain)
         self.pipeline_factory = pipeline_factory
         self.compression_degraded = compression_degraded
         self.quality_thresholds = {
@@ -386,9 +392,10 @@ class Tier1ToTier2Bridge:
         rows = conn.execute(
             "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
             "owner_id, workspace_id "
-            f"FROM turns WHERE {time_clause}compressed_to_tier2 = 0 "
+            ", memory_domain FROM turns WHERE "
+            f"{time_clause}compressed_to_tier2 = 0 AND memory_domain = ? "
             "AND relevance_score >= ? ORDER BY timestamp ASC LIMIT ?",
-            params,
+            (*params[:-2], self.memory_domain, *params[-2:]),
         ).fetchall()
         low_relevance_fallback = False
         if not rows:
@@ -400,17 +407,21 @@ class Tier1ToTier2Bridge:
             rows = conn.execute(
                 "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
                 "owner_id, workspace_id "
-                f"FROM turns WHERE {time_clause}compressed_to_tier2 = 0 "
+                ", memory_domain FROM turns WHERE "
+                f"{time_clause}compressed_to_tier2 = 0 AND memory_domain = ? "
                 "ORDER BY timestamp ASC LIMIT ?",
-                fallback_params,
+                (*fallback_params[:-1], self.memory_domain, fallback_params[-1]),
             ).fetchall()
             low_relevance_fallback = bool(rows)
         owner_id = str(rows[0][6]) if rows else DEFAULT_OWNER_ID
         workspace_id = str(rows[0][7]) if rows else DEFAULT_WORKSPACE_ID
+        memory_domain = str(rows[0][8]) if rows else self.memory_domain
         rows = [
             row
             for row in rows
-            if str(row[6]) == owner_id and str(row[7]) == workspace_id
+            if str(row[6]) == owner_id
+            and str(row[7]) == workspace_id
+            and str(row[8]) == memory_domain
         ]
         conn.close()
         turns = [
@@ -423,6 +434,7 @@ class Tier1ToTier2Bridge:
                 "relevance_score": r[5],
                 "owner_id": r[6],
                 "workspace_id": r[7],
+                "memory_domain": r[8],
             }
             for r in rows
         ]
@@ -433,6 +445,7 @@ class Tier1ToTier2Bridge:
             low_relevance_fallback=low_relevance_fallback,
             owner_id=owner_id,
             workspace_id=workspace_id,
+            memory_domain=memory_domain,
         )
 
     def find_candidate_turns(self) -> List[Dict[str, Any]]:
@@ -443,7 +456,8 @@ class Tier1ToTier2Bridge:
     def _active_turn_count(self) -> int:
         conn = open_memory_sqlite(self.db_path)
         count = conn.execute(
-            "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0"
+            "SELECT COUNT(*) FROM turns WHERE compressed_to_tier2 = 0 AND memory_domain = ?",
+            (self.memory_domain,),
         ).fetchone()[0]
         conn.close()
         return int(count)
@@ -691,6 +705,11 @@ class Tier1ToTier2Bridge:
             "thresholds": dict(self.quality_thresholds),
             "failed_checks": failed_checks,
             "sample_turn_ids": [turn["turn_id"] for turn in turns[:5]],
+            "memory_domain": (
+                str(turns[0].get("memory_domain") or "agent_interaction")
+                if turns
+                else self.memory_domain
+            ),
         }
         audit_seed = json.dumps(audit_payload, ensure_ascii=False, sort_keys=True)
         audit_payload["audit_id"] = "cqa_" + hashlib.sha1(
@@ -707,16 +726,17 @@ class Tier1ToTier2Bridge:
     ) -> None:
         conn.execute(
             "INSERT OR REPLACE INTO compression_quality_audit "
-            "(audit_id, evaluated_at, status, candidate_count, event_count, "
+            "(audit_id, memory_domain, evaluated_at, status, candidate_count, event_count, "
             "covered_turn_count, event_coverage, backlinked_event_count, "
             "backlink_completeness, source_chars, event_summary_chars, "
             "compression_ratio, degraded_event_count, degraded_fraction, "
             "source_supported_event_count, source_support, identifier_fidelity, "
             "polarity_consistency, unsupported_identifiers, thresholds, failed_checks, "
-            "sample_turn_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+            "sample_turn_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
             "?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 quality_evidence["audit_id"],
+                quality_evidence["memory_domain"],
                 quality_evidence["evaluated_at"],
                 status,
                 quality_evidence["candidate_count"],
@@ -804,14 +824,16 @@ class Tier1ToTier2Bridge:
                     conn.execute(
                         "INSERT OR REPLACE INTO turns_archive "
                         "(turn_id, session_id, speaker, text_summary, original_text, "
-                        "timestamp, compressed_at, event_ids, scene_ids, owner_id, workspace_id) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "timestamp, compressed_at, event_ids, scene_ids, owner_id, workspace_id, "
+                        "memory_domain) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             turn_id, t["session_id"], t["speaker"],
                             text_summary, original_text,
                             t["timestamp"], now,
                             json.dumps(event_ids), json.dumps(scene_ids),
                             t["owner_id"], t["workspace_id"],
+                            t["memory_domain"],
                         ),
                     )
                     conn.execute(
@@ -852,6 +874,7 @@ class Tier1ToTier2Bridge:
             "sample_turn_ids": [item["turn_id"] for item in candidates[:5]],
             "owner_id": batch.owner_id,
             "workspace_id": batch.workspace_id,
+            "memory_domain": batch.memory_domain,
         }
         if not candidates:
             return BridgeResult(

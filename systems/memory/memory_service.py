@@ -14,6 +14,16 @@ from pydantic import BaseModel, Field
 from agent.redact import redact_sensitive_text
 from systems.memory.backup import MemoryBackupManager, MemoryRestoreError
 from systems.memory.config import MemoryServiceConfig
+from systems.memory.domain import (
+    DEFAULT_MEMORY_ACTOR,
+    DEFAULT_MEMORY_DOMAIN,
+    MemoryActor,
+    MemoryDomain,
+    MemoryDomainAccessError,
+    authorize_read,
+    authorize_write,
+    domain_values,
+)
 from systems.memory.lexical_index import setup_memory_fts
 from systems.memory.profile_capture import (
     ALL_PROFILE_PREDICATES,
@@ -61,12 +71,34 @@ def _redact_for_memory_storage(value: Any) -> Any:
     return value
 
 
+def _authorized_write_domain(
+    actor: MemoryActor | str,
+    domain: MemoryDomain | str,
+) -> str:
+    try:
+        return authorize_write(actor, domain).value
+    except (MemoryDomainAccessError, ValueError) as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+def _authorized_read_domains(
+    actor: MemoryActor | str,
+    requested: List[MemoryDomain] | tuple[MemoryDomain, ...] | None,
+) -> tuple[str, ...]:
+    try:
+        return domain_values(authorize_read(actor, requested))
+    except (MemoryDomainAccessError, ValueError) as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
 # ── Tier 1 Models (Short-term conversation store) ──────────────────
 
 class SessionCreate(BaseModel):
     session_id: str = ""  # Optional: caller-provided ID; auto-generated if empty
     owner_id: str = DEFAULT_OWNER_ID
     workspace_id: str = DEFAULT_WORKSPACE_ID
+    memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR
+    memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -75,6 +107,8 @@ class TurnCreate(BaseModel):
     text: str
     owner_id: str = DEFAULT_OWNER_ID
     workspace_id: str = DEFAULT_WORKSPACE_ID
+    memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR
+    memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -85,6 +119,8 @@ class TurnPairCreate(BaseModel):
     write_id: str = Field(min_length=1, max_length=300)
     owner_id: str = DEFAULT_OWNER_ID
     workspace_id: str = DEFAULT_WORKSPACE_ID
+    memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR
+    memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -116,6 +152,8 @@ class TimelineQuery(BaseModel):
     limit: int = 100
     owner_id: str = DEFAULT_OWNER_ID
     workspace_id: str = DEFAULT_WORKSPACE_ID
+    memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR
+    source_domains: List[MemoryDomain] = Field(default_factory=list)
 
 
 class Tier2CompressRequest(BaseModel):
@@ -124,6 +162,8 @@ class Tier2CompressRequest(BaseModel):
     min_relevance: float = 0.1
     dry_run: bool = False
     force_oldest: bool = False
+    memory_actor: MemoryActor = MemoryActor.MEMORY_MAINTENANCE
+    memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN
 
 
 class RecallRequest(BaseModel):
@@ -138,6 +178,8 @@ class RecallRequest(BaseModel):
     current_session_id: Optional[str] = None
     owner_id: str = DEFAULT_OWNER_ID
     workspace_id: str = DEFAULT_WORKSPACE_ID
+    memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR
+    source_domains: List[MemoryDomain] = Field(default_factory=list)
     include_tier1: bool = True
     include_tier2: bool = True
     request_source: str = Field(
@@ -175,6 +217,8 @@ class IdentityExperienceVerification(BaseModel):
     importance: float = Field(default=0.9, ge=0.0, le=1.0)
     owner_id: str = DEFAULT_OWNER_ID
     workspace_id: str = DEFAULT_WORKSPACE_ID
+    memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR
+    memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN
 
 
 class InteractionExperienceSettlement(BaseModel):
@@ -187,6 +231,8 @@ class InteractionExperienceSettlement(BaseModel):
     )
     owner_id: str = DEFAULT_OWNER_ID
     workspace_id: str = DEFAULT_WORKSPACE_ID
+    memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR
+    memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN
 
 
 class DurableMemoryCreate(BaseModel):
@@ -200,6 +246,8 @@ class DurableMemoryCreate(BaseModel):
     source_actor: str = Field(default="agent", min_length=1, max_length=100)
     owner_id: str = DEFAULT_OWNER_ID
     workspace_id: str = DEFAULT_WORKSPACE_ID
+    memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR
+    memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN
 
 
 class RecallFeedbackCreate(BaseModel):
@@ -209,6 +257,7 @@ class RecallFeedbackCreate(BaseModel):
     reason: str = Field(default="", max_length=2000)
     owner_id: str = DEFAULT_OWNER_ID
     workspace_id: str = DEFAULT_WORKSPACE_ID
+    memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR
 
 
 class ForgetRequest(BaseModel):
@@ -218,6 +267,8 @@ class ForgetRequest(BaseModel):
     confirmation: str = Field(pattern=r"^FORGET$")
     owner_id: str = DEFAULT_OWNER_ID
     workspace_id: str = DEFAULT_WORKSPACE_ID
+    memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR
+    memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN
 
 
 # ── Content-aware weight model (five dimensions) ─────────────────
@@ -305,6 +356,7 @@ def _cmem_row_to_dict(row) -> Dict[str, Any]:
         "origin_type": row[25] if len(row) > 25 else None,
         "origin_id": row[26] if len(row) > 26 else None,
         "verified_at": row[27] if len(row) > 27 else None,
+        "memory_domain": row[30] if len(row) > 30 else DEFAULT_MEMORY_DOMAIN.value,
     }
     # Compute dynamic weight from all signals
     base["dynamic_weight"] = compute_dynamic_weight(
@@ -331,6 +383,7 @@ def _turn_row_to_dict(row) -> Dict[str, Any]:
         "tags": json.loads(row[7]) if row[7] else [],
         "metadata": json.loads(row[8]) if row[8] else {},
         "compressed_to_tier2": bool(row[9]),
+        "memory_domain": row[10] if len(row) > 10 else DEFAULT_MEMORY_DOMAIN.value,
     }
 
 
@@ -436,6 +489,7 @@ class MemoryService:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id TEXT PRIMARY KEY,
+                memory_domain TEXT NOT NULL DEFAULT 'agent_interaction',
                 owner_id TEXT NOT NULL DEFAULT 'local-user',
                 workspace_id TEXT NOT NULL DEFAULT 'default',
                 created_at TEXT NOT NULL,
@@ -447,6 +501,7 @@ class MemoryService:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS turns (
                 turn_id TEXT PRIMARY KEY,
+                memory_domain TEXT NOT NULL DEFAULT 'agent_interaction',
                 session_id TEXT NOT NULL,
                 speaker TEXT NOT NULL,
                 text TEXT NOT NULL,
@@ -468,6 +523,7 @@ class MemoryService:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS turns_archive (
                 turn_id TEXT PRIMARY KEY,
+                memory_domain TEXT NOT NULL DEFAULT 'agent_interaction',
                 session_id TEXT NOT NULL,
                 speaker TEXT NOT NULL,
                 text_summary TEXT,
@@ -484,6 +540,7 @@ class MemoryService:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS compression_quality_audit (
                 audit_id TEXT PRIMARY KEY,
+                memory_domain TEXT NOT NULL DEFAULT 'agent_interaction',
                 evaluated_at TEXT NOT NULL,
                 status TEXT NOT NULL,
                 candidate_count INTEGER NOT NULL,
@@ -528,6 +585,8 @@ class MemoryService:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS recall_traces (
                 trace_id TEXT PRIMARY KEY,
+                memory_actor TEXT NOT NULL DEFAULT 'api_a',
+                source_domains TEXT NOT NULL DEFAULT '["agent_interaction"]',
                 created_at TEXT NOT NULL,
                 completed_at TEXT NOT NULL,
                 request_source TEXT NOT NULL,
@@ -551,6 +610,7 @@ class MemoryService:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS recall_feedback (
                 feedback_id TEXT PRIMARY KEY,
+                memory_domain TEXT NOT NULL DEFAULT 'agent_interaction',
                 trace_id TEXT NOT NULL,
                 memory_id TEXT NOT NULL,
                 verdict TEXT NOT NULL,
@@ -565,6 +625,7 @@ class MemoryService:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS memory_deletion_audit (
                 audit_id TEXT PRIMARY KEY,
+                memory_domain TEXT NOT NULL DEFAULT 'agent_interaction',
                 target_kind TEXT NOT NULL,
                 target_hash TEXT NOT NULL,
                 reason TEXT NOT NULL,
@@ -579,13 +640,14 @@ class MemoryService:
             CREATE TABLE IF NOT EXISTS profile_memory_tombstones (
                 owner_id TEXT NOT NULL,
                 workspace_id TEXT NOT NULL,
+                memory_domain TEXT NOT NULL DEFAULT 'agent_interaction',
                 subject TEXT NOT NULL,
                 predicate TEXT NOT NULL,
                 revoked_at TEXT NOT NULL,
                 source_turn_id TEXT NOT NULL,
                 evidence_turns TEXT NOT NULL DEFAULT '[]',
                 reason_hash TEXT NOT NULL,
-                PRIMARY KEY(owner_id, workspace_id, subject, predicate)
+                PRIMARY KEY(owner_id, workspace_id, memory_domain, subject, predicate)
             )
         ''')
         tombstone_columns = {
@@ -636,7 +698,8 @@ class MemoryService:
                 origin_id TEXT,                       -- stable source identity
                 verified_at TEXT,                     -- source verification timestamp
                 owner_id TEXT NOT NULL DEFAULT 'local-user',
-                workspace_id TEXT NOT NULL DEFAULT 'default'
+                workspace_id TEXT NOT NULL DEFAULT 'default',
+                memory_domain TEXT NOT NULL DEFAULT 'agent_interaction'
             )
         ''')
 
@@ -646,6 +709,7 @@ class MemoryService:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS profile_memories (
                 memory_id TEXT PRIMARY KEY,
+                memory_domain TEXT NOT NULL DEFAULT 'agent_interaction',
                 memory_kind TEXT NOT NULL,
                 subject TEXT NOT NULL,
                 predicate TEXT NOT NULL,
@@ -668,6 +732,7 @@ class MemoryService:
         ''')
 
         self._migrate_scope_schema(cursor)
+        self._migrate_domain_schema(cursor)
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS identity_revision_proposals (
@@ -720,7 +785,7 @@ class MemoryService:
             "CREATE INDEX IF NOT EXISTS idx_turns_relevance ON turns(relevance_score)",
             "CREATE INDEX IF NOT EXISTS idx_turns_compressed ON turns(compressed_to_tier2)",
             "CREATE INDEX IF NOT EXISTS idx_turns_scope_time "
-            "ON turns(owner_id, workspace_id, compressed_to_tier2, timestamp)",
+            "ON turns(owner_id, workspace_id, memory_domain, compressed_to_tier2, timestamp)",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_turns_session_dedup "
             "ON turns(session_id, dedup_key) WHERE dedup_key IS NOT NULL",
             "CREATE INDEX IF NOT EXISTS idx_archive_timestamp ON turns_archive(timestamp)",
@@ -732,11 +797,11 @@ class MemoryService:
             "CREATE INDEX IF NOT EXISTS idx_recall_traces_session "
             "ON recall_traces(session_id, created_at DESC)",
             "CREATE INDEX IF NOT EXISTS idx_recall_feedback_memory "
-            "ON recall_feedback(owner_id, workspace_id, memory_id, created_at)",
+            "ON recall_feedback(owner_id, workspace_id, memory_domain, memory_id, created_at)",
             "CREATE INDEX IF NOT EXISTS idx_memory_deletion_audit_scope "
-            "ON memory_deletion_audit(owner_id, workspace_id, created_at)",
+            "ON memory_deletion_audit(owner_id, workspace_id, memory_domain, created_at)",
             "CREATE INDEX IF NOT EXISTS idx_profile_tombstones_scope "
-            "ON profile_memory_tombstones(owner_id, workspace_id, revoked_at)",
+            "ON profile_memory_tombstones(owner_id, workspace_id, memory_domain, revoked_at)",
             "CREATE INDEX IF NOT EXISTS idx_cmem_type ON compressed_memories(memory_type)",
             "CREATE INDEX IF NOT EXISTS idx_cmem_timespan ON compressed_memories(timespan_start, timespan_end)",
             "CREATE INDEX IF NOT EXISTS idx_cmem_status ON compressed_memories(status)",
@@ -744,9 +809,9 @@ class MemoryService:
             "CREATE INDEX IF NOT EXISTS idx_cmem_identity_layer "
             "ON compressed_memories(identity_layer, status, timespan_end)",
             "CREATE INDEX IF NOT EXISTS idx_cmem_scope_status "
-            "ON compressed_memories(owner_id, workspace_id, status, timespan_end)",
+            "ON compressed_memories(owner_id, workspace_id, memory_domain, status, timespan_end)",
             "CREATE INDEX IF NOT EXISTS idx_profile_scope_status "
-            "ON profile_memories(owner_id, workspace_id, status, valid_from)",
+            "ON profile_memories(owner_id, workspace_id, memory_domain, status, valid_from)",
             "CREATE INDEX IF NOT EXISTS idx_identity_revision_status "
             "ON identity_revision_proposals(status, created_at)",
         ]:
@@ -792,6 +857,73 @@ class MemoryService:
                     f"ALTER TABLE {table} ADD COLUMN workspace_id TEXT NOT NULL "
                     f"DEFAULT '{DEFAULT_WORKSPACE_ID}'"
                 )
+
+    @staticmethod
+    def _migrate_domain_schema(cursor) -> None:
+        """One-way migration: all historical rows belong to API-A interaction memory."""
+        column_definitions = {
+            "sessions": ("memory_domain", "TEXT NOT NULL DEFAULT 'agent_interaction'"),
+            "turns": ("memory_domain", "TEXT NOT NULL DEFAULT 'agent_interaction'"),
+            "turns_archive": ("memory_domain", "TEXT NOT NULL DEFAULT 'agent_interaction'"),
+            "compressed_memories": ("memory_domain", "TEXT NOT NULL DEFAULT 'agent_interaction'"),
+            "profile_memories": ("memory_domain", "TEXT NOT NULL DEFAULT 'agent_interaction'"),
+            "compression_quality_audit": ("memory_domain", "TEXT NOT NULL DEFAULT 'agent_interaction'"),
+            "recall_traces": ("source_domains", "TEXT NOT NULL DEFAULT '[\"agent_interaction\"]'"),
+            "recall_feedback": ("memory_domain", "TEXT NOT NULL DEFAULT 'agent_interaction'"),
+            "memory_deletion_audit": ("memory_domain", "TEXT NOT NULL DEFAULT 'agent_interaction'"),
+        }
+        for table, (column, definition) in column_definitions.items():
+            columns = {
+                row[1]
+                for row in cursor.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            if column not in columns:
+                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        trace_columns = {
+            row[1]
+            for row in cursor.execute("PRAGMA table_info(recall_traces)").fetchall()
+        }
+        if "memory_actor" not in trace_columns:
+            cursor.execute(
+                "ALTER TABLE recall_traces ADD COLUMN memory_actor TEXT NOT NULL "
+                "DEFAULT 'api_a'"
+            )
+
+        tombstone_info = cursor.execute(
+            "PRAGMA table_info(profile_memory_tombstones)"
+        ).fetchall()
+        tombstone_pk = [
+            str(row[1])
+            for row in sorted(tombstone_info, key=lambda row: int(row[5] or 0))
+            if int(row[5] or 0) > 0
+        ]
+        expected_pk = [
+            "owner_id", "workspace_id", "memory_domain", "subject", "predicate"
+        ]
+        if tombstone_pk != expected_pk:
+            has_domain = any(str(row[1]) == "memory_domain" for row in tombstone_info)
+            cursor.execute(
+                "CREATE TABLE profile_memory_tombstones_domain_migration ("
+                "owner_id TEXT NOT NULL, workspace_id TEXT NOT NULL, "
+                "memory_domain TEXT NOT NULL DEFAULT 'agent_interaction', "
+                "subject TEXT NOT NULL, predicate TEXT NOT NULL, revoked_at TEXT NOT NULL, "
+                "source_turn_id TEXT NOT NULL, evidence_turns TEXT NOT NULL DEFAULT '[]', "
+                "reason_hash TEXT NOT NULL, PRIMARY KEY(owner_id, workspace_id, "
+                "memory_domain, subject, predicate))"
+            )
+            domain_expression = "memory_domain" if has_domain else "'agent_interaction'"
+            cursor.execute(
+                "INSERT INTO profile_memory_tombstones_domain_migration "
+                "(owner_id, workspace_id, memory_domain, subject, predicate, revoked_at, "
+                "source_turn_id, evidence_turns, reason_hash) SELECT owner_id, workspace_id, "
+                f"{domain_expression}, subject, predicate, revoked_at, source_turn_id, "
+                "evidence_turns, reason_hash FROM profile_memory_tombstones"
+            )
+            cursor.execute("DROP TABLE profile_memory_tombstones")
+            cursor.execute(
+                "ALTER TABLE profile_memory_tombstones_domain_migration "
+                "RENAME TO profile_memory_tombstones"
+            )
 
     @staticmethod
     def _migrate_compressed_memories_schema(cursor) -> None:
@@ -857,7 +989,8 @@ class MemoryService:
             cutoff = (now - timedelta(days=max_age_days)).isoformat()
             rows = conn.execute(
                 "SELECT memory_id, title, summary, topics, entities, "
-                "timespan_start, timespan_end, importance, confidence, source_turns "
+                "timespan_start, timespan_end, importance, confidence, source_turns, "
+                "owner_id, workspace_id, memory_domain "
                 "FROM compressed_memories "
                 "WHERE memory_type = ? AND compression_level = ? "
                 "AND status = 'active' AND pinned = 0 "
@@ -868,7 +1001,8 @@ class MemoryService:
 
             for row in rows:
                 mem_id, title, summary, topics_json, entities_json, \
-                    ts_start, ts_end, importance, confidence, source_turns_json = row
+                    ts_start, ts_end, importance, confidence, source_turns_json, \
+                    owner_id, workspace_id, memory_domain = row
 
                 if level >= 4:
                     # Final level: LLM reviews before permanent deletion
@@ -922,8 +1056,9 @@ class MemoryService:
                     "INSERT OR REPLACE INTO compressed_memories "
                     "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
                     "importance, confidence, topics, entities, source_turns, "
-                    "parent_id, compressed_at, compression_level, status, weight) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "parent_id, compressed_at, compression_level, status, weight, "
+                    "owner_id, workspace_id, memory_domain) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         parent_id, next_type, escalated_title, escalated_summary,
                         ts_start, ts_end,
@@ -931,6 +1066,7 @@ class MemoryService:
                         topics_json, entities_json,
                         json.dumps(source_turns),
                         mem_id, now.isoformat(), next_level, "active", next_weight,
+                        owner_id, workspace_id, memory_domain,
                     ),
                 )
 
@@ -1965,23 +2101,31 @@ class MemoryService:
         """Create a new conversation session. Uses caller-provided ID if given."""
         session_id = request.session_id.strip() if request.session_id else str(uuid.uuid4())
         scope = MemoryScope.create(request.owner_id, request.workspace_id)
+        memory_domain = _authorized_write_domain(
+            request.memory_actor, request.memory_domain
+        )
         now = datetime.now().isoformat()
         conn = open_memory_sqlite(self._db_path)
         existing = conn.execute(
-            "SELECT owner_id, workspace_id FROM sessions WHERE session_id = ?",
+            "SELECT owner_id, workspace_id, memory_domain FROM sessions WHERE session_id = ?",
             (session_id,),
         ).fetchone()
-        if existing and tuple(existing) != (scope.owner_id, scope.workspace_id):
+        if existing and tuple(existing) != (
+            scope.owner_id,
+            scope.workspace_id,
+            memory_domain,
+        ):
             conn.close()
             raise HTTPException(status_code=409, detail="Session belongs to another memory scope")
         conn.execute(
             "INSERT OR IGNORE INTO sessions "
-            "(session_id, owner_id, workspace_id, created_at, updated_at, metadata) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(session_id, owner_id, workspace_id, memory_domain, created_at, updated_at, metadata) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 session_id,
                 scope.owner_id,
                 scope.workspace_id,
+                memory_domain,
                 now,
                 now,
                 json.dumps(_redact_for_memory_storage(request.metadata)),
@@ -1994,6 +2138,7 @@ class MemoryService:
             "session_id": session_id,
             "created_at": now,
             "status": "created" if not existing else "existing",
+            "memory_domain": memory_domain,
             **scope.as_dict(),
         }
 
@@ -2003,18 +2148,22 @@ class MemoryService:
         offset: int = 0,
         owner_id: str = DEFAULT_OWNER_ID,
         workspace_id: str = DEFAULT_WORKSPACE_ID,
+        memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR,
+        memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN,
     ):
         """List sessions in one private memory scope."""
         scope = MemoryScope.create(owner_id, workspace_id)
+        authorized_domain = _authorized_read_domains(memory_actor, [memory_domain])[0]
         conn = open_memory_sqlite(self._db_path)
         rows = conn.execute(
             "SELECT s.session_id, s.created_at, s.updated_at, s.metadata, "
             "COUNT(t.turn_id) as turn_count "
             "FROM sessions s LEFT JOIN turns t ON s.session_id = t.session_id "
             "AND t.owner_id = s.owner_id AND t.workspace_id = s.workspace_id "
-            "WHERE s.owner_id = ? AND s.workspace_id = ? "
+            "AND t.memory_domain = s.memory_domain "
+            "WHERE s.owner_id = ? AND s.workspace_id = ? AND s.memory_domain = ? "
             "GROUP BY s.session_id ORDER BY s.created_at DESC LIMIT ? OFFSET ?",
-            (scope.owner_id, scope.workspace_id, limit, offset),
+            (scope.owner_id, scope.workspace_id, authorized_domain, limit, offset),
         ).fetchall()
         conn.close()
         return {
@@ -2025,6 +2174,7 @@ class MemoryService:
                     "updated_at": r[2],
                     "metadata": json.loads(r[3]) if r[3] else {},
                     "turn_count": r[4],
+                    "memory_domain": authorized_domain,
                 }
                 for r in rows
             ],
@@ -2036,22 +2186,25 @@ class MemoryService:
         session_id: str,
         owner_id: str = DEFAULT_OWNER_ID,
         workspace_id: str = DEFAULT_WORKSPACE_ID,
+        memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR,
+        memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN,
     ):
         """Get a session with its turn count."""
         scope = MemoryScope.create(owner_id, workspace_id)
+        authorized_domain = _authorized_read_domains(memory_actor, [memory_domain])[0]
         conn = open_memory_sqlite(self._db_path)
         row = conn.execute(
             "SELECT session_id, created_at, updated_at, metadata FROM sessions "
-            "WHERE session_id = ? AND owner_id = ? AND workspace_id = ?",
-            (session_id, scope.owner_id, scope.workspace_id),
+            "WHERE session_id = ? AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+            (session_id, scope.owner_id, scope.workspace_id, authorized_domain),
         ).fetchone()
         if not row:
             conn.close()
             raise HTTPException(status_code=404, detail="Session not found")
         turn_count = conn.execute(
             "SELECT COUNT(*) FROM turns WHERE session_id = ? AND owner_id = ? "
-            "AND workspace_id = ?",
-            (session_id, scope.owner_id, scope.workspace_id),
+            "AND workspace_id = ? AND memory_domain = ?",
+            (session_id, scope.owner_id, scope.workspace_id, authorized_domain),
         ).fetchone()[0]
         conn.close()
         return {
@@ -2060,6 +2213,7 @@ class MemoryService:
             "updated_at": row[2],
             "metadata": json.loads(row[3]) if row[3] else {},
             "turn_count": turn_count,
+            "memory_domain": authorized_domain,
         }
 
     def _derive_turn_dedup_key(
@@ -2096,26 +2250,34 @@ class MemoryService:
         """Add a conversation turn to a session."""
         conn = open_memory_sqlite(self._db_path)
         scope = MemoryScope.create(request.owner_id, request.workspace_id)
+        memory_domain = _authorized_write_domain(
+            request.memory_actor, request.memory_domain
+        )
         stored_text = str(_redact_for_memory_storage(request.text))
         stored_metadata = _redact_for_memory_storage(request.metadata)
         now = datetime.now().astimezone().isoformat()
         # Ensure session exists in the same DB transaction as the turn write.
         ses = conn.execute(
-            "SELECT session_id, owner_id, workspace_id FROM sessions WHERE session_id = ?",
+            "SELECT session_id, owner_id, workspace_id, memory_domain FROM sessions WHERE session_id = ?",
             (session_id,),
         ).fetchone()
-        if ses and (str(ses[1]), str(ses[2])) != (scope.owner_id, scope.workspace_id):
+        if ses and (str(ses[1]), str(ses[2]), str(ses[3])) != (
+            scope.owner_id,
+            scope.workspace_id,
+            memory_domain,
+        ):
             conn.close()
             raise HTTPException(status_code=409, detail="Session belongs to another memory scope")
         if not ses:
             conn.execute(
                 "INSERT INTO sessions "
-                "(session_id, owner_id, workspace_id, created_at, updated_at, metadata) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(session_id, owner_id, workspace_id, memory_domain, created_at, updated_at, metadata) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     session_id,
                     scope.owner_id,
                     scope.workspace_id,
+                    memory_domain,
                     now,
                     now,
                     json.dumps({"source": "turn_auto_create"}),
@@ -2144,8 +2306,8 @@ class MemoryService:
         conn.execute(
             "INSERT INTO turns (turn_id, session_id, speaker, text, timestamp, "
             "relevance_score, decay_factor, tags, metadata, dedup_key, "
-            "compressed_to_tier2, last_decay_at, owner_id, workspace_id) "
-            "VALUES (?, ?, ?, ?, ?, 1.0, 0.01, ?, ?, ?, 0, ?, ?, ?)",
+            "compressed_to_tier2, last_decay_at, owner_id, workspace_id, memory_domain) "
+            "VALUES (?, ?, ?, ?, ?, 1.0, 0.01, ?, ?, ?, 0, ?, ?, ?, ?)",
             (
                 turn_id,
                 session_id,
@@ -2158,6 +2320,7 @@ class MemoryService:
                 now,
                 scope.owner_id,
                 scope.workspace_id,
+                memory_domain,
             ),
         )
         conn.execute(
@@ -2168,7 +2331,7 @@ class MemoryService:
         conn.close()
         logger.debug("Turn %s added to session %s", turn_id, session_id)
         self._semantic_wake.set()
-        response = {"turn_id": turn_id, "session_id": session_id, "timestamp": now, "status": "created"}
+        response = {"turn_id": turn_id, "session_id": session_id, "timestamp": now, "status": "created", "memory_domain": memory_domain}
         if dedup_key:
             response["dedup_key"] = dedup_key
         return response
@@ -2176,6 +2339,9 @@ class MemoryService:
     async def add_turn_pair(self, request: TurnPairCreate):
         """Atomically persist one completed user/assistant exchange."""
         scope = MemoryScope.create(request.owner_id, request.workspace_id)
+        memory_domain = _authorized_write_domain(
+            request.memory_actor, request.memory_domain
+        )
         session_id = request.session_id.strip()
         now = datetime.now().astimezone().isoformat()
         conn = open_memory_sqlite(self._db_path)
@@ -2183,12 +2349,13 @@ class MemoryService:
         profile_settlement: dict[str, Any] = {"action": "none"}
         try:
             existing_session = conn.execute(
-                "SELECT owner_id, workspace_id FROM sessions WHERE session_id = ?",
+                "SELECT owner_id, workspace_id, memory_domain FROM sessions WHERE session_id = ?",
                 (session_id,),
             ).fetchone()
             if existing_session and tuple(existing_session) != (
                 scope.owner_id,
                 scope.workspace_id,
+                memory_domain,
             ):
                 raise HTTPException(
                     status_code=409,
@@ -2196,12 +2363,13 @@ class MemoryService:
                 )
             conn.execute(
                 "INSERT OR IGNORE INTO sessions "
-                "(session_id, owner_id, workspace_id, created_at, updated_at, metadata) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(session_id, owner_id, workspace_id, memory_domain, created_at, updated_at, metadata) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     session_id,
                     scope.owner_id,
                     scope.workspace_id,
+                    memory_domain,
                     now,
                     now,
                     json.dumps({"source": "agent_memory_provider"}),
@@ -2233,8 +2401,8 @@ class MemoryService:
                     "INSERT INTO turns "
                     "(turn_id, session_id, speaker, text, timestamp, relevance_score, "
                     "decay_factor, tags, metadata, dedup_key, compressed_to_tier2, "
-                    "last_decay_at, owner_id, workspace_id) "
-                    "VALUES (?, ?, ?, ?, ?, 1.0, 0.01, '[]', ?, ?, 0, ?, ?, ?)",
+                    "last_decay_at, owner_id, workspace_id, memory_domain) "
+                    "VALUES (?, ?, ?, ?, ?, 1.0, 0.01, '[]', ?, ?, 0, ?, ?, ?, ?)",
                     (
                         turn_id,
                         session_id,
@@ -2246,6 +2414,7 @@ class MemoryService:
                         now,
                         scope.owner_id,
                         scope.workspace_id,
+                        memory_domain,
                     ),
                 )
                 turn_ids[speaker] = turn_id
@@ -2283,6 +2452,7 @@ class MemoryService:
                             predicates,
                             owner_id=scope.owner_id,
                             workspace_id=scope.workspace_id,
+                            memory_domain=memory_domain,
                             turn_id=turn_ids["user"],
                             now=now,
                         )
@@ -2293,6 +2463,7 @@ class MemoryService:
                                 profile,
                                 owner_id=scope.owner_id,
                                 workspace_id=scope.workspace_id,
+                                memory_domain=memory_domain,
                                 now=now,
                             )
                             for profile in capture.profiles
@@ -2324,6 +2495,8 @@ class MemoryService:
                     agent_turn_id=turn_ids.get("agent"),
                     owner_id=scope.owner_id,
                     workspace_id=scope.workspace_id,
+                    memory_actor=request.memory_actor,
+                    memory_domain=request.memory_domain,
                 )
             )
         return {
@@ -2333,6 +2506,7 @@ class MemoryService:
             "turn_ids": turn_ids,
             "identity_settlement": settlement,
             "profile_settlement": profile_settlement,
+            "memory_domain": memory_domain,
             **scope.as_dict(),
         }
 
@@ -2343,21 +2517,25 @@ class MemoryService:
         offset: int = 0,
         owner_id: str = DEFAULT_OWNER_ID,
         workspace_id: str = DEFAULT_WORKSPACE_ID,
+        memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR,
+        memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN,
     ):
         """Get all turns for a session, ordered by timestamp."""
         scope = MemoryScope.create(owner_id, workspace_id)
+        authorized_domain = _authorized_read_domains(memory_actor, [memory_domain])[0]
         conn = open_memory_sqlite(self._db_path)
         rows = conn.execute(
             "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
-            "decay_factor, tags, metadata, compressed_to_tier2 "
+            "decay_factor, tags, metadata, compressed_to_tier2, memory_domain "
             "FROM turns WHERE session_id = ? AND owner_id = ? AND workspace_id = ? "
+            "AND memory_domain = ? "
             "ORDER BY timestamp ASC LIMIT ? OFFSET ?",
-            (session_id, scope.owner_id, scope.workspace_id, limit, offset),
+            (session_id, scope.owner_id, scope.workspace_id, authorized_domain, limit, offset),
         ).fetchall()
         total = conn.execute(
             "SELECT COUNT(*) FROM turns WHERE session_id = ? AND owner_id = ? "
-            "AND workspace_id = ?",
-            (session_id, scope.owner_id, scope.workspace_id),
+            "AND workspace_id = ? AND memory_domain = ?",
+            (session_id, scope.owner_id, scope.workspace_id, authorized_domain),
         ).fetchone()[0]
         conn.close()
         return {
@@ -2373,14 +2551,17 @@ class MemoryService:
         newest_first: bool = False,
         owner_id: str = DEFAULT_OWNER_ID,
         workspace_id: str = DEFAULT_WORKSPACE_ID,
+        memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR,
+        memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN,
     ):
         """Query turns by time range, speaker, or session."""
         scope = MemoryScope.create(owner_id, workspace_id)
+        authorized_domain = _authorized_read_domains(memory_actor, [memory_domain])[0]
         conn = open_memory_sqlite(self._db_path)
         sql = "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, " \
-              "decay_factor, tags, metadata, compressed_to_tier2 FROM turns " \
-              "WHERE owner_id = ? AND workspace_id = ?"
-        params: list = [scope.owner_id, scope.workspace_id]
+              "decay_factor, tags, metadata, compressed_to_tier2, memory_domain FROM turns " \
+              "WHERE owner_id = ? AND workspace_id = ? AND memory_domain = ?"
+        params: list = [scope.owner_id, scope.workspace_id, authorized_domain]
         if start:
             sql += " AND timestamp >= ?"
             params.append(start)
@@ -2407,15 +2588,19 @@ class MemoryService:
         turn_id: str,
         owner_id: str = DEFAULT_OWNER_ID,
         workspace_id: str = DEFAULT_WORKSPACE_ID,
+        memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR,
+        memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN,
     ):
         """Get a single turn by ID."""
         scope = MemoryScope.create(owner_id, workspace_id)
+        authorized_domain = _authorized_read_domains(memory_actor, [memory_domain])[0]
         conn = open_memory_sqlite(self._db_path)
         row = conn.execute(
             "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
-            "decay_factor, tags, metadata, compressed_to_tier2 "
-            "FROM turns WHERE turn_id = ? AND owner_id = ? AND workspace_id = ?",
-            (turn_id, scope.owner_id, scope.workspace_id),
+            "decay_factor, tags, metadata, compressed_to_tier2, memory_domain "
+            "FROM turns WHERE turn_id = ? AND owner_id = ? AND workspace_id = ? "
+            "AND memory_domain = ?",
+            (turn_id, scope.owner_id, scope.workspace_id, authorized_domain),
         ).fetchone()
         if not row:
             # Check archive
@@ -2423,8 +2608,8 @@ class MemoryService:
                 "SELECT turn_id, session_id, speaker, text_summary, timestamp, "
                 "compressed_at, event_ids, scene_ids, original_text "
                 "FROM turns_archive WHERE turn_id = ? AND owner_id = ? "
-                "AND workspace_id = ?",
-                (turn_id, scope.owner_id, scope.workspace_id),
+                "AND workspace_id = ? AND memory_domain = ?",
+                (turn_id, scope.owner_id, scope.workspace_id, authorized_domain),
             ).fetchone()
             if not row:
                 conn.close()
@@ -2436,6 +2621,7 @@ class MemoryService:
                 "in_archive": True, "compressed_at": row[5],
                 "event_ids": json.loads(row[6]) if row[6] else [],
                 "scene_ids": json.loads(row[7]) if row[7] else [],
+                "memory_domain": authorized_domain,
             }
         conn.close()
         return _turn_row_to_dict(row)
@@ -2444,12 +2630,19 @@ class MemoryService:
         """Get timeline view for a specific date with turn summaries."""
         conn = open_memory_sqlite(self._db_path)
         scope = MemoryScope.create(request.owner_id, request.workspace_id)
+        source_domains = _authorized_read_domains(
+            request.memory_actor, request.source_domains
+        )
         date_start = f"{request.date}T00:00:00"
         date_end = f"{request.date}T23:59:59"
         sql = "SELECT turn_id, session_id, speaker, text, timestamp FROM turns " \
               "WHERE timestamp >= ? AND timestamp <= ? " \
               "AND owner_id = ? AND workspace_id = ?"
-        params: list = [date_start, date_end, scope.owner_id, scope.workspace_id]
+        placeholders = ",".join("?" for _ in source_domains)
+        sql += f" AND memory_domain IN ({placeholders})"
+        params: list = [
+            date_start, date_end, scope.owner_id, scope.workspace_id, *source_domains
+        ]
         if request.session_id:
             sql += " AND session_id = ?"
             params.append(request.session_id)
@@ -2476,6 +2669,7 @@ class MemoryService:
     async def tier2_compress(self, request: Tier2CompressRequest = None):
         """Run the canonical Tier 1 → Tier 2 bridge with request-scoped policy."""
         req = request or Tier2CompressRequest()
+        memory_domain = _authorized_write_domain(req.memory_actor, req.memory_domain)
         bridge = Tier1ToTier2Bridge(
             self._db_path,
             retention_days=req.retention_days,
@@ -2492,6 +2686,7 @@ class MemoryService:
             min_source_support=self.config.tier2_min_source_support,
             min_identifier_fidelity=self.config.tier2_min_identifier_fidelity,
             min_polarity_consistency=self.config.tier2_min_polarity_consistency,
+            memory_domain=memory_domain,
         )
         result = await asyncio.to_thread(
             bridge.run_cycle,
@@ -2749,6 +2944,10 @@ class MemoryService:
             request.get("owner_id"),
             request.get("workspace_id"),
         )
+        source_domains = _authorized_read_domains(
+            request.get("memory_actor") or DEFAULT_MEMORY_ACTOR,
+            request.get("source_domains") or None,
+        )
 
         sql = (
             "SELECT * FROM compressed_memories WHERE "
@@ -2761,6 +2960,9 @@ class MemoryService:
             GLOBAL_SCOPE_ID,
             GLOBAL_SCOPE_ID,
         ]
+        domain_placeholders = ",".join("?" for _ in source_domains)
+        sql += f" AND memory_domain IN ({domain_placeholders})"
+        params.extend(source_domains)
         # Default: only active entries
         if not include_superseded:
             sql += " AND status = 'active'"
@@ -2801,7 +3003,8 @@ class MemoryService:
                     "UPDATE compressed_memories SET access_count = access_count + 1, "
                     "last_accessed_at = ? WHERE memory_id = ? AND "
                     "((owner_id = ? AND workspace_id = ?) OR "
-                    "(owner_id = ? AND workspace_id = ?))",
+                    "(owner_id = ? AND workspace_id = ?)) "
+                    f"AND memory_domain IN ({domain_placeholders})",
                     (
                         now_iso,
                         d["memory_id"],
@@ -2809,6 +3012,7 @@ class MemoryService:
                         scope.workspace_id,
                         GLOBAL_SCOPE_ID,
                         GLOBAL_SCOPE_ID,
+                        *source_domains,
                     ),
                 )
             conn.commit()
@@ -2835,6 +3039,9 @@ class MemoryService:
         started = time.perf_counter()
         self._recall_requests += 1
         scope = MemoryScope.create(request.owner_id, request.workspace_id)
+        source_domains = _authorized_read_domains(
+            request.memory_actor, request.source_domains
+        )
         plan = None
         payload: Dict[str, Any] | None = None
         failure: Exception | None = None
@@ -2851,6 +3058,7 @@ class MemoryService:
                 request.query,
                 owner_id=scope.owner_id,
                 workspace_id=scope.workspace_id,
+                source_domains=source_domains,
                 limit=self.config.recall_candidate_limit,
             )
             conn = open_memory_sqlite(self._db_path)
@@ -2874,6 +3082,7 @@ class MemoryService:
                     include_tier2=request.include_tier2,
                     owner_id=scope.owner_id,
                     workspace_id=scope.workspace_id,
+                    source_domains=source_domains,
                     semantic_matches=semantic_matches,
                 )
             finally:
@@ -2882,6 +3091,7 @@ class MemoryService:
             payload["trace_id"] = trace_id
             payload["recall_status"] = "hit" if payload["count"] else "empty"
             payload["request_source"] = request.request_source
+            payload["source_domains"] = list(source_domains)
             self._last_recall_count = int(payload["count"])
             if self._last_recall_count:
                 self._recall_hits += 1
@@ -2933,6 +3143,7 @@ class MemoryService:
                     "matched_terms": item.get("matched_terms") or [],
                     "source_turns": item.get("source_turns") or [],
                     "evidence_refs": item.get("evidence_refs") or [],
+                    "memory_domain": item.get("memory_domain"),
                 }
             )
         status = (
@@ -2942,14 +3153,17 @@ class MemoryService:
         )
         conn = open_memory_sqlite(self._db_path)
         scope = MemoryScope.create(request.owner_id, request.workspace_id)
+        source_domains = _authorized_read_domains(
+            request.memory_actor, request.source_domains
+        )
         try:
             conn.execute(
                 "INSERT INTO recall_traces "
                 "(trace_id, created_at, completed_at, request_source, session_id, "
                 "query, status, intent, query_plan, candidate_count, result_count, "
                 "selected_results, context_chars, latency_ms, error_type, error_detail, "
-                "owner_id, workspace_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "memory_actor, owner_id, workspace_id, source_domains) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     trace_id,
                     created_at,
@@ -2974,8 +3188,10 @@ class MemoryService:
                         if failure is not None
                         else None
                     ),
+                    request.memory_actor.value,
                     scope.owner_id,
                     scope.workspace_id,
+                    json.dumps(source_domains),
                 ),
             )
             conn.commit()
@@ -2992,11 +3208,13 @@ class MemoryService:
         status: Optional[str] = None,
         owner_id: str = DEFAULT_OWNER_ID,
         workspace_id: str = DEFAULT_WORKSPACE_ID,
+        memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR,
     ):
         bounded_limit = max(1, min(int(limit), 500))
+        memory_actor = MemoryActor(memory_actor)
         scope = MemoryScope.create(owner_id, workspace_id)
-        clauses = ["owner_id = ?", "workspace_id = ?"]
-        params: list[Any] = [scope.owner_id, scope.workspace_id]
+        clauses = ["owner_id = ?", "workspace_id = ?", "memory_actor = ?"]
+        params: list[Any] = [scope.owner_id, scope.workspace_id, memory_actor.value]
         if session_id:
             clauses.append("session_id = ?")
             params.append(session_id)
@@ -3047,9 +3265,15 @@ class MemoryService:
         conn = open_memory_sqlite(self._db_path)
         try:
             row = conn.execute(
-                "SELECT selected_results FROM recall_traces "
-                "WHERE trace_id = ? AND owner_id = ? AND workspace_id = ?",
-                (request.trace_id, scope.owner_id, scope.workspace_id),
+                "SELECT selected_results, source_domains FROM recall_traces "
+                "WHERE trace_id = ? AND owner_id = ? AND workspace_id = ? "
+                "AND memory_actor = ?",
+                (
+                    request.trace_id,
+                    scope.owner_id,
+                    scope.workspace_id,
+                    request.memory_actor.value,
+                ),
             ).fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="Recall trace not found")
@@ -3063,6 +3287,15 @@ class MemoryService:
                     status_code=409,
                     detail="Feedback can only reference a selected recall result",
                 )
+            selected_item = next(
+                item
+                for item in json.loads(row[0] or "[]")
+                if isinstance(item, dict) and str(item.get("id") or "") == request.memory_id
+            )
+            memory_domain = str(
+                selected_item.get("memory_domain") or DEFAULT_MEMORY_DOMAIN.value
+            )
+            _authorized_read_domains(request.memory_actor, [MemoryDomain(memory_domain)])
             feedback_id = "feedback-" + hashlib.sha256(
                 (
                     f"{request.trace_id}\0{request.memory_id}\0"
@@ -3073,9 +3306,10 @@ class MemoryService:
             conn.execute(
                 "INSERT INTO recall_feedback "
                 "(feedback_id, trace_id, memory_id, verdict, reason, owner_id, "
-                "workspace_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "workspace_id, memory_domain, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(trace_id, memory_id, owner_id, workspace_id) DO UPDATE SET "
                 "verdict = excluded.verdict, reason = excluded.reason, "
+                "memory_domain = excluded.memory_domain, "
                 "created_at = excluded.created_at",
                 (
                     feedback_id,
@@ -3085,6 +3319,7 @@ class MemoryService:
                     str(_redact_for_memory_storage(request.reason)).strip(),
                     scope.owner_id,
                     scope.workspace_id,
+                    memory_domain,
                     now,
                 ),
             )
@@ -3099,6 +3334,7 @@ class MemoryService:
             "feedback_id": feedback_id,
             "verdict": request.verdict,
             "memory_id": request.memory_id,
+            "memory_domain": memory_domain,
             **scope.as_dict(),
         }
 
@@ -3112,6 +3348,9 @@ class MemoryService:
                 detail="Specify exactly one of memory_id or session_id",
             )
         scope = MemoryScope.create(request.owner_id, request.workspace_id)
+        memory_domain = _authorized_write_domain(
+            request.memory_actor, request.memory_domain
+        )
         conn = open_memory_sqlite(self._db_path)
         counts = {
             "compressed_memories": 0,
@@ -3131,29 +3370,38 @@ class MemoryService:
                 for table in ("compressed_memories", "profile_memories"):
                     cursor = conn.execute(
                         f"DELETE FROM {table} WHERE memory_id = ? "
-                        "AND owner_id = ? AND workspace_id = ?",
-                        (memory_id, scope.owner_id, scope.workspace_id),
+                        "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+                        (memory_id, scope.owner_id, scope.workspace_id, memory_domain),
                     )
                     counts[table] += max(0, int(cursor.rowcount or 0))
                 for table in ("turns", "turns_archive"):
                     cursor = conn.execute(
                         f"DELETE FROM {table} WHERE turn_id = ? "
-                        "AND owner_id = ? AND workspace_id = ?",
-                        (memory_id, scope.owner_id, scope.workspace_id),
+                        "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+                        (memory_id, scope.owner_id, scope.workspace_id, memory_domain),
                     )
                     counts[table] += max(0, int(cursor.rowcount or 0))
                 cursor = conn.execute(
                     "DELETE FROM recall_feedback WHERE memory_id = ? "
-                    "AND owner_id = ? AND workspace_id = ?",
-                    (memory_id, scope.owner_id, scope.workspace_id),
+                    "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+                    (memory_id, scope.owner_id, scope.workspace_id, memory_domain),
                 )
                 counts["recall_feedback"] += max(0, int(cursor.rowcount or 0))
                 trace_rows = conn.execute(
                     "SELECT trace_id, selected_results FROM recall_traces WHERE "
-                    "owner_id = ? AND workspace_id = ? AND EXISTS (SELECT 1 FROM "
+                    "owner_id = ? AND workspace_id = ? AND memory_actor = ? "
+                    "AND EXISTS (SELECT 1 FROM "
+                    "json_each(recall_traces.source_domains) domains WHERE domains.value = ?) "
+                    "AND EXISTS (SELECT 1 FROM "
                     "json_each(recall_traces.selected_results) "
                     "WHERE json_extract(value, '$.id') = ?)",
-                    (scope.owner_id, scope.workspace_id, memory_id),
+                    (
+                        scope.owner_id,
+                        scope.workspace_id,
+                        request.memory_actor.value,
+                        memory_domain,
+                        memory_id,
+                    ),
                 ).fetchall()
                 for trace_id, selected_json in trace_rows:
                     selected = [
@@ -3175,22 +3423,25 @@ class MemoryService:
                 counts["recall_trace_references"] += len(trace_rows)
                 cursor = conn.execute(
                     "DELETE FROM memory_embeddings WHERE memory_id = ? "
-                    "AND owner_id = ? AND workspace_id = ?",
-                    (memory_id, scope.owner_id, scope.workspace_id),
+                    "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+                    (memory_id, scope.owner_id, scope.workspace_id, memory_domain),
                 )
                 counts["memory_embeddings"] += max(0, int(cursor.rowcount or 0))
             else:
                 turn_rows = conn.execute(
                     "SELECT turn_id FROM turns WHERE session_id = ? AND owner_id = ? "
-                    "AND workspace_id = ? UNION SELECT turn_id FROM turns_archive "
-                    "WHERE session_id = ? AND owner_id = ? AND workspace_id = ?",
+                    "AND workspace_id = ? AND memory_domain = ? UNION SELECT turn_id FROM turns_archive "
+                    "WHERE session_id = ? AND owner_id = ? AND workspace_id = ? "
+                    "AND memory_domain = ?",
                     (
                         session_id,
                         scope.owner_id,
                         scope.workspace_id,
+                        memory_domain,
                         session_id,
                         scope.owner_id,
                         scope.workspace_id,
+                        memory_domain,
                     ),
                 ).fetchall()
                 derived_memory_ids: set[str] = set()
@@ -3200,16 +3451,16 @@ class MemoryService:
                             str(row[0])
                             for row in conn.execute(
                                 f"SELECT memory_id FROM {table} WHERE owner_id = ? "
-                                "AND workspace_id = ? AND EXISTS (SELECT 1 FROM "
+                                "AND workspace_id = ? AND memory_domain = ? AND EXISTS (SELECT 1 FROM "
                                 f"json_each({table}.source_turns) WHERE value = ?)",
-                                (scope.owner_id, scope.workspace_id, turn_id),
+                                (scope.owner_id, scope.workspace_id, memory_domain, turn_id),
                             ).fetchall()
                         )
                         cursor = conn.execute(
                             f"DELETE FROM {table} WHERE owner_id = ? AND workspace_id = ? "
-                            "AND EXISTS (SELECT 1 FROM "
+                            "AND memory_domain = ? AND EXISTS (SELECT 1 FROM "
                             f"json_each({table}.source_turns) WHERE value = ?)",
-                            (scope.owner_id, scope.workspace_id, turn_id),
+                            (scope.owner_id, scope.workspace_id, memory_domain, turn_id),
                         )
                         counts[table] += max(0, int(cursor.rowcount or 0))
                 for source_type, identifiers in (
@@ -3223,39 +3474,51 @@ class MemoryService:
                     placeholders = ",".join("?" for _ in identifiers)
                     cursor = conn.execute(
                         "DELETE FROM memory_embeddings WHERE source_type = ? AND "
-                        f"memory_id IN ({placeholders}) AND owner_id = ? AND workspace_id = ?",
+                        f"memory_id IN ({placeholders}) AND owner_id = ? AND workspace_id = ? "
+                        "AND memory_domain = ?",
                         (
                             source_type,
                             *sorted(identifiers),
                             scope.owner_id,
                             scope.workspace_id,
+                            memory_domain,
                         ),
                     )
                     counts["memory_embeddings"] += max(0, int(cursor.rowcount or 0))
                 cursor = conn.execute(
-                    "DELETE FROM recall_feedback WHERE trace_id IN ("
+                    "DELETE FROM recall_feedback WHERE memory_domain = ? AND trace_id IN ("
                     "SELECT trace_id FROM recall_traces WHERE session_id = ? "
-                    "AND owner_id = ? AND workspace_id = ?)",
-                    (session_id, scope.owner_id, scope.workspace_id),
+                    "AND owner_id = ? AND workspace_id = ? AND memory_actor = ? "
+                    "AND EXISTS (SELECT 1 FROM "
+                    "json_each(recall_traces.source_domains) WHERE value = ?))",
+                    (
+                        memory_domain,
+                        session_id,
+                        scope.owner_id,
+                        scope.workspace_id,
+                        request.memory_actor.value,
+                        memory_domain,
+                    ),
                 )
                 counts["recall_feedback"] += max(0, int(cursor.rowcount or 0))
                 cursor = conn.execute(
                     "DELETE FROM recall_traces WHERE session_id = ? AND owner_id = ? "
-                    "AND workspace_id = ?",
-                    (session_id, scope.owner_id, scope.workspace_id),
+                    "AND workspace_id = ? AND EXISTS (SELECT 1 FROM "
+                    "json_each(recall_traces.source_domains) WHERE value = ?)",
+                    (session_id, scope.owner_id, scope.workspace_id, memory_domain),
                 )
                 counts["recall_traces"] += max(0, int(cursor.rowcount or 0))
                 for table in ("turns", "turns_archive"):
                     cursor = conn.execute(
                         f"DELETE FROM {table} WHERE session_id = ? "
-                        "AND owner_id = ? AND workspace_id = ?",
-                        (session_id, scope.owner_id, scope.workspace_id),
+                        "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+                        (session_id, scope.owner_id, scope.workspace_id, memory_domain),
                     )
                     counts[table] += max(0, int(cursor.rowcount or 0))
                 cursor = conn.execute(
                     "DELETE FROM sessions WHERE session_id = ? AND owner_id = ? "
-                    "AND workspace_id = ?",
-                    (session_id, scope.owner_id, scope.workspace_id),
+                    "AND workspace_id = ? AND memory_domain = ?",
+                    (session_id, scope.owner_id, scope.workspace_id, memory_domain),
                 )
                 counts["sessions"] += max(0, int(cursor.rowcount or 0))
             deleted_total = sum(counts.values())
@@ -3264,10 +3527,11 @@ class MemoryService:
             audit_id = f"forget-{uuid.uuid4()}"
             conn.execute(
                 "INSERT INTO memory_deletion_audit "
-                "(audit_id, target_kind, target_hash, reason, deleted_counts, owner_id, "
-                "workspace_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "(audit_id, memory_domain, target_kind, target_hash, reason, deleted_counts, owner_id, "
+                "workspace_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     audit_id,
+                    memory_domain,
                     target_kind,
                     hashlib.sha256(target.encode("utf-8")).hexdigest(),
                     str(_redact_for_memory_storage(request.reason)).strip(),
@@ -3287,6 +3551,7 @@ class MemoryService:
             "status": "forgotten",
             "audit_id": audit_id,
             "target_kind": target_kind,
+            "memory_domain": memory_domain,
             "deleted_counts": counts,
             **scope.as_dict(),
         }
@@ -3294,6 +3559,9 @@ class MemoryService:
     async def remember(self, request: DurableMemoryCreate):
         """Persist an explicit durable memory in the canonical Mem store."""
         scope = MemoryScope.create(request.owner_id, request.workspace_id)
+        memory_domain = _authorized_write_domain(
+            request.memory_actor, request.memory_domain
+        )
         title = str(_redact_for_memory_storage(request.title)).strip()
         summary = str(_redact_for_memory_storage(request.summary)).strip()
         evidence_refs = list(
@@ -3308,6 +3576,7 @@ class MemoryService:
                 "source_actor": request.source_actor.strip(),
                 "owner_id": scope.owner_id,
                 "workspace_id": scope.workspace_id,
+                "memory_domain": memory_domain,
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -3324,11 +3593,11 @@ class MemoryService:
         try:
             conn.execute(
                 "INSERT INTO compressed_memories "
-                "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
+                "(memory_id, memory_domain, memory_type, title, summary, timespan_start, timespan_end, "
                 "importance, confidence, topics, entities, source_turns, compressed_at, "
                 "compression_level, status, weight, event_kind, pinned, hidden, "
                 "evidence_refs, origin_type, origin_id, verified_at, owner_id, workspace_id) "
-                "VALUES (?, 'event', ?, ?, ?, ?, ?, 0.9, ?, ?, ?, ?, 0, 'active', "
+                "VALUES (?, ?, 'event', ?, ?, ?, ?, ?, 0.9, ?, ?, ?, ?, 0, 'active', "
                 "0.8, ?, 0, 0, ?, 'agent_explicit_memory', ?, ?, ?, ?) "
                 "ON CONFLICT(memory_id) DO UPDATE SET "
                 "title = excluded.title, summary = excluded.summary, "
@@ -3338,6 +3607,7 @@ class MemoryService:
                 "status = 'active', hidden = 0",
                 (
                     memory_id,
+                    memory_domain,
                     title,
                     summary,
                     now,
@@ -3379,20 +3649,24 @@ class MemoryService:
         memory_id: str,
         owner_id: str = DEFAULT_OWNER_ID,
         workspace_id: str = DEFAULT_WORKSPACE_ID,
+        memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR,
+        memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN,
     ):
         """Get a single compressed memory by ID."""
         scope = MemoryScope.create(owner_id, workspace_id)
+        authorized_domain = _authorized_read_domains(memory_actor, [memory_domain])[0]
         conn = open_memory_sqlite(self._db_path)
         row = conn.execute(
             "SELECT * FROM compressed_memories WHERE memory_id = ? AND "
             "((owner_id = ? AND workspace_id = ?) OR "
-            "(owner_id = ? AND workspace_id = ?))",
+            "(owner_id = ? AND workspace_id = ?)) AND memory_domain = ?",
             (
                 memory_id,
                 scope.owner_id,
                 scope.workspace_id,
                 GLOBAL_SCOPE_ID,
                 GLOBAL_SCOPE_ID,
+                authorized_domain,
             ),
         ).fetchone()
         conn.close()
@@ -3405,20 +3679,25 @@ class MemoryService:
         turn_id: str,
         owner_id: str = DEFAULT_OWNER_ID,
         workspace_id: str = DEFAULT_WORKSPACE_ID,
+        memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR,
+        memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN,
     ):
         """Find all compressed memories that reference a given turn_id."""
         scope = MemoryScope.create(owner_id, workspace_id)
+        authorized_domain = _authorized_read_domains(memory_actor, [memory_domain])[0]
         conn = open_memory_sqlite(self._db_path)
         rows = conn.execute(
             "SELECT c.* FROM compressed_memories c WHERE "
             "((c.owner_id = ? AND c.workspace_id = ?) OR "
             "(c.owner_id = ? AND c.workspace_id = ?)) "
+            "AND c.memory_domain = ? "
             "AND EXISTS (SELECT 1 FROM json_each(c.source_turns) WHERE value = ?)",
             (
                 scope.owner_id,
                 scope.workspace_id,
                 GLOBAL_SCOPE_ID,
                 GLOBAL_SCOPE_ID,
+                authorized_domain,
                 turn_id,
             ),
         ).fetchall()
@@ -3459,15 +3738,19 @@ class MemoryService:
         memory_id: str,
         owner_id: str = DEFAULT_OWNER_ID,
         workspace_id: str = DEFAULT_WORKSPACE_ID,
+        memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR,
+        memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN,
     ):
         """Pin a memory: lock weight at 1.0, immune to decay/escalation."""
         self._reject_founding_identity_mutation(memory_id)
         scope = MemoryScope.create(owner_id, workspace_id)
+        authorized_domain = _authorized_write_domain(memory_actor, memory_domain)
         conn = open_memory_sqlite(self._db_path)
         cur = conn.execute(
             "UPDATE compressed_memories SET pinned = 1, hidden = 0, "
-            "weight = 1.0 WHERE memory_id = ? AND owner_id = ? AND workspace_id = ?",
-            (memory_id, scope.owner_id, scope.workspace_id),
+            "weight = 1.0 WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
+            "AND memory_domain = ?",
+            (memory_id, scope.owner_id, scope.workspace_id, authorized_domain),
         )
         if cur.rowcount == 0:
             conn.close()
@@ -3481,15 +3764,19 @@ class MemoryService:
         memory_id: str,
         owner_id: str = DEFAULT_OWNER_ID,
         workspace_id: str = DEFAULT_WORKSPACE_ID,
+        memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR,
+        memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN,
     ):
         """Hide a memory: weight = 0.0, excluded from default queries."""
         self._reject_founding_identity_mutation(memory_id)
         scope = MemoryScope.create(owner_id, workspace_id)
+        authorized_domain = _authorized_write_domain(memory_actor, memory_domain)
         conn = open_memory_sqlite(self._db_path)
         cur = conn.execute(
             "UPDATE compressed_memories SET hidden = 1, pinned = 0, "
-            "weight = 0.0 WHERE memory_id = ? AND owner_id = ? AND workspace_id = ?",
-            (memory_id, scope.owner_id, scope.workspace_id),
+            "weight = 0.0 WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
+            "AND memory_domain = ?",
+            (memory_id, scope.owner_id, scope.workspace_id, authorized_domain),
         )
         if cur.rowcount == 0:
             conn.close()
@@ -3503,15 +3790,19 @@ class MemoryService:
         memory_id: str,
         owner_id: str = DEFAULT_OWNER_ID,
         workspace_id: str = DEFAULT_WORKSPACE_ID,
+        memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR,
+        memory_domain: MemoryDomain = DEFAULT_MEMORY_DOMAIN,
     ):
         """Remove pin/hide: restore to normal dynamic weight."""
         self._reject_founding_identity_mutation(memory_id)
         scope = MemoryScope.create(owner_id, workspace_id)
+        authorized_domain = _authorized_write_domain(memory_actor, memory_domain)
         conn = open_memory_sqlite(self._db_path)
         row = conn.execute(
             "SELECT memory_type, compression_level FROM compressed_memories "
-            "WHERE memory_id = ? AND owner_id = ? AND workspace_id = ?",
-            (memory_id, scope.owner_id, scope.workspace_id),
+            "WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
+            "AND memory_domain = ?",
+            (memory_id, scope.owner_id, scope.workspace_id, authorized_domain),
         ).fetchone()
         if not row:
             conn.close()
@@ -3520,8 +3811,9 @@ class MemoryService:
         base_w = self._LEVEL_WEIGHT.get(level, 0.2)
         conn.execute(
             "UPDATE compressed_memories SET pinned = 0, hidden = 0, "
-            "weight = ? WHERE memory_id = ? AND owner_id = ? AND workspace_id = ?",
-            (base_w, memory_id, scope.owner_id, scope.workspace_id),
+            "weight = ? WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
+            "AND memory_domain = ?",
+            (base_w, memory_id, scope.owner_id, scope.workspace_id, authorized_domain),
         )
         conn.commit()
         conn.close()

@@ -53,6 +53,8 @@ image = [
 # 语音 (可选)
 voice = [
     "edge-tts>=6.0.0,<7",
+    "numpy>=2.0.0,<3",
+    "sounddevice>=0.5.0,<1",
 ]
 # Web 工具
 web = [

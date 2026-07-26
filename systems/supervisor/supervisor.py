@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from systems.body_registry import BodyImprovementReport
 from systems.governor import GovernorRequest
@@ -32,6 +32,7 @@ from systems.supervisor.runtime_assemblers import (
 from systems.supervisor.service_runtime import ServiceRuntimeMixin
 from systems.supervisor.trace_runtime import TraceRuntimeMixin
 from systems.supervisor.ui_runtime import SupervisorUIMixin
+from systems.voice import VoiceConfig, VoiceSessionManager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("supervisor")
@@ -61,6 +62,20 @@ class HealthCheckResult(BaseModel):
     details: Dict[str, Any] = {}
 
 
+class CompanionMessageRequest(BaseModel):
+    text: str
+    session_id: str = ""
+
+
+class VoiceToggleRequest(BaseModel):
+    enabled: bool
+
+
+class VoiceCaptureRequest(BaseModel):
+    session_id: str = ""
+    duration_seconds: float = Field(default=8.0, ge=1.0, le=30.0)
+
+
 
 class Supervisor(
     PlanningRuntimeMixin,
@@ -79,6 +94,10 @@ class Supervisor(
         self._agent_model = AgentInstance
         self._agents: Dict[str, AgentInstance] = {}
         self._initialize_service_runtime()
+        self._voice_manager = VoiceSessionManager(
+            VoiceConfig.from_env(),
+            companion_callback=self.handle_companion_message,
+        )
         # Watch-window state is owned by executor adapter (§3.6 / S-02/03).
         # Supervisor holds a plain holder that gets proxied after assembly.
         self._watch_window_runtime: Any = type("_WatchWindowHolder", (), {
@@ -202,6 +221,13 @@ class Supervisor(
         self.app.add_api_route("/autonomous-chain-gate/activate", self.activate_autonomous_chain_gate, methods=["POST"])
         self.app.add_api_route("/autonomous-chain-gate/deactivate", self.deactivate_autonomous_chain_gate, methods=["POST"])
         self.app.add_api_route("/autonomous-chain-gate/status", self.get_autonomous_chain_gate_status, methods=["GET"])
+        self.app.add_api_route("/stellar-mode/status", self.get_stellar_mode_status, methods=["GET"])
+        self.app.add_api_route("/companion/message", self.companion_message, methods=["POST"])
+        self.app.add_api_route("/voice/status", self.voice_status, methods=["GET"])
+        self.app.add_api_route("/voice/microphone", self.set_voice_microphone, methods=["POST"])
+        self.app.add_api_route("/voice/enroll", self.enroll_voice_fingerprint, methods=["POST"])
+        self.app.add_api_route("/voice/session/start", self.start_voice_session, methods=["POST"])
+        self.app.add_api_route("/voice/session/interrupt", self.interrupt_voice_session, methods=["POST"])
 
     async def activate_autonomous_chain_gate(self, request: dict | None = None) -> Dict[str, Any]:
         """Ensure the autonomous chain runtime is active."""
@@ -217,6 +243,47 @@ class Supervisor(
     async def get_autonomous_chain_gate_status(self) -> Dict[str, Any]:
         """Return current autonomous-chain gate state."""
         return self._autonomous_chain_gate_status()
+
+    async def get_stellar_mode_status(self) -> Dict[str, Any]:
+        """Return the canonical daily-companion/auto-evolution mode state."""
+        return self._autonomous_chain_gate_status()
+
+    async def companion_message(self, request: CompanionMessageRequest) -> Dict[str, Any]:
+        return await self.handle_companion_message(
+            text=request.text,
+            session_id=request.session_id,
+        )
+
+    async def voice_status(self) -> Dict[str, Any]:
+        return self._voice_manager.status()
+
+    async def set_voice_microphone(self, request: VoiceToggleRequest) -> Dict[str, Any]:
+        return self._voice_manager.set_enabled(request.enabled)
+
+    async def enroll_voice_fingerprint(
+        self,
+        request: VoiceCaptureRequest,
+    ) -> Dict[str, Any]:
+        return await self._voice_manager.enroll(
+            duration_seconds=request.duration_seconds,
+        )
+
+    async def start_voice_session(
+        self,
+        request: VoiceCaptureRequest,
+    ) -> Dict[str, Any]:
+        if self._service_runtime.stellar_mode.value != "daily_companion":
+            return {
+                "status": "unavailable",
+                "reason": "stellar_auto_evolution_active",
+            }
+        return await self._voice_manager.run_once(
+            session_id=request.session_id,
+            duration_seconds=request.duration_seconds,
+        )
+
+    async def interrupt_voice_session(self) -> Dict[str, Any]:
+        return self._voice_manager.interrupt()
 
     async def get_body_registry(self) -> Dict[str, Any]:
         return self._execution_facade.get_body_registry()

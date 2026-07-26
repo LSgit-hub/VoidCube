@@ -107,22 +107,23 @@ class SemanticMemoryIndex:
         if not records:
             return 0
         try:
-            vectors = self._embed([record[4] for record in records])
+            vectors = self._embed([record[5] for record in records])
             if len(vectors) != len(records):
                 raise ValueError("Embedding response count does not match input count")
             conn = open_memory_sqlite(self.db_path)
             try:
                 now = datetime.now(timezone.utc).isoformat()
                 for record, vector in zip(records, vectors):
-                    source_type, memory_id, owner_id, workspace_id, content = record
+                    source_type, memory_id, owner_id, workspace_id, memory_domain, content = record
                     self._validate_vector(vector)
                     conn.execute(
                         "INSERT INTO memory_embeddings "
-                        "(source_type, memory_id, owner_id, workspace_id, content_hash, "
+                        "(source_type, memory_id, owner_id, workspace_id, memory_domain, content_hash, "
                         "provider, model, dimensions, vector, updated_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                        "ON CONFLICT(source_type, memory_id, provider, model) DO UPDATE SET "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT(source_type, memory_id, memory_domain, provider, model) DO UPDATE SET "
                         "owner_id = excluded.owner_id, workspace_id = excluded.workspace_id, "
+                        "memory_domain = excluded.memory_domain, "
                         "content_hash = excluded.content_hash, provider = excluded.provider, "
                         "dimensions = excluded.dimensions, vector = excluded.vector, "
                         "updated_at = excluded.updated_at",
@@ -131,6 +132,7 @@ class SemanticMemoryIndex:
                             memory_id,
                             owner_id,
                             workspace_id,
+                            memory_domain,
                             _content_hash(content),
                             self.config.provider,
                             self.config.model,
@@ -154,6 +156,7 @@ class SemanticMemoryIndex:
         *,
         owner_id: str,
         workspace_id: str,
+        source_domains: Sequence[str] = ("agent_interaction",),
         limit: int = 50,
     ) -> dict[tuple[str, str], float]:
         if not self.enabled or not str(query or "").strip():
@@ -163,11 +166,16 @@ class SemanticMemoryIndex:
             self._validate_vector(query_vector)
             conn = open_memory_sqlite(self.db_path)
             try:
+                domains = tuple(dict.fromkeys(str(item) for item in source_domains))
+                if not domains:
+                    return {}
+                placeholders = ",".join("?" for _ in domains)
                 rows = conn.execute(
                     "SELECT source_type, memory_id, vector FROM memory_embeddings "
                     "WHERE provider = ? AND model = ? AND dimensions = ? "
                     "AND ((owner_id = ? AND workspace_id = ?) OR "
-                    "(owner_id = ? AND workspace_id = ?))",
+                    "(owner_id = ? AND workspace_id = ?)) "
+                    f"AND memory_domain IN ({placeholders})",
                     (
                         self.config.provider,
                         self.config.model,
@@ -176,6 +184,7 @@ class SemanticMemoryIndex:
                         workspace_id,
                         GLOBAL_SCOPE_ID,
                         GLOBAL_SCOPE_ID,
+                        *domains,
                     ),
                 ).fetchall()
             finally:
@@ -214,21 +223,27 @@ class SemanticMemoryIndex:
                     for row in sorted(table_info, key=lambda item: int(item[5] or 0))
                     if int(row[5] or 0) > 0
                 ]
-                if primary_key != ["source_type", "memory_id", "provider", "model"]:
+                columns = {str(row[1]) for row in table_info}
+                if (
+                    "memory_domain" not in columns
+                    or primary_key
+                    != ["source_type", "memory_id", "memory_domain", "provider", "model"]
+                ):
                     # Embeddings are derived data. Rebuild instead of preserving an
                     # ambiguous provider-less uniqueness contract.
                     conn.execute("DROP TABLE memory_embeddings")
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS memory_embeddings ("
                 "source_type TEXT NOT NULL, memory_id TEXT NOT NULL, owner_id TEXT NOT NULL, "
-                "workspace_id TEXT NOT NULL, content_hash TEXT NOT NULL, "
+                "workspace_id TEXT NOT NULL, memory_domain TEXT NOT NULL DEFAULT 'agent_interaction', "
+                "content_hash TEXT NOT NULL, "
                 "provider TEXT NOT NULL, model TEXT NOT NULL, dimensions INTEGER NOT NULL, "
                 "vector TEXT NOT NULL, updated_at TEXT NOT NULL, "
-                "PRIMARY KEY(source_type, memory_id, provider, model))"
+                "PRIMARY KEY(source_type, memory_id, memory_domain, provider, model))"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_memory_embeddings_scope_v2 "
-                "ON memory_embeddings(provider, model, owner_id, workspace_id, source_type)"
+                "ON memory_embeddings(provider, model, owner_id, workspace_id, memory_domain, source_type)"
             )
             for trigger_name, table, id_column, source_type in (
                 ("memory_embeddings_turn_delete", "turns", "turn_id", "turn"),
@@ -246,16 +261,18 @@ class SemanticMemoryIndex:
                     "profile",
                 ),
             ):
+                conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
                 conn.execute(
                     f"CREATE TRIGGER IF NOT EXISTS {trigger_name} AFTER DELETE ON {table} "
                     "BEGIN DELETE FROM memory_embeddings WHERE source_type = "
-                    f"'{source_type}' AND memory_id = OLD.{id_column}; END"
+                    f"'{source_type}' AND memory_id = OLD.{id_column} "
+                    "AND memory_domain = OLD.memory_domain; END"
                 )
             conn.commit()
         finally:
             conn.close()
 
-    def _pending_records(self, limit: int) -> list[tuple[str, str, str, str, str]]:
+    def _pending_records(self, limit: int) -> list[tuple[str, str, str, str, str, str]]:
         conn = open_memory_sqlite(self.db_path)
         try:
             conn.create_function(
@@ -271,28 +288,30 @@ class SemanticMemoryIndex:
                 params.append(self.config.dimensions)
             params.append(max(1, int(limit)))
             rows = conn.execute(
-                "WITH source_records(source_type, memory_id, owner_id, workspace_id, content) AS ("
-                "SELECT 'turn', turn_id, owner_id, workspace_id, COALESCE(text, '') "
+                "WITH source_records(source_type, memory_id, owner_id, workspace_id, memory_domain, content) AS ("
+                "SELECT 'turn', turn_id, owner_id, workspace_id, memory_domain, COALESCE(text, '') "
                 "FROM turns WHERE compressed_to_tier2 = 0 "
-                "UNION ALL SELECT 'archive', turn_id, owner_id, workspace_id, "
+                "UNION ALL SELECT 'archive', turn_id, owner_id, workspace_id, memory_domain, "
                 "COALESCE(original_text, text_summary, '') FROM turns_archive "
-                "UNION ALL SELECT 'compressed', memory_id, owner_id, workspace_id, "
+                "UNION ALL SELECT 'compressed', memory_id, owner_id, workspace_id, memory_domain, "
                 "COALESCE(title, '') || ' ' || COALESCE(summary, '') || ' ' || "
                 "COALESCE(topics, '') || ' ' || COALESCE(entities, '') "
                 "FROM compressed_memories WHERE status = 'active' AND hidden = 0 "
-                "UNION ALL SELECT 'profile', memory_id, owner_id, workspace_id, "
+                "UNION ALL SELECT 'profile', memory_id, owner_id, workspace_id, memory_domain, "
                 "COALESCE(subject, '') || ' ' || COALESCE(predicate, '') || ' ' || "
                 "COALESCE(value, '') || ' ' || COALESCE(summary, '') "
                 "FROM profile_memories WHERE status = 'active') "
                 "SELECT source.source_type, source.memory_id, source.owner_id, "
-                "source.workspace_id, source.content FROM source_records AS source "
+                "source.workspace_id, source.memory_domain, source.content FROM source_records AS source "
                 "LEFT JOIN memory_embeddings AS embedding ON "
                 "embedding.source_type = source.source_type AND "
                 "embedding.memory_id = source.memory_id AND embedding.provider = ? AND "
-                "embedding.model = ? WHERE embedding.memory_id IS NULL OR "
+                "embedding.model = ? AND embedding.memory_domain = source.memory_domain "
+                "WHERE embedding.memory_id IS NULL OR "
                 "embedding.content_hash != memory_content_hash(source.content) OR "
                 "embedding.owner_id != source.owner_id OR "
                 "embedding.workspace_id != source.workspace_id"
+                " OR embedding.memory_domain != source.memory_domain"
                 + dimension_clause
                 + " ORDER BY source.source_type, source.memory_id LIMIT ?",
                 params,
@@ -306,6 +325,7 @@ class SemanticMemoryIndex:
                 str(row[2] or ""),
                 str(row[3] or ""),
                 str(row[4] or ""),
+                str(row[5] or ""),
             )
             for row in rows
         ]

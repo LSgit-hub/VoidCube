@@ -268,6 +268,13 @@ class SupervisorExecutionConfig(BaseModel):
 
 class SupervisorServiceRuntimeConfig(BaseModel):
     health_check_interval: int = 30
+    companion_observation_enabled: bool = True
+    companion_observation_interval: int = 30
+    companion_judgement_enabled: bool = True
+    companion_model_timeout_seconds: float = 8.0
+    companion_goal_confidence_threshold: float = 0.75
+    companion_deviation_confidence_threshold: float = 0.70
+    companion_help_value_threshold: float = 0.65
     governor_llm_advisory_enabled: bool = True
     autonomous_chain_review_interval: int = 300
     autonomous_chain_handoff_limit_per_cycle: int = 1

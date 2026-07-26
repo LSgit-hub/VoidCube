@@ -23,14 +23,16 @@ def upsert_profile_memory(
     *,
     owner_id: str,
     workspace_id: str,
+    memory_domain: str = "agent_interaction",
     now: str,
 ) -> int:
     """Insert or revise one scoped profile fact without losing evidence."""
     valid_from = _iso_value(profile.valid_from)
     tombstone = conn.execute(
         "SELECT revoked_at FROM profile_memory_tombstones "
-        "WHERE owner_id = ? AND workspace_id = ? AND subject = ? AND predicate = ?",
-        (owner_id, workspace_id, profile.subject, profile.predicate),
+        "WHERE owner_id = ? AND workspace_id = ? AND memory_domain = ? "
+        "AND subject = ? AND predicate = ?",
+        (owner_id, workspace_id, memory_domain, profile.subject, profile.predicate),
     ).fetchone()
     if tombstone and _as_utc(valid_from) < _as_utc(str(tombstone[0])):
         return 0
@@ -38,9 +40,9 @@ def upsert_profile_memory(
     existing = conn.execute(
         "SELECT memory_id, value, confidence, evidence_refs, source_turns "
         "FROM profile_memories WHERE owner_id = ? AND workspace_id = ? "
-        "AND subject = ? AND predicate = ? AND status = 'active' "
+        "AND memory_domain = ? AND subject = ? AND predicate = ? AND status = 'active' "
         "ORDER BY valid_from DESC LIMIT 1",
-        (owner_id, workspace_id, profile.subject, profile.predicate),
+        (owner_id, workspace_id, memory_domain, profile.subject, profile.predicate),
     ).fetchone()
     supersedes = list(getattr(profile, "supersedes", []) or [])
     if existing and str(existing[1]) != str(profile.value):
@@ -75,14 +77,20 @@ def upsert_profile_memory(
         )
         return 0
 
+    memory_id = (
+        str(profile.id)
+        if memory_domain == "agent_interaction"
+        else f"{memory_domain}:{profile.id}"
+    )
     conn.execute(
         "INSERT OR REPLACE INTO profile_memories "
-        "(memory_id, memory_kind, subject, predicate, value, summary, confidence, "
+        "(memory_id, memory_domain, memory_kind, subject, predicate, value, summary, confidence, "
         "certainty_state, status, valid_from, valid_to, evidence_refs, source_turns, "
         "supersedes, conflict_refs, created_at, updated_at, owner_id, workspace_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
-            profile.id,
+            memory_id,
+            memory_domain,
             _enum_value(profile.memory_kind),
             profile.subject,
             profile.predicate,
@@ -112,6 +120,7 @@ def revoke_profile_predicates(
     *,
     owner_id: str,
     workspace_id: str,
+    memory_domain: str = "agent_interaction",
     turn_id: str,
     now: str,
 ) -> dict[str, Any]:
@@ -124,8 +133,9 @@ def revoke_profile_predicates(
     prior_tombstones = conn.execute(
         "SELECT predicate, source_turn_id, evidence_turns "
         "FROM profile_memory_tombstones "
-        "WHERE owner_id = ? AND workspace_id = ? AND subject = 'user'",
-        (owner_id, workspace_id),
+        "WHERE owner_id = ? AND workspace_id = ? AND memory_domain = ? "
+        "AND subject = 'user'",
+        (owner_id, workspace_id, memory_domain),
     ).fetchall()
     prior_by_predicate = {str(row[0]): str(row[1]) for row in prior_tombstones}
     prior_evidence = {
@@ -140,9 +150,9 @@ def revoke_profile_predicates(
     placeholders = ",".join("?" for _ in normalized)
     profile_rows = conn.execute(
         "SELECT memory_id, source_turns FROM profile_memories WHERE owner_id = ? "
-        "AND workspace_id = ? AND subject = 'user' "
+        "AND workspace_id = ? AND memory_domain = ? AND subject = 'user' "
         f"AND predicate IN ({placeholders})",
-        (owner_id, workspace_id, *normalized),
+        (owner_id, workspace_id, memory_domain, *normalized),
     ).fetchall()
     profile_memory_ids = [str(row[0]) for row in profile_rows]
     evidence_turns = list(
@@ -157,22 +167,23 @@ def revoke_profile_predicates(
         id_placeholders = ",".join("?" for _ in profile_memory_ids)
         conn.execute(
             "DELETE FROM memory_embeddings WHERE source_type = 'profile' "
-            f"AND memory_id IN ({id_placeholders}) AND owner_id = ? AND workspace_id = ?",
-            (*profile_memory_ids, owner_id, workspace_id),
+            f"AND memory_id IN ({id_placeholders}) AND owner_id = ? AND workspace_id = ? "
+            "AND memory_domain = ?",
+            (*profile_memory_ids, owner_id, workspace_id, memory_domain),
         )
     deleted = conn.execute(
         "DELETE FROM profile_memories WHERE owner_id = ? AND workspace_id = ? "
-        "AND subject = 'user' "
+        "AND memory_domain = ? AND subject = 'user' "
         f"AND predicate IN ({placeholders})",
-        (owner_id, workspace_id, *normalized),
+        (owner_id, workspace_id, memory_domain, *normalized),
     ).rowcount
     if evidence_turns:
         turn_placeholders = ",".join("?" for _ in evidence_turns)
         conn.execute(
             "UPDATE turns SET compressed_to_tier2 = 1 WHERE owner_id = ? "
-            "AND workspace_id = ? "
+            "AND workspace_id = ? AND memory_domain = ? "
             f"AND turn_id IN ({turn_placeholders})",
-            (owner_id, workspace_id, *evidence_turns),
+            (owner_id, workspace_id, memory_domain, *evidence_turns),
         )
     derived_memory_ids: list[str] = []
     for evidence_turn_id in evidence_turns:
@@ -180,9 +191,9 @@ def revoke_profile_predicates(
             str(row[0])
             for row in conn.execute(
                 "SELECT memory_id FROM compressed_memories WHERE owner_id = ? "
-                "AND workspace_id = ? AND EXISTS (SELECT 1 FROM "
+                "AND workspace_id = ? AND memory_domain = ? AND EXISTS (SELECT 1 FROM "
                 "json_each(compressed_memories.source_turns) WHERE value = ?)",
-                (owner_id, workspace_id, evidence_turn_id),
+                (owner_id, workspace_id, memory_domain, evidence_turn_id),
             ).fetchall()
         )
     derived_memory_ids = list(dict.fromkeys(derived_memory_ids))
@@ -190,14 +201,14 @@ def revoke_profile_predicates(
         derived_placeholders = ",".join("?" for _ in derived_memory_ids)
         conn.execute(
             "DELETE FROM compressed_memories WHERE owner_id = ? AND workspace_id = ? "
-            f"AND memory_id IN ({derived_placeholders})",
-            (owner_id, workspace_id, *derived_memory_ids),
+            "AND memory_domain = ? " f"AND memory_id IN ({derived_placeholders})",
+            (owner_id, workspace_id, memory_domain, *derived_memory_ids),
         )
         conn.execute(
             "DELETE FROM memory_embeddings WHERE source_type = 'compressed' "
             f"AND memory_id IN ({derived_placeholders}) AND owner_id = ? "
-            "AND workspace_id = ?",
-            (*derived_memory_ids, owner_id, workspace_id),
+            "AND workspace_id = ? AND memory_domain = ?",
+            (*derived_memory_ids, owner_id, workspace_id, memory_domain),
         )
     trace_references = 0
     revoked_memory_ids = list(
@@ -206,8 +217,9 @@ def revoke_profile_predicates(
     if revoked_memory_ids:
         trace_rows = conn.execute(
             "SELECT trace_id, selected_results FROM recall_traces WHERE "
-            "owner_id = ? AND workspace_id = ?",
-            (owner_id, workspace_id),
+            "owner_id = ? AND workspace_id = ? AND EXISTS (SELECT 1 FROM "
+            "json_each(recall_traces.source_domains) WHERE value = ?)",
+            (owner_id, workspace_id, memory_domain),
         ).fetchall()
         revoked_ids = set(revoked_memory_ids)
         for trace_id, selected_json in trace_rows:
@@ -232,8 +244,8 @@ def revoke_profile_predicates(
         id_placeholders = ",".join("?" for _ in revoked_memory_ids)
         conn.execute(
             "DELETE FROM recall_feedback WHERE owner_id = ? AND workspace_id = ? "
-            f"AND memory_id IN ({id_placeholders})",
-            (owner_id, workspace_id, *revoked_memory_ids),
+            "AND memory_domain = ? " f"AND memory_id IN ({id_placeholders})",
+            (owner_id, workspace_id, memory_domain, *revoked_memory_ids),
         )
     reason_hash = hashlib.sha256(
         json.dumps(normalized, ensure_ascii=False).encode("utf-8")
@@ -244,16 +256,17 @@ def revoke_profile_predicates(
         )
         conn.execute(
             "INSERT INTO profile_memory_tombstones "
-            "(owner_id, workspace_id, subject, predicate, revoked_at, "
+            "(owner_id, workspace_id, memory_domain, subject, predicate, revoked_at, "
             "source_turn_id, evidence_turns, reason_hash) "
-            "VALUES (?, ?, 'user', ?, ?, ?, ?, ?) "
-            "ON CONFLICT(owner_id, workspace_id, subject, predicate) DO UPDATE SET "
+            "VALUES (?, ?, ?, 'user', ?, ?, ?, ?, ?) "
+            "ON CONFLICT(owner_id, workspace_id, memory_domain, subject, predicate) DO UPDATE SET "
             "revoked_at = excluded.revoked_at, source_turn_id = excluded.source_turn_id, "
             "evidence_turns = excluded.evidence_turns, "
             "reason_hash = excluded.reason_hash",
             (
                 owner_id,
                 workspace_id,
+                memory_domain,
                 predicate,
                 now,
                 turn_id,
@@ -264,10 +277,11 @@ def revoke_profile_predicates(
     audit_id = f"profile-revoke-{uuid.uuid4()}"
     conn.execute(
         "INSERT INTO memory_deletion_audit "
-        "(audit_id, target_kind, target_hash, reason, deleted_counts, owner_id, "
-        "workspace_id, created_at) VALUES (?, 'profile_predicate', ?, ?, ?, ?, ?, ?)",
+        "(audit_id, memory_domain, target_kind, target_hash, reason, deleted_counts, owner_id, "
+        "workspace_id, created_at) VALUES (?, ?, 'profile_predicate', ?, ?, ?, ?, ?, ?)",
         (
             audit_id,
+            memory_domain,
             reason_hash,
             "user_explicit_profile_revocation",
             json.dumps(

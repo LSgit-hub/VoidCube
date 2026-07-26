@@ -1,64 +1,132 @@
-"""
-语音模式
-"""
+"""Compatibility facade over the canonical Stellar voice transport."""
 
-from typing import Optional, Dict, Any
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+import queue
+import shutil
+import tempfile
+from typing import Any, Dict, Optional
+
+from systems.voice.audio import AudioPlayer, AudioRecorder
+from systems.voice.config import VoiceConfig
+from systems.voice.stt import SpeechToText
+from systems.voice.tts import TextToSpeech
+
+
+_PLAYER = AudioPlayer()
+
 
 def play_beep() -> None:
-    """播放提示音"""
-    pass
+    try:
+        import winsound
+
+        winsound.MessageBeep()
+    except (ImportError, RuntimeError):
+        return
+
 
 def create_audio_recorder(output_path: str) -> Optional[Any]:
-    """创建录音器"""
-    return None
+    del output_path
+    recorder = AudioRecorder()
+    return recorder if recorder.available() else None
+
 
 def check_voice_requirements() -> Dict[str, Any]:
-    """检查语音要求"""
-    return {"available": False, "reason": "Voice disabled"}
+    config = VoiceConfig.from_env()
+    environment = detect_audio_environment()
+    return {
+        "available": bool(
+            environment["capture_available"]
+            and environment["playback_available"]
+            and config.stt_base_url
+        ),
+        **environment,
+        "stt_configured": bool(config.stt_base_url and config.stt_model),
+        "fingerprint_path": str(config.fingerprint_path),
+        "raw_audio_retained": config.retain_raw_audio,
+    }
+
 
 def transcribe_recording(audio_path: str) -> Optional[str]:
-    """转录录音"""
-    return None
+    config = VoiceConfig.from_env()
+    client = SpeechToText(
+        base_url=config.stt_base_url,
+        api_key=config.stt_api_key,
+        model=config.stt_model,
+    )
+    if not client.configured:
+        return None
+    return asyncio.run(client.transcribe(audio_path))
+
 
 def play_audio_file(path: str) -> None:
-    """播放音频文件"""
-    pass
+    asyncio.run(_PLAYER.play(path, stop_event=asyncio.Event()))
+
 
 def detect_audio_environment() -> Dict[str, Any]:
-    """检测音频环境"""
-    return {"available": False}
+    return {
+        "capture_available": AudioRecorder.available(),
+        "playback_available": AudioPlayer.available(),
+        "ffplay_path": shutil.which("ffplay") or "",
+    }
+
 
 def stop_playback() -> None:
-    """停止播放"""
-    pass
+    _PLAYER.stop()
+
 
 def cleanup_temp_recordings() -> None:
-    """清理临时录音"""
-    pass
+    directory = Path(tempfile.gettempdir()) / "voidcube-voice"
+    if not directory.is_dir():
+        return
+    for path in directory.glob("*"):
+        if path.is_file():
+            path.unlink(missing_ok=True)
+
 
 def stream_tts_to_speaker(
     text_queue,
     stop_event,
     done_callback,
-    display_callback=None
+    display_callback=None,
 ) -> None:
-    """
-    Stream text to speaker using TTS.
-    
-    Args:
-        text_queue: Queue containing text chunks to speak
-        stop_event: Event to signal stopping
-        done_callback: Callback when done
-        display_callback: Optional callback to display text
-    """
-    try:
+    config = VoiceConfig.from_env()
+    tts = TextToSpeech(
+        provider=config.tts_provider,
+        voice=config.tts_voice,
+        base_url=config.tts_base_url,
+        api_key=config.tts_api_key,
+        model=config.tts_model,
+    )
+
+    async def run() -> None:
         while not stop_event.is_set():
             try:
                 text = text_queue.get(timeout=0.1)
-                if display_callback:
-                    display_callback(text)
-            except:
-                pass
+            except queue.Empty:
+                await asyncio.sleep(0.05)
+                continue
+            if text is None:
+                break
+            value = str(text).strip()
+            if not value:
+                continue
+            if display_callback:
+                display_callback(value)
+            output = Path(tempfile.gettempdir()) / "voidcube-voice" / "stream-reply.mp3"
+            try:
+                await tts.synthesize(value, output)
+                bridge_stop = asyncio.Event()
+                if stop_event.is_set():
+                    bridge_stop.set()
+                await _PLAYER.play(output, stop_event=bridge_stop)
+            finally:
+                output.unlink(missing_ok=True)
+
+    try:
+        asyncio.run(run())
     finally:
         if done_callback:
             done_callback()

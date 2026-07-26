@@ -2492,6 +2492,60 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   transition: opacity .8s;
 }
 .scene-mini-title span:first-child { font-size: 14px; }
+.stellar-mode-control {
+  position: absolute;
+  right: 18px; top: 18px;
+  z-index: 21;
+  display: grid;
+  grid-template-columns: 64px 64px;
+  height: 30px;
+  padding: 2px;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 6px;
+  background: rgba(20,14,10,.78);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.stellar-mode-control button {
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.stellar-mode-control button[aria-pressed="true"] {
+  color: var(--text-primary);
+  background: rgba(111,198,160,.22);
+}
+.stellar-mode-control button[data-mode="auto_evolution"][aria-pressed="true"] {
+  background: rgba(226,176,74,.24);
+}
+.stellar-mode-control button:disabled { cursor: wait; opacity: .55; }
+.voice-controls {
+  position: absolute;
+  right: 158px; top: 18px;
+  z-index: 21;
+  display: flex;
+  gap: 4px;
+}
+.voice-controls button {
+  width: 30px; height: 30px;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 6px;
+  background: rgba(20,14,10,.78);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+}
+.voice-controls button[aria-pressed="true"] {
+  color: var(--text-primary);
+  border-color: rgba(111,198,160,.45);
+  background: rgba(111,198,160,.18);
+}
+.voice-controls button:disabled { cursor: wait; opacity: .55; }
 
 /* ── Dock 响应式 ── */
 @media (max-width: 720px) {
@@ -2979,6 +3033,15 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
       <span id="sceneMiniIcon">🛋</span>
       <span id="sceneMiniText">星子与西子的小屋</span>
     </div>
+    <div class="stellar-mode-control" id="stellarModeControl" role="group" aria-label="星子模式">
+      <button type="button" data-mode="daily_companion" aria-pressed="true">日常</button>
+      <button type="button" data-mode="auto_evolution" aria-pressed="false">Auto</button>
+    </div>
+    <div class="voice-controls" id="voiceControls">
+      <button type="button" id="voiceEnroll" title="注册声纹">◎</button>
+      <button type="button" id="voiceMicToggle" title="麦克风开关" aria-pressed="false">🎙</button>
+      <button type="button" id="voiceTalk" title="开始语音会话">●</button>
+    </div>
 
     <!-- ═══════════════════════════════════════════
     底部菜单系统 —— 游戏风格 Dock + 滑出面板
@@ -3133,6 +3196,11 @@ const els = {
   /* scene mini title */
   sceneMiniIcon: $('#sceneMiniIcon'),
   sceneMiniText: $('#sceneMiniText'),
+  stellarModeControl: $('#stellarModeControl'),
+  voiceControls: $('#voiceControls'),
+  voiceEnroll: $('#voiceEnroll'),
+  voiceMicToggle: $('#voiceMicToggle'),
+  voiceTalk: $('#voiceTalk'),
   /* dock char strip */
   dcsName: $('#dcsName'),
   dcsStatus: $('#dcsStatus'),
@@ -3150,6 +3218,15 @@ const els = {
   drawerClose: $('#detailDrawerClose'),
   drawerBody: $('#detailDrawerBody'),
 };
+if (els.stellarModeControl) {
+  els.stellarModeControl.addEventListener('click', event => {
+    const button = event.target.closest('button[data-mode]');
+    if (button) setStellarMode(button.dataset.mode);
+  });
+}
+if (els.voiceEnroll) els.voiceEnroll.addEventListener('click', () => enrollVoice());
+if (els.voiceMicToggle) els.voiceMicToggle.addEventListener('click', () => toggleVoice());
+if (els.voiceTalk) els.voiceTalk.addEventListener('click', () => runVoiceSession());
 
 /* ── 场景 → 动作自动映射 ── */
 const SCENE_TO_ACTION = {
@@ -4956,7 +5033,16 @@ function updateDockCharStrip(state) {
     els.dcsHpFill.className = 'dcs-hp-fill ' + (hp < 30 ? 'danger' : hp < 60 ? 'warn' : 'good');
   }
   if (els.dcsStatus) {
-    els.dcsStatus.textContent = (state.summary || '就绪').substring(0, 30);
+    const stellar = state.stellar_mode || {};
+    const mode = stellar.mode || 'daily_companion';
+    const observation = stellar.latest_companion_observation || {};
+    els.dcsStatus.textContent = mode === 'auto_evolution'
+      ? 'Auto · 自主进化中'
+      : observation.disposition === 'remind'
+        ? '日常 · 有提醒待输出'
+        : observation.intent_state === 'understood'
+          ? '日常 · 已理解任务'
+          : '日常 · 静默观察';
   }
 }
 
@@ -4964,7 +5050,79 @@ function updateDockCharStrip(state) {
 function updateSceneMiniTitle(state) {
   const scene = state.scene || 'idle';
   if (els.sceneMiniIcon) els.sceneMiniIcon.textContent = SCENE_ICONS[scene] || '🛋';
-  if (els.sceneMiniText) els.sceneMiniText.textContent = state.title || '星子与西子的小屋';
+  if (els.sceneMiniText) {
+    const mode = ((state.stellar_mode || {}).mode || 'daily_companion');
+    const suffix = mode === 'auto_evolution' ? ' · Auto' : ' · 日常';
+    els.sceneMiniText.textContent = (state.title || '星子与西子的小屋') + suffix;
+  }
+  if (els.stellarModeControl) {
+    const activeMode = ((state.stellar_mode || {}).mode || 'daily_companion');
+    $$('button[data-mode]', els.stellarModeControl).forEach(button => {
+      button.setAttribute('aria-pressed', String(button.dataset.mode === activeMode));
+    });
+  }
+  const voice = state.voice || {};
+  if (els.voiceMicToggle) {
+    els.voiceMicToggle.setAttribute('aria-pressed', String(Boolean(voice.enabled)));
+  }
+  if (els.voiceTalk) {
+    els.voiceTalk.textContent = voice.active ? '■' : '●';
+    els.voiceTalk.title = voice.active ? '中断语音会话' : '开始语音会话';
+  }
+}
+
+async function setStellarMode(mode) {
+  if (!els.stellarModeControl) return;
+  const buttons = $$('button[data-mode]', els.stellarModeControl);
+  buttons.forEach(button => { button.disabled = true; });
+  const path = mode === 'auto_evolution'
+    ? '/autonomous-chain-gate/activate'
+    : '/autonomous-chain-gate/deactivate';
+  try {
+    const response = await fetch(path, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: '{}',
+    });
+    if (response.ok) await refresh();
+  } finally {
+    buttons.forEach(button => { button.disabled = false; });
+  }
+}
+
+async function postVoice(path, payload) {
+  const buttons = els.voiceControls ? $$('button', els.voiceControls) : [];
+  buttons.forEach(button => { button.disabled = true; });
+  try {
+    const response = await fetch(path, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload || {}),
+    });
+    await refresh();
+    return response.ok ? response.json() : null;
+  } finally {
+    buttons.forEach(button => { button.disabled = false; });
+  }
+}
+
+async function enrollVoice() {
+  await postVoice('/voice/enroll', {duration_seconds: 5});
+}
+
+async function toggleVoice() {
+  const enabled = !Boolean(((lastState || {}).voice || {}).enabled);
+  await postVoice('/voice/microphone', {enabled});
+}
+
+async function runVoiceSession() {
+  const voice = ((lastState || {}).voice || {});
+  if (voice.active) {
+    await postVoice('/voice/session/interrupt', {});
+    return;
+  }
+  if (!voice.enabled) await postVoice('/voice/microphone', {enabled: true});
+  await postVoice('/voice/session/start', {duration_seconds: 8});
 }
 
 /* ── 应用状态(主入口) ── */
@@ -6361,6 +6519,8 @@ class SupervisorUIMixin:
 
         return {
             "status": "ok",
+            "stellar_mode": self._stellar_mode_status(),
+            "voice": self._voice_manager.status(),
             "scene": scene,
             "title": title,
             "summary": summary,
