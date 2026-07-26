@@ -1,4 +1,5 @@
 import logging
+import re
 import subprocess
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -6,7 +7,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from systems.body_registry import BodyImprovementReport
 from systems.governor import GovernorRequest
@@ -79,6 +80,21 @@ class VoiceCaptureRequest(BaseModel):
 class VoiceContinuousRequest(BaseModel):
     session_id: str = ""
 
+
+class CompanionReminderPolicyRequest(BaseModel):
+    enabled: bool
+    tts_enabled: bool
+    cooldown_seconds: int = Field(ge=0, le=86400)
+    dnd_start: str = ""
+    dnd_end: str = ""
+
+    @field_validator("dnd_start", "dnd_end")
+    @classmethod
+    def validate_dnd_time(cls, value: str) -> str:
+        normalized = str(value or "").strip()
+        if normalized and not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", normalized):
+            raise ValueError("must be empty or use HH:MM in 24-hour time")
+        return normalized
 
 
 class Supervisor(
@@ -227,6 +243,16 @@ class Supervisor(
         self.app.add_api_route("/autonomous-chain-gate/status", self.get_autonomous_chain_gate_status, methods=["GET"])
         self.app.add_api_route("/stellar-mode/status", self.get_stellar_mode_status, methods=["GET"])
         self.app.add_api_route("/companion/message", self.companion_message, methods=["POST"])
+        self.app.add_api_route(
+            "/companion/reminder-policy",
+            self.get_companion_reminder_policy,
+            methods=["GET"],
+        )
+        self.app.add_api_route(
+            "/companion/reminder-policy",
+            self.set_companion_reminder_policy,
+            methods=["POST"],
+        )
         self.app.add_api_route("/voice/status", self.voice_status, methods=["GET"])
         self.app.add_api_route("/voice/microphone", self.set_voice_microphone, methods=["POST"])
         self.app.add_api_route("/voice/enroll", self.enroll_voice_fingerprint, methods=["POST"])
@@ -260,6 +286,88 @@ class Supervisor(
             session_id=request.session_id,
         )
 
+    def _companion_reminder_policy_payload(self) -> Dict[str, Any]:
+        runtime = self.config.service_runtime
+        return {
+            "enabled": bool(runtime.companion_proactive_reminder_enabled),
+            "tts_enabled": bool(runtime.companion_proactive_reminder_tts_enabled),
+            "cooldown_seconds": int(
+                runtime.companion_proactive_reminder_cooldown_seconds
+            ),
+            "dnd_start": str(runtime.companion_proactive_dnd_start or ""),
+            "dnd_end": str(runtime.companion_proactive_dnd_end or ""),
+        }
+
+    async def get_companion_reminder_policy(self) -> Dict[str, Any]:
+        from VoidCube_cli.config import is_managed
+
+        return {
+            **self._companion_reminder_policy_payload(),
+            "managed": is_managed(),
+        }
+
+    async def set_companion_reminder_policy(
+        self,
+        request: CompanionReminderPolicyRequest,
+    ) -> Dict[str, Any]:
+        from VoidCube_cli.config import (
+            format_managed_message,
+            is_managed,
+            read_raw_config,
+            save_config,
+        )
+
+        if is_managed():
+            raise HTTPException(
+                status_code=409,
+                detail=format_managed_message("change the companion reminder policy"),
+            )
+
+        raw_config = read_raw_config()
+        if not isinstance(raw_config, dict):
+            raw_config = {}
+        supervisor_config = raw_config.get("supervisor")
+        if not isinstance(supervisor_config, dict):
+            supervisor_config = {}
+        else:
+            supervisor_config = dict(supervisor_config)
+        service_runtime = supervisor_config.get("service_runtime")
+        if not isinstance(service_runtime, dict):
+            service_runtime = {}
+        else:
+            service_runtime = dict(service_runtime)
+
+        persisted_fields = {
+            "companion_proactive_reminder_enabled": request.enabled,
+            "companion_proactive_reminder_tts_enabled": request.tts_enabled,
+            "companion_proactive_reminder_cooldown_seconds": request.cooldown_seconds,
+            "companion_proactive_dnd_start": request.dnd_start,
+            "companion_proactive_dnd_end": request.dnd_end,
+        }
+        service_runtime.update(persisted_fields)
+        supervisor_config["service_runtime"] = service_runtime
+        raw_config = dict(raw_config)
+        raw_config["supervisor"] = supervisor_config
+
+        try:
+            save_config(raw_config, preserve_structure=True)
+        except Exception as exc:
+            logger.exception("Failed to save companion reminder policy")
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to save companion reminder policy",
+            ) from exc
+
+        runtime = self.config.service_runtime
+        for field_name, value in persisted_fields.items():
+            setattr(runtime, field_name, value)
+
+        return {
+            **self._companion_reminder_policy_payload(),
+            "managed": False,
+            "status": "saved",
+        }
+
     async def voice_status(self) -> Dict[str, Any]:
         return self._voice_manager.status()
 
@@ -267,6 +375,8 @@ class Supervisor(
         self._voice_manager.set_enabled(request.enabled)
         if not request.enabled:
             await self._voice_manager.stop_continuous()
+        elif self._service_runtime.stellar_mode.value == "daily_companion":
+            await self.flush_pending_proactive_reminder()
         return self._voice_manager.status()
 
     async def enroll_voice_fingerprint(

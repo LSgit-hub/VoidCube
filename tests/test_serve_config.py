@@ -4,8 +4,9 @@ import sys
 from types import ModuleType, SimpleNamespace
 
 import pytest
+import yaml
 
-from systems.config import SystemConfig
+from systems.config import SystemConfig, load_config_from_env
 
 from VoidCube_cli.ops.serve import (
     _build_service_config,
@@ -38,6 +39,45 @@ def test_supervisor_lm_task_generation_is_enabled_by_default():
     config = _build_service_config("supervisor", 6123, system_config=SystemConfig())
 
     assert config.service_runtime.endogenous_drive_lm_task_generation_enabled is True
+
+
+def test_supervisor_reminder_policy_loads_from_canonical_config_before_env_overrides(
+    tmp_path,
+    monkeypatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "supervisor": {
+                    "service_runtime": {
+                        "companion_proactive_reminder_enabled": False,
+                        "companion_proactive_reminder_tts_enabled": False,
+                        "companion_proactive_reminder_cooldown_seconds": 1200,
+                        "companion_proactive_dnd_start": "21:30",
+                        "companion_proactive_dnd_end": "07:15",
+                    }
+                }
+            },
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VOIDCUBE_HOME", str(home))
+    monkeypatch.setenv("SUPERVISOR_COMPANION_PROACTIVE_REMINDER_ENABLED", "1")
+    monkeypatch.setenv(
+        "SUPERVISOR_COMPANION_PROACTIVE_REMINDER_COOLDOWN_SECONDS",
+        "300",
+    )
+
+    config = load_config_from_env().supervisor.service_runtime
+
+    assert config.companion_proactive_reminder_enabled is True
+    assert config.companion_proactive_reminder_tts_enabled is False
+    assert config.companion_proactive_reminder_cooldown_seconds == 300
+    assert config.companion_proactive_dnd_start == "21:30"
+    assert config.companion_proactive_dnd_end == "07:15"
 
 
 def test_service_subprocess_python_path_includes_canonical_mem_source():

@@ -1,8 +1,10 @@
 import aiohttp
 import asyncio
+import hmac
 import json
 import logging
 import os
+import secrets
 import uuid
 from collections import deque
 from datetime import datetime
@@ -87,6 +89,24 @@ class SessionRegisterRequest(BaseModel):
 
 
 class InternalGateway:
+    SERVICE_ID_HEADER = "x-voidcube-service-id"
+    SERVICE_TOKEN_HEADER = "x-voidcube-service-token"
+    SESSION_ID_HEADER = "x-voidcube-session-id"
+    SESSION_TOKEN_HEADER = "x-voidcube-session-token"
+    MEMORY_ACTOR_HEADER = "x-voidcube-memory-actor"
+    GATEWAY_TOKEN_HEADER = "x-voidcube-gateway-token"
+    SERVICE_MEMORY_ACTORS = {
+        "agent": ("api_a", frozenset({"api_a"})),
+        "supervisor": (
+            "stellar_companion",
+            frozenset({"stellar_companion", "stellar_auto", "governor"}),
+        ),
+        "executor": ("execution", frozenset({"execution"})),
+        "memory": (
+            "memory_maintenance",
+            frozenset({"memory_maintenance"}),
+        ),
+    }
     ROUTE_PREFIX_BY_SERVICE_TYPE = {
         "memory": "/mem/",
         "supervisor": "/supervisor/",
@@ -103,6 +123,8 @@ class InternalGateway:
         self.config = config or GatewayConfig()
         self.app = FastAPI(title="VoidCube Internal Gateway", version="1.0")
         self._services: Dict[str, ServiceInfo] = {}
+        self._service_credentials: Dict[str, str] = {}
+        self._session_credentials: Dict[str, str] = {}
         self._routes: Dict[str, RouteEntry] = {}
         self._active_cli_session_id: str | None = None
         # Maps a reporting CLI session_id to the agent lane it last wrote
@@ -225,6 +247,129 @@ class InternalGateway:
             "self_evolution_plan": "autonomous_chain_plan",
             "self_evolution_execute": "autonomous_chain_execute",
         }.get(normalized, normalized)
+
+    @staticmethod
+    def _bearer_token(request: Request) -> str:
+        authorization = str(request.headers.get("authorization") or "").strip()
+        scheme, separator, token = authorization.partition(" ")
+        if separator and scheme.lower() == "bearer":
+            return token.strip()
+        return ""
+
+    def _authorize_registration(self, request: Request) -> None:
+        expected = str(self.config.auth_token or "").strip()
+        if not expected:
+            return
+        supplied = (
+            self._bearer_token(request)
+            or str(request.headers.get(self.GATEWAY_TOKEN_HEADER) or "").strip()
+        )
+        if not supplied or not hmac.compare_digest(supplied, expected):
+            raise HTTPException(
+                status_code=401,
+                detail="Gateway registration authentication failed",
+            )
+
+    @staticmethod
+    def _new_credential() -> str:
+        return secrets.token_urlsafe(32)
+
+    def _authenticate_memory_caller(self, request: Request) -> str:
+        service_id = str(request.headers.get(self.SERVICE_ID_HEADER) or "").strip()
+        service_token = str(
+            request.headers.get(self.SERVICE_TOKEN_HEADER) or ""
+        ).strip()
+        if service_id or service_token:
+            service = self._services.get(service_id)
+            expected = self._service_credentials.get(service_id, "")
+            if (
+                service is None
+                or not service_token
+                or not expected
+                or not hmac.compare_digest(service_token, expected)
+            ):
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid Gateway service credential",
+                )
+            policy = self.SERVICE_MEMORY_ACTORS.get(service.service_type)
+            if policy is None:
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        f"Service type {service.service_type} has no Memory capability"
+                    ),
+                )
+            default_actor, allowed_actors = policy
+            requested_actor = str(
+                request.headers.get(self.MEMORY_ACTOR_HEADER) or default_actor
+            ).strip()
+            if requested_actor not in allowed_actors:
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        f"Service type {service.service_type} cannot assume "
+                        f"Memory actor {requested_actor}"
+                    ),
+                )
+            return requested_actor
+
+        session_id = str(request.headers.get(self.SESSION_ID_HEADER) or "").strip()
+        session_token = str(
+            request.headers.get(self.SESSION_TOKEN_HEADER) or ""
+        ).strip()
+        if session_id or session_token:
+            expected = self._session_credentials.get(session_id, "")
+            if (
+                session_id not in self._agent_session_cache
+                or not session_token
+                or not expected
+                or not hmac.compare_digest(session_token, expected)
+            ):
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid Gateway session credential",
+                )
+            return "api_a"
+
+        raise HTTPException(
+            status_code=401,
+            detail="Authenticated service or session identity is required for Memory",
+        )
+
+    @staticmethod
+    def _inject_memory_actor(
+        body: bytes,
+        query_params: list[tuple[str, str]],
+        *,
+        method: str,
+        memory_actor: str,
+    ) -> tuple[bytes, list[tuple[str, str]]]:
+        query_params = [
+            (key, value)
+            for key, value in query_params
+            if str(key).lower() != "memory_actor"
+        ]
+        query_params.append(("memory_actor", memory_actor))
+
+        if body:
+            try:
+                payload = json.loads(body.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Memory requests with a body must use JSON",
+                ) from exc
+            if not isinstance(payload, dict):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Memory request JSON must be an object",
+                )
+            payload["memory_actor"] = memory_actor
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        elif method.upper() in {"POST", "PUT", "PATCH"}:
+            body = json.dumps({"memory_actor": memory_actor}).encode("utf-8")
+        return body, query_params
 
     def _setup_routes(self):
         self.app.add_api_route("/", self.health_check, methods=["GET"])
@@ -1077,6 +1222,7 @@ class InternalGateway:
 
     async def register_session(self, request: Request):
         try:
+            self._authorize_registration(request)
             payload = SessionRegisterRequest.model_validate(await request.json())
             self._touch_session(payload.session_id, source=payload.source)
             existing = dict(self._agent_session_cache.get(payload.session_id) or {})
@@ -1088,11 +1234,18 @@ class InternalGateway:
             }
             if payload.source == "cli" and not self._active_cli_session_id:
                 self._active_cli_session_id = payload.session_id
+            session_token = self._session_credentials.setdefault(
+                payload.session_id,
+                self._new_credential(),
+            )
             return {
                 "status": "registered",
                 "session_id": payload.session_id,
+                "session_token": session_token,
                 "active_cli_session_id": self._active_cli_session_id,
             }
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Error registering session: {e}")
             raise HTTPException(status_code=500, detail=str(e))
@@ -1114,6 +1267,7 @@ class InternalGateway:
 
     async def register_service(self, request: Request):
         try:
+            self._authorize_registration(request)
             data = await request.json()
             service_id = str(data.get("service_id") or uuid.uuid4()).strip()
             service_name = str(data.get("service_name") or "").strip()
@@ -1140,6 +1294,8 @@ class InternalGateway:
                 service_info
             )
             self._services[service_id] = service_info
+            service_token = self._new_credential()
+            self._service_credentials[service_id] = service_token
             self._auto_configure_route(service_type, service_id)
 
             if replaced_service_ids:
@@ -1149,7 +1305,14 @@ class InternalGateway:
                     ", ".join(replaced_service_ids),
                 )
             logger.info(f"Service registered: {service_name} ({service_id}) at {address}")
-            return JSONResponse(content={"service_id": service_id, "status": "registered"}, status_code=201)
+            return JSONResponse(
+                content={
+                    "service_id": service_id,
+                    "service_token": service_token,
+                    "status": "registered",
+                },
+                status_code=201,
+            )
         except HTTPException:
             raise
         except Exception as e:
@@ -1209,6 +1372,7 @@ class InternalGateway:
 
     def _remove_service_registration(self, service_id: str) -> Optional[ServiceInfo]:
         service = self._services.pop(service_id, None)
+        self._service_credentials.pop(service_id, None)
         if service is None:
             return None
 
@@ -1523,6 +1687,41 @@ class InternalGateway:
                 except (UnicodeDecodeError, json.JSONDecodeError):
                     activity_metadata = {}
 
+            upstream_path = self._upstream_route_path(
+                target_service.service_type,
+                path,
+            )
+            headers = dict(request.headers)
+            query_params = list(request.query_params.multi_items())
+            if (
+                target_service.service_type == "memory"
+                and upstream_path.rstrip("/") != ""
+            ):
+                memory_actor = self._authenticate_memory_caller(request)
+                body, query_params = self._inject_memory_actor(
+                    body,
+                    query_params,
+                    method=request.method,
+                    memory_actor=memory_actor,
+                )
+                stripped_headers = {
+                    self.SERVICE_ID_HEADER,
+                    self.SERVICE_TOKEN_HEADER,
+                    self.SESSION_ID_HEADER,
+                    self.SESSION_TOKEN_HEADER,
+                    self.MEMORY_ACTOR_HEADER,
+                    "authorization",
+                    self.GATEWAY_TOKEN_HEADER,
+                    "content-length",
+                }
+                headers = {
+                    key: value
+                    for key, value in headers.items()
+                    if key.lower() not in stripped_headers
+                }
+                if body and "content-type" not in headers:
+                    headers["content-type"] = "application/json"
+
             if target_service.service_type == "memory":
                 if self._is_memory_write_activity(path, request.method):
                     self._touch_activity("memory_task", source_service="gateway", metadata=activity_metadata)
@@ -1533,14 +1732,8 @@ class InternalGateway:
             elif target_service.service_type == "executor":
                 self._touch_activity("autonomous_chain_execute", metadata=activity_metadata)
             
-            upstream_path = self._upstream_route_path(
-                target_service.service_type,
-                path,
-            )
             url = f"{target_service.address}{upstream_path}"
             logger.debug(f"Routing request {request_id}: {path} -> {url}")
-            headers = dict(request.headers)
-            query_params = list(request.query_params.multi_items())
             
             async with asyncio.timeout(30):
                 async with aiohttp.ClientSession() as session:
@@ -1592,6 +1785,7 @@ class InternalGateway:
             if sid == self._active_cli_session_id:
                 self._active_cli_session_id = None
             self._clear_agent_session_lane(sid)
+            self._session_credentials.pop(sid, None)
             del self._agent_session_cache[sid]
 
     # ── Tier 1 Conversation Recording ──────────────────────────────
@@ -2106,6 +2300,7 @@ class InternalGateway:
         if session_id == self._active_cli_session_id:
             self._active_cli_session_id = None
         self._clear_agent_session_lane(session_id)
+        self._session_credentials.pop(session_id, None)
         del self._agent_session_cache[session_id]
         logger.info(f"Session deleted: {session_id}")
         return {"status": "deleted"}

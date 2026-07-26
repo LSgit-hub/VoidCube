@@ -1293,7 +1293,7 @@ _KNOWN_ROOT_KEYS = {
     "_config_version", "model", "runtime", "providers", "fallback_model",
     "fallback_providers", "credential_pool_strategies", "toolsets",
     "agent", "terminal", "display", "clarify", "compression", "delegation",
-    "auxiliary", "context", "memory", "gateway",
+    "auxiliary", "context", "memory", "gateway", "supervisor",
 }
 
 # Fields that look like they should be inside a provider entry, not at root
@@ -2350,8 +2350,12 @@ _COMMENTED_SECTIONS = """
 """
 
 
-def save_config(config: Dict[str, Any]):
-    """Save configuration to ~/.VoidCube/config.yaml."""
+def save_config(config: Dict[str, Any], *, preserve_structure: bool = False):
+    """Save configuration to ~/.VoidCube/config.yaml.
+
+    ``preserve_structure`` is reserved for narrow editors that must update one
+    canonical subtree without normalizing unrelated user configuration.
+    """
     if is_managed():
         managed_error("save configuration")
         return
@@ -2359,10 +2363,13 @@ def save_config(config: Dict[str, Any]):
 
     ensure_VoidCube_home()
     config_path = get_config_path()
-    normalized = _normalize_runtime_mapping_sections(config)
-    normalized, _, _, _ = _migrate_retired_display_config(normalized)
-    normalized = _drop_root_model_keys(_normalize_max_turns_config(normalized))
-    normalized = _normalize_provider_runtime_config(normalized)
+    if preserve_structure:
+        normalized = copy.deepcopy(config)
+    else:
+        normalized = _normalize_runtime_mapping_sections(config)
+        normalized, _, _, _ = _migrate_retired_display_config(normalized)
+        normalized = _drop_root_model_keys(_normalize_max_turns_config(normalized))
+        normalized = _normalize_provider_runtime_config(normalized)
 
     # Build optional commented-out sections for features that are off by
     # default or only relevant when explicitly configured.

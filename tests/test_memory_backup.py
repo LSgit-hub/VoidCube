@@ -137,4 +137,5 @@ async def test_explicit_json_export_is_consistent_and_scoped(tmp_path):
     assert "memories" not in payload["tables"]
     assert "profile_memories" in payload["tables"]
     assert "profile_memory_tombstones" in payload["tables"]
+    assert "memory_promotion_refs" in payload["tables"]
     assert "identity_revision_proposals" in payload["tables"]

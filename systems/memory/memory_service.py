@@ -33,9 +33,25 @@ from systems.memory.profile_store import (
     revoke_profile_predicates,
     upsert_profile_memory,
 )
+from systems.memory.promotion import (
+    MemoryPromotionAccessError,
+    MemoryPromotionConflictError,
+    MemoryPromotionCreate,
+    MemoryPromotionNotFoundError,
+    MemoryPromotionRevoke,
+    MemoryPromotionValidationError,
+    authorize_promotion_manager,
+    create_memory_promotion,
+    list_memory_promotions,
+    promotion_source_key,
+    revoke_memory_promotion,
+    revoke_promotions_for_source,
+    setup_memory_promotion_schema,
+)
 from systems.memory.recall import (
     build_recall_plan,
     format_recall_context,
+    merge_recall_results,
     recall_memories,
 )
 from systems.memory.runtime_migration import migrate_memory_database
@@ -182,6 +198,7 @@ class RecallRequest(BaseModel):
     source_domains: List[MemoryDomain] = Field(default_factory=list)
     include_tier1: bool = True
     include_tier2: bool = True
+    include_promotions: bool = True
     request_source: str = Field(
         default="api",
         pattern=r"^(api|auto_prefetch|tool)$",
@@ -731,6 +748,8 @@ class MemoryService:
             )
         ''')
 
+        setup_memory_promotion_schema(conn)
+
         self._migrate_scope_schema(cursor)
         self._migrate_domain_schema(cursor)
 
@@ -1220,6 +1239,13 @@ class MemoryService:
         self.app.add_api_route("/recall", self.recall, methods=["POST"])
         self.app.add_api_route("/recall/traces", self.list_recall_traces, methods=["GET"])
         self.app.add_api_route("/recall/feedback", self.record_recall_feedback, methods=["POST"])
+        self.app.add_api_route("/promotions", self.create_promotion, methods=["POST"])
+        self.app.add_api_route("/promotions", self.list_promotions, methods=["GET"])
+        self.app.add_api_route(
+            "/promotions/{promotion_id}/revoke",
+            self.revoke_promotion,
+            methods=["POST"],
+        )
         self.app.add_api_route("/forget", self.forget_memory, methods=["POST"])
         self.app.add_api_route("/remember", self.remember, methods=["POST"])
         self.app.add_api_route("/identity/archive", self.get_identity_archive, methods=["GET"])
@@ -2510,6 +2536,105 @@ class MemoryService:
             **scope.as_dict(),
         }
 
+    @staticmethod
+    def _promotion_http_error(exc: Exception) -> HTTPException:
+        if isinstance(exc, (MemoryPromotionAccessError, MemoryDomainAccessError)):
+            return HTTPException(status_code=403, detail=str(exc))
+        if isinstance(exc, MemoryPromotionNotFoundError):
+            return HTTPException(status_code=404, detail=str(exc))
+        if isinstance(exc, MemoryPromotionConflictError):
+            return HTTPException(status_code=409, detail=str(exc))
+        return HTTPException(status_code=400, detail=str(exc))
+
+    async def create_promotion(self, request: MemoryPromotionCreate):
+        request = request.model_copy(
+            update={
+                "reason": str(_redact_for_memory_storage(request.reason)).strip(),
+                "approval_ref": str(
+                    _redact_for_memory_storage(request.approval_ref)
+                ).strip(),
+            }
+        )
+        conn = open_memory_sqlite(self._db_path)
+        try:
+            result = create_memory_promotion(conn, request)
+            conn.commit()
+        except (
+            MemoryPromotionAccessError,
+            MemoryPromotionConflictError,
+            MemoryPromotionNotFoundError,
+            MemoryPromotionValidationError,
+        ) as exc:
+            conn.rollback()
+            raise self._promotion_http_error(exc) from exc
+        finally:
+            conn.close()
+        return {"status": "created", "promotion": result}
+
+    async def list_promotions(
+        self,
+        limit: int = 100,
+        status: Optional[str] = None,
+        target_domain: Optional[MemoryDomain] = None,
+        owner_id: str = DEFAULT_OWNER_ID,
+        workspace_id: str = DEFAULT_WORKSPACE_ID,
+        memory_actor: MemoryActor = MemoryActor.STELLAR_COMPANION,
+    ):
+        scope = MemoryScope.create(owner_id, workspace_id)
+        try:
+            actor = MemoryActor(memory_actor)
+            if target_domain is not None:
+                target_domains = _authorized_read_domains(actor, [target_domain])
+            elif actor in {MemoryActor.MEMORY_MAINTENANCE, MemoryActor.GOVERNOR}:
+                target_domains = None
+            else:
+                target_domains = authorize_read(actor, None)
+            conn = open_memory_sqlite(self._db_path)
+            try:
+                promotions = list_memory_promotions(
+                    conn,
+                    scope=scope,
+                    target_domains=target_domains,
+                    status=status,
+                    limit=limit,
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except (
+            MemoryPromotionValidationError,
+            MemoryDomainAccessError,
+            ValueError,
+        ) as exc:
+            raise self._promotion_http_error(exc) from exc
+        return {"promotions": promotions, "count": len(promotions)}
+
+    async def revoke_promotion(
+        self,
+        promotion_id: str,
+        request: MemoryPromotionRevoke,
+    ):
+        request = request.model_copy(
+            update={
+                "reason": str(_redact_for_memory_storage(request.reason)).strip(),
+            }
+        )
+        conn = open_memory_sqlite(self._db_path)
+        try:
+            result = revoke_memory_promotion(conn, promotion_id, request)
+            conn.commit()
+        except (
+            MemoryPromotionAccessError,
+            MemoryPromotionConflictError,
+            MemoryPromotionNotFoundError,
+            MemoryPromotionValidationError,
+        ) as exc:
+            conn.rollback()
+            raise self._promotion_http_error(exc) from exc
+        finally:
+            conn.close()
+        return {"status": "revoked", "promotion": result}
+
     async def get_session_turns(
         self,
         session_id: str,
@@ -3024,6 +3149,122 @@ class MemoryService:
             "count": len(results),
         }
 
+    async def _recall_promoted_results(
+        self,
+        *,
+        request: RecallRequest,
+        scope: MemoryScope,
+        target_domains: tuple[str, ...],
+        plan,
+    ) -> tuple[list[Dict[str, Any]], set[tuple[str, str, str]], int]:
+        conn = open_memory_sqlite(self._db_path)
+        try:
+            promotions = list_memory_promotions(
+                conn,
+                scope=scope,
+                target_domains=target_domains,
+                status="active",
+                limit=500,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        if not promotions:
+            return [], set(), 0
+
+        source_domains = tuple(
+            dict.fromkeys(item["source_domain"] for item in promotions)
+        )
+        record_filter: dict[str, list[str]] = {}
+        promotions_by_source: dict[
+            tuple[str, str, str], list[Dict[str, Any]]
+        ] = {}
+        for promotion in promotions:
+            source_type = str(promotion["source_type"])
+            source_id = str(promotion["source_memory_id"])
+            source_domain = str(promotion["source_domain"])
+            record_filter.setdefault(source_type, []).append(source_id)
+            promotions_by_source.setdefault(
+                (source_type, source_id, source_domain), []
+            ).append(promotion)
+
+        semantic_matches = await asyncio.to_thread(
+            self._semantic_index.search,
+            request.query,
+            owner_id=scope.owner_id,
+            workspace_id=scope.workspace_id,
+            source_domains=source_domains,
+            limit=max(self.config.recall_candidate_limit, len(promotions)),
+        )
+        conn = open_memory_sqlite(self._db_path)
+        try:
+            source_payload = recall_memories(
+                conn,
+                plan,
+                limit=min(50, max(request.limit or self.config.recall_default_limit, len(promotions))),
+                candidate_limit=max(self.config.recall_candidate_limit, len(promotions)),
+                max_context_chars=(
+                    request.max_context_chars or self.config.recall_max_context_chars
+                ),
+                min_score=(
+                    request.min_score
+                    if request.min_score is not None
+                    else self.config.recall_min_score
+                ),
+                current_session_id=request.current_session_id,
+                include_tier1=request.include_tier1,
+                include_tier2=request.include_tier2,
+                owner_id=scope.owner_id,
+                workspace_id=scope.workspace_id,
+                source_domains=source_domains,
+                semantic_matches=semantic_matches,
+                record_filter=record_filter,
+            )
+        finally:
+            conn.close()
+
+        projected: list[Dict[str, Any]] = []
+        projected_source_keys: set[tuple[str, str, str]] = set()
+        for source in source_payload["results"]:
+            source_key = promotion_source_key(source)
+            for promotion in promotions_by_source.get(source_key, []):
+                projected_source_keys.add(source_key)
+                item = dict(source)
+                source_id = str(item.get("id") or "")
+                source_domain = str(item.get("memory_domain") or "")
+                promotion_id = str(promotion["promotion_id"])
+                item.update(
+                    {
+                        "id": promotion_id,
+                        "memory_domain": promotion["target_domain"],
+                        "promotion_ref_id": promotion_id,
+                        "source_memory_id": source_id,
+                        "source_memory_type": promotion["source_type"],
+                        "source_memory_domain": source_domain,
+                        "promotion_reason": promotion["reason"],
+                        "promotion_approved_by": promotion["approved_by"],
+                        "promotion_approval_ref": promotion["approval_ref"],
+                        "promotion_expires_at": promotion["expires_at"],
+                        "score": round(float(item.get("score") or 0.0) * 0.98, 6),
+                    }
+                )
+                item["evidence_refs"] = list(
+                    dict.fromkeys(
+                        [
+                            *(item.get("evidence_refs") or []),
+                            f"promotion:{promotion_id}",
+                        ]
+                    )
+                )
+                item["signals"] = {
+                    **dict(item.get("signals") or {}),
+                    "promotion_reference": True,
+                }
+                projected.append(item)
+        return projected, projected_source_keys, int(
+            source_payload.get("candidate_count") or 0
+        )
+
     async def recall(self, request: RecallRequest):
         """Recall a bounded mix of recent turns and durable Tier 2 memory."""
         if not request.query.strip():
@@ -3087,6 +3328,47 @@ class MemoryService:
                 )
             finally:
                 conn.close()
+            payload["promotion_count"] = 0
+            if request.include_promotions:
+                promoted, promoted_source_keys, promoted_candidate_count = (
+                    await self._recall_promoted_results(
+                        request=request,
+                        scope=scope,
+                        target_domains=source_domains,
+                        plan=plan,
+                    )
+                )
+                payload["candidate_count"] = int(
+                    payload.get("candidate_count") or 0
+                ) + promoted_candidate_count
+                if promoted:
+                    native_results = [
+                        item
+                        for item in payload["results"]
+                        if promotion_source_key(item) not in promoted_source_keys
+                    ]
+                    merged = merge_recall_results(
+                        [native_results, promoted],
+                        limit=request.limit or self.config.recall_default_limit,
+                        max_context_chars=(
+                            request.max_context_chars
+                            or self.config.recall_max_context_chars
+                        ),
+                        per_session_limit=(
+                            request.limit or self.config.recall_default_limit
+                            if plan.intent == "recent_conversation"
+                            else 2
+                        ),
+                    )
+                    merged["truncated"] = bool(
+                        payload.get("truncated") or merged.get("truncated")
+                    )
+                    payload.update(merged)
+                payload["promotion_count"] = sum(
+                    1
+                    for item in payload["results"]
+                    if item.get("promotion_ref_id")
+                )
             payload["context"] = format_recall_context(payload["results"])
             payload["trace_id"] = trace_id
             payload["recall_status"] = "hit" if payload["count"] else "empty"
@@ -3144,6 +3426,12 @@ class MemoryService:
                     "source_turns": item.get("source_turns") or [],
                     "evidence_refs": item.get("evidence_refs") or [],
                     "memory_domain": item.get("memory_domain"),
+                    "promotion_ref_id": item.get("promotion_ref_id"),
+                    "source_memory_id": item.get("source_memory_id"),
+                    "source_memory_type": item.get("source_memory_type"),
+                    "source_memory_domain": item.get("source_memory_domain"),
+                    "promotion_approved_by": item.get("promotion_approved_by"),
+                    "promotion_approval_ref": item.get("promotion_approval_ref"),
                 }
             )
         status = (
@@ -3362,6 +3650,7 @@ class MemoryService:
             "recall_traces": 0,
             "recall_trace_references": 0,
             "memory_embeddings": 0,
+            "memory_promotions_revoked": 0,
         }
         target_kind = "memory" if memory_id else "session"
         target = memory_id or session_id
@@ -3381,6 +3670,13 @@ class MemoryService:
                         (memory_id, scope.owner_id, scope.workspace_id, memory_domain),
                     )
                     counts[table] += max(0, int(cursor.rowcount or 0))
+                counts["memory_promotions_revoked"] += revoke_promotions_for_source(
+                    conn,
+                    source_memory_ids=[memory_id],
+                    source_domain=memory_domain,
+                    scope=scope,
+                    revoked_by=request.memory_actor.value,
+                )
                 cursor = conn.execute(
                     "DELETE FROM recall_feedback WHERE memory_id = ? "
                     "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
@@ -3389,17 +3685,18 @@ class MemoryService:
                 counts["recall_feedback"] += max(0, int(cursor.rowcount or 0))
                 trace_rows = conn.execute(
                     "SELECT trace_id, selected_results FROM recall_traces WHERE "
-                    "owner_id = ? AND workspace_id = ? AND memory_actor = ? "
-                    "AND EXISTS (SELECT 1 FROM "
+                    "owner_id = ? AND workspace_id = ? AND ((EXISTS (SELECT 1 FROM "
                     "json_each(recall_traces.source_domains) domains WHERE domains.value = ?) "
                     "AND EXISTS (SELECT 1 FROM "
                     "json_each(recall_traces.selected_results) "
-                    "WHERE json_extract(value, '$.id') = ?)",
+                    "WHERE json_extract(value, '$.id') = ?)) OR EXISTS (SELECT 1 FROM "
+                    "json_each(recall_traces.selected_results) "
+                    "WHERE json_extract(value, '$.source_memory_id') = ?))",
                     (
                         scope.owner_id,
                         scope.workspace_id,
-                        request.memory_actor.value,
                         memory_domain,
+                        memory_id,
                         memory_id,
                     ),
                 ).fetchall()
@@ -3408,6 +3705,7 @@ class MemoryService:
                         item
                         for item in json.loads(selected_json or "[]")
                         if str(item.get("id") or "") != memory_id
+                        and str(item.get("source_memory_id") or "") != memory_id
                     ]
                     conn.execute(
                         "UPDATE recall_traces SET selected_results = ?, result_count = ? "
@@ -3485,6 +3783,17 @@ class MemoryService:
                         ),
                     )
                     counts["memory_embeddings"] += max(0, int(cursor.rowcount or 0))
+                promotion_source_ids = {
+                    *(str(row[0]) for row in turn_rows),
+                    *derived_memory_ids,
+                }
+                counts["memory_promotions_revoked"] += revoke_promotions_for_source(
+                    conn,
+                    source_memory_ids=sorted(promotion_source_ids),
+                    source_domain=memory_domain,
+                    scope=scope,
+                    revoked_by=request.memory_actor.value,
+                )
                 cursor = conn.execute(
                     "DELETE FROM recall_feedback WHERE memory_domain = ? AND trace_id IN ("
                     "SELECT trace_id FROM recall_traces WHERE session_id = ? "
@@ -3836,10 +4145,28 @@ class MemoryService:
                 import aiohttp
 
                 async with aiohttp.ClientSession() as session:
-                    async with session.post(url, json=payload, timeout=10) as response:
+                    request_kwargs: Dict[str, Any] = {
+                        "json": payload,
+                        "timeout": 10,
+                    }
+                    gateway_token = str(
+                        os.getenv("GATEWAY_AUTH_TOKEN") or ""
+                    ).strip()
+                    if gateway_token:
+                        request_kwargs["headers"] = {
+                            "Authorization": f"Bearer {gateway_token}"
+                        }
+                    async with session.post(url, **request_kwargs) as response:
                         if response.status == 201:
                             result = await response.json()
-                            logger.info("Registered with gateway (attempt %d): %s", attempt, result)
+                            logger.info(
+                                "Registered with gateway (attempt %d): %s",
+                                attempt,
+                                {
+                                    "service_id": result.get("service_id"),
+                                    "status": result.get("status"),
+                                },
+                            )
                             self._gateway_service_id = result["service_id"]
                             self._gateway_registration_healthy = True
                             self._last_gateway_registration_check_at = (

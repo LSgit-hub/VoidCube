@@ -275,6 +275,11 @@ class SupervisorServiceRuntimeConfig(BaseModel):
     companion_goal_confidence_threshold: float = 0.75
     companion_deviation_confidence_threshold: float = 0.70
     companion_help_value_threshold: float = 0.65
+    companion_proactive_reminder_enabled: bool = True
+    companion_proactive_reminder_tts_enabled: bool = True
+    companion_proactive_reminder_cooldown_seconds: int = 900
+    companion_proactive_dnd_start: str = ""
+    companion_proactive_dnd_end: str = ""
     governor_llm_advisory_enabled: bool = True
     autonomous_chain_review_interval: int = 300
     autonomous_chain_handoff_limit_per_cycle: int = 1

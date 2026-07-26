@@ -15,7 +15,7 @@ import sqlite3
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from systems.memory.lexical_index import search_memory_fts
 from systems.memory.scope import (
@@ -301,6 +301,7 @@ def recall_memories(
     workspace_id: str = DEFAULT_WORKSPACE_ID,
     source_domains: Sequence[str] = ("agent_interaction",),
     semantic_matches: dict[tuple[str, str], float] | None = None,
+    record_filter: Mapping[str, Sequence[str]] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Return a small, ranked, traceable recall set.
@@ -341,6 +342,7 @@ def recall_memories(
                 source_domains=source_domains,
                 lexical_matches=lexical_matches,
                 semantic_matches=semantic_matches,
+                record_filter=record_filter,
             )
         )
         if plan.intent != "identity":
@@ -355,6 +357,7 @@ def recall_memories(
                     source_domains=source_domains,
                     lexical_matches=lexical_matches,
                     semantic_matches=semantic_matches,
+                    record_filter=record_filter,
                 )
             )
     if include_tier1 and plan.intent != "identity":
@@ -370,6 +373,7 @@ def recall_memories(
                 source_domains=source_domains,
                 lexical_matches=lexical_matches,
                 semantic_matches=semantic_matches,
+                record_filter=record_filter,
             )
         )
         if not plan.immediate_recency and plan.intent != "recent_conversation":
@@ -384,6 +388,7 @@ def recall_memories(
                     source_domains=source_domains,
                     lexical_matches=lexical_matches,
                     semantic_matches=semantic_matches,
+                    record_filter=record_filter,
                 )
             )
 
@@ -425,6 +430,33 @@ def recall_memories(
     }
 
 
+def merge_recall_results(
+    result_sets: Sequence[Sequence[dict[str, Any]]],
+    *,
+    limit: int,
+    max_context_chars: int,
+    per_session_limit: int = 2,
+) -> dict[str, Any]:
+    """Rank and budget already-scored recall results from multiple sources."""
+    candidates = [dict(item) for items in result_sets for item in items]
+    ranked, dedup_truncated = _deduplicate_and_rank(
+        candidates,
+        limit=max(1, min(int(limit), 50)),
+        per_session_limit=max(1, min(int(per_session_limit), 50)),
+    )
+    selected, context_chars, budget_truncated = _apply_context_budget(
+        ranked,
+        limit=max(1, min(int(limit), 50)),
+        max_chars=max(256, min(int(max_context_chars), 20000)),
+    )
+    return {
+        "results": selected,
+        "count": len(selected),
+        "context_chars": context_chars,
+        "truncated": dedup_truncated or budget_truncated,
+    }
+
+
 def format_recall_context(results: Sequence[dict[str, Any]]) -> str:
     lines: list[str] = []
     for result in results:
@@ -447,6 +479,20 @@ def format_recall_context(results: Sequence[dict[str, Any]]) -> str:
             attributes.append(f"matched={matched}")
         if evidence_text:
             attributes.append(f"evidence={evidence_text}")
+        promotion_ref = str(result.get("promotion_ref_id") or "").strip()
+        if promotion_ref:
+            attributes.append(f"promotion={promotion_ref}")
+            attributes.append(
+                "source="
+                + ":".join(
+                    part
+                    for part in (
+                        str(result.get("source_memory_domain") or ""),
+                        str(result.get("source_memory_id") or ""),
+                    )
+                    if part
+                )
+            )
         lines.append(
             f"- [{label}{date_suffix} {' '.join(attributes)}] {title}: {summary}"
         )
@@ -519,6 +565,7 @@ def _tier2_candidates(
     source_domains: Sequence[str],
     lexical_matches: dict[str, tuple[str, ...]],
     semantic_matches: dict[tuple[str, str], float],
+    record_filter: Mapping[str, Sequence[str]] | None,
 ) -> list[dict[str, Any]]:
     clauses = [
         "status = 'active'",
@@ -535,6 +582,14 @@ def _tier2_candidates(
     domain_placeholders = ",".join("?" for _ in source_domains)
     clauses.append(f"memory_domain IN ({domain_placeholders})")
     params.extend(source_domains)
+    if not _append_record_filter(
+        clauses,
+        params,
+        source_type="compressed",
+        id_column="memory_id",
+        record_filter=record_filter,
+    ):
+        return []
     if plan.intent == "identity":
         clauses.extend(
             (
@@ -664,6 +719,7 @@ def _profile_candidates(
     source_domains: Sequence[str],
     lexical_matches: dict[str, tuple[str, ...]],
     semantic_matches: dict[tuple[str, str], float],
+    record_filter: Mapping[str, Sequence[str]] | None,
 ) -> list[dict[str, Any]]:
     if plan.memory_types and "profile" not in plan.memory_types:
         return []
@@ -676,6 +732,14 @@ def _profile_candidates(
     domain_placeholders = ",".join("?" for _ in source_domains)
     clauses.append(f"memory_domain IN ({domain_placeholders})")
     params.extend(source_domains)
+    if not _append_record_filter(
+        clauses,
+        params,
+        source_type="profile",
+        id_column="memory_id",
+        record_filter=record_filter,
+    ):
+        return []
     lexical_ids = lexical_matches.get("profile", ())
     semantic_ids = _semantic_ids(semantic_matches, "profile")
     _append_search_predicates(
@@ -759,6 +823,7 @@ def _archive_candidates(
     source_domains: Sequence[str],
     lexical_matches: dict[str, tuple[str, ...]],
     semantic_matches: dict[tuple[str, str], float],
+    record_filter: Mapping[str, Sequence[str]] | None,
 ) -> list[dict[str, Any]]:
     clauses = [
         "owner_id = ?",
@@ -775,6 +840,14 @@ def _archive_candidates(
     domain_placeholders = ",".join("?" for _ in source_domains)
     clauses.append(f"memory_domain IN ({domain_placeholders})")
     params.extend(source_domains)
+    if not _append_record_filter(
+        clauses,
+        params,
+        source_type="archive",
+        id_column="turn_id",
+        record_filter=record_filter,
+    ):
+        return []
     lexical_ids = lexical_matches.get("archive", ())
     semantic_ids = _semantic_ids(semantic_matches, "archive")
     _append_search_predicates(
@@ -848,6 +921,7 @@ def _tier1_candidates(
     source_domains: Sequence[str],
     lexical_matches: dict[str, tuple[str, ...]],
     semantic_matches: dict[tuple[str, str], float],
+    record_filter: Mapping[str, Sequence[str]] | None,
 ) -> list[dict[str, Any]]:
     clauses = [
         "compressed_to_tier2 = 0",
@@ -858,6 +932,14 @@ def _tier1_candidates(
     domain_placeholders = ",".join("?" for _ in source_domains)
     clauses.append(f"memory_domain IN ({domain_placeholders})")
     params.extend(source_domains)
+    if not _append_record_filter(
+        clauses,
+        params,
+        source_type="turn",
+        id_column="turn_id",
+        record_filter=record_filter,
+    ):
+        return []
     if plan.intent != "recent_conversation":
         lexical_ids = lexical_matches.get("turn", ())
         semantic_ids = _semantic_ids(semantic_matches, "turn")
@@ -974,6 +1056,31 @@ def _append_search_predicates(
         return
     clauses.append(f"{id_column} IN ({','.join('?' for _ in candidate_ids)})")
     params.extend(candidate_ids)
+
+
+def _append_record_filter(
+    clauses: list[str],
+    params: list[Any],
+    *,
+    source_type: str,
+    id_column: str,
+    record_filter: Mapping[str, Sequence[str]] | None,
+) -> bool:
+    if record_filter is None:
+        return True
+    candidate_ids = tuple(
+        dict.fromkeys(
+            str(item)
+            for item in record_filter.get(source_type, ())
+            if str(item)
+        )
+    )
+    if not candidate_ids:
+        return False
+    placeholders = ",".join("?" for _ in candidate_ids)
+    clauses.append(f"{id_column} IN ({placeholders})")
+    params.extend(candidate_ids)
+    return True
 
 
 def _lexical_score(plan: RecallPlan, value: object) -> tuple[float, list[str]]:

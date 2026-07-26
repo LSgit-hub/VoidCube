@@ -173,6 +173,49 @@ class VoiceSessionManager:
             finally:
                 self.state.active = False
 
+    async def speak_text(self, text: str, *, reason: str = "proactive") -> dict[str, Any]:
+        """Play already-authorized text without opening the microphone."""
+        message = str(text or "").strip()
+        if not message:
+            return {"status": "invalid", "reason": "text_is_empty"}
+        if not self.state.enabled:
+            return {"status": "disabled", "reason": "voice_disabled"}
+        if self.state.active or self.state.continuous_active:
+            return {"status": "busy", "reason": "voice_session_active"}
+
+        async with self._lock:
+            self.state.active = True
+            self.state.last_status = "speaking"
+            self.state.last_error = ""
+            self.state.interrupted = False
+            self.state.last_reply = message[:4000]
+            self._stop_event = asyncio.Event()
+            speech_path = self._temporary_audio_path("proactive", suffix=".mp3")
+            try:
+                await self.tts.synthesize(message, speech_path)
+                await self.player.play(speech_path, stop_event=self._stop_event)
+                if self._stop_event.is_set():
+                    self.state.last_status = "interrupted"
+                    return {
+                        "status": "interrupted",
+                        "reply_text": message,
+                        "reason": reason,
+                    }
+                self.state.last_status = "complete"
+                return {
+                    "status": "complete",
+                    "reply_text": message,
+                    "reason": reason,
+                }
+            except asyncio.CancelledError:
+                self.interrupt()
+                raise
+            except Exception as exc:
+                return self._record_error(exc)
+            finally:
+                self.state.active = False
+                self._cleanup(speech_path)
+
     def start_continuous(self, *, session_id: str = "") -> dict[str, Any]:
         if not self.state.enabled:
             return {"status": "disabled", "reason": "voice_disabled"}

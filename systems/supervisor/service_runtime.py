@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from enum import Enum
@@ -33,6 +34,11 @@ class ServiceRuntimeState:
     latest_companion_observation: Dict[str, Any] = field(default_factory=dict)
     last_companion_evidence_key: str = ""
     latest_companion_dialogue: Dict[str, Any] = field(default_factory=dict)
+    last_proactive_reminder_at: Optional[datetime] = None
+    last_proactive_reminder_evidence_key: str = ""
+    pending_proactive_reminder: Dict[str, Any] = field(default_factory=dict)
+    latest_proactive_reminder: Dict[str, Any] = field(default_factory=dict)
+    proactive_reminder_history: list[Dict[str, Any]] = field(default_factory=list)
     auto_evidence_packet: Dict[str, Any] = field(default_factory=dict)
     last_review_at: Optional[datetime] = None
     next_review_at: Optional[datetime] = None
@@ -48,6 +54,26 @@ class ServiceRuntimeMixin:
         self._service_runtime = ServiceRuntimeState()
         self._gateway_service_id: Optional[str] = None
         self._gateway_executor_service_id: Optional[str] = None
+        self._gateway_service_tokens: Dict[str, str] = {}
+
+    @staticmethod
+    def _gateway_registration_headers() -> Dict[str, str]:
+        token = str(os.getenv("GATEWAY_AUTH_TOKEN") or "").strip()
+        return {"Authorization": f"Bearer {token}"} if token else {}
+
+    def _gateway_memory_headers(
+        self,
+        *,
+        memory_actor: str = "stellar_companion",
+    ) -> Dict[str, str]:
+        token = self._gateway_service_tokens.get("supervisor", "")
+        if not self._gateway_service_id or not token:
+            return {}
+        return {
+            "X-VoidCube-Service-Id": self._gateway_service_id,
+            "X-VoidCube-Service-Token": token,
+            "X-VoidCube-Memory-Actor": memory_actor,
+        }
 
     @property
     def _service_runtime_started(self) -> bool:
@@ -271,14 +297,29 @@ class ServiceRuntimeMixin:
                 import aiohttp
 
                 async with aiohttp.ClientSession() as session:
-                    async with session.post(url, json=payload, timeout=10) as response:
+                    request_kwargs: Dict[str, Any] = {
+                        "json": payload,
+                        "timeout": 10,
+                    }
+                    registration_headers = self._gateway_registration_headers()
+                    if registration_headers:
+                        request_kwargs["headers"] = registration_headers
+                    async with session.post(url, **request_kwargs) as response:
                         if response.status == 201:
                             result = await response.json()
+                            service_token = str(
+                                result.get("service_token") or ""
+                            ).strip()
+                            if service_token:
+                                self._gateway_service_tokens[service_type] = service_token
                             logger.info(
                                 "Registered %s with gateway (attempt %d): %s",
                                 service_type,
                                 attempt,
-                                result,
+                                {
+                                    "service_id": result.get("service_id"),
+                                    "status": result.get("status"),
+                                },
                             )
                             return result["service_id"]
                         else:
@@ -381,8 +422,175 @@ class ServiceRuntimeMixin:
                 judgement = await self._judge_daily_companion_evidence(evidence)
                 snapshot.update(judgement)
         self._service_runtime.last_companion_observation_at = now
+        judgement = dict(snapshot.get("judgement") or {})
+        if snapshot.get("disposition") == "remind" and str(judgement.get("reminder_text") or "").strip():
+            self._queue_proactive_reminder(snapshot, now=now)
+        elif "judgement" in snapshot and snapshot.get("disposition") != "remind":
+            self._service_runtime.pending_proactive_reminder = {}
+        snapshot["reminder_delivery"] = await self._deliver_pending_proactive_reminder(now=now)
         self._service_runtime.latest_companion_observation = snapshot
         return snapshot
+
+    def _queue_proactive_reminder(
+        self,
+        observation: Dict[str, Any],
+        *,
+        now: datetime,
+    ) -> None:
+        judgement = dict(observation.get("judgement") or {})
+        reminder_text = str(judgement.get("reminder_text") or "").strip()[:1000]
+        refs = [
+            str(item).strip()
+            for item in list(judgement.get("evidence_refs") or [])
+            if str(item).strip()
+        ]
+        refs.extend(
+            str(item).strip()
+            for item in list(dict(observation.get("evidence") or {}).get("evidence_refs") or [])
+            if str(item).strip()
+        )
+        evidence_key = str(observation.get("evidence_key") or "").strip()
+        if not evidence_key:
+            evidence_key = hashlib.sha256(
+                json.dumps(
+                    {"text": reminder_text, "refs": sorted(set(refs))},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest()
+        current = self._service_runtime.pending_proactive_reminder
+        if str(current.get("evidence_key") or "") == evidence_key:
+            return
+        self._service_runtime.pending_proactive_reminder = {
+            "status": "pending",
+            "created_at": now.isoformat(),
+            "evidence_key": evidence_key,
+            "reminder_text": reminder_text,
+            "evidence_refs": sorted(set(refs)),
+            "reason": str(observation.get("reason") or "companion_reminder")[:500],
+            "attempts": 0,
+        }
+
+    @staticmethod
+    def _parse_local_clock(value: str) -> Optional[tuple[int, int]]:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            hour, minute = (int(part) for part in text.split(":", 1))
+        except (TypeError, ValueError):
+            return None
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            return None
+        return hour, minute
+
+    def _proactive_dnd_active(self, now: datetime) -> bool:
+        config = self.config.service_runtime
+        start = self._parse_local_clock(config.companion_proactive_dnd_start)
+        end = self._parse_local_clock(config.companion_proactive_dnd_end)
+        if start is None or end is None:
+            return False
+        current = now.astimezone().hour * 60 + now.astimezone().minute
+        start_minutes = start[0] * 60 + start[1]
+        end_minutes = end[0] * 60 + end[1]
+        if start_minutes == end_minutes:
+            return True
+        if start_minutes < end_minutes:
+            return start_minutes <= current < end_minutes
+        return current >= start_minutes or current < end_minutes
+
+    async def _deliver_pending_proactive_reminder(
+        self,
+        *,
+        now: datetime,
+    ) -> Dict[str, Any]:
+        pending = self._service_runtime.pending_proactive_reminder
+        if not pending:
+            return {"status": "none"}
+        config = self.config.service_runtime
+        if self._service_runtime.stellar_mode != StellarMode.DAILY_COMPANION:
+            return {"status": "suppressed", "reason": "stellar_auto_evolution_active"}
+        if not config.companion_proactive_reminder_enabled:
+            return {"status": "suppressed", "reason": "proactive_reminders_disabled"}
+        if self._proactive_dnd_active(now):
+            result = {"status": "suppressed", "reason": "do_not_disturb_window"}
+            self._service_runtime.latest_proactive_reminder = result
+            return result
+        last = self._service_runtime.last_proactive_reminder_at
+        cooldown = max(0, int(config.companion_proactive_reminder_cooldown_seconds))
+        if last is not None and (now - last).total_seconds() < cooldown:
+            result = {
+                "status": "suppressed",
+                "reason": "proactive_reminder_cooldown",
+                "retry_after_seconds": max(0, int(cooldown - (now - last).total_seconds())),
+            }
+            self._service_runtime.latest_proactive_reminder = result
+            return result
+        attempt_at = str(pending.get("last_attempt_at") or "").strip()
+        if attempt_at:
+            try:
+                attempt_time = datetime.fromisoformat(attempt_at)
+                if (now - attempt_time).total_seconds() < 60:
+                    return {"status": "waiting_retry", "reason": "tts_retry_backoff"}
+            except ValueError:
+                pass
+        if not config.companion_proactive_reminder_tts_enabled:
+            result = {"status": "waiting", "reason": "proactive_tts_disabled"}
+            self._service_runtime.latest_proactive_reminder = result
+            return result
+        voice_manager = getattr(self, "_voice_manager", None)
+        if voice_manager is None or not voice_manager.status().get("enabled"):
+            result = {"status": "waiting", "reason": "voice_output_disabled"}
+            self._service_runtime.latest_proactive_reminder = result
+            return result
+
+        pending["attempts"] = int(pending.get("attempts") or 0) + 1
+        pending["last_attempt_at"] = now.isoformat()
+        result = await voice_manager.speak_text(
+            str(pending.get("reminder_text") or ""),
+            reason="proactive_companion_reminder",
+        )
+        if str(result.get("status") or "") != "complete":
+            failure = {
+                "status": "waiting",
+                "reason": str(result.get("reason") or result.get("status") or "tts_unavailable"),
+                "attempts": pending["attempts"],
+            }
+            self._service_runtime.latest_proactive_reminder = failure
+            return failure
+
+        delivered_at = now.isoformat()
+        audit = {
+            "status": "delivered",
+            "delivered_at": delivered_at,
+            "evidence_key": pending.get("evidence_key"),
+            "reminder_text": pending.get("reminder_text"),
+            "evidence_refs": list(pending.get("evidence_refs") or []),
+            "attempts": pending.get("attempts", 1),
+        }
+        self._service_runtime.last_proactive_reminder_at = now
+        self._service_runtime.last_proactive_reminder_evidence_key = str(
+            pending.get("evidence_key") or ""
+        )
+        self._service_runtime.latest_proactive_reminder = audit
+        self._service_runtime.proactive_reminder_history.append(dict(audit))
+        self._service_runtime.proactive_reminder_history = (
+            self._service_runtime.proactive_reminder_history[-20:]
+        )
+        self._service_runtime.pending_proactive_reminder = {}
+        await self._touch_gateway_activity(
+            "companion_proactive_reminder",
+            metadata={
+                "evidence_key": audit["evidence_key"],
+                "reminder_text": str(audit["reminder_text"] or "")[:1000],
+                "evidence_refs": audit["evidence_refs"],
+                "attempts": audit["attempts"],
+            },
+        )
+        return audit
+
+    async def flush_pending_proactive_reminder(self) -> Dict[str, Any]:
+        return await self._deliver_pending_proactive_reminder(now=datetime.now(timezone.utc))
 
     @staticmethod
     def _extract_daily_companion_evidence(
@@ -567,9 +775,9 @@ class ServiceRuntimeMixin:
                         "limit": 5,
                         "max_context_chars": 3500,
                         "request_source": "tool",
-                        "memory_actor": "stellar_companion",
                         "source_domains": ["agent_interaction", "companion"],
                     },
+                    headers=self._gateway_memory_headers(),
                     timeout=3,
                 ) as response:
                     if response.status != 200:
@@ -598,10 +806,10 @@ class ServiceRuntimeMixin:
                         "user_content": user_text,
                         "assistant_content": assistant_text,
                         "write_id": f"companion-{uuid.uuid4()}",
-                        "memory_actor": "stellar_companion",
                         "memory_domain": "companion",
                         "metadata": {"source": "stellar_companion_dialogue"},
                     },
+                    headers=self._gateway_memory_headers(),
                     timeout=3,
                 ) as response:
                     return response.status == 200
@@ -730,12 +938,14 @@ class ServiceRuntimeMixin:
             if self._service_runtime.autonomous_chain_gate_active:
                 await self._stop_daily_companion_worker()
                 self._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
+                self._service_runtime.pending_proactive_reminder = {}
                 if not self._service_runtime.auto_evidence_packet:
                     self._service_runtime.auto_evidence_packet = self._new_auto_evidence_packet()
                 await self._notify_gateway_autonomous_chain_gate(active=True)
                 return
             await self._stop_daily_companion_worker()
             self._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
+            self._service_runtime.pending_proactive_reminder = {}
             self._service_runtime.autonomous_chain_gate_active = True
             self._service_runtime.auto_evidence_packet = self._new_auto_evidence_packet()
             await self._notify_gateway_autonomous_chain_gate(active=True)
@@ -893,6 +1103,9 @@ class ServiceRuntimeMixin:
             ),
             "latest_companion_observation": dict(runtime.latest_companion_observation),
             "latest_companion_dialogue": dict(runtime.latest_companion_dialogue),
+            "latest_proactive_reminder": dict(runtime.latest_proactive_reminder),
+            "pending_proactive_reminder": dict(runtime.pending_proactive_reminder),
+            "proactive_reminder_history": list(runtime.proactive_reminder_history[-20:]),
             "auto_evidence_packet": dict(runtime.auto_evidence_packet),
         }
 

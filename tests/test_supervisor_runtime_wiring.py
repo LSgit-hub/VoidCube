@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call, patch
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -412,6 +414,127 @@ def test_supervisor_room_frontend_uses_chain_panel_contract():
     assert 'data-chain-trace="' in UI_HTML
     assert 'body-integrity-row' in UI_HTML
     assert 'body-integrity-violation' in UI_HTML
+
+
+@pytest.mark.unit
+def test_supervisor_room_frontend_uses_canonical_reminder_policy_contract():
+    assert 'id="panelSettings"' in UI_HTML
+    assert 'id="reminderPolicyForm"' in UI_HTML
+    assert 'id="reminderPolicyEnabled"' in UI_HTML
+    assert 'id="reminderPolicyTts"' in UI_HTML
+    assert 'id="reminderPolicyCooldown"' in UI_HTML
+    assert 'id="reminderPolicyDndStart"' in UI_HTML
+    assert 'id="reminderPolicyDndEnd"' in UI_HTML
+    assert "fetch('/companion/reminder-policy'" in UI_HTML
+    assert "localStorage" not in UI_HTML
+
+
+@pytest.mark.unit
+def test_companion_reminder_policy_route_persists_only_its_canonical_subtree(
+    tmp_path,
+    monkeypatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    original_provider = {
+        "base_url": "https://example.invalid/v1",
+        "api_key_env": "DEEPSEEK_API_KEY",
+        "selected_model": "deepseek-chat",
+    }
+    original_memory = {"db_path": "custom-memory.db", "recall_default_limit": 17}
+    (home / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "providers": {"deepseek": original_provider},
+                "memory": original_memory,
+                "supervisor": {
+                    "ui_enabled": True,
+                    "service_runtime": {"health_check_interval": 45},
+                },
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VOIDCUBE_HOME", str(home))
+    supervisor = _make_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+
+    initial = client.get("/companion/reminder-policy")
+    response = client.post(
+        "/companion/reminder-policy",
+        json={
+            "enabled": False,
+            "tts_enabled": True,
+            "cooldown_seconds": 1800,
+            "dnd_start": "22:00",
+            "dnd_end": "08:00",
+        },
+    )
+
+    assert initial.status_code == 200
+    assert initial.json()["managed"] is False
+    assert response.status_code == 200
+    assert response.json() == {
+        "enabled": False,
+        "tts_enabled": True,
+        "cooldown_seconds": 1800,
+        "dnd_start": "22:00",
+        "dnd_end": "08:00",
+        "managed": False,
+        "status": "saved",
+    }
+    assert supervisor.config.service_runtime.companion_proactive_reminder_enabled is False
+    assert supervisor.config.service_runtime.companion_proactive_dnd_start == "22:00"
+
+    saved = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+    assert saved["providers"]["deepseek"] == original_provider
+    assert saved["memory"] == original_memory
+    assert saved["supervisor"]["ui_enabled"] is True
+    assert saved["supervisor"]["service_runtime"] == {
+        "health_check_interval": 45,
+        "companion_proactive_reminder_enabled": False,
+        "companion_proactive_reminder_tts_enabled": True,
+        "companion_proactive_reminder_cooldown_seconds": 1800,
+        "companion_proactive_dnd_start": "22:00",
+        "companion_proactive_dnd_end": "08:00",
+    }
+
+
+@pytest.mark.unit
+def test_companion_reminder_policy_route_rejects_invalid_values_and_managed_writes(
+    tmp_path,
+    monkeypatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("VOIDCUBE_HOME", str(home))
+    supervisor = _make_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+    base = {
+        "enabled": True,
+        "tts_enabled": True,
+        "cooldown_seconds": 900,
+        "dnd_start": "",
+        "dnd_end": "",
+    }
+
+    invalid_time = client.post(
+        "/companion/reminder-policy",
+        json={**base, "dnd_start": "25:00"},
+    )
+    invalid_cooldown = client.post(
+        "/companion/reminder-policy",
+        json={**base, "cooldown_seconds": 86401},
+    )
+    monkeypatch.setenv("VOIDCUBE_MANAGED", "true")
+    managed = client.post("/companion/reminder-policy", json=base)
+
+    assert invalid_time.status_code == 422
+    assert invalid_cooldown.status_code == 422
+    assert managed.status_code == 409
+    assert "managed by NixOS" in managed.json()["detail"]
     assert "slot.integrity_healthy === false" in UI_HTML
     assert 'data-chain-trace-expanded="' in UI_HTML
     assert 'data-chain-trace-source="' in UI_HTML
@@ -2524,6 +2647,81 @@ async def test_daily_companion_rejects_low_confidence_reminder(tmp_path):
     assert normalized["intent_state"] == "uncertain"
     assert normalized["disposition"] == "silent"
     assert normalized["judgement"]["reminder_text"] == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_proactive_reminder_delivers_only_after_policy_gate_and_records_audit(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._voice_manager.status = Mock(return_value={"enabled": True})
+    supervisor._voice_manager.speak_text = AsyncMock(
+        return_value={"status": "complete", "reply_text": "请检查当前任务。"}
+    )
+    supervisor._touch_gateway_activity = AsyncMock()  # type: ignore[method-assign]
+    now = datetime(2026, 5, 25, 12, 0, tzinfo=timezone.utc)
+    observation = {
+        "evidence_key": "evidence-reminder-1",
+        "reason": "goal_deviation_supported",
+        "evidence": {"evidence_refs": ["gateway:user_request:r1"]},
+        "judgement": {
+            "reminder_text": "请检查当前任务。",
+            "evidence_refs": ["gateway:agent_work:a1"],
+        },
+    }
+
+    supervisor._queue_proactive_reminder(observation, now=now)
+    delivered = await supervisor._deliver_pending_proactive_reminder(now=now)
+
+    assert delivered["status"] == "delivered"
+    supervisor._voice_manager.speak_text.assert_awaited_once_with(
+        "请检查当前任务。",
+        reason="proactive_companion_reminder",
+    )
+    assert supervisor._service_runtime.pending_proactive_reminder == {}
+    assert supervisor._service_runtime.last_proactive_reminder_evidence_key == "evidence-reminder-1"
+    supervisor._touch_gateway_activity.assert_awaited_once()
+    assert supervisor._touch_gateway_activity.await_args.args[0] == "companion_proactive_reminder"
+
+    supervisor._queue_proactive_reminder(observation, now=now + timedelta(minutes=1))
+    suppressed = await supervisor._deliver_pending_proactive_reminder(
+        now=now + timedelta(minutes=1)
+    )
+    assert suppressed["reason"] == "proactive_reminder_cooldown"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_proactive_reminder_waits_for_voice_and_respects_do_not_disturb(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.config = supervisor.config.model_copy(
+        update={
+            "service_runtime": supervisor.config.service_runtime.model_copy(
+                update={
+                    "companion_proactive_dnd_start": "22:00",
+                    "companion_proactive_dnd_end": "08:00",
+                }
+            )
+        }
+    )
+    supervisor._voice_manager.status = Mock(return_value={"enabled": False})
+    supervisor._voice_manager.speak_text = AsyncMock()
+    observation = {
+        "evidence_key": "evidence-reminder-2",
+        "evidence": {},
+        "judgement": {"reminder_text": "提醒内容", "evidence_refs": ["ref-2"]},
+    }
+    local_tz = datetime.now().astimezone().tzinfo or timezone.utc
+    dnd_time = datetime(2026, 5, 25, 23, 0, tzinfo=local_tz)
+    supervisor._queue_proactive_reminder(observation, now=dnd_time)
+
+    suppressed = await supervisor._deliver_pending_proactive_reminder(now=dnd_time)
+    assert suppressed["reason"] == "do_not_disturb_window"
+    supervisor._voice_manager.status.return_value = {"enabled": False}
+    waiting = await supervisor._deliver_pending_proactive_reminder(
+        now=datetime(2026, 5, 26, 9, 0, tzinfo=local_tz)
+    )
+    assert waiting["reason"] == "voice_output_disabled"
+    supervisor._voice_manager.speak_text.assert_not_awaited()
 
 
 @pytest.mark.asyncio

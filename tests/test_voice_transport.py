@@ -150,6 +150,29 @@ async def test_continuous_voice_discards_non_wake_segments_and_stops_cleanly(tmp
     assert not list(tmp_path.glob("*.mp3"))
 
 
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_voice_speak_text_plays_authorized_reminder_without_microphone(tmp_path):
+    manager = VoiceSessionManager(
+        VoiceConfig(enabled=True, fingerprint_path=tmp_path / "fingerprint.json")
+    )
+    manager.tts.synthesize = fake_synthesize  # type: ignore[method-assign]
+    manager.player.play = fake_play  # type: ignore[method-assign]
+    manager._temporary_audio_path = (  # type: ignore[method-assign]
+        lambda prefix, suffix=".wav": tmp_path / f"{prefix}{suffix}"
+    )
+
+    result = await manager.speak_text("请检查当前任务。", reason="proactive_test")
+
+    assert result == {
+        "status": "complete",
+        "reply_text": "请检查当前任务。",
+        "reason": "proactive_test",
+    }
+    assert manager.status()["last_reply"] == "请检查当前任务。"
+    assert not (tmp_path / "proactive.mp3").exists()
+
+
 async def companion(*, text: str, session_id: str):
     assert text == "当前任务是什么"
     assert session_id == "voice-test"

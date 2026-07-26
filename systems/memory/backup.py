@@ -78,6 +78,7 @@ class MemoryBackupManager:
         "recall_traces",
         "recall_feedback",
         "memory_deletion_audit",
+        "memory_promotion_refs",
         "memory_embeddings",
         "identity_revision_proposals",
     )

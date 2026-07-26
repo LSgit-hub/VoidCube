@@ -539,10 +539,14 @@ def _register_with_gateway(session_id: str, model: str, provider: str) -> bool:
             "provider": provider,
             "source": "cli",
         }).encode()
+        gateway_token = str(os.getenv("GATEWAY_AUTH_TOKEN") or "").strip()
+        headers = {"Content-Type": "application/json"}
+        if gateway_token:
+            headers["Authorization"] = f"Bearer {gateway_token}"
         req = _req.Request(
             "http://127.0.0.1:6000/v1/sessions/register",
             data=payload,
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             method="POST",
         )
         _req.urlopen(req, timeout=3)

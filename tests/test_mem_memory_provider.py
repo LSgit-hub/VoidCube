@@ -60,7 +60,6 @@ def test_mem_provider_remember_uses_canonical_service(monkeypatch):
                 "source_actor": "agent",
                 "owner_id": "local-user",
                 "workspace_id": "default",
-                "memory_actor": "api_a",
                 "memory_domain": "agent_interaction",
             },
         )
@@ -111,7 +110,6 @@ def test_mem_provider_search_and_prefetch_use_gateway_memory_route(monkeypatch):
                 "request_source": "tool",
                 "owner_id": "local-user",
                 "workspace_id": "default",
-                "memory_actor": "api_a",
                 "memory_domain": "agent_interaction",
             },
         ),
@@ -126,7 +124,6 @@ def test_mem_provider_search_and_prefetch_use_gateway_memory_route(monkeypatch):
                 "request_source": "auto_prefetch",
                 "owner_id": "local-user",
                 "workspace_id": "default",
-                "memory_actor": "api_a",
                 "memory_domain": "agent_interaction",
             },
         ),
@@ -165,6 +162,50 @@ def test_mem_provider_writes_explicit_session_and_deduplicated_turn_pair(monkeyp
             },
         )
     ]
+
+
+@pytest.mark.unit
+def test_mem_provider_uses_gateway_issued_session_credential(monkeypatch):
+    provider = MemMemoryProvider()
+    provider._initialized = True
+    provider._session_id = "session-1"
+    provider._gateway_url = "http://gateway.test"
+    requests = []
+
+    class _FakeResponse:
+        def __init__(self, payload):
+            self._payload = json.dumps(payload).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return self._payload
+
+    def fake_urlopen(request, timeout=None):
+        requests.append((request, timeout))
+        if request.full_url.endswith("/v1/sessions/register"):
+            return _FakeResponse({"session_token": "session-secret"})
+        return _FakeResponse({"status": "remembered"})
+
+    monkeypatch.setenv("GATEWAY_AUTH_TOKEN", "root-secret")
+    monkeypatch.setattr("plugins.memory.mem.urlopen", fake_urlopen)
+
+    result = provider._request_json(
+        "POST",
+        "/remember",
+        {"title": "Decision", "summary": "Keep rollback evidence."},
+    )
+
+    assert result == {"status": "remembered"}
+    registration_request = requests[0][0]
+    memory_request = requests[1][0]
+    assert registration_request.get_header("Authorization") == "Bearer root-secret"
+    assert memory_request.get_header("X-voidcube-session-id") == "session-1"
+    assert memory_request.get_header("X-voidcube-session-token") == "session-secret"
 
 
 @pytest.mark.unit

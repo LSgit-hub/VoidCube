@@ -214,14 +214,22 @@ async def test_live_gateway_executor_propagates_body_integrity_degraded(tmp_path
 @pytest.mark.operational
 async def test_live_three_service_lifespan_registration_recovery_and_shutdown(
     tmp_path: Path,
+    monkeypatch,
 ):
     _create_git_repo(tmp_path)
+    monkeypatch.setenv("GATEWAY_AUTH_TOKEN", "live-gateway-root-secret")
     gateway_port = _free_port()
     memory_port = _free_port()
     supervisor_port = _free_port()
     gateway_url = f"http://127.0.0.1:{gateway_port}"
 
-    gateway = InternalGateway(GatewayConfig(host="127.0.0.1", port=gateway_port))
+    gateway = InternalGateway(
+        GatewayConfig(
+            host="127.0.0.1",
+            port=gateway_port,
+            auth_token="live-gateway-root-secret",
+        )
+    )
     memory = MemoryService(
         MemoryServiceConfig(
             host="127.0.0.1",
@@ -297,7 +305,13 @@ async def test_live_three_service_lifespan_registration_recovery_and_shutdown(
             )
             turns = (
                 await client.get(
-                    f"{gateway_url}/api/mem/sessions/live%20agent%20session/turns"
+                    f"{gateway_url}/api/mem/sessions/live%20agent%20session/turns",
+                    headers={
+                        "X-VoidCube-Session-Id": "live agent session",
+                        "X-VoidCube-Session-Token": provider._gateway_session_credentials[
+                            "live agent session"
+                        ],
+                    },
                 )
             ).json()
             assert [turn["speaker"] for turn in turns["turns"]] == ["user", "agent"]

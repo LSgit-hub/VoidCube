@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import uuid
 from pathlib import Path
@@ -51,6 +52,8 @@ class MemMemoryProvider(MemoryProvider):
         self._owner_id = DEFAULT_OWNER_ID
         self._workspace_id = DEFAULT_WORKSPACE_ID
         self._redact_before_store = True
+        self._gateway_session_credentials: dict[str, str] = {}
+        self._gateway_credential_lock = threading.Lock()
         self._outbox: MemoryWriteOutbox | None = None
         self._sync_thread: threading.Thread | None = None
         self._sync_stop = threading.Event()
@@ -465,9 +468,49 @@ class MemMemoryProvider(MemoryProvider):
         return {
             "owner_id": self._owner_id,
             "workspace_id": self._workspace_id,
-            "memory_actor": "api_a",
             "memory_domain": "agent_interaction",
         }
+
+    def _ensure_gateway_session_credential(self, session_id: str) -> str:
+        resolved_session_id = str(session_id or "").strip()
+        if not resolved_session_id:
+            raise RuntimeError("Memory Gateway session identity is unavailable")
+        existing = self._gateway_session_credentials.get(resolved_session_id, "")
+        if existing:
+            return existing
+        with self._gateway_credential_lock:
+            existing = self._gateway_session_credentials.get(
+                resolved_session_id,
+                "",
+            )
+            if existing:
+                return existing
+            payload = json.dumps(
+                {
+                    "session_id": resolved_session_id,
+                    "source": "agent_memory_provider",
+                }
+            ).encode("utf-8")
+            headers = {"Content-Type": "application/json"}
+            gateway_token = str(os.getenv("GATEWAY_AUTH_TOKEN") or "").strip()
+            if gateway_token:
+                headers["Authorization"] = f"Bearer {gateway_token}"
+            request = Request(
+                f"{self._gateway_url}/v1/sessions/register",
+                data=payload,
+                headers=headers,
+                method="POST",
+            )
+            with urlopen(
+                request,
+                timeout=self._request_timeout_seconds,
+            ) as response:
+                result = json.loads(response.read().decode("utf-8") or "{}")
+            session_token = str(result.get("session_token") or "").strip()
+            if not session_token:
+                raise RuntimeError("Gateway did not issue a session credential")
+            self._gateway_session_credentials[resolved_session_id] = session_token
+            return session_token
 
     def _request_json(
         self,
@@ -475,9 +518,20 @@ class MemMemoryProvider(MemoryProvider):
         path: str,
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        identity_session_id = str(
+            (payload or {}).get("session_id")
+            or (payload or {}).get("current_session_id")
+            or self._session_id
+            or ""
+        ).strip()
+        session_token = self._ensure_gateway_session_credential(identity_session_id)
         url = f"{self._gateway_url}/api/mem{path}"
         data = None
-        headers = {"Accept": "application/json"}
+        headers = {
+            "Accept": "application/json",
+            "X-VoidCube-Session-Id": identity_session_id,
+            "X-VoidCube-Session-Token": session_token,
+        }
         if method.upper() == "GET" and payload:
             url += "?" + urlencode(payload)
         elif payload is not None:

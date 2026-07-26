@@ -1,6 +1,7 @@
 import os
 import json
 from typing import Optional
+import yaml
 from pydantic import BaseModel, Field
 
 from systems.memory.config import MemoryServiceConfig
@@ -68,8 +69,34 @@ class SystemConfig(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
 
 
+def _apply_canonical_supervisor_config(config: SystemConfig) -> None:
+    """Load Supervisor settings from VOIDCUBE_HOME/config.yaml.
+
+    Environment overrides are applied afterwards, preserving the repository's
+    existing precedence contract.
+    """
+    try:
+        from VoidCube_core.constants import get_config_path
+
+        path = get_config_path()
+        if not path.is_file():
+            return
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        supervisor = dict(raw.get("supervisor") or {})
+        service_runtime = dict(supervisor.get("service_runtime") or {})
+        if service_runtime:
+            current = config.supervisor.service_runtime.model_dump(mode="python")
+            current.update(service_runtime)
+            config.supervisor.service_runtime = type(
+                config.supervisor.service_runtime
+            ).model_validate(current)
+    except Exception:
+        return
+
+
 def load_config_from_env() -> SystemConfig:
     config = SystemConfig()
+    _apply_canonical_supervisor_config(config)
     
     config.gateway.host = os.getenv("GATEWAY_HOST", config.gateway.host)
     config.gateway.port = int(os.getenv("GATEWAY_PORT", config.gateway.port))
@@ -154,6 +181,34 @@ def load_config_from_env() -> SystemConfig:
             "SUPERVISOR_HEALTH_INTERVAL",
             config.supervisor.service_runtime.health_check_interval,
         )
+    )
+    config.supervisor.service_runtime.companion_proactive_reminder_enabled = (
+        os.getenv(
+            "SUPERVISOR_COMPANION_PROACTIVE_REMINDER_ENABLED",
+            str(config.supervisor.service_runtime.companion_proactive_reminder_enabled),
+        ).strip().lower()
+        not in {"0", "false", "no", "off"}
+    )
+    config.supervisor.service_runtime.companion_proactive_reminder_tts_enabled = (
+        os.getenv(
+            "SUPERVISOR_COMPANION_PROACTIVE_REMINDER_TTS_ENABLED",
+            str(config.supervisor.service_runtime.companion_proactive_reminder_tts_enabled),
+        ).strip().lower()
+        not in {"0", "false", "no", "off"}
+    )
+    config.supervisor.service_runtime.companion_proactive_reminder_cooldown_seconds = int(
+        os.getenv(
+            "SUPERVISOR_COMPANION_PROACTIVE_REMINDER_COOLDOWN_SECONDS",
+            config.supervisor.service_runtime.companion_proactive_reminder_cooldown_seconds,
+        )
+    )
+    config.supervisor.service_runtime.companion_proactive_dnd_start = os.getenv(
+        "SUPERVISOR_COMPANION_PROACTIVE_DND_START",
+        config.supervisor.service_runtime.companion_proactive_dnd_start,
+    )
+    config.supervisor.service_runtime.companion_proactive_dnd_end = os.getenv(
+        "SUPERVISOR_COMPANION_PROACTIVE_DND_END",
+        config.supervisor.service_runtime.companion_proactive_dnd_end,
     )
     config.supervisor.service_runtime.autonomous_chain_review_interval = int(
         os.getenv(

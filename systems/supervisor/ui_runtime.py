@@ -2546,6 +2546,104 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   background: rgba(111,198,160,.18);
 }
 .voice-controls button:disabled { cursor: wait; opacity: .55; }
+.reminder-policy-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 20px;
+  padding: 4px 2px;
+}
+.reminder-policy-field {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 38px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.reminder-policy-field > span {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.reminder-policy-field input[type="number"],
+.reminder-policy-field input[type="time"] {
+  width: 112px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 5px;
+  background: rgba(10,8,7,.52);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 11px;
+  color-scheme: dark;
+}
+.reminder-policy-toggle {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  flex: 0 0 auto;
+}
+.reminder-policy-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.reminder-policy-toggle span {
+  position: absolute;
+  inset: 0;
+  border-radius: 11px;
+  background: rgba(255,255,255,.12);
+  border: 1px solid rgba(255,255,255,.1);
+  cursor: pointer;
+  transition: background .2s ease;
+}
+.reminder-policy-toggle span::after {
+  content: "";
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  left: 2px;
+  top: 2px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  transition: transform .2s ease, background .2s ease;
+}
+.reminder-policy-toggle input:checked + span {
+  background: rgba(111,198,160,.28);
+  border-color: rgba(111,198,160,.45);
+}
+.reminder-policy-toggle input:checked + span::after {
+  transform: translateX(16px);
+  background: var(--accent-green);
+}
+.reminder-policy-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  min-height: 34px;
+}
+.reminder-policy-status {
+  margin-right: auto;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.reminder-policy-save {
+  height: 30px;
+  padding: 0 16px;
+  border: 1px solid rgba(111,198,160,.42);
+  border-radius: 5px;
+  background: rgba(111,198,160,.18);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.reminder-policy-form :disabled { cursor: not-allowed; opacity: .5; }
 
 /* ── Dock 响应式 ── */
 @media (max-width: 720px) {
@@ -2557,6 +2655,8 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   .dock-char-strip { padding: 0 6px; gap: 4px; }
   .dock-panel { max-height: 320px; border-radius: 10px 10px 0 0; }
   .dock-panels { padding: 0 8px 6px; }
+  .reminder-policy-form { grid-template-columns: 1fr; }
+  .reminder-policy-actions { grid-column: 1; }
 }
 
 /* ── drill-down 详情抽屉 ── */
@@ -3104,6 +3204,47 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
         <div class="panel-body" id="panelStatsBody">
         </div>
       </div>
+
+      <div class="dock-panel" id="panelSettings">
+        <div class="panel-header">
+          <div class="panel-title"><span class="pt-icon">⚙</span>主动提醒</div>
+          <button class="panel-close" data-panel="settings">×</button>
+        </div>
+        <div class="panel-body">
+          <form class="reminder-policy-form" id="reminderPolicyForm">
+            <label class="reminder-policy-field">
+              <span>主动提醒</span>
+              <span class="reminder-policy-toggle">
+                <input type="checkbox" id="reminderPolicyEnabled"/>
+                <span></span>
+              </span>
+            </label>
+            <label class="reminder-policy-field">
+              <span>语音播报</span>
+              <span class="reminder-policy-toggle">
+                <input type="checkbox" id="reminderPolicyTts"/>
+                <span></span>
+              </span>
+            </label>
+            <label class="reminder-policy-field">
+              <span>冷却时间（分钟）</span>
+              <input type="number" id="reminderPolicyCooldown" min="0" max="1440" step="1" required/>
+            </label>
+            <label class="reminder-policy-field">
+              <span>免打扰开始</span>
+              <input type="time" id="reminderPolicyDndStart"/>
+            </label>
+            <label class="reminder-policy-field">
+              <span>免打扰结束</span>
+              <input type="time" id="reminderPolicyDndEnd"/>
+            </label>
+            <div class="reminder-policy-actions">
+              <span class="reminder-policy-status" id="reminderPolicyStatus" aria-live="polite"></span>
+              <button class="reminder-policy-save" id="reminderPolicySave" type="submit">保存</button>
+            </div>
+          </form>
+        </div>
+      </div>
     </div>
 
     <!-- 底部 Dock 栏 -->
@@ -3145,6 +3286,11 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
       <button class="dock-btn" data-panel="stats" title="替身与统计">
         <span class="db-icon">📈</span>
         <span class="db-label">替身</span>
+      </button>
+      <span class="dock-sep"></span>
+      <button class="dock-btn" data-panel="settings" title="主动提醒设置">
+        <span class="db-icon">⚙</span>
+        <span class="db-label">提醒</span>
       </button>
 
     </nav>
@@ -3213,6 +3359,14 @@ const els = {
   panelCognitionBody: $('#panelCognitionBody'),
   panelObservationBody: $('#panelObservationBody'),
   panelStatsBody: $('#panelStatsBody'),
+  reminderPolicyForm: $('#reminderPolicyForm'),
+  reminderPolicyEnabled: $('#reminderPolicyEnabled'),
+  reminderPolicyTts: $('#reminderPolicyTts'),
+  reminderPolicyCooldown: $('#reminderPolicyCooldown'),
+  reminderPolicyDndStart: $('#reminderPolicyDndStart'),
+  reminderPolicyDndEnd: $('#reminderPolicyDndEnd'),
+  reminderPolicyStatus: $('#reminderPolicyStatus'),
+  reminderPolicySave: $('#reminderPolicySave'),
   /* drill-down drawer */
   drawer: $('#detailDrawer'),
   drawerCard: $('#detailDrawerCard'),
@@ -3230,6 +3384,12 @@ if (els.voiceEnroll) els.voiceEnroll.addEventListener('click', () => enrollVoice
 if (els.voiceMicToggle) els.voiceMicToggle.addEventListener('click', () => toggleVoice());
 if (els.voiceListen) els.voiceListen.addEventListener('click', () => toggleContinuousVoice());
 if (els.voiceTalk) els.voiceTalk.addEventListener('click', () => runVoiceSession());
+if (els.reminderPolicyForm) {
+  els.reminderPolicyForm.addEventListener('submit', event => {
+    event.preventDefault();
+    saveReminderPolicy();
+  });
+}
 
 /* ── 场景 → 动作自动映射 ── */
 const SCENE_TO_ACTION = {
@@ -3371,6 +3531,7 @@ function openPanel(name) {
     if (name === 'observation') renderObservationPanel(lastState);
     if (name === 'stats') renderStatsPanel(lastState);
   }
+  if (name === 'settings') loadReminderPolicy();
 }
 function closePanel(name) {
   const panelId = 'panel' + name.charAt(0).toUpperCase() + name.slice(1).replace(/input$/i, 'Input');
@@ -5039,13 +5200,15 @@ function updateDockCharStrip(state) {
     const stellar = state.stellar_mode || {};
     const mode = stellar.mode || 'daily_companion';
     const observation = stellar.latest_companion_observation || {};
-    els.dcsStatus.textContent = mode === 'auto_evolution'
-      ? 'Auto · 自主进化中'
-      : observation.disposition === 'remind'
-        ? '日常 · 有提醒待输出'
-        : observation.intent_state === 'understood'
-          ? '日常 · 已理解任务'
-          : '日常 · 静默观察';
+    const pendingReminder = stellar.pending_proactive_reminder || {};
+    const reminderDelivery = observation.reminder_delivery || {};
+    let companionStatus = '日常 · 静默观察';
+    if (mode === 'auto_evolution') companionStatus = 'Auto · 自主进化中';
+    else if (Object.keys(pendingReminder).length) companionStatus = '日常 · 提醒待输出';
+    else if (reminderDelivery.status === 'delivered') companionStatus = '日常 · 提醒已播报';
+    else if (observation.disposition === 'remind') companionStatus = '日常 · 有提醒待输出';
+    else if (observation.intent_state === 'understood') companionStatus = '日常 · 已理解任务';
+    els.dcsStatus.textContent = companionStatus;
   }
 }
 
@@ -5144,6 +5307,83 @@ async function runVoiceSession() {
   }
   if (!voice.enabled) await postVoice('/voice/microphone', {enabled: true});
   await postVoice('/voice/session/start', {duration_seconds: 8});
+}
+
+let reminderPolicy = null;
+let reminderPolicyBusy = false;
+
+function setReminderPolicyBusy(busy) {
+  reminderPolicyBusy = busy;
+  if (!els.reminderPolicyForm) return;
+  const managed = Boolean(reminderPolicy && reminderPolicy.managed);
+  $$('input, button', els.reminderPolicyForm).forEach(control => {
+    control.disabled = busy || managed;
+  });
+}
+
+function renderReminderPolicy(policy) {
+  reminderPolicy = policy || {};
+  if (els.reminderPolicyEnabled) els.reminderPolicyEnabled.checked = Boolean(reminderPolicy.enabled);
+  if (els.reminderPolicyTts) els.reminderPolicyTts.checked = Boolean(reminderPolicy.tts_enabled);
+  if (els.reminderPolicyCooldown) {
+    els.reminderPolicyCooldown.value = String(
+      Math.round(Number(reminderPolicy.cooldown_seconds || 0) / 60)
+    );
+  }
+  if (els.reminderPolicyDndStart) els.reminderPolicyDndStart.value = reminderPolicy.dnd_start || '';
+  if (els.reminderPolicyDndEnd) els.reminderPolicyDndEnd.value = reminderPolicy.dnd_end || '';
+  if (els.reminderPolicyStatus) {
+    els.reminderPolicyStatus.textContent = reminderPolicy.managed ? '托管配置，只读' : '';
+  }
+  setReminderPolicyBusy(false);
+}
+
+async function loadReminderPolicy() {
+  if (reminderPolicyBusy) return;
+  setReminderPolicyBusy(true);
+  if (els.reminderPolicyStatus) els.reminderPolicyStatus.textContent = '读取中';
+  try {
+    const response = await fetch('/companion/reminder-policy', {cache: 'no-store'});
+    if (!response.ok) throw new Error('load_failed');
+    renderReminderPolicy(await response.json());
+  } catch (error) {
+    if (els.reminderPolicyStatus) els.reminderPolicyStatus.textContent = '读取失败';
+    setReminderPolicyBusy(false);
+  }
+}
+
+async function saveReminderPolicy() {
+  if (!els.reminderPolicyForm || reminderPolicyBusy || !els.reminderPolicyForm.reportValidity()) return;
+  setReminderPolicyBusy(true);
+  if (els.reminderPolicyStatus) els.reminderPolicyStatus.textContent = '保存中';
+  const cooldownMinutes = Number(els.reminderPolicyCooldown.value || 0);
+  const payload = {
+    enabled: Boolean(els.reminderPolicyEnabled.checked),
+    tts_enabled: Boolean(els.reminderPolicyTts.checked),
+    cooldown_seconds: Math.round(cooldownMinutes * 60),
+    dnd_start: els.reminderPolicyDndStart.value || '',
+    dnd_end: els.reminderPolicyDndEnd.value || '',
+  };
+  try {
+    const response = await fetch('/companion/reminder-policy', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const errorPayload = await response.json().catch(() => ({}));
+      throw new Error(String(errorPayload.detail || 'save_failed'));
+    }
+    renderReminderPolicy(await response.json());
+    if (els.reminderPolicyStatus) els.reminderPolicyStatus.textContent = '已保存';
+  } catch (error) {
+    if (els.reminderPolicyStatus) {
+      els.reminderPolicyStatus.textContent = String(error.message || '').includes('managed')
+        ? '托管配置，只读'
+        : '保存失败';
+    }
+    setReminderPolicyBusy(false);
+  }
 }
 
 /* ── 应用状态(主入口) ── */

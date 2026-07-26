@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta
+import json
 from pathlib import Path
 import sys
 
@@ -11,6 +12,35 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from systems.gateway.internal_gateway import GatewayConfig, InternalGateway, ServiceInfo
+
+
+def _register_memory_target(client: TestClient) -> None:
+    response = client.post(
+        "/register",
+        json={
+            "service_name": "memory-service",
+            "service_type": "memory",
+            "address": "http://memory-service",
+        },
+    )
+    assert response.status_code == 201
+
+
+def _register_agent_identity(client: TestClient) -> dict[str, str]:
+    response = client.post(
+        "/register",
+        json={
+            "service_name": "api-a-agent",
+            "service_type": "agent",
+            "address": "http://agent-service",
+        },
+    )
+    assert response.status_code == 201
+    payload = response.json()
+    return {
+        "X-VoidCube-Service-Id": payload["service_id"],
+        "X-VoidCube-Service-Token": payload["service_token"],
+    }
 
 
 def test_gateway_activity_touch_endpoint_updates_snapshot():
@@ -674,8 +704,13 @@ def test_gateway_memory_recall_does_not_update_memory_activity_when_upstream_fai
         },
     )
     assert register_response.status_code == 201
+    identity_headers = _register_agent_identity(client)
 
-    response = client.post("/api/mem/recall", json={"query": "hello"})
+    response = client.post(
+        "/api/mem/recall",
+        json={"query": "hello"},
+        headers=identity_headers,
+    )
     assert response.status_code in {500, 504}
 
     activity = client.get("/admin/activity").json()
@@ -695,6 +730,7 @@ def test_gateway_memory_proxy_preserves_query_parameters(monkeypatch):
         },
     )
     assert register_response.status_code == 201
+    identity_headers = _register_agent_identity(client)
     captured = {}
 
     class _FakeResponse:
@@ -727,7 +763,8 @@ def test_gateway_memory_proxy_preserves_query_parameters(monkeypatch):
     )
 
     response = client.get(
-        "/api/mem/recall/traces?session_id=session-1&status=hit&limit=3"
+        "/api/mem/recall/traces?session_id=session-1&status=hit&limit=3",
+        headers=identity_headers,
     )
 
     assert response.status_code == 200
@@ -736,6 +773,7 @@ def test_gateway_memory_proxy_preserves_query_parameters(monkeypatch):
         ("session_id", "session-1"),
         ("status", "hit"),
         ("limit", "3"),
+        ("memory_actor", "api_a"),
     ]
 
 
@@ -752,16 +790,174 @@ def test_gateway_remember_route_updates_memory_activity_even_when_upstream_fails
         },
     )
     assert register_response.status_code == 201
+    identity_headers = _register_agent_identity(client)
 
     response = client.post(
         "/api/mem/remember",
         json={"title": "Greeting", "summary": "hello"},
+        headers=identity_headers,
     )
     assert response.status_code in {500, 504}
 
     activity = client.get("/admin/activity").json()
     assert activity["last_memory_task_at"] is not None
     assert activity["counts"]["memory_task_count"] == 1
+
+
+def test_gateway_memory_proxy_requires_authenticated_identity():
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+    _register_memory_target(client)
+
+    response = client.post(
+        "/api/mem/remember",
+        json={"title": "Greeting", "summary": "hello"},
+    )
+
+    assert response.status_code == 401
+    assert "Authenticated service or session identity" in response.json()["detail"]
+    activity = client.get("/admin/activity").json()
+    assert activity["counts"]["memory_task_count"] == 0
+
+
+def test_gateway_memory_proxy_overwrites_spoofed_actor_and_strips_credentials(
+    monkeypatch,
+):
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+    _register_memory_target(client)
+    identity_headers = _register_agent_identity(client)
+    captured = {}
+
+    class _FakeResponse:
+        status = 200
+        headers = {"content-type": "application/json"}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def read(self):
+            return b'{"status":"remembered"}'
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def request(self, method, url, **kwargs):
+            captured.update(
+                method=method,
+                url=url,
+                body=json.loads(kwargs["data"].decode("utf-8")),
+                headers=kwargs["headers"],
+            )
+            return _FakeResponse()
+
+    monkeypatch.setattr(
+        "systems.gateway.internal_gateway.aiohttp.ClientSession",
+        _FakeSession,
+    )
+    response = client.post(
+        "/api/mem/remember",
+        json={
+            "title": "Greeting",
+            "summary": "hello",
+            "memory_actor": "governor",
+        },
+        headers=identity_headers,
+    )
+
+    assert response.status_code == 200
+    assert captured["body"]["memory_actor"] == "api_a"
+    assert "x-voidcube-service-token" not in captured["headers"]
+    assert "authorization" not in captured["headers"]
+
+
+def test_gateway_supervisor_memory_capabilities_are_bounded(monkeypatch):
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+    _register_memory_target(client)
+    registration = client.post(
+        "/register",
+        json={
+            "service_name": "supervisor",
+            "service_type": "supervisor",
+            "address": "http://supervisor-service",
+        },
+    ).json()
+    headers = {
+        "X-VoidCube-Service-Id": registration["service_id"],
+        "X-VoidCube-Service-Token": registration["service_token"],
+        "X-VoidCube-Memory-Actor": "governor",
+    }
+    captured = {}
+
+    class _FakeResponse:
+        status = 200
+        headers = {"content-type": "application/json"}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def read(self):
+            return b'{"promotions":[]}'
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def request(self, method, url, **kwargs):
+            captured["body"] = json.loads(kwargs["data"].decode("utf-8"))
+            return _FakeResponse()
+
+    monkeypatch.setattr(
+        "systems.gateway.internal_gateway.aiohttp.ClientSession",
+        _FakeSession,
+    )
+    allowed = client.post(
+        "/api/mem/promotions",
+        json={"reason": "approved by governance", "memory_actor": "api_a"},
+        headers=headers,
+    )
+    assert allowed.status_code == 200
+    assert captured["body"]["memory_actor"] == "governor"
+
+    denied = client.post(
+        "/api/mem/promotions",
+        json={"reason": "approved by governance"},
+        headers={**headers, "X-VoidCube-Memory-Actor": "api_a"},
+    )
+    assert denied.status_code == 403
+
+
+def test_gateway_registration_requires_root_token_when_configured():
+    gateway = InternalGateway(GatewayConfig(auth_token="root-secret"))
+    client = TestClient(gateway.app)
+    payload = {
+        "service_name": "api-a-agent",
+        "service_type": "agent",
+        "address": "http://agent-service",
+    }
+
+    assert client.post("/register", json=payload).status_code == 401
+    response = client.post(
+        "/register",
+        json=payload,
+        headers={"Authorization": "Bearer root-secret"},
+    )
+    assert response.status_code == 201
+    assert response.json()["service_token"]
 
 
 def test_gateway_records_tier1_turn_with_single_atomic_memory_call(monkeypatch):
