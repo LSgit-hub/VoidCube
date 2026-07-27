@@ -74,7 +74,6 @@ class VoiceToggleRequest(BaseModel):
 
 class VoiceCaptureRequest(BaseModel):
     session_id: str = ""
-    duration_seconds: float = Field(default=8.0, ge=1.0, le=30.0)
 
 
 class VoiceEnrollmentRequest(BaseModel):
@@ -169,6 +168,11 @@ class Supervisor(
             self.app.add_api_route(self.config.ui_path, self.get_supervisor_ui, methods=["GET"])
             self.app.add_api_route("/ui/state", self.get_supervisor_ui_state, methods=["GET"])
             self.app.add_api_route("/ui/events", self.get_supervisor_ui_events, methods=["GET"])
+            self.app.add_api_route(
+                "/ui/voice-levels",
+                self.get_voice_level_events,
+                methods=["GET"],
+            )
             self.app.add_api_route(
                 "/ui/identity/archive",
                 self.get_supervisor_identity_archive,
@@ -445,7 +449,6 @@ class Supervisor(
             }
         return await self._voice_manager.run_once(
             session_id=request.session_id,
-            duration_seconds=request.duration_seconds,
         )
 
     async def interrupt_voice_session(self) -> Dict[str, Any]:

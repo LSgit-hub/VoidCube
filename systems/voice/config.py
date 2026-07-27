@@ -18,10 +18,18 @@ class VoiceConfig:
     sample_rate: int = 16000
     channels: int = 1
     max_record_seconds: float = 12.0
-    continuous_segment_seconds: float = 3.0
-    wake_word: str = "星子"
+    wake_word: str = "你好，星子"
+    wake_keyword_tokens: str = "n ǐ h ǎo x īng z ǐ @你好星子"
     wake_word_required: bool = True
-    wake_window_seconds: float = 8.0
+    wake_cue_enabled: bool = True
+    speech_start_timeout_seconds: float = 8.0
+    speech_end_silence_seconds: float = 3.0
+    max_utterance_seconds: float = 45.0
+    vad_threshold: float = 0.5
+    vad_model_path: Path = Path("runtime/voice/models/silero_vad.onnx")
+    wake_model_root: Path = Path("runtime/voice/models")
+    wake_threshold: float = 0.25
+    wake_score: float = 1.5
     fingerprint_threshold: float = 0.5
     fingerprint_path: Path = Path("runtime/voice/fingerprint.json")
     fingerprint_model_path: Path = Path(
@@ -34,7 +42,7 @@ class VoiceConfig:
     stt_api_key: str = ""
     stt_model: str = "base"
     stt_language: str = "zh"
-    stt_hotwords: str = "星子 西子 VoidCube 语音系统"
+    stt_hotwords: str = "你好 星子 西子 VoidCube 语音系统"
     stt_device: str = "cpu"
     stt_compute_type: str = "int8"
     tts_provider: str = "edge"
@@ -58,18 +66,83 @@ class VoiceConfig:
             max_record_seconds=max(
                 1.0, float(os.getenv("VOIDCUBE_VOICE_MAX_RECORD_SECONDS", "12"))
             ),
-            continuous_segment_seconds=max(
-                0.5,
+            wake_word=(
+                str(os.getenv("VOIDCUBE_VOICE_WAKE_WORD", "你好，星子")).strip()
+                or "你好，星子"
+            ),
+            wake_keyword_tokens=(
+                str(
+                    os.getenv(
+                        "VOIDCUBE_VOICE_WAKE_KEYWORD_TOKENS",
+                        "n ǐ h ǎo x īng z ǐ @你好星子",
+                    )
+                ).strip()
+                or "n ǐ h ǎo x īng z ǐ @你好星子"
+            ),
+            wake_word_required=_env_bool("VOIDCUBE_VOICE_WAKE_WORD_REQUIRED", True),
+            wake_cue_enabled=_env_bool("VOIDCUBE_VOICE_WAKE_CUE_ENABLED", True),
+            speech_start_timeout_seconds=max(
+                1.0,
                 min(
-                    10.0,
-                    float(os.getenv("VOIDCUBE_VOICE_CONTINUOUS_SEGMENT_SECONDS", "3")),
+                    30.0,
+                    float(
+                        os.getenv(
+                            "VOIDCUBE_VOICE_SPEECH_START_TIMEOUT_SECONDS",
+                            "8",
+                        )
+                    ),
                 ),
             ),
-            wake_word=str(os.getenv("VOIDCUBE_VOICE_WAKE_WORD", "星子")).strip() or "星子",
-            wake_word_required=_env_bool("VOIDCUBE_VOICE_WAKE_WORD_REQUIRED", True),
-            wake_window_seconds=max(
-                1.0,
-                min(30.0, float(os.getenv("VOIDCUBE_VOICE_WAKE_WINDOW_SECONDS", "8"))),
+            speech_end_silence_seconds=max(
+                0.5,
+                min(
+                    5.0,
+                    float(
+                        os.getenv(
+                            "VOIDCUBE_VOICE_SPEECH_END_SILENCE_SECONDS",
+                            "3",
+                        )
+                    ),
+                ),
+            ),
+            max_utterance_seconds=max(
+                5.0,
+                min(
+                    120.0,
+                    float(
+                        os.getenv(
+                            "VOIDCUBE_VOICE_MAX_UTTERANCE_SECONDS",
+                            "45",
+                        )
+                    ),
+                ),
+            ),
+            vad_threshold=max(
+                0.0,
+                min(1.0, float(os.getenv("VOIDCUBE_VOICE_VAD_THRESHOLD", "0.5"))),
+            ),
+            vad_model_path=Path(
+                os.getenv(
+                    "VOIDCUBE_VOICE_VAD_MODEL_PATH",
+                    "runtime/voice/models/silero_vad.onnx",
+                )
+            ),
+            wake_model_root=Path(
+                os.getenv(
+                    "VOIDCUBE_VOICE_WAKE_MODEL_ROOT",
+                    "runtime/voice/models",
+                )
+            ),
+            wake_threshold=max(
+                0.0,
+                min(
+                    1.0,
+                    float(os.getenv("VOIDCUBE_VOICE_WAKE_THRESHOLD", "0.25")),
+                ),
+            ),
+            wake_score=max(
+                0.1,
+                min(10.0, float(os.getenv("VOIDCUBE_VOICE_WAKE_SCORE", "1.5"))),
             ),
             fingerprint_threshold=max(
                 0.0,
@@ -105,7 +178,7 @@ class VoiceConfig:
             stt_hotwords=str(
                 os.getenv(
                     "VOIDCUBE_STT_HOTWORDS",
-                    "星子 西子 VoidCube 语音系统",
+                    "你好 星子 西子 VoidCube 语音系统",
                 )
             ).strip(),
             stt_device=str(os.getenv("VOIDCUBE_STT_DEVICE", "cpu")).strip() or "cpu",

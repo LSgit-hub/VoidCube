@@ -178,12 +178,10 @@ html, body {
 .wc-hand.m {
   width: 3px; height: 36px; margin-left: -1.5px; margin-top: -36px;
   background: var(--trim);
-  animation: clock-tick 60s steps(60) infinite;
 }
 .wc-hand.s {
   width: 1.5px; height: 42px; margin-left: -.75px; margin-top: -42px;
   background: var(--coral);
-  animation: clock-tick 1s steps(60) infinite;
 }
 .wc-center {
   position: absolute; left: 50%; top: 50%;
@@ -193,8 +191,6 @@ html, body {
   z-index: 3;
   box-shadow: 0 0 4px var(--coral-g);
 }
-@keyframes clock-tick { to { transform: rotate(360deg); } }
-
 /* ── 窗户(可日夜切换) ── */
 .window {
   position: absolute;
@@ -1473,7 +1469,7 @@ body[data-character=""] .xizi { display: block; }
   border-radius: 10px;
   background: linear-gradient(180deg, #f0c8a0 0%, #d4a070 100%);
   transform-origin: top center;
-  z-index: 3;
+  z-index: 6;
   transition: transform .6s var(--ease-out);
 }
 .xs-arm.l { left: 16px; transform: rotate(8deg); }
@@ -2733,7 +2729,44 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   background: #188a52;
   box-shadow: 0 0 0 1px rgba(67,217,137,.18), 0 2px 8px rgba(12,92,54,.38);
 }
+@keyframes voice-listening-pulse {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(67,217,137,.18), 0 2px 8px rgba(12,92,54,.38); }
+  50% { box-shadow: 0 0 0 4px rgba(67,217,137,.12), 0 2px 10px rgba(12,92,54,.52); }
+}
+#voiceListen[aria-pressed="true"] {
+  animation: voice-listening-pulse 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  #voiceListen[aria-pressed="true"] { animation: none; }
+}
 .voice-controls button:disabled { cursor: wait; opacity: .55; }
+.voice-meter {
+  width: 54px;
+  height: 30px;
+  display: none;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 4px;
+  border: 1px solid rgba(67,217,137,.35);
+  border-radius: 5px;
+  background: rgba(20,14,10,.78);
+  box-sizing: border-box;
+}
+.voice-meter[data-active="true"] { display: flex; }
+.voice-meter i {
+  width: 3px;
+  height: 100%;
+  border-radius: 1px;
+  background: rgba(255,255,255,.12);
+  transform: scaleY(.18);
+  transform-origin: bottom;
+  transition: transform 90ms linear, background 90ms linear;
+}
+.voice-meter i[data-lit="true"] {
+  background: #43d989;
+  transform: scaleY(var(--meter-height, 1));
+}
 .voice-status-label {
   position: absolute;
   right: 0;
@@ -3142,8 +3175,8 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
         <span class="wc-tick major" style="transform: rotate(180deg);"></span>
         <span class="wc-tick major" style="transform: rotate(270deg);"></span>
         <div class="wc-hand h" id="wcHour"></div>
-        <div class="wc-hand m"></div>
-        <div class="wc-hand s"></div>
+        <div class="wc-hand m" id="wcMinute"></div>
+        <div class="wc-hand s" id="wcSecond"></div>
         <div class="wc-center"></div>
       </div>
     </div>
@@ -3386,6 +3419,9 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
       <button type="button" id="voiceMicToggle" title="麦克风开关" aria-pressed="false">🎙</button>
       <button type="button" id="voiceListen" title="持续监听" aria-pressed="false">◉</button>
       <button type="button" id="voiceTalk" title="开始语音会话">●</button>
+      <span class="voice-meter" id="voiceMeter" data-active="false" aria-hidden="true">
+        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+      </span>
       <span class="voice-status-label" id="voiceStatusLabel" aria-live="polite">语音关闭 · 声纹未录入</span>
     </div>
 
@@ -3595,6 +3631,8 @@ const els = {
   activeChar: 'xizi',
   particles: $('#particles'),
   wcHour: $('#wcHour'),
+  wcMinute: $('#wcMinute'),
+  wcSecond: $('#wcSecond'),
   /* bottom dock */
   dock: $('#bottomDock'),
   trigger: $('#bottomTrigger'),
@@ -3609,6 +3647,7 @@ const els = {
   voiceMicToggle: $('#voiceMicToggle'),
   voiceListen: $('#voiceListen'),
   voiceTalk: $('#voiceTalk'),
+  voiceMeter: $('#voiceMeter'),
   voiceStatusLabel: $('#voiceStatusLabel'),
   /* dock char strip */
   dcsName: $('#dcsName'),
@@ -3660,8 +3699,8 @@ if (els.reminderPolicyForm) {
 
 /* ── 场景 → 动作自动映射 ── */
 const SCENE_TO_ACTION = {
-  idle: 'rest', planning: 'work', drive: 'organize',
-  memory: 'organize', maintenance: 'organize', handoff: 'write',
+  idle: 'rest', planning: 'write', drive: 'work',
+  memory: 'organize', maintenance: 'organize', handoff: 'work', body_switch: 'work',
 };
 const GLYPHS = {
   idle: '·', planning: '!', drive: '✦', memory: 'λ',
@@ -5767,12 +5806,40 @@ function renderVoiceStatus(voice) {
   if (!els.voiceStatusLabel) return;
   let text = '';
   let tone = '';
+  const continuous = Boolean(voice.continuous_active || voice.continuous_task_running);
+  const continuousForeground = continuous && voice.active && [
+    'finalizing_utterance',
+    'matching_owner_voice',
+    'transcribing',
+    'thinking',
+    'speaking',
+  ].includes(String(voice.last_status || ''));
   if (voiceActionNotice) {
     text = voiceActionNotice.text;
     tone = voiceActionNotice.tone;
-  } else if (voice.last_status === 'rejected') {
-    text = fingerprintResultText(voice) || '语音已拒绝';
-    tone = 'error';
+  } else if (continuous && !continuousForeground) {
+    if (voice.last_status === 'continuous_retrying') {
+      text = '持续监听恢复中';
+      tone = 'warn';
+    } else if (voice.wake_state === 'starting') {
+      text = '正在准备本地语音模型';
+      tone = 'warn';
+    } else if (voice.wake_state === 'listening') {
+      text = voice.speech_detected ? '已检测到语音 · 等待说完' : '已唤醒 · 正在聆听';
+      tone = 'ok';
+    } else if (voice.wake_state === 'wake_detected') {
+      text = '已唤醒';
+      tone = 'ok';
+    } else {
+      text = '待唤醒';
+      tone = 'ok';
+    }
+  } else if (voice.active && voice.wake_state === 'starting') {
+    text = '正在准备本地语音模型';
+    tone = 'warn';
+  } else if (voice.active && voice.wake_state === 'listening') {
+    text = voice.speech_detected ? '已检测到语音 · 等待说完' : '正在聆听';
+    tone = 'ok';
   } else if (voice.active) {
     if (voice.last_status === 'recording_owner_voice_template') {
       const current = Number(voice.enrollment_sample_index || 0);
@@ -5781,15 +5848,18 @@ function renderVoiceStatus(voice) {
       tone = 'warn';
     }
     const activeLabels = {
-      recording: '正在录音',
       matching_owner_voice: '正在验证声纹',
       transcribing: '正在转写',
-      thinking: '星子正在思考',
-      speaking: '星子正在回复',
+      thinking: '待回复',
+      speaking: '正在回复',
       building_owner_voice_template: '正在生成声纹模板',
+      finalizing_utterance: '用户输入完成',
     };
     if (!text) text = activeLabels[voice.last_status] || '语音处理中';
     tone = 'warn';
+  } else if (voice.last_status === 'rejected') {
+    text = fingerprintResultText(voice) || '语音已拒绝';
+    tone = 'error';
   } else {
     const microphone = voice.enabled ? '语音开启' : '语音关闭';
     let fingerprint = '声纹未录入';
@@ -5813,6 +5883,29 @@ function renderVoiceStatus(voice) {
   els.voiceStatusLabel.textContent = text;
   els.voiceStatusLabel.title = text;
   els.voiceStatusLabel.dataset.tone = tone;
+}
+
+function renderVoiceLevel(voice) {
+  if (!els.voiceMeter) return;
+  const active = Boolean(voice.meter_active && voice.wake_state === 'listening');
+  els.voiceMeter.dataset.active = String(active);
+  const level = Math.max(0, Math.min(1, Number(voice.audio_level || 0)));
+  $$('i', els.voiceMeter).forEach((bar, index, bars) => {
+    const threshold = (index + 1) / bars.length;
+    bar.dataset.lit = String(active && level >= threshold * .82);
+    bar.style.setProperty('--meter-height', String(.22 + threshold * .78));
+  });
+}
+
+function applyVoiceRealtime(update) {
+  if (!lastState) lastState = {};
+  lastState.voice = Object.assign({}, lastState.voice || {}, update || {});
+  renderVoiceLevel(lastState.voice);
+  renderVoiceStatus(lastState.voice);
+  if (els.voiceTalk) {
+    els.voiceTalk.textContent = lastState.voice.active ? '■' : '●';
+    els.voiceTalk.title = lastState.voice.active ? '中断语音会话' : '开始语音会话';
+  }
 }
 
 function showVoiceNotice(text, tone = '', durationMs = 4000) {
@@ -5871,13 +5964,14 @@ function updateSceneMiniTitle(state) {
     els.voiceListen.textContent = listening ? '■' : '◉';
     els.voiceListen.title = listening
       ? '停止持续监听'
-      : '持续监听，唤醒词：' + String(voice.wake_word || '星子');
+      : '持续监听，唤醒词：' + String(voice.wake_word || '你好，星子');
   }
   if (els.voiceTalk) {
     els.voiceTalk.textContent = voice.active ? '■' : '●';
     els.voiceTalk.title = voice.active ? '中断语音会话' : '开始语音会话';
   }
   renderVoiceStatus(voice);
+  renderVoiceLevel(voice);
 }
 
 function renderCompanionChat(state) {
@@ -5932,9 +6026,10 @@ async function setStellarMode(mode) {
   }
 }
 
-async function postVoice(path, payload) {
+async function postVoice(path, payload, options = {}) {
   const buttons = els.voiceControls ? $$('button', els.voiceControls) : [];
   buttons.forEach(button => { button.disabled = true; });
+  if (options.keepTalkEnabled && els.voiceTalk) els.voiceTalk.disabled = false;
   try {
     const response = await fetch(path, {
       method: 'POST',
@@ -5989,10 +6084,16 @@ async function toggleContinuousVoice() {
   const voice = ((lastState || {}).voice || {});
   if (voice.continuous_active || voice.continuous_task_running) {
     await postVoice('/voice/continuous/stop', {});
+    showVoiceNotice('持续监听已关闭');
     return;
   }
   if (!voice.enabled) await postVoice('/voice/microphone', {enabled: true});
-  await postVoice('/voice/continuous/start', {});
+  const result = await postVoice('/voice/continuous/start', {});
+  if (result && ['started', 'already_running'].includes(String(result.status || ''))) {
+    showVoiceNotice('持续监听已开启', 'ok');
+  } else {
+    showVoiceNotice('持续监听启动失败', 'error', 6000);
+  }
 }
 
 async function runVoiceSession() {
@@ -6002,8 +6103,12 @@ async function runVoiceSession() {
     return;
   }
   if (!voice.enabled) await postVoice('/voice/microphone', {enabled: true});
-  showVoiceNotice('正在录音，请开始说话', 'warn', 0);
-  const result = await postVoice('/voice/session/start', {duration_seconds: 8});
+  showVoiceNotice('请开始说话', 'warn', 1200);
+  const result = await postVoice(
+    '/voice/session/start',
+    {},
+    {keepTalkEnabled: true}
+  );
   if (!result) {
     showVoiceNotice('语音请求失败', 'error');
   } else if (result.status === 'complete') {
@@ -6013,6 +6118,10 @@ async function runVoiceSession() {
     showVoiceNotice(fingerprintResultText(voiceState) || '声纹未通过', 'error', 6000);
   } else if (result.status === 'reply_ready_tts_unavailable') {
     showVoiceNotice('已生成回复，但语音播放失败', 'error', 6000);
+  } else if (result.reason === 'speech_start_timeout') {
+    showVoiceNotice('未检测到语音', 'warn');
+  } else if (result.status === 'interrupted') {
+    showVoiceNotice('语音会话已中断');
   } else {
     showVoiceNotice('语音未完成：' + String(result.reason || result.status), 'error', 6000);
   }
@@ -6198,24 +6307,30 @@ if ('EventSource' in window) {
     applyState(JSON.parse(ev.data));
   });
   es.onerror = () => startFallback();
+  const voiceLevels = new EventSource('/ui/voice-levels');
+  voiceLevels.addEventListener('level', ev => {
+    applyVoiceRealtime(JSON.parse(ev.data));
+  });
 } else {
   startFallback();
 }
 
 ambientParticles();
 
-/* ── 钟表时/分针同步 ── */
+/* ── 钟表指针同步 ── */
 function syncClock() {
-  const h = els.wcHour;
-  if (!h) return;
+  const {wcHour, wcMinute, wcSecond} = els;
+  if (!wcHour || !wcMinute || !wcSecond) return;
   const d = new Date();
-  const hh = d.getHours() % 12;
-  const mm = d.getMinutes();
-  h.style.transform = `rotate(${hh * 30 + mm * .5}deg)`;
-  h.style.marginTop = '-28px';
+  const hours = d.getHours() % 12;
+  const minutes = d.getMinutes();
+  const seconds = d.getSeconds();
+  wcSecond.style.transform = `rotate(${seconds * 6}deg)`;
+  wcMinute.style.transform = `rotate(${minutes * 6 + seconds * .1}deg)`;
+  wcHour.style.transform = `rotate(${hours * 30 + minutes * .5 + seconds / 120}deg)`;
 }
 syncClock();
-setInterval(syncClock, 60000);
+setInterval(syncClock, 1000);
 
 /* ── 启动缩放 ── */
 updateRoomScale();
@@ -6700,6 +6815,26 @@ class SupervisorUIMixin:
                 state = await self.get_supervisor_ui_state()
                 yield self._format_supervisor_ui_event("state", state)
                 await asyncio.sleep(self.config.ui_event_interval_seconds)
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    async def get_voice_level_events(self, request: Request) -> StreamingResponse:
+        async def event_stream():
+            while True:
+                if await request.is_disconnected():
+                    break
+                yield self._format_supervisor_ui_event(
+                    "level",
+                    self._voice_manager.realtime_status(),
+                )
+                await asyncio.sleep(0.1)
 
         return StreamingResponse(
             event_stream(),
@@ -8981,6 +9116,7 @@ class SupervisorUIMixin:
                 ],
             },
         )
+
         focus_card = next(
             (
                 card

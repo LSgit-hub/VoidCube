@@ -330,6 +330,87 @@ def _is_local_backend() -> bool:
     return _is_camofox_mode() or _get_cloud_provider() is None
 
 
+def _resolve_chrome_executable() -> Optional[str]:
+    """Find a usable Chrome/Chromium executable, caching the result.
+
+    Checks in order:
+    1. ``AGENT_BROWSER_EXECUTABLE_PATH`` environment variable
+    2. ``~/.VoidCube/chrome/`` — scan for ``chrome.exe`` (Windows) or
+       ``chrome`` (Linux/macOS) in versioned subdirectories
+    3. System PATH (``google-chrome``, ``chromium``, ``chrome``)
+
+    Returns the absolute path to the executable, or ``None`` when no
+    Chrome installation is found.
+    """
+    global _cached_chrome_path, _chrome_path_resolved
+    if _chrome_path_resolved:
+        return _cached_chrome_path
+
+    _chrome_path_resolved = True
+
+    # 1) Explicit env-var override
+    env_path = os.environ.get("AGENT_BROWSER_EXECUTABLE_PATH", "").strip()
+    if env_path and Path(env_path).exists():
+        _cached_chrome_path = env_path
+        logger.debug("Chrome resolved via env var: %s", env_path)
+        return env_path
+
+    # 2) ~/.VoidCube/chrome/  — scan for the newest versioned install
+    VoidCube_chrome_dir = Path.home() / ".VoidCube" / "chrome"
+    if VoidCube_chrome_dir.is_dir():
+        candidates: List[Path] = []
+        if sys.platform == "win32":
+            candidates = sorted(
+                VoidCube_chrome_dir.glob("win64-*/chrome-win64/chrome.exe"),
+                reverse=True,
+            )
+        elif sys.platform == "darwin":
+            candidates = sorted(
+                VoidCube_chrome_dir.glob("mac-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium"),
+                reverse=True,
+            )
+        else:  # Linux
+            candidates = sorted(
+                VoidCube_chrome_dir.glob("linux-*/chrome-linux64/chrome"),
+                reverse=True,
+            )
+        if candidates:
+            _cached_chrome_path = str(candidates[0])
+            logger.debug("Chrome resolved via ~/.VoidCube/chrome/: %s", _cached_chrome_path)
+            return _cached_chrome_path
+
+    # 3) System PATH fallback
+    for name in ("google-chrome", "chromium", "chrome", "chromium-browser"):
+        found = shutil.which(name)
+        if found:
+            _cached_chrome_path = found
+            logger.debug("Chrome resolved via system PATH: %s", found)
+            return found
+
+    _cached_chrome_path = None
+    logger.debug("No Chrome installation found")
+    return None
+
+
+# Cache for _resolve_chrome_executable
+_cached_chrome_path: Optional[str] = None
+_chrome_path_resolved: bool = False
+
+
+def _get_chrome_install_hint() -> str:
+    """Return the shell command to install Chrome to ~/.VoidCube/chrome/."""
+    chrome_dir = Path.home() / ".VoidCube" / "chrome"
+    return (
+        f'npx --yes @puppeteer/browsers install chrome@stable --path '
+        f'"{chrome_dir.parent.as_posix()}"'
+    )
+
+
+def _is_chrome_missing() -> bool:
+    """Return True when no Chrome executable can be found."""
+    return _resolve_chrome_executable() is None
+
+
 def _allow_private_urls() -> bool:
     """Return whether the browser is allowed to navigate to private/internal addresses.
 
@@ -989,7 +1070,22 @@ def _run_browser_command(
         error = _termux_browser_install_error()
         logger.warning("browser command blocked on Termux: %s", error)
         return {"success": False, "error": error}
-    
+
+    # ── Chrome availability check ──
+    if _is_local_mode() and _is_chrome_missing():
+        install_hint = _get_chrome_install_hint()
+        chrome_dir = Path.home() / ".VoidCube" / "chrome"
+        return {
+            "success": False,
+            "error": (
+                "Chrome/Chromium 未安装。请用终端工具运行以下命令安装（约 428MB）：\n"
+                f"  {install_hint}\n"
+                f"安装后 Chrome 将位于 {chrome_dir}，browser 工具会自动找到它。"
+            ),
+            "_chrome_missing": True,
+            "_install_hint": install_hint,
+        }
+
     from tools.interrupt import is_interrupted
     if is_interrupted():
         return {"success": False, "error": "Interrupted"}
@@ -2249,6 +2345,14 @@ def check_browser_requirements() -> bool:
     provider = _get_cloud_provider()
     if provider is not None and not provider.is_configured():
         return False
+
+    # Chrome missing is NOT a hard failure — it can be installed on demand
+    # at ~/.VoidCube/chrome/.  Log a warning so the user/agent knows.
+    if _is_chrome_missing():
+        logger.warning(
+            "Chrome/Chromium not found.  Install it with: %s",
+            _get_chrome_install_hint(),
+        )
 
     return True
 

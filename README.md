@@ -45,7 +45,7 @@ python -m pytest -q
 python -m pytest Mem/tests -q
 ```
 
-语音能力是可选依赖：`edge-tts`、`faster-whisper`、`sherpa-onnx`、`numpy`、`sounddevice`、`soundfile`；支持单轮会话和显式启停的持续监听，默认唤醒词为“星子”。STT 在未配置远程地址时使用本地 `faster-whisper base/int8`，默认以“星子 西子 VoidCube 语音系统”为热词，也可通过 `VOIDCUBE_STT_HOTWORDS` 调整或切换至 OpenAI-compatible 音频转写端点；播放默认由 `soundfile + sounddevice` 在进程内完成，`ffplay` 仅作为兼容回退。声纹采用 3D-Speaker CAM++ 的 192 维说话人嵌入和三段录入模板，只承担本机说话人过滤；可通过 UI 或 `/voice/fingerprint` 临时关闭，关闭不会删除模板。原始音频默认不保留。
+语音能力是可选依赖：`edge-tts`、`faster-whisper`、`sherpa-onnx`、`numpy`、`sounddevice`、`soundfile`；支持按钮单轮会话和显式启停的持续监听，默认唤醒词为“你好，星子”。两种入口共用持久麦克风流和 Silero VAD，在连续 3 秒静音时提交完整话语，再进行声纹、STT、API-B 和 TTS；按钮会话点击后直接聆听并在一轮后结束，持续监听由本地 KWS 唤醒并在回复后返回待唤醒。STT 在未配置远程地址时使用本地 `faster-whisper base/int8`，默认以“你好 星子 西子 VoidCube 语音系统”为热词，也可通过 `VOIDCUBE_STT_HOTWORDS` 调整或切换至 OpenAI-compatible 音频转写端点；播放默认由 `soundfile + sounddevice` 在进程内完成，`ffplay` 仅作为兼容回退。声纹采用 3D-Speaker CAM++ 的 192 维说话人嵌入和三段录入模板，只承担本机说话人过滤；可通过 UI 或 `/voice/fingerprint` 临时关闭，关闭不会删除模板。原始音频默认不保留。
 
 模型、鉴权、协议、技能或打包相关改动还必须运行：
 

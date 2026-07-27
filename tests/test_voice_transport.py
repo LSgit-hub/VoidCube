@@ -13,8 +13,173 @@ import pytest
 from systems.voice.audio import AudioPlayer, AudioRecorder
 from systems.voice.config import VoiceConfig
 from systems.voice.fingerprint import FingerprintStore, SPEAKER_ENGINE
-from systems.voice.session import VoiceSessionManager
+from systems.voice.session import VoiceSessionManager, _extract_wake_query
 from systems.voice.stt import SpeechToText
+from systems.voice.vad import SpeechEndpointDetector
+from systems.voice.wake import (
+    KWS_DECODER,
+    KWS_ENCODER,
+    KWS_JOINER,
+    KWS_MODEL_NAME,
+    WakeWordDetector,
+)
+
+
+@pytest.mark.unit
+def test_voice_config_uses_hello_stellar_as_default_wake_phrase(monkeypatch):
+    monkeypatch.delenv("VOIDCUBE_VOICE_WAKE_WORD", raising=False)
+    monkeypatch.delenv("VOIDCUBE_STT_HOTWORDS", raising=False)
+
+    config = VoiceConfig.from_env()
+
+    assert config.wake_word == "你好，星子"
+    assert config.wake_keyword_tokens == "n ǐ h ǎo x īng z ǐ @你好星子"
+    assert config.wake_cue_enabled is True
+    assert config.speech_start_timeout_seconds == 8.0
+    assert config.speech_end_silence_seconds == 3.0
+    assert config.max_utterance_seconds == 45.0
+    assert config.stt_hotwords == "你好 星子 西子 VoidCube 语音系统"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("transcript", "expected_query"),
+    [
+        ("你好，星子", ""),
+        ("你好星子。请告诉我当前任务", "请告诉我当前任务"),
+        ("你好, 星子！ 当前任务是什么？", "当前任务是什么？"),
+        ("我只是提到了星子", None),
+    ],
+)
+def test_wake_phrase_tolerates_stt_punctuation_without_short_word_fallback(
+    transcript,
+    expected_query,
+):
+    assert _extract_wake_query(transcript, "你好，星子") == expected_query
+
+
+@pytest.mark.unit
+def test_wake_word_detector_uses_local_streaming_keyword_runtime(tmp_path, monkeypatch):
+    model_dir = tmp_path / KWS_MODEL_NAME
+    model_dir.mkdir()
+    for name in ("tokens.txt", KWS_ENCODER, KWS_DECODER, KWS_JOINER):
+        (model_dir / name).write_bytes(b"model")
+    runtime: dict[str, object] = {}
+
+    class FakeStream:
+        ready = False
+
+        def accept_waveform(self, sample_rate, samples):
+            runtime["sample_rate"] = sample_rate
+            runtime["samples"] = samples
+            self.ready = True
+
+    class FakeSpotter:
+        def __init__(self, **kwargs):
+            runtime["config"] = kwargs
+
+        def create_stream(self):
+            return FakeStream()
+
+        def is_ready(self, stream):
+            return stream.ready
+
+        def decode_stream(self, stream):
+            stream.ready = False
+
+        def get_result(self, stream):
+            del stream
+            return "你好星子"
+
+        def reset_stream(self, stream):
+            runtime["reset"] = stream
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sherpa_onnx",
+        SimpleNamespace(KeywordSpotter=FakeSpotter),
+    )
+    detector = WakeWordDetector(
+        tmp_path,
+        keyword_tokens="n ǐ h ǎo x īng z ǐ @你好星子",
+    )
+
+    detector.reset()
+    result = detector.accept([0.1] * 512)
+
+    assert result == "你好星子"
+    assert runtime["sample_rate"] == 16000
+    assert runtime["config"]["provider"] == "cpu"  # type: ignore[index]
+    assert runtime["config"]["keywords_threshold"] == 0.25  # type: ignore[index]
+    assert (model_dir / "voidcube-keywords.txt").read_text(encoding="utf-8") == (
+        "n ǐ h ǎo x īng z ǐ @你好星子\n"
+    )
+
+
+@pytest.mark.unit
+def test_silero_vad_uses_three_second_endpoint_and_returns_complete_segment(
+    tmp_path,
+    monkeypatch,
+):
+    model_path = tmp_path / "silero_vad.onnx"
+    model_path.write_bytes(b"model")
+    runtime: dict[str, object] = {}
+
+    class FakeSileroConfig:
+        def __init__(self, **kwargs):
+            runtime["silero"] = kwargs
+
+    class FakeVadConfig:
+        def __init__(self, **kwargs):
+            runtime["vad"] = kwargs
+
+        def validate(self):
+            return True
+
+    class FakeVad:
+        def __init__(self, config, *, buffer_size_in_seconds):
+            runtime["buffer"] = buffer_size_in_seconds
+            runtime["config"] = config
+            self.has_segment = False
+            self.front = SimpleNamespace(samples=[0.1, 0.2, 0.3])
+
+        def reset(self):
+            self.has_segment = False
+
+        def accept_waveform(self, samples):
+            runtime["samples"] = samples
+            self.has_segment = True
+
+        def is_speech_detected(self):
+            return self.has_segment
+
+        def empty(self):
+            return not self.has_segment
+
+        def pop(self):
+            self.has_segment = False
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sherpa_onnx",
+        SimpleNamespace(
+            SileroVadModelConfig=FakeSileroConfig,
+            VadModelConfig=FakeVadConfig,
+            VoiceActivityDetector=FakeVad,
+        ),
+    )
+    detector = SpeechEndpointDetector(model_path, min_silence_seconds=3.0)
+    detector.ensure_model = lambda: model_path  # type: ignore[method-assign]
+
+    detector.reset()
+    detector.accept([0.1] * 512)
+    utterance = detector.pop_utterance()
+
+    assert runtime["silero"]["min_silence_duration"] == 3.0  # type: ignore[index]
+    assert runtime["silero"]["window_size"] == 512  # type: ignore[index]
+    assert runtime["buffer"] == 55.0
+    assert utterance == [0.1, 0.2, 0.3]
+    assert detector.pop_utterance() is None
 
 
 def _wav(path: Path, *, frequency: float = 220.0) -> Path:
@@ -191,6 +356,33 @@ async def test_local_stt_lazily_loads_faster_whisper(tmp_path, monkeypatch):
     assert created == [("base", "cpu", "int8")]
 
 
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_local_stt_returns_empty_text_for_silent_audio(tmp_path, monkeypatch):
+    class SilentModel:
+        def __init__(self, model, *, device, compute_type):
+            pass
+
+        def transcribe(self, path, **kwargs):
+            return iter(()), SimpleNamespace()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "faster_whisper",
+        SimpleNamespace(WhisperModel=SilentModel),
+    )
+    stt = SpeechToText(
+        provider="local",
+        base_url="",
+        api_key="",
+        model="base",
+    )
+    audio_path = tmp_path / "silence.wav"
+    audio_path.write_bytes(b"audio")
+
+    assert await stt.transcribe(audio_path) == ""
+
+
 @pytest.mark.unit
 def test_stt_auto_provider_prefers_configured_remote_endpoint():
     stt = SpeechToText(
@@ -222,6 +414,70 @@ def test_voice_status_exposes_owner_filter_not_user_authentication(tmp_path):
     assert manager.interrupt()["interrupted"] is False
 
 
+def _install_single_utterance_stream(
+    manager: VoiceSessionManager,
+) -> list[str]:
+    observations: list[str] = []
+
+    class FakeInputStream:
+        active = False
+
+        def start(self, loop):
+            del loop
+            self.active = True
+            observations.append("input_started")
+
+        async def read(self):
+            assert manager.state.active is True
+            assert manager.state.wake_state == "listening"
+            assert manager.state.meter_active is True
+            observations.append("meter_active")
+            return SimpleNamespace(
+                samples=[0.2] * 512,
+                level=0.72,
+                peak=0.81,
+                rms=0.2,
+            )
+
+        def flush(self):
+            pass
+
+        def stop(self):
+            if self.active:
+                observations.append("input_stopped")
+            self.active = False
+
+    class FakeEndpointDetector:
+        model_ready = True
+
+        def __init__(self):
+            self.has_utterance = False
+
+        def ensure_model(self):
+            observations.append("vad_ready")
+
+        def reset(self):
+            self.has_utterance = False
+
+        @property
+        def speech_active(self):
+            return self.has_utterance
+
+        def accept(self, samples):
+            del samples
+            self.has_utterance = True
+
+        def pop_utterance(self):
+            if not self.has_utterance:
+                return None
+            self.has_utterance = False
+            return [0.2] * 3200
+
+    manager.input_stream = FakeInputStream()  # type: ignore[assignment]
+    manager.endpoint_detector = FakeEndpointDetector()  # type: ignore[assignment]
+    return observations
+
+
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_disabled_fingerprint_filter_skips_verification_and_accepts_speaker(tmp_path):
@@ -233,7 +489,7 @@ async def test_disabled_fingerprint_filter_skips_verification_and_accepts_speake
         ),
         companion_callback=companion,
     )
-    manager.recorder.record = fake_record  # type: ignore[method-assign]
+    _install_single_utterance_stream(manager)
     manager.fingerprint.verify = Mock()  # type: ignore[method-assign]
     manager.stt.transcribe = fake_transcribe  # type: ignore[method-assign]
     manager.tts.synthesize = fake_synthesize  # type: ignore[method-assign]
@@ -265,7 +521,7 @@ async def test_fingerprint_rejection_exposes_similarity_and_threshold(tmp_path):
             fingerprint_path=tmp_path / "fingerprint.json",
         )
     )
-    manager.recorder.record = fake_record  # type: ignore[method-assign]
+    _install_single_utterance_stream(manager)
     manager.fingerprint.verify = lambda path: {  # type: ignore[method-assign]
         "owner_voice_matched": False,
         "reason": "owner_voice_mismatch",
@@ -349,7 +605,7 @@ async def test_voice_session_matches_owner_transcribes_calls_companion_and_clean
         retain_raw_audio=False,
     )
     manager = VoiceSessionManager(config, companion_callback=companion)
-    manager.recorder.record = fake_record  # type: ignore[method-assign]
+    observations = _install_single_utterance_stream(manager)
     manager.fingerprint.verify = lambda path: {"owner_voice_matched": True, "similarity": 1.0}  # type: ignore[method-assign]
     manager.stt.transcribe = fake_transcribe  # type: ignore[method-assign]
     manager.tts.synthesize = fake_synthesize  # type: ignore[method-assign]
@@ -364,7 +620,16 @@ async def test_voice_session_matches_owner_transcribes_calls_companion_and_clean
     assert result["transcript"] == "当前任务是什么"
     assert result["reply_text"] == "当前正在处理记忆隔离。"
     assert manager.status()["active"] is False
-    assert not (tmp_path / "input.wav").exists()
+    assert manager.status()["wake_state"] == "idle"
+    assert manager.status()["meter_active"] is False
+    assert manager.status()["utterance_seconds"] == 0.2
+    assert observations == [
+        "vad_ready",
+        "input_started",
+        "meter_active",
+        "input_stopped",
+    ]
+    assert not (tmp_path / "utterance.wav").exists()
     assert not (tmp_path / "reply.mp3").exists()
 
 
@@ -380,7 +645,7 @@ async def test_voice_session_interrupts_active_playback_and_cleans_audio(tmp_pat
         companion_callback=companion,
     )
     playback_started = asyncio.Event()
-    manager.recorder.record = fake_record  # type: ignore[method-assign]
+    _install_single_utterance_stream(manager)
     manager.fingerprint.verify = lambda path: {  # type: ignore[method-assign]
         "owner_voice_matched": True,
         "similarity": 1.0,
@@ -407,64 +672,255 @@ async def test_voice_session_interrupts_active_playback_and_cleans_audio(tmp_pat
     assert status["last_status"] == "interrupted"
     assert result["status"] == "interrupted"
     assert manager.status()["active"] is False
-    assert not (tmp_path / "input.wav").exists()
+    assert not (tmp_path / "utterance.wav").exists()
     assert not (tmp_path / "reply.mp3").exists()
 
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_continuous_voice_discards_non_wake_segments_and_stops_cleanly(tmp_path):
+async def test_voice_session_button_can_interrupt_while_waiting_for_speech():
+    manager = VoiceSessionManager(VoiceConfig(enabled=True))
+    listening = asyncio.Event()
+
+    class WaitingInputStream:
+        active = False
+
+        def start(self, loop):
+            del loop
+            self.active = True
+
+        async def read(self):
+            listening.set()
+            await asyncio.Event().wait()
+
+        def flush(self):
+            pass
+
+        def stop(self):
+            self.active = False
+
+    class SilentEndpointDetector:
+        model_ready = True
+        speech_active = False
+
+        def ensure_model(self):
+            pass
+
+        def reset(self):
+            pass
+
+        def accept(self, samples):
+            del samples
+
+        def pop_utterance(self):
+            return None
+
+    manager.input_stream = WaitingInputStream()  # type: ignore[assignment]
+    manager.endpoint_detector = SilentEndpointDetector()  # type: ignore[assignment]
+
+    task = asyncio.create_task(manager.run_once(session_id="button-interrupt"))
+    await asyncio.wait_for(listening.wait(), timeout=1)
+    interrupt_status = manager.interrupt()
+    result = await asyncio.wait_for(task, timeout=1)
+
+    assert interrupt_status["interrupted"] is True
+    assert result == {"status": "interrupted", "reason": "recording_interrupted"}
+    assert manager.state.active is False
+    assert manager.state.wake_state == "idle"
+    assert manager.state.meter_active is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_continuous_voice_uses_kws_vad_and_returns_to_wake_standby(tmp_path):
     config = VoiceConfig(
         enabled=True,
         fingerprint_path=tmp_path / "fingerprint.json",
         retain_raw_audio=False,
-        continuous_segment_seconds=0.5,
-        wake_word="星子",
+        wake_word="你好，星子",
         wake_word_required=True,
-        wake_window_seconds=2.0,
+        fingerprint_enabled=True,
     )
     callbacks: list[str] = []
-    transcriptions = iter(["只是背景声音", "星子", "请告诉我当前任务"])
-    replied = asyncio.Event()
+    synthesized: list[str] = []
+    transitions: list[str] = []
 
     async def companion_for_continuous(*, text: str, session_id: str):
         callbacks.append(text)
-        replied.set()
+        transitions.append(f"companion:{manager.state.last_status}")
         return {"status": "ok", "reply_text": "当前正在处理记忆隔离。"}
 
     manager = VoiceSessionManager(config, companion_callback=companion_for_continuous)
-    manager.recorder.record = fake_record  # type: ignore[method-assign]
-    manager.fingerprint.verify = lambda path: {"owner_voice_matched": True, "similarity": 1.0}  # type: ignore[method-assign]
 
-    async def transcribe_sequence(path):
-        try:
-            return next(transcriptions)
-        except StopIteration:
-            await asyncio.sleep(10)
-            return ""
+    class FakeInputStream:
+        def __init__(self):
+            self.frames = iter(
+                [
+                    SimpleNamespace(samples=[0.0] * 512, level=0.1, peak=0.1, rms=0.01),
+                    SimpleNamespace(samples=[0.2] * 512, level=0.7, peak=0.8, rms=0.2),
+                    SimpleNamespace(samples=[0.0] * 512, level=0.2, peak=0.2, rms=0.02),
+                ]
+            )
+            self.start_count = 0
+            self.active = False
 
-    manager.stt.transcribe = transcribe_sequence  # type: ignore[method-assign]
-    manager.tts.synthesize = fake_synthesize  # type: ignore[method-assign]
-    manager.player.play = fake_play  # type: ignore[method-assign]
+        def start(self, loop):
+            del loop
+            self.start_count += 1
+            self.active = True
+            if self.start_count == 2:
+                manager._continuous_stop_event.set()
+
+        async def read(self):
+            await asyncio.sleep(0)
+            return next(self.frames)
+
+        def flush(self):
+            transitions.append("input:flushed")
+
+        def stop(self):
+            self.active = False
+
+    class FakeWakeDetector:
+        model_ready = True
+
+        def ensure_model(self):
+            transitions.append("wake:model_ready")
+
+        def reset(self):
+            transitions.append("wake:reset")
+
+        def accept(self, samples):
+            del samples
+            transitions.append(f"wake:{manager.state.wake_state}")
+            return "你好星子"
+
+    class FakeEndpointDetector:
+        model_ready = True
+
+        def __init__(self):
+            self.accept_count = 0
+
+        def ensure_model(self):
+            transitions.append("vad:model_ready")
+
+        def reset(self):
+            self.accept_count = 0
+            transitions.append("vad:reset")
+
+        @property
+        def speech_active(self):
+            return self.accept_count > 0
+
+        def accept(self, samples):
+            del samples
+            self.accept_count += 1
+            transitions.append(f"vad:{manager.state.wake_state}")
+
+        def pop_utterance(self):
+            if self.accept_count < 2:
+                return None
+            return [0.2] * 3200
+
+    manager.input_stream = FakeInputStream()  # type: ignore[assignment]
+    manager.wake_detector = FakeWakeDetector()  # type: ignore[assignment]
+    manager.endpoint_detector = FakeEndpointDetector()  # type: ignore[assignment]
+
+    def verify_complete_utterance(path):
+        assert Path(path).is_file()
+        assert manager.input_stream.active is False
+        transitions.append(f"fingerprint:{manager.state.last_status}")
+        return {"owner_voice_matched": True, "similarity": 0.91, "reason": "matched"}
+
+    manager.fingerprint.verify = verify_complete_utterance  # type: ignore[method-assign]
+
+    async def transcribe_once(path):
+        assert Path(path).is_file()
+        assert manager.input_stream.active is False
+        transitions.append(f"stt:{manager.state.last_status}")
+        return "请告诉我当前任务"
+
+    manager.stt.transcribe = transcribe_once  # type: ignore[method-assign]
+
+    async def synthesize_sequence(text, path):
+        assert manager.input_stream.active is False
+        synthesized.append(text)
+        transitions.append(f"tts:{manager.state.last_status}")
+        return await fake_synthesize(text, path)
+
+    manager.tts.synthesize = synthesize_sequence  # type: ignore[method-assign]
+
+    async def play_reply(path, *, stop_event):
+        assert Path(path).is_file()
+        assert not stop_event.is_set()
+        transitions.append(f"play:{manager.state.last_status}")
+
+    async def play_wake_cue():
+        transitions.append(f"cue:{manager.state.wake_state}")
+
+    manager.player.play = play_reply  # type: ignore[method-assign]
+    manager.player.play_wake_cue = play_wake_cue  # type: ignore[method-assign]
     manager._temporary_audio_path = (  # type: ignore[method-assign]
         lambda prefix, suffix=".wav": tmp_path / f"{prefix}-{len(callbacks)}{suffix}"
     )
+    manager.state.continuous_active = True
+    manager.state.session_id = "continuous-test"
 
-    started = manager.start_continuous(session_id="continuous-test")
-    assert started["status"] == "started"
-    await asyncio.wait_for(replied.wait(), timeout=2)
-
-    stopped = await manager.stop_continuous()
+    await asyncio.wait_for(manager._run_streaming_voice_loop(), timeout=2)
 
     assert callbacks == ["请告诉我当前任务"]
-    assert stopped["status"] == "stopped"
-    assert stopped["continuous_active"] is False
-    assert stopped["wake_state"] == "idle"
-    assert stopped["wake_word_hits"] == 1
-    assert stopped["last_transcript"] == "请告诉我当前任务"
-    assert "背景" not in stopped["last_transcript"]
+    assert manager.state.wake_word_hits == 1
+    assert manager.state.last_transcript == "请告诉我当前任务"
+    assert manager.state.last_reply == "当前正在处理记忆隔离。"
+    assert manager.state.wake_state == "standby"
+    assert manager.state.last_status == "awaiting_wake_word"
+    assert manager.state.meter_active is False
+    assert synthesized == ["当前正在处理记忆隔离。"]
+    assert transitions.count("wake:standby") == 1
+    assert transitions.count("vad:listening") == 2
+    assert transitions.count("fingerprint:matching_owner_voice") == 1
+    assert "cue:wake_detected" in transitions
+    assert "stt:transcribing" in transitions
+    assert "companion:thinking" in transitions
+    assert "tts:speaking" in transitions
+    assert "play:speaking" in transitions
     assert not list(tmp_path.glob("*.wav"))
     assert not list(tmp_path.glob("*.mp3"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_continuous_voice_retries_transient_stream_failure_without_disabling():
+    manager = VoiceSessionManager(VoiceConfig(enabled=True))
+    attempts = 0
+    retry_state: dict[str, object] = {}
+
+    async def flaky_stream_loop():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("temporary microphone stream failure")
+        retry_state.update(
+            continuous_active=manager.state.continuous_active,
+            last_status=manager.state.last_status,
+            wake_state=manager.state.wake_state,
+        )
+        manager._continuous_stop_event.set()
+
+    manager._run_streaming_voice_loop = flaky_stream_loop  # type: ignore[method-assign]
+
+    await asyncio.wait_for(manager._continuous_loop(), timeout=2)
+
+    assert attempts == 2
+    assert retry_state == {
+        "continuous_active": True,
+        "last_status": "continuous_retrying",
+        "wake_state": "starting",
+    }
+    assert manager.state.continuous_error_count == 1
+    assert manager.state.last_error == (
+        "RuntimeError: temporary microphone stream failure"
+    )
 
 
 @pytest.mark.asyncio

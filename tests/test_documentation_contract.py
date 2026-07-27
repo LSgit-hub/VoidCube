@@ -148,3 +148,15 @@ def test_architecture_documents_daily_companion_room_projection():
     assert "`daily_companion` 固定投影为原 `idle -> rest` 休息动画" in architecture
     assert "最近伴侣对话、语音转写或已播报提醒" in architecture
     assert "进入 `auto_evolution` 后气泡隐藏" in architecture
+
+
+def test_architecture_documents_streaming_local_voice_pipeline():
+    architecture = (DOCS / "项目架构与逻辑架构.md").read_text(encoding="utf-8")
+    issue_list = (DOCS / "全链路问题清单.md").read_text(encoding="utf-8")
+
+    assert "持久麦克风流 -> 本地 KWS“你好，星子”" in architecture
+    assert "Silero VAD（连续 3 秒静音收句）" in architecture
+    assert "`/ui/voice-levels`" in architecture
+    assert "runtime/voice/models/" in architecture
+    assert "分段 STT 文本检测" not in architecture
+    assert "分段 STT 文本检测" not in issue_list

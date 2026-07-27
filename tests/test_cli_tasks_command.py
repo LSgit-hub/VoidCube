@@ -221,6 +221,8 @@ def test_middle_status_fragments_include_subagent_summary():
     assert "[SA]" in rendered
     assert "2+1" in rendered
     assert "read_file" in rendered
+    assert "辅助" in rendered
+    assert "休眠" not in rendered
 
 
 def test_show_session_status_includes_subagent_summary(monkeypatch):

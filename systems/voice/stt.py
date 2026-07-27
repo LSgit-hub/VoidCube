@@ -66,8 +66,6 @@ class SpeechToText:
             response.raise_for_status()
             payload: Any = response.json()
         text = str(payload.get("text") if isinstance(payload, dict) else payload).strip()
-        if not text:
-            raise RuntimeError("STT returned empty text")
         return text
 
     def _transcribe_local(self, audio_path: Path) -> str:
@@ -91,6 +89,4 @@ class SpeechToText:
             hotwords=self.hotwords,
         )
         text = "".join(str(segment.text) for segment in segments).strip()
-        if not text:
-            raise RuntimeError("STT returned empty text")
         return text

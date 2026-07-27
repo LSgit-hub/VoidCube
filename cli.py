@@ -2029,7 +2029,7 @@ class VoidcubeCLI:
 
                 # compact scene label
                 scene_labels = {
-                    "idle": "休眠", "planning": "规划", "memory": "记忆",
+                    "idle": "辅助", "planning": "规划", "memory": "记忆",
                     "drive": "驱动", "handoff": "交接", "maintenance": "维护",
                     "body_switch": "切换",
                 }

@@ -21,6 +21,7 @@ from systems.supervisor.supervisor import (
     SupervisorConfig,
     SupervisorExecutionConfig,
     SupervisorServiceRuntimeConfig,
+    VoiceCaptureRequest,
 )
 from systems.supervisor.autonomous_chain_store import (
     AutonomousChainExecutionRequest,
@@ -440,10 +441,37 @@ def test_supervisor_room_frontend_uses_rest_animation_and_chat_in_daily_mode():
     assert "dialogue.reply_text || reminder.reminder_text || voice.last_reply" in UI_HTML
     assert "SCENE_TO_ACTION" in UI_HTML
     assert "idle: 'rest'" in UI_HTML
+    assert "planning: 'write'" in UI_HTML
+    assert "drive: 'work'" in UI_HTML
+    assert "memory: 'organize'" in UI_HTML
+    assert "maintenance: 'organize'" in UI_HTML
+    assert "handoff: 'work'" in UI_HTML
+    assert "body_switch: 'work'" in UI_HTML
+    assert "planning: 'work'" not in UI_HTML
+    assert "drive: 'organize'" not in UI_HTML
+    assert "handoff: 'write'" not in UI_HTML
     assert "sw <= 720 ? 1" in UI_HTML
     assert "flex: 0 0 var(--room-w)" in UI_HTML
     assert "body[data-panel-open] .companion-chat" in UI_HTML
     assert "els.body.dataset.panelOpen = name" in UI_HTML
+
+
+@pytest.mark.unit
+def test_supervisor_room_frontend_layers_xingzi_arms_above_belt():
+    assert ".xs-belt {" in UI_HTML
+    assert ".xs-arm {" in UI_HTML
+    assert "z-index: 5;\n}\n.xs-belt::after" in UI_HTML
+    assert "z-index: 6;\n  transition: transform" in UI_HTML
+
+
+@pytest.mark.unit
+def test_supervisor_room_frontend_syncs_clock_hands_to_wall_time():
+    assert 'id="wcMinute"' in UI_HTML
+    assert 'id="wcSecond"' in UI_HTML
+    assert "seconds * 6" in UI_HTML
+    assert "minutes * 6 + seconds * .1" in UI_HTML
+    assert "setInterval(syncClock, 1000)" in UI_HTML
+    assert "animation: clock-tick" not in UI_HTML
 
 
 @pytest.mark.unit
@@ -671,6 +699,7 @@ def test_supervisor_mounts_built_in_room_ui_when_enabled(tmp_path):
     assert "/ui" in route_paths
     assert "/ui/state" in route_paths
     assert "/ui/events" in route_paths
+    assert "/ui/voice-levels" in route_paths
     assert "/ui/identity/archive" in route_paths
     assert "/ui/identity/turns" in route_paths
     assert "/ui/evolution-promotions" in route_paths
@@ -1792,6 +1821,35 @@ def test_supervisor_room_labels_active_sessions_as_user_chain_idle_signal():
 
     assert "API-B 判断输入" in ui_source
     assert "label:'活跃会话'" not in ui_source
+
+
+@pytest.mark.unit
+def test_continuous_voice_ui_treats_background_capture_as_listening():
+    ui_source = Path("systems/supervisor/ui_runtime.py").read_text(encoding="utf-8")
+
+    assert "const continuousForeground = continuous && voice.active" in ui_source
+    assert "continuous && !continuousForeground" in ui_source
+    assert "text = '待唤醒'" in ui_source
+    assert "已检测到语音 · 等待说完" in ui_source
+    assert "finalizing_utterance: '用户输入完成'" in ui_source
+    assert "thinking: '待回复'" in ui_source
+    assert "const voiceLevels = new EventSource('/ui/voice-levels')" in ui_source
+    assert "applyVoiceRealtime(JSON.parse(ev.data))" in ui_source
+    assert 'id="voiceMeter"' in ui_source
+    assert "voice.meter_active && voice.wake_state === 'listening'" in ui_source
+    assert '#voiceListen[aria-pressed="true"]' in ui_source
+
+
+@pytest.mark.unit
+def test_single_voice_button_reuses_vad_pipeline_without_fixed_duration():
+    ui_source = Path("systems/supervisor/ui_runtime.py").read_text(encoding="utf-8")
+
+    assert set(VoiceCaptureRequest.model_fields) == {"session_id"}
+    assert "'/voice/session/start',\n    {}," in ui_source
+    assert "{keepTalkEnabled: true}" in ui_source
+    assert "voice.active && voice.wake_state === 'listening'" in ui_source
+    assert "text = voice.speech_detected ? '已检测到语音 · 等待说完' : '正在聆听'" in ui_source
+    assert "duration_seconds: 8" not in ui_source
 
 
 @pytest.mark.asyncio
@@ -3108,7 +3166,7 @@ async def test_auto_mode_blocks_all_voice_capture_entrypoints(tmp_path):
         SimpleNamespace(duration_seconds=3.0, sample_count=3)
     )
     session = await supervisor.start_voice_session(
-        SimpleNamespace(session_id="", duration_seconds=5.0)
+        SimpleNamespace(session_id="")
     )
 
     for result in (microphone, fingerprint, template, session):
