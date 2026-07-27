@@ -2608,6 +2608,58 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   line-height: 1.45;
 }
 .promotion-audit-meta span { min-width: 0; overflow-wrap: anywhere; }
+.promotion-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 2px;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 700;
+}
+.promotion-section-head span {
+  color: var(--text-muted);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+.promotion-consent-list { display: grid; gap: 8px; }
+.promotion-consent-row {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid rgba(226,176,74,.2);
+  border-left: 3px solid var(--gold);
+  border-radius: 6px;
+  background: rgba(226,176,74,.045);
+}
+.promotion-consent-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+}
+.promotion-consent-actions button {
+  min-width: 56px;
+  min-height: 28px;
+  padding: 5px 10px;
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 5px;
+  color: var(--text-secondary);
+  background: rgba(255,255,255,.04);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.promotion-consent-actions button[data-decision="approve"] {
+  border-color: rgba(93,201,164,.28);
+  color: var(--mint);
+}
+.promotion-consent-actions button[data-decision="reject"] {
+  border-color: rgba(232,130,110,.24);
+  color: var(--coral);
+}
+.promotion-consent-actions button:disabled { opacity: .45; cursor: wait; }
 
 /* ── 场景迷你标题(左上角轻量提示) ── */
 .scene-mini-title {
@@ -3721,7 +3773,10 @@ function openPanel(name) {
     if (name === 'stats') renderStatsPanel(lastState);
     if (name === 'promotions') renderEvolutionPromotionAudit();
   }
-  if (name === 'promotions') loadEvolutionPromotionAudit();
+  if (name === 'promotions') {
+    loadEvolutionPromotionCandidates();
+    loadEvolutionPromotionAudit();
+  }
   if (name === 'settings') loadReminderPolicy();
 }
 function closePanel(name) {
@@ -3784,6 +3839,10 @@ let identityVerificationBusy = '';
 let evolutionPromotionAudit = null;
 let evolutionPromotionAuditError = '';
 let evolutionPromotionAuditBusy = false;
+let evolutionPromotionCandidates = null;
+let evolutionPromotionCandidatesError = '';
+let evolutionPromotionCandidatesBusy = false;
+let evolutionPromotionDecisionBusy = '';
 
 const DRAWER_META = {
   autonomous: { icon: '🚦', title: '链路详情' },
@@ -4974,17 +5033,90 @@ function renderEvolutionPromotionAudit() {
   if (!body) return;
   body.replaceChildren();
 
-  if (evolutionPromotionAuditBusy && !evolutionPromotionAudit) {
+  if (
+    evolutionPromotionAuditBusy && !evolutionPromotionAudit &&
+    evolutionPromotionCandidatesBusy && !evolutionPromotionCandidates
+  ) {
     const loading = document.createElement('div');
     loading.className = 'panel-empty';
     loading.innerHTML = '<div class="pe-icon">◎</div><div class="pe-text">正在读取提升审计记录</div>';
     body.append(loading);
     return;
   }
-  if (evolutionPromotionAuditError) {
+  if (evolutionPromotionAuditError && evolutionPromotionCandidatesError) {
     const failed = document.createElement('div');
     failed.className = 'panel-empty';
     failed.innerHTML = '<div class="pe-icon">!</div><div class="pe-text">提升审计暂时不可用</div>';
+    body.append(failed);
+    return;
+  }
+
+  const candidatesPayload = evolutionPromotionCandidates || {candidates: [], count: 0};
+  const candidatesHead = document.createElement('div');
+  candidatesHead.className = 'promotion-section-head';
+  candidatesHead.innerHTML = '<div>等待你确认</div><span>' + String(candidatesPayload.count || 0) + ' 条</span>';
+  body.append(candidatesHead);
+
+  if (evolutionPromotionCandidatesError) {
+    const failed = document.createElement('div');
+    failed.className = 'panel-subtle-note';
+    failed.textContent = '待确认队列暂时不可用';
+    body.append(failed);
+  } else {
+    const candidates = Array.isArray(candidatesPayload.candidates)
+      ? candidatesPayload.candidates : [];
+    if (!candidates.length) {
+      const empty = document.createElement('div');
+      empty.className = 'panel-subtle-note';
+      empty.textContent = evolutionPromotionCandidatesBusy ? '正在读取待确认结论' : '没有待确认结论';
+      body.append(empty);
+    } else {
+      const pendingList = document.createElement('div');
+      pendingList.className = 'promotion-consent-list';
+      candidates.forEach(record => {
+        const row = document.createElement('article');
+        row.className = 'promotion-consent-row';
+        const source = document.createElement('div');
+        source.className = 'promotion-audit-source';
+        source.textContent = String(record.source_type || 'memory') + ' · ' + String(record.source_memory_id || '未知来源');
+        row.append(source);
+        const reason = document.createElement('div');
+        reason.className = 'promotion-audit-reason';
+        reason.textContent = String(record.reason || '未记录提升理由');
+        row.append(reason);
+        const meta = document.createElement('div');
+        meta.className = 'promotion-audit-meta';
+        appendPromotionAuditMeta(meta, 'Governor 依据', record.governance_ref);
+        appendPromotionAuditMeta(meta, '提案时间', promotionAuditTime(record.requested_at));
+        appendPromotionAuditMeta(meta, '有效期', record.expires_at ? promotionAuditTime(record.expires_at) : '长期有效');
+        row.append(meta);
+        const actions = document.createElement('div');
+        actions.className = 'promotion-consent-actions';
+        [['reject', '拒绝'], ['approve', '同意']].forEach(([decision, label]) => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.dataset.decision = decision;
+          button.textContent = label;
+          button.disabled = Boolean(evolutionPromotionDecisionBusy);
+          button.addEventListener('click', () => decideEvolutionPromotion(record, decision === 'approve'));
+          actions.append(button);
+        });
+        row.append(actions);
+        pendingList.append(row);
+      });
+      body.append(pendingList);
+    }
+  }
+
+  const auditHead = document.createElement('div');
+  auditHead.className = 'promotion-section-head';
+  auditHead.innerHTML = '<div>正式引用审计</div><span>只读</span>';
+  body.append(auditHead);
+
+  if (evolutionPromotionAuditError) {
+    const failed = document.createElement('div');
+    failed.className = 'panel-subtle-note';
+    failed.textContent = '正式引用审计暂时不可用';
     body.append(failed);
     return;
   }
@@ -5009,11 +5141,6 @@ function renderEvolutionPromotionAudit() {
     summary.append(stat);
   });
   body.append(summary);
-
-  const note = document.createElement('div');
-  note.className = 'panel-subtle-note';
-  note.textContent = '只读显示 evolution → companion 引用；正文仍保留在 Auto 记忆域。';
-  body.append(note);
 
   const promotions = Array.isArray(audit.promotions) ? audit.promotions : [];
   if (!promotions.length) {
@@ -5077,6 +5204,61 @@ async function loadEvolutionPromotionAudit() {
     evolutionPromotionAuditError = String((error || {}).message || 'unavailable');
   } finally {
     evolutionPromotionAuditBusy = false;
+    if (panelOpen === 'promotions') renderEvolutionPromotionAudit();
+  }
+}
+
+async function loadEvolutionPromotionCandidates() {
+  if (evolutionPromotionCandidatesBusy) return;
+  evolutionPromotionCandidatesBusy = true;
+  evolutionPromotionCandidatesError = '';
+  renderEvolutionPromotionAudit();
+  try {
+    const response = await fetch('/ui/evolution-promotion-candidates?limit=100', {cache: 'no-store'});
+    if (!response.ok) throw new Error('status_' + response.status);
+    evolutionPromotionCandidates = await response.json();
+  } catch (error) {
+    evolutionPromotionCandidatesError = String((error || {}).message || 'unavailable');
+  } finally {
+    evolutionPromotionCandidatesBusy = false;
+    if (panelOpen === 'promotions') renderEvolutionPromotionAudit();
+  }
+}
+
+async function decideEvolutionPromotion(record, approved) {
+  const candidateId = String(record.candidate_id || '').trim();
+  if (!candidateId || evolutionPromotionDecisionBusy) return;
+  let reason = '本机所有者明确同意提升至日常陪伴记忆。';
+  if (approved) {
+    const confirmed = window.confirm('确认将这条 Auto 结论提升为日常模式可召回的记忆引用？');
+    if (!confirmed) return;
+  } else {
+    reason = String(window.prompt('请填写拒绝原因', '') || '').trim();
+    if (reason.length < 3) {
+      window.alert('拒绝原因至少需要 3 个字符');
+      return;
+    }
+  }
+  evolutionPromotionDecisionBusy = candidateId;
+  renderEvolutionPromotionAudit();
+  try {
+    const response = await fetch(
+      '/ui/evolution-promotion-candidates/' + encodeURIComponent(candidateId) + '/consent',
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({approved, reason}),
+      }
+    );
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(String(payload.detail || ('status_' + response.status)));
+    evolutionPromotionCandidates = null;
+    evolutionPromotionAudit = null;
+    await Promise.all([loadEvolutionPromotionCandidates(), loadEvolutionPromotionAudit()]);
+  } catch (error) {
+    window.alert('处理失败：' + String((error || {}).message || 'unavailable'));
+  } finally {
+    evolutionPromotionDecisionBusy = '';
     if (panelOpen === 'promotions') renderEvolutionPromotionAudit();
   }
 }
@@ -6078,16 +6260,15 @@ class SupervisorUIMixin:
             gateway_url = str(self.config.execution.gateway_address).rstrip("/")
             timeout = aiohttp.ClientTimeout(total=5)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                memory_url = await self._resolve_ui_memory_service_url(
-                    session, gateway_url
-                )
                 async with session.get(
-                    f"{memory_url}/promotions",
+                    f"{gateway_url}/api/mem/promotions",
                     params={
                         "limit": 500,
                         "target_domain": "companion",
-                        "memory_actor": "stellar_companion",
                     },
+                    headers=self._gateway_memory_headers(
+                        memory_actor="stellar_companion"
+                    ),
                 ) as response:
                     if response.status != 200:
                         raise HTTPException(
@@ -6150,6 +6331,125 @@ class SupervisorUIMixin:
             "status_counts": status_counts,
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
+
+    async def get_supervisor_evolution_promotion_candidates(
+        self,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Return only pending evolution-to-companion consent metadata."""
+        bounded_limit = max(1, min(int(limit), 100))
+        try:
+            import aiohttp
+
+            gateway_url = str(self.config.execution.gateway_address).rstrip("/")
+            timeout = aiohttp.ClientTimeout(total=5)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(
+                    f"{gateway_url}/api/mem/promotion-candidates",
+                    params={
+                        "limit": bounded_limit,
+                        "status": "awaiting_user_consent",
+                        "source_domain": "evolution",
+                        "target_domain": "companion",
+                    },
+                    headers=self._gateway_memory_headers(memory_actor="governor"),
+                ) as response:
+                    payload = await response.json()
+                    if response.status != 200:
+                        detail = payload.get("detail") if isinstance(payload, dict) else None
+                        raise HTTPException(
+                            status_code=response.status,
+                            detail=detail or "Memory promotion candidates unavailable",
+                        )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Memory promotion candidates unavailable: {type(exc).__name__}",
+            ) from exc
+
+        raw_candidates = payload.get("candidates") if isinstance(payload, dict) else None
+        if not isinstance(raw_candidates, list):
+            raise HTTPException(
+                status_code=503,
+                detail="Memory promotion candidates returned an invalid payload",
+            )
+        allowed_fields = (
+            "candidate_id",
+            "source_type",
+            "source_memory_id",
+            "source_domain",
+            "target_domain",
+            "reason",
+            "proposed_by",
+            "governance_ref",
+            "status",
+            "requested_at",
+            "expires_at",
+        )
+        candidates = [
+            {field: item.get(field) for field in allowed_fields}
+            for item in raw_candidates
+            if isinstance(item, dict)
+            and str(item.get("source_domain") or "") == "evolution"
+            and str(item.get("target_domain") or "") == "companion"
+            and str(item.get("status") or "") == "awaiting_user_consent"
+        ][:bounded_limit]
+        return {
+            "direction": {
+                "source_domain": "evolution",
+                "target_domain": "companion",
+            },
+            "candidates": candidates,
+            "count": len(candidates),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    async def consent_supervisor_evolution_promotion_candidate(
+        self,
+        candidate_id: str,
+        request: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Record the local owner's immutable decision through the Gateway."""
+        try:
+            import aiohttp
+
+            from systems.memory.promotion import MemoryPromotionConsent
+
+            consent = MemoryPromotionConsent.model_validate(
+                {
+                    "approved": request.get("approved"),
+                    "reason": request.get("reason"),
+                    "consented_by": "local-owner",
+                    "memory_actor": "governor",
+                }
+            )
+            gateway_url = str(self.config.execution.gateway_address).rstrip("/")
+            timeout = aiohttp.ClientTimeout(total=8)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(
+                    f"{gateway_url}/api/mem/promotion-candidates/{candidate_id}/consent",
+                    json=consent.model_dump(mode="json"),
+                    headers=self._gateway_memory_headers(memory_actor="governor"),
+                ) as response:
+                    payload = await response.json()
+                    if response.status != 200:
+                        detail = payload.get("detail") if isinstance(payload, dict) else None
+                        raise HTTPException(
+                            status_code=response.status,
+                            detail=detail or "Memory promotion consent failed",
+                        )
+                    return payload
+        except HTTPException:
+            raise
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Memory promotion consent unavailable: {type(exc).__name__}",
+            ) from exc
 
     async def verify_supervisor_identity_experience(
         self, request: Dict[str, Any]

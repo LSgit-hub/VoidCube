@@ -10,7 +10,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Sequence
+from typing import Any, Literal, Sequence
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -30,18 +30,17 @@ class MemorySourceType(str, Enum):
     PROFILE = "profile"
 
 
-class MemoryPromotionCreate(BaseModel):
+class MemoryPromotionCandidateCreate(BaseModel):
     source_memory_id: str = Field(min_length=1, max_length=300)
     source_type: MemorySourceType
     source_domain: MemoryDomain
     target_domain: MemoryDomain
     reason: str = Field(min_length=8, max_length=2000)
-    approved_by: str = Field(min_length=1, max_length=100)
-    approval_ref: str = Field(default="", max_length=500)
+    governance_ref: str = Field(min_length=1, max_length=500)
     expires_at: datetime | None = None
     owner_id: str = DEFAULT_OWNER_ID
     workspace_id: str = DEFAULT_WORKSPACE_ID
-    memory_actor: MemoryActor = MemoryActor.MEMORY_MAINTENANCE
+    memory_actor: MemoryActor = MemoryActor.GOVERNOR
 
     @field_validator("expires_at")
     @classmethod
@@ -49,6 +48,15 @@ class MemoryPromotionCreate(BaseModel):
         if value is not None and value.tzinfo is None:
             raise ValueError("expires_at must include a timezone")
         return value
+
+
+class MemoryPromotionConsent(BaseModel):
+    approved: bool
+    reason: str = Field(min_length=3, max_length=2000)
+    consented_by: Literal["local-owner"] = "local-owner"
+    owner_id: str = DEFAULT_OWNER_ID
+    workspace_id: str = DEFAULT_WORKSPACE_ID
+    memory_actor: MemoryActor = MemoryActor.GOVERNOR
 
 
 class MemoryPromotionRevoke(BaseModel):
@@ -125,6 +133,31 @@ def validate_promotion_pair(
 
 def setup_memory_promotion_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
+        "CREATE TABLE IF NOT EXISTS memory_promotion_candidates ("
+        "candidate_id TEXT PRIMARY KEY, "
+        "source_type TEXT NOT NULL, source_memory_id TEXT NOT NULL, "
+        "source_domain TEXT NOT NULL, target_domain TEXT NOT NULL, "
+        "reason TEXT NOT NULL, proposed_by TEXT NOT NULL, "
+        "governance_ref TEXT NOT NULL, status TEXT NOT NULL "
+        "DEFAULT 'awaiting_user_consent', requested_at TEXT NOT NULL, "
+        "expires_at TEXT, consented_at TEXT, consented_by TEXT, "
+        "consent_reason TEXT, promotion_id TEXT UNIQUE, "
+        "owner_id TEXT NOT NULL, workspace_id TEXT NOT NULL, "
+        "CHECK(source_domain != target_domain), "
+        "CHECK(status IN ('awaiting_user_consent', 'approved', 'rejected')))"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_promotion_candidate_pending_unique "
+        "ON memory_promotion_candidates(owner_id, workspace_id, source_type, "
+        "source_memory_id, source_domain, target_domain) "
+        "WHERE status = 'awaiting_user_consent'"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_memory_promotion_candidate_status "
+        "ON memory_promotion_candidates(owner_id, workspace_id, source_domain, "
+        "target_domain, status, requested_at DESC)"
+    )
+    conn.execute(
         "CREATE TABLE IF NOT EXISTS memory_promotion_refs ("
         "promotion_id TEXT PRIMARY KEY, "
         "source_type TEXT NOT NULL, source_memory_id TEXT NOT NULL, "
@@ -194,9 +227,9 @@ def source_memory_exists(
     return row is not None
 
 
-def create_memory_promotion(
+def create_memory_promotion_candidate(
     conn: sqlite3.Connection,
-    request: MemoryPromotionCreate,
+    request: MemoryPromotionCandidateCreate,
     *,
     now: datetime | None = None,
 ) -> dict[str, Any]:
@@ -241,23 +274,42 @@ def create_memory_promotion(
             f"active memory promotion already exists: {existing[0]}"
         )
 
-    promotion_id = f"promotion-{uuid.uuid4()}"
+    pending = conn.execute(
+        "SELECT candidate_id FROM memory_promotion_candidates WHERE owner_id = ? "
+        "AND workspace_id = ? AND source_type = ? AND source_memory_id = ? "
+        "AND source_domain = ? AND target_domain = ? "
+        "AND status = 'awaiting_user_consent'",
+        (
+            scope.owner_id,
+            scope.workspace_id,
+            request.source_type.value,
+            request.source_memory_id,
+            source_domain.value,
+            target_domain.value,
+        ),
+    ).fetchone()
+    if pending:
+        raise MemoryPromotionConflictError(
+            f"pending memory promotion candidate already exists: {pending[0]}"
+        )
+
+    candidate_id = f"promotion-candidate-{uuid.uuid4()}"
     try:
         conn.execute(
-            "INSERT INTO memory_promotion_refs (promotion_id, source_type, "
-            "source_memory_id, source_domain, target_domain, reason, approved_by, "
-            "approval_ref, created_by, status, created_at, expires_at, owner_id, "
-            "workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)",
+            "INSERT INTO memory_promotion_candidates (candidate_id, source_type, "
+            "source_memory_id, source_domain, target_domain, reason, proposed_by, "
+            "governance_ref, status, requested_at, expires_at, owner_id, "
+            "workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, "
+            "'awaiting_user_consent', ?, ?, ?, ?)",
             (
-                promotion_id,
+                candidate_id,
                 request.source_type.value,
                 request.source_memory_id,
                 source_domain.value,
                 target_domain.value,
                 request.reason.strip(),
-                request.approved_by.strip(),
-                request.approval_ref.strip() or None,
                 actor.value,
+                request.governance_ref.strip(),
                 current.isoformat(),
                 expires_at.isoformat() if expires_at else None,
                 scope.owner_id,
@@ -266,13 +318,174 @@ def create_memory_promotion(
         )
     except sqlite3.IntegrityError as exc:
         raise MemoryPromotionConflictError(
-            "equivalent active memory promotion already exists"
+            "equivalent pending memory promotion candidate already exists"
         ) from exc
     row = conn.execute(
-        "SELECT * FROM memory_promotion_refs WHERE promotion_id = ?",
-        (promotion_id,),
+        "SELECT * FROM memory_promotion_candidates WHERE candidate_id = ?",
+        (candidate_id,),
     ).fetchone()
-    return promotion_row_to_dict(row)
+    return promotion_candidate_row_to_dict(row)
+
+
+def list_memory_promotion_candidates(
+    conn: sqlite3.Connection,
+    *,
+    scope: MemoryScope,
+    source_domain: MemoryDomain | str | None = None,
+    target_domain: MemoryDomain | str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    clauses = ["owner_id = ?", "workspace_id = ?"]
+    params: list[Any] = [scope.owner_id, scope.workspace_id]
+    if source_domain is not None:
+        clauses.append("source_domain = ?")
+        params.append(MemoryDomain(source_domain).value)
+    if target_domain is not None:
+        clauses.append("target_domain = ?")
+        params.append(MemoryDomain(target_domain).value)
+    if status:
+        normalized_status = str(status).strip().lower()
+        if normalized_status not in {
+            "awaiting_user_consent",
+            "approved",
+            "rejected",
+        }:
+            raise MemoryPromotionValidationError("invalid promotion candidate status")
+        clauses.append("status = ?")
+        params.append(normalized_status)
+    params.append(max(1, min(int(limit), 500)))
+    rows = conn.execute(
+        "SELECT * FROM memory_promotion_candidates WHERE "
+        + " AND ".join(clauses)
+        + " ORDER BY requested_at DESC LIMIT ?",
+        params,
+    ).fetchall()
+    return [promotion_candidate_row_to_dict(row) for row in rows]
+
+
+def consent_memory_promotion_candidate(
+    conn: sqlite3.Connection,
+    candidate_id: str,
+    request: MemoryPromotionConsent,
+    *,
+    now: datetime | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    actor = authorize_promotion_manager(request.memory_actor)
+    scope = MemoryScope.create(request.owner_id, request.workspace_id)
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    expire_memory_promotions(conn, now=current)
+    row = conn.execute(
+        "SELECT * FROM memory_promotion_candidates WHERE candidate_id = ? "
+        "AND owner_id = ? AND workspace_id = ?",
+        (candidate_id, scope.owner_id, scope.workspace_id),
+    ).fetchone()
+    if not row:
+        raise MemoryPromotionNotFoundError("memory promotion candidate not found")
+    candidate = promotion_candidate_row_to_dict(row)
+    if candidate["status"] != "awaiting_user_consent":
+        raise MemoryPromotionConflictError(
+            f"memory promotion candidate is already {candidate['status']}"
+        )
+
+    promotion: dict[str, Any] | None = None
+    promotion_id: str | None = None
+    if request.approved:
+        expires_at_text = candidate.get("expires_at")
+        if expires_at_text:
+            expires_at = datetime.fromisoformat(str(expires_at_text)).astimezone(
+                timezone.utc
+            )
+            if expires_at <= current:
+                raise MemoryPromotionConflictError(
+                    "memory promotion candidate validity has expired"
+                )
+        source_type = MemorySourceType(candidate["source_type"])
+        source_domain, target_domain = validate_promotion_pair(
+            candidate["source_domain"], candidate["target_domain"]
+        )
+        if not source_memory_exists(
+            conn,
+            source_type=source_type,
+            source_memory_id=candidate["source_memory_id"],
+            source_domain=source_domain,
+            scope=scope,
+        ):
+            raise MemoryPromotionNotFoundError("promotion source memory not found")
+        existing = conn.execute(
+            "SELECT promotion_id FROM memory_promotion_refs WHERE owner_id = ? "
+            "AND workspace_id = ? AND source_type = ? AND source_memory_id = ? "
+            "AND source_domain = ? AND target_domain = ? AND status = 'active'",
+            (
+                scope.owner_id,
+                scope.workspace_id,
+                source_type.value,
+                candidate["source_memory_id"],
+                source_domain.value,
+                target_domain.value,
+            ),
+        ).fetchone()
+        if existing:
+            raise MemoryPromotionConflictError(
+                f"active memory promotion already exists: {existing[0]}"
+            )
+        promotion_id = f"promotion-{uuid.uuid4()}"
+        try:
+            conn.execute(
+                "INSERT INTO memory_promotion_refs (promotion_id, source_type, "
+                "source_memory_id, source_domain, target_domain, reason, approved_by, "
+                "approval_ref, created_by, status, created_at, expires_at, owner_id, "
+                "workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)",
+                (
+                    promotion_id,
+                    source_type.value,
+                    candidate["source_memory_id"],
+                    source_domain.value,
+                    target_domain.value,
+                    candidate["reason"],
+                    request.consented_by,
+                    candidate["governance_ref"],
+                    actor.value,
+                    current.isoformat(),
+                    candidate.get("expires_at"),
+                    scope.owner_id,
+                    scope.workspace_id,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise MemoryPromotionConflictError(
+                "equivalent active memory promotion already exists"
+            ) from exc
+
+    status = "approved" if request.approved else "rejected"
+    cursor = conn.execute(
+        "UPDATE memory_promotion_candidates SET status = ?, consented_at = ?, "
+        "consented_by = ?, consent_reason = ?, promotion_id = ? "
+        "WHERE candidate_id = ? AND status = 'awaiting_user_consent'",
+        (
+            status,
+            current.isoformat(),
+            request.consented_by,
+            request.reason.strip(),
+            promotion_id,
+            candidate_id,
+        ),
+    )
+    if int(cursor.rowcount or 0) != 1:
+        raise MemoryPromotionConflictError(
+            "memory promotion candidate was decided concurrently"
+        )
+    updated = conn.execute(
+        "SELECT * FROM memory_promotion_candidates WHERE candidate_id = ?",
+        (candidate_id,),
+    ).fetchone()
+    if promotion_id:
+        promotion_row = conn.execute(
+            "SELECT * FROM memory_promotion_refs WHERE promotion_id = ?",
+            (promotion_id,),
+        ).fetchone()
+        promotion = promotion_row_to_dict(promotion_row)
+    return promotion_candidate_row_to_dict(updated), promotion
 
 
 def list_memory_promotions(
@@ -378,6 +591,62 @@ def revoke_promotions_for_source(
         ),
     )
     return max(0, int(cursor.rowcount or 0))
+
+
+def reject_promotion_candidates_for_source(
+    conn: sqlite3.Connection,
+    *,
+    source_memory_ids: Sequence[str],
+    source_domain: MemoryDomain | str,
+    scope: MemoryScope,
+    reason: str = "source_memory_deleted",
+    now: datetime | None = None,
+) -> int:
+    ids = tuple(dict.fromkeys(str(item) for item in source_memory_ids if str(item)))
+    if not ids:
+        return 0
+    placeholders = ",".join("?" for _ in ids)
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
+    cursor = conn.execute(
+        "UPDATE memory_promotion_candidates SET status = 'rejected', "
+        "consented_at = ?, consented_by = 'memory-maintenance', "
+        "consent_reason = ? WHERE owner_id = ? AND workspace_id = ? "
+        "AND source_domain = ? AND status = 'awaiting_user_consent' "
+        f"AND source_memory_id IN ({placeholders})",
+        (
+            current,
+            reason,
+            scope.owner_id,
+            scope.workspace_id,
+            MemoryDomain(source_domain).value,
+            *ids,
+        ),
+    )
+    return max(0, int(cursor.rowcount or 0))
+
+
+def promotion_candidate_row_to_dict(
+    row: sqlite3.Row | Sequence[Any],
+) -> dict[str, Any]:
+    return {
+        "candidate_id": row[0],
+        "source_type": row[1],
+        "source_memory_id": row[2],
+        "source_domain": row[3],
+        "target_domain": row[4],
+        "reason": row[5],
+        "proposed_by": row[6],
+        "governance_ref": row[7],
+        "status": row[8],
+        "requested_at": row[9],
+        "expires_at": row[10],
+        "consented_at": row[11],
+        "consented_by": row[12],
+        "consent_reason": row[13],
+        "promotion_id": row[14],
+        "owner_id": row[15],
+        "workspace_id": row[16],
+    }
 
 
 def promotion_row_to_dict(row: sqlite3.Row | Sequence[Any]) -> dict[str, Any]:

@@ -180,6 +180,16 @@ class Supervisor(
                 methods=["GET"],
             )
             self.app.add_api_route(
+                "/ui/evolution-promotion-candidates",
+                self.get_supervisor_evolution_promotion_candidates,
+                methods=["GET"],
+            )
+            self.app.add_api_route(
+                "/ui/evolution-promotion-candidates/{candidate_id}/consent",
+                self.consent_supervisor_evolution_promotion_candidate,
+                methods=["POST"],
+            )
+            self.app.add_api_route(
                 "/ui/identity/experiences/verify",
                 self.verify_supervisor_identity_experience,
                 methods=["POST"],

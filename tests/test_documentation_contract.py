@@ -128,13 +128,18 @@ def test_single_owner_identity_terms_do_not_imply_user_registration():
     assert "声纹注册" not in architecture
 
 
-def test_architecture_documents_read_only_evolution_promotion_audit_boundary():
+def test_architecture_documents_governed_evolution_promotion_boundary():
     architecture = (DOCS / "项目架构与逻辑架构.md").read_text(encoding="utf-8")
 
     assert "/ui/evolution-promotions" in architecture
+    assert "/ui/evolution-promotion-candidates" in architecture
     assert "固定方向并剔除 owner/workspace scope" in architecture
     assert "不返回 Auto 记忆正文" in architecture
     assert "提升账本" in architecture
+    assert "不存在直接创建正式引用的 `POST /promotions`" in architecture
+    assert "候选未确认或被拒绝时，日常模式没有任何可召回入口" in architecture
+    assert "`local-owner` 是单机 consent 审计值，不是账号" in architecture
+    assert "`source=self_learning`、`verified=true` 且已经进入 `approved`" in architecture
 
 
 def test_architecture_documents_daily_companion_room_projection():

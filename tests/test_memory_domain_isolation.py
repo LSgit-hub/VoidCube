@@ -16,7 +16,8 @@ from systems.memory.memory_service import (
     TurnCreate,
 )
 from systems.memory.promotion import (
-    MemoryPromotionCreate,
+    MemoryPromotionCandidateCreate,
+    MemoryPromotionConsent,
     MemoryPromotionRevoke,
 )
 from systems.memory.tier1_to_tier2_bridge import (
@@ -34,6 +35,33 @@ def _service(tmp_path) -> MemoryService:
             db_path=str(tmp_path / "memory.db"),
             recall_candidate_limit=100,
         )
+    )
+
+
+async def _propose_evolution_promotion(service, source_id, **updates):
+    values = {
+        "source_memory_id": source_id,
+        "source_type": "compressed",
+        "source_domain": "evolution",
+        "target_domain": "companion",
+        "reason": "Governor confirmed this conclusion is useful to daily companion work.",
+        "governance_ref": "governor-review:promotion-1",
+        "memory_actor": "governor",
+    }
+    values.update(updates)
+    return await service.create_promotion_candidate(
+        MemoryPromotionCandidateCreate(**values)
+    )
+
+
+async def _decide_promotion(service, candidate_id, *, approved, reason):
+    return await service.consent_promotion_candidate(
+        candidate_id,
+        MemoryPromotionConsent(
+            approved=approved,
+            reason=reason,
+            memory_actor="governor",
+        ),
     )
 
 
@@ -188,7 +216,7 @@ async def test_compression_candidate_batch_is_single_domain(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_cross_domain_promotion_is_audited_reference_without_copying_source(tmp_path):
+async def test_cross_domain_promotion_requires_owner_consent_before_reference(tmp_path):
     service = _service(tmp_path)
     source = await service.remember(
         DurableMemoryCreate(
@@ -200,18 +228,7 @@ async def test_cross_domain_promotion_is_audited_reference_without_copying_sourc
     )
     source_id = source["memory"]["memory_id"]
 
-    created = await service.create_promotion(
-        MemoryPromotionCreate(
-            source_memory_id=source_id,
-            source_type="compressed",
-            source_domain="evolution",
-            target_domain="companion",
-            reason="Approved conclusion is useful for future companion explanations.",
-            approved_by="user-consent",
-            approval_ref="decision:promote-1",
-            memory_actor="governor",
-        )
-    )
+    created = await _propose_evolution_promotion(service, source_id)
 
     conn = open_memory_sqlite(service._db_path)
     try:
@@ -221,16 +238,21 @@ async def test_cross_domain_promotion_is_audited_reference_without_copying_sourc
             (source_id,),
         ).fetchone()[0]
         promotion_count = conn.execute(
-            "SELECT COUNT(*) FROM memory_promotion_refs WHERE promotion_id = ?",
-            (created["promotion"]["promotion_id"],),
+            "SELECT COUNT(*) FROM memory_promotion_refs"
+        ).fetchone()[0]
+        candidate_count = conn.execute(
+            "SELECT COUNT(*) FROM memory_promotion_candidates WHERE candidate_id = ?",
+            (created["candidate"]["candidate_id"],),
         ).fetchone()[0]
     finally:
         conn.close()
 
     assert copied == 0
-    assert promotion_count == 1
-    assert created["promotion"]["source_domain"] == "evolution"
-    assert created["promotion"]["target_domain"] == "companion"
+    assert promotion_count == 0
+    assert candidate_count == 1
+    assert created["candidate"]["status"] == "awaiting_user_consent"
+    assert created["candidate"]["source_domain"] == "evolution"
+    assert created["candidate"]["target_domain"] == "companion"
 
 
 @pytest.mark.asyncio
@@ -245,18 +267,28 @@ async def test_companion_recall_dereferences_only_active_promotions(tmp_path):
         )
     )
     source_id = source["memory"]["memory_id"]
-    promotion = await service.create_promotion(
-        MemoryPromotionCreate(
-            source_memory_id=source_id,
-            source_type="compressed",
-            source_domain="evolution",
-            target_domain="companion",
-            reason="User approved this durable guidance for companion use.",
-            approved_by="user",
-            memory_actor="governor",
+    proposed = await _propose_evolution_promotion(service, source_id)
+    before_consent = await service.recall(
+        RecallRequest(
+            query="companion explain approved changes evidence",
+            memory_actor="stellar_companion",
+            source_domains=["companion"],
+            include_tier1=False,
+            include_tier2=True,
         )
     )
-    promotion_id = promotion["promotion"]["promotion_id"]
+    assert before_consent["promotion_count"] == 0
+
+    decided = await _decide_promotion(
+        service,
+        proposed["candidate"]["candidate_id"],
+        approved=True,
+        reason="I explicitly approve this conclusion for daily companion recall.",
+    )
+    promotion_id = decided["promotion"]["promotion_id"]
+    assert decided["candidate"]["status"] == "approved"
+    assert decided["candidate"]["promotion_id"] == promotion_id
+    assert decided["promotion"]["approved_by"] == "local-owner"
 
     recalled = await service.recall(
         RecallRequest(
@@ -311,28 +343,28 @@ async def test_promotion_policy_blocks_private_companion_and_auto_targets(tmp_pa
     source_id = source["memory"]["memory_id"]
 
     with pytest.raises(HTTPException) as private_error:
-        await service.create_promotion(
-            MemoryPromotionCreate(
+        await service.create_promotion_candidate(
+            MemoryPromotionCandidateCreate(
                 source_memory_id=source_id,
                 source_type="compressed",
                 source_domain="companion",
                 target_domain="agent_interaction",
                 reason="This must remain private.",
-                approved_by="user",
+                governance_ref="governor-review:private-memory",
                 memory_actor="governor",
             )
         )
     assert private_error.value.status_code == 400
 
     with pytest.raises(HTTPException) as actor_error:
-        await service.create_promotion(
-            MemoryPromotionCreate(
+        await service.create_promotion_candidate(
+            MemoryPromotionCandidateCreate(
                 source_memory_id=source_id,
                 source_type="compressed",
                 source_domain="companion",
                 target_domain="evolution",
                 reason="Auto must not receive companion memory.",
-                approved_by="user",
+                governance_ref="governor-review:forbidden-target",
                 memory_actor="stellar_companion",
             )
         )
@@ -351,16 +383,12 @@ async def test_forgetting_source_revokes_cross_domain_promotion(tmp_path):
         )
     )
     source_id = source["memory"]["memory_id"]
-    promotion = await service.create_promotion(
-        MemoryPromotionCreate(
-            source_memory_id=source_id,
-            source_type="compressed",
-            source_domain="evolution",
-            target_domain="companion",
-            reason="Temporary approved projection.",
-            approved_by="user",
-            memory_actor="governor",
-        )
+    proposed = await _propose_evolution_promotion(service, source_id)
+    promotion = await _decide_promotion(
+        service,
+        proposed["candidate"]["candidate_id"],
+        approved=True,
+        reason="Approve this temporary projection.",
     )
     recalled = await service.recall(
         RecallRequest(
@@ -391,10 +419,109 @@ async def test_forgetting_source_revokes_cross_domain_promotion(tmp_path):
     assert listed["promotions"][0]["promotion_id"] == promotion["promotion"]["promotion_id"]
 
 
+@pytest.mark.asyncio
+async def test_rejected_candidate_never_creates_reference_and_cannot_be_decided_twice(
+    tmp_path,
+):
+    service = _service(tmp_path)
+    source = await service.remember(
+        DurableMemoryCreate(
+            title="Rejected Auto conclusion",
+            summary="This conclusion should remain private to Auto.",
+            memory_actor="stellar_auto",
+            memory_domain="evolution",
+        )
+    )
+    proposed = await _propose_evolution_promotion(
+        service,
+        source["memory"]["memory_id"],
+    )
+    candidate_id = proposed["candidate"]["candidate_id"]
+    rejected = await _decide_promotion(
+        service,
+        candidate_id,
+        approved=False,
+        reason="Do not expose this Auto conclusion in daily companion mode.",
+    )
+    assert rejected["candidate"]["status"] == "rejected"
+    assert rejected["promotion"] is None
+
+    with pytest.raises(HTTPException) as repeated:
+        await _decide_promotion(
+            service,
+            candidate_id,
+            approved=True,
+            reason="Attempting to reverse an immutable decision.",
+        )
+    assert repeated.value.status_code == 409
+
+    recalled = await service.recall(
+        RecallRequest(
+            query="remain private Auto conclusion",
+            memory_actor="stellar_companion",
+            source_domains=["companion"],
+            include_tier1=False,
+        )
+    )
+    assert recalled["promotion_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_pending_and_active_promotion_candidates_are_deduplicated(tmp_path):
+    service = _service(tmp_path)
+    source = await service.remember(
+        DurableMemoryCreate(
+            title="Stable Auto conclusion",
+            summary="A stable conclusion proposed exactly once.",
+            memory_actor="stellar_auto",
+            memory_domain="evolution",
+        )
+    )
+    source_id = source["memory"]["memory_id"]
+    proposed = await _propose_evolution_promotion(service, source_id)
+
+    with pytest.raises(HTTPException) as pending_duplicate:
+        await _propose_evolution_promotion(service, source_id)
+    assert pending_duplicate.value.status_code == 409
+
+    await _decide_promotion(
+        service,
+        proposed["candidate"]["candidate_id"],
+        approved=True,
+        reason="Approve the stable conclusion.",
+    )
+    with pytest.raises(HTTPException) as active_duplicate:
+        await _propose_evolution_promotion(service, source_id)
+    assert active_duplicate.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_only_promotion_managers_can_propose_candidates(tmp_path):
+    service = _service(tmp_path)
+    source = await service.remember(
+        DurableMemoryCreate(
+            title="Governed Auto conclusion",
+            summary="Only governance may propose this conclusion.",
+            memory_actor="stellar_auto",
+            memory_domain="evolution",
+        )
+    )
+    with pytest.raises(HTTPException) as denied:
+        await _propose_evolution_promotion(
+            service,
+            source["memory"]["memory_id"],
+            memory_actor="stellar_auto",
+        )
+    assert denied.value.status_code == 403
+
+
 def test_memory_service_exposes_promotion_lifecycle_routes(tmp_path):
     service = _service(tmp_path)
     routes = {(route.path, method) for route in service.app.routes for method in route.methods}
 
-    assert ("/promotions", "POST") in routes
+    assert ("/promotion-candidates", "POST") in routes
+    assert ("/promotion-candidates", "GET") in routes
+    assert ("/promotion-candidates/{candidate_id}/consent", "POST") in routes
+    assert ("/promotions", "POST") not in routes
     assert ("/promotions", "GET") in routes
     assert ("/promotions/{promotion_id}/revoke", "POST") in routes

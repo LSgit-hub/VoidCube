@@ -908,7 +908,7 @@ def test_gateway_supervisor_memory_capabilities_are_bounded(monkeypatch):
             return False
 
         async def read(self):
-            return b'{"promotions":[]}'
+            return b'{"candidates":[]}'
 
     class _FakeSession:
         async def __aenter__(self):
@@ -926,7 +926,7 @@ def test_gateway_supervisor_memory_capabilities_are_bounded(monkeypatch):
         _FakeSession,
     )
     allowed = client.post(
-        "/api/mem/promotions",
+        "/api/mem/promotion-candidates",
         json={"reason": "approved by governance", "memory_actor": "api_a"},
         headers=headers,
     )
@@ -934,7 +934,7 @@ def test_gateway_supervisor_memory_capabilities_are_bounded(monkeypatch):
     assert captured["body"]["memory_actor"] == "governor"
 
     denied = client.post(
-        "/api/mem/promotions",
+        "/api/mem/promotion-candidates",
         json={"reason": "approved by governance"},
         headers={**headers, "X-VoidCube-Memory-Actor": "api_a"},
     )
@@ -970,7 +970,7 @@ def test_gateway_governor_logical_identity_has_fixed_memory_actor(monkeypatch):
             return False
 
         async def read(self):
-            return b'{"promotions":[]}'
+            return b'{"status":"approved"}'
 
     class _FakeSession:
         async def __aenter__(self):
@@ -988,16 +988,16 @@ def test_gateway_governor_logical_identity_has_fixed_memory_actor(monkeypatch):
         _FakeSession,
     )
     response = client.post(
-        "/api/mem/promotions",
-        json={"reason": "governed promotion"},
+        "/api/mem/promotion-candidates/candidate-1/consent",
+        json={"approved": True, "reason": "local owner approved"},
         headers=headers,
     )
 
     assert response.status_code == 200
     assert captured["body"]["memory_actor"] == "governor"
     denied = client.post(
-        "/api/mem/promotions",
-        json={"reason": "governed promotion"},
+        "/api/mem/promotion-candidates/candidate-1/consent",
+        json={"approved": True, "reason": "local owner approved"},
         headers={**headers, "X-VoidCube-Memory-Actor": "stellar_auto"},
     )
     assert denied.status_code == 403

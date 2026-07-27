@@ -35,15 +35,19 @@ from systems.memory.profile_store import (
 )
 from systems.memory.promotion import (
     MemoryPromotionAccessError,
+    MemoryPromotionCandidateCreate,
     MemoryPromotionConflictError,
-    MemoryPromotionCreate,
+    MemoryPromotionConsent,
     MemoryPromotionNotFoundError,
     MemoryPromotionRevoke,
     MemoryPromotionValidationError,
     authorize_promotion_manager,
-    create_memory_promotion,
+    consent_memory_promotion_candidate,
+    create_memory_promotion_candidate,
+    list_memory_promotion_candidates,
     list_memory_promotions,
     promotion_source_key,
+    reject_promotion_candidates_for_source,
     revoke_memory_promotion,
     revoke_promotions_for_source,
     setup_memory_promotion_schema,
@@ -1239,7 +1243,21 @@ class MemoryService:
         self.app.add_api_route("/recall", self.recall, methods=["POST"])
         self.app.add_api_route("/recall/traces", self.list_recall_traces, methods=["GET"])
         self.app.add_api_route("/recall/feedback", self.record_recall_feedback, methods=["POST"])
-        self.app.add_api_route("/promotions", self.create_promotion, methods=["POST"])
+        self.app.add_api_route(
+            "/promotion-candidates",
+            self.create_promotion_candidate,
+            methods=["POST"],
+        )
+        self.app.add_api_route(
+            "/promotion-candidates",
+            self.list_promotion_candidates,
+            methods=["GET"],
+        )
+        self.app.add_api_route(
+            "/promotion-candidates/{candidate_id}/consent",
+            self.consent_promotion_candidate,
+            methods=["POST"],
+        )
         self.app.add_api_route("/promotions", self.list_promotions, methods=["GET"])
         self.app.add_api_route(
             "/promotions/{promotion_id}/revoke",
@@ -2546,18 +2564,22 @@ class MemoryService:
             return HTTPException(status_code=409, detail=str(exc))
         return HTTPException(status_code=400, detail=str(exc))
 
-    async def create_promotion(self, request: MemoryPromotionCreate):
+    async def create_promotion_candidate(
+        self,
+        request: MemoryPromotionCandidateCreate,
+    ):
         request = request.model_copy(
             update={
                 "reason": str(_redact_for_memory_storage(request.reason)).strip(),
-                "approval_ref": str(
-                    _redact_for_memory_storage(request.approval_ref)
+                "governance_ref": str(
+                    _redact_for_memory_storage(request.governance_ref)
                 ).strip(),
             }
         )
         conn = open_memory_sqlite(self._db_path)
         try:
-            result = create_memory_promotion(conn, request)
+            conn.execute("BEGIN IMMEDIATE")
+            result = create_memory_promotion_candidate(conn, request)
             conn.commit()
         except (
             MemoryPromotionAccessError,
@@ -2569,7 +2591,75 @@ class MemoryService:
             raise self._promotion_http_error(exc) from exc
         finally:
             conn.close()
-        return {"status": "created", "promotion": result}
+        return {"status": "awaiting_user_consent", "candidate": result}
+
+    async def list_promotion_candidates(
+        self,
+        limit: int = 100,
+        status: Optional[str] = None,
+        source_domain: Optional[MemoryDomain] = None,
+        target_domain: Optional[MemoryDomain] = None,
+        owner_id: str = DEFAULT_OWNER_ID,
+        workspace_id: str = DEFAULT_WORKSPACE_ID,
+        memory_actor: MemoryActor = MemoryActor.GOVERNOR,
+    ):
+        scope = MemoryScope.create(owner_id, workspace_id)
+        try:
+            authorize_promotion_manager(memory_actor)
+            conn = open_memory_sqlite(self._db_path)
+            try:
+                candidates = list_memory_promotion_candidates(
+                    conn,
+                    scope=scope,
+                    source_domain=source_domain,
+                    target_domain=target_domain,
+                    status=status,
+                    limit=limit,
+                )
+            finally:
+                conn.close()
+        except (
+            MemoryPromotionAccessError,
+            MemoryPromotionValidationError,
+            ValueError,
+        ) as exc:
+            raise self._promotion_http_error(exc) from exc
+        return {"candidates": candidates, "count": len(candidates)}
+
+    async def consent_promotion_candidate(
+        self,
+        candidate_id: str,
+        request: MemoryPromotionConsent,
+    ):
+        request = request.model_copy(
+            update={
+                "reason": str(_redact_for_memory_storage(request.reason)).strip(),
+            }
+        )
+        conn = open_memory_sqlite(self._db_path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            candidate, promotion = consent_memory_promotion_candidate(
+                conn,
+                candidate_id,
+                request,
+            )
+            conn.commit()
+        except (
+            MemoryPromotionAccessError,
+            MemoryPromotionConflictError,
+            MemoryPromotionNotFoundError,
+            MemoryPromotionValidationError,
+        ) as exc:
+            conn.rollback()
+            raise self._promotion_http_error(exc) from exc
+        finally:
+            conn.close()
+        return {
+            "status": candidate["status"],
+            "candidate": candidate,
+            "promotion": promotion,
+        }
 
     async def list_promotions(
         self,
@@ -3651,6 +3741,7 @@ class MemoryService:
             "recall_trace_references": 0,
             "memory_embeddings": 0,
             "memory_promotions_revoked": 0,
+            "memory_promotion_candidates_rejected": 0,
         }
         target_kind = "memory" if memory_id else "session"
         target = memory_id or session_id
@@ -3676,6 +3767,14 @@ class MemoryService:
                     source_domain=memory_domain,
                     scope=scope,
                     revoked_by=request.memory_actor.value,
+                )
+                counts["memory_promotion_candidates_rejected"] += (
+                    reject_promotion_candidates_for_source(
+                        conn,
+                        source_memory_ids=[memory_id],
+                        source_domain=memory_domain,
+                        scope=scope,
+                    )
                 )
                 cursor = conn.execute(
                     "DELETE FROM recall_feedback WHERE memory_id = ? "
@@ -3793,6 +3892,14 @@ class MemoryService:
                     source_domain=memory_domain,
                     scope=scope,
                     revoked_by=request.memory_actor.value,
+                )
+                counts["memory_promotion_candidates_rejected"] += (
+                    reject_promotion_candidates_for_source(
+                        conn,
+                        source_memory_ids=sorted(promotion_source_ids),
+                        source_domain=memory_domain,
+                        scope=scope,
+                    )
                 )
                 cursor = conn.execute(
                     "DELETE FROM recall_feedback WHERE memory_domain = ? AND trace_id IN ("
