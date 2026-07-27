@@ -255,7 +255,11 @@ class Supervisor(
         )
         self.app.add_api_route("/voice/status", self.voice_status, methods=["GET"])
         self.app.add_api_route("/voice/microphone", self.set_voice_microphone, methods=["POST"])
-        self.app.add_api_route("/voice/enroll", self.enroll_voice_fingerprint, methods=["POST"])
+        self.app.add_api_route(
+            "/voice/owner-template",
+            self.record_owner_voice_template,
+            methods=["POST"],
+        )
         self.app.add_api_route("/voice/session/start", self.start_voice_session, methods=["POST"])
         self.app.add_api_route("/voice/session/interrupt", self.interrupt_voice_session, methods=["POST"])
         self.app.add_api_route("/voice/continuous/start", self.start_continuous_voice, methods=["POST"])
@@ -379,11 +383,11 @@ class Supervisor(
             await self.flush_pending_proactive_reminder()
         return self._voice_manager.status()
 
-    async def enroll_voice_fingerprint(
+    async def record_owner_voice_template(
         self,
         request: VoiceCaptureRequest,
     ) -> Dict[str, Any]:
-        return await self._voice_manager.enroll(
+        return await self._voice_manager.record_owner_template(
             duration_seconds=request.duration_seconds,
         )
 

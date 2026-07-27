@@ -30,12 +30,12 @@ class VoiceRuntimeState:
     last_error: str = ""
     last_transcript: str = ""
     last_reply: str = ""
-    authenticated: bool = False
+    owner_voice_matched: bool = False
     interrupted: bool = False
 
 
 class VoiceSessionManager:
-    """Voice transport with auth, wake-word control, cancellation and cleanup."""
+    """Single-owner voice transport with speaker filtering and no user accounts."""
 
     def __init__(
         self,
@@ -88,9 +88,9 @@ class VoiceSessionManager:
             "last_error": self.state.last_error,
             "last_transcript": self.state.last_transcript,
             "last_reply": self.state.last_reply,
-            "authenticated": self.state.authenticated,
+            "owner_voice_matched": self.state.owner_voice_matched,
             "interrupted": self.state.interrupted,
-            "fingerprint_enrolled": self.config.fingerprint_path.is_file(),
+            "owner_voice_template_present": self.config.fingerprint_path.is_file(),
             "stt_configured": self.stt.configured,
             "tts_configured": self.tts.configured,
             "capture_available": self.recorder.available(),
@@ -114,23 +114,27 @@ class VoiceSessionManager:
         self.state.interrupted = True
         return self.status()
 
-    async def enroll(self, *, duration_seconds: float = 5.0) -> dict[str, Any]:
+    async def record_owner_template(
+        self,
+        *,
+        duration_seconds: float = 5.0,
+    ) -> dict[str, Any]:
         if self.state.continuous_active:
             return {"status": "busy", "reason": "continuous_listening_active"}
         async with self._lock:
             self.state.last_error = ""
-            self.state.last_status = "enrolling"
+            self.state.last_status = "recording_owner_voice_template"
             self._stop_event = asyncio.Event()
-            path = self._temporary_audio_path("enroll")
+            path = self._temporary_audio_path("owner-template")
             try:
                 await self.recorder.record(
                     path,
                     duration_seconds=min(duration_seconds, self.config.max_record_seconds),
                     stop_event=self._stop_event,
                 )
-                result = self.fingerprint.enroll(path)
-                self.state.last_status = "enrolled"
-                return {**result, "status": "enrolled"}
+                result = self.fingerprint.record_owner_template(path)
+                self.state.last_status = "owner_voice_template_recorded"
+                return {**result, "status": "owner_voice_template_recorded"}
             except Exception as exc:
                 self.state.last_status = "error"
                 self.state.last_error = f"{type(exc).__name__}: {exc}"
@@ -163,7 +167,7 @@ class VoiceSessionManager:
                     transcript=str(capture["transcript"]),
                     session_id=self.state.session_id,
                     stop_event=self._stop_event,
-                    authentication=dict(capture.get("authentication") or {}),
+                    voice_match=dict(capture.get("voice_match") or {}),
                 )
             except asyncio.CancelledError:
                 self.interrupt()
@@ -302,7 +306,7 @@ class VoiceSessionManager:
                     transcript=query,
                     session_id=self.state.session_id,
                     stop_event=self._continuous_stop_event,
-                    authentication=dict(capture.get("authentication") or {}),
+                    voice_match=dict(capture.get("voice_match") or {}),
                 )
                 self.state.active = False
                 armed_until = 0.0
@@ -326,7 +330,7 @@ class VoiceSessionManager:
         self.state.last_status = "recording"
         self.state.last_error = ""
         self.state.interrupted = False
-        self.state.authenticated = False
+        self.state.owner_voice_matched = False
         self._stop_event = asyncio.Event()
 
     async def _capture_transcript(
@@ -347,12 +351,14 @@ class VoiceSessionManager:
             )
             if stop_event.is_set():
                 return {"status": "interrupted", "reason": "recording_interrupted"}
-            self.state.last_status = "authenticating"
-            auth = self.fingerprint.verify(audio_path)
-            self.state.authenticated = bool(auth.get("authenticated"))
-            if not self.state.authenticated:
+            self.state.last_status = "matching_owner_voice"
+            voice_match = self.fingerprint.verify(audio_path)
+            self.state.owner_voice_matched = bool(
+                voice_match.get("owner_voice_matched")
+            )
+            if not self.state.owner_voice_matched:
                 self.state.last_status = "rejected"
-                return {"status": "rejected", "authentication": auth}
+                return {"status": "rejected", "voice_match": voice_match}
             self.state.last_status = "transcribing"
             transcript = str(await self.stt.transcribe(audio_path)).strip()
             if persist_transcript:
@@ -365,7 +371,7 @@ class VoiceSessionManager:
             return {
                 "status": "transcribed",
                 "transcript": transcript,
-                "authentication": auth,
+                "voice_match": voice_match,
             }
         finally:
             self._cleanup(audio_path)
@@ -376,7 +382,7 @@ class VoiceSessionManager:
         transcript: str,
         session_id: str,
         stop_event: asyncio.Event,
-        authentication: dict[str, Any],
+        voice_match: dict[str, Any],
     ) -> dict[str, Any]:
         if self.companion_callback is None:
             raise RuntimeError("companion callback is not configured")
@@ -412,7 +418,7 @@ class VoiceSessionManager:
                 "session_id": session_id,
                 "transcript": transcript,
                 "reply_text": reply_text,
-                "authentication": authentication,
+                "voice_match": voice_match,
             }
         finally:
             self._cleanup(speech_path)

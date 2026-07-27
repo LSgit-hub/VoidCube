@@ -8,6 +8,7 @@
 - Agent 可以持有可恢复会话、消息游标和临时上下文，但不拥有长期身份、治理裁决或跨会话事实真相。
 - Memory Service 和 MemAI 持有长期记忆与治理事件；`AutonomousChainStore` 是可重建的工作投影。
 - 星子由 Supervisor + Memory/MemAI + API-B 共同承载，不创建第二个独立 Agent 进程。
+- VoidCube 是单机、单所有者系统，不建立人类用户注册或登录；Gateway 凭证只识别内部服务/CLI session，本机声纹模板只做说话人和背景音过滤。
 - 系统启动进入 `daily_companion`；星子周期读取 VoidCube 内部事件，意图不清或没有明确帮助价值时保持沉默。
 - 自主链路门控初始为关闭；当前 `/auto` 是临时启用开关：它把星子从日常伴侣切换到 `auto_evolution`。`/auto-q` 是对应的临时停用开关：它收口 Auto 任务并返回日常模式。
 - 日常与 Auto worker 互斥：Auto 不履行伴侣职责，也不持续感知实时用户行为。

@@ -114,3 +114,15 @@ def test_mainline_architecture_has_precise_collaboration_and_state_ownership():
     assert "VoidCubeExecutionFacade" in baseline
     assert "Agent 保持无状态" not in systems_entry
     assert "不拥有长期身份、治理裁决或跨会话事实真相" in systems_entry
+
+
+def test_single_owner_identity_terms_do_not_imply_user_registration():
+    architecture = (DOCS / "项目架构与逻辑架构.md").read_text(encoding="utf-8")
+    baseline = (DOCS / "voidcube架构基线.md").read_text(encoding="utf-8")
+
+    assert "不建立人类用户注册、账号、登录或多用户权限体系" in architecture
+    assert "Gateway 凭证只识别内部服务/CLI session" in baseline
+    assert "/voice/owner-template" in architecture
+    assert "/voice/enroll" not in architecture
+    assert "注册用户" not in architecture
+    assert "声纹注册" not in architecture

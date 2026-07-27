@@ -8,26 +8,26 @@ import wave
 
 
 class FingerprintStore:
-    """Store only a derived voice template; raw audio is never persisted here."""
+    """Match local-owner speech using a derived template, without user accounts."""
 
     def __init__(self, path: str | Path, *, threshold: float = 0.86) -> None:
         self.path = Path(path)
         self.threshold = threshold
 
-    def enroll(self, audio_path: str | Path) -> dict[str, float | str]:
+    def record_owner_template(self, audio_path: str | Path) -> dict[str, float | str]:
         template = extract_voice_template(audio_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(
             json.dumps({"version": 1, "template": template}, ensure_ascii=False),
             encoding="utf-8",
         )
-        return {"status": "enrolled", "path": str(self.path)}
+        return {"status": "owner_voice_template_recorded", "path": str(self.path)}
 
     def verify(self, audio_path: str | Path) -> dict[str, float | bool | str]:
         if not self.path.is_file():
             return {
-                "authenticated": False,
-                "reason": "voice_fingerprint_not_enrolled",
+                "owner_voice_matched": False,
+                "reason": "owner_voice_template_missing",
                 "similarity": 0.0,
             }
         try:
@@ -37,13 +37,13 @@ class FingerprintStore:
             similarity = cosine_similarity(expected, actual)
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             return {
-                "authenticated": False,
-                "reason": f"fingerprint_read_failed:{type(exc).__name__}",
+                "owner_voice_matched": False,
+                "reason": f"owner_voice_template_read_failed:{type(exc).__name__}",
                 "similarity": 0.0,
             }
         return {
-            "authenticated": similarity >= self.threshold,
-            "reason": "matched" if similarity >= self.threshold else "voice_fingerprint_mismatch",
+            "owner_voice_matched": similarity >= self.threshold,
+            "reason": "matched" if similarity >= self.threshold else "owner_voice_mismatch",
             "similarity": round(similarity, 6),
             "threshold": self.threshold,
         }

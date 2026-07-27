@@ -3138,7 +3138,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
       <button type="button" data-mode="auto_evolution" aria-pressed="false">Auto</button>
     </div>
     <div class="voice-controls" id="voiceControls">
-      <button type="button" id="voiceEnroll" title="注册声纹">◎</button>
+      <button type="button" id="voiceOwnerTemplate" title="录入本机所有者声纹">◎</button>
       <button type="button" id="voiceMicToggle" title="麦克风开关" aria-pressed="false">🎙</button>
       <button type="button" id="voiceListen" title="持续监听" aria-pressed="false">◉</button>
       <button type="button" id="voiceTalk" title="开始语音会话">●</button>
@@ -3345,7 +3345,7 @@ const els = {
   sceneMiniText: $('#sceneMiniText'),
   stellarModeControl: $('#stellarModeControl'),
   voiceControls: $('#voiceControls'),
-  voiceEnroll: $('#voiceEnroll'),
+  voiceOwnerTemplate: $('#voiceOwnerTemplate'),
   voiceMicToggle: $('#voiceMicToggle'),
   voiceListen: $('#voiceListen'),
   voiceTalk: $('#voiceTalk'),
@@ -3380,7 +3380,9 @@ if (els.stellarModeControl) {
     if (button) setStellarMode(button.dataset.mode);
   });
 }
-if (els.voiceEnroll) els.voiceEnroll.addEventListener('click', () => enrollVoice());
+if (els.voiceOwnerTemplate) {
+  els.voiceOwnerTemplate.addEventListener('click', () => recordOwnerVoiceTemplate());
+}
 if (els.voiceMicToggle) els.voiceMicToggle.addEventListener('click', () => toggleVoice());
 if (els.voiceListen) els.voiceListen.addEventListener('click', () => toggleContinuousVoice());
 if (els.voiceTalk) els.voiceTalk.addEventListener('click', () => runVoiceSession());
@@ -5280,8 +5282,8 @@ async function postVoice(path, payload) {
   }
 }
 
-async function enrollVoice() {
-  await postVoice('/voice/enroll', {duration_seconds: 5});
+async function recordOwnerVoiceTemplate() {
+  await postVoice('/voice/owner-template', {duration_seconds: 5});
 }
 
 async function toggleVoice() {

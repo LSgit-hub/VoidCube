@@ -32,11 +32,11 @@ def test_fingerprint_store_persists_derived_template_only(tmp_path):
     fingerprint_path = tmp_path / "fingerprint.json"
     store = FingerprintStore(fingerprint_path, threshold=0.8)
 
-    enrolled = store.enroll(audio)
+    recorded = store.record_owner_template(audio)
     verified = store.verify(audio)
 
-    assert enrolled["status"] == "enrolled"
-    assert verified["authenticated"] is True
+    assert recorded["status"] == "owner_voice_template_recorded"
+    assert verified["owner_voice_matched"] is True
     assert "template" in fingerprint_path.read_text(encoding="utf-8")
     assert "input.wav" not in fingerprint_path.read_text(encoding="utf-8")
 
@@ -46,12 +46,26 @@ def test_fingerprint_mismatch_is_rejected(tmp_path):
     first = _wav(tmp_path / "first.wav", frequency=220)
     second = _wav(tmp_path / "second.wav", frequency=880)
     store = FingerprintStore(tmp_path / "fingerprint.json", threshold=0.999)
-    store.enroll(first)
+    store.record_owner_template(first)
 
     result = store.verify(second)
 
-    assert result["authenticated"] is False
-    assert result["reason"] == "voice_fingerprint_mismatch"
+    assert result["owner_voice_matched"] is False
+    assert result["reason"] == "owner_voice_mismatch"
+
+
+@pytest.mark.unit
+def test_voice_status_exposes_owner_filter_not_user_authentication(tmp_path):
+    manager = VoiceSessionManager(
+        VoiceConfig(enabled=False, fingerprint_path=tmp_path / "fingerprint.json")
+    )
+
+    status = manager.status()
+
+    assert status["owner_voice_matched"] is False
+    assert status["owner_voice_template_present"] is False
+    assert "authenticated" not in status
+    assert "fingerprint_enrolled" not in status
 
 
 @pytest.mark.asyncio
@@ -68,7 +82,7 @@ async def test_voice_session_rejects_when_microphone_is_disabled(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_voice_session_authenticates_transcribes_calls_companion_and_cleans_audio(tmp_path):
+async def test_voice_session_matches_owner_transcribes_calls_companion_and_cleans_audio(tmp_path):
     config = VoiceConfig(
         enabled=True,
         fingerprint_path=tmp_path / "fingerprint.json",
@@ -76,7 +90,7 @@ async def test_voice_session_authenticates_transcribes_calls_companion_and_clean
     )
     manager = VoiceSessionManager(config, companion_callback=companion)
     manager.recorder.record = fake_record  # type: ignore[method-assign]
-    manager.fingerprint.verify = lambda path: {"authenticated": True, "similarity": 1.0}  # type: ignore[method-assign]
+    manager.fingerprint.verify = lambda path: {"owner_voice_matched": True, "similarity": 1.0}  # type: ignore[method-assign]
     manager.stt.transcribe = fake_transcribe  # type: ignore[method-assign]
     manager.tts.synthesize = fake_synthesize  # type: ignore[method-assign]
     manager.player.play = fake_play  # type: ignore[method-assign]
@@ -117,7 +131,7 @@ async def test_continuous_voice_discards_non_wake_segments_and_stops_cleanly(tmp
 
     manager = VoiceSessionManager(config, companion_callback=companion_for_continuous)
     manager.recorder.record = fake_record  # type: ignore[method-assign]
-    manager.fingerprint.verify = lambda path: {"authenticated": True, "similarity": 1.0}  # type: ignore[method-assign]
+    manager.fingerprint.verify = lambda path: {"owner_voice_matched": True, "similarity": 1.0}  # type: ignore[method-assign]
 
     async def transcribe_sequence(path):
         try:
