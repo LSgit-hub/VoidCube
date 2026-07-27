@@ -100,6 +100,7 @@ html, body {
 .room {
   position: relative;
   width: var(--room-w); height: var(--room-h);
+  flex: 0 0 var(--room-w);
   transform: scale(var(--room-scale, 1));
   transform-origin: center center;
   overflow: hidden;
@@ -1111,6 +1112,62 @@ body[data-exec-window="false"] .floor {
 }
 @keyframes glyph-pulse {
   50% { transform: scale(1.2); opacity: 1; }
+}
+
+/* 日常陪伴沿用休息动作，只在有对话内容时显示气泡。 */
+.companion-chat {
+  position: absolute;
+  left: 136px;
+  top: -72px;
+  z-index: 10;
+  width: 270px;
+  display: grid;
+  gap: 6px;
+  padding: 9px 10px;
+  border: 2px solid rgba(45,60,75,.22);
+  border-radius: 8px;
+  background: rgba(255,250,240,.96);
+  box-shadow: 0 8px 22px rgba(20,36,52,.22);
+  color: #2a1d18;
+}
+.companion-chat::after {
+  content: "";
+  position: absolute;
+  left: -10px;
+  bottom: 18px;
+  width: 16px;
+  height: 16px;
+  background: rgba(255,250,240,.96);
+  border-left: 2px solid rgba(45,60,75,.22);
+  border-bottom: 2px solid rgba(45,60,75,.22);
+  transform: rotate(45deg);
+}
+.companion-chat.empty { display: none; }
+body[data-panel-open] .companion-chat { display: none; }
+.companion-chat-line {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px;
+  min-width: 0;
+  padding: 5px 7px;
+  border-radius: 5px;
+  background: rgba(106,158,232,.11);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.companion-chat-line.user {
+  margin-left: 24px;
+  background: rgba(111,198,160,.14);
+}
+.companion-chat-line.hidden { display: none; }
+.companion-chat-label {
+  color: #6b4a34;
+  font-size: 9px;
+  font-weight: 800;
+}
+.companion-chat-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* ═══════════════════════════════════════
@@ -2474,6 +2531,84 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 .panel-empty .pe-icon { font-size: 32px; opacity: .5; }
 .panel-empty .pe-text { font-size: 12px; }
 
+/* ── evolution -> companion 提升审计 ── */
+.promotion-audit-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.promotion-audit-stat {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: 6px;
+  background: rgba(255,255,255,.03);
+}
+.promotion-audit-stat strong {
+  display: block;
+  color: var(--text-primary);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+.promotion-audit-stat span {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 9px;
+}
+.promotion-audit-list { display: grid; gap: 8px; }
+.promotion-audit-row {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(255,255,255,.07);
+  border-left: 3px solid var(--gold);
+  border-radius: 6px;
+  background: rgba(255,255,255,.03);
+}
+.promotion-audit-row.revoked { border-left-color: var(--coral); }
+.promotion-audit-row.expired { border-left-color: var(--text-muted); }
+.promotion-audit-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.promotion-audit-source {
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.promotion-audit-status {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(226,176,74,.13);
+  color: var(--gold);
+  font-size: 9px;
+  font-weight: 700;
+}
+.promotion-audit-status.revoked { background: rgba(232,130,110,.12); color: var(--coral); }
+.promotion-audit-status.expired { background: rgba(255,255,255,.05); color: var(--text-muted); }
+.promotion-audit-reason {
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.promotion-audit-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 12px;
+  color: var(--text-muted);
+  font-size: 9.5px;
+  line-height: 1.45;
+}
+.promotion-audit-meta span { min-width: 0; overflow-wrap: anywhere; }
+
 /* ── 场景迷你标题(左上角轻量提示) ── */
 .scene-mini-title {
   position: absolute;
@@ -2647,6 +2782,16 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 
 /* ── Dock 响应式 ── */
 @media (max-width: 720px) {
+  .room {
+    width: 100vw;
+    height: 100vh;
+    flex-basis: 100vw;
+    border-radius: 0;
+  }
+  .scene-mini-title { left: 12px; top: 12px; max-width: 210px; }
+  .stellar-mode-control { right: 12px; top: 12px; }
+  .voice-controls { right: 12px; top: 50px; }
+  .companion-chat { left: 60px; top: -80px; width: 280px; }
   .bottom-dock { height: 44px; padding: 0 8px; gap: 0; }
   .dock-btn { width: 38px; height: 36px; }
   .dock-btn .db-icon { font-size: 15px; }
@@ -2657,6 +2802,12 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   .dock-panels { padding: 0 8px 6px; }
   .reminder-policy-form { grid-template-columns: 1fr; }
   .reminder-policy-actions { grid-column: 1; }
+  .promotion-audit-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .promotion-audit-meta { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .dock-char-strip { display: none; }
+  .dock-sep { margin: 0 1px; }
 }
 
 /* ── drill-down 详情抽屉 ── */
@@ -3099,6 +3250,16 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
         <span class="bubble b3"></span>
         <span class="glyph" id="glyph">·</span>
       </div>
+      <div class="companion-chat empty" data-companion-chat aria-live="polite">
+        <div class="companion-chat-line user" data-chat-user-line>
+          <span class="companion-chat-label">你</span>
+          <span class="companion-chat-text" data-chat-user></span>
+        </div>
+        <div class="companion-chat-line" data-chat-reply-line>
+          <span class="companion-chat-label">西子</span>
+          <span class="companion-chat-text" data-chat-reply></span>
+        </div>
+      </div>
     </section>
 
     <!-- 角色: 星子(短发男) -->
@@ -3122,6 +3283,16 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
         <span class="bubble b2"></span>
         <span class="bubble b3"></span>
         <span class="glyph" id="glyphXingzi">·</span>
+      </div>
+      <div class="companion-chat empty" data-companion-chat aria-live="polite">
+        <div class="companion-chat-line user" data-chat-user-line>
+          <span class="companion-chat-label">你</span>
+          <span class="companion-chat-text" data-chat-user></span>
+        </div>
+        <div class="companion-chat-line" data-chat-reply-line>
+          <span class="companion-chat-label">星子</span>
+          <span class="companion-chat-text" data-chat-reply></span>
+        </div>
       </div>
     </section>
 
@@ -3202,6 +3373,15 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
           <button class="panel-close" data-panel="stats">×</button>
         </div>
         <div class="panel-body" id="panelStatsBody">
+        </div>
+      </div>
+
+      <div class="dock-panel" id="panelPromotions">
+        <div class="panel-header">
+          <div class="panel-title"><span class="pt-icon">◎</span>提升审计</div>
+          <button class="panel-close" data-panel="promotions" title="关闭">×</button>
+        </div>
+        <div class="panel-body" id="panelPromotionsBody">
         </div>
       </div>
 
@@ -3288,6 +3468,11 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
         <span class="db-label">替身</span>
       </button>
       <span class="dock-sep"></span>
+      <button class="dock-btn" data-panel="promotions" title="进化记忆提升审计">
+        <span class="db-icon">◎</span>
+        <span class="db-label">提升</span>
+      </button>
+      <span class="dock-sep"></span>
       <button class="dock-btn" data-panel="settings" title="主动提醒设置">
         <span class="db-icon">⚙</span>
         <span class="db-label">提醒</span>
@@ -3323,7 +3508,7 @@ function updateRoomScale() {
   const sw = s.clientWidth  || window.innerWidth;
   const sh = s.clientHeight || window.innerHeight;
   if (sw <= 0 || sh <= 0) return;
-  const scale = Math.min(sw / ROOM_W, sh / ROOM_H);
+  const scale = sw <= 720 ? 1 : Math.min(sw / ROOM_W, sh / ROOM_H);
   document.documentElement.style.setProperty('--room-scale', scale);
 }
 
@@ -3359,6 +3544,7 @@ const els = {
   panelCognitionBody: $('#panelCognitionBody'),
   panelObservationBody: $('#panelObservationBody'),
   panelStatsBody: $('#panelStatsBody'),
+  panelPromotionsBody: $('#panelPromotionsBody'),
   reminderPolicyForm: $('#reminderPolicyForm'),
   reminderPolicyEnabled: $('#reminderPolicyEnabled'),
   reminderPolicyTts: $('#reminderPolicyTts'),
@@ -3521,6 +3707,7 @@ function openPanel(name) {
   if (!panel) return;
   panel.classList.add('open');
   panelOpen = name;
+  els.body.dataset.panelOpen = name;
   $$('.dock-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.panel === name);
   });
@@ -3532,7 +3719,9 @@ function openPanel(name) {
     if (name === 'cognition') renderCognitionPanel(lastState);
     if (name === 'observation') renderObservationPanel(lastState);
     if (name === 'stats') renderStatsPanel(lastState);
+    if (name === 'promotions') renderEvolutionPromotionAudit();
   }
+  if (name === 'promotions') loadEvolutionPromotionAudit();
   if (name === 'settings') loadReminderPolicy();
 }
 function closePanel(name) {
@@ -3540,7 +3729,10 @@ function closePanel(name) {
   const panel = document.getElementById(panelId);
   if (!panel) return;
   panel.classList.remove('open');
-  if (panelOpen === name) panelOpen = null;
+  if (panelOpen === name) {
+    panelOpen = null;
+    delete els.body.dataset.panelOpen;
+  }
   $$('.dock-btn').forEach(b => {
     if (b.dataset.panel === name) b.classList.remove('active');
   });
@@ -3589,6 +3781,9 @@ let identityArchiveError = '';
 let identityTurns = null;
 let identityTurnsError = '';
 let identityVerificationBusy = '';
+let evolutionPromotionAudit = null;
+let evolutionPromotionAuditError = '';
+let evolutionPromotionAuditBusy = false;
 
 const DRAWER_META = {
   autonomous: { icon: '🚦', title: '链路详情' },
@@ -4761,6 +4956,131 @@ function renderChainPanel(state) {
   );
 }
 
+function promotionAuditTime(value) {
+  if (!value) return '无';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleString('zh-CN', {hour12: false});
+}
+
+function appendPromotionAuditMeta(container, label, value) {
+  const item = document.createElement('span');
+  item.textContent = label + '：' + (value || '无');
+  container.append(item);
+}
+
+function renderEvolutionPromotionAudit() {
+  const body = els.panelPromotionsBody;
+  if (!body) return;
+  body.replaceChildren();
+
+  if (evolutionPromotionAuditBusy && !evolutionPromotionAudit) {
+    const loading = document.createElement('div');
+    loading.className = 'panel-empty';
+    loading.innerHTML = '<div class="pe-icon">◎</div><div class="pe-text">正在读取提升审计记录</div>';
+    body.append(loading);
+    return;
+  }
+  if (evolutionPromotionAuditError) {
+    const failed = document.createElement('div');
+    failed.className = 'panel-empty';
+    failed.innerHTML = '<div class="pe-icon">!</div><div class="pe-text">提升审计暂时不可用</div>';
+    body.append(failed);
+    return;
+  }
+
+  const audit = evolutionPromotionAudit || {promotions: [], count: 0, status_counts: {}};
+  const counts = audit.status_counts || {};
+  const summary = document.createElement('div');
+  summary.className = 'promotion-audit-summary';
+  [
+    ['全部', audit.count || 0],
+    ['生效中', counts.active || 0],
+    ['已撤销', counts.revoked || 0],
+    ['已到期', counts.expired || 0],
+  ].forEach(([label, value]) => {
+    const stat = document.createElement('div');
+    stat.className = 'promotion-audit-stat';
+    const number = document.createElement('strong');
+    number.textContent = String(value);
+    const caption = document.createElement('span');
+    caption.textContent = label;
+    stat.append(number, caption);
+    summary.append(stat);
+  });
+  body.append(summary);
+
+  const note = document.createElement('div');
+  note.className = 'panel-subtle-note';
+  note.textContent = '只读显示 evolution → companion 引用；正文仍保留在 Auto 记忆域。';
+  body.append(note);
+
+  const promotions = Array.isArray(audit.promotions) ? audit.promotions : [];
+  if (!promotions.length) {
+    const empty = document.createElement('div');
+    empty.className = 'panel-empty';
+    empty.innerHTML = '<div class="pe-icon">◎</div><div class="pe-text">还没有进化记忆提升记录</div>';
+    body.append(empty);
+    return;
+  }
+
+  const list = document.createElement('div');
+  list.className = 'promotion-audit-list';
+  promotions.forEach(record => {
+    const status = String(record.status || '').toLowerCase();
+    const row = document.createElement('article');
+    row.className = 'promotion-audit-row ' + status;
+
+    const head = document.createElement('div');
+    head.className = 'promotion-audit-head';
+    const source = document.createElement('div');
+    source.className = 'promotion-audit-source';
+    source.textContent = String(record.source_type || 'memory') + ' · ' + String(record.source_memory_id || '未知来源');
+    const badge = document.createElement('span');
+    badge.className = 'promotion-audit-status ' + status;
+    badge.textContent = ({active: '生效中', revoked: '已撤销', expired: '已到期'})[status] || '未知';
+    head.append(source, badge);
+    row.append(head);
+
+    const reason = document.createElement('div');
+    reason.className = 'promotion-audit-reason';
+    reason.textContent = String(record.reason || '未记录批准原因');
+    row.append(reason);
+
+    const meta = document.createElement('div');
+    meta.className = 'promotion-audit-meta';
+    appendPromotionAuditMeta(meta, '批准者', record.approved_by);
+    appendPromotionAuditMeta(meta, '批准依据', record.approval_ref);
+    appendPromotionAuditMeta(meta, '创建时间', promotionAuditTime(record.created_at));
+    appendPromotionAuditMeta(meta, '有效期', record.expires_at ? promotionAuditTime(record.expires_at) : '长期有效');
+    if (status === 'revoked') {
+      appendPromotionAuditMeta(meta, '撤销者', record.revoked_by);
+      appendPromotionAuditMeta(meta, '撤销时间', promotionAuditTime(record.revoked_at));
+      appendPromotionAuditMeta(meta, '撤销原因', record.revoke_reason);
+    }
+    row.append(meta);
+    list.append(row);
+  });
+  body.append(list);
+}
+
+async function loadEvolutionPromotionAudit() {
+  if (evolutionPromotionAuditBusy) return;
+  evolutionPromotionAuditBusy = true;
+  evolutionPromotionAuditError = '';
+  renderEvolutionPromotionAudit();
+  try {
+    const response = await fetch('/ui/evolution-promotions?limit=100', {cache: 'no-store'});
+    if (!response.ok) throw new Error('status_' + response.status);
+    evolutionPromotionAudit = await response.json();
+  } catch (error) {
+    evolutionPromotionAuditError = String((error || {}).message || 'unavailable');
+  } finally {
+    evolutionPromotionAuditBusy = false;
+    if (panelOpen === 'promotions') renderEvolutionPromotionAudit();
+  }
+}
+
 function observationRoleStageLabel(task) {
   const projected = String(task.observation_stage_label || '').trim();
   if (projected) return projected;
@@ -5247,6 +5567,39 @@ function updateSceneMiniTitle(state) {
   }
 }
 
+function renderCompanionChat(state) {
+  const stellar = state.stellar_mode || {};
+  const voice = state.voice || {};
+  const dialogue = stellar.latest_companion_dialogue || {};
+  const reminder = stellar.latest_proactive_reminder || {};
+  const daily = String(stellar.mode || 'daily_companion') === 'daily_companion';
+  const userText = daily
+    ? String(dialogue.user_text || voice.last_transcript || '').trim()
+    : '';
+  const replyText = daily
+    ? String(dialogue.reply_text || reminder.reminder_text || voice.last_reply || '').trim()
+    : '';
+
+  $$('[data-companion-chat]').forEach(chat => {
+    const userLine = $('[data-chat-user-line]', chat);
+    const replyLine = $('[data-chat-reply-line]', chat);
+    const user = $('[data-chat-user]', chat);
+    const reply = $('[data-chat-reply]', chat);
+    const visible = Boolean(userText || replyText);
+    chat.classList.toggle('empty', !visible);
+    if (userLine) userLine.classList.toggle('hidden', !userText);
+    if (replyLine) replyLine.classList.toggle('hidden', !replyText);
+    if (user) {
+      user.textContent = userText.substring(0, 180);
+      user.title = userText;
+    }
+    if (reply) {
+      reply.textContent = replyText.substring(0, 220);
+      reply.title = replyText;
+    }
+  });
+}
+
 async function setStellarMode(mode) {
   if (!els.stellarModeControl) return;
   const buttons = $$('button[data-mode]', els.stellarModeControl);
@@ -5415,6 +5768,7 @@ function applyState(state) {
 
   updateSceneMiniTitle(state);
   updateDockCharStrip(state);
+  renderCompanionChat(state);
 
   // 渲染已打开的面板
   if (panelOpen === 'chain') renderChainPanel(state);
@@ -5422,6 +5776,7 @@ function applyState(state) {
   if (panelOpen === 'cognition') renderCognitionPanel(state);
   if (panelOpen === 'observation') renderObservationPanel(state);
   if (panelOpen === 'stats') renderStatsPanel(state);
+  if (panelOpen === 'promotions') renderEvolutionPromotionAudit();
 
   // 抽屉打开时随状态刷新
   if (drawerOpen) renderDrawer();
@@ -5710,6 +6065,91 @@ class SupervisorUIMixin:
             raise HTTPException(
                 status_code=503, detail=f"Memory turns unavailable: {type(exc).__name__}"
             ) from exc
+
+    async def get_supervisor_evolution_promotion_audit(
+        self,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Expose read-only evolution-to-companion promotion metadata to the owner UI."""
+        bounded_limit = max(1, min(int(limit), 500))
+        try:
+            import aiohttp
+
+            gateway_url = str(self.config.execution.gateway_address).rstrip("/")
+            timeout = aiohttp.ClientTimeout(total=5)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                memory_url = await self._resolve_ui_memory_service_url(
+                    session, gateway_url
+                )
+                async with session.get(
+                    f"{memory_url}/promotions",
+                    params={
+                        "limit": 500,
+                        "target_domain": "companion",
+                        "memory_actor": "stellar_companion",
+                    },
+                ) as response:
+                    if response.status != 200:
+                        raise HTTPException(
+                            status_code=503,
+                            detail="Memory promotion audit unavailable",
+                        )
+                    payload = await response.json()
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Memory promotion audit unavailable: {type(exc).__name__}",
+            ) from exc
+
+        raw_promotions = payload.get("promotions") if isinstance(payload, dict) else None
+        if not isinstance(raw_promotions, list):
+            raise HTTPException(
+                status_code=503,
+                detail="Memory promotion audit returned an invalid payload",
+            )
+
+        allowed_fields = (
+            "promotion_id",
+            "source_type",
+            "source_memory_id",
+            "source_domain",
+            "target_domain",
+            "reason",
+            "approved_by",
+            "approval_ref",
+            "created_by",
+            "status",
+            "created_at",
+            "expires_at",
+            "revoked_at",
+            "revoked_by",
+            "revoke_reason",
+        )
+        promotions = [
+            {field: item.get(field) for field in allowed_fields}
+            for item in raw_promotions
+            if isinstance(item, dict)
+            and str(item.get("source_domain") or "") == "evolution"
+            and str(item.get("target_domain") or "") == "companion"
+        ][:bounded_limit]
+        status_counts = {"active": 0, "revoked": 0, "expired": 0}
+        for item in promotions:
+            status = str(item.get("status") or "").strip().lower()
+            if status in status_counts:
+                status_counts[status] += 1
+
+        return {
+            "direction": {
+                "source_domain": "evolution",
+                "target_domain": "companion",
+            },
+            "promotions": promotions,
+            "count": len(promotions),
+            "status_counts": status_counts,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
 
     async def verify_supervisor_identity_experience(
         self, request: Dict[str, Any]
@@ -6633,6 +7073,25 @@ class SupervisorUIMixin:
             error_count=error_count,
             memory_active=tier1_stats.get("memory_active", False),
         )
+        stellar_mode = self._stellar_mode_status()
+        voice_status = self._voice_manager.status()
+        if stellar_mode.get("mode") == "daily_companion":
+            scene = "idle"
+            title = "日常陪伴中"
+            latest_dialogue = dict(
+                stellar_mode.get("latest_companion_dialogue") or {}
+            )
+            latest_observation = dict(
+                stellar_mode.get("latest_companion_observation") or {}
+            )
+            if voice_status.get("active"):
+                summary = "正在通过语音与你交流。"
+            elif latest_dialogue:
+                summary = "最近完成了一轮日常对话，继续保持陪伴。"
+            elif latest_observation.get("intent_state") == "understood":
+                summary = "已理解当前任务，在确有帮助前保持安静。"
+            else:
+                summary = "正在安静陪伴并观察 VoidCube 内部事件。"
 
         # ── LM Input info (for 🧠 panel) ──
         lm_input: Dict[str, Any] = {
@@ -6782,8 +7241,8 @@ class SupervisorUIMixin:
 
         return {
             "status": "ok",
-            "stellar_mode": self._stellar_mode_status(),
-            "voice": self._voice_manager.status(),
+            "stellar_mode": stellar_mode,
+            "voice": voice_status,
             "scene": scene,
             "title": title,
             "summary": summary,

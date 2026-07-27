@@ -417,6 +417,33 @@ def test_supervisor_room_frontend_uses_chain_panel_contract():
 
 
 @pytest.mark.unit
+def test_supervisor_room_frontend_uses_read_only_evolution_promotion_audit():
+    assert 'id="panelPromotions"' in UI_HTML
+    assert 'id="panelPromotionsBody"' in UI_HTML
+    assert 'data-panel="promotions"' in UI_HTML
+    assert 'renderEvolutionPromotionAudit' in UI_HTML
+    assert "fetch('/ui/evolution-promotions?limit=100'" in UI_HTML
+    assert '只读显示 evolution → companion 引用' in UI_HTML
+    assert 'data-promotion-revoke' not in UI_HTML
+
+
+@pytest.mark.unit
+def test_supervisor_room_frontend_uses_rest_animation_and_chat_in_daily_mode():
+    assert 'data-companion-chat' in UI_HTML
+    assert 'data-chat-user' in UI_HTML
+    assert 'data-chat-reply' in UI_HTML
+    assert 'renderCompanionChat' in UI_HTML
+    assert "dialogue.user_text || voice.last_transcript" in UI_HTML
+    assert "dialogue.reply_text || reminder.reminder_text || voice.last_reply" in UI_HTML
+    assert "SCENE_TO_ACTION" in UI_HTML
+    assert "idle: 'rest'" in UI_HTML
+    assert "sw <= 720 ? 1" in UI_HTML
+    assert "flex: 0 0 var(--room-w)" in UI_HTML
+    assert "body[data-panel-open] .companion-chat" in UI_HTML
+    assert "els.body.dataset.panelOpen = name" in UI_HTML
+
+
+@pytest.mark.unit
 def test_supervisor_room_frontend_uses_canonical_reminder_policy_contract():
     assert 'id="panelSettings"' in UI_HTML
     assert 'id="reminderPolicyForm"' in UI_HTML
@@ -643,6 +670,7 @@ def test_supervisor_mounts_built_in_room_ui_when_enabled(tmp_path):
     assert "/ui/events" in route_paths
     assert "/ui/identity/archive" in route_paths
     assert "/ui/identity/turns" in route_paths
+    assert "/ui/evolution-promotions" in route_paths
     assert "/ui/identity/experiences/verify" in route_paths
     assert "/runtime/timeline" in route_paths
     assert "/runtime/traces" in route_paths
@@ -670,6 +698,134 @@ def test_supervisor_mounts_built_in_room_ui_when_enabled(tmp_path):
     assert payload["status"] == "ok"
     assert payload["scene"] in {"idle", "planning", "drive", "memory", "maintenance", "handoff"}
     assert "timeline" in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_evolution_promotion_audit_is_fixed_read_only_projection(
+    tmp_path,
+    monkeypatch,
+):
+    supervisor = _make_supervisor(tmp_path)
+    requests = []
+    rows = [
+        {
+            "promotion_id": "promotion-active",
+            "source_type": "compressed",
+            "source_memory_id": "evolution-memory-1",
+            "source_domain": "evolution",
+            "target_domain": "companion",
+            "reason": "Approved for companion explanations.",
+            "approved_by": "owner-consent",
+            "approval_ref": "decision:1",
+            "created_by": "governor",
+            "status": "active",
+            "created_at": "2026-07-27T08:00:00+00:00",
+            "expires_at": None,
+            "revoked_at": None,
+            "revoked_by": None,
+            "revoke_reason": None,
+            "owner_id": "local-user",
+            "workspace_id": "default",
+        },
+        {
+            "promotion_id": "promotion-other-source",
+            "source_type": "turn",
+            "source_memory_id": "agent-turn-1",
+            "source_domain": "agent_interaction",
+            "target_domain": "companion",
+            "reason": "Not part of this audit direction.",
+            "status": "active",
+        },
+        {
+            "promotion_id": "promotion-revoked",
+            "source_type": "profile",
+            "source_memory_id": "evolution-profile-2",
+            "source_domain": "evolution",
+            "target_domain": "companion",
+            "reason": "Previously approved conclusion.",
+            "approved_by": "owner-consent",
+            "approval_ref": "decision:2",
+            "created_by": "governor",
+            "status": "revoked",
+            "created_at": "2026-07-26T08:00:00+00:00",
+            "expires_at": None,
+            "revoked_at": "2026-07-27T09:00:00+00:00",
+            "revoked_by": "governor",
+            "revoke_reason": "Superseded by stronger evidence.",
+        },
+    ]
+
+    class _Response:
+        def __init__(self, status, payload):
+            self.status = status
+            self._payload = payload
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return self._payload
+
+    class _Session:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, *, params=None):
+            requests.append((url, params))
+            if url.endswith("/admin/services"):
+                return _Response(
+                    200,
+                    {
+                        "services": {
+                            "memory-1": {
+                                "service_type": "memory",
+                                "address": "http://127.0.0.1:6001",
+                            }
+                        }
+                    },
+                )
+            return _Response(200, {"promotions": rows, "count": len(rows)})
+
+    monkeypatch.setitem(
+        sys.modules,
+        "aiohttp",
+        SimpleNamespace(
+            ClientTimeout=lambda **kwargs: kwargs,
+            ClientSession=_Session,
+        ),
+    )
+
+    audit = await supervisor.get_supervisor_evolution_promotion_audit(limit=25)
+
+    assert requests[1] == (
+        "http://127.0.0.1:6001/promotions",
+        {
+            "limit": 500,
+            "target_domain": "companion",
+            "memory_actor": "stellar_companion",
+        },
+    )
+    assert audit["direction"] == {
+        "source_domain": "evolution",
+        "target_domain": "companion",
+    }
+    assert [item["promotion_id"] for item in audit["promotions"]] == [
+        "promotion-active",
+        "promotion-revoked",
+    ]
+    assert audit["status_counts"] == {"active": 1, "revoked": 1, "expired": 0}
+    assert "owner_id" not in audit["promotions"][0]
+    assert "workspace_id" not in audit["promotions"][0]
 
 
 @pytest.mark.unit
@@ -1388,6 +1544,7 @@ async def test_supervisor_room_state_read_does_not_mirror_observation_to_governa
 @pytest.mark.unit
 async def test_supervisor_room_state_maps_memory_task_to_memory_scene(tmp_path):
     supervisor = _make_supervisor(tmp_path)
+    supervisor._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
     supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
     await supervisor.plan_autonomous_chain_task(
         {
@@ -1946,6 +2103,7 @@ async def test_supervisor_room_state_keeps_running_api_a_task_out_of_ready_segme
 @pytest.mark.unit
 async def test_supervisor_room_state_maps_running_api_a_task_to_handoff_scene(tmp_path):
     supervisor = _make_supervisor(tmp_path)
+    supervisor._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
     supervisor.evaluate_endogenous_drive = AsyncMock(return_value={"candidates": []})  # type: ignore[method-assign]
 
     planned = await supervisor.plan_autonomous_chain_task(
@@ -2443,6 +2601,28 @@ async def test_supervisor_room_state_keeps_supervisor_idle_when_only_agent_task_
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_supervisor_room_uses_rest_scene_only_for_daily_companion(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._map_supervisor_scene = Mock(  # type: ignore[method-assign]
+        return_value=("planning", "Auto judgement", "Auto work is active."),
+    )
+
+    daily = await supervisor.get_supervisor_ui_state()
+
+    assert daily["stellar_mode"]["mode"] == "daily_companion"
+    assert daily["scene"] == "idle"
+    assert daily["title"] == "日常陪伴中"
+
+    supervisor._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
+    auto = await supervisor.get_supervisor_ui_state()
+
+    assert auto["stellar_mode"]["mode"] == "auto_evolution"
+    assert auto["scene"] == "planning"
+    assert auto["title"] == "Auto judgement"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_supervisor_delegates_memory_compression_to_maintenance_adapter(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     expected = {
@@ -2742,6 +2922,9 @@ async def test_companion_text_message_reuses_daily_mode_and_companion_memory(tmp
     assert result["status"] == "ok"
     assert result["disposition"] == "respond_to_user"
     assert result["memory_persisted"] is True
+    assert result["user_text"] == "星子，我现在在做什么？"
+    assert result["reply_text"] == "我看到了当前任务上下文。"
+    assert result["recorded_at"]
     supervisor._persist_companion_turn_pair.assert_awaited_once_with(
         session_id="voice-session-1",
         user_text="星子，我现在在做什么？",

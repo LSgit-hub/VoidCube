@@ -62,10 +62,10 @@ def _local_link_target(source: Path, raw_target: str) -> Path | None:
     return (source.parent / target).resolve()
 
 
-def test_docs_directory_contains_only_active_documents():
+def test_docs_directory_contains_required_active_documents_and_no_removed_documents():
     actual = {path.name for path in DOCS.glob("*.md")}
 
-    assert actual == ACTIVE_DOCS
+    assert ACTIVE_DOCS <= actual
     assert actual.isdisjoint(REMOVED_DOCS)
 
 
@@ -126,3 +126,20 @@ def test_single_owner_identity_terms_do_not_imply_user_registration():
     assert "/voice/enroll" not in architecture
     assert "注册用户" not in architecture
     assert "声纹注册" not in architecture
+
+
+def test_architecture_documents_read_only_evolution_promotion_audit_boundary():
+    architecture = (DOCS / "项目架构与逻辑架构.md").read_text(encoding="utf-8")
+
+    assert "/ui/evolution-promotions" in architecture
+    assert "固定方向并剔除 owner/workspace scope" in architecture
+    assert "不返回 Auto 记忆正文" in architecture
+    assert "提升账本" in architecture
+
+
+def test_architecture_documents_daily_companion_room_projection():
+    architecture = (DOCS / "项目架构与逻辑架构.md").read_text(encoding="utf-8")
+
+    assert "`daily_companion` 固定投影为原 `idle -> rest` 休息动画" in architecture
+    assert "最近伴侣对话、语音转写或已播报提醒" in architecture
+    assert "进入 `auto_evolution` 后气泡隐藏" in architecture

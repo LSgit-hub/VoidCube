@@ -867,9 +867,11 @@ class ServiceRuntimeMixin:
             "session_id": dialogue_session_id,
             "stellar_mode": StellarMode.DAILY_COMPANION.value,
             "disposition": "respond_to_user",
+            "user_text": message[:4000],
             "reply_text": reply_text[:4000],
             "reason": str(dict(result or {}).get("reason") or "direct_user_request")[:500],
             "memory_persisted": persisted,
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
         self._service_runtime.latest_companion_dialogue = snapshot
         return snapshot

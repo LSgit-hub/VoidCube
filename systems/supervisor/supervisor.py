@@ -175,6 +175,11 @@ class Supervisor(
                 methods=["GET"],
             )
             self.app.add_api_route(
+                "/ui/evolution-promotions",
+                self.get_supervisor_evolution_promotion_audit,
+                methods=["GET"],
+            )
+            self.app.add_api_route(
                 "/ui/identity/experiences/verify",
                 self.verify_supervisor_identity_experience,
                 methods=["POST"],
