@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import uuid
 
-from memai.governance import GovernanceEvent
+from memai.governance import GOVERNANCE_MEMORY_DOMAIN, GovernanceEvent
 
 
 class GovernanceEventMigrationConflict(RuntimeError):
@@ -38,9 +38,11 @@ def consolidate_governance_event_logs(
     )
     source_inputs = _existing_inputs(source_paths)
     target_retry = target_path.with_suffix(".retry.jsonl")
+    had_target_retry = target_retry.exists()
     target_inputs = [path for path in (target_path, target_retry) if path.exists()]
 
-    if not source_inputs and not target_retry.exists():
+    target_needs_normalization = _requires_domain_normalization(target_path)
+    if not source_inputs and not target_retry.exists() and not target_needs_normalization:
         return GovernanceEventMigrationResult(
             status="target_exists" if target_path.exists() else "source_missing",
             sources=source_paths,
@@ -90,7 +92,12 @@ def consolidate_governance_event_logs(
             temporary.unlink(missing_ok=True)
         raise
 
-    status = "migrated" if source_inputs else "recovered_retry"
+    if source_inputs:
+        status = "migrated"
+    elif had_target_retry:
+        status = "recovered_retry"
+    else:
+        status = "normalized"
     return GovernanceEventMigrationResult(
         status=status,
         sources=source_paths,
@@ -100,6 +107,22 @@ def consolidate_governance_event_logs(
         merged_events=len(ordered),
         duplicates_removed=duplicates,
     )
+
+
+def _requires_domain_normalization(path: Path) -> bool:
+    """Return whether an existing JSONL log predates explicit domain tagging."""
+    if not path.exists():
+        return False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            return True
+        if payload.get("memory_domain") != GOVERNANCE_MEMORY_DOMAIN:
+            return True
+    return False
 
 
 def _existing_inputs(sources: tuple[Path, ...]) -> list[Path]:

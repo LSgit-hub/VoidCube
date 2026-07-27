@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -31,6 +32,7 @@ class MemGovernorRecord(BaseModel):
     execution_report: Optional[Dict[str, Any]] = None
     registry: Optional[Dict[str, Any]] = None
     evolution_lineage: Optional[Dict[str, Any]] = None
+    memory_domain: Literal["evolution"] = "evolution"
 
 
 class MemGovernorBridge:
@@ -47,6 +49,8 @@ class MemGovernorBridge:
         self.storage_root.mkdir(parents=True, exist_ok=True)
         self.history_path = self.storage_root / "governor_history.jsonl"
         self.latest_path = self.storage_root / "governor_latest.json"
+        self._normalize_history_memory_domain()
+        self._normalize_latest_memory_domain()
         if engine is not None:
             self._engine = engine
         else:
@@ -228,7 +232,13 @@ class MemGovernorBridge:
                 line = line.strip()
                 if not line:
                     continue
-                rows.append(json.loads(line))
+                row = json.loads(line)
+                row.setdefault("memory_domain", "evolution")
+                if row["memory_domain"] != "evolution":
+                    raise ValueError(
+                        "Governor history contains a non-evolution memory domain"
+                    )
+                rows.append(row)
         if limit > 0:
             rows = rows[-limit:]
         return rows
@@ -245,6 +255,63 @@ class MemGovernorBridge:
                 self.history_path.write_text("", encoding="utf-8")
             if self.latest_path.exists():
                 self.latest_path.unlink()
+
+    def _normalize_history_memory_domain(self) -> None:
+        """Backfill the explicit evolution domain on the legacy projection."""
+        if not self.history_path.exists():
+            return
+        rows: list[str] = []
+        changed = False
+        try:
+            for line in self.history_path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                payload = json.loads(line)
+                domain = payload.get("memory_domain")
+                if domain is None:
+                    payload["memory_domain"] = "evolution"
+                    changed = True
+                elif domain != "evolution":
+                    raise ValueError(
+                        "Governor history contains a non-evolution memory domain"
+                    )
+                rows.append(json.dumps(payload, ensure_ascii=False))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Governor history domain migration skipped: %s", exc)
+            return
+        if not changed:
+            return
+        temporary = self.history_path.with_name(
+            f".{self.history_path.name}.migrating-{uuid.uuid4().hex}"
+        )
+        try:
+            with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+                handle.write("\n".join(rows))
+                if rows:
+                    handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.history_path)
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
+
+    def _normalize_latest_memory_domain(self) -> None:
+        if not self.latest_path.exists():
+            return
+        try:
+            payload = json.loads(self.latest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Governor latest domain migration skipped: %s", exc)
+            return
+        domain = payload.get("memory_domain")
+        if domain is None:
+            payload["memory_domain"] = "evolution"
+            atomic_json_write(self.latest_path, payload)
+        elif domain != "evolution":
+            raise ValueError(
+                "Governor latest projection contains a non-evolution memory domain"
+            )
 
     def _extract_evolution_lineage(
         self,

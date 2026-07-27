@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import json
 import logging
 from pathlib import Path
 
@@ -57,6 +58,7 @@ def test_mem_governor_bridge_records_review_and_latest(tmp_path):
     assert response.decision == "approve"
     assert len(history) == 1
     assert history[0]["kind"] == "review"
+    assert history[0]["memory_domain"] == "evolution"
     assert latest is not None
     assert latest["request"]["request_id"] == "review-1"
     assert latest["request"]["trace_id"] == "trace-1"
@@ -71,6 +73,7 @@ def test_mem_governor_bridge_records_review_and_latest(tmp_path):
 
     events = GovernanceEventRepository(tmp_path / "soul" / "mem_governance.jsonl").list_events()
     assert len(events) == 1
+    assert events[0].memory_domain == "evolution"
     execution_result = events[0].execution_result or {}
     assert execution_result["title"] == "Candidate ready"
     assert execution_result["summary"] == "Candidate ready"
@@ -109,6 +112,24 @@ def test_mem_governor_bridge_rejects_when_repository_write_fails(tmp_path):
     latest = bridge.get_latest()
     assert latest is None
     assert bridge.list_history() == []
+
+
+@pytest.mark.unit
+def test_mem_governor_bridge_normalizes_legacy_history_domain(tmp_path):
+    storage = tmp_path / "soul"
+    storage.mkdir()
+    history = storage / "governor_history.jsonl"
+    latest = storage / "governor_latest.json"
+    history.write_text(json.dumps({"record_id": "legacy", "kind": "review"}) + "\n", encoding="utf-8")
+    latest.write_text(json.dumps({"record_id": "legacy", "kind": "review"}), encoding="utf-8")
+
+    bridge = MemGovernorBridge(storage_root=storage)
+
+    row = json.loads(history.read_text(encoding="utf-8").strip())
+    assert row["memory_domain"] == "evolution"
+    assert json.loads(latest.read_text(encoding="utf-8"))["memory_domain"] == "evolution"
+    assert bridge.list_history()[0]["memory_domain"] == "evolution"
+    assert bridge.get_latest()["memory_domain"] == "evolution"
 
 
 @pytest.mark.unit

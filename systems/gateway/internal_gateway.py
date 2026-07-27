@@ -101,6 +101,12 @@ class InternalGateway:
             "stellar_companion",
             frozenset({"stellar_companion", "stellar_auto", "governor"}),
         ),
+        "stellar_companion": (
+            "stellar_companion",
+            frozenset({"stellar_companion"}),
+        ),
+        "stellar_auto": ("stellar_auto", frozenset({"stellar_auto"})),
+        "governor": ("governor", frozenset({"governor"})),
         "executor": ("execution", frozenset({"execution"})),
         "memory": (
             "memory_maintenance",

@@ -84,7 +84,7 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
             ),
             target=get_runtime_layout().supervisor_governance_log,
         )
-        if governance_result.status in {"migrated", "recovered_retry"}:
+        if governance_result.status in {"migrated", "recovered_retry", "normalized"}:
             logger.info(
                 "Consolidated governance events into %s "
                 "(%d source, %d existing, %d merged, %d duplicates removed)",

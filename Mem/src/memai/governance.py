@@ -8,6 +8,9 @@ from typing import Any
 from .schema import _serialize, new_id, parse_datetime, utc_now
 
 
+GOVERNANCE_MEMORY_DOMAIN = "evolution"
+
+
 class GovernanceEventType(str, Enum):
     AUTONOMOUS_TASK_TRANSITION = "autonomous_task_transition"
     AUTONOMOUS_TASK_CLEAR = "autonomous_task_clear"
@@ -136,6 +139,13 @@ class GovernanceEvent:
     failure_signature: GovernanceFailureSignature | None = None
     evidence_refs: list[str] = field(default_factory=list)
     related_event_ids: list[str] = field(default_factory=list)
+    memory_domain: str = GOVERNANCE_MEMORY_DOMAIN
+
+    def __post_init__(self) -> None:
+        if self.memory_domain != GOVERNANCE_MEMORY_DOMAIN:
+            raise ValueError(
+                "Governance events must be stored in the evolution memory domain"
+            )
 
     @classmethod
     def create(
@@ -185,6 +195,7 @@ class GovernanceEvent:
         data = dict(payload)
         data["event_type"] = GovernanceEventType(data["event_type"])
         data["decision"] = GovernanceDecision(data["decision"])
+        data["memory_domain"] = data.get("memory_domain", GOVERNANCE_MEMORY_DOMAIN)
         data["risk_level"] = GovernanceRiskLevel(data.get("risk_level", "unknown"))
         data["created_at"] = parse_datetime(data["created_at"])
         data["git_lineage"] = GovernanceGitLineage.from_dict(data.get("git_lineage"))

@@ -941,6 +941,68 @@ def test_gateway_supervisor_memory_capabilities_are_bounded(monkeypatch):
     assert denied.status_code == 403
 
 
+def test_gateway_governor_logical_identity_has_fixed_memory_actor(monkeypatch):
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+    _register_memory_target(client)
+    registration = client.post(
+        "/register",
+        json={
+            "service_name": "governor-runtime",
+            "service_type": "governor",
+            "address": "internal://governor",
+        },
+    ).json()
+    headers = {
+        "X-VoidCube-Service-Id": registration["service_id"],
+        "X-VoidCube-Service-Token": registration["service_token"],
+    }
+    captured = {}
+
+    class _FakeResponse:
+        status = 200
+        headers = {"content-type": "application/json"}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def read(self):
+            return b'{"promotions":[]}'
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def request(self, method, url, **kwargs):
+            captured["body"] = json.loads(kwargs["data"].decode("utf-8"))
+            return _FakeResponse()
+
+    monkeypatch.setattr(
+        "systems.gateway.internal_gateway.aiohttp.ClientSession",
+        _FakeSession,
+    )
+    response = client.post(
+        "/api/mem/promotions",
+        json={"reason": "governed promotion"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert captured["body"]["memory_actor"] == "governor"
+    denied = client.post(
+        "/api/mem/promotions",
+        json={"reason": "governed promotion"},
+        headers={**headers, "X-VoidCube-Memory-Actor": "stellar_auto"},
+    )
+    assert denied.status_code == 403
+
+
 def test_gateway_registration_requires_root_token_when_configured():
     gateway = InternalGateway(GatewayConfig(auth_token="root-secret"))
     client = TestClient(gateway.app)

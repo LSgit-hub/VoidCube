@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from memai.governance import (
+    GOVERNANCE_MEMORY_DOMAIN,
     GovernanceDecision,
     GovernanceEvent,
     GovernanceEventType,
@@ -134,6 +135,29 @@ def test_target_retry_is_recovered_without_legacy_source(tmp_path: Path) -> None
         "gov_retry"
     ]
     assert not retry.exists()
+
+
+def test_existing_target_without_domain_is_normalized_in_place(tmp_path: Path) -> None:
+    target = tmp_path / "canonical" / "mem_governance.jsonl"
+    payload = _event("gov_legacy_domain", minute=1).to_dict()
+    payload.pop("memory_domain")
+    target.parent.mkdir(parents=True)
+    target.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = consolidate_governance_event_logs(sources=(), target=target)
+
+    assert result.status == "normalized"
+    row = json.loads(target.read_text(encoding="utf-8").strip())
+    assert row["memory_domain"] == GOVERNANCE_MEMORY_DOMAIN
+    assert GovernanceEventRepository(target).list_events()[0].memory_domain == "evolution"
+
+
+def test_governance_event_rejects_non_evolution_domain() -> None:
+    payload = _event("gov_wrong_domain", minute=1).to_dict()
+    payload["memory_domain"] = "companion"
+
+    with pytest.raises(ValueError, match="evolution memory domain"):
+        GovernanceEvent.from_dict(payload)
 
 
 def test_default_supervisor_consolidates_root_and_supervisor_history(
