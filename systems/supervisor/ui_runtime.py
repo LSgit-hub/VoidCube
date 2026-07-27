@@ -2728,11 +2728,31 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   font-size: 14px;
 }
 .voice-controls button[aria-pressed="true"] {
-  color: var(--text-primary);
-  border-color: rgba(111,198,160,.45);
-  background: rgba(111,198,160,.18);
+  color: #fff;
+  border-color: #43d989;
+  background: #188a52;
+  box-shadow: 0 0 0 1px rgba(67,217,137,.18), 0 2px 8px rgba(12,92,54,.38);
 }
 .voice-controls button:disabled { cursor: wait; opacity: .55; }
+.voice-status-label {
+  position: absolute;
+  right: 0;
+  top: 34px;
+  max-width: 240px;
+  padding: 4px 7px;
+  border-radius: 4px;
+  background: rgba(20,14,10,.82);
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.voice-status-label[data-tone="ok"] { color: #78e6aa; }
+.voice-status-label[data-tone="warn"] { color: #ffd166; }
+.voice-status-label[data-tone="error"] { color: #ff8d8d; }
 .reminder-policy-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3362,9 +3382,11 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
     </div>
     <div class="voice-controls" id="voiceControls">
       <button type="button" id="voiceOwnerTemplate" title="录入本机所有者声纹">◎</button>
+      <button type="button" id="voiceFingerprintToggle" title="声纹过滤开关" aria-pressed="true">◆</button>
       <button type="button" id="voiceMicToggle" title="麦克风开关" aria-pressed="false">🎙</button>
       <button type="button" id="voiceListen" title="持续监听" aria-pressed="false">◉</button>
       <button type="button" id="voiceTalk" title="开始语音会话">●</button>
+      <span class="voice-status-label" id="voiceStatusLabel" aria-live="polite">语音关闭 · 声纹未录入</span>
     </div>
 
     <!-- ═══════════════════════════════════════════
@@ -3583,9 +3605,11 @@ const els = {
   stellarModeControl: $('#stellarModeControl'),
   voiceControls: $('#voiceControls'),
   voiceOwnerTemplate: $('#voiceOwnerTemplate'),
+  voiceFingerprintToggle: $('#voiceFingerprintToggle'),
   voiceMicToggle: $('#voiceMicToggle'),
   voiceListen: $('#voiceListen'),
   voiceTalk: $('#voiceTalk'),
+  voiceStatusLabel: $('#voiceStatusLabel'),
   /* dock char strip */
   dcsName: $('#dcsName'),
   dcsStatus: $('#dcsStatus'),
@@ -3620,6 +3644,9 @@ if (els.stellarModeControl) {
 }
 if (els.voiceOwnerTemplate) {
   els.voiceOwnerTemplate.addEventListener('click', () => recordOwnerVoiceTemplate());
+}
+if (els.voiceFingerprintToggle) {
+  els.voiceFingerprintToggle.addEventListener('click', () => toggleVoiceFingerprint());
 }
 if (els.voiceMicToggle) els.voiceMicToggle.addEventListener('click', () => toggleVoice());
 if (els.voiceListen) els.voiceListen.addEventListener('click', () => toggleContinuousVoice());
@@ -5717,23 +5744,126 @@ function updateDockCharStrip(state) {
 }
 
 /* ── 场景迷你标题 ── */
+let voiceActionNotice = null;
+
+function fingerprintResultText(voice) {
+  const reason = String(voice.last_fingerprint_reason || '');
+  if (reason === 'owner_voice_template_missing') return '声纹未录入';
+  if (reason === 'owner_voice_template_upgrade_required') return '声纹需重新录入';
+  if (reason === 'owner_voice_template_invalid') return '声纹模板无效，请重新录入';
+  if (reason === 'owner_voice_mismatch') {
+    const similarity = Number(voice.last_fingerprint_similarity);
+    const threshold = Number(voice.fingerprint_threshold);
+    if (Number.isFinite(similarity) && Number.isFinite(threshold)) {
+      return `声纹未通过 ${similarity.toFixed(2)} / ${threshold.toFixed(2)}`;
+    }
+    return '声纹未通过';
+  }
+  if (reason.startsWith('owner_voice_template_read_failed')) return '声纹模板读取失败';
+  return '';
+}
+
+function renderVoiceStatus(voice) {
+  if (!els.voiceStatusLabel) return;
+  let text = '';
+  let tone = '';
+  if (voiceActionNotice) {
+    text = voiceActionNotice.text;
+    tone = voiceActionNotice.tone;
+  } else if (voice.last_status === 'rejected') {
+    text = fingerprintResultText(voice) || '语音已拒绝';
+    tone = 'error';
+  } else if (voice.active) {
+    if (voice.last_status === 'recording_owner_voice_template') {
+      const current = Number(voice.enrollment_sample_index || 0);
+      const total = Number(voice.enrollment_sample_count || 3);
+      text = `正在录入声纹 ${current}/${total}`;
+      tone = 'warn';
+    }
+    const activeLabels = {
+      recording: '正在录音',
+      matching_owner_voice: '正在验证声纹',
+      transcribing: '正在转写',
+      thinking: '星子正在思考',
+      speaking: '星子正在回复',
+      building_owner_voice_template: '正在生成声纹模板',
+    };
+    if (!text) text = activeLabels[voice.last_status] || '语音处理中';
+    tone = 'warn';
+  } else {
+    const microphone = voice.enabled ? '语音开启' : '语音关闭';
+    let fingerprint = '声纹未录入';
+    if (!voice.fingerprint_enabled) {
+      fingerprint = voice.owner_voice_template_present
+        ? '声纹关闭 · 模板已录入'
+        : '声纹关闭 · 模板未录入';
+    }
+    else if (voice.fingerprint_template_status === 'upgrade_required') {
+      fingerprint = '声纹需重新录入';
+      tone = 'warn';
+    }
+    else if (voice.fingerprint_template_status === 'invalid') {
+      fingerprint = '声纹模板无效';
+      tone = 'error';
+    }
+    else if (voice.owner_voice_template_present) fingerprint = '声纹已录入';
+    text = `${microphone} · ${fingerprint}`;
+    tone = voice.enabled ? 'ok' : '';
+  }
+  els.voiceStatusLabel.textContent = text;
+  els.voiceStatusLabel.title = text;
+  els.voiceStatusLabel.dataset.tone = tone;
+}
+
+function showVoiceNotice(text, tone = '', durationMs = 4000) {
+  voiceActionNotice = {text, tone};
+  renderVoiceStatus(((lastState || {}).voice || {}));
+  if (durationMs > 0) {
+    window.setTimeout(() => {
+      if (!voiceActionNotice || voiceActionNotice.text !== text) return;
+      voiceActionNotice = null;
+      renderVoiceStatus(((lastState || {}).voice || {}));
+    }, durationMs);
+  }
+}
+
 function updateSceneMiniTitle(state) {
   const scene = state.scene || 'idle';
+  const activeMode = ((state.stellar_mode || {}).mode || 'daily_companion');
   if (els.sceneMiniIcon) els.sceneMiniIcon.textContent = SCENE_ICONS[scene] || '🛋';
   if (els.sceneMiniText) {
-    const mode = ((state.stellar_mode || {}).mode || 'daily_companion');
-    const suffix = mode === 'auto_evolution' ? ' · Auto' : ' · 日常';
+    const suffix = activeMode === 'auto_evolution' ? ' · Auto' : ' · 日常';
     els.sceneMiniText.textContent = (state.title || '星子与西子的小屋') + suffix;
   }
   if (els.stellarModeControl) {
-    const activeMode = ((state.stellar_mode || {}).mode || 'daily_companion');
     $$('button[data-mode]', els.stellarModeControl).forEach(button => {
       button.setAttribute('aria-pressed', String(button.dataset.mode === activeMode));
     });
   }
   const voice = state.voice || {};
+  const voiceUnavailable = activeMode === 'auto_evolution';
+  if (els.voiceControls) {
+    els.voiceControls.setAttribute('aria-disabled', String(voiceUnavailable));
+    $$('button', els.voiceControls).forEach(button => {
+      button.disabled = voiceUnavailable;
+    });
+  }
   if (els.voiceMicToggle) {
     els.voiceMicToggle.setAttribute('aria-pressed', String(Boolean(voice.enabled)));
+    els.voiceMicToggle.title = voice.enabled ? '关闭麦克风' : '开启麦克风';
+  }
+  if (els.voiceOwnerTemplate) {
+    const enrolled = Boolean(voice.owner_voice_template_present);
+    els.voiceOwnerTemplate.setAttribute('aria-pressed', String(enrolled));
+    els.voiceOwnerTemplate.title = enrolled ? '重新录入本机所有者声纹' : '录入本机所有者声纹';
+  }
+  if (els.voiceFingerprintToggle) {
+    const fingerprintEnabled = voice.fingerprint_enabled !== false;
+    els.voiceFingerprintToggle.setAttribute('aria-pressed', String(fingerprintEnabled));
+    els.voiceFingerprintToggle.textContent = fingerprintEnabled ? '◆' : '◇';
+    els.voiceFingerprintToggle.title = fingerprintEnabled
+      ? '关闭声纹过滤，允许其他说话人使用'
+      : '开启声纹过滤，仅接受已录入的说话人';
   }
   if (els.voiceListen) {
     const listening = Boolean(voice.continuous_active || voice.continuous_task_running);
@@ -5747,6 +5877,7 @@ function updateSceneMiniTitle(state) {
     els.voiceTalk.textContent = voice.active ? '■' : '●';
     els.voiceTalk.title = voice.active ? '中断语音会话' : '开始语音会话';
   }
+  renderVoiceStatus(voice);
 }
 
 function renderCompanionChat(state) {
@@ -5810,20 +5941,48 @@ async function postVoice(path, payload) {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(payload || {}),
     });
+    const result = response.ok ? await response.json() : null;
     await refresh();
-    return response.ok ? response.json() : null;
+    return result;
   } finally {
-    buttons.forEach(button => { button.disabled = false; });
+    const mode = (((lastState || {}).stellar_mode || {}).mode || 'daily_companion');
+    buttons.forEach(button => { button.disabled = mode === 'auto_evolution'; });
   }
 }
 
 async function recordOwnerVoiceTemplate() {
-  await postVoice('/voice/owner-template', {duration_seconds: 5});
+  const voice = ((lastState || {}).voice || {});
+  if (!voice.enabled) await postVoice('/voice/microphone', {enabled: true});
+  showVoiceNotice('正在录入 3 段声纹，请连续自然说话', 'warn', 0);
+  const result = await postVoice(
+    '/voice/owner-template',
+    {duration_seconds: 3, sample_count: 3}
+  );
+  if (result && result.status === 'owner_voice_template_recorded') {
+    showVoiceNotice('3 段声纹已录入', 'ok');
+  } else {
+    showVoiceNotice('声纹录入失败', 'error');
+  }
+}
+
+async function toggleVoiceFingerprint() {
+  const voice = ((lastState || {}).voice || {});
+  const enabled = !Boolean(voice.fingerprint_enabled);
+  const result = await postVoice('/voice/fingerprint', {enabled});
+  if (!result || result.status === 'unavailable') {
+    showVoiceNotice('当前模式不能修改声纹过滤', 'error');
+    return;
+  }
+  showVoiceNotice(
+    enabled ? '声纹过滤已开启' : '声纹过滤已关闭，允许其他说话人使用',
+    enabled ? 'ok' : 'warn'
+  );
 }
 
 async function toggleVoice() {
   const enabled = !Boolean(((lastState || {}).voice || {}).enabled);
   await postVoice('/voice/microphone', {enabled});
+  showVoiceNotice(enabled ? '语音已开启' : '语音已关闭', enabled ? 'ok' : '');
 }
 
 async function toggleContinuousVoice() {
@@ -5843,7 +6002,20 @@ async function runVoiceSession() {
     return;
   }
   if (!voice.enabled) await postVoice('/voice/microphone', {enabled: true});
-  await postVoice('/voice/session/start', {duration_seconds: 8});
+  showVoiceNotice('正在录音，请开始说话', 'warn', 0);
+  const result = await postVoice('/voice/session/start', {duration_seconds: 8});
+  if (!result) {
+    showVoiceNotice('语音请求失败', 'error');
+  } else if (result.status === 'complete') {
+    showVoiceNotice('语音回复完成', 'ok');
+  } else if (result.status === 'rejected') {
+    const voiceState = ((lastState || {}).voice || {});
+    showVoiceNotice(fingerprintResultText(voiceState) || '声纹未通过', 'error', 6000);
+  } else if (result.status === 'reply_ready_tts_unavailable') {
+    showVoiceNotice('已生成回复，但语音播放失败', 'error', 6000);
+  } else {
+    showVoiceNotice('语音未完成：' + String(result.reason || result.status), 'error', 6000);
+  }
 }
 
 let reminderPolicy = null;

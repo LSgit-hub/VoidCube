@@ -52,9 +52,13 @@ image = [
 ]
 # 语音 (可选)
 voice = [
-    "edge-tts>=6.0.0,<7",
+    "edge-tts>=7.2.8,<8",
+    "faster-whisper>=1.2.0,<2",
     "numpy>=2.0.0,<3",
     "sounddevice>=0.5.0,<1",
+    "soundfile>=0.13.0,<1",
+    "sherpa-onnx>=1.13.4,<2",
+    "truststore>=0.10.0,<1",
 ]
 # Web 工具
 web = [

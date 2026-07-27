@@ -54,6 +54,7 @@ CONFIGURABLE_TOOLSETS = [
     ("terminal",        "💻 终端执行",      "执行Shell命令、进程管理"),
     ("file",            "📁 文件操作",      "读写文件、搜索、补丁"),
     ("web",             "🔍 Web搜索",       "网络搜索、网页抓取"),
+    ("browser",         "🌐 浏览器自动化",  "网页导航、截图、点击、输入"),
     ("code_execution",  "🔧 代码执行",      "Python/Shell代码执行"),
 ]
 

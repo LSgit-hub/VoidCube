@@ -81,22 +81,33 @@ TOOLSETS = {
         "includes": []
     },
     
+    "browser": {
+        "description": "Browser automation — navigate, snapshot, click, type, scroll",
+        "tools": [
+            "browser_navigate", "browser_snapshot", "browser_click",
+            "browser_type", "browser_scroll", "browser_back",
+            "browser_press", "browser_get_images", "browser_vision",
+            "browser_console",
+        ],
+        "includes": []
+    },
+
     "ops": {
         "description": "All server operations tools",
         "tools": [],
         "includes": ["system", "network", "logs"]
     },
-    
+
     "voidcube": {
         "description": "Core tools for server management",
         "tools": [],
-        "includes": ["web", "terminal", "file", "skills", "code_execution", "ops"]
+        "includes": ["web", "browser", "terminal", "file", "skills", "code_execution", "ops"]
     },
-    
+
     "voidcube-cli": {
         "description": "Core tools for server management (alias)",
         "tools": [],
-        "includes": ["web", "terminal", "file", "skills", "code_execution", "ops"]
+        "includes": ["web", "browser", "terminal", "file", "skills", "code_execution", "ops"]
     },
     
     "mini": {

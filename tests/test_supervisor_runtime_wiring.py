@@ -3090,6 +3090,68 @@ async def test_companion_text_message_reuses_daily_mode_and_companion_memory(tmp
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_auto_mode_blocks_all_voice_capture_entrypoints(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
+    supervisor._voice_manager.set_enabled = Mock()  # type: ignore[method-assign]
+    supervisor._voice_manager.set_fingerprint_enabled = Mock()  # type: ignore[method-assign]
+    supervisor._voice_manager.record_owner_template = AsyncMock()  # type: ignore[method-assign]
+    supervisor._voice_manager.run_once = AsyncMock()  # type: ignore[method-assign]
+
+    microphone = await supervisor.set_voice_microphone(
+        SimpleNamespace(enabled=True)
+    )
+    fingerprint = await supervisor.set_voice_fingerprint(
+        SimpleNamespace(enabled=False)
+    )
+    template = await supervisor.record_owner_voice_template(
+        SimpleNamespace(duration_seconds=3.0, sample_count=3)
+    )
+    session = await supervisor.start_voice_session(
+        SimpleNamespace(session_id="", duration_seconds=5.0)
+    )
+
+    for result in (microphone, fingerprint, template, session):
+        assert result == {
+            "status": "unavailable",
+            "reason": "stellar_auto_evolution_active",
+        }
+    supervisor._voice_manager.set_enabled.assert_not_called()
+    supervisor._voice_manager.set_fingerprint_enabled.assert_not_called()
+    supervisor._voice_manager.record_owner_template.assert_not_awaited()
+    supervisor._voice_manager.run_once.assert_not_awaited()
+
+
+@pytest.mark.unit
+def test_auto_mode_disables_voice_controls_in_supervisor_ui():
+    assert "const voiceUnavailable = activeMode === 'auto_evolution';" in UI_HTML
+    assert "button.disabled = voiceUnavailable;" in UI_HTML
+    assert "button.disabled = mode === 'auto_evolution';" in UI_HTML
+    assert 'id="voiceFingerprintToggle"' in UI_HTML
+    assert 'id="voiceStatusLabel"' in UI_HTML
+    assert "background: #188a52;" in UI_HTML
+    assert "声纹过滤已关闭，允许其他说话人使用" in UI_HTML
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_daily_mode_can_toggle_fingerprint_filter_without_deleting_template(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._voice_manager.set_fingerprint_enabled = Mock(  # type: ignore[method-assign]
+        return_value={"fingerprint_enabled": False, "fingerprint_status": "disabled"}
+    )
+
+    result = await supervisor.set_voice_fingerprint(SimpleNamespace(enabled=False))
+
+    assert result == {
+        "fingerprint_enabled": False,
+        "fingerprint_status": "disabled",
+    }
+    supervisor._voice_manager.set_fingerprint_enabled.assert_called_once_with(False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_stellar_mode_status_route_exposes_canonical_default(tmp_path):
     supervisor = _make_supervisor(tmp_path)
 

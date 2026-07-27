@@ -77,6 +77,11 @@ class VoiceCaptureRequest(BaseModel):
     duration_seconds: float = Field(default=8.0, ge=1.0, le=30.0)
 
 
+class VoiceEnrollmentRequest(BaseModel):
+    duration_seconds: float = Field(default=3.0, ge=2.0, le=10.0)
+    sample_count: int = Field(default=3, ge=2, le=5)
+
+
 class VoiceContinuousRequest(BaseModel):
     session_id: str = ""
 
@@ -270,6 +275,7 @@ class Supervisor(
         )
         self.app.add_api_route("/voice/status", self.voice_status, methods=["GET"])
         self.app.add_api_route("/voice/microphone", self.set_voice_microphone, methods=["POST"])
+        self.app.add_api_route("/voice/fingerprint", self.set_voice_fingerprint, methods=["POST"])
         self.app.add_api_route(
             "/voice/owner-template",
             self.record_owner_voice_template,
@@ -391,6 +397,14 @@ class Supervisor(
         return self._voice_manager.status()
 
     async def set_voice_microphone(self, request: VoiceToggleRequest) -> Dict[str, Any]:
+        if (
+            request.enabled
+            and self._service_runtime.stellar_mode.value != "daily_companion"
+        ):
+            return {
+                "status": "unavailable",
+                "reason": "stellar_auto_evolution_active",
+            }
         self._voice_manager.set_enabled(request.enabled)
         if not request.enabled:
             await self._voice_manager.stop_continuous()
@@ -398,12 +412,26 @@ class Supervisor(
             await self.flush_pending_proactive_reminder()
         return self._voice_manager.status()
 
+    async def set_voice_fingerprint(self, request: VoiceToggleRequest) -> Dict[str, Any]:
+        if self._service_runtime.stellar_mode.value != "daily_companion":
+            return {
+                "status": "unavailable",
+                "reason": "stellar_auto_evolution_active",
+            }
+        return self._voice_manager.set_fingerprint_enabled(request.enabled)
+
     async def record_owner_voice_template(
         self,
-        request: VoiceCaptureRequest,
+        request: VoiceEnrollmentRequest,
     ) -> Dict[str, Any]:
+        if self._service_runtime.stellar_mode.value != "daily_companion":
+            return {
+                "status": "unavailable",
+                "reason": "stellar_auto_evolution_active",
+            }
         return await self._voice_manager.record_owner_template(
             duration_seconds=request.duration_seconds,
+            sample_count=request.sample_count,
         )
 
     async def start_voice_session(

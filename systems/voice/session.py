@@ -31,6 +31,11 @@ class VoiceRuntimeState:
     last_transcript: str = ""
     last_reply: str = ""
     owner_voice_matched: bool = False
+    fingerprint_enabled: bool = True
+    last_fingerprint_reason: str = "not_checked"
+    last_fingerprint_similarity: float | None = None
+    enrollment_sample_index: int = 0
+    enrollment_sample_count: int = 0
     interrupted: bool = False
 
 
@@ -45,7 +50,10 @@ class VoiceSessionManager:
     ) -> None:
         self.config = config or VoiceConfig.from_env()
         self.companion_callback = companion_callback
-        self.state = VoiceRuntimeState(enabled=self.config.enabled)
+        self.state = VoiceRuntimeState(
+            enabled=self.config.enabled,
+            fingerprint_enabled=self.config.fingerprint_enabled,
+        )
         self.recorder = AudioRecorder(
             sample_rate=self.config.sample_rate,
             channels=self.config.channels,
@@ -54,11 +62,17 @@ class VoiceSessionManager:
         self.fingerprint = FingerprintStore(
             self.config.fingerprint_path,
             threshold=self.config.fingerprint_threshold,
+            model_path=self.config.fingerprint_model_path,
         )
         self.stt = SpeechToText(
+            provider=self.config.stt_provider,
             base_url=self.config.stt_base_url,
             api_key=self.config.stt_api_key,
             model=self.config.stt_model,
+            language=self.config.stt_language,
+            hotwords=self.config.stt_hotwords,
+            device=self.config.stt_device,
+            compute_type=self.config.stt_compute_type,
         )
         self.tts = TextToSpeech(
             provider=self.config.tts_provider,
@@ -89,8 +103,22 @@ class VoiceSessionManager:
             "last_transcript": self.state.last_transcript,
             "last_reply": self.state.last_reply,
             "owner_voice_matched": self.state.owner_voice_matched,
+            "fingerprint_enabled": self.state.fingerprint_enabled,
+            "fingerprint_status": self._fingerprint_status(),
+            "last_fingerprint_reason": self.state.last_fingerprint_reason,
+            "last_fingerprint_similarity": self.state.last_fingerprint_similarity,
+            "fingerprint_threshold": self.fingerprint.threshold,
+            "fingerprint_engine": "sherpa-onnx-campplus",
+            "fingerprint_model_ready": self.fingerprint.model_ready,
+            "fingerprint_template_status": self.fingerprint.template_status,
+            "enrollment_sample_index": self.state.enrollment_sample_index,
+            "enrollment_sample_count": self.state.enrollment_sample_count,
             "interrupted": self.state.interrupted,
-            "owner_voice_template_present": self.config.fingerprint_path.is_file(),
+            "owner_voice_template_present": (
+                self.fingerprint.template_status == "enrolled"
+            ),
+            "stt_provider": self.stt.provider,
+            "stt_model": self.stt.model,
             "stt_configured": self.stt.configured,
             "tts_configured": self.tts.configured,
             "capture_available": self.recorder.available(),
@@ -104,43 +132,93 @@ class VoiceSessionManager:
             self.interrupt()
         return self.status()
 
+    def set_fingerprint_enabled(self, enabled: bool) -> dict[str, Any]:
+        self.state.fingerprint_enabled = bool(enabled)
+        self.state.owner_voice_matched = False
+        template_status = self.fingerprint.template_status
+        self.state.last_fingerprint_reason = "fingerprint_disabled"
+        if enabled:
+            self.state.last_fingerprint_reason = (
+                "owner_voice_template_upgrade_required"
+                if template_status == "upgrade_required"
+                else "not_checked"
+            )
+        self.state.last_fingerprint_similarity = None
+        return self.status()
+
     def interrupt(self) -> dict[str, Any]:
+        task = self._continuous_task
+        was_active = bool(
+            self.state.active
+            or self.state.continuous_active
+            or (task is not None and not task.done())
+        )
         self._stop_event.set()
         self._continuous_stop_event.set()
         self.player.stop()
-        task = self._continuous_task
         if task is not None and not task.done():
             task.cancel()
-        self.state.interrupted = True
+        self.state.interrupted = was_active
+        if was_active:
+            self.state.last_status = "interrupted"
         return self.status()
 
     async def record_owner_template(
         self,
         *,
-        duration_seconds: float = 5.0,
+        duration_seconds: float = 3.0,
+        sample_count: int = 3,
     ) -> dict[str, Any]:
+        if not self.state.enabled:
+            return {"status": "disabled", "reason": "voice_disabled"}
         if self.state.continuous_active:
             return {"status": "busy", "reason": "continuous_listening_active"}
         async with self._lock:
+            self.state.active = True
             self.state.last_error = ""
             self.state.last_status = "recording_owner_voice_template"
+            self.state.enrollment_sample_index = 0
+            self.state.enrollment_sample_count = max(2, min(5, int(sample_count)))
             self._stop_event = asyncio.Event()
-            path = self._temporary_audio_path("owner-template")
+            paths: list[Path] = []
             try:
-                await self.recorder.record(
-                    path,
-                    duration_seconds=min(duration_seconds, self.config.max_record_seconds),
-                    stop_event=self._stop_event,
+                for index in range(self.state.enrollment_sample_count):
+                    self.state.enrollment_sample_index = index + 1
+                    path = self._temporary_audio_path(
+                        f"owner-template-{index + 1}"
+                    )
+                    paths.append(path)
+                    await self.recorder.record(
+                        path,
+                        duration_seconds=min(
+                            duration_seconds,
+                            self.config.max_record_seconds,
+                        ),
+                        stop_event=self._stop_event,
+                    )
+                    if self._stop_event.is_set():
+                        self.state.last_status = "interrupted"
+                        return {
+                            "status": "interrupted",
+                            "reason": "recording_interrupted",
+                        }
+                self.state.last_status = "building_owner_voice_template"
+                result = await asyncio.to_thread(
+                    self.fingerprint.record_owner_templates,
+                    paths,
                 )
-                result = self.fingerprint.record_owner_template(path)
                 self.state.last_status = "owner_voice_template_recorded"
+                self.state.last_fingerprint_reason = "template_recorded"
+                self.state.last_fingerprint_similarity = None
                 return {**result, "status": "owner_voice_template_recorded"}
             except Exception as exc:
                 self.state.last_status = "error"
                 self.state.last_error = f"{type(exc).__name__}: {exc}"
                 return {"status": "error", "reason": self.state.last_error}
             finally:
-                self._cleanup(path)
+                self.state.active = False
+                for path in paths:
+                    self._cleanup(path)
 
     async def run_once(
         self,
@@ -331,6 +409,8 @@ class VoiceSessionManager:
         self.state.last_error = ""
         self.state.interrupted = False
         self.state.owner_voice_matched = False
+        self.state.last_fingerprint_reason = "not_checked"
+        self.state.last_fingerprint_similarity = None
         self._stop_event = asyncio.Event()
 
     async def _capture_transcript(
@@ -351,14 +431,34 @@ class VoiceSessionManager:
             )
             if stop_event.is_set():
                 return {"status": "interrupted", "reason": "recording_interrupted"}
-            self.state.last_status = "matching_owner_voice"
-            voice_match = self.fingerprint.verify(audio_path)
-            self.state.owner_voice_matched = bool(
-                voice_match.get("owner_voice_matched")
-            )
-            if not self.state.owner_voice_matched:
-                self.state.last_status = "rejected"
-                return {"status": "rejected", "voice_match": voice_match}
+            if self.state.fingerprint_enabled:
+                self.state.last_status = "matching_owner_voice"
+                voice_match = await asyncio.to_thread(
+                    self.fingerprint.verify,
+                    audio_path,
+                )
+                self.state.owner_voice_matched = bool(
+                    voice_match.get("owner_voice_matched")
+                )
+                self.state.last_fingerprint_reason = str(
+                    voice_match.get("reason") or "unknown"
+                )
+                similarity = voice_match.get("similarity")
+                self.state.last_fingerprint_similarity = (
+                    float(similarity) if isinstance(similarity, (int, float)) else None
+                )
+                if not self.state.owner_voice_matched:
+                    self.state.last_status = "rejected"
+                    return {"status": "rejected", "voice_match": voice_match}
+            else:
+                self.state.owner_voice_matched = False
+                self.state.last_fingerprint_reason = "fingerprint_disabled"
+                self.state.last_fingerprint_similarity = None
+                voice_match = {
+                    "owner_voice_matched": False,
+                    "verification_skipped": True,
+                    "reason": "fingerprint_disabled",
+                }
             self.state.last_status = "transcribing"
             transcript = str(await self.stt.transcribe(audio_path)).strip()
             if persist_transcript:
@@ -427,6 +527,11 @@ class VoiceSessionManager:
         self.state.last_status = "error"
         self.state.last_error = f"{type(exc).__name__}: {exc}"
         return {"status": "error", "reason": self.state.last_error}
+
+    def _fingerprint_status(self) -> str:
+        if not self.state.fingerprint_enabled:
+            return "disabled"
+        return self.fingerprint.template_status
 
     @staticmethod
     def _temporary_audio_path(prefix: str, *, suffix: str = ".wav") -> Path:

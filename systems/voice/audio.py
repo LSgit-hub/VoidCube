@@ -19,11 +19,15 @@ class AudioRecorder:
     @staticmethod
     def available() -> bool:
         try:
-            import sounddevice  # noqa: F401
+            import sounddevice as sd
             import numpy  # noqa: F401
         except ImportError:
             return False
-        return True
+        try:
+            device = sd.query_devices(kind="input")
+        except Exception:
+            return False
+        return int(device.get("max_input_channels") or 0) > 0
 
     async def record(
         self,
@@ -67,15 +71,54 @@ class AudioRecorder:
 class AudioPlayer:
     def __init__(self) -> None:
         self._process: subprocess.Popen | None = None
+        self._sounddevice_playing = False
 
     @staticmethod
-    def available() -> bool:
-        return bool(shutil.which("ffplay"))
+    def _sounddevice_available() -> bool:
+        try:
+            import sounddevice as sd
+            import soundfile  # noqa: F401
+        except ImportError:
+            return False
+        try:
+            device = sd.query_devices(kind="output")
+        except Exception:
+            return False
+        return int(device.get("max_output_channels") or 0) > 0
+
+    @classmethod
+    def available(cls) -> bool:
+        return cls._sounddevice_available() or bool(shutil.which("ffplay"))
 
     async def play(self, path: str | Path, *, stop_event: asyncio.Event) -> None:
+        if stop_event.is_set():
+            return
+        if self._sounddevice_available():
+            import sounddevice as sd
+            import soundfile as sf
+
+            audio, sample_rate = sf.read(
+                str(path),
+                dtype="float32",
+                always_2d=True,
+            )
+            sd.play(audio, samplerate=sample_rate, blocking=False)
+            self._sounddevice_playing = True
+            try:
+                while bool(getattr(sd.get_stream(), "active", False)):
+                    if stop_event.is_set():
+                        sd.stop()
+                        break
+                    await asyncio.sleep(0.05)
+            finally:
+                self._sounddevice_playing = False
+            return
+
         executable = shutil.which("ffplay")
         if not executable:
-            raise AudioUnavailableError("Audio playback requires ffplay on PATH")
+            raise AudioUnavailableError(
+                "Audio playback requires sounddevice + soundfile or ffplay on PATH"
+            )
         self._process = subprocess.Popen(
             [executable, "-nodisp", "-autoexit", "-loglevel", "quiet", str(path)],
             stdout=subprocess.DEVNULL,
@@ -94,5 +137,13 @@ class AudioPlayer:
             self._process = None
 
     def stop(self) -> None:
+        if self._sounddevice_playing:
+            try:
+                import sounddevice as sd
+
+                sd.stop()
+            except ImportError:
+                pass
+            self._sounddevice_playing = False
         if self._process is not None and self._process.poll() is None:
             self._process.terminate()
