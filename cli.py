@@ -8112,7 +8112,6 @@ class VoidcubeCLI:
         input_area,
         input_rule_bot,
         voice_status_bar,
-        autonomous_gate_bar=None,
         completions_menu,
     ) -> list:
         """Assemble the ordered list of children for the root ``HSplit``.
@@ -8133,13 +8132,12 @@ class VoidcubeCLI:
                 spacer,
                 *self._get_extra_tui_widgets(),
                 status_bar,
-                auto_execution_panel,
                 input_rule_top,
                 image_bar,
                 input_area,
                 input_rule_bot,
                 voice_status_bar,
-                autonomous_gate_bar,
+                auto_execution_panel,
                 completions_menu,
             ] if item is not None
         ]
@@ -9447,19 +9445,6 @@ class VoidcubeCLI:
             filter=Condition(lambda: cli_ref._voice_mode),
         )
 
-        def _get_autonomous_gate_text():
-            return [
-                ("class:auto-mode", " 🤖 自主链路已启用 | API-A 执行组件按需显示 | /auto-q 停用"),
-            ]
-
-        autonomous_gate_bar = ConditionalContainer(
-            Window(
-                FormattedTextControl(_get_autonomous_gate_text),
-                height=1,
-            ),
-            filter=Condition(lambda: cli_ref._autonomous_gate_active),
-        )
-
         auto_execution_panel = ConditionalContainer(
             Window(
                 content=FormattedTextControl(
@@ -9512,7 +9497,6 @@ class VoidcubeCLI:
                     input_area=input_area,
                     input_rule_bot=input_rule_bot,
                     voice_status_bar=voice_status_bar,
-                    autonomous_gate_bar=autonomous_gate_bar,
                     completions_menu=completions_menu,
                 )
             )

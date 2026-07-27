@@ -47,6 +47,44 @@ def _autonomous_runtime(cli: VoidcubeCLI):
     )
 
 
+def test_autonomous_execution_panel_is_below_input_without_legacy_gate_bar():
+    cli = VoidcubeCLI.__new__(VoidcubeCLI)
+    cli._get_extra_tui_widgets = lambda: []  # type: ignore[method-assign]
+    widgets = {
+        name: object()
+        for name in (
+            "sudo_widget",
+            "secret_widget",
+            "approval_widget",
+            "clarify_widget",
+            "model_picker_widget",
+            "spinner_widget",
+            "spacer",
+            "status_bar",
+            "auto_execution_panel",
+            "input_rule_top",
+            "image_bar",
+            "input_area",
+            "input_rule_bot",
+            "voice_status_bar",
+            "completions_menu",
+        )
+    }
+
+    children = cli._build_tui_layout_children(**widgets)
+
+    assert children.index(widgets["status_bar"]) < children.index(widgets["input_area"])
+    assert children.index(widgets["input_area"]) < children.index(
+        widgets["auto_execution_panel"]
+    )
+    assert children.index(widgets["voice_status_bar"]) < children.index(
+        widgets["auto_execution_panel"]
+    )
+    assert "autonomous_gate_bar" not in str(
+        __import__("inspect").signature(VoidcubeCLI._build_tui_layout_children)
+    )
+
+
 def test_cli_does_not_rewrite_live_agent_base_url_to_gateway(monkeypatch):
     cli = VoidcubeCLI.__new__(VoidcubeCLI)
     cli.api_key = "runtime-key"
