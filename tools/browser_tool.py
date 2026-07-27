@@ -1087,9 +1087,9 @@ def _run_browser_command(
                            command, timeout, task_id, task_socket_dir)
             return {"success": False, "error": f"Command timed out after {timeout} seconds"}
 
-        with open(stdout_path, "r") as f:
+        with open(stdout_path, "r", encoding="utf-8") as f:
             stdout = f.read()
-        with open(stderr_path, "r") as f:
+        with open(stderr_path, "r", encoding="utf-8") as f:
             stderr = f.read()
         returncode = proc.returncode
 
