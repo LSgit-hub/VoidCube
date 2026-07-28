@@ -5371,6 +5371,8 @@ class VoidcubeCLI:
         task_id: Optional[str] = None,
         task_label: str = "Background task",
         response_title: Optional[str] = None,
+        request_timeout_seconds: Optional[float] = None,
+        timeout_seconds: Optional[float] = None,
         on_complete: Optional[Callable[[bool, str, str], None]] = None,
     ) -> bool:
         """Run one isolated API-A session and project its result to the main CLI."""
@@ -5397,8 +5399,34 @@ class VoidcubeCLI:
         }
 
         turn_route = self._resolve_turn_agent_config(prompt)
+        request_overrides = dict(turn_route.get("request_overrides") or {})
+        if request_timeout_seconds is not None:
+            request_overrides["timeout"] = max(0.1, float(request_timeout_seconds))
 
         def run_background():
+            timeout_timer: Optional[threading.Timer] = None
+            timed_out = threading.Event()
+            finished = threading.Event()
+            timeout_error = ""
+            active_agent: Dict[str, Any] = {}
+            if timeout_seconds is not None:
+                effective_timeout = max(0.1, float(timeout_seconds))
+                timeout_error = (
+                    f"API-A background execution timed out after "
+                    f"{effective_timeout:g} seconds"
+                )
+
+                def interrupt_on_timeout() -> None:
+                    if finished.is_set():
+                        return
+                    timed_out.set()
+                    agent = active_agent.get("value")
+                    if agent is not None:
+                        agent.interrupt(timeout_error)
+
+                timeout_timer = threading.Timer(effective_timeout, interrupt_on_timeout)
+                timeout_timer.daemon = True
+                timeout_timer.start()
             try:
                 bg_agent = _get_AIAgent()(
                     model=turn_route["model"],
@@ -5416,7 +5444,7 @@ class VoidcubeCLI:
                     session_db=self._session_db,
                     reasoning_config=self.reasoning_config,
                     service_tier=self.service_tier,
-                    request_overrides=turn_route.get("request_overrides"),
+                    request_overrides=request_overrides or None,
                     providers_allowed=self._providers_only,
                     providers_ignored=self._providers_ignore,
                     providers_order=self._providers_order,
@@ -5425,6 +5453,9 @@ class VoidcubeCLI:
                     provider_data_collection=self._provider_data_collection,
                     fallback_model=self._fallback_model,
                 )
+                active_agent["value"] = bg_agent
+                if timed_out.is_set():
+                    raise TimeoutError(timeout_error)
                 # Silence raw spinner; route thinking through TUI widget when no foreground agent is active.
                 bg_agent._print_fn = lambda *_a, **_kw: None
 
@@ -5441,8 +5472,13 @@ class VoidcubeCLI:
                     user_message=prompt,
                     task_id=task_id,
                 )
+                finished.set()
 
                 completion_success, response, completion_error = _background_completion_outcome(result)
+                if timed_out.is_set():
+                    completion_success = False
+                    response = ""
+                    completion_error = timeout_error
 
                 # Display result in the CLI (thread-safe via patch_stdout).
                 # Force a TUI refresh first so spinner/status bar don't overlap
@@ -5453,7 +5489,10 @@ class VoidcubeCLI:
                     _tmod.sleep(0.05)  # brief pause for refresh
                 print()
                 ChatConsole().print(f"[#34D399]{'~' * 40}[/]")
-                _cprint(f"  ✅ {task_label} #{task_num} complete")
+                if completion_success:
+                    _cprint(f"  ✅ {task_label} #{task_num} complete")
+                else:
+                    _cprint(f"  ❌ {task_label} #{task_num} failed: {completion_error}")
                 _cprint(f"  Prompt: \"{prompt[:60]}{'...' if len(prompt) > 60 else ''}\"")
                 ChatConsole().print(f"[#34D399]{'~' * 40}[/]")
                 if response:
@@ -5492,19 +5531,25 @@ class VoidcubeCLI:
                         logger.debug("Background completion callback failed", exc_info=True)
 
             except Exception as e:
+                finished.set()
                 # Same TUI refresh pattern as success path (#2718)
                 if self._app:
                     self._app.invalidate()
                     import time as _tmod
                     _tmod.sleep(0.05)
                 print()
-                _cprint(f"  ❌ {task_label} #{task_num} failed: {e}")
+                completion_error = timeout_error if timed_out.is_set() else str(e)
+                _cprint(f"  ❌ {task_label} #{task_num} failed: {completion_error}")
                 if on_complete is not None:
                     try:
-                        on_complete(False, "", str(e))
+                        on_complete(False, "", completion_error)
                     except Exception:
                         logger.debug("Background completion callback failed", exc_info=True)
             finally:
+                finished.set()
+                active_agent.clear()
+                if timeout_timer is not None:
+                    timeout_timer.cancel()
                 self._background_tasks.pop(task_id, None)
                 self._background_task_info.pop(task_id, None)
                 # Clear spinner only if no foreground agent owns it

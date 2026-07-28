@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 import threading
 import time
@@ -16,6 +17,29 @@ from VoidCube_core.runtime_paths import get_runtime_layout
 
 
 logger = logging.getLogger(__name__)
+
+
+def _scheduled_timeout_seconds(
+    env_name: str,
+    *,
+    default: float,
+    explicit: float | None,
+) -> float:
+    value: Any = explicit
+    if value is None:
+        raw = os.getenv(env_name)
+        if raw not in (None, ""):
+            try:
+                value = float(raw)
+            except ValueError:
+                logger.warning("Ignoring invalid %s=%r; using %.0f", env_name, raw, default)
+    if value is None:
+        value = default
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(0.1, min(parsed, 86400.0))
 
 
 class ScheduledWritebackOutbox:
@@ -111,6 +135,8 @@ class ScheduledTaskExecutorRuntime:
         poll_interval_seconds: float = 2.0,
         lease_seconds: int = 300,
         lease_renew_interval_seconds: float = 60.0,
+        request_timeout_seconds: float | None = None,
+        execution_timeout_seconds: float | None = None,
         outbox_path: str | Path | None = None,
     ):
         self.host = host
@@ -119,6 +145,16 @@ class ScheduledTaskExecutorRuntime:
         self.lease_renew_interval_seconds = max(
             10.0,
             min(float(lease_renew_interval_seconds), self.lease_seconds / 2),
+        )
+        self.request_timeout_seconds = _scheduled_timeout_seconds(
+            "VOIDCUBE_SCHEDULED_REQUEST_TIMEOUT_SECONDS",
+            default=120.0,
+            explicit=request_timeout_seconds,
+        )
+        self.execution_timeout_seconds = _scheduled_timeout_seconds(
+            "VOIDCUBE_SCHEDULED_EXECUTION_TIMEOUT_SECONDS",
+            default=600.0,
+            explicit=execution_timeout_seconds,
         )
         self._last_poll_at = 0.0
         self._poll_lock = threading.Lock()
@@ -328,6 +364,8 @@ class ScheduledTaskExecutorRuntime:
                 task_id=f"scheduled_{run_id}",
                 task_label=f"定时任务 · {title}",
                 response_title="> Voidcube（定时任务）",
+                request_timeout_seconds=self.request_timeout_seconds,
+                timeout_seconds=self.execution_timeout_seconds,
                 on_complete=on_complete,
             )
             execution_started = bool(started)

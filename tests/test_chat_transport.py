@@ -123,6 +123,27 @@ def test_stream_assembles_response_and_emits_updates(monkeypatch):
     assert lifecycle.closed == [(client, "stream_request_complete")]
 
 
+def test_stream_transport_respects_per_request_timeout():
+    captured = {}
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return [_chunk(content="ok", finish_reason="stop")]
+
+    lifecycle = _Lifecycle([_Client(create)])
+
+    _transport(lifecycle).stream(
+        {"model": "safe-model", "messages": [], "timeout": 7.0},
+        on_update=lambda _update: None,
+    )
+
+    timeout = captured["timeout"]
+    assert timeout.connect == 7.0
+    assert timeout.read == 7.0
+    assert timeout.write == 7.0
+    assert timeout.pool == 7.0
+
+
 def test_unsupported_stream_falls_back_to_non_streaming(monkeypatch):
     streaming = _Client(
         lambda **_kwargs: (_ for _ in ()).throw(

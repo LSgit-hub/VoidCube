@@ -144,7 +144,7 @@ class ChatTransport:
                 delivered_visible["value"] = True
 
         def stream_once() -> Any:
-            base_timeout = self._env_float("VOIDCUBE_API_TIMEOUT", 1800.0)
+            base_timeout = self._request_timeout(api_kwargs)
             read_timeout = self._env_float("VOIDCUBE_STREAM_READ_TIMEOUT", 120.0)
             base_url = self._base_url()
             if (
@@ -158,15 +158,16 @@ class ChatTransport:
                     base_url,
                     read_timeout,
                 )
+            read_timeout = min(read_timeout, base_timeout)
             stream_kwargs = {
                 **api_kwargs,
                 "stream": True,
                 "stream_options": {"include_usage": True},
                 "timeout": httpx.Timeout(
-                    connect=30.0,
+                    connect=min(30.0, base_timeout),
                     read=read_timeout,
                     write=base_timeout,
-                    pool=30.0,
+                    pool=min(30.0, base_timeout),
                 ),
             }
             client = self._clients.create_request_client(
@@ -424,3 +425,12 @@ class ChatTransport:
         except ValueError:
             logger.warning("Ignoring invalid %s=%r; using %s", name, raw, default)
             return default
+
+    def _request_timeout(self, api_kwargs: dict[str, Any]) -> float:
+        fallback = self._env_float("VOIDCUBE_API_TIMEOUT", 1800.0)
+        raw = api_kwargs.get("timeout", fallback)
+        try:
+            return max(0.1, float(raw))
+        except (TypeError, ValueError):
+            logger.warning("Ignoring invalid request timeout=%r; using %s", raw, fallback)
+            return fallback

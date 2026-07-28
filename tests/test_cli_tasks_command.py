@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -124,6 +125,146 @@ def test_process_command_routes_tasks(monkeypatch):
 
     assert keep_running is True
     assert called["tasks"] == 1
+
+
+def test_background_task_timeout_interrupts_agent_and_reports_failure(monkeypatch):
+    interrupted = threading.Event()
+    completed = threading.Event()
+    callback_result = []
+
+    class _FakeAgent:
+        def __init__(self, **kwargs):
+            self.request_overrides = kwargs["request_overrides"]
+            self._print_fn = None
+            self.thinking_callback = None
+
+        def interrupt(self, message=None):
+            self.interrupt_message = message
+            interrupted.set()
+
+        def run_conversation(self, **kwargs):
+            assert kwargs["task_id"] == "scheduled-test"
+            assert interrupted.wait(timeout=2)
+            return {"error": "interrupted"}
+
+    fake_agent = _FakeAgent.__new__(_FakeAgent)
+    monkeypatch.setattr(
+        cli,
+        "_get_AIAgent",
+        lambda: lambda **kwargs: _capture_agent(fake_agent, kwargs),
+    )
+    monkeypatch.setattr(cli, "_cprint", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "ChatConsole", lambda: _FakeConsole([]))
+
+    app = _background_test_app()
+    app._resolve_turn_agent_config = lambda _prompt: {
+        "model": "safe-model",
+        "runtime": {
+            "api_key": "test-key",
+            "base_url": "https://api.example/v1",
+            "provider": "custom",
+            "command": None,
+            "args": [],
+        },
+        "request_overrides": {"temperature": 0.1},
+    }
+
+    def on_complete(success, response, error):
+        callback_result.append((success, response, error))
+        completed.set()
+
+    assert app._start_background_agent_task(
+        "run scheduled work",
+        task_id="scheduled-test",
+        request_timeout_seconds=3,
+        timeout_seconds=0.05,
+        on_complete=on_complete,
+    )
+    assert completed.wait(timeout=2)
+
+    assert fake_agent.request_overrides == {"temperature": 0.1, "timeout": 3.0}
+    assert "timed out after 0.1 seconds" in fake_agent.interrupt_message
+    assert callback_result == [
+        (False, "", "API-A background execution timed out after 0.1 seconds")
+    ]
+
+
+def test_background_task_timeout_includes_agent_initialization(monkeypatch):
+    completed = threading.Event()
+    callback_result = []
+
+    class _SlowAgent:
+        def __init__(self, **_kwargs):
+            threading.Event().wait(0.15)
+
+        def interrupt(self, _message=None):
+            raise AssertionError("conversation did not start, so no interrupt is needed")
+
+        def run_conversation(self, **_kwargs):
+            raise AssertionError("timed-out agent initialization must not start a conversation")
+
+    monkeypatch.setattr(cli, "_get_AIAgent", lambda: _SlowAgent)
+    monkeypatch.setattr(cli, "_cprint", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "ChatConsole", lambda: _FakeConsole([]))
+
+    app = _background_test_app()
+
+    def on_complete(success, response, error):
+        callback_result.append((success, response, error))
+        completed.set()
+
+    assert app._start_background_agent_task(
+        "initialize scheduled work",
+        task_id="scheduled-init-timeout",
+        timeout_seconds=0.05,
+        on_complete=on_complete,
+    )
+    assert completed.wait(timeout=2)
+    assert callback_result == [
+        (False, "", "API-A background execution timed out after 0.1 seconds")
+    ]
+
+
+def _capture_agent(agent, kwargs):
+    agent.__init__(**kwargs)
+    return agent
+
+
+def _background_test_app():
+    app = cli.VoidcubeCLI.__new__(cli.VoidcubeCLI)
+    app._background_task_counter = 0
+    app._background_tasks = {}
+    app._background_task_info = {}
+    app._ensure_runtime_credentials = lambda: True
+    app._resolve_turn_agent_config = lambda _prompt: {
+        "model": "safe-model",
+        "runtime": {
+            "api_key": "test-key",
+            "base_url": "https://api.example/v1",
+            "provider": "custom",
+            "command": None,
+            "args": [],
+        },
+        "request_overrides": {},
+    }
+    app.max_turns = 2
+    app.enabled_toolsets = []
+    app._session_db = None
+    app.reasoning_config = None
+    app.service_tier = None
+    app._providers_only = []
+    app._providers_ignore = []
+    app._providers_order = []
+    app._provider_sort = None
+    app._provider_require_params = False
+    app._provider_data_collection = None
+    app._fallback_model = None
+    app._agent_running = False
+    app._app = None
+    app.bell_on_complete = False
+    app._spinner_text = ""
+    app._invalidate = lambda **_kwargs: None
+    return app
 
 
 def test_handle_tasks_command_can_send_subagent_to_background(monkeypatch):

@@ -235,6 +235,8 @@ def test_main_cli_scheduled_executor_starts_api_a_background_and_writes_back(tmp
     def start_background(prompt, **kwargs):
         callbacks.append(kwargs["on_complete"])
         assert "不要把它交给 Auto 自主链" in prompt
+        assert kwargs["request_timeout_seconds"] == 120.0
+        assert kwargs["timeout_seconds"] == 600.0
         return True
 
     host._start_background_agent_task = start_background
@@ -523,3 +525,44 @@ def test_background_completion_outcome_treats_agent_error_as_failure() -> None:
     assert success is False
     assert response == "Error: provider failed"
     assert error == "provider failed"
+
+
+def test_scheduled_executor_uses_explicit_bounded_timeouts(tmp_path) -> None:
+    callbacks = []
+    host = SimpleNamespace(
+        session_id="main-cli",
+        _scheduled_execution_active=False,
+        _agent_running=False,
+        _command_running=False,
+        _background_tasks={},
+        _api_a_execution_gate=threading.Lock(),
+        _autonomous_component_host=SimpleNamespace(_agent_running=False),
+        _is_embedded_autonomous_component=lambda: False,
+    )
+
+    def start_background(_prompt, **kwargs):
+        callbacks.append(kwargs["on_complete"])
+        assert kwargs["request_timeout_seconds"] == 15.0
+        assert kwargs["timeout_seconds"] == 45.0
+        return True
+
+    host._start_background_agent_task = start_background
+    runtime = ScheduledTaskExecutorRuntime(
+        host,
+        request_timeout_seconds=15,
+        execution_timeout_seconds=45,
+        outbox_path=tmp_path / "writebacks.db",
+    )
+    runtime._post = Mock(
+        side_effect=[
+            {"claim": {"task": {"title": "计划", "instruction": "执行"}, "run": {"run_id": "run-1"}}},
+            {"status": "failed"},
+        ]
+    )  # type: ignore[method-assign]
+
+    runtime.poll_workflow()
+    callbacks[0](False, "", "API-A background execution timed out after 45 seconds")
+
+    finish_payload = runtime._post.call_args_list[-1].args[1]
+    assert finish_payload["success"] is False
+    assert "timed out after 45 seconds" in finish_payload["error"]
