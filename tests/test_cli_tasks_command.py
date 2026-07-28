@@ -135,6 +135,7 @@ def test_background_task_timeout_interrupts_agent_and_reports_failure(monkeypatc
     class _FakeAgent:
         def __init__(self, **kwargs):
             self.request_overrides = kwargs["request_overrides"]
+            self.persist_session = kwargs["persist_session"]
             self._print_fn = None
             self.thinking_callback = None
 
@@ -178,11 +179,13 @@ def test_background_task_timeout_interrupts_agent_and_reports_failure(monkeypatc
         task_id="scheduled-test",
         request_timeout_seconds=3,
         timeout_seconds=0.05,
+        persist_session=False,
         on_complete=on_complete,
     )
     assert completed.wait(timeout=2)
 
     assert fake_agent.request_overrides == {"temperature": 0.1, "timeout": 3.0}
+    assert fake_agent.persist_session is False
     assert "timed out after 0.1 seconds" in fake_agent.interrupt_message
     assert callback_result == [
         (False, "", "API-A background execution timed out after 0.1 seconds")

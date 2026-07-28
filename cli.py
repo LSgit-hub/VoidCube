@@ -1129,7 +1129,10 @@ class VoidcubeCLI:
                     # no user messages: autonomous tasks can be supervisor-pulled and
                     # never produce a user row, so message_count alone can skip
                     # the owner session after a crash/restart.
-                    recent_sessions = self._session_db.list_sessions_rich(limit=20)
+                    recent_sessions = self._session_db.list_sessions_rich(
+                        limit=20,
+                        exclude_id_prefixes=["scheduled_"],
+                    )
                     selected_session = None
                     for sess in recent_sessions:
                         if sess.get("source") == "cli_supervisor_task_lane" and sess.get("ended_at") is None:
@@ -3687,6 +3690,7 @@ class VoidcubeCLI:
                 source="cli",
                 exclude_sources=["tool"],
                 limit=limit,
+                exclude_id_prefixes=["scheduled_"],
             )
         except Exception:
             return []
@@ -5373,6 +5377,7 @@ class VoidcubeCLI:
         response_title: Optional[str] = None,
         request_timeout_seconds: Optional[float] = None,
         timeout_seconds: Optional[float] = None,
+        persist_session: bool = True,
         on_complete: Optional[Callable[[bool, str, str], None]] = None,
     ) -> bool:
         """Run one isolated API-A session and project its result to the main CLI."""
@@ -5452,6 +5457,7 @@ class VoidcubeCLI:
                     provider_require_parameters=self._provider_require_params,
                     provider_data_collection=self._provider_data_collection,
                     fallback_model=self._fallback_model,
+                    persist_session=persist_session,
                 )
                 active_agent["value"] = bg_agent
                 if timed_out.is_set():
@@ -8280,7 +8286,12 @@ class VoidcubeCLI:
         try:
             from VoidCube_core.state import SessionDB
             db = SessionDB()
-            sessions = db.list_sessions_rich(source="cli", exclude_sources=["tool"], limit=5)
+            sessions = db.list_sessions_rich(
+                source="cli",
+                exclude_sources=["tool"],
+                limit=5,
+                exclude_id_prefixes=["scheduled_"],
+            )
             current_session_id = getattr(self, 'session_id', None)
             for sess in sessions:
                 if sess.get("id") != current_session_id:

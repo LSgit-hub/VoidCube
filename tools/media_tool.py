@@ -8,7 +8,7 @@ Agent 调用此工具后，Web UI 会自动弹出播放器。
 
 import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 def _supervisor_media_url() -> str:
     """解析 supervisor 的 media enqueue 端点地址。
 
-    优先使用环境变量 ``SUPERVISOR_MEDIA_URL``，否则从网关地址推导。
+    优先使用环境变量 ``SUPERVISOR_MEDIA_URL``，否则读取 Supervisor 主配置。
     """
     import os
 
@@ -25,20 +25,16 @@ def _supervisor_media_url() -> str:
     if env_url:
         return env_url.rstrip("/") + "/ui/media/enqueue"
 
-    # 从 config 推导: gateway 地址 + /ui/media/enqueue
+    # Supervisor 的主配置由 systems.config 统一解析，包含环境变量覆盖。
     try:
-        from VoidCube_cli.config import load_config
-        cfg = load_config()
-        supervisor_cfg = cfg.get("supervisor", {})
-        if isinstance(supervisor_cfg, dict):
-            host = supervisor_cfg.get("host", "127.0.0.1")
-            port = supervisor_cfg.get("port", 6102)
-            return f"http://{host}:{port}/ui/media/enqueue"
+        from systems.config import load_config_from_env
+
+        supervisor = load_config_from_env().supervisor
+        return f"http://{supervisor.host}:{supervisor.port}/ui/media/enqueue"
     except Exception:
         pass
 
-    # 最后 fallback: 默认 supervisor 端口
-    return "http://127.0.0.1:6102/ui/media/enqueue"
+    return "http://127.0.0.1:6002/ui/media/enqueue"
 
 
 def media_play(

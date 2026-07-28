@@ -199,6 +199,28 @@ def test_start_all_starts_gateway_before_memory_and_waits_for_registration(monke
     ]
 
 
+def test_stop_service_on_windows_terminates_venv_process_tree(monkeypatch, tmp_path):
+    from VoidCube_cli.ops import serve
+
+    service = serve.SERVICES["supervisor"]
+    pid_file = tmp_path / "supervisor.pid"
+    pid_file.write_text("4321\n", encoding="ascii")
+    calls = []
+
+    monkeypatch.setattr(service, "pid_file", str(pid_file))
+    monkeypatch.setattr(serve.sys, "platform", "win32")
+    monkeypatch.setattr(serve, "_pid_alive", lambda pid: pid == 4321)
+    monkeypatch.setattr(
+        serve.subprocess,
+        "run",
+        lambda args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    assert serve.stop_service("supervisor", silent=True) is True
+    assert calls[0][0] == ["taskkill", "/PID", "4321", "/T", "/F"]
+    assert not pid_file.exists()
+
+
 def test_ensure_running_restarts_healthy_unregistered_memory(monkeypatch, tmp_path):
     from VoidCube_cli.ops import serve
 

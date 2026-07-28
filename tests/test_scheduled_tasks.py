@@ -223,6 +223,36 @@ async def test_daily_companion_can_manage_but_not_execute_schedule(tmp_path) -> 
     assert schedule_context == {"count": 0, "omitted_count": 0, "items": []}
 
 
+@pytest.mark.asyncio
+async def test_daily_companion_create_uses_title_when_instruction_is_omitted(tmp_path) -> None:
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._recall_companion_context = AsyncMock(return_value="")  # type: ignore[method-assign]
+    supervisor._persist_companion_turn_pair = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    supervisor._call_companion_model = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "reply_text": "十分钟后提醒你测试。",
+            "reason": "explicit_user_schedule_request",
+            "schedule_action": {
+                "action": "create",
+                "task": {
+                    "title": "提醒用户进行定时任务测试",
+                    "schedule_type": "once",
+                    "run_at": "2026-07-29T20:00:00+08:00",
+                },
+            },
+        }
+    )
+
+    result = await supervisor.handle_companion_message(text="十分钟后提醒我测试")
+
+    assert result["status"] == "ok"
+    assert result["schedule_action_result"]["ok"] is True
+    task = supervisor._scheduled_task_store.list()[0]
+    assert task["instruction"] == "提醒用户进行定时任务测试"
+    prompt = supervisor._call_companion_model.call_args.kwargs["system_prompt"]
+    assert "必须包含 title、instruction 和 schedule_type" in prompt
+
+
 def test_main_cli_scheduled_executor_starts_api_a_background_and_writes_back(tmp_path) -> None:
     callbacks = []
     host = SimpleNamespace(
@@ -237,6 +267,7 @@ def test_main_cli_scheduled_executor_starts_api_a_background_and_writes_back(tmp
         assert "不要把它交给 Auto 自主链" in prompt
         assert kwargs["request_timeout_seconds"] == 120.0
         assert kwargs["timeout_seconds"] == 600.0
+        assert kwargs["persist_session"] is False
         return True
 
     host._start_background_agent_task = start_background
@@ -262,6 +293,107 @@ def test_main_cli_scheduled_executor_starts_api_a_background_and_writes_back(tmp
     callbacks[0](True, "任务结果", "")
     assert host._scheduled_execution_active is False
     assert runtime._post.call_args_list[-1].args[0] == "/scheduled-task-runs/run-1/finish"
+
+
+@pytest.mark.asyncio
+async def test_companion_media_request_is_delegated_to_api_a_and_hidden_from_schedule_ui(
+    tmp_path,
+) -> None:
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._recall_companion_context = AsyncMock(return_value="")  # type: ignore[method-assign]
+    supervisor._persist_companion_turn_pair = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    supervisor._call_companion_model = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "reply_text": "我已交给 API-A 查找并播放。",
+            "reason": "explicit_media_request",
+            "schedule_action": {"action": "none"},
+            "media_action": {"action": "delegate", "query": "播放测试视频"},
+        }
+    )
+
+    result = await supervisor.handle_companion_message(text="帮我播放测试视频")
+
+    assert result["media_action_result"]["ok"] is True
+    stored = supervisor._scheduled_task_store.list(include_completed=True)
+    assert len(stored) == 1
+    assert stored[0]["requested_via"] == "companion_media"
+    assert "media_play" in stored[0]["instruction"]
+    assert supervisor._scheduled_task_snapshot()["tasks"] == []
+    assert supervisor._companion_schedule_context()["items"] == []
+    prompt = supervisor._call_companion_model.call_args.kwargs["system_prompt"]
+    assert "schedule_action.action 必须为 none" in prompt
+
+
+@pytest.mark.asyncio
+async def test_explicit_media_request_is_delegated_when_api_b_omits_media_action(
+    tmp_path,
+) -> None:
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._recall_companion_context = AsyncMock(return_value="")  # type: ignore[method-assign]
+    supervisor._persist_companion_turn_pair = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    supervisor._call_companion_model = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "reply_text": "抱歉，我无法直接播放音乐。",
+            "reason": "capability_misclassified",
+            "schedule_action": {"action": "none"},
+        }
+    )
+
+    result = await supervisor.handle_companion_message(text="帮我播放周杰伦的晴天")
+
+    assert result["media_action_result"]["ok"] is True
+    assert result["reply_text"] == "我已交给 API-A 查找并播放，执行状态会显示在主 CLI。"
+    tasks = supervisor._scheduled_task_store.list(include_completed=True)
+    assert len(tasks) == 1
+    assert tasks[0]["requested_via"] == "companion_media"
+    assert "帮我播放周杰伦的晴天" in tasks[0]["instruction"]
+
+
+def test_main_cli_media_request_uses_media_label_and_nonpersistent_session(tmp_path) -> None:
+    callbacks = []
+    host = SimpleNamespace(
+        session_id="main-cli",
+        _scheduled_execution_active=False,
+        _autonomous_component_host=SimpleNamespace(_agent_running=False),
+        _is_embedded_autonomous_component=lambda: False,
+    )
+
+    def start_background(prompt, **kwargs):
+        callbacks.append(kwargs["on_complete"])
+        assert "即时媒体播放请求" in prompt
+        assert "media_play" in prompt
+        assert kwargs["task_label"].startswith("媒体请求 ·")
+        assert kwargs["response_title"] == "> Voidcube（媒体播放）"
+        assert kwargs["persist_session"] is False
+        return True
+
+    host._start_background_agent_task = start_background
+    runtime = ScheduledTaskExecutorRuntime(
+        host,
+        poll_interval_seconds=0.5,
+        outbox_path=tmp_path / "media-writebacks.db",
+    )
+    runtime._post = Mock(
+        side_effect=[
+            {
+                "status": "claimed",
+                "claim": {
+                    "task": {
+                        "title": "播放媒体 · 测试视频",
+                        "instruction": "搜索并播放测试视频",
+                        "requested_via": "companion_media",
+                    },
+                    "run": {"run_id": "media-run-1"},
+                },
+            },
+            {"status": "completed"},
+        ]
+    )  # type: ignore[method-assign]
+
+    runtime.poll_workflow()
+    callbacks[0](True, "已播放", "")
+
+    assert runtime._post.call_args_list[-1].args[0] == "/scheduled-task-runs/media-run-1/finish"
 
 
 def test_main_cli_scheduled_executor_waits_for_running_auto_task(tmp_path) -> None:

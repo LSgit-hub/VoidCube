@@ -11,6 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import run_agent
+from VoidCube_cli.skin_engine import Skin
 from tools import delegate_tool
 
 
@@ -128,6 +129,10 @@ def test_delegate_task_falls_back_to_legacy_spinner_without_cli_print_fn(monkeyp
     assert captured["enable_display"] is False
     assert spinner_events == ["init", "start", "stop:delegate finished"]
     assert messages[-1]["tool_call_id"] == "tool-1"
+
+
+def test_default_skin_implements_spinner_decoration_contract():
+    assert Skin().get_spinner_wings() == []
 
 
 @pytest.mark.unit

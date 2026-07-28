@@ -2,7 +2,7 @@
 皮肤引擎
 """
 
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 class Skin:
     """皮肤"""
@@ -16,6 +16,10 @@ class Skin:
     
     def get_branding(self, key: str, default: str) -> str:
         return default
+
+    def get_spinner_wings(self) -> List[Tuple[str, str]]:
+        """Return optional left/right decorations for animated spinners."""
+        return []
 
 _default_skin = Skin("default")
 

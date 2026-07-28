@@ -75,6 +75,7 @@ UI_HTML = r"""<!doctype html>
   /* 房间 */
   --room-w: 1440px;
   --room-h: 810px;
+  --room-scale-inverse: 1;
   /* 缓动 */
   --ease-out: cubic-bezier(.22,.9,.32,1);
   --ease-in-out: cubic-bezier(.4,0,.2,1);
@@ -2735,6 +2736,8 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   z-index: 21;
   display: flex;
   gap: 4px;
+  transform: scale(var(--room-scale-inverse));
+  transform-origin: top right;
 }
 .voice-controls button {
   width: 30px; height: 30px;
@@ -2956,11 +2959,14 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   border-radius: 16px;
   box-shadow: 0 30px 80px rgba(0,0,0,.6);
   padding: 18px 20px 22px;
-  transform: translateY(16px) scale(.98);
+  transform: translateY(16px) scale(var(--room-scale-inverse)) scale(.98);
   opacity: 0;
   transition: transform .28s var(--ease-out), opacity .28s var(--ease-out);
 }
-.drawer-mask.open .drawer { transform: translateY(0) scale(1); opacity: 1; }
+.drawer-mask.open .drawer {
+  transform: translateY(0) scale(var(--room-scale-inverse));
+  opacity: 1;
+}
 .drawer-head {
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 14px; padding-bottom: 10px;
@@ -3738,6 +3744,7 @@ function updateRoomScale() {
   if (sw <= 0 || sh <= 0) return;
   const scale = sw <= 720 ? 1 : Math.min(sw / ROOM_W, sh / ROOM_H);
   document.documentElement.style.setProperty('--room-scale', scale);
+  document.documentElement.style.setProperty('--room-scale-inverse', 1 / scale);
 }
 
 /* ── DOM refs ── */
@@ -6233,9 +6240,16 @@ async function postVoice(path, payload, options = {}) {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(payload || {}),
     });
-    const result = response.ok ? await response.json() : null;
+    if (!response.ok) throw new Error(`voice_request_failed:${response.status}`);
+    const result = await response.json();
+    if (result && Object.prototype.hasOwnProperty.call(result, 'enabled')) {
+      applyVoiceRealtime(result);
+    }
     await refresh();
     return result;
+  } catch (error) {
+    showVoiceNotice('语音服务请求失败', 'error', 6000);
+    return null;
   } finally {
     const mode = (((lastState || {}).stellar_mode || {}).mode || 'daily_companion');
     buttons.forEach(button => { button.disabled = mode === 'auto_evolution'; });
@@ -6273,8 +6287,18 @@ async function toggleVoiceFingerprint() {
 
 async function toggleVoice() {
   const enabled = !Boolean(((lastState || {}).voice || {}).enabled);
-  await postVoice('/voice/microphone', {enabled});
-  showVoiceNotice(enabled ? '语音已开启' : '语音已关闭', enabled ? 'ok' : '');
+  const result = await postVoice('/voice/microphone', {enabled});
+  if (!result) return;
+  if (result.status === 'unavailable') {
+    showVoiceNotice('Auto 模式下不能开启麦克风', 'error', 6000);
+    return;
+  }
+  const confirmed = Boolean(result.enabled);
+  if (confirmed !== enabled) {
+    showVoiceNotice('麦克风状态更新失败', 'error', 6000);
+    return;
+  }
+  showVoiceNotice(confirmed ? '语音已开启' : '语音已关闭', confirmed ? 'ok' : '');
 }
 
 async function toggleContinuousVoice() {
@@ -6554,6 +6578,12 @@ function classifyMedia(url) {
   return 'youtube'; // 未知 URL 默认尝试 iframe
 }
 
+function resolveMediaType(media) {
+  const requested = String((media || {}).type || 'auto').toLowerCase();
+  if (['youtube', 'bilibili', 'audio', 'video'].includes(requested)) return requested;
+  return classifyMedia((media || {}).url || '');
+}
+
 function youtubeEmbedId(url) {
   const m = url.match(/(?:v=|\/)([a-zA-Z0-9_-]{11})(?:[&?#]|$)/);
   return m ? m[1] : null;
@@ -6569,7 +6599,7 @@ function bilibiliEmbedUrl(url) {
 
 function showMediaBar(media) {
   currentMedia = media;
-  const type = classifyMedia(media.url);
+  const type = resolveMediaType(media);
   mbIcon.textContent = mediaTypeIcon(type);
   mbTitle.textContent = media.title || media.url;
   mediaBar.classList.add('visible');
@@ -6593,7 +6623,7 @@ function closeMediaPanel() {
 
 function openMediaPanel() {
   if (!currentMedia) return;
-  const type = classifyMedia(currentMedia.url);
+  const type = resolveMediaType(currentMedia);
   mpContent.innerHTML = '';
   embeddedPlayer = null;
 
@@ -6716,9 +6746,9 @@ class SupervisorUIMixin:
         )
         self._supervisor_ui_observation_input_cache: Dict[str, Any] = {}
         self._supervisor_ui_memory_stats_cache: Dict[str, Any] = {}
-        # ── 媒体播放队列 ──
-        self._media_queue: Deque[Dict[str, Any]] = deque(maxlen=20)
+        # 媒体播放是即时指令；revision 保证相同 URL 的重复播放也会重新推送。
         self._current_media: Optional[Dict[str, Any]] = None
+        self._media_revision = 0
 
     def enqueue_media(self, media: Dict[str, Any]) -> None:
         """将媒体项加入播放队列，Web UI 自动弹出播放器。
@@ -6729,22 +6759,15 @@ class SupervisorUIMixin:
         - type (str): "youtube" | "bilibili" | "audio" | "video" | "auto"
         - auto_play (bool): 是否自动播放，默认 True
         """
-        media.setdefault("auto_play", True)
-        media.setdefault("type", "auto")
-        media.setdefault("title", media.get("url", "未知"))
-        media["_enqueued_at"] = datetime.now(timezone.utc).isoformat()
-        self._media_queue.append(media)
-        if self._current_media is None:
-            self._current_media = media
-        logger.info("Media enqueued: %s (%s)", media.get("title"), media.get("type"))
-
-    def _pop_next_media(self) -> Optional[Dict[str, Any]]:
-        """弹出队列中的下一个媒体项。"""
-        try:
-            self._current_media = self._media_queue.popleft()
-        except IndexError:
-            self._current_media = None
-        return self._current_media
+        current = dict(media)
+        current.setdefault("auto_play", True)
+        current.setdefault("type", "auto")
+        current.setdefault("title", current.get("url", "未知"))
+        current["_enqueued_at"] = datetime.now(timezone.utc).isoformat()
+        self._media_revision += 1
+        current["_revision"] = self._media_revision
+        self._current_media = current
+        logger.info("Media enqueued: %s (%s)", current.get("title"), current.get("type"))
 
     def _record_supervisor_ui_activity(
         self,
@@ -7236,18 +7259,18 @@ class SupervisorUIMixin:
         当队列中有新媒体项时，立即推送给前端播放器。
         轮询间隔 500ms，兼顾响应速度与资源消耗。
         """
-        _last_url: Optional[str] = None
+        _last_revision = 0
 
         async def event_stream():
-            nonlocal _last_url
+            nonlocal _last_revision
             while True:
                 if await request.is_disconnected():
                     break
                 current = self._current_media
                 if current:
-                    current_url = current.get("url", "")
-                    if current_url != _last_url:
-                        _last_url = current_url
+                    revision = int(current.get("_revision") or 0)
+                    if revision != _last_revision:
+                        _last_revision = revision
                         yield self._format_supervisor_ui_event(
                             "play",
                             {
@@ -7256,7 +7279,8 @@ class SupervisorUIMixin:
                                 "type": current.get("type", "auto"),
                                 "auto_play": current.get("auto_play", True),
                                 "enqueued_at": current.get("_enqueued_at", ""),
-                                "queue_remaining": len(self._media_queue),
+                                "revision": revision,
+                                "queue_remaining": 0,
                             },
                         )
                 await asyncio.sleep(0.5)
@@ -7289,7 +7313,7 @@ class SupervisorUIMixin:
             "type": (body.get("type") or "auto").strip(),
             "auto_play": body.get("auto_play", True),
         })
-        return {"status": "ok", "queued": len(self._media_queue)}
+        return {"status": "ok", "queued": 1, "revision": self._media_revision}
 
     def _format_supervisor_ui_event(self, event_name: str, payload: Dict[str, Any]) -> str:
         data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -8310,7 +8334,7 @@ class SupervisorUIMixin:
             "cognition": cognition,
             "media": {
                 "current": self._current_media,
-                "queue_length": len(self._media_queue),
+                "queue_length": 1 if self._current_media else 0,
             },
         }
 

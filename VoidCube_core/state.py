@@ -719,6 +719,7 @@ class SessionDB:
         limit: int = 20,
         offset: int = 0,
         include_children: bool = False,
+        exclude_id_prefixes: List[str] = None,
     ) -> List[Dict[str, Any]]:
         """List sessions with preview (first user message) and last active timestamp.
 
@@ -744,6 +745,17 @@ class SessionDB:
             placeholders = ",".join("?" for _ in exclude_sources)
             where_clauses.append(f"s.source NOT IN ({placeholders})")
             params.extend(exclude_sources)
+        for prefix in exclude_id_prefixes or []:
+            normalized = str(prefix or "")
+            if not normalized:
+                continue
+            escaped = (
+                normalized.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
+            where_clauses.append("s.id NOT LIKE ? ESCAPE '\\'")
+            params.append(f"{escaped}%")
 
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
         query = f"""

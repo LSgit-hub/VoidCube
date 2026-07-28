@@ -437,7 +437,9 @@ def stop_service(name: str, silent: bool = False) -> bool:
 
     try:
         if sys.platform == "win32":
-            subprocess.run(["taskkill", "/PID", str(pid), "/F"],
+            # venv 的 python.exe 是启动器，实际监听端口的是其子进程。
+            # 必须结束完整进程树，否则旧服务会继续占用端口并加载旧代码。
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
                            capture_output=True, timeout=10)
         else:
             os.kill(pid, signal.SIGTERM)

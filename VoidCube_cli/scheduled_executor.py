@@ -335,11 +335,24 @@ class ScheduledTaskExecutorRuntime:
             )
             title = str(task.get("title") or "定时任务").strip()
             instruction = str(task.get("instruction") or "").strip()
-            prompt = (
-                "这是用户预先安排并已到期的定时任务。请使用 API-A 的正常工具能力完成任务，"
-                "不要创建新的定时任务，也不要把它交给 Auto 自主链。\n\n"
-                f"任务：{title}\n指令：{instruction}"
-            )
+            companion_media = task.get("requested_via") == "companion_media"
+            if companion_media:
+                prompt = (
+                    "这是日常模式下星子转交的即时媒体播放请求。请使用 API-A 的正常工具能力"
+                    "查找可靠、可播放的媒体 URL，然后调用 media_play 推送到 VoidCube Web UI。"
+                    "不要创建定时任务，也不要把请求交给 Auto 自主链。\n\n"
+                    f"请求：{title}\n播放要求：{instruction}"
+                )
+                task_label = f"媒体请求 · {title}"
+                response_title = "> Voidcube（媒体播放）"
+            else:
+                prompt = (
+                    "这是用户预先安排并已到期的定时任务。请使用 API-A 的正常工具能力完成任务，"
+                    "不要创建新的定时任务，也不要把它交给 Auto 自主链。\n\n"
+                    f"任务：{title}\n指令：{instruction}"
+                )
+                task_label = f"定时任务 · {title}"
+                response_title = "> Voidcube（定时任务）"
 
             def on_complete(success: bool, response_text: str, error: str) -> None:
                 with self._state_lock:
@@ -362,10 +375,11 @@ class ScheduledTaskExecutorRuntime:
             started = self.host._start_background_agent_task(
                 prompt,
                 task_id=f"scheduled_{run_id}",
-                task_label=f"定时任务 · {title}",
-                response_title="> Voidcube（定时任务）",
+                task_label=task_label,
+                response_title=response_title,
                 request_timeout_seconds=self.request_timeout_seconds,
                 timeout_seconds=self.execution_timeout_seconds,
+                persist_session=False,
                 on_complete=on_complete,
             )
             execution_started = bool(started)

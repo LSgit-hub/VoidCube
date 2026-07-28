@@ -1772,7 +1772,12 @@ Examples:
         _exclude = None if _source else ["tool"]
 
         if action == "list":
-            sessions = db.list_sessions_rich(source=args.source, exclude_sources=_exclude, limit=args.limit)
+            sessions = db.list_sessions_rich(
+                source=args.source,
+                exclude_sources=_exclude,
+                limit=args.limit,
+                exclude_id_prefixes=["scheduled_"],
+            )
             if not sessions:
                 print("No sessions found.")
                 return
@@ -1866,7 +1871,12 @@ Examples:
             limit = getattr(args, "limit", 50) or 50
             source = getattr(args, "source", None)
             _browse_exclude = None if source else ["tool"]
-            sessions = db.list_sessions_rich(source=source, exclude_sources=_browse_exclude, limit=limit)
+            sessions = db.list_sessions_rich(
+                source=source,
+                exclude_sources=_browse_exclude,
+                limit=limit,
+                exclude_id_prefixes=["scheduled_"],
+            )
             db.close()
             if not sessions:
                 print("No sessions found.")

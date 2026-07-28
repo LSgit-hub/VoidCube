@@ -3207,6 +3207,41 @@ def test_auto_mode_disables_voice_controls_in_supervisor_ui():
     assert 'id="voiceStatusLabel"' in UI_HTML
     assert "background: #188a52;" in UI_HTML
     assert "声纹过滤已关闭，允许其他说话人使用" in UI_HTML
+    assert "applyVoiceRealtime(result);" in UI_HTML
+    assert "Auto 模式下不能开启麦克风" in UI_HTML
+    assert "麦克风状态更新失败" in UI_HTML
+    assert "语音服务请求失败" in UI_HTML
+    assert "transform: scale(var(--room-scale-inverse));" in UI_HTML
+    assert "setProperty('--room-scale-inverse', 1 / scale);" in UI_HTML
+    assert "scale(var(--room-scale-inverse)) scale(.98)" in UI_HTML
+    assert ".drawer-mask.open .drawer" in UI_HTML
+    assert "function resolveMediaType(media)" in UI_HTML
+    assert "const type = resolveMediaType(currentMedia);" in UI_HTML
+
+
+@pytest.mark.unit
+def test_media_enqueue_replaces_current_item_and_revisions_repeat_url(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    supervisor.enqueue_media({"url": "https://example.com/song.mp3", "title": "第一次"})
+    first_revision = supervisor._current_media["_revision"]
+    supervisor.enqueue_media({"url": "https://example.com/song.mp3", "title": "第二次"})
+
+    assert supervisor._current_media["title"] == "第二次"
+    assert supervisor._current_media["_revision"] == first_revision + 1
+    assert supervisor._media_revision == first_revision + 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_daily_mode_microphone_toggle_returns_confirmed_voice_state(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+
+    enabled = await supervisor.set_voice_microphone(SimpleNamespace(enabled=True))
+    disabled = await supervisor.set_voice_microphone(SimpleNamespace(enabled=False))
+
+    assert enabled["enabled"] is True
+    assert disabled["enabled"] is False
 
 
 @pytest.mark.asyncio

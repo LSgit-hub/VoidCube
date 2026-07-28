@@ -16,6 +16,7 @@ from fastapi import HTTPException
 
 SCHEDULE_TYPES = frozenset({"once", "daily", "weekly"})
 TERMINAL_SCHEDULE_STATUSES = frozenset({"completed", "failed"})
+INTERNAL_SCHEDULE_REQUEST_SOURCES = frozenset({"companion_media"})
 
 
 def _utc_now() -> datetime:
@@ -635,7 +636,23 @@ class ScheduledTaskRuntimeMixin:
 
     def _scheduled_task_snapshot(self, *, include_completed: bool = True) -> Dict[str, Any]:
         now = _utc_now()
-        tasks = self._scheduled_task_store.list(include_completed=include_completed)
+        all_tasks = self._scheduled_task_store.list(include_completed=True)
+        hidden_schedule_ids = {
+            str(task.get("schedule_id") or "")
+            for task in all_tasks
+            if task.get("requested_via") in INTERNAL_SCHEDULE_REQUEST_SOURCES
+        }
+        tasks = [
+            task
+            for task in all_tasks
+            if str(task.get("schedule_id") or "") not in hidden_schedule_ids
+            and (include_completed or task.get("status") != "completed")
+        ]
+        recent_runs = [
+            run
+            for run in self._scheduled_task_store.recent_runs(limit=200)
+            if str(run.get("schedule_id") or "") not in hidden_schedule_ids
+        ][:20]
         due_count = sum(
             1
             for task in tasks
@@ -648,7 +665,7 @@ class ScheduledTaskRuntimeMixin:
             "tasks": tasks,
             "count": len(tasks),
             "due_count": due_count,
-            "recent_runs": self._scheduled_task_store.recent_runs(limit=20),
+            "recent_runs": recent_runs,
             "generated_at": _iso_utc(now),
         }
 
