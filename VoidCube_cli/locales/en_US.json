@@ -110,9 +110,6 @@
       "skills": {
         "description": "Search, install, inspect, or manage skills"
       },
-      "cron": {
-        "description": "Manage scheduled tasks"
-      },
       "reload-mcp": {
         "description": "Reload MCP servers from config"
       },
@@ -262,7 +259,6 @@
     },
     "usage": {
       "config_set": "Usage: VoidCube config set <key> <value>",
-      "cron": "Usage: VoidCube cron [list|create|edit|pause|resume|run|remove|status|tick]",
       "debug_share": "Usage: VoidCube debug share [--lines N] [--expire N] [--local]",
       "pairing": "Usage: VoidCube pairing {list|approve|revoke|clear-pending}",
       "webhook": "Usage: VoidCube webhook {subscribe|list|remove|test}",

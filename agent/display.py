@@ -192,7 +192,6 @@ def build_tool_preview(tool_name: str, args: dict, max_len: int | None = None) -
         "image_generate": "prompt", "text_to_speech": "text",
         "vision_analyze": "question", "mixture_of_agents": "user_prompt",
         "skill_view": "name", "skills_list": "category",
-        "cronjob": "action",
         "execute_code": "code", "delegate_task": "goal",
         "clarify": "question", "skill_manage": "name",
     }
@@ -945,15 +944,6 @@ def get_cute_tool_message(
         return _wrap(f"┊ 🧠 {_pad('深度推理', 8)}{_trunc(args.get('user_prompt', ''), 30)}  {dur}")
     if tool_name == "send_message":
         return _wrap(f"┊ 📨 {_pad('发送', 8)}{args.get('target', '?')}: \"{_trunc(args.get('message', ''), 25)}\"  {dur}")
-    if tool_name == "cronjob":
-        action = args.get("action", "?")
-        if action == "create":
-            skills = args.get("skills") or ([] if not args.get("skill") else [args.get("skill")])
-            label = args.get("name") or (skills[0] if skills else None) or args.get("prompt", "task")
-            return _wrap(f"┊ ⏰ {_pad('定时任务', 8)}创建 {_trunc(label, 24)}  {dur}")
-        if action == "list":
-            return _wrap(f"┊ ⏰ {_pad('定时任务', 8)}列表中  {dur}")
-        return _wrap(f"┊ ⏰ {_pad('定时任务', 8)}{action} {args.get('job_id', '')}  {dur}")
     if tool_name.startswith("rl_"):
         rl = {
             "rl_list_environments": "环境列表", "rl_select_environment": f"选择 {args.get('name', '')}",

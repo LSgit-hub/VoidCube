@@ -6245,7 +6245,7 @@ class VoidcubeCLI:
                 logging.getLogger(noisy).setLevel(logging.WARNING)
         else:
             logging.getLogger().setLevel(logging.INFO)
-            for quiet_logger in ('tools', 'run_agent', 'trajectory_compressor', 'cron', 'VoidCube_cli'):
+            for quiet_logger in ('tools', 'run_agent', 'trajectory_compressor', 'VoidCube_cli'):
                 logging.getLogger(quiet_logger).setLevel(logging.ERROR)
 
     def _check_config_mcp_changes(self) -> None:
@@ -10063,7 +10063,7 @@ def main(
             atexit.register(_maybe_stop_daemons_on_exit)
 
     # Parse toolsets - handle both string and tuple/list inputs
-    # Default to VoidCube-cli toolset which includes cronjob management tools
+    # Parse the explicitly selected toolsets when provided.
     toolsets_list = None
     if toolsets:
         if isinstance(toolsets, str):

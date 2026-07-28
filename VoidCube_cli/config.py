@@ -310,7 +310,7 @@ def ensure_VoidCube_home():
     else:
         home.mkdir(parents=True, exist_ok=True)
         _secure_dir(home)
-        for subdir in ("cron", "sessions", "logs", "memories"):
+        for subdir in ("sessions", "logs", "memories"):
             d = home / subdir
             d.mkdir(parents=True, exist_ok=True)
             _secure_dir(d)
@@ -324,7 +324,7 @@ def _ensure_VoidCube_home_managed(home: Path):
             f"VOIDCUBE_HOME {home} does not exist. "
             "Run 'sudo nixos-rebuild switch' first."
         )
-    for subdir in ("cron", "sessions", "logs", "memories"):
+    for subdir in ("sessions", "logs", "memories"):
         d = home / subdir
         if not d.is_dir():
             raise RuntimeError(
@@ -737,12 +737,6 @@ DEFAULT_CONFIG = {
             "domains": [],
             "shared_files": [],
         },
-    },
-
-    "cron": {
-        # Wrap delivered cron responses with a header (task name) and footer
-        # ("The agent cannot see this message").  Set to false for clean output.
-        "wrap_response": True,
     },
 
     # Logging — controls file logging to ~/.VoidCube/logs/.

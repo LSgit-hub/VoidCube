@@ -77,7 +77,7 @@ DEFAULT_FALLBACK_CONTEXT = CONTEXT_PROBE_TIERS[0]
 
 # Minimum context length required to run Voidcube Agent.  Models with fewer
 # tokens cannot maintain enough working memory for tool-calling workflows.
-# Sessions, model switches, and cron jobs should reject models below this.
+# Sessions and model switches should reject models below this.
 MINIMUM_CONTEXT_LENGTH = 64_000
 
 _CONTEXT_LENGTH_KEYS = (

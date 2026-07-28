@@ -1,4 +1,4 @@
-"""Shared runtime provider resolution for CLI, gateway, cron, and helpers."""
+"""Shared runtime provider resolution for CLI, gateway, and helpers."""
 
 from __future__ import annotations
 

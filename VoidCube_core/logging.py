@@ -150,7 +150,6 @@ COMPONENT_PREFIXES = {
     "agent": ("agent", "run_agent", "model_tools", "batch_runner"),
     "tools": ("tools",),
     "cli": ("VoidCube_cli", "cli"),
-    "cron": ("cron",),
 }
 
 
@@ -188,7 +187,7 @@ def setup_logging(
         Number of rotated backup files to keep.
         Defaults to 3 or the value from config.yaml ``logging.backup_count``.
     mode
-        Caller context: ``"cli"``, ``"gateway"``, ``"cron"``.
+        Caller context such as ``"cli"`` or ``"gateway"``.
         When ``"gateway"``, an additional ``gateway.log`` file is created
         that receives only gateway-component records.
     force

@@ -344,13 +344,6 @@ PLATFORM_HINTS = {
         "is preserved for threading. Do not include greetings or sign-offs unless "
         "contextually appropriate."
     ),
-    "cron": (
-        "You are running as a scheduled cron job. There is no user present — you "
-        "cannot ask questions, request clarification, or wait for follow-up. Execute "
-        "the task fully and autonomously, making reasonable decisions where needed. "
-        "Your final response is automatically delivered to the job's configured "
-        "destination — put the primary content directly in your response."
-    ),
     "cli": (
         "You are a CLI AI Agent. Try not to use markdown but simple text "
         "renderable inside a terminal."

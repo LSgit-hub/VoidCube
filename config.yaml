@@ -228,8 +228,6 @@ security:
     enabled: false
     domains: []
     shared_files: []
-cron:
-  wrap_response: true
 logging:
   level: INFO
   max_size_mb: 5

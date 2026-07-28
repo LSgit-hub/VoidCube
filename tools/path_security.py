@@ -2,7 +2,7 @@
 
 Extracts the ``resolve() + relative_to()`` and ``..`` traversal check
 patterns previously duplicated across skill_manager_tool, skills_tool,
-skills_hub, cronjob_tools, and credential_files.
+skills_hub, and credential_files.
 
 Also consolidates file operation security checks from file_tools.py and
 file_operations.py to provide a unified security validation interface.

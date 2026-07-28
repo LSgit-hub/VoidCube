@@ -453,26 +453,6 @@ def show_status(args):
         print("  Manager:      (not supported on this platform)")
     
     # =========================================================================
-    # Cron Jobs
-    # =========================================================================
-    print()
-    print(color("◆ Scheduled Jobs", Colors.CYAN, Colors.BOLD))
-    
-    jobs_file = get_VoidCube_home() / "cron" / "jobs.json"
-    if jobs_file.exists():
-        import json
-        try:
-            with open(jobs_file, encoding="utf-8") as f:
-                data = json.load(f)
-                jobs = data.get("jobs", [])
-                enabled_jobs = [j for j in jobs if j.get("enabled", True)]
-                print(f"  Jobs:         {len(enabled_jobs)} active, {len(jobs)} total")
-        except Exception:
-            print("  Jobs:         (error reading jobs file)")
-    else:
-        print("  Jobs:         0")
-    
-    # =========================================================================
     # Sessions
     # =========================================================================
     print()

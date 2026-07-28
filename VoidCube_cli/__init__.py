@@ -8,7 +8,6 @@ Provides subcommands for:
 - VoidCube gateway stop  - Stop gateway service  
 - VoidCube api           - API configuration
 - VoidCube status        - Show status of all components
-- VoidCube cron          - Manage cron jobs
 """
 
 __version__ = "1.0.0"

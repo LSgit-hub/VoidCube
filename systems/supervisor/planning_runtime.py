@@ -7413,7 +7413,7 @@ class PlanningRuntimeMixin:
             "4. 优先考虑避免重复、无证据、陈旧或与当前系统状态冲突的任务\n"
             "5. body_improvement 只有在学习证据足够时才建议 approve；这里的 approve 只表示转交 API-A 接手，不表示 Web 小屋可控制执行\n\n"
             "6. 同一个 scheduled_for / preset_time 只能保留一个活跃任务；"
-            "如果时间重叠，按先后顺序只保留一个，不能与现有定时任务重复，其余建议 defer 或 cancel；"
+            "如果时间重叠，按先后顺序只保留一个，不能与现有自主链计划时段重复，其余建议 defer 或 cancel；"
             "该保留/顺延建议由监督者 LM 判断\n\n"
             "输出 JSON 对象，格式为：\n"
             "{\n"

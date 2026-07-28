@@ -60,12 +60,12 @@ class MemoryProvider(ABC):
         kwargs always include:
           - VoidCube_home (str): The active VOIDCUBE_HOME directory path. Use this
             for profile-scoped storage instead of hardcoding ``~/.VoidCube``.
-          - platform (str): "cli", "telegram", "discord", "cron", etc.
+          - platform (str): "cli", "telegram", "discord", etc.
 
         kwargs may also include:
-          - agent_context (str): "primary", "subagent", "cron", or "flush".
-            Providers should skip writes for non-primary contexts (cron system
-            prompts would corrupt user representations).
+          - agent_context (str): "primary", "subagent", or "flush".
+            Providers should skip writes for non-primary contexts because
+            background system prompts would corrupt user representations.
           - agent_identity (str): Profile name (e.g. "coder"). Use for
             per-profile provider identity scoping.
           - agent_workspace (str): Shared workspace name (e.g. "VoidCube").

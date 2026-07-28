@@ -187,20 +187,6 @@
           "install": "安装技能"
         }
       },
-      "cron": {
-        "description": "管理计划任务",
-        "usage": "用法: /cron [子命令]",
-        "subcommands": {
-          "list": "列出任务",
-          "add": "添加任务",
-          "create": "创建任务",
-          "edit": "编辑任务",
-          "pause": "暂停任务",
-          "resume": "恢复任务",
-          "run": "运行任务",
-          "remove": "删除任务"
-        }
-      },
       "reload-mcp": {
         "description": "从配置重新加载MCP服务器",
         "usage": "用法: /reload-mcp"
@@ -3005,7 +2991,6 @@
       "prompts.you_can_continue_chatting_—_results_will_appear_when_done.\\n": "  You can continue chatting — results will appear when done.\\n",
       "prompts.⚠_yolo_mode_[bold_red]off[_]_—_dangerous_commands_will_require_approval.": "  ⚠ YOLO mode [bold red]OFF[/] — dangerous commands will require approval.",
       "prompts.⚠️_mcp_reload_timed_out_(30s)._some_servers_may_not_have_reconnected.": "  ⚠️  MCP reload timed out (30s). Some servers may not have reconnected.",
-      "prompts.⚠️_cron_command_has_been_removed._scheduled_tasks_feature_is_no_longer_available.": "  ⚠️ /cron command has been removed. Scheduled tasks feature is no longer available.",
       "prompts.⚠️_insights_command_has_been_removed._usage_analytics_feature_is_no_longer_available.": "  ⚠️ /insights command has been removed. Usage analytics feature is no longer available.",
       "prompts.✨_(◕‿◕)✨_fresh_start!_screen_cleared_and_conversation_reset.\\n": "  ✨ (◕‿◕)✨ Fresh start! Screen cleared and conversation reset.\\n",
       "prompts.💬_btw_(no_response)": "  💬 /btw: (no response)",
@@ -3072,7 +3057,6 @@
     },
     "usage": {
       "config_set": "用法: VoidCube config set <键> <值>",
-      "cron": "用法: VoidCube cron [list|create|edit|pause|resume|run|remove|status|tick]",
       "debug_share": "用法: VoidCube debug share [--lines N] [--expire N] [--local]",
       "pairing": "用法: VoidCube pairing {list|approve|revoke|clear-pending}",
       "webhook": "用法: VoidCube webhook {subscribe|list|remove|test}",
@@ -3106,7 +3090,6 @@
       "statusbar_toggle": "/statusbar 切换持久栏，显示模型、令牌、上下文填充率、成本和持续时间。",
       "tools_disable": "/tools disable browser 临时移除当前会话的浏览器工具。",
       "browser_connect": "/browser connect 通过 CDP 将浏览器工具附加到运行中的 Chrome 实例。",
-      "cron_scheduled": "/cron 管理计划任务 — 设置定期提示并投递到任何平台。",
       "reload_mcp": "/reload-mcp 热重载 MCP 服务器配置，无需重启。",
       "usage_tokens": "/usage 显示令牌使用、成本明细和会话持续时间。",
       "insights_analytics": "/insights 显示最近30天的使用分析。",
@@ -3122,7 +3105,6 @@
       "skills_well_known": "任何网站都可以通过 /.well-known/skills/index.json 暴露技能 — 技能中心自动发现它们。",
       "sovl_md_custom": "SOUL.md 完全替换智能体的默认身份 — 重写它让 Voidcube 成为你的。",
       "compress_focus": "/compress <焦点主题> 将 60-70% 的摘要预算分配给你的主题，并积极修剪其余部分。",
-      "cron_script": "Cron 作业可以附加 Python 脚本 (--script)，其 stdout 作为上下文注入到提示中。",
       "prefill_messages": "config.yaml 中的 prefill_messages_file 将少样本示例注入到每个 API 调用，从不保存到历史记录。",
       "set_env_permanent": "提示：设置 {env_var} 环境变量使其永久生效。",
       "run_doctor_fix": "提示：运行 '{command}' 自动修复可能的问题。",

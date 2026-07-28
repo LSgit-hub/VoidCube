@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -115,6 +116,25 @@ def test_builtin_table_is_complete_and_contains_no_removed_commands() -> None:
         if spec.exits:
             continue
         assert hasattr(VoidcubeCLI, spec.handler_name), spec.handler_name
+
+
+def test_retired_cron_integration_has_no_active_runtime_or_config_surface() -> None:
+    active_surfaces = (
+        "config.yaml",
+        "agent/display.py",
+        "agent/memory_provider.py",
+        "agent/prompt_builder.py",
+        "VoidCube_cli/config.py",
+        "VoidCube_cli/main.py",
+        "VoidCube_cli/status.py",
+        "VoidCube_cli/locales/en_US.json",
+        "VoidCube_cli/locales/zh_CN.json",
+        "VoidCube_core/logging.py",
+    )
+
+    for path in active_surfaces:
+        source = Path(path).read_text(encoding="utf-8").casefold()
+        assert "cron" not in source, path
 
 
 def test_every_discoverable_cli_builtin_has_an_execution_spec() -> None:

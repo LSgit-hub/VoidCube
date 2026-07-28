@@ -40,7 +40,6 @@ _COMPLEX_KEYWORDS = {
     "planning",
     "delegate",
     "subagent",
-    "cron",
     "docker",
     "kubernetes",
 }

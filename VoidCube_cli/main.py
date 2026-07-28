@@ -15,9 +15,6 @@ Usage:
     VoidCube logout              # Clear stored authentication
     VoidCube status              # Show status of all components
     VoidCube autonomous          # Debug the API-A autonomous execution component
-    VoidCube cron                # Manage cron jobs
-    VoidCube cron list           # List cron jobs
-    VoidCube cron status         # Check if cron scheduler is running
     VoidCube doctor              # Check configuration and dependencies
     VoidCube honcho setup                    # Configure Honcho AI memory integration
     VoidCube honcho status                   # Show Honcho config and connection status
@@ -2009,7 +2006,7 @@ Examples:
     )
     logs_parser.add_argument(
         "--component", metavar="NAME",
-        help="Filter by component: gateway, agent, tools, cli, cron",
+        help="Filter by component: gateway, agent, tools, cli",
     )
     logs_parser.set_defaults(func=cmd_logs)
 

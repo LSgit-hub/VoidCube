@@ -1195,7 +1195,7 @@ def _load_config() -> dict:
     Checks the runtime config (cli.py CLI_CONFIG) first, then falls back
     to the persistent config (VoidCube_cli/config.py load_config()) so that
     ``delegation.model`` / ``delegation.provider`` are picked up regardless
-    of the entry point (CLI, gateway, cron).
+    of the entry point (CLI or gateway).
     """
     try:
         from cli import CLI_CONFIG

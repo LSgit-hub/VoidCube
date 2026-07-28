@@ -468,8 +468,7 @@ class AIAgent:
                     'tools',               # all tools.* (terminal, browser, web, file, etc.)
                     'run_agent',            # agent runner internals
                     'trajectory_compressor',
-                    'cron',                 # scheduler (only relevant in daemon mode)
-                    'VoidCube_cli',           # CLI helpers
+                    'VoidCube_cli',         # CLI helpers
                 ]:
                     logging.getLogger(quiet_logger).setLevel(logging.ERROR)
         
@@ -1129,7 +1128,7 @@ class AIAgent:
 
         In headless environments (systemd, Docker, nohup) stdout may become
         unavailable mid-session.  A raw ``print()`` raises ``OSError`` which
-        can crash cron jobs and lose completed work.
+        can crash background runs and lose completed work.
 
         Internally routes through ``self._print_fn`` (default: builtin
         ``print``) so callers such as the CLI can inject a renderer that
@@ -4330,7 +4329,7 @@ class AIAgent:
 
                         # Persist token counts to session DB for /insights.
                         # Do this for every platform with a session_id so non-CLI
-                        # sessions (gateway, cron, delegated runs) cannot lose
+                        # sessions (gateway and delegated runs) cannot lose
                         # token/accounting data if a higher-level persistence path
                         # is skipped or fails. Gateway/session-store writes use
                         # absolute totals, so they safely overwrite these per-call
