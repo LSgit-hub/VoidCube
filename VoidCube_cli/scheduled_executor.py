@@ -1,0 +1,343 @@
+from __future__ import annotations
+
+import json
+import logging
+import sqlite3
+import threading
+import time
+import urllib.error
+import urllib.request
+from contextlib import closing
+from pathlib import Path
+from typing import Any, Dict
+
+from VoidCube_cli.ops.executor import default_gateway_url
+from VoidCube_core.runtime_paths import get_runtime_layout
+
+
+logger = logging.getLogger(__name__)
+
+
+class ScheduledWritebackOutbox:
+    """Durable completion queue for scheduled API-A executions."""
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(self._connect()) as connection:
+            with connection:
+                connection.execute(
+                    "CREATE TABLE IF NOT EXISTS pending_writebacks ("
+                    "run_id TEXT PRIMARY KEY, payload TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, "
+                    "next_attempt_at REAL NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '', "
+                    "dead_letter INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL)"
+                )
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_scheduled_writebacks_due "
+                    "ON pending_writebacks(dead_letter, next_attempt_at, created_at)"
+                )
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(str(self.path), timeout=10.0)
+        connection.execute("PRAGMA busy_timeout = 10000")
+        connection.execute("PRAGMA journal_mode = WAL")
+        return connection
+
+    def enqueue(self, run_id: str, payload: Dict[str, Any]) -> None:
+        with closing(self._connect()) as connection:
+            with connection:
+                connection.execute(
+                    "INSERT OR REPLACE INTO pending_writebacks "
+                    "(run_id, payload, attempts, next_attempt_at, last_error, dead_letter, created_at) "
+                    "VALUES (?, ?, 0, 0, '', 0, ?)",
+                    (run_id, json.dumps(payload, ensure_ascii=False), time.time()),
+                )
+
+    def next_due(self) -> Dict[str, Any] | None:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT run_id, payload, attempts FROM pending_writebacks "
+                "WHERE dead_letter = 0 AND next_attempt_at <= ? "
+                "ORDER BY created_at LIMIT 1",
+                (time.time(),),
+            ).fetchone()
+        if row is None:
+            return None
+        payload = json.loads(row[1])
+        payload["_outbox_run_id"] = str(row[0])
+        payload["_outbox_attempts"] = int(row[2])
+        return payload
+
+    def mark_delivered(self, run_id: str) -> None:
+        with closing(self._connect()) as connection:
+            with connection:
+                connection.execute("DELETE FROM pending_writebacks WHERE run_id = ?", (run_id,))
+
+    def mark_failed(self, run_id: str, *, attempts: int, error: str) -> None:
+        delay = min(60.0, float(2 ** min(max(attempts, 1), 6)))
+        with closing(self._connect()) as connection:
+            with connection:
+                connection.execute(
+                    "UPDATE pending_writebacks SET attempts = ?, next_attempt_at = ?, last_error = ? "
+                    "WHERE run_id = ?",
+                    (attempts, time.time() + delay, error[:1000], run_id),
+                )
+
+    def mark_dead(self, run_id: str, *, attempts: int, error: str) -> None:
+        with closing(self._connect()) as connection:
+            with connection:
+                connection.execute(
+                    "UPDATE pending_writebacks SET attempts = ?, last_error = ?, dead_letter = 1 "
+                    "WHERE run_id = ?",
+                    (attempts, error[:1000], run_id),
+                )
+
+    def pending_count(self) -> int:
+        with closing(self._connect()) as connection:
+            return int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM pending_writebacks WHERE dead_letter = 0"
+                ).fetchone()[0]
+            )
+
+
+class ScheduledTaskExecutorRuntime:
+    """Main-CLI-only poller that hands due plans to an isolated API-A session."""
+
+    def __init__(
+        self,
+        host: Any,
+        *,
+        poll_interval_seconds: float = 2.0,
+        lease_seconds: int = 300,
+        lease_renew_interval_seconds: float = 60.0,
+        outbox_path: str | Path | None = None,
+    ):
+        self.host = host
+        self.poll_interval_seconds = max(0.5, float(poll_interval_seconds))
+        self.lease_seconds = max(60, min(int(lease_seconds), 3600))
+        self.lease_renew_interval_seconds = max(
+            10.0,
+            min(float(lease_renew_interval_seconds), self.lease_seconds / 2),
+        )
+        self._last_poll_at = 0.0
+        self._poll_lock = threading.Lock()
+        self._delivery_lock = threading.Lock()
+        self._state_lock = threading.RLock()
+        self._active_run_id = ""
+        self._execution_gate_acquired = False
+        self._outbox = ScheduledWritebackOutbox(
+            outbox_path
+            or (get_runtime_layout().runtime_root / "cli" / "scheduled_writebacks.db")
+        )
+
+    @staticmethod
+    def _post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        url = f"{default_gateway_url().rstrip('/')}/api/supervisor{path}"
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:
+            decoded = json.loads(response.read().decode("utf-8"))
+            return dict(decoded) if isinstance(decoded, dict) else {}
+
+    def _auto_task_is_running(self) -> bool:
+        component = getattr(self.host, "_autonomous_component_host", None)
+        return bool(component is not None and getattr(component, "_agent_running", False))
+
+    def _manual_background_task_is_running(self) -> bool:
+        tasks = getattr(self.host, "_background_tasks", {})
+        if not isinstance(tasks, dict):
+            return False
+        return any(
+            callable(getattr(thread, "is_alive", None)) and thread.is_alive()
+            for thread in list(tasks.values())
+        )
+
+    def _api_a_is_busy(self) -> bool:
+        return bool(
+            self._auto_task_is_running()
+            or getattr(self.host, "_agent_running", False)
+            or getattr(self.host, "_command_running", False)
+            or self._manual_background_task_is_running()
+        )
+
+    def _acquire_execution_gate(self) -> bool:
+        gate = getattr(self.host, "_api_a_execution_gate", None)
+        if gate is None:
+            return True
+        acquired = bool(gate.acquire(blocking=False))
+        self._execution_gate_acquired = acquired
+        return acquired
+
+    def _release_execution_slot(self) -> None:
+        with self._state_lock:
+            self.host._scheduled_execution_active = False
+            if self._execution_gate_acquired:
+                gate = getattr(self.host, "_api_a_execution_gate", None)
+                self._execution_gate_acquired = False
+                if gate is not None:
+                    try:
+                        gate.release()
+                    except RuntimeError:
+                        pass
+
+    def _flush_writebacks(self, *, limit: int = 4) -> None:
+        if not self._delivery_lock.acquire(blocking=False):
+            return
+        try:
+            for _ in range(max(1, int(limit))):
+                pending = self._outbox.next_due()
+                if pending is None:
+                    return
+                run_id = str(pending.pop("_outbox_run_id"))
+                attempts = int(pending.pop("_outbox_attempts", 0)) + 1
+                try:
+                    self._post(f"/scheduled-task-runs/{run_id}/finish", pending)
+                except urllib.error.HTTPError as exc:
+                    detail = f"HTTP {exc.code}: {exc.reason}"
+                    if exc.code in {400, 404, 409}:
+                        self._outbox.mark_dead(run_id, attempts=attempts, error=detail)
+                        logger.error("Scheduled task writeback permanently rejected for %s: %s", run_id, detail)
+                    else:
+                        self._outbox.mark_failed(run_id, attempts=attempts, error=detail)
+                    return
+                except Exception as exc:
+                    self._outbox.mark_failed(run_id, attempts=attempts, error=str(exc))
+                    logger.warning("Scheduled task writeback retry deferred for %s: %s", run_id, exc)
+                    return
+                self._outbox.mark_delivered(run_id)
+        finally:
+            self._delivery_lock.release()
+
+    def _start_lease_heartbeat(
+        self,
+        *,
+        run_id: str,
+        owner_session_id: str,
+        stop_event: threading.Event,
+    ) -> None:
+        def renew_loop() -> None:
+            while not stop_event.wait(self.lease_renew_interval_seconds):
+                try:
+                    self._post(
+                        f"/scheduled-task-runs/{run_id}/renew",
+                        {
+                            "owner_session_id": owner_session_id,
+                            "lease_seconds": self.lease_seconds,
+                        },
+                    )
+                except Exception as exc:
+                    logger.warning("Scheduled task lease renewal failed for %s: %s", run_id, exc)
+
+        threading.Thread(
+            target=renew_loop,
+            daemon=True,
+            name=f"scheduled-lease-{run_id[:8]}",
+        ).start()
+
+    def poll_workflow(self) -> None:
+        if getattr(self.host, "_is_embedded_autonomous_component", lambda: False)():
+            return
+        self._flush_writebacks()
+        if self._outbox.pending_count():
+            return
+        if self._active_run_id or getattr(self.host, "_scheduled_execution_active", False):
+            return
+        now = time.monotonic()
+        if now - self._last_poll_at < self.poll_interval_seconds:
+            return
+        self._last_poll_at = now
+        if self._api_a_is_busy() or not self._poll_lock.acquire(blocking=False):
+            return
+
+        execution_started = False
+        heartbeat_stop: threading.Event | None = None
+        try:
+            if not self._acquire_execution_gate():
+                return
+            self.host._scheduled_execution_active = True
+            if self._api_a_is_busy():
+                self._release_execution_slot()
+                return
+            owner_session_id = str(getattr(self.host, "session_id", "") or "").strip()
+            if not owner_session_id:
+                self._release_execution_slot()
+                return
+            try:
+                response = self._post(
+                    "/scheduled-tasks/claim",
+                    {
+                        "owner_session_id": owner_session_id,
+                        "lease_seconds": self.lease_seconds,
+                    },
+                )
+            except (OSError, ValueError, urllib.error.HTTPError):
+                self._release_execution_slot()
+                return
+            claim = response.get("claim")
+            if not isinstance(claim, dict):
+                self._release_execution_slot()
+                return
+            task = dict(claim.get("task") or {})
+            run = dict(claim.get("run") or {})
+            run_id = str(run.get("run_id") or "").strip()
+            if not run_id:
+                self._release_execution_slot()
+                return
+
+            with self._state_lock:
+                self._active_run_id = run_id
+            heartbeat_stop = threading.Event()
+            self._start_lease_heartbeat(
+                run_id=run_id,
+                owner_session_id=owner_session_id,
+                stop_event=heartbeat_stop,
+            )
+            title = str(task.get("title") or "定时任务").strip()
+            instruction = str(task.get("instruction") or "").strip()
+            prompt = (
+                "这是用户预先安排并已到期的定时任务。请使用 API-A 的正常工具能力完成任务，"
+                "不要创建新的定时任务，也不要把它交给 Auto 自主链。\n\n"
+                f"任务：{title}\n指令：{instruction}"
+            )
+
+            def on_complete(success: bool, response_text: str, error: str) -> None:
+                with self._state_lock:
+                    if self._active_run_id != run_id:
+                        return
+                    self._active_run_id = ""
+                heartbeat_stop.set()
+                self._outbox.enqueue(
+                    run_id,
+                    {
+                        "owner_session_id": owner_session_id,
+                        "success": bool(success),
+                        "result_summary": response_text,
+                        "error": error,
+                    },
+                )
+                self._flush_writebacks()
+                self._release_execution_slot()
+
+            started = self.host._start_background_agent_task(
+                prompt,
+                task_id=f"scheduled_{run_id}",
+                task_label=f"定时任务 · {title}",
+                response_title="> Voidcube（定时任务）",
+                on_complete=on_complete,
+            )
+            execution_started = bool(started)
+            if not started:
+                on_complete(False, "", "API-A scheduled execution could not start")
+        finally:
+            if not execution_started and self._active_run_id:
+                if heartbeat_stop is not None:
+                    heartbeat_stop.set()
+                with self._state_lock:
+                    self._active_run_id = ""
+                self._release_execution_slot()
+            self._poll_lock.release()

@@ -149,7 +149,10 @@ html, body {
   transform: translateX(-50%);
   width: 100px; height: 100px;
   z-index: 2;
+  cursor: pointer;
 }
+.wall-clock:hover { filter: brightness(1.08); }
+.wall-clock:focus-visible { outline: 3px solid #4e9f78; outline-offset: 5px; border-radius: 50%; }
 .wc-body {
   position: absolute; inset: 0;
   border-radius: 50%;
@@ -1858,7 +1861,7 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 .bottom-trigger {
   position: fixed; left: 0; right: 0; bottom: 0;
   height: 36px;
-  z-index: 100;
+  z-index: 97;
   /* 透明不可见，仅用于 hover 检测 */
 }
 
@@ -1918,7 +1921,9 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 /* ── Dock 按钮 ── */
 .dock-btn {
   position: relative;
-  width: 48px; height: 40px;
+  width: 60px; height: 48px;
+  flex: 0 0 60px;
+  box-sizing: border-box;
   border: 0; background: transparent;
   color: rgba(244,228,188,.55);
   cursor: pointer;
@@ -1929,6 +1934,7 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
   font-family: inherit;
   padding: 0;
   z-index: 1;
+  touch-action: manipulation;
 }
 .dock-btn .db-icon {
   font-size: 18px; line-height: 1;
@@ -1967,7 +1973,7 @@ body[data-action="write"]    .av-body { background: linear-gradient(140deg, #a78
 .dock-sep {
   width: 1px; height: 22px;
   background: rgba(255,255,255,.08);
-  margin: 0 6px;
+  margin: 0;
   border-radius: 1px;
 }
 
@@ -2526,6 +2532,22 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 }
 .panel-empty .pe-icon { font-size: 32px; opacity: .5; }
 .panel-empty .pe-text { font-size: 12px; }
+.schedule-list { display: grid; gap: 8px; }
+.schedule-item {
+  padding: 10px 12px;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 6px;
+  background: rgba(255,255,255,.035);
+}
+.schedule-item-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.schedule-item-title { color: var(--text-primary); font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
+.schedule-item-status { color: #8ed8ad; font-size: 11px; white-space: nowrap; }
+.schedule-item-status.paused, .schedule-item-status.completed { color: var(--text-muted); }
+.schedule-item-status.failed { color: var(--coral); }
+.schedule-item-status.due { color: #e2b04a; }
+.schedule-item-time { margin-top: 5px; color: #e2b04a; font-size: 12px; }
+.schedule-item-instruction { margin-top: 5px; color: var(--text-secondary); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.schedule-list-meta { margin-bottom: 9px; color: var(--text-muted); font-size: 11px; }
 
 /* ── evolution -> companion 提升审计 ── */
 .promotion-audit-summary {
@@ -2898,10 +2920,9 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   .voice-controls { right: 12px; top: 50px; }
   .companion-chat { left: 60px; top: -80px; width: 280px; }
   .bottom-dock { height: 44px; padding: 0 8px; gap: 0; }
-  .dock-btn { width: 38px; height: 36px; }
+  .dock-btn { width: 42px; height: 44px; flex-basis: 42px; }
   .dock-btn .db-icon { font-size: 15px; }
   .dock-btn .db-label { font-size: 7px; }
-  .dock-sep { margin: 0 2px; }
   .dock-char-strip { padding: 0 6px; gap: 4px; }
   .dock-panel { max-height: 320px; border-radius: 10px 10px 0 0; }
   .dock-panels { padding: 0 8px 6px; }
@@ -2912,7 +2933,6 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 }
 @media (max-width: 560px) {
   .dock-char-strip { display: none; }
-  .dock-sep { margin: 0 1px; }
 }
 
 /* ── drill-down 详情抽屉 ── */
@@ -3158,6 +3178,75 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   transition: background .2s;
 }
 .drill-link:hover { background: rgba(226,176,74,.24); }
+
+/*━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  媒体播放器  ——  底部滑入条
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━*/
+.media-bar {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 9000;
+  background: linear-gradient(180deg, #1e1a16f2 0%, #15120e 100%);
+  border-top: 1px solid rgba(226,176,74,.3);
+  display: flex; align-items: stretch; gap: 0;
+  height: 52px;
+  transform: translateY(100%);
+  transition: transform .35s cubic-bezier(.4,0,.2,1);
+  font-family: inherit; color: #dad0c0;
+}
+.media-bar.visible { transform: translateY(0); }
+.media-bar .mb-info {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 14px;
+}
+.media-bar .mb-icon {
+  font-size: 18px; flex-shrink: 0; opacity: .85;
+}
+.media-bar .mb-title {
+  font-size: 12px; font-weight: 600; line-height: 1.3;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 320px;
+}
+.media-bar .mb-actions {
+  display: flex; align-items: center; gap: 2px; flex-shrink: 0;
+  padding-right: 8px;
+}
+.media-bar button {
+  background: none; border: none; color: #dad0c0;
+  font-size: 16px; padding: 8px 12px; cursor: pointer;
+  border-radius: 6px; transition: background .2s;
+  line-height: 1;
+}
+.media-bar button:hover { background: rgba(226,176,74,.18); }
+.media-bar button.mb-close { font-size: 18px; opacity: .6; }
+.media-bar button.mb-close:hover { opacity: 1; background: rgba(220,80,60,.25); }
+
+/* 展开面板 (iframe / video) */
+.media-panel {
+  position: fixed; inset: 0; z-index: 8999;
+  background: rgba(0,0,0,.88);
+  display: none; align-items: center; justify-content: center;
+}
+.media-panel.open { display: flex; }
+.media-panel iframe, .media-panel video, .media-panel audio {
+  max-width: 92vw; max-height: 86vh; border-radius: 10px;
+  border: none; background: #000;
+}
+.media-panel iframe { width: 854px; height: 480px; }
+.media-panel video { max-width: 90vw; max-height: 85vh; }
+.media-panel audio { width: 420px; height: 54px; background: #1a1714; border-radius: 8px; }
+.media-panel .mp-close {
+  position: absolute; top: 18px; right: 22px;
+  background: rgba(255,255,255,.08); border: none; color: #fff;
+  font-size: 22px; padding: 10px 14px; cursor: pointer;
+  border-radius: 8px; transition: background .2s;
+}
+.media-panel .mp-close:hover { background: rgba(220,60,50,.7); }
+
+@media (max-width: 640px) {
+  .media-bar .mb-title { max-width: 160px; }
+  .media-panel iframe { width: 100vw; height: 56vw; }
+  .media-panel audio { width: 88vw; }
+}
 </style>
 </head>
 <body data-scene="idle" data-action="rest" data-has-errors="false" data-exec-window="true">
@@ -3168,7 +3257,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
     <div class="wall"></div>
     <div class="baseboard"></div>
 
-    <div class="wall-clock" aria-hidden="true">
+    <div class="wall-clock" id="scheduleClock" role="button" tabindex="0" title="查看定时任务" aria-label="查看定时任务">
       <div class="wc-body">
         <span class="wc-tick major" style="transform: rotate(0deg);"></span>
         <span class="wc-tick major" style="transform: rotate(90deg);"></span>
@@ -3535,6 +3624,16 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
           </form>
         </div>
       </div>
+
+      <div class="dock-panel" id="panelSchedules">
+        <div class="panel-header">
+          <div class="panel-title"><span class="pt-icon">◷</span>定时任务</div>
+          <button class="panel-close" data-panel="schedules" title="关闭">×</button>
+        </div>
+        <div class="panel-body" id="panelSchedulesBody">
+          <div class="panel-empty"><div class="pe-text">正在读取任务列表...</div></div>
+        </div>
+      </div>
     </div>
 
     <!-- 底部 Dock 栏 -->
@@ -3603,6 +3702,25 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 
   </main>
 </div>
+
+<!-- ── 媒体播放器 ── -->
+<div class="media-bar" id="mediaBar">
+  <div class="mb-info">
+    <span class="mb-icon" id="mbIcon">🎵</span>
+    <span class="mb-title" id="mbTitle"></span>
+  </div>
+  <div class="mb-actions">
+    <button id="mbPlayToggle" title="播放/暂停">⏯</button>
+    <button id="mbExpand" title="展开播放窗口">⛶</button>
+    <button class="mb-close" id="mbClose" title="关闭">✕</button>
+  </div>
+</div>
+
+<div class="media-panel" id="mediaPanel">
+  <button class="mp-close" id="mpClose" title="关闭">✕</button>
+  <div id="mpContent"></div>
+</div>
+
 <script>
 /*━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   VoidCube 监督者小屋  v5  ——  底部菜单系统
@@ -3633,6 +3751,7 @@ const els = {
   wcHour: $('#wcHour'),
   wcMinute: $('#wcMinute'),
   wcSecond: $('#wcSecond'),
+  scheduleClock: $('#scheduleClock'),
   /* bottom dock */
   dock: $('#bottomDock'),
   trigger: $('#bottomTrigger'),
@@ -3660,6 +3779,7 @@ const els = {
   panelObservationBody: $('#panelObservationBody'),
   panelStatsBody: $('#panelStatsBody'),
   panelPromotionsBody: $('#panelPromotionsBody'),
+  panelSchedulesBody: $('#panelSchedulesBody'),
   reminderPolicyForm: $('#reminderPolicyForm'),
   reminderPolicyEnabled: $('#reminderPolicyEnabled'),
   reminderPolicyTts: $('#reminderPolicyTts'),
@@ -3690,6 +3810,18 @@ if (els.voiceFingerprintToggle) {
 if (els.voiceMicToggle) els.voiceMicToggle.addEventListener('click', () => toggleVoice());
 if (els.voiceListen) els.voiceListen.addEventListener('click', () => toggleContinuousVoice());
 if (els.voiceTalk) els.voiceTalk.addEventListener('click', () => runVoiceSession());
+if (els.scheduleClock) {
+  els.scheduleClock.addEventListener('click', event => {
+    event.stopPropagation();
+    openPanel('schedules');
+  });
+  els.scheduleClock.addEventListener('keydown', event => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      openPanel('schedules');
+    }
+  });
+}
 if (els.reminderPolicyForm) {
   els.reminderPolicyForm.addEventListener('submit', event => {
     event.preventDefault();
@@ -3818,10 +3950,14 @@ if (els.dock) {
 }
 
 /* ── 面板切换 ── */
+function dockPanelFor(name) {
+  const closeButton = document.querySelector('.panel-close[data-panel="' + String(name) + '"]');
+  return closeButton ? closeButton.closest('.dock-panel') : null;
+}
+
 function openPanel(name) {
   if (panelOpen && panelOpen !== name) closePanel(panelOpen);
-  const panelId = 'panel' + name.charAt(0).toUpperCase() + name.slice(1).replace(/input$/i, 'Input');
-  const panel = document.getElementById(panelId);
+  const panel = dockPanelFor(name);
   if (!panel) return;
   panel.classList.add('open');
   panelOpen = name;
@@ -3838,6 +3974,7 @@ function openPanel(name) {
     if (name === 'observation') renderObservationPanel(lastState);
     if (name === 'stats') renderStatsPanel(lastState);
     if (name === 'promotions') renderEvolutionPromotionAudit();
+    if (name === 'schedules') loadScheduledTasks();
   }
   if (name === 'promotions') {
     loadEvolutionPromotionCandidates();
@@ -3845,9 +3982,70 @@ function openPanel(name) {
   }
   if (name === 'settings') loadReminderPolicy();
 }
+
+let scheduledTaskSnapshot = null;
+let scheduledTaskLoading = false;
+
+function scheduledTaskTime(task) {
+  const next = String(task.next_run_at || '').trim();
+  if (!next) {
+    if (task.status === 'completed') return '已结束';
+    if (task.status === 'failed') return '执行失败，修改后可重新安排';
+    return '尚未安排下次执行';
+  }
+  const parsed = new Date(next);
+  if (Number.isNaN(parsed.getTime())) return next;
+  return parsed.toLocaleString([], {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit',
+  });
+}
+
+function renderScheduledTasks() {
+  if (!els.panelSchedulesBody) return;
+  if (!scheduledTaskSnapshot) {
+    els.panelSchedulesBody.innerHTML = '<div class="panel-empty"><div class="pe-text">任务列表暂时不可用</div></div>';
+    return;
+  }
+  const tasks = Array.isArray(scheduledTaskSnapshot.tasks) ? scheduledTaskSnapshot.tasks : [];
+  if (!tasks.length) {
+    els.panelSchedulesBody.innerHTML = '<div class="panel-empty"><div class="pe-icon">◷</div><div class="pe-text">还没有定时任务</div></div>';
+    return;
+  }
+  const statusLabels = {active:'已启用', paused:'已暂停', completed:'已完成', failed:'执行失败'};
+  const rows = tasks.map(task => {
+    const status = String(task.status || 'active');
+    const nextAt = task.next_run_at ? new Date(task.next_run_at).getTime() : NaN;
+    const due = status === 'active' && Number.isFinite(nextAt) && nextAt <= Date.now();
+    const source = task.created_by === 'api_b' ? '星子' : '主 CLI';
+    return '<div class="schedule-item">' +
+      '<div class="schedule-item-head"><div class="schedule-item-title">' + esc(task.title || '未命名任务') + '</div>' +
+      '<div class="schedule-item-status ' + esc(due ? 'due' : status) + '">' + esc(due ? '等待主 CLI' : (statusLabels[status] || status)) + '</div></div>' +
+      '<div class="schedule-item-time">' + esc(scheduledTaskTime(task)) + ' · ' + esc(source) + '</div>' +
+      '<div class="schedule-item-instruction">' + esc(String(task.instruction || '').substring(0, 260)) + '</div>' +
+      '</div>';
+  }).join('');
+  els.panelSchedulesBody.innerHTML =
+    '<div class="schedule-list-meta">共 ' + esc(tasks.length) + ' 项 · 到期等待 ' + esc(scheduledTaskSnapshot.due_count || 0) + '</div>' +
+    '<div class="schedule-list">' + rows + '</div>';
+}
+
+async function loadScheduledTasks() {
+  if (scheduledTaskLoading) return;
+  scheduledTaskLoading = true;
+  try {
+    const response = await fetch('/scheduled-tasks?include_completed=true', {cache:'no-store'});
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    scheduledTaskSnapshot = await response.json();
+  } catch (error) {
+    scheduledTaskSnapshot = null;
+  } finally {
+    scheduledTaskLoading = false;
+    renderScheduledTasks();
+  }
+}
 function closePanel(name) {
-  const panelId = 'panel' + name.charAt(0).toUpperCase() + name.slice(1).replace(/input$/i, 'Input');
-  const panel = document.getElementById(panelId);
+  const panel = dockPanelFor(name);
   if (!panel) return;
   panel.classList.remove('open');
   if (panelOpen === name) {
@@ -3884,8 +4082,7 @@ document.addEventListener('click', e => {
 // 点击面板外区域关闭
 document.addEventListener('click', e => {
   if (!panelOpen) return;
-  const panelId = 'panel' + panelOpen.charAt(0).toUpperCase() + panelOpen.slice(1).replace(/input$/i, 'Input');
-  const panel = document.getElementById(panelId);
+  const panel = dockPanelFor(panelOpen);
   if (!panel) return;
   if (!panel.contains(e.target) && !e.target.closest('.bottom-dock')) {
     closePanel(panelOpen);
@@ -6240,6 +6437,7 @@ function applyState(state) {
   if (panelOpen === 'observation') renderObservationPanel(state);
   if (panelOpen === 'stats') renderStatsPanel(state);
   if (panelOpen === 'promotions') renderEvolutionPromotionAudit();
+  if (panelOpen === 'schedules') loadScheduledTasks();
 
   // 抽屉打开时随状态刷新
   if (drawerOpen) renderDrawer();
@@ -6332,6 +6530,164 @@ function syncClock() {
 syncClock();
 setInterval(syncClock, 1000);
 
+/* ── 媒体播放器 ── */
+const mediaBar = document.getElementById('mediaBar');
+const mediaPanel = document.getElementById('mediaPanel');
+const mpContent = document.getElementById('mpContent');
+const mbTitle = document.getElementById('mbTitle');
+const mbIcon = document.getElementById('mbIcon');
+let currentMedia = null;
+let embeddedPlayer = null;  // YouTube iframe or <video>/<audio> element
+
+function mediaTypeIcon(t) {
+  const map = { youtube: '▶', bilibili: '▶', video: '🎬', audio: '🎵' };
+  return map[t] || '🎵';
+}
+
+function classifyMedia(url) {
+  if (!url) return 'auto';
+  const u = url.toLowerCase();
+  if (u.includes('youtube.com') || u.includes('youtu.be')) return 'youtube';
+  if (u.includes('bilibili.com')) return 'bilibili';
+  if (/\.(mp3|m4a|ogg|wav|flac|aac|opus)(\?|$)/.test(u)) return 'audio';
+  if (/\.(mp4|webm|mkv|mov|avi)(\?|$)/.test(u)) return 'video';
+  return 'youtube'; // 未知 URL 默认尝试 iframe
+}
+
+function youtubeEmbedId(url) {
+  const m = url.match(/(?:v=|\/)([a-zA-Z0-9_-]{11})(?:[&?#]|$)/);
+  return m ? m[1] : null;
+}
+
+function bilibiliEmbedUrl(url) {
+  const m = url.match(/\/video\/(BV[a-zA-Z0-9]+)/);
+  if (m) return 'https://player.bilibili.com/player.html?bvid=' + m[1] + '&autoplay=1';
+  const m2 = url.match(/\/video\/av(\d+)/);
+  if (m2) return 'https://player.bilibili.com/player.html?aid=' + m2[1] + '&autoplay=1';
+  return url;
+}
+
+function showMediaBar(media) {
+  currentMedia = media;
+  const type = classifyMedia(media.url);
+  mbIcon.textContent = mediaTypeIcon(type);
+  mbTitle.textContent = media.title || media.url;
+  mediaBar.classList.add('visible');
+}
+
+function hideMediaBar() {
+  mediaBar.classList.remove('visible');
+  closeMediaPanel();
+  currentMedia = null;
+  embeddedPlayer = null;
+}
+
+function closeMediaPanel() {
+  mediaPanel.classList.remove('open');
+  mpContent.innerHTML = '';
+  if (embeddedPlayer) {
+    try { embeddedPlayer.pause(); } catch(e) {}
+    embeddedPlayer = null;
+  }
+}
+
+function openMediaPanel() {
+  if (!currentMedia) return;
+  const type = classifyMedia(currentMedia.url);
+  mpContent.innerHTML = '';
+  embeddedPlayer = null;
+
+  if (type === 'youtube') {
+    const vid = youtubeEmbedId(currentMedia.url);
+    if (vid) {
+      const iframe = document.createElement('iframe');
+      iframe.src = 'https://www.youtube.com/embed/' + vid + '?autoplay=1';
+      iframe.allow = 'autoplay; encrypted-media; picture-in-picture';
+      iframe.allowFullscreen = true;
+      iframe.style.width = '854px'; iframe.style.height = '480px';
+      mpContent.appendChild(iframe);
+      embeddedPlayer = iframe;
+    }
+  } else if (type === 'bilibili') {
+    const iframe = document.createElement('iframe');
+    iframe.src = bilibiliEmbedUrl(currentMedia.url);
+    iframe.allow = 'autoplay';
+    iframe.allowFullscreen = true;
+    iframe.style.width = '854px'; iframe.style.height = '480px';
+    mpContent.appendChild(iframe);
+    embeddedPlayer = iframe;
+  } else if (type === 'video') {
+    const video = document.createElement('video');
+    video.src = currentMedia.url;
+    video.controls = true;
+    video.autoplay = true;
+    video.style.maxWidth = '90vw'; video.style.maxHeight = '85vh';
+    mpContent.appendChild(video);
+    embeddedPlayer = video;
+  } else if (type === 'audio') {
+    const audio = document.createElement('audio');
+    audio.src = currentMedia.url;
+    audio.controls = true;
+    audio.autoplay = true;
+    audio.style.width = '420px';
+    mpContent.appendChild(audio);
+    embeddedPlayer = audio;
+  }
+
+  mediaPanel.classList.add('open');
+}
+
+function togglePlayPause() {
+  if (!embeddedPlayer) { openMediaPanel(); return; }
+  try {
+    if (embeddedPlayer.tagName === 'IFRAME') {
+      // YouTube/B站 iframe: 通过 postMessage 控制
+      const cmd = embeddedPlayer.paused !== false ? 'playVideo' : 'pauseVideo';
+      embeddedPlayer.contentWindow && embeddedPlayer.contentWindow.postMessage(
+        '{"event":"command","func":"' + cmd + '","args":""}', '*'
+      );
+    } else if (embeddedPlayer.paused) {
+      embeddedPlayer.play();
+    } else {
+      embeddedPlayer.pause();
+    }
+  } catch(e) {}
+}
+
+document.getElementById('mbPlayToggle').addEventListener('click', togglePlayPause);
+document.getElementById('mbExpand').addEventListener('click', function() {
+  mediaPanel.classList.contains('open') ? closeMediaPanel() : openMediaPanel();
+});
+document.getElementById('mbClose').addEventListener('click', hideMediaBar);
+document.getElementById('mpClose').addEventListener('click', closeMediaPanel);
+
+mediaPanel.addEventListener('click', function(e) {
+  if (e.target === mediaPanel) closeMediaPanel();
+});
+
+/* ── SSE: 媒体事件 ── */
+if ('EventSource' in window) {
+  const mediaES = new EventSource('/ui/media-events');
+  mediaES.addEventListener('play', function(ev) {
+    const media = JSON.parse(ev.data);
+    if (media && media.url) {
+      showMediaBar(media);
+      if (media.auto_play !== false) openMediaPanel();
+    }
+  });
+}
+
+/* ── 键盘快捷键 ── */
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && mediaPanel.classList.contains('open')) {
+    closeMediaPanel();
+  }
+  if (e.key === ' ' && currentMedia && e.target === document.body) {
+    e.preventDefault();
+    togglePlayPause();
+  }
+});
+
 /* ── 启动缩放 ── */
 updateRoomScale();
 window.addEventListener('resize', updateRoomScale);
@@ -6360,6 +6716,35 @@ class SupervisorUIMixin:
         )
         self._supervisor_ui_observation_input_cache: Dict[str, Any] = {}
         self._supervisor_ui_memory_stats_cache: Dict[str, Any] = {}
+        # ── 媒体播放队列 ──
+        self._media_queue: Deque[Dict[str, Any]] = deque(maxlen=20)
+        self._current_media: Optional[Dict[str, Any]] = None
+
+    def enqueue_media(self, media: Dict[str, Any]) -> None:
+        """将媒体项加入播放队列，Web UI 自动弹出播放器。
+
+        ``media`` 字段：
+        - url (str, 必填): 媒体 URL（YouTube/B站/直链）
+        - title (str): 标题，显示在播放器上
+        - type (str): "youtube" | "bilibili" | "audio" | "video" | "auto"
+        - auto_play (bool): 是否自动播放，默认 True
+        """
+        media.setdefault("auto_play", True)
+        media.setdefault("type", "auto")
+        media.setdefault("title", media.get("url", "未知"))
+        media["_enqueued_at"] = datetime.now(timezone.utc).isoformat()
+        self._media_queue.append(media)
+        if self._current_media is None:
+            self._current_media = media
+        logger.info("Media enqueued: %s (%s)", media.get("title"), media.get("type"))
+
+    def _pop_next_media(self) -> Optional[Dict[str, Any]]:
+        """弹出队列中的下一个媒体项。"""
+        try:
+            self._current_media = self._media_queue.popleft()
+        except IndexError:
+            self._current_media = None
+        return self._current_media
 
     def _record_supervisor_ui_activity(
         self,
@@ -6844,6 +7229,67 @@ class SupervisorUIMixin:
                 "X-Accel-Buffering": "no",
             },
         )
+
+    async def get_media_events(self, request: Request) -> StreamingResponse:
+        """SSE 端点：快速推送媒体播放事件到 Web UI。
+
+        当队列中有新媒体项时，立即推送给前端播放器。
+        轮询间隔 500ms，兼顾响应速度与资源消耗。
+        """
+        _last_url: Optional[str] = None
+
+        async def event_stream():
+            nonlocal _last_url
+            while True:
+                if await request.is_disconnected():
+                    break
+                current = self._current_media
+                if current:
+                    current_url = current.get("url", "")
+                    if current_url != _last_url:
+                        _last_url = current_url
+                        yield self._format_supervisor_ui_event(
+                            "play",
+                            {
+                                "url": current.get("url", ""),
+                                "title": current.get("title", ""),
+                                "type": current.get("type", "auto"),
+                                "auto_play": current.get("auto_play", True),
+                                "enqueued_at": current.get("_enqueued_at", ""),
+                                "queue_remaining": len(self._media_queue),
+                            },
+                        )
+                await asyncio.sleep(0.5)
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    async def enqueue_media_endpoint(self, request: Request) -> Dict[str, Any]:
+        """HTTP 端点：Agent 通过网关调用此接口播放媒体。
+
+        POST /ui/media/enqueue
+        Body: {"url": "...", "title": "...", "type": "youtube|audio|video|auto"}
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="请求体必须是 JSON")
+        url = (body.get("url") or "").strip()
+        if not url:
+            raise HTTPException(status_code=400, detail="缺少 url 字段")
+        self.enqueue_media({
+            "url": url,
+            "title": (body.get("title") or "").strip() or url,
+            "type": (body.get("type") or "auto").strip(),
+            "auto_play": body.get("auto_play", True),
+        })
+        return {"status": "ok", "queued": len(self._media_queue)}
 
     def _format_supervisor_ui_event(self, event_name: str, payload: Dict[str, Any]) -> str:
         data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -7862,6 +8308,10 @@ class SupervisorUIMixin:
             "timeline": observation_timeline[:10],
             "lm_input": lm_input,
             "cognition": cognition,
+            "media": {
+                "current": self._current_media,
+                "queue_length": len(self._media_queue),
+            },
         }
 
     def _is_api_a_lane_family_task(self, task: Dict[str, Any]) -> bool:

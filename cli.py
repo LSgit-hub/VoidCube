@@ -57,7 +57,7 @@ if sys.platform == 'win32':
 from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Any, Optional, TYPE_CHECKING
+from typing import List, Dict, Any, Optional, Callable, TYPE_CHECKING
 
 from agent.error_classifier import summarize_api_error
 from VoidCube_cli.chat_render_state import CliStreamRenderState
@@ -113,6 +113,17 @@ from VoidCube_cli.autonomous_status_host import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _background_completion_outcome(result: Optional[Dict[str, Any]]) -> tuple[bool, str, str]:
+    response = str((result or {}).get("final_response") or "")
+    error = str((result or {}).get("error") or "").strip()
+    if result is None and not error:
+        error = "API-A returned no result"
+    if not response and error:
+        response = f"Error: {error}"
+    return not bool(error), response, error
+
 
 # Suppress startup messages for clean CLI experience
 os.environ["VOIDCUBE_QUIET"] = "1"  # Our own modules
@@ -1222,6 +1233,10 @@ class VoidcubeCLI:
         self._autonomous_component_host = None
         self._autonomous_component_thread = None
         self._autonomous_component_stop = threading.Event()
+        self._api_a_execution_gate = threading.Lock()
+        self._scheduled_execution_active = False
+        from VoidCube_cli.scheduled_executor import ScheduledTaskExecutorRuntime
+        self._scheduled_executor_runtime = ScheduledTaskExecutorRuntime(self)
         _initialize_autonomous_status_caches_view(self)
 
     def _quiet_autonomous_component_cprint(self, *args: Any, **kwargs: Any) -> None:
@@ -1324,7 +1339,10 @@ class VoidcubeCLI:
                         monotonic_time=_time.monotonic,
                     )
 
-                    if not getattr(component_host, "_agent_running", False):
+                    if (
+                        not getattr(self, "_scheduled_execution_active", False)
+                        and not getattr(component_host, "_agent_running", False)
+                    ):
                         runtime.poll_workflow()
                         try:
                             pending = component_host._pending_input.get_nowait()
@@ -5344,21 +5362,37 @@ class VoidcubeCLI:
             return
 
         prompt = parts[1].strip()
+        self._start_background_agent_task(prompt)
+
+    def _start_background_agent_task(
+        self,
+        prompt: str,
+        *,
+        task_id: Optional[str] = None,
+        task_label: str = "Background task",
+        response_title: Optional[str] = None,
+        on_complete: Optional[Callable[[bool, str, str], None]] = None,
+    ) -> bool:
+        """Run one isolated API-A session and project its result to the main CLI."""
         self._background_task_counter += 1
         task_num = self._background_task_counter
-        task_id = f"bg_{datetime.now().strftime('%H%M%S')}_{uuid.uuid4().hex[:6]}"
+        task_id = task_id or f"bg_{datetime.now().strftime('%H%M%S')}_{uuid.uuid4().hex[:6]}"
 
         # Make sure we have valid credentials
         if not self._ensure_runtime_credentials():
             _cprint("  (>_<) Cannot start background task: no valid credentials.")
-            return
+            return False
 
-        _cprint(f"  🔄 Background task #{task_num} started: \"{prompt[:60]}{'...' if len(prompt) > 60 else ''}\"")
+        _cprint(f"  🔄 {task_label} #{task_num} started: \"{prompt[:60]}{'...' if len(prompt) > 60 else ''}\"")
         _cprint(f"  Task ID: {task_id}")
         _cprint("  You can continue chatting — results will appear when done.\n")
         self._background_task_info[task_id] = {
             "task_num": task_num,
-            "prompt_preview": prompt[:60] + ("..." if len(prompt) > 60 else ""),
+            "prompt_preview": (
+                task_label
+                if task_label != "Background task"
+                else prompt[:60] + ("..." if len(prompt) > 60 else "")
+            ),
             "started_at": time.time(),
         }
 
@@ -5408,9 +5442,7 @@ class VoidcubeCLI:
                     task_id=task_id,
                 )
 
-                response = result.get("final_response", "") if result else ""
-                if not response and result and result.get("error"):
-                    response = f"Error: {result['error']}"
+                completion_success, response, completion_error = _background_completion_outcome(result)
 
                 # Display result in the CLI (thread-safe via patch_stdout).
                 # Force a TUI refresh first so spinner/status bar don't overlap
@@ -5421,7 +5453,7 @@ class VoidcubeCLI:
                     _tmod.sleep(0.05)  # brief pause for refresh
                 print()
                 ChatConsole().print(f"[#34D399]{'~' * 40}[/]")
-                _cprint(f"  ✅ Background task #{task_num} complete")
+                _cprint(f"  ✅ {task_label} #{task_num} complete")
                 _cprint(f"  Prompt: \"{prompt[:60]}{'...' if len(prompt) > 60 else ''}\"")
                 ChatConsole().print(f"[#34D399]{'~' * 40}[/]")
                 if response:
@@ -5439,7 +5471,7 @@ class VoidcubeCLI:
                     _chat_console = ChatConsole()
                     _chat_console.print(Panel(
                         _rich_text_from_ansi(response),
-                        title=f"[{_resp_color} bold]{label} (background #{task_num})[/]",
+                        title=f"[{_resp_color} bold]{response_title or (label + f' (background #{task_num})')}[/]",
                         title_align="left",
                         border_style=_resp_color,
                         style=_resp_text,
@@ -5453,6 +5485,11 @@ class VoidcubeCLI:
                 if self.bell_on_complete:
                     sys.stdout.write("\a")
                     sys.stdout.flush()
+                if on_complete is not None:
+                    try:
+                        on_complete(completion_success, response, completion_error)
+                    except Exception:
+                        logger.debug("Background completion callback failed", exc_info=True)
 
             except Exception as e:
                 # Same TUI refresh pattern as success path (#2718)
@@ -5461,7 +5498,12 @@ class VoidcubeCLI:
                     import time as _tmod
                     _tmod.sleep(0.05)
                 print()
-                _cprint(f"  ❌ Background task #{task_num} failed: {e}")
+                _cprint(f"  ❌ {task_label} #{task_num} failed: {e}")
+                if on_complete is not None:
+                    try:
+                        on_complete(False, "", str(e))
+                    except Exception:
+                        logger.debug("Background completion callback failed", exc_info=True)
             finally:
                 self._background_tasks.pop(task_id, None)
                 self._background_task_info.pop(task_id, None)
@@ -5474,6 +5516,7 @@ class VoidcubeCLI:
         thread = threading.Thread(target=run_background, daemon=True, name=f"bg-task-{task_id}")
         self._background_tasks[task_id] = thread
         thread.start()
+        return True
 
     def _render_background_tasks_summary(self) -> str:
         """Return a compact summary of CLI background threads."""
@@ -9655,11 +9698,30 @@ class VoidcubeCLI:
 
         spinner_thread = threading.Thread(target=spinner_loop, daemon=True)
         spinner_thread.start()
+
+        def scheduled_task_loop():
+            while not self._should_exit:
+                try:
+                    self._scheduled_executor_runtime.poll_workflow()
+                except Exception:
+                    logger.debug("Scheduled task poll failed", exc_info=True)
+                time.sleep(1.0)
+
+        scheduled_task_thread = threading.Thread(
+            target=scheduled_task_loop,
+            daemon=True,
+            name="scheduled-task-executor",
+        )
+        scheduled_task_thread.start()
         
         # Background thread to process inputs and run agent
         def process_loop():
             while not self._should_exit:
                 try:
+                    execution_gate = getattr(self, "_api_a_execution_gate", None)
+                    if execution_gate is not None and execution_gate.locked():
+                        time.sleep(0.1)
+                        continue
                     # Check for pending input with timeout
                     try:
                         user_input = self._pending_input.get(timeout=0.1)
@@ -9703,7 +9765,15 @@ class VoidcubeCLI:
                                 pass
                         continue
                     
-                    self._execute_pending_input(user_input, app=app)
+                    if execution_gate is not None and not execution_gate.acquire(blocking=False):
+                        self._pending_input.put(user_input)
+                        time.sleep(0.1)
+                        continue
+                    try:
+                        self._execute_pending_input(user_input, app=app)
+                    finally:
+                        if execution_gate is not None:
+                            execution_gate.release()
 
                 except Exception as e:
                     print(f"Error: {e}")

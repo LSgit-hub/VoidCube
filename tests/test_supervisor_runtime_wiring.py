@@ -407,6 +407,24 @@ def test_supervisor_room_frontend_uses_chain_panel_contract():
     assert 'id="panelChainBody"' in UI_HTML
     assert 'data-panel="chain"' in UI_HTML
     assert 'renderChainPanel' in UI_HTML
+    assert 'id="scheduleClock"' in UI_HTML
+    assert 'id="panelSchedules"' in UI_HTML
+    assert 'id="panelSchedulesBody"' in UI_HTML
+    assert "els.scheduleClock.addEventListener('click', event => {" in UI_HTML
+    assert "event.stopPropagation();\n    openPanel('schedules');" in UI_HTML
+    assert "width: 60px; height: 48px;" in UI_HTML
+    assert "flex: 0 0 60px;" in UI_HTML
+    assert ".dock-btn { width: 42px; height: 44px; flex-basis: 42px; }" in UI_HTML
+    assert ".bottom-trigger {\n  position: fixed; left: 0; right: 0; bottom: 0;\n  height: 36px;\n  z-index: 97;" in UI_HTML
+    assert "function dockPanelFor(name)" in UI_HTML
+    assert "const panel = dockPanelFor(name);" in UI_HTML
+    assert "const panel = dockPanelFor(panelOpen);" in UI_HTML
+    assert "name.charAt(0).toUpperCase()" not in UI_HTML
+    assert "failed:'执行失败'" in UI_HTML
+    assert UI_HTML.index('id="mediaBar"') < UI_HTML.index("<script>")
+    assert 'data-panel="schedules"' in UI_HTML
+    assert "fetch('/scheduled-tasks?include_completed=true'" in UI_HTML
+    assert "openPanel('schedules')" in UI_HTML
     assert 'chain-stage-rail' in UI_HTML
     assert '判断参考' in UI_HTML
     assert '当前判断' in UI_HTML

@@ -27,6 +27,7 @@ from systems.governance_runtime_migration import consolidate_governance_event_lo
 from systems.probe import ProbeExecutor, ProbeRunner
 from systems.supervisor.endogenous_drive import EndogenousDriveEngine
 from systems.supervisor.autonomous_chain_store import AutonomousChainStore
+from systems.supervisor.scheduled_tasks import ScheduledTaskStore
 from systems.supervisor.runtime_migration import migrate_supervisor_runtime
 
 
@@ -105,6 +106,19 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
     supervisor._autonomous_chain_store = AutonomousChainStore(
         supervisor.config.autonomous_chain_store_path
         or (runtime_root / "autonomous_chain_store.json")
+    )
+    scheduled_store_path = (
+        Path(supervisor.config.scheduled_task_store_path)
+        if supervisor.config.scheduled_task_store_path
+        else runtime_root / "scheduled_tasks.db"
+    )
+    supervisor._scheduled_task_store = ScheduledTaskStore(
+        scheduled_store_path,
+        legacy_json_path=(
+            runtime_root / "scheduled_tasks.json"
+            if not supervisor.config.scheduled_task_store_path
+            else None
+        ),
     )
     supervisor._endogenous_drive_history_path = runtime_root / "endogenous_drive_history.json"
     supervisor._endogenous_drive_engine = EndogenousDriveEngine(config=supervisor.config)

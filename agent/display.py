@@ -192,6 +192,7 @@ def build_tool_preview(tool_name: str, args: dict, max_len: int | None = None) -
         "image_generate": "prompt", "text_to_speech": "text",
         "vision_analyze": "question", "mixture_of_agents": "user_prompt",
         "skill_view": "name", "skills_list": "category",
+        "scheduled_task": "action",
         "execute_code": "code", "delegate_task": "goal",
         "clarify": "question", "skill_manage": "name",
     }
@@ -944,6 +945,16 @@ def get_cute_tool_message(
         return _wrap(f"┊ 🧠 {_pad('深度推理', 8)}{_trunc(args.get('user_prompt', ''), 30)}  {dur}")
     if tool_name == "send_message":
         return _wrap(f"┊ 📨 {_pad('发送', 8)}{args.get('target', '?')}: \"{_trunc(args.get('message', ''), 25)}\"  {dur}")
+    if tool_name == "scheduled_task":
+        action_labels = {
+            "list": "查看", "create": "创建", "update": "修改",
+            "pause": "暂停", "resume": "恢复", "delete": "删除",
+        }
+        action = str(args.get("action") or "管理")
+        label = args.get("title") or args.get("schedule_id") or "任务列表"
+        return _wrap(
+            f"┊ ⏱ {_pad('定时任务', 8)}{action_labels.get(action, action)} {_trunc(str(label), 24)}  {dur}"
+        )
     if tool_name.startswith("rl_"):
         rl = {
             "rl_list_environments": "环境列表", "rl_select_environment": f"选择 {args.get('name', '')}",

@@ -341,6 +341,7 @@ class SupervisorConfig(BaseModel):
     ui_path: str = "/ui"
     soul_store_path: str = Field(default_factory=_default_supervisor_runtime_root)
     autonomous_chain_store_path: Optional[str] = None
+    scheduled_task_store_path: Optional[str] = None
 
 
 

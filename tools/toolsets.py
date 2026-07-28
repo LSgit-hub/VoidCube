@@ -56,6 +56,12 @@ TOOLSETS = {
         "tools": ["session_search"],
         "includes": []
     },
+
+    "scheduling": {
+        "description": "Manage scheduled tasks executed later by the main CLI API-A agent",
+        "tools": ["scheduled_task"],
+        "includes": [],
+    },
     
     "code_execution": {
         "description": "Execute Python code in a sandboxed environment",
@@ -101,13 +107,13 @@ TOOLSETS = {
     "voidcube": {
         "description": "Core tools for server management",
         "tools": [],
-        "includes": ["web", "browser", "terminal", "file", "skills", "code_execution", "ops"]
+        "includes": ["web", "browser", "terminal", "file", "skills", "scheduling", "code_execution", "ops"]
     },
 
     "voidcube-cli": {
         "description": "Core tools for server management (alias)",
         "tools": [],
-        "includes": ["web", "browser", "terminal", "file", "skills", "code_execution", "ops"]
+        "includes": ["web", "browser", "terminal", "file", "skills", "scheduling", "code_execution", "ops"]
     },
     
     "mini": {

@@ -30,6 +30,7 @@ from systems.supervisor.runtime_assemblers import (
     assemble_supervisor_execution_runtime,
     assemble_supervisor_runtime_state,
 )
+from systems.supervisor.scheduled_tasks import ScheduledTaskRuntimeMixin
 from systems.supervisor.service_runtime import ServiceRuntimeMixin
 from systems.supervisor.trace_runtime import TraceRuntimeMixin
 from systems.supervisor.ui_runtime import SupervisorUIMixin
@@ -103,6 +104,7 @@ class CompanionReminderPolicyRequest(BaseModel):
 
 class Supervisor(
     PlanningRuntimeMixin,
+    ScheduledTaskRuntimeMixin,
     ServiceRuntimeMixin,
     TraceRuntimeMixin,
     SupervisorUIMixin,
@@ -172,6 +174,16 @@ class Supervisor(
                 "/ui/voice-levels",
                 self.get_voice_level_events,
                 methods=["GET"],
+            )
+            self.app.add_api_route(
+                "/ui/media-events",
+                self.get_media_events,
+                methods=["GET"],
+            )
+            self.app.add_api_route(
+                "/ui/media/enqueue",
+                self.enqueue_media_endpoint,
+                methods=["POST"],
             )
             self.app.add_api_route(
                 "/ui/identity/archive",
@@ -267,6 +279,24 @@ class Supervisor(
         self.app.add_api_route("/autonomous-chain-gate/status", self.get_autonomous_chain_gate_status, methods=["GET"])
         self.app.add_api_route("/stellar-mode/status", self.get_stellar_mode_status, methods=["GET"])
         self.app.add_api_route("/companion/message", self.companion_message, methods=["POST"])
+        self.app.add_api_route("/scheduled-tasks", self.list_scheduled_tasks, methods=["GET"])
+        self.app.add_api_route("/scheduled-tasks", self.create_scheduled_task, methods=["POST"])
+        self.app.add_api_route("/scheduled-tasks/claim", self.claim_scheduled_task, methods=["POST"])
+        self.app.add_api_route("/scheduled-tasks/{schedule_id}", self.get_scheduled_task, methods=["GET"])
+        self.app.add_api_route("/scheduled-tasks/{schedule_id}", self.update_scheduled_task, methods=["PUT"])
+        self.app.add_api_route("/scheduled-tasks/{schedule_id}", self.delete_scheduled_task, methods=["DELETE"])
+        self.app.add_api_route("/scheduled-tasks/{schedule_id}/pause", self.pause_scheduled_task, methods=["POST"])
+        self.app.add_api_route("/scheduled-tasks/{schedule_id}/resume", self.resume_scheduled_task, methods=["POST"])
+        self.app.add_api_route(
+            "/scheduled-task-runs/{run_id}/renew",
+            self.renew_scheduled_task_run,
+            methods=["POST"],
+        )
+        self.app.add_api_route(
+            "/scheduled-task-runs/{run_id}/finish",
+            self.finish_scheduled_task_run,
+            methods=["POST"],
+        )
         self.app.add_api_route(
             "/companion/reminder-policy",
             self.get_companion_reminder_policy,
@@ -568,5 +598,3 @@ if __name__ == "__main__":
     
     import asyncio
     asyncio.run(supervisor.start())
-
-
