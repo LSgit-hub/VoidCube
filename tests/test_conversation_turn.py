@@ -21,7 +21,28 @@ def test_turn_state_owns_iteration_and_completion_lifecycle():
     state.final_response = "done"
 
     assert not state.can_continue(max_iterations=2, iteration_budget=budget)
-    assert state.completed(max_iterations=2)
+    assert state.completed()
+
+
+def test_turn_state_completes_on_last_allowed_successful_iteration():
+    budget = IterationBudget(1)
+    state = ConversationTurnState()
+
+    assert state.begin_iteration(budget)
+    state.final_response = "done"
+    state.exit_reason = "text_response(finish_reason=stop)"
+
+    assert state.completed()
+
+
+def test_turn_state_does_not_complete_iteration_limit_summary():
+    state = ConversationTurnState(
+        api_call_count=1,
+        final_response="partial summary",
+        exit_reason="max_iterations_reached(1/1)",
+    )
+
+    assert not state.completed()
 
 
 def test_turn_state_reports_budget_exhaustion_without_cross_turn_flags():

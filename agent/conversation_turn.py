@@ -49,11 +49,11 @@ class ConversationTurnState:
             or iteration_budget.remaining <= 0
         )
 
-    def completed(self, *, max_iterations: int) -> bool:
+    def completed(self) -> bool:
         return (
             self.final_response is not None
-            and self.api_call_count < max_iterations
             and not self.interrupted
+            and not self.exit_reason.startswith("max_iterations_reached(")
         )
 
     def clear_text_continuation(self) -> None:

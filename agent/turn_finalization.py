@@ -171,7 +171,7 @@ def finalize_conversation_turn(
 ) -> dict[str, Any]:
     """Run the one canonical post-loop finalization sequence."""
     hook = invoke_hook or _default_hook_invoker
-    completed = state.completed(max_iterations=owner.max_iterations)
+    completed = state.completed()
 
     owner._cleanup_task_resources(task_id)
     owner._session_persistence.persist(messages, conversation_history)
