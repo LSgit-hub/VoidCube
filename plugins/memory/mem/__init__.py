@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import socket
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from agent.memory_provider import MemoryProvider
@@ -19,6 +21,11 @@ from systems.memory.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID, MemoryS
 
 
 logger = logging.getLogger(__name__)
+
+
+_GATEWAY_PROBE_TIMEOUT_SECONDS = 0.25
+_GATEWAY_REACHABLE_TTL_SECONDS = 30.0
+_GATEWAY_UNREACHABLE_TTL_SECONDS = 5.0
 
 
 _IDENTITY_RECALL_GUIDANCE = (
@@ -54,6 +61,9 @@ class MemMemoryProvider(MemoryProvider):
         self._redact_before_store = True
         self._gateway_session_credentials: dict[str, str] = {}
         self._gateway_credential_lock = threading.Lock()
+        self._gateway_probe_lock = threading.Lock()
+        self._gateway_probe_result: bool | None = None
+        self._gateway_probe_expires_at = 0.0
         self._outbox: MemoryWriteOutbox | None = None
         self._sync_thread: threading.Thread | None = None
         self._sync_stop = threading.Event()
@@ -485,6 +495,8 @@ class MemMemoryProvider(MemoryProvider):
             )
             if existing:
                 return existing
+            if not self._gateway_is_reachable():
+                raise ConnectionError("Memory Gateway is unreachable")
             payload = json.dumps(
                 {
                     "session_id": resolved_session_id,
@@ -501,11 +513,15 @@ class MemMemoryProvider(MemoryProvider):
                 headers=headers,
                 method="POST",
             )
-            with urlopen(
-                request,
-                timeout=self._request_timeout_seconds,
-            ) as response:
-                result = json.loads(response.read().decode("utf-8") or "{}")
+            try:
+                with urlopen(
+                    request,
+                    timeout=self._request_timeout_seconds,
+                ) as response:
+                    result = json.loads(response.read().decode("utf-8") or "{}")
+            except Exception:
+                self._mark_gateway_unreachable()
+                raise
             session_token = str(result.get("session_token") or "").strip()
             if not session_token:
                 raise RuntimeError("Gateway did not issue a session credential")
@@ -518,6 +534,8 @@ class MemMemoryProvider(MemoryProvider):
         path: str,
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if not self._gateway_is_reachable():
+            raise ConnectionError("Memory Gateway is unreachable")
         identity_session_id = str(
             (payload or {}).get("session_id")
             or (payload or {}).get("current_session_id")
@@ -538,9 +556,55 @@ class MemMemoryProvider(MemoryProvider):
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             headers["Content-Type"] = "application/json"
         request = Request(url, data=data, headers=headers, method=method.upper())
-        with urlopen(request, timeout=self._request_timeout_seconds) as response:
-            body = response.read().decode("utf-8")
+        try:
+            with urlopen(request, timeout=self._request_timeout_seconds) as response:
+                body = response.read().decode("utf-8")
+        except Exception:
+            self._mark_gateway_unreachable()
+            raise
         parsed = json.loads(body or "{}")
         if not isinstance(parsed, dict):
             raise ValueError("Memory Service returned a non-object response")
         return parsed
+
+    def _gateway_is_reachable(self) -> bool:
+        now = time.monotonic()
+        with self._gateway_probe_lock:
+            if (
+                self._gateway_probe_result is not None
+                and now < self._gateway_probe_expires_at
+            ):
+                return self._gateway_probe_result
+
+            parsed = urlsplit(self._gateway_url)
+            host = parsed.hostname
+            if not host or parsed.scheme not in {"http", "https"}:
+                return True
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            try:
+                with socket.create_connection(
+                    (host, port),
+                    timeout=min(
+                        _GATEWAY_PROBE_TIMEOUT_SECONDS,
+                        self._request_timeout_seconds,
+                    ),
+                ):
+                    pass
+            except OSError:
+                reachable = False
+            else:
+                reachable = True
+            self._gateway_probe_result = reachable
+            self._gateway_probe_expires_at = time.monotonic() + (
+                _GATEWAY_REACHABLE_TTL_SECONDS
+                if reachable
+                else _GATEWAY_UNREACHABLE_TTL_SECONDS
+            )
+            return reachable
+
+    def _mark_gateway_unreachable(self) -> None:
+        with self._gateway_probe_lock:
+            self._gateway_probe_result = False
+            self._gateway_probe_expires_at = (
+                time.monotonic() + _GATEWAY_UNREACHABLE_TTL_SECONDS
+            )

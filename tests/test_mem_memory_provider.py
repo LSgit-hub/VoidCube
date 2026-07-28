@@ -192,6 +192,7 @@ def test_mem_provider_uses_gateway_issued_session_credential(monkeypatch):
         return _FakeResponse({"status": "remembered"})
 
     monkeypatch.setenv("GATEWAY_AUTH_TOKEN", "root-secret")
+    monkeypatch.setattr(provider, "_gateway_is_reachable", lambda: True)
     monkeypatch.setattr("plugins.memory.mem.urlopen", fake_urlopen)
 
     result = provider._request_json(
@@ -206,6 +207,35 @@ def test_mem_provider_uses_gateway_issued_session_credential(monkeypatch):
     assert registration_request.get_header("Authorization") == "Bearer root-secret"
     assert memory_request.get_header("X-voidcube-session-id") == "session-1"
     assert memory_request.get_header("X-voidcube-session-token") == "session-secret"
+
+
+@pytest.mark.unit
+def test_mem_provider_caches_failed_gateway_probe(monkeypatch):
+    provider = MemMemoryProvider()
+    provider._initialized = True
+    provider._gateway_url = "http://unreachable.test:6000"
+    attempts = []
+
+    def fail_connection(address, timeout):
+        attempts.append((address, timeout))
+        raise TimeoutError("unreachable")
+
+    monkeypatch.setattr(
+        "plugins.memory.mem.socket.create_connection",
+        fail_connection,
+    )
+    monkeypatch.setattr(
+        "plugins.memory.mem.urlopen",
+        lambda *_args, **_kwargs: pytest.fail(
+            "HTTP request ran after a failed gateway probe"
+        ),
+    )
+
+    for _ in range(2):
+        with pytest.raises(ConnectionError, match="unreachable"):
+            provider._request_json("POST", "/recall", {"query": "x"})
+
+    assert attempts == [(('unreachable.test', 6000), 0.25)]
 
 
 @pytest.mark.unit
