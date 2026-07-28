@@ -60,6 +60,9 @@ _MODEL_CACHE_TTL = 3600
 _endpoint_model_metadata_cache: Dict[str, Dict[str, Dict[str, Any]]] = {}
 _endpoint_model_metadata_cache_time: Dict[str, float] = {}
 _ENDPOINT_MODEL_CACHE_TTL = 300
+_local_server_type_cache: Dict[str, tuple[float, Optional[str]]] = {}
+_LOCAL_SERVER_TYPE_CACHE_TTL = 30
+_LOCAL_CONNECT_TIMEOUT = 0.25
 
 # Descending tiers for context length probing when the model is unknown.
 # We start at 128K (a safe default for most modern models) and step down
@@ -169,17 +172,41 @@ def detect_local_server_type(base_url: str) -> Optional[str]:
     import httpx
 
     normalized = _normalize_base_url(base_url)
+    cached = _local_server_type_cache.get(normalized)
+    if cached and time.monotonic() - cached[0] < _LOCAL_SERVER_TYPE_CACHE_TTL:
+        return cached[1]
+
+    def remember(server_type: Optional[str]) -> Optional[str]:
+        _local_server_type_cache[normalized] = (time.monotonic(), server_type)
+        return server_type
+
+    url = normalized if "://" in normalized else f"http://{normalized}"
+    parsed = urlparse(url)
+    if not parsed.hostname:
+        return remember(None)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        import socket
+
+        with socket.create_connection(
+            (parsed.hostname, port), timeout=_LOCAL_CONNECT_TIMEOUT
+        ):
+            pass
+    except OSError:
+        return remember(None)
+
     server_url = normalized
     if server_url.endswith("/v1"):
         server_url = server_url[:-3]
 
     try:
-        with httpx.Client(timeout=2.0) as client:
+        timeout = httpx.Timeout(0.5, connect=_LOCAL_CONNECT_TIMEOUT)
+        with httpx.Client(timeout=timeout) as client:
             # LM Studio exposes /api/v1/models — check first (most specific)
             try:
                 r = client.get(f"{server_url}/api/v1/models")
                 if r.status_code == 200:
-                    return "lm-studio"
+                    return remember("lm-studio")
             except Exception:
                 pass
             # Ollama exposes /api/tags and responds with {"models": [...]}
@@ -191,7 +218,7 @@ def detect_local_server_type(base_url: str) -> Optional[str]:
                     try:
                         data = r.json()
                         if "models" in data:
-                            return "ollama"
+                            return remember("ollama")
                     except Exception:
                         pass
             except Exception:
@@ -202,7 +229,7 @@ def detect_local_server_type(base_url: str) -> Optional[str]:
                 if r.status_code != 200:
                     r = client.get(f"{server_url}/props")  # fallback for older builds
                 if r.status_code == 200 and "default_generation_settings" in r.text:
-                    return "llamacpp"
+                    return remember("llamacpp")
             except Exception:
                 pass
             # vLLM: /version
@@ -211,13 +238,20 @@ def detect_local_server_type(base_url: str) -> Optional[str]:
                 if r.status_code == 200:
                     data = r.json()
                     if "version" in data:
-                        return "vllm"
+                        return remember("vllm")
+            except Exception:
+                pass
+            # Generic OpenAI-compatible local servers expose /v1/models.
+            try:
+                r = client.get(f"{server_url}/v1/models")
+                if r.status_code == 200:
+                    return remember("openai-compatible")
             except Exception:
                 pass
     except Exception:
         pass
 
-    return None
+    return remember(None)
 
 
 def _iter_nested_dicts(value: Any):
@@ -364,7 +398,7 @@ def fetch_endpoint_model_metadata(
     for candidate in candidates:
         url = candidate.rstrip("/") + "/models"
         try:
-            response = requests.get(url, headers=headers, timeout=10)
+            response = requests.get(url, headers=headers, timeout=(0.5, 5.0))
             response.raise_for_status()
             payload = response.json()
             cache: Dict[str, Dict[str, Any]] = {}
@@ -592,7 +626,8 @@ def query_ollama_num_ctx(model: str, base_url: str) -> Optional[int]:
         return None
 
     try:
-        with httpx.Client(timeout=3.0) as client:
+        timeout = httpx.Timeout(3.0, connect=_LOCAL_CONNECT_TIMEOUT)
+        with httpx.Client(timeout=timeout) as client:
             resp = client.post(f"{server_url}/api/show", json={"name": bare_model})
             if resp.status_code != 200:
                 return None
@@ -639,7 +674,8 @@ def _query_local_context_length(model: str, base_url: str) -> Optional[int]:
         server_type = None
 
     try:
-        with httpx.Client(timeout=3.0) as client:
+        timeout = httpx.Timeout(3.0, connect=_LOCAL_CONNECT_TIMEOUT)
+        with httpx.Client(timeout=timeout) as client:
             # Ollama: /api/show returns model details with context info
             if server_type == "ollama":
                 resp = client.post(f"{server_url}/api/show", json={"name": model})
@@ -766,9 +802,9 @@ def get_model_context_length(
     0. Explicit config override (model.context_length or providers.<name> per-model)
     1. Persistent cache (previously discovered via probing)
     2. Active endpoint metadata (/models)
-    3. Local server query (for local endpoints)
-    4. OpenRouter live API metadata
-    5. Nous suffix-match via OpenRouter cache
+    3. Local server query (for reachable local endpoints)
+    4. Nous suffix-match via OpenRouter cache
+    5. OpenRouter live API metadata (OpenRouter endpoints only)
     6. Default fallback (128K)
     """
     # 0. Explicit config override — user knows best
@@ -786,8 +822,13 @@ def get_model_context_length(
         if cached is not None:
             return cached
 
-    # 2. Active endpoint metadata is authoritative when available.
+    # 2. Active endpoint metadata is authoritative when available. Avoid a
+    # chain of long synchronous probes when a configured local server is down.
     if _is_custom_endpoint(base_url):
+        local_endpoint = is_local_endpoint(base_url)
+        if local_endpoint and detect_local_server_type(base_url) is None:
+            return DEFAULT_FALLBACK_CONTEXT
+
         endpoint_metadata = fetch_endpoint_model_metadata(base_url, api_key=api_key)
         matched = endpoint_metadata.get(model)
         if not matched:
@@ -805,11 +846,15 @@ def get_model_context_length(
             if isinstance(context_length, int):
                 return context_length
         # 3. Try querying a local server directly when /models omits metadata.
-        if is_local_endpoint(base_url):
+        if local_endpoint:
             local_ctx = _query_local_context_length(model, base_url)
             if local_ctx and local_ctx > 0:
                 save_context_length(model, base_url, local_ctx)
                 return local_ctx
+
+        # Metadata from an unrelated provider is not authoritative for custom
+        # endpoints, even when they happen to use the same model identifier.
+        return DEFAULT_FALLBACK_CONTEXT
 
     # 4. Provider-aware lookups (before generic OpenRouter cache)
     # These are provider-specific and take priority over the generic OR cache,
@@ -819,19 +864,13 @@ def get_model_context_length(
         if ctx:
             return ctx
 
-    # 6. OpenRouter live API metadata (provider-unaware fallback)
-    metadata = fetch_model_metadata()
-    if model in metadata:
-        return metadata[model].get("context_length", 128000)
+    # 5. OpenRouter live metadata is only authoritative for OpenRouter routes.
+    if _is_openrouter_base_url(base_url) or provider == "openrouter":
+        metadata = fetch_model_metadata()
+        if model in metadata:
+            return metadata[model].get("context_length", DEFAULT_FALLBACK_CONTEXT)
 
-    # 8. Query local server as last resort
-    if base_url and is_local_endpoint(base_url):
-        local_ctx = _query_local_context_length(model, base_url)
-        if local_ctx and local_ctx > 0:
-            save_context_length(model, base_url, local_ctx)
-            return local_ctx
-
-    # 9. Default fallback — 128K
+    # 6. Default fallback — 128K
     return DEFAULT_FALLBACK_CONTEXT
 
 
