@@ -29,7 +29,6 @@ dependencies = [
     "prompt_toolkit>=3.0.0,<4",
     "pyyaml>=6.0,<7",
     "python-dotenv>=1.0.0,<2",
-    "tenacity>=8.0.0,<9",
     "pydantic>=2.0.0,<3",
     "requests>=2.31.0,<3",
     "fire>=0.5.0,<1",

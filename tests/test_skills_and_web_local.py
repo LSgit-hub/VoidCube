@@ -85,6 +85,13 @@ def test_web_search_local_backend_uses_local_crawler(monkeypatch):
 
 
 @pytest.mark.unit
+def test_local_web_backend_is_reported_available(monkeypatch):
+    monkeypatch.setattr(web_tools, "_get_backend", lambda: "local")
+
+    assert web_tools.check_web_api_key() is True
+
+
+@pytest.mark.unit
 def test_local_web_search_falls_back_to_bing(monkeypatch):
     calls = []
 

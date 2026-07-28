@@ -4,19 +4,15 @@ Model Tools Module
 
 Thin orchestration layer over the tool registry. Each tool file in tools/
 self-registers its schema, handler, and metadata via tools.registry.register().
-This module triggers discovery (by importing all tool modules), then provides
-the public API that run_agent.py, cli.py, batch_runner.py, and the RL
-environments consume.
+Tool discovery is deferred until the first public API call so importing the
+agent or gateway does not eagerly load every tool integration.
 
 Public API (signatures preserved from the original 2,400-line version):
     get_tool_definitions(enabled_toolsets, disabled_toolsets, quiet_mode) -> list
     handle_function_call(function_name, function_args, task_id, user_task) -> str
-    TOOL_TO_TOOLSET_MAP: dict          (for batch_runner.py)
-    TOOLSET_REQUIREMENTS: dict         (for cli.py and config diagnostics)
     get_all_tool_names() -> list
     get_toolset_for_tool(name) -> str
     get_available_toolsets() -> dict
-    check_toolset_requirements() -> dict
     check_tool_availability(quiet) -> tuple
 """
 
@@ -169,30 +165,35 @@ def _discover_tools():
             logger.warning("Could not import tool module %s: %s", mod_name, e)
 
 
-_discover_tools()
-
-# MCP tool discovery (external MCP servers from config)
-try:
-    from tools.mcp_tool import discover_mcp_tools
-    discover_mcp_tools()
-except (ImportError, RuntimeError) as e:
-    logger.debug("MCP tool discovery failed: %s", e)
-
-# Plugin tool discovery (user/project/pip plugins)
-try:
-    from VoidCube_cli.plugins import discover_plugins
-    discover_plugins()
-except (ImportError, RuntimeError) as e:
-    logger.debug("Plugin discovery failed: %s", e)
+_tools_discovered = False
+_tool_discovery_lock = threading.Lock()
 
 
-# =============================================================================
-# Backward-compat constants  (built once after discovery)
-# =============================================================================
+def ensure_tools_discovered() -> None:
+    """Discover built-in, MCP, and plugin tools exactly once on first use."""
+    global _tools_discovered
+    if _tools_discovered:
+        return
 
-TOOL_TO_TOOLSET_MAP: Dict[str, str] = registry.get_tool_to_toolset_map()
+    with _tool_discovery_lock:
+        if _tools_discovered:
+            return
 
-TOOLSET_REQUIREMENTS: Dict[str, dict] = registry.get_toolset_requirements()
+        _discover_tools()
+
+        try:
+            from tools.mcp_tool import discover_mcp_tools
+            discover_mcp_tools()
+        except (ImportError, RuntimeError) as e:
+            logger.debug("MCP tool discovery failed: %s", e)
+
+        try:
+            from VoidCube_cli.plugins import discover_plugins
+            discover_plugins()
+        except (ImportError, RuntimeError) as e:
+            logger.debug("Plugin discovery failed: %s", e)
+
+        _tools_discovered = True
 
 # Resolved tool names from the last get_tool_definitions() call.
 # Used by code_execution_tool to know which tools are available in this session.
@@ -241,6 +242,8 @@ def get_tool_definitions(
     Returns:
         Filtered list of OpenAI-format tool definitions.
     """
+    ensure_tools_discovered()
+
     # Determine which tool names the caller wants
     tools_to_include: Set[str] = set()
 
@@ -474,6 +477,8 @@ def handle_function_call(
     Returns:
         Function result as a JSON string.
     """
+    ensure_tools_discovered()
+
     # Coerce string arguments to their schema-declared types (e.g. "42"→42)
     function_args = coerce_tool_args(function_name, function_args)
 
@@ -549,24 +554,23 @@ def handle_function_call(
 
 def get_all_tool_names() -> List[str]:
     """Return all registered tool names."""
+    ensure_tools_discovered()
     return registry.get_all_tool_names()
 
 
 def get_toolset_for_tool(tool_name: str) -> Optional[str]:
     """Return the toolset a tool belongs to."""
+    ensure_tools_discovered()
     return registry.get_toolset_for_tool(tool_name)
 
 
 def get_available_toolsets() -> Dict[str, dict]:
     """Return toolset availability info for UI display."""
+    ensure_tools_discovered()
     return registry.get_available_toolsets()
-
-
-def check_toolset_requirements() -> Dict[str, dict]:
-    """Return {toolset: available_bool} for every registered toolset."""
-    return registry.get_toolset_requirements()
 
 
 def check_tool_availability(quiet: bool = False) -> Tuple[List[str], List[dict]]:
     """Return (available_toolsets, unavailable_info)."""
+    ensure_tools_discovered()
     return registry.check_tool_availability(quiet=quiet)

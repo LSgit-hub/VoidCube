@@ -7,8 +7,21 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-from VoidCube_cli.env_loader import load_VoidCube_dotenv
+from VoidCube_cli.env_loader import is_placeholder_secret, load_VoidCube_dotenv
 from VoidCube_cli.auth import get_auth_status, read_credential_pool, write_credential_pool
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    (
+        ("sk-your-key-here", True),
+        ('"YOUR_API_KEY"', True),
+        ("sk-real-provider-token-123456789", False),
+        ("", False),
+    ),
+)
+def test_placeholder_secret_detection(value, expected):
+    assert is_placeholder_secret(value) is expected
 
 
 def test_load_config_normalizes_required_mapping_sections(tmp_path, monkeypatch):

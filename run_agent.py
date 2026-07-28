@@ -20,7 +20,6 @@ Usage:
     response = agent.run_conversation("Tell me about the latest Python updates")
 """
 
-import asyncio
 import copy
 import json
 import logging
@@ -31,11 +30,8 @@ import re
 import sys
 import time
 import threading
-from dataclasses import replace
-from types import SimpleNamespace
 import uuid
 from typing import List, Dict, Any, Optional
-import fire
 from datetime import datetime
 from pathlib import Path
 
@@ -74,15 +70,19 @@ from tools.model_tools import (
     get_tool_definitions,
     get_toolset_for_tool,
     handle_function_call,
-    check_toolset_requirements,
 )
-from tools.terminal_tool import cleanup_vm, get_active_env, is_persistent_env
 from tools.tool_result_storage import maybe_persist_tool_result, enforce_turn_budget
 from tools.interrupt import set_interrupt as _set_interrupt
-from tools.browser_tool import cleanup_browser
 
 
 from VoidCube_core.constants import OPENROUTER_BASE_URL
+
+
+def get_active_env(task_id: str):
+    """Return the task environment without loading terminal backends at import time."""
+    from tools.terminal_tool import get_active_env as _get_active_env
+
+    return _get_active_env(task_id)
 
 # Agent internals extracted to agent/ package for modularity
 from agent.memory_manager import build_memory_context_block
@@ -621,13 +621,6 @@ class AIAgent:
                     print(f"   ❌ Disabled toolsets: {', '.join(disabled_toolsets)}")
         elif not self.quiet_mode:
             print("🛠️  No tools loaded (all tools filtered out or unavailable)")
-        
-        # Check tool requirements
-        if self.tools and not self.quiet_mode:
-            requirements = check_toolset_requirements()
-            missing_reqs = [name for name, available in requirements.items() if not available]
-            if missing_reqs:
-                print(f"⚠️  Some tools may not work due to missing requirements: {missing_reqs}")
         
         # Show ephemeral system prompt status
         if self.ephemeral_system_prompt and not self.quiet_mode:
@@ -1359,6 +1352,8 @@ class AIAgent:
         intent of this hook for the Morph backend, see commit fbd3a2fd).
         """
         try:
+            from tools.terminal_tool import cleanup_vm, is_persistent_env
+
             if is_persistent_env(task_id):
                 if self.verbose_logging:
                     logging.debug(
@@ -1371,6 +1366,7 @@ class AIAgent:
             if self.verbose_logging:
                 logging.warning(f"Failed to cleanup VM for task {task_id}: {e}")
         try:
+            from tools.browser_tool import cleanup_browser
             cleanup_browser(task_id)
         except Exception as e:
             if self.verbose_logging:
@@ -5408,4 +5404,6 @@ def main(
 
 
 if __name__ == "__main__":
+    import fire
+
     fire.Fire(main)

@@ -9,6 +9,8 @@ import os
 import threading
 from pathlib import Path
 
+from VoidCube_cli.env_loader import is_placeholder_secret
+
 class ProviderConfig(dict):
     """提供者配置类，支持字典和属性访问"""
     
@@ -228,32 +230,6 @@ def has_usable_secret(api_key: str) -> bool:
         "OPENROUTER-", "DEEPSEEK-",
     ]
     return any(api_key.startswith(prefix) for prefix in valid_prefixes) or len(api_key) >= 32
-
-
-def is_placeholder_secret(value: str) -> bool:
-    """Return True for template/example secrets that must never authenticate."""
-    normalized = str(value or "").strip().strip('"\'').lower()
-    if not normalized:
-        return True
-    placeholders = {
-        "sk-your-key-here",
-        "sk-or-your-key-here",
-        "your-key-here",
-        "your-api-key",
-        "your_api_key",
-        "changeme",
-        "change-me",
-        "placeholder",
-        "***",
-    }
-    if normalized in placeholders:
-        return True
-    return (
-        "your-key" in normalized
-        or "your_api_key" in normalized
-        or normalized.endswith("-your-key-here")
-    )
-
 
 def resolve_api_key_provider_credentials(provider: str) -> Optional[Dict[str, Any]]:
     """解析 API Key 提供者凭证"""

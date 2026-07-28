@@ -539,10 +539,11 @@ def _diagnose_podman() -> AgentCheck:
 
 
 def _diagnose_tool_registration() -> AgentCheck:
-    from tools.model_tools import registry
+    from tools.model_tools import get_all_tool_names
 
     required_tools = ["terminal", "read_file", "write_file", "patch", "search_files"]
-    missing = [name for name in required_tools if not registry.has_tool(name)]
+    registered_tools = set(get_all_tool_names())
+    missing = [name for name in required_tools if name not in registered_tools]
 
     if missing:
         return AgentCheck(

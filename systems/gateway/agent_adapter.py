@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import uuid
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 import aiohttp
-
-from run_agent import AIAgent
 
 logger = logging.getLogger("gateway.agent_adapter")
 

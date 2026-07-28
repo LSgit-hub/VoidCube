@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 
 from VoidCube_core.constants import get_VoidCube_home, get_config_path, get_env_path
+from VoidCube_cli.env_loader import is_placeholder_secret
 from tools.tool_backend_helpers import managed_nous_tools_enabled as _managed_nous_tools_enabled
 
 _IS_WINDOWS = platform.system() == "Windows"
@@ -2434,7 +2435,7 @@ def _sanitize_env_lines(lines: list) -> list:
             continue
 
         key, sep, value = stripped.partition("=")
-        if sep and key in known_keys and _is_placeholder_env_value(value):
+        if sep and key in known_keys and is_placeholder_secret(value):
             sanitized.append(f"# {stripped}\n")
             continue
 
@@ -2462,27 +2463,6 @@ def _sanitize_env_lines(lines: list) -> list:
 
     return sanitized
 
-
-def _is_placeholder_env_value(value: str) -> bool:
-    normalized = str(value or "").strip().strip('"\'').lower()
-    if not normalized:
-        return False
-    return (
-        normalized in {
-            "sk-your-key-here",
-            "sk-or-your-key-here",
-            "your-key-here",
-            "your-api-key",
-            "your_api_key",
-            "changeme",
-            "change-me",
-            "placeholder",
-            "***",
-        }
-        or "your-key" in normalized
-        or "your_api_key" in normalized
-        or normalized.endswith("-your-key-here")
-    )
 
 
 def sanitize_env_file() -> int:

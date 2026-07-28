@@ -8,8 +8,6 @@ import threading
 from typing import Any, Callable, Mapping
 from unittest.mock import Mock
 
-from openai import OpenAI
-
 from agent.integration_policy import require_active_integration
 
 
@@ -227,6 +225,8 @@ class ChatClientLifecycle:
 
             client = CopilotACPClient(**client_kwargs)
         else:
+            from openai import OpenAI
+
             client = OpenAI(**client_kwargs)
         logger.info(
             "Chat client created (%s, shared=%s) %s",

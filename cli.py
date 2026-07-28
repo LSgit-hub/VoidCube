@@ -19,7 +19,6 @@ import shutil
 import sys
 import json
 import atexit
-import tempfile
 import time
 import uuid
 import textwrap
@@ -75,14 +74,10 @@ if TYPE_CHECKING:
     from run_agent import AIAgent  # noqa: F401 — only for static type-checkers
 
 from VoidCube_cli.autonomous_executor import (
-    autonomous_task_execution_kind,
-    autonomous_task_label,
     autonomous_task_run_id_for_message,
-    build_autonomous_task_prompt,
 )
 from VoidCube_cli.autonomous_events import (
     append_autonomous_execution_event as _append_autonomous_execution_event_view,
-    sync_autonomous_supervisor_event as _sync_autonomous_supervisor_event_view,
 )
 from VoidCube_cli.autonomous_gate import (
     exit_autonomous_gate_fast as _exit_autonomous_gate_fast_view,
@@ -228,10 +223,8 @@ def _estimate_usage_cost_lazy(usage, **kwargs):
 def _CanonicalUsage_lazy(*args, **kwargs):
     _lazy_import_usage_pricing()
     return _CanonicalUsage(*args, **kwargs)
-from VoidCube_cli.banner import _format_context_length, format_banner_version_label
+from VoidCube_cli.banner import format_banner_version_label
 from VoidCube_cli.cli_ui import (
-    _SkinAwareAnsi,
-    _hex_to_ansi_bold,
     _accent_hex,
     _rich_text_from_ansi,
     _cprint,
@@ -480,9 +473,6 @@ from rich import box as rich_box
 from rich.console import Console
 from rich.markup import escape as _escape
 from rich.panel import Panel
-from rich.text import Text as _RichText
-
-import fire
 
 from VoidCube_cli.banner import build_welcome_banner
 from VoidCube_cli.commands import SlashCommandCompleter, SlashCommandAutoSuggest
@@ -10349,5 +10339,7 @@ def _get_language_preference_prompt() -> str:
 
 
 if __name__ == "__main__":
+    import fire
+
     fire.Fire(main)
 

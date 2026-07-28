@@ -67,8 +67,6 @@ def ensure_minisweagent_on_path(_repo_root: Path | None = None) -> None:
 # Custom Singularity Environment with more space
 # =============================================================================
 
-# Singularity helpers (scratch dir, SIF cache) now live in tools/environments/singularity.py
-from tools.environments.singularity import _get_scratch_dir
 from tools.tool_backend_helpers import (
     coerce_modal_mode,
     has_direct_modal_credentials,
@@ -87,6 +85,8 @@ DISK_USAGE_WARNING_THRESHOLD_GB = float(os.getenv("TERMINAL_DISK_WARNING_GB", "5
 def _check_disk_usage_warning():
     """Check if total disk usage exceeds warning threshold."""
     try:
+        from tools.environments.singularity import _get_scratch_dir
+
         scratch_dir = _get_scratch_dir()
 
         # Get total size of VoidCube directories
@@ -504,19 +504,6 @@ def _transform_sudo_command(command: str | None) -> tuple[str | None, str | None
     return command, None
 
 
-# Environment classes now live in tools/environments/
-from tools.environments.local import LocalEnvironment as _LocalEnvironment
-from tools.environments.singularity import SingularityEnvironment as _SingularityEnvironment
-from tools.environments.ssh import SSHEnvironment as _SSHEnvironment
-from tools.environments.docker import (
-    DockerEnvironment as _DockerEnvironment,
-    PodmanEnvironment as _PodmanEnvironment,
-)
-from tools.environments.modal import ModalEnvironment as _ModalEnvironment
-from tools.environments.managed_modal import ManagedModalEnvironment as _ManagedModalEnvironment
-from tools.managed_tool_gateway import is_managed_tool_gateway_ready
-
-
 # Tool description for LLM
 TERMINAL_TOOL_DESCRIPTION = """Execute shell commands on a Linux environment. Filesystem usually persists between calls.
 
@@ -687,6 +674,8 @@ def _get_env_config() -> Dict[str, Any]:
 
 def _get_modal_backend_state(modal_mode: object | None) -> Dict[str, Any]:
     """Resolve direct vs managed Modal backend selection."""
+    from tools.managed_tool_gateway import is_managed_tool_gateway_ready
+
     return resolve_modal_backend_state(
         modal_mode,
         has_direct=has_direct_modal_credentials(),
@@ -752,10 +741,14 @@ def _create_environment_once(env_type: str, image: str, cwd: str, timeout: int,
     docker_env = cc.get("docker_env", {})
 
     if env_type == "local":
-        return _LocalEnvironment(cwd=cwd, timeout=timeout)
+        from tools.environments.local import LocalEnvironment
+
+        return LocalEnvironment(cwd=cwd, timeout=timeout)
     
     elif env_type == "docker":
-        return _DockerEnvironment(
+        from tools.environments.docker import DockerEnvironment
+
+        return DockerEnvironment(
             image=image, cwd=cwd, timeout=timeout,
             cpu=cpu, memory=memory, disk=disk,
             persistent_filesystem=persistent, task_id=task_id,
@@ -768,7 +761,9 @@ def _create_environment_once(env_type: str, image: str, cwd: str, timeout: int,
         )
 
     elif env_type == "podman":
-        return _PodmanEnvironment(
+        from tools.environments.docker import PodmanEnvironment
+
+        return PodmanEnvironment(
             image=image, cwd=cwd, timeout=timeout,
             cpu=cpu, memory=memory, disk=disk,
             persistent_filesystem=persistent, task_id=task_id,
@@ -781,7 +776,9 @@ def _create_environment_once(env_type: str, image: str, cwd: str, timeout: int,
         )
     
     elif env_type == "singularity":
-        return _SingularityEnvironment(
+        from tools.environments.singularity import SingularityEnvironment
+
+        return SingularityEnvironment(
             image=image, cwd=cwd, timeout=timeout,
             cpu=cpu, memory=memory, disk=disk,
             persistent_filesystem=persistent, task_id=task_id,
@@ -804,7 +801,9 @@ def _create_environment_once(env_type: str, image: str, cwd: str, timeout: int,
         modal_state = _get_modal_backend_state(cc.get("modal_mode"))
 
         if modal_state["selected_backend"] == "managed":
-            return _ManagedModalEnvironment(
+            from tools.environments.managed_modal import ManagedModalEnvironment
+
+            return ManagedModalEnvironment(
                 image=image, cwd=cwd, timeout=timeout,
                 modal_sandbox_kwargs=sandbox_kwargs,
                 persistent_filesystem=persistent, task_id=task_id,
@@ -833,7 +832,9 @@ def _create_environment_once(env_type: str, image: str, cwd: str, timeout: int,
                 )
             raise ValueError(message)
 
-        return _ModalEnvironment(
+        from tools.environments.modal import ModalEnvironment
+
+        return ModalEnvironment(
             image=image, cwd=cwd, timeout=timeout,
             modal_sandbox_kwargs=sandbox_kwargs,
             persistent_filesystem=persistent, task_id=task_id,
@@ -851,7 +852,9 @@ def _create_environment_once(env_type: str, image: str, cwd: str, timeout: int,
     elif env_type == "ssh":
         if not ssh_config or not ssh_config.get("host") or not ssh_config.get("user"):
             raise ValueError("SSH environment requires ssh_host and ssh_user to be configured")
-        return _SSHEnvironment(
+        from tools.environments.ssh import SSHEnvironment
+
+        return SSHEnvironment(
             host=ssh_config["host"],
             user=ssh_config["user"],
             port=ssh_config.get("port", 22),

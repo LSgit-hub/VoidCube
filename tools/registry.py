@@ -25,6 +25,7 @@ class ToolRegistry:
         self._toolsets: Dict[str, List[str]] = {}
         self._is_async: Dict[str, bool] = {}
         self._schemas: Dict[str, Any] = {}
+        self._check_fns: Dict[str, Any] = {}
     
     def register(self, name: str, tool: Any = None, toolset: str = None, 
                  schema: Any = None, handler: Any = None, check_fn: Any = None,
@@ -39,7 +40,7 @@ class ToolRegistry:
             toolset: 工具集名称
             schema: 工具schema
             handler: 工具处理函数（用作tool）
-            check_fn: 检查函数（忽略）
+            check_fn: 工具可用性检查函数
             emoji: 表情符号（忽略）
             max_result_size_chars: 最大结果大小（忽略）
             is_async: 工具是否为异步函数
@@ -53,6 +54,10 @@ class ToolRegistry:
         
         self._tools[name] = tool
         self._is_async[name] = is_async
+        if check_fn is None:
+            self._check_fns.pop(name, None)
+        else:
+            self._check_fns[name] = check_fn
         if schema is not None:
             self._schemas[name] = schema
         if toolset:
@@ -93,12 +98,25 @@ class ToolRegistry:
         """列出所有工具集"""
         return list(self._toolsets.keys())
     
-    def get_toolset_requirements(self) -> Dict[str, dict]:
-        """获取工具集要求"""
-        return {
-            "core": {"description": "核心工具集"},
-            "extended": {"description": "扩展工具集"},
-        }
+    def get_toolset_requirements(self) -> Dict[str, bool]:
+        """Return availability for toolsets that contain registered tools."""
+        requirements: Dict[str, bool] = {}
+        for toolset_name, tools in self._toolsets.items():
+            registered = [name for name in tools if name in self._tools]
+            if registered:
+                requirements[toolset_name] = all(
+                    self._is_tool_available(name) for name in registered
+                )
+        return requirements
+
+    def _is_tool_available(self, name: str) -> bool:
+        check_fn = self._check_fns.get(name)
+        if check_fn is None:
+            return name in self._tools
+        try:
+            return bool(check_fn())
+        except Exception:
+            return False
     
     def get_definitions(self, tool_names: List[str] = None, quiet: bool = False) -> List[Dict[str, Any]]:
         """获取工具定义（schema）
@@ -117,7 +135,7 @@ class ToolRegistry:
         
         for name in tool_names:
             tool = self.get(name)
-            if tool is None:
+            if tool is None or not self._is_tool_available(name):
                 continue
             
             # 构建工具定义
@@ -280,6 +298,7 @@ class ToolRegistry:
                 del self._is_async[name]
             if name in self._schemas:
                 del self._schemas[name]
+            self._check_fns.pop(name, None)
             # 从工具集中移除
             for toolset in self._toolsets:
                 if name in self._toolsets[toolset]:
@@ -293,6 +312,7 @@ class ToolRegistry:
         self._toolsets.clear()
         self._is_async.clear()
         self._schemas.clear()
+        self._check_fns.clear()
     
     def check_tool_availability(self, quiet: bool = False) -> tuple:
         """检查工具可用性
@@ -304,11 +324,26 @@ class ToolRegistry:
         unavailable: list = []
         
         for toolset_name, tools in self._toolsets.items():
-            available.append({
-                "name": toolset_name,
-                "tools": tools,
-                "available": True
-            })
+            registered = [name for name in tools if name in self._tools]
+            available_tools = [
+                name for name in registered if self._is_tool_available(name)
+            ]
+            unavailable_tools = [
+                name for name in registered if name not in available_tools
+            ]
+            if available_tools:
+                available.append({
+                    "name": toolset_name,
+                    "tools": available_tools,
+                    "available": True,
+                })
+            if unavailable_tools:
+                unavailable.append({
+                    "name": toolset_name,
+                    "tools": unavailable_tools,
+                    "available": False,
+                    "missing_vars": [],
+                })
         
         return available, unavailable
     

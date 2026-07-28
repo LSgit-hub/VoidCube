@@ -18,13 +18,14 @@ def _load_dotenv_with_fallback(path: Path, *, override: bool) -> None:
     for key, value in values.items():
         if not key or value is None:
             continue
-        if _is_placeholder_secret(value):
+        if is_placeholder_secret(value):
             continue
         if override or key not in os.environ:
             os.environ[key] = value
 
 
-def _is_placeholder_secret(value: str) -> bool:
+def is_placeholder_secret(value: str) -> bool:
+    """Return whether a value is a template secret rather than a credential."""
     normalized = str(value or "").strip().strip('"\'').lower()
     if not normalized:
         return False

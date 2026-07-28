@@ -9,7 +9,6 @@ import time
 from typing import Any, Callable
 
 import httpx
-from openai import APIError
 
 from agent.model_metadata import is_local_endpoint
 from agent.stream_response import StreamChunkUpdate, StreamingResponseAssembler
@@ -367,6 +366,8 @@ class ChatTransport:
             ),
         ):
             return True
+        from openai import APIError
+
         if isinstance(error, APIError) and not getattr(error, "status_code", None):
             lowered = str(error).lower()
             return any(phrase in lowered for phrase in _SSE_CONNECTION_PHRASES)

@@ -807,7 +807,7 @@ class MCPServerTask:
 
             # 3. Deregister old tools from the central registry
             for prefixed_name in self._registered_tool_names:
-                registry.deregister(prefixed_name)
+                registry.unregister(prefixed_name)
 
             # 4. Re-register with fresh tool list
             self._tools = new_mcp_tools
