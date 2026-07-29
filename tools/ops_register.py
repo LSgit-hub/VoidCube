@@ -125,28 +125,6 @@ def top_processes_tool(args=None):
         return json.dumps({"success": False, "error": str(e)})
 
 
-def process_tool(args=None):
-    """获取进程列表"""
-    try:
-        processes = []
-        for proc in psutil.process_iter(['pid', 'name', 'username', 'cpu_percent', 'memory_percent']):
-            try:
-                processes.append({
-                    "pid": proc.info['pid'],
-                    "name": proc.info['name'],
-                    "username": proc.info['username'],
-                    "cpu_percent": proc.info['cpu_percent'],
-                    "memory_percent": proc.info['memory_percent'],
-                })
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-        processes.sort(key=lambda x: x['cpu_percent'] if x['cpu_percent'] is not None else 0, reverse=True)
-        top_processes = processes[:20]
-        return json.dumps({"success": True, "processes": top_processes}, ensure_ascii=False)
-    except (RuntimeError, OSError, psutil.Error) as e:
-        return json.dumps({"success": False, "error": str(e)})
-
-
 def ping_tool(args):
     """Ping测试"""
     try:
@@ -371,18 +349,6 @@ def register_ops_tools() -> List[str]:
         handler=top_processes_tool,
     )
     registered_tools.append("top_processes")
-    
-    process_schema = {
-        "description": "获取进程列表",
-        "parameters": {}
-    }
-    registry.register(
-        name="process",
-        toolset="system",
-        schema=process_schema,
-        handler=process_tool,
-    )
-    registered_tools.append("process")
     
     ping_schema = {
         "description": "Ping测试",

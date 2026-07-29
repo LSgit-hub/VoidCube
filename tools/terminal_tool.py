@@ -519,10 +519,10 @@ Background: Set background=true to get a session_id. Two patterns:
   (1) Long-lived processes that never exit (servers, watchers).
   (2) Long-running tasks with notify_on_complete=true — you can keep working on other things and the system auto-notifies you when the task finishes. Great for test suites, builds, deployments, or anything that takes more than a minute.
 Use process(action="poll") for progress checks, process(action="wait") to block until done.
+Use process(action="write") to send stdin and process(action="close") to send EOF to local background commands.
 Working directory: Use 'workdir' for per-command cwd.
-PTY mode: Set pty=true for interactive CLI tools and REPLs.
 
-Do NOT use vim/nano/interactive tools without pty=true — they hang without a pseudo-terminal. Pipe git output to cat if it might page.
+Do NOT run full-screen terminal programs such as vim or nano. Pipe git output to cat if it might page.
 Important: cloud sandboxes may be cleaned up, idled out, or recreated between turns. Persistent filesystem means files can resume later; it does NOT guarantee a continuously running machine or surviving background processes. Use terminal sandboxes for task work, not durable hosting.
 """
 
@@ -1201,21 +1201,6 @@ def _interpret_exit_code(command: str, exit_code: int) -> str | None:
     return None
 
 
-def _command_requires_pipe_stdin(command: str) -> bool:
-    """Return True when PTY mode would break stdin-driven commands.
-
-    Some CLIs change behavior when stdin is a TTY. In particular,
-    `gh auth login --with-token` expects the token to arrive via piped stdin and
-    waits for EOF; when we launch it under a PTY, `process.submit()` only sends a
-    newline, so the command appears to hang forever with no visible progress.
-    """
-    normalized = " ".join(command.lower().split())
-    return (
-        normalized.startswith("gh auth login")
-        and "--with-token" in normalized
-    )
-
-
 def terminal_tool(
     command: str,
     background: bool = False,
@@ -1223,7 +1208,6 @@ def terminal_tool(
     task_id: Optional[str] = None,
     force: bool = False,
     workdir: Optional[str] = None,
-    pty: bool = False,
     notify_on_complete: bool = False,
     watch_patterns: Optional[List[str]] = None,
 ) -> str:
@@ -1237,7 +1221,6 @@ def terminal_tool(
         task_id: Unique identifier for environment isolation (optional)
         force: If True, skip dangerous command check (use after user confirms)
         workdir: Working directory for this command (optional, uses session cwd if not set)
-        pty: If True, use pseudo-terminal for interactive CLI tools (local backend only)
         notify_on_complete: If True and background=True, auto-notify the agent when the process exits
         watch_patterns: List of strings to watch for in background output; triggers notification on match
 
@@ -1457,26 +1440,12 @@ def terminal_tool(
                     "status": "blocked"
                 }, ensure_ascii=False)
 
-        # Prepare command for execution
-        pty_disabled_reason = None
-        effective_pty = pty
-        if pty and _command_requires_pipe_stdin(command):
-            effective_pty = False
-            pty_disabled_reason = (
-                "PTY disabled for this command because it expects piped stdin/EOF "
-                "(for example gh auth login --with-token). For local background "
-                "processes, call process(action='close') after writing so it receives "
-                "EOF."
-            )
-
         if background:
             # Spawn a tracked background process via the process registry.
             # For local backends: uses subprocess.Popen with output buffering.
             # For non-local backends: runs inside the sandbox via env.execute().
-            from tools.approval import get_current_session_key
             from tools.process_registry import process_registry
 
-            session_key = get_current_session_key(default="")
             effective_cwd = workdir or cwd
             try:
                 if active_env_type == "local":
@@ -1484,9 +1453,9 @@ def terminal_tool(
                         command=command,
                         cwd=effective_cwd,
                         task_id=effective_task_id,
-                        session_key=session_key,
                         env_vars=env.env if hasattr(env, 'env') else None,
-                        use_pty=effective_pty,
+                        notify_on_complete=notify_on_complete,
+                        watch_patterns=watch_patterns,
                     )
                 else:
                     proc_session = process_registry.spawn_via_env(
@@ -1494,7 +1463,8 @@ def terminal_tool(
                         command=command,
                         cwd=effective_cwd,
                         task_id=effective_task_id,
-                        session_key=session_key,
+                        notify_on_complete=notify_on_complete,
+                        watch_patterns=watch_patterns,
                     )
 
                 result_data = {
@@ -1506,50 +1476,16 @@ def terminal_tool(
                 }
                 if approval_note:
                     result_data["approval"] = approval_note
-                if pty_disabled_reason:
-                    result_data["pty_note"] = pty_disabled_reason
                 if requested_env_type != active_env_type:
                     result_data["requested_backend"] = requested_env_type
                     result_data["active_backend"] = active_env_type
                 if backend_warning:
                     result_data["_warning"] = backend_warning
 
-                # Mark for agent notification on completion
-                if notify_on_complete and background:
-                    proc_session.notify_on_complete = True
+                if notify_on_complete:
                     result_data["notify_on_complete"] = True
-
-                    # In gateway mode, auto-register a fast watcher so the
-                    # gateway can detect completion and trigger a new agent
-                    # turn.  CLI mode uses the completion_queue directly.
-                    _gw_platform = os.environ.get("VOIDCUBE_SESSION_PLATFORM", "")
-                    if _gw_platform:
-                        _gw_chat_id = os.environ.get("VOIDCUBE_SESSION_CHAT_ID", "")
-                        _gw_thread_id = os.environ.get("VOIDCUBE_SESSION_THREAD_ID", "")
-                        _gw_user_id = os.environ.get("VOIDCUBE_SESSION_USER_ID", "")
-                        _gw_user_name = os.environ.get("VOIDCUBE_SESSION_USER_NAME", "")
-                        proc_session.watcher_platform = _gw_platform
-                        proc_session.watcher_chat_id = _gw_chat_id
-                        proc_session.watcher_user_id = _gw_user_id
-                        proc_session.watcher_user_name = _gw_user_name
-                        proc_session.watcher_thread_id = _gw_thread_id
-                        proc_session.watcher_interval = 5
-                        process_registry.pending_watchers.append({
-                            "session_id": proc_session.id,
-                            "check_interval": 5,
-                            "session_key": session_key,
-                            "platform": _gw_platform,
-                            "chat_id": _gw_chat_id,
-                            "user_id": _gw_user_id,
-                            "user_name": _gw_user_name,
-                            "thread_id": _gw_thread_id,
-                            "notify_on_complete": True,
-                        })
-
-                # Set watch patterns for output monitoring
-                if watch_patterns and background:
-                    proc_session.watch_patterns = list(watch_patterns)
-                    result_data["watch_patterns"] = proc_session.watch_patterns
+                if proc_session.watch_patterns:
+                    result_data["watch_patterns"] = list(proc_session.watch_patterns)
 
                 return json.dumps(result_data, ensure_ascii=False)
             except Exception as e:
@@ -1849,11 +1785,6 @@ TERMINAL_SCHEMA = {
                 "type": "string",
                 "description": "Working directory for this command (absolute path). Defaults to the session working directory."
             },
-            "pty": {
-                "type": "boolean",
-                "description": "Run in pseudo-terminal (PTY) mode for interactive CLI tools or REPLs. Only works with local and SSH backends. Default: false.",
-                "default": False
-            },
             "notify_on_complete": {
                 "type": "boolean",
                 "description": "When true (and background=true), you'll be automatically notified when the process finishes — no polling needed. Use this for tasks that take a while (tests, builds, deployments) so you can keep working on other things in the meantime.",
@@ -1877,7 +1808,6 @@ def _handle_terminal(args, **kw):
         timeout=args.get("timeout"),
         task_id=kw.get("task_id"),
         workdir=args.get("workdir"),
-        pty=args.get("pty", False),
         notify_on_complete=args.get("notify_on_complete", False),
         watch_patterns=args.get("watch_patterns"),
     )
